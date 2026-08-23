@@ -9,15 +9,18 @@ pub(crate) fn snapshot_webui_context_before_user_prompt(
     session_id: SessionId,
     _source: PendingSessionPromptSource,
 ) -> Result<(), String> {
-    let Some(project_id) = owning_project_id_for_session(workspace_snapshot, session_id) else {
+    let Some(session_directory) = segmented_session_directory_for_workspace_session(
+        &controller_runtime.data_root,
+        workspace_snapshot,
+        session_id,
+    ) else {
         return Ok(());
     };
     let Some(runtime_state) = workspace_snapshot.session_runtime_state.get(&session_id) else {
         return Ok(());
     };
     vulcan_workspace_store::workspace_store::snapshot_segmented_session_context_before_user_prompt(
-        &controller_runtime.data_root,
-        &project_id,
+        &session_directory,
         session_id,
         runtime_state,
     )
@@ -94,23 +97,70 @@ fn spawn_webui_context_current_document_persist_task(
     session_id: SessionId,
     session_title: &str,
 ) {
-    let Some(project_id) = owning_project_id_for_session(workspace_snapshot, session_id) else {
+    let Some(session_directory) = segmented_session_directory_for_workspace_session(
+        &controller_runtime.data_root,
+        workspace_snapshot,
+        session_id,
+    ) else {
         return;
     };
     let Some(runtime_state) = workspace_snapshot.session_runtime_state.get(&session_id) else {
         return;
     };
-    let data_root = controller_runtime.data_root.clone();
-    let runtime_state = runtime_state.clone();
-    let session_title = session_title.to_string();
+    // projection excludes canonical conversation history before the background task owns any payload.
+    // projection 在后台任务取得任何载荷所有权前排除规范会话历史。
+    let projection =
+        match vulcan_workspace_store::workspace_store::project_single_session_runtime_state_update(
+            session_id,
+            runtime_state,
+        ) {
+            Ok(projection) => projection,
+            Err(error) => {
+                eprintln!(
+                    "[webui-service] current context projection failed for `{session_title}`: {error}"
+                );
+                return;
+            }
+        };
+    spawn_projected_webui_context_current_document_persist_task(
+        session_directory,
+        session_id,
+        projection,
+        session_title.to_string(),
+    );
+}
+
+/// Spawns one exact state-document write from an already projected history-free payload.
+/// 从已投影的无历史载荷启动单个精确状态文档写入任务。
+///
+/// # Parameters
+/// 参数
+/// `session_directory` is the exact retained main-session directory.
+/// `session_directory` 是精确保留的主会话目录。
+/// `session_id` is the exact owner validated by the storage layer.
+/// `session_id` 是由存储层校验的精确所有者。
+/// `projection` is the detached metadata payload produced while authoritative state was borrowed.
+/// `projection` 是借用权威状态期间生成的分离元数据载荷。
+/// `session_title` labels persistence diagnostics.
+/// `session_title` 标记持久化诊断信息。
+///
+/// # Returns
+/// 返回值
+/// This scheduling helper returns no value.
+/// 该调度辅助函数不返回值。
+pub(crate) fn spawn_projected_webui_context_current_document_persist_task(
+    session_directory: std::path::PathBuf,
+    session_id: SessionId,
+    projection: vulcan_workspace_store::workspace_store::SessionRuntimeStatePersistenceProjection,
+    session_title: String,
+) {
     spawn_service_task(async move {
-        if let Err(error) =
-            vulcan_workspace_store::workspace_store::persist_segmented_session_context_current_document(
-                &data_root,
-                &project_id,
+        if let Err(error) = vulcan_workspace_store::workspace_store::persist_projected_single_session_runtime_state_update(
+                session_directory,
                 session_id,
-                &runtime_state,
+                &projection,
             )
+            .await
         {
             eprintln!(
                 "[webui-service] current context persist failed for `{session_title}`: {error}"
@@ -136,7 +186,11 @@ pub(crate) fn persist_webui_context_current_document(
     session_id: SessionId,
     session_title: &str,
 ) {
-    let Some(project_id) = owning_project_id_for_session(workspace_snapshot, session_id) else {
+    let Some(session_directory) = segmented_session_directory_for_workspace_session(
+        &controller_runtime.data_root,
+        workspace_snapshot,
+        session_id,
+    ) else {
         return;
     };
     let Some(runtime_state) = workspace_snapshot.session_runtime_state.get(&session_id) else {
@@ -144,8 +198,7 @@ pub(crate) fn persist_webui_context_current_document(
     };
     if let Err(error) =
         vulcan_workspace_store::workspace_store::persist_segmented_session_context_current_document(
-            &controller_runtime.data_root,
-            &project_id,
+            &session_directory,
             session_id,
             runtime_state,
         )

@@ -81,7 +81,6 @@ fn shell_tool_schemas_expose_dynamic_detected_shells() {
     let shell_support = test_shell_support();
     let command_schema = shell_command_args_schema(&shell_support);
     let session_schema = terminal_session_args_schema(&shell_support);
-
     assert_eq!(
         command_schema["properties"]["shell"]["enum"],
         json!(["auto", "pwsh", "powershell", "cmd"])
@@ -104,6 +103,9 @@ fn shell_tool_schema_descriptions_document_defaults_in_english() {
     );
     let command_schema = shell_command_args_schema(&shell_support);
     let session_schema = terminal_session_args_schema(&shell_support);
+    // legacySessionSchema verifies the legacy shell-session surface shares the same host limits.
+    // legacySessionSchema 验证旧 shell-session 暴露面共享同一组宿主限制。
+    let legacy_session_schema = shell_session_args_schema(&shell_support);
 
     assert!(
         command_tool
@@ -176,6 +178,14 @@ fn shell_tool_schema_descriptions_document_defaults_in_english() {
             .as_str()
             .unwrap_or_default()
             .contains("Default: 128")
+    );
+    assert_eq!(
+        legacy_session_schema["properties"]["wait_for_output_ms"]["maximum"],
+        json!(MAX_COMMAND_SESSION_READ_WAIT_MS)
+    );
+    assert_eq!(
+        legacy_session_schema["properties"]["max_chunks"]["maximum"],
+        json!(MAX_COMMAND_SESSION_READ_CHUNKS)
     );
     assert!(
         session_schema["properties"]["inputs"]["description"]

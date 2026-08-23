@@ -344,8 +344,21 @@ pub(in crate::workspace_store) fn backup_segmented_session_before_display_mainte
         sanitize_file_component(reason),
         Uuid::new_v4()
     ));
-    create_dir_all(&backup_dir)?;
-    copy_segmented_directory_tree(session_dir, &backup_dir.join("original"))?;
+    let original_dir = backup_dir.join("original");
+    create_dir_all(&original_dir)?;
+    let metadata = read_session_metadata(session_dir)?;
+    fs::copy(
+        session_dir.join(SEGMENTED_METADATA_FILE),
+        original_dir.join(SEGMENTED_METADATA_FILE),
+    )
+    .map_err(to_store_error)?;
+    for segment in &metadata.segments {
+        fs::copy(
+            session_dir.join(&segment.file),
+            original_dir.join(&segment.file),
+        )
+        .map_err(to_store_error)?;
+    }
     Ok(backup_dir)
 }
 
@@ -404,7 +417,7 @@ pub(in crate::workspace_store) fn restore_display_segments_from_backup(
     let backup_metadata = read_required_json::<SegmentedSessionMetadata>(
         &original_backup_dir.join(SEGMENTED_METADATA_FILE),
     )?;
-    remove_root_display_segment_files(session_dir)?;
+    remove_root_display_segment_files(session_dir, &backup_metadata.segments)?;
     for segment in &backup_metadata.segments {
         fs::copy(
             original_backup_dir.join(&segment.file),
@@ -419,18 +432,19 @@ pub(in crate::workspace_store) fn restore_display_segments_from_backup(
 /// 删除根显示分段文件，但不触碰 runtime、task、blob 或备份目录。
 pub(in crate::workspace_store) fn remove_root_display_segment_files(
     session_dir: &Path,
+    segments: &[SegmentMetadata],
 ) -> Result<(), String> {
-    for entry in fs::read_dir(session_dir).map_err(to_store_error)? {
-        let entry = entry.map_err(to_store_error)?;
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
-            continue;
-        };
-        if file_name.starts_with('s') && file_name.ends_with(".jsonl") {
-            fs::remove_file(path).map_err(to_store_error)?;
+    for segment in segments {
+        let path = session_dir.join(&segment.file);
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "Failed to remove exact display segment {}: {error}",
+                    path.display()
+                ));
+            }
         }
     }
     Ok(())

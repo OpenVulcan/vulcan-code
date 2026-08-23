@@ -1,5 +1,58 @@
 use super::*;
 
+/// Terminal wait policies should never exceed the host-enforced command-session read budget.
+/// 终端等待策略不应超过宿主强制执行的命令会话读取预算。
+#[test]
+fn terminal_wait_policy_is_hard_bounded() {
+    // waitPolicy carries an intentionally excessive budget to verify the host-side cap.
+    // waitPolicy 携带故意过大的预算，用于验证宿主侧硬上限。
+    let wait_policy = serde_json::from_value::<TerminalSessionWaitPolicy>(json!({
+        "mode": "until_pattern",
+        "max_wait_ms": u64::MAX,
+        "pattern": "ready"
+    }))
+    .expect("wait policy should deserialize");
+
+    assert_eq!(
+        terminal_wait_budget_ms(Some(&wait_policy)),
+        Some(MAX_COMMAND_SESSION_READ_WAIT_MS)
+    );
+}
+
+/// Terminal read chunk budgets should apply one host-bounded total across every poll.
+/// 终端读取分片预算应当作为所有轮询共同使用的一份宿主有界总量。
+#[test]
+fn terminal_read_chunk_budget_is_total_and_hard_bounded() {
+    assert_eq!(
+        terminal_read_chunk_budget(None),
+        DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS
+    );
+    assert_eq!(terminal_read_chunk_budget(Some(0)), 1);
+    assert_eq!(terminal_read_chunk_budget(Some(17)), 17);
+    assert_eq!(
+        terminal_read_chunk_budget(Some(usize::MAX)),
+        MAX_COMMAND_SESSION_READ_CHUNKS
+    );
+}
+
+/// Terminal-session schema should publish the same wait and output limits enforced by the host.
+/// terminal-session Schema 应发布与宿主执行一致的等待和输出上限。
+#[test]
+fn terminal_session_schema_publishes_hard_read_limits() {
+    // schema is the exact model-visible contract for bounded terminal reads.
+    // schema 是有界终端读取对应的精确模型可见合同。
+    let schema = terminal_session_args_schema(&test_shell_support());
+
+    assert_eq!(
+        schema["properties"]["wait_policy"]["properties"]["max_wait_ms"]["maximum"],
+        json!(MAX_COMMAND_SESSION_READ_WAIT_MS)
+    );
+    assert_eq!(
+        schema["properties"]["max_chunks"]["maximum"],
+        json!(MAX_COMMAND_SESSION_READ_CHUNKS)
+    );
+}
+
 /// The terminal-session tool should stay AI-visible in Plan mode so interactive command workflows are not silently hidden from the model.
 /// terminal-session 工具应在 Plan 模式下继续对 AI 可见，避免交互式命令工作流被模型静默隐藏。
 #[test]

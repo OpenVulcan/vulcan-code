@@ -467,6 +467,7 @@ fn default_analysis_runtime_tool_policy() -> RuntimeToolPolicyDefinition {
         name: String::from("分析只读策略"),
         allow_all_native: false,
         native_tools: vec![
+            String::from("file"),
             String::from("shell_command"),
             String::from("terminal_session"),
             String::from("vmm_memory_search"),
@@ -917,6 +918,7 @@ mod tests {
         assert_eq!(
             analysis_safe.native_tools,
             vec![
+                String::from("file"),
                 String::from("shell_command"),
                 String::from("terminal_session"),
                 String::from("vmm_memory_search"),

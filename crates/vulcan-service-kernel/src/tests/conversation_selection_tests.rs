@@ -166,6 +166,9 @@ fn create_selection_test_root_metadata(
     });
     let encoded = serde_json::to_string_pretty(&metadata).expect("encode root metadata");
     std::fs::write(session_dir.join("metadata.json"), encoded).expect("write root metadata");
+    // The exact empty active segment must exist because append hot paths never scan or synthesize it.
+    // 精确的空活动分段必须存在，因为追加热路径不会扫描或补建它。
+    std::fs::write(session_dir.join("s001.jsonl"), b"").expect("write empty root segment");
 }
 
 /// Builds one persisted subagent metadata document for retained-selection preload tests.

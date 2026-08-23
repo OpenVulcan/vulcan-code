@@ -55,6 +55,9 @@ pub struct ChangeSetStats {
 /// 展示在工具弹层中的紧凑单文件摘要行。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChangeSetFileSummary {
+    /// Optional opaque resource identifier used to correlate one file across a single tool call.
+    /// 用于在单次工具调用内关联同一文件的可选不透明资源标识。
+    pub resource_id: Option<String>,
     /// Stable file change kind.
     /// 稳定的文件变更类型。
     pub change: ChangeSetFileChangeKind,
@@ -298,6 +301,9 @@ pub(super) struct RawChangeSetHunk {
 /// 从产出载荷解析得到的一条原始 canonical 文件记录。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RawChangeSetFileRecord {
+    /// Optional opaque resource identifier emitted by the producing tool.
+    /// 由产出工具发出的可选不透明资源标识。
+    pub(super) resource_id: Option<String>,
     /// Stable file-level change kind.
     /// 稳定的文件级变更类型。
     pub(super) change: ChangeSetFileChangeKind,

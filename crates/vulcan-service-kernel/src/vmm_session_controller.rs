@@ -102,9 +102,9 @@ pub(crate) struct SessionVmmController {
     /// Exact session identity owned by this controller.
     /// 该控制器拥有的精确会话身份。
     session_id: Uuid,
-    /// Controller-managed data root used by the storage adapter.
-    /// 存储适配器使用的控制器管理数据根目录。
-    data_root: PathBuf,
+    /// Exact segmented session directory used by the storage adapter.
+    /// 存储适配器使用的精确分段会话目录。
+    session_directory: PathBuf,
     /// Serialized authoritative domain state.
     /// 串行化的权威领域状态。
     state: Mutex<VmmSessionMemoryState>,
@@ -119,8 +119,8 @@ impl SessionVmmController {
     ///
     /// # Parameters
     /// 参数
-    /// `data_root` is the controller-managed Vulcan data root.
-    /// `data_root` 是控制器管理的 Vulcan 数据根目录。
+    /// `session_directory` is the exact segmented session directory.
+    /// `session_directory` 是精确的分段会话目录。
     /// `session_id` is the exact session identity owned by the new controller.
     /// `session_id` 是新控制器拥有的精确会话身份。
     /// `updated_at` is the timestamp used only when no durable state exists.
@@ -131,7 +131,7 @@ impl SessionVmmController {
     /// A ready controller or an explicit strict-load error.
     /// 返回就绪控制器或明确的严格加载错误。
     fn open(
-        data_root: &Path,
+        session_directory: &Path,
         session_id: Uuid,
         updated_at: &str,
     ) -> Result<Self, SessionVmmControllerOpenError> {
@@ -139,7 +139,8 @@ impl SessionVmmController {
         // rebuild_reason 仅由存储适配器的精确历史或损坏分类器产生。
         if let Some(rebuild_reason) =
             vulcan_workspace_store::workspace_store::core_session_vmm_rebuild_reason(
-                data_root, session_id,
+                session_directory,
+                session_id,
             )
             .map_err(SessionVmmControllerOpenError::Other)?
         {
@@ -150,7 +151,8 @@ impl SessionVmmController {
         // loaded_state is accepted only from the new Core controller document format.
         // loaded_state 仅接受新的 Core 控制器文档格式。
         let loaded_state = vulcan_workspace_store::workspace_store::load_core_session_vmm_state(
-            data_root, session_id,
+            session_directory,
+            session_id,
         )
         .map_err(SessionVmmControllerOpenError::Other)?;
         // state becomes the controller's sole mutable copy.
@@ -161,7 +163,7 @@ impl SessionVmmController {
         };
         Ok(Self {
             session_id,
-            data_root: data_root.to_path_buf(),
+            session_directory: session_directory.to_path_buf(),
             state: Mutex::new(state),
             closed: AtomicBool::new(false),
         })
@@ -259,7 +261,7 @@ impl SessionVmmController {
         )?;
         candidate.validate(&self.session_id.to_string())?;
         vulcan_workspace_store::workspace_store::persist_core_session_vmm_state(
-            &self.data_root,
+            &self.session_directory,
             self.session_id,
             &candidate,
         )?;
@@ -363,8 +365,8 @@ impl SessionVmmControllerRegistry {
     ///
     /// # Parameters
     /// 参数
-    /// `data_root` is the controller-managed Vulcan data root.
-    /// `data_root` 是控制器管理的 Vulcan 数据根目录。
+    /// `session_directory` is the exact segmented session directory.
+    /// `session_directory` 是精确的分段会话目录。
     /// `session_id` is the exact requested session identity.
     /// `session_id` 是精确的请求会话身份。
     /// `updated_at` is used only for clean first initialization.
@@ -376,7 +378,7 @@ impl SessionVmmControllerRegistry {
     /// 返回唯一共享控制器实例或严格打开错误。
     pub(crate) fn get_or_open(
         &self,
-        data_root: &Path,
+        session_directory: &Path,
         session_id: Uuid,
         updated_at: &str,
     ) -> Result<Arc<SessionVmmController>, SessionVmmControllerOpenError> {
@@ -393,11 +395,11 @@ impl SessionVmmControllerRegistry {
             .into());
         }
         if let Some(controller) = guard.controllers.get(&session_id) {
-            if controller.data_root != data_root {
+            if controller.session_directory != session_directory {
                 return Err(format!(
-                    "Core VMM controller data root mismatch for session `{session_id}`: registered `{}` but requested `{}`.",
-                    controller.data_root.display(),
-                    data_root.display()
+                    "Core VMM controller session directory mismatch for session `{session_id}`: registered `{}` but requested `{}`.",
+                    controller.session_directory.display(),
+                    session_directory.display()
                 )
                 .into());
             }
@@ -406,7 +408,9 @@ impl SessionVmmControllerRegistry {
         // controller is fully loaded before publication so callers never observe partial initialization.
         // controller 在发布前完成完整加载，使调用方不会观察到部分初始化。
         let controller = Arc::new(SessionVmmController::open(
-            data_root, session_id, updated_at,
+            session_directory,
+            session_id,
+            updated_at,
         )?);
         guard.controllers.insert(session_id, controller.clone());
         Ok(controller)
@@ -568,8 +572,8 @@ impl SessionVmmControllerRegistry {
     ///
     /// # Parameters
     /// 参数
-    /// `data_root` is the storage root retained by the seeded controller.
-    /// `data_root` 是播种控制器保留的存储根。
+    /// `session_directory` is the exact storage directory retained by the seeded controller.
+    /// `session_directory` 是播种控制器保留的精确存储目录。
     /// `session_id` is the exact controller owner.
     /// `session_id` 是精确的控制器所有者。
     /// `state` is the validated authoritative test state.
@@ -582,7 +586,7 @@ impl SessionVmmControllerRegistry {
     #[cfg(test)]
     pub(crate) fn seed_for_test(
         &self,
-        data_root: &Path,
+        session_directory: &Path,
         session_id: Uuid,
         state: VmmSessionMemoryState,
     ) -> Result<(), String> {
@@ -591,7 +595,7 @@ impl SessionVmmControllerRegistry {
         // controller 在播种后继续携带与生产一致的串行化和持久化行为。
         let controller = Arc::new(SessionVmmController {
             session_id,
-            data_root: data_root.to_path_buf(),
+            session_directory: session_directory.to_path_buf(),
             state: Mutex::new(state),
             closed: AtomicBool::new(false),
         });
@@ -629,12 +633,12 @@ mod tests {
         // first is the controller created by the initial lookup.
         // first 是首次查找创建的控制器。
         let first = registry
-            .get_or_open(controller_root.data_root(), session_id, "1")
+            .get_or_open(controller_root.session_directory(), session_id, "1")
             .expect("open first controller");
         // second must reuse the already published registry entry.
         // second 必须复用已经发布的注册表条目。
         let second = registry
-            .get_or_open(controller_root.data_root(), session_id, "2")
+            .get_or_open(controller_root.session_directory(), session_id, "2")
             .expect("open second controller");
 
         assert!(Arc::ptr_eq(&first, &second));
@@ -654,7 +658,7 @@ mod tests {
         // reopened is the only active replacement after the old instance was permanently fenced.
         // reopened 是旧实例被永久栅栏化后的唯一活动替代实例。
         let reopened = registry
-            .get_or_open(controller_root.data_root(), session_id, "3")
+            .get_or_open(controller_root.session_directory(), session_id, "3")
             .expect("reopen controller");
         assert!(!Arc::ptr_eq(&first, &reopened));
     }
@@ -671,11 +675,7 @@ mod tests {
         let controller_root = TestControllerRuntimeRoot::new(session_id);
         // session_dir is the exact directory created by the shared test fixture.
         // session_dir 是共享测试夹具创建的精确目录。
-        let session_dir = controller_root
-            .data_root()
-            .join("sessions")
-            .join("project-a")
-            .join(format!("1970-01-01-{session_id}"));
+        let session_dir = controller_root.session_directory();
         // historical_state is the removed flat VMM document written before controller opening.
         // historical_state 是控制器打开前写入的已移除扁平 VMM 文档。
         let historical_state =
@@ -690,7 +690,7 @@ mod tests {
         let registry = SessionVmmControllerRegistry::default();
 
         let error = registry
-            .get_or_open(controller_root.data_root(), session_id, "2")
+            .get_or_open(controller_root.session_directory(), session_id, "2")
             .expect_err("historical VMM state must require rebuild");
 
         assert!(error.requires_rebuild());
@@ -710,11 +710,7 @@ mod tests {
         let controller_root = TestControllerRuntimeRoot::new(session_id);
         // session_dir is the exact conversation directory whose transcript stays independent.
         // session_dir 是转录保持独立的精确会话目录。
-        let session_dir = controller_root
-            .data_root()
-            .join("sessions")
-            .join("project-a")
-            .join(format!("1970-01-01-{session_id}"));
+        let session_dir = controller_root.session_directory();
         std::fs::write(
             session_dir.join("vmm.json"),
             b"{\"schema_version\":2,\"controller_kind\":",
@@ -726,7 +722,7 @@ mod tests {
         // open_error proves storage classification reaches the controller boundary.
         // open_error 证明存储分类能够到达控制器边界。
         let open_error = registry
-            .get_or_open(controller_root.data_root(), session_id, "2")
+            .get_or_open(controller_root.session_directory(), session_id, "2")
             .expect_err("damaged VMM attachment must require rebuild");
 
         assert!(open_error.requires_rebuild());
@@ -734,7 +730,7 @@ mod tests {
         assert!(!registry.contains(session_id).expect("inspect registry"));
         assert!(
             vulcan_workspace_store::workspace_store::rebuild_damaged_core_session_vmm_state(
-                controller_root.data_root(),
+                controller_root.session_directory(),
                 session_id,
                 "3",
             )
@@ -743,7 +739,7 @@ mod tests {
         // controller opens only after the explicit rebuild publishes a clean current document.
         // controller 仅在明确重建发布干净当前文档后打开。
         let controller = registry
-            .get_or_open(controller_root.data_root(), session_id, "4")
+            .get_or_open(controller_root.session_directory(), session_id, "4")
             .expect("open rebuilt VMM controller");
         // commit is the first durable memory command after the damaged attachment was discarded.
         // commit 是损坏附件被丢弃后的首个持久化记忆命令。
@@ -753,7 +749,7 @@ mod tests {
         // durable_state proves the rebuilt attachment remains writable through the normal controller path.
         // durable_state 证明重建附件仍可通过正常控制器路径写入。
         let durable_state = vulcan_workspace_store::workspace_store::load_core_session_vmm_state(
-            controller_root.data_root(),
+            controller_root.session_directory(),
             session_id,
         )
         .expect("load post-rebuild VMM state")
@@ -766,7 +762,7 @@ mod tests {
     /// Verifies one registered session identity cannot be rebound to another durable data root.
     /// 验证一个已注册会话身份不能重新绑定到另一个持久数据根目录。
     #[test]
-    fn registry_rejects_data_root_mismatch_for_registered_session() {
+    fn registry_rejects_session_directory_mismatch_for_registered_session() {
         // session_id identifies the single registry identity whose storage ownership is fixed.
         // session_id 标识存储所有权固定的唯一注册表身份。
         let session_id = Uuid::new_v4();
@@ -781,17 +777,17 @@ mod tests {
         let registry = SessionVmmControllerRegistry::default();
 
         registry
-            .get_or_open(registered_root.data_root(), session_id, "1")
+            .get_or_open(registered_root.session_directory(), session_id, "1")
             .expect("open registered controller");
         // error must reject rebinding before any conflicting durable state is loaded or published.
         // error 必须在加载或发布任何冲突持久状态前拒绝重新绑定。
         let error = registry
-            .get_or_open(conflicting_root.data_root(), session_id, "2")
-            .expect_err("data root mismatch must be rejected");
+            .get_or_open(conflicting_root.session_directory(), session_id, "2")
+            .expect_err("session directory mismatch must be rejected");
 
-        assert!(error.contains("data root mismatch"));
-        assert!(error.contains(&registered_root.data_root().display().to_string()));
-        assert!(error.contains(&conflicting_root.data_root().display().to_string()));
+        assert!(error.contains("session directory mismatch"));
+        assert!(error.contains(&registered_root.session_directory().display().to_string()));
+        assert!(error.contains(&conflicting_root.session_directory().display().to_string()));
     }
 
     /// Verifies a lifecycle fence blocks stale and replacement controllers until explicit release.
@@ -810,7 +806,7 @@ mod tests {
         // original is retained to prove stale references remain permanently closed.
         // original 被保留，以证明旧引用会保持永久关闭。
         let original = registry
-            .get_or_open(controller_root.data_root(), session_id, "1")
+            .get_or_open(controller_root.session_directory(), session_id, "1")
             .expect("open original controller");
         // lifecycle_fence remains alive for the simulated storage transition.
         // lifecycle_fence 在模拟存储转换期间保持存活。
@@ -826,7 +822,7 @@ mod tests {
         );
         assert!(
             registry
-                .get_or_open(controller_root.data_root(), session_id, "2")
+                .get_or_open(controller_root.session_directory(), session_id, "2")
                 .expect_err("replacement must be blocked")
                 .contains("during a lifecycle transition")
         );
@@ -837,7 +833,7 @@ mod tests {
         // replacement is created only after the storage transition explicitly releases its fence.
         // replacement 仅在存储转换显式释放栅栏后创建。
         let replacement = registry
-            .get_or_open(controller_root.data_root(), session_id, "3")
+            .get_or_open(controller_root.session_directory(), session_id, "3")
             .expect("open replacement controller");
         assert!(!Arc::ptr_eq(&original, &replacement));
     }
@@ -855,7 +851,7 @@ mod tests {
         // controller is the sole state owner for both attempts.
         // controller 是两次尝试的唯一状态所有者。
         let controller = SessionVmmControllerRegistry::default()
-            .get_or_open(controller_root.data_root(), session_id, "1")
+            .get_or_open(controller_root.session_directory(), session_id, "1")
             .expect("open controller");
         // mutation_count proves the duplicate path does not invoke its closure.
         // mutation_count 证明重复路径不会调用其闭包。
@@ -905,7 +901,7 @@ mod tests {
         // controller is cloned into every worker without cloning its authoritative state.
         // controller 被克隆到每个工作线程，但不会克隆其权威状态。
         let controller = registry
-            .get_or_open(controller_root.data_root(), session_id, "1")
+            .get_or_open(controller_root.session_directory(), session_id, "1")
             .expect("open concurrent controller");
         // worker_count defines the exact number of unique serialized commands.
         // worker_count 定义唯一串行命令的精确数量。
@@ -947,7 +943,7 @@ mod tests {
         // reloaded proves the same serialized lineage was durably published.
         // reloaded 证明同一串行谱系已经持久发布。
         let reloaded = registry
-            .get_or_open(controller_root.data_root(), session_id, "99")
+            .get_or_open(controller_root.session_directory(), session_id, "99")
             .expect("reload concurrent controller")
             .snapshot()
             .expect("read reloaded concurrent state");
@@ -964,9 +960,9 @@ mod tests {
         // controller_root supplies a safe temporary parent for the deliberately missing data root.
         // controller_root 为刻意缺失的数据根提供安全的临时父目录。
         let controller_root = TestControllerRuntimeRoot::new(Uuid::new_v4());
-        // missing_data_root has no segmented directory for session_id.
-        // missing_data_root 不包含 session_id 的分段目录。
-        let missing_data_root = controller_root.data_root().join("missing-data-root");
+        // missing_session_directory is absent and therefore cannot accept a durable VMM write.
+        // missing_session_directory 不存在，因此不能接受持久 VMM 写入。
+        let missing_session_directory = controller_root.data_root().join("missing-session");
         // initial_state is the authoritative in-memory baseline before the failed command.
         // initial_state 是失败命令前的权威内存基线。
         let initial_state = VmmSessionMemoryState::new(session_id.to_string(), "1")
@@ -975,19 +971,24 @@ mod tests {
         // registry 持有一个指向缺失存储位置的生产控制器。
         let registry = SessionVmmControllerRegistry::default();
         registry
-            .seed_for_test(&missing_data_root, session_id, initial_state.clone())
+            .seed_for_test(
+                &missing_session_directory,
+                session_id,
+                initial_state.clone(),
+            )
             .expect("seed failure controller");
         // controller is the exact seeded registry entry.
         // controller 是精确的已播种注册表条目。
         let controller = registry
-            .get_or_open(&missing_data_root, session_id, "2")
+            .get_or_open(&missing_session_directory, session_id, "2")
             .expect("open seeded failure controller");
 
         let error = controller
             .execute_command("must-not-commit", "2", |_| Ok(()))
             .expect_err("missing session directory must reject persistence");
 
-        assert!(error.contains("has no segmented directory"));
+        assert!(error.contains("metadata.json"));
+        assert!(error.contains(&missing_session_directory.display().to_string()));
         assert_eq!(
             controller.snapshot().expect("read state after failure"),
             initial_state

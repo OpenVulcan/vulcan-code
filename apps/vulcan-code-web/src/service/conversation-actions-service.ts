@@ -1,5 +1,6 @@
 import type {
   CommandSessionSummary,
+  ComposerAttachmentPreparationSummary,
   ComposerAttachmentSummary,
   PendingPromptSummary,
   ContextCompactionWindowNodeId,
@@ -20,23 +21,13 @@ import {
 } from "@/service/webui-service-runtime";
 import { updateBrowserFallbackWorkbench } from "@/service/browser-fallback-workbench";
 
-// ConversationContinuationExpectation binds a problem-turn composer submission to one exact recovery generation.
-// ConversationContinuationExpectation 将问题回合的输入区提交绑定到一个精确恢复代际。
-export interface ConversationContinuationExpectation {
-  // Exact continuation generation projected by the backend.
-  // 后端投影的精确 Continue 代际。
-  expectedGeneration: number;
-  // Exact Provider-call ledger revision projected by the backend.
-  // 后端投影的精确 Provider 调用账本修订号。
-  expectedLedgerRevision: number;
-}
-
-// submitConversationPrompt sends one composer prompt to the desktop conversation runtime.
-// submitConversationPrompt 将单条输入区提示词发送到桌面会话运行时。
+// submitConversationPrompt sends one ordinary new user turn to the desktop conversation runtime.
+// submitConversationPrompt 将一个普通的新用户回合发送到桌面会话运行时。
 export async function submitConversationPrompt(
   clientSubmissionId: string,
   projectId: string | null,
   conversationId: string | null,
+  draftSlotKey: string,
   prompt: string,
   hiddenModelGuidance: string | undefined,
   attachments: ComposerAttachmentSummary[],
@@ -44,7 +35,6 @@ export async function submitConversationPrompt(
   reasoningEffort: string | null,
   modelSelection: ComposerModelSelectionSnapshot | null,
   sessionSettings: ComposerSessionSettingsSnapshot | null,
-  continuationExpectation: ConversationContinuationExpectation | null = null,
 ): Promise<SubmitConversationPromptAck | null> {
   if (!hasServiceRuntime()) {
     return null;
@@ -53,6 +43,7 @@ export async function submitConversationPrompt(
     clientSubmissionId,
     projectId,
     conversationId,
+    draftSlotKey,
     prompt,
     hiddenModelGuidance,
     attachments,
@@ -60,7 +51,9 @@ export async function submitConversationPrompt(
     reasoningEffort,
     modelSelection,
     sessionSettings,
-    continuationExpectation,
+    // Ordinary composer submissions cannot claim problem-turn recovery through this service boundary.
+    // 普通输入区提交无法通过此服务边界领取问题回合恢复。
+    continuationExpectation: null,
   });
 }
 
@@ -492,6 +485,88 @@ export async function setSessionOutputStyle(
   });
 }
 
+// planComposerAttachments resolves immutable draft-delivery decisions for the current route.
+// planComposerAttachments 为当前路线解析不可变草稿传输决策。
+// Parameters: generation rejects late plans, modelSelection freezes the route, and attachments are canonical staged assets.
+// 参数：generation 用于拒绝迟到规划，modelSelection 冻结路线，attachments 是规范已暂存资源。
+// Returns: one preparation state per attachment in input order.
+// 返回值：按输入顺序返回每个附件的一条准备状态。
+export async function planComposerAttachments(
+  projectId: string | null,
+  conversationId: string | null,
+  generation: number,
+  modelSelection: ComposerModelSelectionSnapshot,
+  attachments: ComposerAttachmentSummary[],
+): Promise<ComposerAttachmentPreparationSummary[]> {
+  if (!hasServiceRuntime()) {
+    return attachments.map((attachment) => ({
+      attachmentId: attachment.assetId ?? attachment.resourcePath ?? attachment.localPath,
+      generation,
+      transferId: `browser-draft-media:${generation}:${attachment.assetId ?? attachment.fileName}`,
+      deliveryPlan: "metadata_only",
+      phase: "metadata_only",
+      blocksSubmission: false,
+      routeRevision: null,
+      reason: "desktop_service_runtime_unavailable",
+      error: null,
+    }));
+  }
+  return serviceClient.request<ComposerAttachmentPreparationSummary[]>(
+    "service_plan_composer_attachments",
+    { projectId, conversationId, generation, modelSelection, attachments },
+  );
+}
+
+// prepareComposerAttachment executes one planned provider upload without submitting the prompt.
+// prepareComposerAttachment 在不提交提示词的情况下执行一条已规划供应商上传。
+// Parameters: conversationId scopes reusable references and preparation freezes the transfer identity.
+// 参数：conversationId 限定可复用引用作用域，preparation 冻结传输身份。
+// Returns: a terminal draft state that is either ready, degraded, failed, or cancelled.
+// 返回值：返回就绪、降级、失败或取消之一的终态草稿状态。
+export async function prepareComposerAttachment(
+  projectId: string | null,
+  conversationId: string | null,
+  modelSelection: ComposerModelSelectionSnapshot,
+  attachment: ComposerAttachmentSummary,
+  preparation: ComposerAttachmentPreparationSummary,
+): Promise<ComposerAttachmentPreparationSummary> {
+  if (!hasServiceRuntime()) {
+    return {
+      ...preparation,
+      phase: "metadata_only",
+      blocksSubmission: false,
+      reason: "desktop_service_runtime_unavailable",
+    };
+  }
+  return serviceClient.request<ComposerAttachmentPreparationSummary>(
+    "service_prepare_composer_attachment",
+    { projectId, conversationId, modelSelection, attachment, preparation },
+  );
+}
+
+// reconcileComposerAttachmentDraftLease replaces one persistent draft owner with its complete canonical attachment set.
+// reconcileComposerAttachmentDraftLease 使用完整规范附件集合替换一条持久草稿所有者。
+// Parameters: draftSlotKey is the stable composer slot and attachments is its complete service-issued set.
+// 参数：draftSlotKey 是稳定输入区草稿槽，attachments 是其完整服务签发集合。
+// Returns: whether the backend attachment index changed.
+// 返回值：后端附件索引是否发生变化。
+export async function reconcileComposerAttachmentDraftLease(
+  projectId: string | null,
+  conversationId: string | null,
+  draftSlotKey: string,
+  attachments: ComposerAttachmentSummary[],
+): Promise<boolean> {
+  if (!hasServiceRuntime()) {
+    return false;
+  }
+  return serviceClient.request<boolean>("service_reconcile_composer_attachment_draft", {
+    projectId,
+    conversationId,
+    draftSlotKey,
+    attachments,
+  });
+}
+
 // setSessionContextCompactionWindow persists one stable node id or clears the session lock.
 // setSessionContextCompactionWindow 持久化一个稳定节点标识，或清除会话锁定。
 export async function setSessionContextCompactionWindow(
@@ -619,6 +694,26 @@ export async function stageComposerAttachmentBytes(
     conversationId,
     fileName: file.name || "clipboard-attachment",
     mimeType: file.type || "",
+    dataBase64,
+  });
+}
+
+// stageComposerAttachmentPreviewBytes binds one derived JPEG preview to its existing managed image asset.
+// stageComposerAttachmentPreviewBytes 将一份派生 JPEG 预览绑定到既有托管图片资产。
+export async function stageComposerAttachmentPreviewBytes(
+  projectId: string | null,
+  conversationId: string | null,
+  attachmentId: string,
+  file: File,
+): Promise<string> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Browser service is unavailable, so the attachment preview cannot be staged.");
+  }
+  const dataBase64 = await fileToBase64(file);
+  return serviceClient.request<string>("service_stage_composer_attachment_preview_bytes", {
+    projectId,
+    conversationId,
+    attachmentId,
     dataBase64,
   });
 }

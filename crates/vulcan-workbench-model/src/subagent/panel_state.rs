@@ -108,8 +108,43 @@ pub fn subagent_task_panel_state_from_task_session(
     }))
 }
 
-/// Loads direct child panel states from a segmented TaskSession store without reading every task event.
-/// 从分段 TaskSession 存储加载直接子代理面板状态，并避免读取每个子任务的完整事件历史。
+/// Builds one list-level panel state directly from the root task mirror index.
+/// 直接从根任务镜像索引构建一条列表级面板状态。
+///
+/// # Parameters
+/// 参数
+/// `mirror` is the compact task summary read from the root session metadata file.
+/// `mirror` 是从根会话元数据文件读取的紧凑任务摘要。
+///
+/// # Returns
+/// 返回值
+/// A display-ready state without opening the child task directory, or `None` for a rootless entry.
+/// 返回无需打开子任务目录即可显示的状态；无根条目返回 `None`。
+fn subagent_task_panel_state_from_task_mirror(
+    mirror: &TaskSessionMirrorSummary,
+) -> Option<SubagentTaskPanelState> {
+    let parent_session_id = parent_session_id_from_task_session_parent(&mirror.parent)?;
+    let subagent_label = task_session_tool_display_label(
+        Some(mirror.display_title.as_str()),
+        mirror.description.as_deref(),
+        None,
+        Some(mirror.public_task_id.as_str()),
+        None,
+    );
+    Some(SubagentTaskPanelState {
+        task_id: mirror.task_session_id.as_uuid(),
+        public_task_id: mirror.public_task_id.clone(),
+        parent_session_id,
+        subagent_label,
+        description: mirror.description.clone(),
+        run_state: subagent_run_state_from_task_session_status(mirror.status),
+        result_text: mirror.last_result_summary.clone().unwrap_or_default(),
+        conversation_state: None,
+    })
+}
+
+/// Loads direct child panel states from the single root task mirror index.
+/// 仅从单个根任务镜像索引加载直接子代理面板状态。
 ///
 /// # Parameters
 /// 参数
@@ -128,21 +163,20 @@ pub fn subagent_task_panel_states_from_segmented_task_session_store(
 ) -> Result<Vec<SubagentTaskPanelState>, SessionStoreError> {
     let parent = subagent_parent_ref_from_task_session_store(store, parent_session_id)?;
     let mut states = Vec::new();
-    for metadata in store.list_child_task_sessions(parent)? {
-        if metadata.status == TaskSessionStatus::Archived {
+    for mirror in store.load_task_session_mirror_summaries()? {
+        if mirror.parent != parent || mirror.status == TaskSessionStatus::Archived {
             continue;
         }
-        let Some(state) = subagent_task_panel_state_from_task_session(&metadata, None, None)?
-        else {
+        let Some(state) = subagent_task_panel_state_from_task_mirror(&mirror) else {
             return Err(SessionStoreError::new(format!(
                 "TaskSession `{}` has no direct parent.",
-                metadata.task_session_id
+                mirror.task_session_id
             )));
         };
         if state.parent_session_id != parent_session_id {
             return Err(SessionStoreError::new(format!(
                 "TaskSession `{}` parent mismatch: expected `{}`, got `{}`.",
-                metadata.task_session_id, parent_session_id, state.parent_session_id
+                mirror.task_session_id, parent_session_id, state.parent_session_id
             )));
         }
         states.push(state);

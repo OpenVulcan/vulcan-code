@@ -589,6 +589,11 @@ export type TranslationKey =
   | "composer.attachment.menu"
   | "composer.attachment.empty"
   | "composer.attachment.remove"
+  | "composer.attachment.processing"
+  | "composer.attachment.preparationBlocked"
+  | "composer.attachment.metadataOnly"
+  | "composer.attachment.metadataOnlyCount"
+  | "composer.attachment.retry"
   | "composer.attachment.unsupported"
   | "composer.attachment.maxLimit"
   | "composer.attachment.partialMaxLimit"
@@ -596,6 +601,7 @@ export type TranslationKey =
   | "composer.attachment.kind.audio"
   | "composer.attachment.kind.video"
   | "composer.attachment.kind.pdf"
+  | "composer.attachment.kind.file"
   | "composer.thinkingProcess"
   | "composer.planMode"
   | "composer.vmmMemory"
@@ -3423,13 +3429,19 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.attachment.menu": "附件",
     "composer.attachment.empty": "当前无可用附件类型",
     "composer.attachment.remove": "移除附件",
-    "composer.attachment.unsupported": "当前模型或扩展能力不支持这些附件。",
+    "composer.attachment.processing": "正在确认上传资源",
+    "composer.attachment.preparationBlocked": "仍有 {count} 个附件正在准备，完成后才能发送。",
+    "composer.attachment.metadataOnly": "此附件不会直接交给模型理解，仅会作为附件清单告知模型。",
+    "composer.attachment.metadataOnlyCount": "{count} 个附件将仅作为附件清单告知模型。",
+    "composer.attachment.retry": "重试上传",
+    "composer.attachment.unsupported": "无法暂存这些附件。",
     "composer.attachment.maxLimit": "最多只能添加 {count} 个附件。",
     "composer.attachment.partialMaxLimit": "已达到 {count} 个附件上限，部分文件未添加。",
     "composer.attachment.kind.image": "图片",
     "composer.attachment.kind.audio": "音频",
     "composer.attachment.kind.video": "视频",
     "composer.attachment.kind.pdf": "PDF",
+    "composer.attachment.kind.file": "文件",
     "composer.thinkingProcess": "思考过程",
     "composer.planMode": "计划模式",
     "composer.vmmMemory": "VMM 记忆",
@@ -4782,12 +4794,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.diagnostics.startupStatus": "启动状态",
     "settings.diagnostics.waitingStatus": "等待状态更新",
     "settings.diagnostics.providerRequestTrace": "Provider 请求追踪",
-    "settings.diagnostics.providerRequestTrace.completeRequests": "完整请求日志",
-    "settings.diagnostics.providerRequestTrace.description": "开启后，每次真实 Provider API 调用都会把控制器请求、统一请求与最终协议请求完整写入所属会话的 temp/provider-request-trace 目录。内容可能包含提示词、工具参数与工具结果，仅应在诊断期间开启。",
+    "settings.diagnostics.providerRequestTrace.completeRequests": "有界线上请求日志",
+    "settings.diagnostics.providerRequestTrace.description": "开启后，每次真实 Provider API 调用只在后台记录最终线上请求，不复制控制器请求或统一请求。所属会话的 temp/provider-request-trace 目录固定轮转 4 个槽位；单份超过 16 MiB 时只保留不含正文的摘要。内容可能包含提示词、工具参数与工具结果，仅应在诊断期间开启。",
     "settings.diagnostics.providerRequestTrace.disabled": "已关闭",
     "settings.diagnostics.providerRequestTrace.enabled": "诊断中",
     "settings.diagnostics.providerRequestTrace.saveFailed": "保存失败",
-    "settings.diagnostics.providerRequestTrace.switch": "记录完整 Provider 请求",
+    "settings.diagnostics.providerRequestTrace.switch": "记录有界 Provider 线上请求",
     "settings.diagnostics.runtimeModules": "运行时模块",
     "settings.gitCommit.description": "提交弹窗的新分支命名、自动总结模型与额外提示词。",
     "settings.gitCommit.active": "已生效",
@@ -6271,13 +6283,19 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.attachment.menu": "Attachments",
     "composer.attachment.empty": "No attachment types are available",
     "composer.attachment.remove": "Remove attachment",
-    "composer.attachment.unsupported": "These attachments are not supported by the current model or extended capabilities.",
+    "composer.attachment.processing": "Confirming uploaded resource",
+    "composer.attachment.preparationBlocked": "{count} attachment(s) are still being prepared. Wait for completion before sending.",
+    "composer.attachment.metadataOnly": "This attachment will be disclosed as metadata only and will not be sent for direct model understanding.",
+    "composer.attachment.metadataOnlyCount": "{count} attachment(s) will be disclosed as metadata only.",
+    "composer.attachment.retry": "Retry upload",
+    "composer.attachment.unsupported": "These attachments could not be staged.",
     "composer.attachment.maxLimit": "You can add at most {count} attachments.",
     "composer.attachment.partialMaxLimit": "The {count}-attachment limit has been reached. Some files were not added.",
     "composer.attachment.kind.image": "Image",
     "composer.attachment.kind.audio": "Audio",
     "composer.attachment.kind.video": "Video",
     "composer.attachment.kind.pdf": "PDF",
+    "composer.attachment.kind.file": "File",
     "composer.thinkingProcess": "Thinking",
     "composer.planMode": "Plan mode",
     "composer.vmmMemory": "VMM memory",
@@ -7630,12 +7648,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.diagnostics.startupStatus": "Startup status",
     "settings.diagnostics.waitingStatus": "Waiting for status update",
     "settings.diagnostics.providerRequestTrace": "Provider request tracing",
-    "settings.diagnostics.providerRequestTrace.completeRequests": "Complete request logs",
-    "settings.diagnostics.providerRequestTrace.description": "When enabled, every real Provider API call writes its controller request, canonical request, and final protocol request into the owning session's temp/provider-request-trace directory. The files may contain prompts, tool arguments, and tool results; enable this only while diagnosing a problem.",
+    "settings.diagnostics.providerRequestTrace.completeRequests": "Bounded wire-request logs",
+    "settings.diagnostics.providerRequestTrace.description": "When enabled, each real Provider API call records only the final wire request in the background without cloning controller or canonical requests. The owning session's temp/provider-request-trace directory rotates through four fixed slots; requests over 16 MiB retain a body-free summary only. Files may contain prompts, tool arguments, and tool results; enable this only while diagnosing a problem.",
     "settings.diagnostics.providerRequestTrace.disabled": "Off",
     "settings.diagnostics.providerRequestTrace.enabled": "Tracing",
     "settings.diagnostics.providerRequestTrace.saveFailed": "Save failed",
-    "settings.diagnostics.providerRequestTrace.switch": "Record complete Provider requests",
+    "settings.diagnostics.providerRequestTrace.switch": "Record bounded Provider wire requests",
     "settings.diagnostics.runtimeModules": "Runtime modules",
     "settings.gitCommit.description": "New-branch naming, automatic summary model, and extra prompt text for the commit dialog.",
     "settings.gitCommit.active": "Active",

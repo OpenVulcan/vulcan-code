@@ -1,11 +1,13 @@
 //! Fixed-schema image, video, and audio understanding backends.
 //! 固定 Schema 的图片、视频与音频理解后端。
 
-use crate::attachment_assets::attachment_descriptor_from_path;
+use crate::attachment_assets::{
+    attachment_descriptor_from_path, registered_media_attachment_mime_types,
+};
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use vulcan_ai_contract::{
     AiExecutionRequest, AiMessage, AiOperation, AiStreamEvent, ContentItem, MessageRole,
@@ -15,9 +17,10 @@ use vulcan_ai_contract::{
 };
 use vulcan_core::types::ConversationAttachmentKind;
 use vulcan_provider_adapters::{
-    ActiveAiModelSelection, MediaUploadCancellation, PersistedAiConfiguration,
-    ProviderToolCapabilityKind, ProviderToolExecutionResult, ProviderToolMediaInputProjection,
-    ProviderToolNormalizedOutput, PublicAiRuntime, ResolvedPublicAiSelection,
+    ActiveAiModelSelection, InputResourceConstraint, MediaUploadCancellation,
+    PersistedAiConfiguration, ProviderToolCapabilityKind, ProviderToolExecutionResult,
+    ProviderToolMediaInputProfile, ProviderToolMediaInputProjection, ProviderToolNormalizedOutput,
+    PublicAiRuntime, ResolvedPublicAiSelection,
 };
 use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
@@ -70,7 +73,7 @@ pub(crate) fn media_understanding_input_schema(
             (path_argument): {
                 "type": "string",
                 "minLength": 1,
-                "description": "Absolute or workspace-relative path to the media input."
+                "description": "Canonical project-relative attachment resource path or attachment:// resource id disclosed in the conversation. Absolute paths are not accepted."
             },
             "prompt": {
                 "type": "string",
@@ -205,14 +208,26 @@ pub(crate) fn build_model_replacement_media_candidate(
             reasoning_effort,
         )?;
     }
-    // description remains provider-neutral and stable across backend switches.
-    // description 在后端切换时保持供应商无关且稳定。
-    let description = media_understanding_description(capability)?;
+    // description combines the invariant facade with exact frozen route constraints.
+    // description 将不变外壳与精确冻结路线约束合并。
+    let description = media_understanding_description(
+        capability,
+        resolved_selection
+            .route
+            .protocol_route
+            .protocol_profile_id
+            .as_str(),
+        resolved_selection
+            .route
+            .protocol_route
+            .input_resource_constraints
+            .as_slice(),
+    )?;
     Ok(VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
             id: tool_id.clone(),
             name: tool_id,
-            description: description.to_string(),
+            description,
             help_text: None,
             source: VulcanToolSourceKind::AiHostBinding,
         },
@@ -289,16 +304,29 @@ async fn execute_model_replacement_media_understanding(
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| String::from("Media-understanding argument `prompt` is required."))?;
-    // mediaPath resolves inside the active workspace without symlink traversal.
-    // mediaPath 在活动工作区内解析且不允许符号链接穿越。
-    let media_path = canonical_workspace_media_path(workspace_root, media_reference).await?;
+    // attachment resolves only a canonical resource owned by the invoking conversation.
+    // attachment 只解析由发起调用会话持有的规范资源。
+    let attachment = resolve_media_understanding_attachment(
+        workspace_root,
+        owner_session_id.as_deref(),
+        capability,
+        media_reference,
+    )
+    .await?;
+    let media_path = PathBuf::from(attachment.local_path.as_str());
     // resourceKind is the exact provider-neutral media category.
     // resourceKind 是精确的供应商无关媒体类别。
     let resource_kind = media_understanding_resource_kind(capability)
         .ok_or_else(|| format!("Capability `{capability:?}` has no media resource kind."))?;
-    // mimeType is derived from a closed extension map for the selected media kind.
-    // mimeType 从所选媒体类型的封闭扩展映射派生。
-    let mime_type = media_understanding_mime_type(resource_kind, &media_path)?;
+    // mimeType is the canonical staged MIME and must also agree with the closed host format registry.
+    // mimeType 是规范暂存 MIME，且必须同时与封闭宿主格式注册表一致。
+    let registered_mime_type = media_understanding_mime_type(resource_kind, &media_path)?;
+    if registered_mime_type != attachment.mime_type {
+        return Err(String::from(
+            "Canonical attachment MIME no longer matches the registered media format.",
+        ));
+    }
+    let mime_type = attachment.mime_type.as_str();
     // protocolProfileId is the exact immutable encoder selected with the replacement account route.
     // protocolProfileId 是随替代账号路由选定的精确不可变编码器。
     let protocol_profile_id = resolved_selection
@@ -327,7 +355,7 @@ async fn execute_model_replacement_media_understanding(
     );
     // preparedReference is immutable request-owned content, so protocol encoding never reopens the path.
     // preparedReference 是不可变的请求自有内容，因此协议编码绝不重新打开该路径。
-    let prepared_reference = runtime
+    let prepared_media = runtime
         .prepare_and_remember_local_media(
             &resolved_selection,
             owner_session_id.as_deref(),
@@ -344,18 +372,43 @@ async fn execute_model_replacement_media_understanding(
     let media_id = format!("media-understanding:{}", uuid::Uuid::new_v4());
     // resource is replayed in both the user message and request resource inventory.
     // resource 同时进入用户消息与请求资源清单。
+    // preparedRouteFields preserve Provider file ids, remote URLs, and inline Data URLs in their
+    // dedicated wire channels instead of inferring semantics from string shape.
+    // preparedRouteFields 将供应商文件标识、远程 URL 与内联 Data URL 保留在各自专用 Wire 通道，
+    // 不根据字符串形态推断语义。
+    let (resource_id, source_kind, resource_url) = match prepared_media.reference_encoding {
+        Some(vulcan_provider_adapters::UploadReferenceEncoding::ProviderFileId) => (
+            prepared_media.reference,
+            ResourceSourceKind::ProviderFileId,
+            None,
+        ),
+        Some(
+            vulcan_provider_adapters::UploadReferenceEncoding::ResponseUrl
+            | vulcan_provider_adapters::UploadReferenceEncoding::Template,
+        ) => (
+            media_id,
+            ResourceSourceKind::RemoteUrl,
+            Some(prepared_media.reference),
+        ),
+        None => (
+            media_id,
+            ResourceSourceKind::InlineData,
+            Some(prepared_media.reference),
+        ),
+    };
     let resource = ResourceReference {
-        id: media_id,
+        id: resource_id,
         kind: resource_kind,
         media_type: Some(mime_type.to_string()),
-        source_kind: ResourceSourceKind::HostResolved,
+        source_kind,
         file_name: media_path
             .file_name()
             .and_then(|value| value.to_str())
             .map(str::to_owned),
         image_detail: None,
-        local_path: Some(media_path.to_string_lossy().into_owned()),
-        url: Some(prepared_reference),
+        resource_path: attachment.resource_path.clone(),
+        local_path: None,
+        url: resource_url,
     };
     // outputSchema is the invariant canonical media-understanding result contract.
     // outputSchema 是不变的规范媒体理解结果契约。
@@ -819,6 +872,31 @@ fn media_understanding_resource_kind(
     }
 }
 
+/// Returns the canonical attachment kind for one media-understanding capability.
+/// 返回一项媒体理解能力对应的规范附件类型。
+///
+/// # Parameters
+/// 参数
+/// `capability` is the exact provider-neutral understanding capability.
+/// `capability` 是精确的供应商无关理解能力。
+///
+/// # Returns
+/// 返回值
+/// The matching attachment modality, or an explicit error for non-understanding capabilities.
+/// 返回匹配的附件模态；非理解能力返回显式错误。
+fn media_understanding_attachment_kind(
+    capability: ProviderToolCapabilityKind,
+) -> Result<ConversationAttachmentKind, String> {
+    match capability {
+        ProviderToolCapabilityKind::ImageUnderstand => Ok(ConversationAttachmentKind::Image),
+        ProviderToolCapabilityKind::VideoUnderstand => Ok(ConversationAttachmentKind::Video),
+        ProviderToolCapabilityKind::AudioUnderstand => Ok(ConversationAttachmentKind::Audio),
+        _ => Err(format!(
+            "Capability `{capability:?}` is not media understanding."
+        )),
+    }
+}
+
 /// Reports whether one frozen model and protocol route can execute a replacement media tool.
 /// 报告一条冻结的模型与协议路由能否执行媒体替代理解工具。
 ///
@@ -839,11 +917,9 @@ fn model_replacement_route_supports_media_understanding(
 ) -> bool {
     // attachmentKind binds the semantic facade to the same protocol encoder registry used by normal attachments.
     // attachmentKind 将语义外壳绑定到普通附件使用的同一协议编码器注册表。
-    let attachment_kind = match capability {
-        ProviderToolCapabilityKind::ImageUnderstand => ConversationAttachmentKind::Image,
-        ProviderToolCapabilityKind::VideoUnderstand => ConversationAttachmentKind::Video,
-        ProviderToolCapabilityKind::AudioUnderstand => ConversationAttachmentKind::Audio,
-        _ => return false,
+    let attachment_kind = match media_understanding_attachment_kind(capability) {
+        Ok(kind) => kind,
+        Err(_) => return false,
     };
     let Some(resource_kind) = media_understanding_resource_kind(capability) else {
         return false;
@@ -890,25 +966,144 @@ fn media_understanding_media_label(
     }
 }
 
-/// Returns the provider-neutral AI-facing description for one media tool.
-/// 返回一项媒体工具供应商无关的 AI 可见说明。
+/// Returns the provider-neutral AI-facing description for one media tool and frozen route.
+/// 返回一项媒体工具及冻结路线的供应商无关 AI 可见说明。
+///
+/// # Parameters
+/// 参数
+/// `capability` fixes the media kind, `protocol_profile_id` names the exact encoder, and
+/// `constraints` contains only reviewed route limits.
+/// `capability` 固定媒体类型，`protocol_profile_id` 命名精确编码器，`constraints`
+/// 只包含已审核的路线限制。
+///
+/// # Returns
+/// 返回值
+/// A deterministic description that never invents absent MIME or size claims.
+/// 返回一条确定性说明，绝不虚构缺失的 MIME 或大小声明。
 fn media_understanding_description(
     capability: ProviderToolCapabilityKind,
-) -> Result<&'static str, String> {
-    match capability {
-        ProviderToolCapabilityKind::ImageUnderstand => {
-            Ok("Understand one image using the configured media-understanding backend.")
-        }
-        ProviderToolCapabilityKind::VideoUnderstand => {
-            Ok("Understand one video using the configured media-understanding backend.")
-        }
-        ProviderToolCapabilityKind::AudioUnderstand => {
-            Ok("Understand one audio file using the configured media-understanding backend.")
-        }
-        _ => Err(format!(
-            "Capability `{capability:?}` is not media understanding."
-        )),
+    protocol_profile_id: &str,
+    constraints: &[InputResourceConstraint],
+) -> Result<String, String> {
+    let media_label = media_understanding_media_label(capability)?;
+    let resource_kind = media_understanding_resource_kind(capability)
+        .ok_or_else(|| format!("Capability `{capability:?}` is not media understanding."))?;
+    let constraint = constraints
+        .iter()
+        .find(|constraint| constraint.resource_kind == resource_kind);
+    // acceptedMimeTypes is the exact intersection of the host resolver, protocol encoder, and
+    // optional frozen route declaration; no provider capability is inferred from its name.
+    // acceptedMimeTypes 是宿主解析器、协议编码器与可选冻结路线声明的精确交集；不会根据供应商名称推断能力。
+    let accepted_mime_types =
+        registered_media_attachment_mime_types(media_understanding_attachment_kind(capability)?)
+            .iter()
+            .copied()
+            .filter(|mime_type| {
+                vulcan_ai_protocols::protocol_profile_supports_local_media_type(
+                    protocol_profile_id,
+                    resource_kind,
+                    mime_type,
+                )
+            })
+            .filter(|mime_type| {
+                constraint.is_none_or(|constraint| {
+                    constraint.accepted_mime_types.is_empty()
+                        || constraint
+                            .accepted_mime_types
+                            .iter()
+                            .any(|accepted| accepted.eq_ignore_ascii_case(mime_type))
+                })
+            })
+            .collect::<Vec<_>>();
+    let mime_description = if accepted_mime_types.is_empty() {
+        String::from("none in the host media format registry")
+    } else {
+        accepted_mime_types.join(", ")
+    };
+    let byte_description = constraint
+        .and_then(|constraint| constraint.max_bytes)
+        .map(|max_bytes| format!(" Maximum source size: {max_bytes} bytes."))
+        .unwrap_or_default();
+    let count_description = constraint
+        .and_then(|constraint| constraint.max_count)
+        .map(|max_count| format!(" Frozen route count limit: {max_count}."))
+        .unwrap_or_default();
+    Ok(format!(
+        "Understand exactly one {media_label} using the configured media-understanding backend. Use only a canonical project-relative resource path or `attachment://` id disclosed in this conversation; absolute paths are rejected. Accepted source MIME types: {mime_description}.{byte_description}{count_description} The host never calls this tool automatically; preserve the user's exact analysis intent in `prompt`."
+    ))
+}
+
+/// Builds one direct provider-understanding description from exact operation and channel limits.
+/// 根据精确操作与通道限制构建一条直连供应商理解工具说明。
+///
+/// # Parameters
+/// 参数
+/// `capability` fixes the media kind, `base_description` retains reviewed provider facts, and
+/// `profile` contains the frozen non-secret upload-route intersections.
+/// `capability` 固定媒体类型，`base_description` 保留已审核供应商事实，`profile` 包含冻结的
+/// 非秘密上传路线交集。
+///
+/// # Returns
+/// 返回值
+/// One deterministic AI-facing description listing every actually usable host MIME and route limit.
+/// 返回一条确定性的 AI 可见说明，列出每项实际可用宿主 MIME 与路线限制。
+pub(crate) fn direct_media_understanding_description(
+    capability: ProviderToolCapabilityKind,
+    base_description: &str,
+    profile: &ProviderToolMediaInputProfile,
+) -> Result<String, String> {
+    let attachment_kind = media_understanding_attachment_kind(capability)?;
+    let resource_kind = media_understanding_resource_kind(capability)
+        .ok_or_else(|| format!("Capability `{capability:?}` is not media understanding."))?;
+    if profile.resource_kind != resource_kind {
+        return Err(String::from(
+            "Provider media input profile does not match the understanding capability.",
+        ));
     }
+    let registered = registered_media_attachment_mime_types(attachment_kind);
+    let mut route_descriptions = Vec::with_capacity(profile.routes.len());
+    for (index, route) in profile.routes.iter().enumerate() {
+        // accepted retains only formats that both the canonical attachment resolver and exact
+        // provider-tool route can consume.
+        // accepted 仅保留规范附件解析器与精确供应商工具路线均可消费的格式。
+        let accepted = registered
+            .iter()
+            .copied()
+            .filter(|mime_type| {
+                route.accepted_mime_types.is_empty()
+                    || route
+                        .accepted_mime_types
+                        .iter()
+                        .any(|accepted| accepted.eq_ignore_ascii_case(mime_type))
+            })
+            .collect::<Vec<_>>();
+        if accepted.is_empty() {
+            return Err(format!(
+                "Provider media route {} has no MIME type shared with the host registry.",
+                index + 1
+            ));
+        }
+        let max_bytes = route
+            .max_bytes
+            .map(|value| format!(" maximum source size {value} bytes"))
+            .unwrap_or_else(|| String::from(" no declared source-size maximum"));
+        let max_count = route
+            .max_count
+            .map(|value| format!(" maximum source count {value}"))
+            .unwrap_or_else(|| String::from(" no declared source-count maximum"));
+        route_descriptions.push(format!(
+            "Route {} accepts {};{};{}.",
+            index + 1,
+            accepted.join(", "),
+            max_bytes,
+            max_count
+        ));
+    }
+    Ok(format!(
+        "{} Use exactly one conversation-owned canonical project-relative resource path or `attachment://` id; absolute paths and Provider file ids are rejected. {} The host never invokes this understanding tool automatically, so preserve the user's exact analysis intent.",
+        base_description.trim(),
+        route_descriptions.join(" ")
+    ))
 }
 
 /// Validates one reasoning level against the exact replacement route.
@@ -938,85 +1133,93 @@ fn validate_media_replacement_reasoning(
     })
 }
 
-/// Resolves one existing local media path inside the explicit workspace without symlinks.
-/// 在显式工作区内解析一个已存在本地媒体路径且不允许符号链接。
-async fn canonical_workspace_media_path(
+/// Resolves one AI-visible resource locator into an owned canonical media attachment.
+/// 将一个 AI 可见资源定位符解析为归当前会话所有的规范媒体附件。
+///
+/// # Parameters
+/// 参数
+/// `workspace_root` owns the managed asset index, `owner_session_id` is the invoking conversation,
+/// `capability` fixes the expected modality, and `reference` is the disclosed safe locator.
+/// `workspace_root` 持有托管资产索引，`owner_session_id` 是发起调用的会话，`capability`
+/// 固定预期模态，`reference` 是已告知 AI 的安全定位符。
+///
+/// # Returns
+/// 返回值
+/// The integrity-checked canonical attachment without exposing its provider reference to the model.
+/// 返回通过完整性校验的规范附件，且不向模型暴露供应商引用。
+pub(crate) async fn resolve_media_understanding_attachment(
     workspace_root: Option<&Path>,
+    owner_session_id: Option<&str>,
+    capability: ProviderToolCapabilityKind,
     reference: &str,
-) -> Result<PathBuf, String> {
-    // workspaceRoot is mandatory because AI-visible local paths require one host boundary.
-    // workspaceRoot 是必需的，因为 AI 可见本地路径需要一个宿主边界。
+) -> Result<vulcan_core::types::ConversationAttachment, String> {
     let workspace_root = workspace_root.ok_or_else(|| {
-        String::from("Local media-understanding inputs require an active workspace root.")
+        String::from("Media-understanding resources require an active workspace root.")
     })?;
-    // source is the exact submitted path before workspace resolution.
-    // source 是工作区解析前提交的精确路径。
-    let source = PathBuf::from(reference);
-    if source
-        .components()
-        .any(|component| component == Component::ParentDir)
-    {
-        return Err(String::from(
-            "Media-understanding paths cannot contain parent-directory traversal.",
-        ));
-    }
-    // canonicalRoot is the immutable host filesystem boundary.
-    // canonicalRoot 是不可变宿主文件系统边界。
-    let canonical_root = tokio::fs::canonicalize(workspace_root)
-        .await
-        .map_err(|error| {
-            format!("Media-understanding workspace root cannot be resolved: {error}")
-        })?;
-    // resolved applies the workspace only to relative references.
-    // resolved 仅为相对引用应用工作区。
-    let resolved = if source.is_absolute() {
-        source
-    } else {
-        canonical_root.join(source)
-    };
-    for component_path in resolved.ancestors() {
-        // metadata detects symlinks without following the current component.
-        // metadata 在不跟随当前组件的情况下检测符号链接。
-        let metadata = tokio::fs::symlink_metadata(component_path)
-            .await
-            .map_err(|error| {
-                format!(
-                    "Media-understanding source `{}` cannot be inspected: {error}",
-                    component_path.display()
-                )
-            })?;
-        if metadata.file_type().is_symlink() {
-            return Err(format!(
-                "Media-understanding source `{}` crosses a symbolic link.",
-                component_path.display()
-            ));
-        }
-    }
-    // canonical is the exact existing source identity used for upload and execution.
-    // canonical 是上传与执行使用的精确已存在来源身份。
-    let canonical = tokio::fs::canonicalize(&resolved).await.map_err(|error| {
-        format!(
-            "Media-understanding source `{}` cannot be resolved: {error}",
-            resolved.display()
+    let owner_session_id = owner_session_id.ok_or_else(|| {
+        String::from("Media-understanding resources require an owning conversation id.")
+    })?;
+    let expected_kind = media_understanding_attachment_kind(capability)?;
+    let workspace_path = vulcan_runtime_assets::native_host_path_text_from_path(workspace_root);
+    let owner_session_id = owner_session_id.to_string();
+    let reference = reference.to_string();
+    tokio::task::spawn_blocking(move || {
+        crate::attachment_asset_index::resolve_owned_attachment_resource(
+            workspace_path.as_str(),
+            owner_session_id.as_str(),
+            reference.as_str(),
+            expected_kind,
         )
-    })?;
-    if !canonical.starts_with(&canonical_root) {
-        return Err(format!(
-            "Media-understanding source `{}` is outside the active workspace.",
-            resolved.display()
-        ));
-    }
-    // metadata proves the final source is a regular file.
-    // metadata 证明最终来源是普通文件。
-    let metadata = tokio::fs::metadata(&canonical)
-        .await
-        .map_err(|error| format!("Media-understanding source cannot be inspected: {error}"))?;
-    if !metadata.is_file() {
-        return Err(String::from(
-            "Media-understanding source must be a regular file.",
-        ));
-    }
-    Ok(canonical)
+    })
+    .await
+    .map_err(|error| format!("Media-understanding resource resolver task failed: {error}"))?
+}
+
+/// Rewrites the safe AI-visible locator in one media-tool argument object to its internal local path.
+/// 将媒体工具参数对象中的安全 AI 可见定位符改写为内部本地路径。
+///
+/// # Parameters
+/// 参数
+/// `workspace_root`, `owner_session_id`, and `capability` define the ownership boundary; `arguments`
+/// is the exact fixed-schema model call.
+/// `workspace_root`、`owner_session_id` 与 `capability` 定义所有权边界；`arguments` 是精确的
+/// 固定 Schema 模型调用。
+///
+/// # Returns
+/// 返回值
+/// A request-local argument copy containing an internal path for the provider adapter only.
+/// 返回仅供 Provider Adapter 使用、包含内部路径的单次请求局部参数副本。
+pub(crate) async fn resolve_media_understanding_resource_arguments(
+    workspace_root: Option<&Path>,
+    owner_session_id: Option<&str>,
+    capability: ProviderToolCapabilityKind,
+    arguments: Value,
+) -> Result<Value, String> {
+    let path_argument = media_understanding_path_argument(capability)
+        .ok_or_else(|| format!("Capability `{capability:?}` has no media path argument."))?;
+    let reference = arguments
+        .as_object()
+        .and_then(|object| object.get(path_argument))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("Media-understanding argument `{path_argument}` is required."))?;
+    let attachment = resolve_media_understanding_attachment(
+        workspace_root,
+        owner_session_id,
+        capability,
+        reference,
+    )
+    .await?;
+    let mut resolved = arguments;
+    resolved
+        .as_object_mut()
+        .ok_or_else(|| String::from("Media-understanding arguments must be a JSON object."))?
+        .insert(
+            path_argument.to_string(),
+            Value::String(attachment.local_path),
+        );
+    Ok(resolved)
 }
 
 /// Resolves one exact MIME type from the shared host attachment format registry.
@@ -1206,6 +1409,69 @@ mod tests {
             vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
             ProviderToolCapabilityKind::VideoUnderstand,
         ));
+    }
+
+    /// Verifies AI-facing tool documentation exposes the exact host, protocol, and route MIME intersection.
+    /// 验证 AI 可见工具说明会公布宿主、协议与路线三者的精确 MIME 交集。
+    #[test]
+    fn media_description_lists_exact_frozen_route_mime_types() {
+        let constraints = vec![InputResourceConstraint {
+            resource_kind: ResourceKind::Image,
+            accepted_mime_types: vec![
+                String::from("image/png"),
+                String::from("image/webp"),
+                String::from("image/svg+xml"),
+            ],
+            max_bytes: Some(1_048_576),
+            max_count: Some(2),
+            reference_policy: Default::default(),
+            upload_channel_refs: Vec::new(),
+        }];
+
+        let description = media_understanding_description(
+            ProviderToolCapabilityKind::ImageUnderstand,
+            vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID,
+            constraints.as_slice(),
+        )
+        .expect("image understanding description");
+
+        assert!(description.contains("Accepted source MIME types: image/png, image/webp."));
+        assert!(!description.contains("image/svg+xml"));
+        assert!(description.contains("Maximum source size: 1048576 bytes."));
+        assert!(description.contains("Frozen route count limit: 2."));
+    }
+
+    /// Verifies direct-provider documentation intersects host formats and keeps per-route limits.
+    /// 验证直连供应商说明会取宿主格式交集，并保留逐路线限制。
+    #[test]
+    fn direct_media_description_lists_exact_operation_route_constraints() {
+        let profile = ProviderToolMediaInputProfile {
+            resource_kind: ResourceKind::Video,
+            routes: vec![
+                vulcan_provider_adapters::ProviderToolMediaInputRouteConstraint {
+                    upload_channel_id: String::from("video-a"),
+                    accepted_mime_types: vec![
+                        String::from("video/mp4"),
+                        String::from("application/octet-stream"),
+                    ],
+                    max_bytes: Some(8_388_608),
+                    max_count: Some(1),
+                },
+            ],
+        };
+
+        let description = direct_media_understanding_description(
+            ProviderToolCapabilityKind::VideoUnderstand,
+            "Understand one video.",
+            &profile,
+        )
+        .expect("direct media description");
+
+        assert!(description.contains("Route 1 accepts video/mp4;"));
+        assert!(!description.contains("application/octet-stream"));
+        assert!(description.contains("maximum source size 8388608 bytes"));
+        assert!(description.contains("maximum source count 1"));
+        assert!(description.contains("Provider file ids are rejected"));
     }
 
     /// Verifies model replacement accepts every extended video container recognized for Kimi uploads.

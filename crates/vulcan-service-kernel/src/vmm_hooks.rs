@@ -10,10 +10,13 @@ use std::{
 };
 
 use vulcan_agent_runtime::{
-    agent_runtime::{conversation_hooks::VmmWritebackHookEffect, vmm_hooks::VmmHookConfigSnapshot},
+    agent_runtime::{
+        conversation_hooks::VmmWritebackHookEffect,
+        vmm_hooks::{VmmHookConfigSnapshot, VmmHookRuntimeHandle},
+    },
     provider_config::ProviderConfigurationFile,
 };
-use vulcan_workbench_model::SessionRuntimeStateEntry;
+use vulcan_workbench_model::{SessionId, SessionRuntimeStateEntry};
 use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
 use crate::{
@@ -94,38 +97,42 @@ pub(crate) fn managed_vmm_public_target() -> Option<String> {
         .and_then(|guard| guard.as_ref().map(|overlay| overlay.grpc_target.clone()))
 }
 
-/// Applies the current managed transport to every configuration layer so lower scopes cannot
-/// replace an owned child with stale external connection data.
-/// 将当前托管传输应用到每一层配置，使较低作用域无法用陈旧外部连接数据替换宿主持有的子进程。
-fn apply_managed_vmm_transport_overlay(snapshot: &mut VmmHookConfigSnapshot) {
-    let Some(overlay) = MANAGED_VMM_TRANSPORT_OVERLAY
+/// Builds the current process-local managed transport override without enumerating VMM layers.
+/// 构建当前进程内托管传输覆盖，且不枚举 VMM 配置层。
+///
+/// # Returns
+/// 返回值
+/// The five-field host-owned override while a managed child is active, otherwise `None`.
+/// 托管子进程活动时返回宿主持有的五字段覆盖，否则返回 `None`。
+fn managed_vmm_transport_override_layer() -> Option<vulcan_vmm::VmmConfigLayer> {
+    let overlay = MANAGED_VMM_TRANSPORT_OVERLAY
         .get()
         .and_then(|overlay| overlay.read().ok())
-        .and_then(|guard| guard.clone())
-    else {
-        return;
-    };
-    let apply = |layer: &mut vulcan_vmm::VmmConfigLayer| {
-        layer.enabled = Some(true);
-        layer.grpc_target = Some(overlay.grpc_target.clone());
-        layer.grpc_api_key = Some(overlay.authorization.clone());
-        if !overlay.scope_ready {
-            layer.enabled = Some(false);
-        }
-        if !overlay.precheck_ready {
-            layer.precheck_enabled = Some(false);
-        }
-        if !overlay.postaction_ready {
-            layer.memory_writeback_enabled = Some(false);
-        }
-    };
-    apply(&mut snapshot.global);
-    for layer in snapshot.projects_by_workspace.values_mut() {
-        apply(layer);
-    }
-    for layer in snapshot.sessions.values_mut() {
-        apply(layer);
-    }
+        .and_then(|guard| guard.clone())?;
+    Some(vulcan_vmm::VmmConfigLayer {
+        enabled: Some(overlay.scope_ready),
+        grpc_target: Some(overlay.grpc_target),
+        grpc_api_key: Some(overlay.authorization),
+        precheck_enabled: (!overlay.precheck_ready).then_some(false),
+        memory_writeback_enabled: (!overlay.postaction_ready).then_some(false),
+        ..vulcan_vmm::VmmConfigLayer::default()
+    })
+}
+
+/// Attaches the process-local managed transport override to one complete startup snapshot.
+/// 把进程内托管传输覆盖附加到单个完整启动快照。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` is the startup snapshot receiving one optional constant-size layer.
+/// `snapshot` 是接收单个可选常量大小配置层的启动快照。
+///
+/// # Returns
+/// 返回值
+/// This in-place operation returns no value.
+/// 该原地操作不返回值。
+fn apply_managed_vmm_transport_overlay(snapshot: &mut VmmHookConfigSnapshot) {
+    snapshot.runtime_transport_override = managed_vmm_transport_override_layer();
 }
 
 /// Cached project VMM layer with monotonic metadata for debugging and tests.
@@ -391,16 +398,44 @@ pub(super) fn refresh_guard_vmm_hook_snapshot(
     guard: &mut ServiceBridgeState,
     provider_configuration: &ProviderConfigurationFile,
 ) -> Result<(), String> {
-    if let (Some(agent_runtime), Some(workspace_snapshot)) = (
-        guard.agent_runtime.as_ref(),
-        guard.workspace_snapshot.as_ref(),
-    ) {
+    if let Some(agent_runtime) = guard.agent_runtime.as_ref() {
+        let runtime_transport_override = managed_vmm_transport_override_layer();
+        agent_runtime.vmm_hook_runtime.replace_global_projection(
+            &provider_configuration.vmm,
+            runtime_transport_override.as_ref(),
+        )?;
+    }
+    Ok(())
+}
+
+/// Refreshes one exact project VMM layer after its authoritative configuration save.
+/// 在单个精确项目的权威配置保存后刷新其 VMM 配置层。
+///
+/// # Parameters
+/// 参数
+/// `state` holds the optional runtime hook handle.
+/// `state` 持有可选的运行时 hook 句柄。
+/// `workspace_path` is the exact normalized project key.
+/// `workspace_path` 是精确的规范化项目键。
+/// `project` is the complete saved project layer.
+/// `project` 是已保存的完整项目配置层。
+///
+/// # Returns
+/// 返回值
+/// Returns success after one exact map update or a lock diagnostic.
+/// 单次精确映射更新完成后返回成功，失败时返回锁诊断。
+pub(super) fn refresh_exact_vmm_hook_project_projection(
+    state: &SharedServiceBridgeState,
+    workspace_path: &str,
+    project: &vulcan_vmm::VmmConfigLayer,
+) -> Result<(), String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    if let Some(agent_runtime) = guard.agent_runtime.as_ref() {
         agent_runtime
             .vmm_hook_runtime
-            .replace_snapshot(build_vmm_hook_config_snapshot(
-                provider_configuration,
-                workspace_snapshot,
-            ))?;
+            .replace_project_projection(workspace_path, project)?;
     }
     Ok(())
 }
@@ -475,6 +510,7 @@ pub(super) fn build_vmm_hook_config_snapshot(
         outboxes,
         profile_sync,
         last_compaction_ids,
+        runtime_transport_override: None,
     };
     apply_managed_vmm_transport_overlay(&mut snapshot);
     webui_trace(
@@ -491,6 +527,48 @@ pub(super) fn build_vmm_hook_config_snapshot(
         ),
     );
     snapshot
+}
+
+/// Refreshes only the VMM hook projection owned by one exact retained session.
+/// 仅刷新单个精确保留会话拥有的 VMM hook 投影。
+///
+/// # Parameters
+/// 参数
+/// `runtime` is the authoritative hook runtime receiving the targeted update.
+/// `runtime` 是接收定向更新的权威 hook 运行时。
+/// `workspace_snapshot` provides direct active and archived runtime-state indexes.
+/// `workspace_snapshot` 提供活动与归档运行态的直接索引。
+/// `session_id` identifies the only projection allowed to change.
+/// `session_id` 标识唯一允许发生变化的投影。
+///
+/// # Returns
+/// 返回值
+/// Returns success after one exact map lookup and update, or a runtime lock diagnostic.
+/// 单次精确映射查询与更新完成后返回成功，失败时返回运行时锁诊断。
+pub(super) fn refresh_exact_vmm_hook_session_projection(
+    runtime: &VmmHookRuntimeHandle,
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Result<(), String> {
+    // runtimeState resolves from the two schema-declared ownership maps without enumerating either map.
+    // runtimeState 从 Schema 声明的两个归属映射中解析，且不会枚举任一映射。
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .or_else(|| {
+            workspace_snapshot
+                .archived_session_runtime_state
+                .get(&session_id)
+        });
+    let Some(runtime_state) = runtime_state else {
+        return runtime.remove_session_projection(session_id);
+    };
+    runtime.replace_session_projection(
+        session_id,
+        &runtime_state.vmm,
+        &runtime_state.vmm_writeback_outbox,
+        runtime_state.last_compaction_id.as_deref(),
+    )
 }
 
 /// Applies VMM writeback hook effects to one session runtime state.

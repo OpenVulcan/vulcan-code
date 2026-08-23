@@ -105,19 +105,141 @@ pub(crate) async fn service_stage_composer_attachment_bytes(
         conversation_id.as_deref(),
     )?;
     let descriptor = attachment_descriptor_from_mime_type(&mime_type)
-        .or_else(|| attachment_descriptor_from_path_fallback(&file_name))
-        .ok_or_else(|| format!("文件 `{}` 不是受支持的附件格式。", file_name.trim()))?;
+        .or_else(|| attachment_descriptor_from_path_fallback(&file_name));
     let bytes = BASE64_STANDARD
         .decode(data_base64.trim())
         .map_err(|error| format!("解码附件 `{}` 失败：{}。", file_name.trim(), error))?;
-    let attachment = stage_attachment_bytes(
-        &workspace_path,
-        &descriptor,
-        file_name.trim(),
-        None,
-        bytes.as_slice(),
-    )?;
+    let attachment = if let Some(descriptor) = descriptor {
+        stage_attachment_bytes(
+            &workspace_path,
+            &descriptor,
+            file_name.trim(),
+            None,
+            bytes.as_slice(),
+        )?
+    } else {
+        vulcan_agent_runtime::attachment_assets::stage_generic_attachment_bytes(
+            &workspace_path,
+            file_name.trim(),
+            None,
+            &mime_type,
+            bytes.as_slice(),
+        )?
+    };
     Ok(composer_attachment_summary_from_core(&attachment))
+}
+
+/// Binds one browser-derived JPEG preview sidecar to an already staged managed image.
+/// 将一份浏览器派生的 JPEG 预览旁路文件绑定到已暂存的托管图片。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the workspace snapshot, `project_id` and `conversation_id` resolve the project scope, `attachment_id` is the staged asset id, and `data_base64` carries the derived JPEG bytes.
+/// `state` 持有工作区快照，`project_id` 与 `conversation_id` 解析项目范围，`attachment_id` 是已暂存资产标识，`data_base64` 携带派生 JPEG 字节。
+///
+/// # Returns
+/// 返回值
+/// The native host path of the bound preview sidecar.
+/// 返回已绑定预览旁路文件的宿主原生路径。
+pub(crate) async fn service_stage_composer_attachment_preview_bytes(
+    state: SharedServiceBridgeState,
+    project_id: Option<String>,
+    conversation_id: Option<String>,
+    attachment_id: String,
+    data_base64: String,
+) -> Result<String, String> {
+    let workspace_path = composer_attachment_workspace_path(
+        &state,
+        project_id.as_deref(),
+        conversation_id.as_deref(),
+    )?;
+    let attachment_id = attachment_id.trim();
+    if attachment_id.is_empty() {
+        return Err(String::from(
+            "Attachment image preview requires a staged asset id.",
+        ));
+    }
+    let attachment = resolve_indexed_attachment_resource(
+        &workspace_path,
+        format!("attachment://{attachment_id}").as_str(),
+        ConversationAttachmentKind::Image,
+    )?;
+    let bytes = BASE64_STANDARD
+        .decode(data_base64.trim())
+        .map_err(|error| format!("Failed to decode attachment image preview: {error}"))?;
+    write_attachment_image_preview_sidecar(&attachment, bytes.as_slice())
+}
+
+/// Reconciles one durable composer-draft lease with its complete canonical attachment set.
+/// 使用完整规范附件集合协调一条持久输入区草稿租约。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the authoritative project/session lookup snapshot.
+/// `state` 持有权威项目与会话查找快照。
+/// `project_id` and `conversation_id` identify the exact attachment workspace.
+/// `project_id` 与 `conversation_id` 标识精确附件工作区。
+/// `draft_slot_key` is the stable browser draft owner selected by the composer.
+/// `draft_slot_key` 是输入区选定的稳定浏览器草稿所有者。
+/// `attachments` is the complete service-issued draft attachment set.
+/// `attachments` 是完整的服务签发草稿附件集合。
+///
+/// # Returns
+/// 返回值
+/// Whether the durable owner set changed, or an explicit ownership/integrity error.
+/// 返回持久所有者集合是否变化，或明确的所有权/完整性错误。
+pub(crate) async fn service_reconcile_composer_attachment_draft(
+    state: SharedServiceBridgeState,
+    project_id: Option<String>,
+    conversation_id: Option<String>,
+    draft_slot_key: String,
+    attachments: Vec<ComposerAttachmentSummary>,
+) -> Result<bool, String> {
+    let workspace_path = composer_attachment_workspace_path(
+        &state,
+        project_id.as_deref(),
+        conversation_id.as_deref(),
+    )?;
+    let scope = composer_attachment_draft_scope(&draft_slot_key)?;
+    let attachments = attachments
+        .into_iter()
+        .map(|summary| {
+            resolve_composer_attachment_summary_for_workspace(&workspace_path, summary)
+                .and_then(composer_attachment_summary_to_core)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    reconcile_staged_attachment_ref_scope(&workspace_path, &scope, attachments.as_slice())
+}
+
+/// Builds the internal staging-reference scope for one exact composer draft slot.
+/// 为一个精确输入区草稿槽构建内部暂存引用作用域。
+///
+/// # Parameters
+/// 参数
+/// `draft_slot_key` is the canonical `conversation:` or `new:` slot identity from WebUI.
+/// `draft_slot_key` 是来自 WebUI 的规范 `conversation:` 或 `new:` 草稿槽身份。
+///
+/// # Returns
+/// 返回值
+/// The namespaced internal scope, or an explicit invalid-slot error.
+/// 返回带命名空间的内部作用域，或明确的无效草稿槽错误。
+pub(crate) fn composer_attachment_draft_scope(draft_slot_key: &str) -> Result<String, String> {
+    if draft_slot_key.chars().any(char::is_control) {
+        return Err(String::from(
+            "Composer attachment draft slot must be one bounded conversation: or new: identity.",
+        ));
+    }
+    let draft_slot_key = draft_slot_key.trim();
+    let has_valid_prefix = draft_slot_key
+        .strip_prefix("conversation:")
+        .or_else(|| draft_slot_key.strip_prefix("new:"))
+        .is_some_and(|owner| !owner.trim().is_empty());
+    if !has_valid_prefix || draft_slot_key.len() > 512 {
+        return Err(String::from(
+            "Composer attachment draft slot must be one bounded conversation: or new: identity.",
+        ));
+    }
+    Ok(format!("composer-draft:v1:{draft_slot_key}"))
 }
 
 /// Resolves the project workspace path used to stage one composer attachment.
@@ -136,7 +258,7 @@ pub(crate) async fn service_stage_composer_attachment_bytes(
 /// 返回值
 /// The resolved workspace path text used by attachment staging.
 /// 附件暂存使用的已解析工作区路径文本。
-fn composer_attachment_workspace_path(
+pub(crate) fn composer_attachment_workspace_path(
     state: &SharedServiceBridgeState,
     project_id: Option<&str>,
     conversation_id: Option<&str>,
@@ -145,25 +267,80 @@ fn composer_attachment_workspace_path(
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
     let Some(workspace_snapshot) = guard.workspace_snapshot.as_ref() else {
+        if project_id.is_some_and(|value| !value.trim().is_empty())
+            || conversation_id.is_some_and(|value| !value.trim().is_empty())
+        {
+            return Err(String::from(
+                "Attachment project scope is unavailable while the workspace is loading.",
+            ));
+        }
         return Ok(default_composer_attachment_workspace_path());
     };
-    let owner_project_id = conversation_id
-        .and_then(parse_session_id)
-        .and_then(|session_id| {
-            workspace_session_summary_for_session(workspace_snapshot, session_id)
-                .and_then(session_summary_project_id)
-        })
-        .or(project_id)
+    composer_attachment_workspace_path_from_snapshot(
+        workspace_snapshot,
+        project_id,
+        conversation_id,
+    )
+}
+
+/// Resolves one authoritative attachment workspace path from an already loaded workspace snapshot.
+/// 从已经加载的工作区快照解析一条权威附件工作区路径。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` owns project/session identities, while `project_id` and `conversation_id` select the exact attachment owner.
+/// `workspace_snapshot` 持有项目/会话身份，`project_id` 与 `conversation_id` 选择精确附件所有者。
+///
+/// # Returns
+/// 返回值
+/// The exact project path, the process workspace only when no owner is supplied, or one explicit unknown-owner error.
+/// 返回精确项目路径；仅当未提供所有者时返回进程工作区；未知所有者则返回明确错误。
+pub(crate) fn composer_attachment_workspace_path_from_snapshot(
+    workspace_snapshot: &vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+    project_id: Option<&str>,
+    conversation_id: Option<&str>,
+) -> Result<String, String> {
+    if project_id.is_some_and(|value| value.trim().is_empty())
+        || conversation_id.is_some_and(|value| value.trim().is_empty())
+    {
+        return Err(String::from(
+            "Attachment project and conversation ids cannot be blank.",
+        ));
+    }
+    let conversation_project_id = if let Some(conversation_id) = conversation_id
         .map(str::trim)
-        .filter(|value| !value.is_empty());
+        .filter(|value| !value.is_empty())
+    {
+        let session_id = parse_session_id(conversation_id)
+            .ok_or_else(|| String::from("Attachment conversation id is invalid."))?;
+        let session = workspace_session_summary_for_session(workspace_snapshot, session_id)
+            .ok_or_else(|| String::from("Attachment conversation is not available."))?;
+        Some(
+            session_summary_project_id(session)
+                .ok_or_else(|| String::from("Attachment conversation has no owning project."))?
+                .trim(),
+        )
+    } else {
+        None
+    };
+    let requested_project_id = project_id.map(str::trim).filter(|value| !value.is_empty());
+    if let (Some(conversation_project_id), Some(requested_project_id)) =
+        (conversation_project_id, requested_project_id)
+        && conversation_project_id != requested_project_id
+    {
+        return Err(String::from(
+            "Attachment project does not own the supplied conversation.",
+        ));
+    }
+    // The conversation owner is authoritative when present; the explicit project selects only ownerless draft staging.
+    // 存在会话所有者时以其为权威；显式项目仅用于选择尚无会话所有者的草稿暂存位置。
+    let owner_project_id = conversation_project_id.or(requested_project_id);
     let Some(owner_project_id) = owner_project_id else {
         return Ok(default_composer_attachment_workspace_path());
     };
-    Ok(
-        workspace_task_project_for_project_id(workspace_snapshot, owner_project_id)
-            .map(|project| project.path.clone())
-            .unwrap_or_else(default_composer_attachment_workspace_path),
-    )
+    workspace_task_project_for_project_id(workspace_snapshot, owner_project_id)
+        .map(|project| project.path.clone())
+        .ok_or_else(|| format!("Attachment project `{owner_project_id}` is not available."))
 }
 
 /// Returns the fallback workspace path used by composer attachment staging.
@@ -314,6 +491,40 @@ mod tests {
         }
     }
 
+    /// Verifies supported draft-slot identities map to stable internal asset scopes.
+    /// 验证受支持的草稿槽身份会映射为稳定的内部资产作用域。
+    #[test]
+    fn composer_attachment_draft_scope_accepts_exact_owner_kinds() {
+        assert_eq!(
+            composer_attachment_draft_scope(" conversation:session-a ")
+                .expect("conversation draft owner should be valid"),
+            "composer-draft:v1:conversation:session-a"
+        );
+        assert_eq!(
+            composer_attachment_draft_scope("new:project-a")
+                .expect("new-conversation draft owner should be valid"),
+            "composer-draft:v1:new:project-a"
+        );
+    }
+
+    /// Verifies malformed or ownerless draft slots fail closed before entering the asset index.
+    /// 验证异常或缺少所有者的草稿槽会在进入资产索引前关闭失败。
+    #[test]
+    fn composer_attachment_draft_scope_rejects_invalid_owner_identity() {
+        for invalid in [
+            "",
+            "conversation:",
+            "new:   ",
+            "workspace:project-a",
+            "new:a\n",
+        ] {
+            assert!(
+                composer_attachment_draft_scope(invalid).is_err(),
+                "invalid draft slot should fail: {invalid:?}"
+            );
+        }
+    }
+
     /// Verifies conversation-owned attachment staging resolves the owning project path.
     /// 验证会话所属附件暂存会解析到所属项目路径。
     #[test]
@@ -359,10 +570,36 @@ mod tests {
         );
     }
 
-    /// Verifies blank conversation project ids fall back to the workspace root.
-    /// 验证空白会话项目标识会回退到工作区根目录。
+    /// Verifies an explicit project cannot be paired with a conversation owned by another project.
+    /// 验证明示项目不能与属于另一项目的会话配对。
     #[test]
-    fn composer_attachment_workspace_path_falls_back_for_blank_conversation_project() {
+    fn composer_attachment_workspace_path_rejects_project_conversation_mismatch() {
+        // session_id identifies the conversation owned by project-a.
+        // session_id 标识属于 project-a 的会话。
+        let session_id = SessionId::new_v4();
+        // conversation_id stores the WebUI conversation identity.
+        // conversation_id 保存 WebUI 会话身份。
+        let conversation_id = session_id.to_string();
+        // state retains the authoritative project-a ownership relation.
+        // state 保留权威的 project-a 所有关系。
+        let state = service_state_with_workspace_snapshot(
+            workspace_snapshot_for_attachment_staging(session_id, Some(String::from("project-a"))),
+        );
+
+        let error =
+            composer_attachment_workspace_path(&state, Some("project-b"), Some(&conversation_id))
+                .expect_err("mismatched project and conversation must fail closed");
+
+        assert_eq!(
+            error,
+            "Attachment project does not own the supplied conversation."
+        );
+    }
+
+    /// Verifies an existing conversation without an owning project fails closed instead of escaping to the process workspace.
+    /// 验证缺少所属项目的既有会话会封闭失败，而不会逃逸到进程工作区。
+    #[test]
+    fn composer_attachment_workspace_path_rejects_blank_conversation_project() {
         // session_id identifies the conversation carrying a blank project id.
         // session_id 标识携带空白项目标识的会话。
         let session_id = SessionId::new_v4();
@@ -375,10 +612,6 @@ mod tests {
             workspace_snapshot_for_attachment_staging(session_id, Some(String::from("   "))),
         );
 
-        assert_eq!(
-            composer_attachment_workspace_path(&state, None, Some(&conversation_id))
-                .expect("blank conversation project should resolve through fallback"),
-            default_composer_attachment_workspace_path()
-        );
+        assert!(composer_attachment_workspace_path(&state, None, Some(&conversation_id)).is_err());
     }
 }

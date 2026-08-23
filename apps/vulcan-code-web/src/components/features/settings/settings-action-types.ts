@@ -145,8 +145,8 @@ export interface SettingsActionProps {
   // Saves Provider retry settings.
   // 保存 Provider 重试设置。
   onSaveProviderRetrySettings: (request: ProviderRetrySettingsSaveRequest) => Promise<void>
-  // Saves the complete Provider request-trace diagnostic switch.
-  // 保存完整 Provider 请求追踪诊断开关。
+  // Saves the bounded Provider wire-request trace diagnostic switch.
+  // 保存有界 Provider 线上请求追踪诊断开关。
   onSaveProviderRequestTraceSettings: (enabled: boolean) => Promise<void>
   // Saves one MCP server configuration.
   // 保存单个 MCP 服务器配置。

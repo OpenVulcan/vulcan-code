@@ -205,6 +205,7 @@ fn refreshed_auto_compaction_request_uses_restored_checkpoint_start_mode() {
     // request 刻意从普通用户提示词模式开始，以证明刷新会覆盖该模式。
     let request = ExecutionPreparationRequest {
         session_id,
+        session_storage_directory: None,
         managed_codebase_memory: None,
         execution_scope: vulcan_session_core::ExecutionScope::ContextCompaction {
             node_id: vulcan_session_core::SessionNodeId::from(session_id),

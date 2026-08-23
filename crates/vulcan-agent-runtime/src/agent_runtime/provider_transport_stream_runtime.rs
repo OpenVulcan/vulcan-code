@@ -886,12 +886,13 @@ where
 ///
 /// # Returns
 /// 返回值
-/// `true` for the durable public request boundary and the retained legacy snapshot boundary.
-/// 对可靠公共请求边界及保留的旧快照边界返回 `true`。
+/// `true` only after Started durability is confirmed, plus the retained legacy snapshot boundary.
+/// 仅在 Started 可靠性得到确认后返回 `true`，另保留旧式快照边界。
 fn provider_delta_starts_physical_request(delta: &ProviderStreamDelta) -> bool {
     matches!(
         delta,
-        ProviderStreamDelta::RequestPrepared { .. } | ProviderStreamDelta::RequestSnapshot(_)
+        ProviderStreamDelta::RequestStartDurabilityConfirmed
+            | ProviderStreamDelta::RequestSnapshot(_)
     )
 }
 
@@ -1454,10 +1455,10 @@ mod tests {
         }
     }
 
-    /// Verifies a new physical Provider request clears output emitted by earlier successful requests from the retry-safety decision.
-    /// 验证新的真实 Provider 请求会从重试安全判定中清除更早成功请求已经发出的输出。
+    /// Verifies only a durability-confirmed Provider request resets retry safety.
+    /// 验证只有可靠性已确认的 Provider 请求才会重置重试安全状态。
     #[test]
-    fn durable_physical_request_boundary_resets_retry_safety() {
+    fn confirmed_physical_request_boundary_resets_retry_safety() {
         // unsafeDeltaSeen models visible output emitted by one earlier successful physical request.
         // unsafeDeltaSeen 模拟更早一次成功真实请求已经发出的可见输出。
         let mut unsafe_delta_seen = false;
@@ -1470,6 +1471,12 @@ mod tests {
         observe_provider_request_retry_safety(
             &mut unsafe_delta_seen,
             &test_request_prepared_delta(),
+        );
+        assert!(unsafe_delta_seen);
+
+        observe_provider_request_retry_safety(
+            &mut unsafe_delta_seen,
+            &ProviderStreamDelta::RequestStartDurabilityConfirmed,
         );
         assert!(!unsafe_delta_seen);
     }
@@ -1495,7 +1502,14 @@ mod tests {
         observe_provider_request_retry_reset(
             &mut physical_request_seen,
             &mut completed_retries,
-            &test_request_prepared_delta(),
+            &ProviderStreamDelta::RequestStartDurabilityConfirmed,
+        );
+        assert_eq!(completed_retries, 3);
+
+        observe_provider_request_retry_reset(
+            &mut physical_request_seen,
+            &mut completed_retries,
+            &ProviderStreamDelta::RequestStartDurabilityConfirmed,
         );
         assert_eq!(completed_retries, 0);
     }
@@ -1511,6 +1525,12 @@ mod tests {
             &mut physical_request_active,
             &test_request_prepared_delta(),
         );
+        assert!(!physical_request_active);
+
+        observe_physical_request_activity(
+            &mut physical_request_active,
+            &ProviderStreamDelta::RequestStartDurabilityConfirmed,
+        );
         assert!(physical_request_active);
 
         // completion supplies the typed success boundary without requiring host persistence in this state-only test.
@@ -1524,6 +1544,37 @@ mod tests {
             },
         );
         assert!(!physical_request_active);
+    }
+
+    /// Verifies a rejected Started persistence boundary cannot create a synthetic terminal call.
+    /// 验证被拒绝的 Started 持久化边界不能生成虚假的调用终态。
+    #[tokio::test]
+    async fn unconfirmed_request_preparation_skips_terminal_boundary() {
+        // physicalRequestActive remains false until the adapter receives durable host acknowledgement.
+        // physicalRequestActive 在适配器收到宿主可靠确认前保持为 false。
+        let mut physical_request_active = false;
+        observe_physical_request_activity(
+            &mut physical_request_active,
+            &test_request_prepared_delta(),
+        );
+        assert!(!physical_request_active);
+
+        // sender exposes any incorrectly synthesized Completed boundary.
+        // sender 用于暴露任何错误合成的 Completed 边界。
+        let (sender, mut receiver) = unbounded_channel();
+        send_durable_request_failure(
+            &sender,
+            physical_request_active,
+            false,
+            0,
+            0,
+            0,
+            String::from("start_persistence_rejected"),
+            None,
+        )
+        .await
+        .expect("unconfirmed preparation must not need terminal persistence");
+        assert!(receiver.try_recv().is_err());
     }
 
     /// Verifies a post-Provider controller failure emits no duplicate durable request terminal.

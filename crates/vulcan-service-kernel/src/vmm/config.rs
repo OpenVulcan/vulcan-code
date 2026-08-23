@@ -41,7 +41,11 @@ pub(crate) async fn save_vmm_memory_config(
             },
             |project_configuration| {
                 update_cached_project_vmm_layer(&project_path, project_configuration.vmm.clone());
-                refresh_service_vmm_hook_snapshot(state)
+                refresh_exact_vmm_hook_project_projection(
+                    state,
+                    &project_path,
+                    &project_configuration.vmm,
+                )
             },
         )
         .await;

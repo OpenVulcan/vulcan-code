@@ -1600,6 +1600,46 @@ impl TaskRuntime {
         Ok(root.map(SegmentedTaskSessionStore::new))
     }
 
+    /// Resolves one exact TaskSession directory through the in-memory task and root locator indexes.
+    /// 通过内存任务索引与根定位索引解析一个精确 TaskSession 目录。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `task_session_id` is the stable child-session identity whose already-published directory is required.
+    /// `task_session_id` 是需要获取已发布目录的稳定子会话身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The deterministic task directory, `None` for an unknown task/root, or an explicit lock/storage error.
+    /// 返回确定性的任务目录；未知任务或根返回 `None`；锁或存储异常返回显式错误。
+    pub fn task_session_directory_for_task(
+        &self,
+        task_session_id: SessionId,
+    ) -> Result<Option<PathBuf>, String> {
+        // rootSessionId is obtained by one task-record key lookup and never by enumerating task directories.
+        // rootSessionId 通过一次任务记录键查询取得，绝不枚举任务目录。
+        let root_session_id = self
+            .sessions
+            .read()
+            .map_err(|_| String::from("The task-session registry is locked and cannot read."))?
+            .get(&task_session_id)
+            .map(|record| record.origin_session_id);
+        let Some(root_session_id) = root_session_id else {
+            return Ok(None);
+        };
+        // store is selected by one root-session key lookup from the authoritative host configuration.
+        // store 通过一次根会话键查询从权威宿主配置中选择。
+        let Some(store) = self.task_session_store_for_root(root_session_id)? else {
+            return Ok(None);
+        };
+        // taskDirectory is a deterministic `tasks/<id>` path validated by the segmented store.
+        // taskDirectory 是由分段存储校验的确定性 `tasks/<id>` 路径。
+        store
+            .task_session_directory(SessionNodeId::from(task_session_id))
+            .map(Some)
+            .map_err(|error| error.message)
+    }
+
     /// Loads child task segment summaries from the segmented task metadata.
     /// 从分段子任务元数据加载子任务分段摘要。
     fn load_task_segment_summaries_for_record(
@@ -1788,29 +1828,43 @@ fn load_validated_open_subagent_metadata(
     store: &SegmentedTaskSessionStore,
     root_session_id: SessionNodeId,
 ) -> Result<Vec<TaskSessionMetadata>, String> {
-    let mut metadata_by_parent = store
-        .load_task_session_metadata_by_parent()
+    let mut mirrors_by_parent = store
+        .load_task_session_mirror_summaries_by_parent_for_root_tree(root_session_id)
         .map_err(|error| error.message)?;
-    validate_persisted_subagent_metadata_forest(&metadata_by_parent, root_session_id)?;
-    let expected_restore_count = metadata_by_parent
-        .values()
-        .flat_map(|metadata| metadata.iter())
-        .filter(|metadata| metadata.status != TaskSessionStatus::Archived)
-        .count();
+    validate_persisted_subagent_mirror_forest(&mirrors_by_parent, root_session_id)?;
     let mut visited_parent_ids = BTreeSet::new();
     let mut parents = vec![ParentSessionRef::MainSession { root_session_id }];
-    let mut metadata_to_restore = Vec::with_capacity(expected_restore_count);
+    let mut metadata_to_restore = Vec::new();
     while let Some(parent) = parents.pop() {
         let parent_node_id = subagent_parent_ref_node_id(&parent);
         if !visited_parent_ids.insert(parent_node_id) {
             continue;
         }
-        let Some(metadata_records) = metadata_by_parent.remove(&parent) else {
+        let Some(mirrors) = mirrors_by_parent.remove(&parent) else {
             continue;
         };
-        for metadata in metadata_records {
-            if metadata.status == TaskSessionStatus::Archived {
+        for mirror in mirrors {
+            if mirror.status == TaskSessionStatus::Archived {
                 continue;
+            }
+            // Initialization opens only the exact active task selected by the root index.
+            // 初始化仅打开根索引选中的精确活动任务。
+            let Some(metadata) = store
+                .load_task_session(mirror.task_session_id)
+                .map_err(|error| error.message)?
+            else {
+                continue;
+            };
+            if metadata.root_session_id != mirror.root_session_id
+                || metadata.task_session_id != mirror.task_session_id
+                || metadata.public_task_id != mirror.public_task_id
+                || metadata.parent != mirror.parent
+                || metadata.status != mirror.status
+            {
+                return Err(format!(
+                    "Persisted subagent mirror `{}` does not match its exact metadata document.",
+                    mirror.task_session_id
+                ));
             }
             parents.push(ParentSessionRef::TaskSession {
                 root_session_id,
@@ -1819,22 +1873,16 @@ fn load_validated_open_subagent_metadata(
             metadata_to_restore.push(metadata);
         }
     }
-    if metadata_to_restore.len() != expected_restore_count {
-        return Err(format!(
-            "Persisted subagent metadata contains {} non-archived entries outside the root `{root_session_id}` tree.",
-            expected_restore_count.saturating_sub(metadata_to_restore.len())
-        ));
-    }
     Ok(metadata_to_restore)
 }
 
-/// Validates persisted open-agent identity and ancestry before any in-memory restore mutation.
-/// 在任何内存恢复变更前校验持久化开放代理的身份与祖先关系。
+/// Validates persisted open-agent identity and ancestry from the single root mirror index.
+/// 从单个根镜像索引校验持久化开放代理的身份与祖先关系。
 ///
 /// # Parameters
 /// 参数
-/// `metadata_by_parent` contains every persisted task grouped by its encoded direct parent.
-/// `metadata_by_parent` 包含按编码直接父级分组的全部持久化任务。
+/// `mirrors_by_parent` contains reachable task mirrors grouped by their encoded direct parent.
+/// `mirrors_by_parent` 包含按编码直接父级分组的可达任务镜像。
 /// `root_session_id` is the only main-session root accepted by this restore transaction.
 /// `root_session_id` 是本次恢复事务唯一接受的主会话根。
 ///
@@ -1842,38 +1890,38 @@ fn load_validated_open_subagent_metadata(
 /// 返回值
 /// Success for one unambiguous rooted forest, or a deterministic integrity error.
 /// 对单一无歧义根森林返回成功，否则返回确定性完整性错误。
-fn validate_persisted_subagent_metadata_forest(
-    metadata_by_parent: &BTreeMap<ParentSessionRef, Vec<TaskSessionMetadata>>,
+fn validate_persisted_subagent_mirror_forest(
+    mirrors_by_parent: &BTreeMap<ParentSessionRef, Vec<TaskSessionMirrorSummary>>,
     root_session_id: SessionNodeId,
 ) -> Result<(), String> {
-    let mut metadata_by_session = BTreeMap::new();
-    for metadata in metadata_by_parent
+    let mut mirrors_by_session = BTreeMap::new();
+    for mirror in mirrors_by_parent
         .values()
-        .flat_map(|metadata| metadata.iter())
+        .flat_map(|mirrors| mirrors.iter())
     {
-        if metadata.root_session_id != root_session_id {
+        if mirror.root_session_id != root_session_id {
             return Err(format!(
                 "Persisted subagent session `{}` belongs to root `{}` instead of `{root_session_id}`.",
-                metadata.task_session_id, metadata.root_session_id
+                mirror.task_session_id, mirror.root_session_id
             ));
         }
-        if metadata_by_session
-            .insert(metadata.task_session_id, metadata)
+        if mirrors_by_session
+            .insert(mirror.task_session_id, mirror)
             .is_some()
         {
             return Err(format!(
                 "Persisted subagent session `{}` appears more than once.",
-                metadata.task_session_id
+                mirror.task_session_id
             ));
         }
     }
     let mut open_slots = BTreeMap::new();
-    for metadata in metadata_by_session
+    for mirror in mirrors_by_session
         .values()
         .copied()
-        .filter(|metadata| metadata.status != TaskSessionStatus::Archived)
+        .filter(|mirror| mirror.status != TaskSessionStatus::Archived)
     {
-        match &metadata.parent {
+        match &mirror.parent {
             ParentSessionRef::MainSession {
                 root_session_id: parent_root_session_id,
             } if *parent_root_session_id == root_session_id => {}
@@ -1881,31 +1929,31 @@ fn validate_persisted_subagent_metadata_forest(
                 root_session_id: parent_root_session_id,
                 parent_task_session_id,
             } if *parent_root_session_id == root_session_id => {
-                let parent = metadata_by_session.get(parent_task_session_id).ok_or_else(|| {
+                let parent = mirrors_by_session.get(parent_task_session_id).ok_or_else(|| {
                     format!(
                         "Persisted open subagent `{}` references missing parent session `{parent_task_session_id}`.",
-                        metadata.task_session_id
+                        mirror.task_session_id
                     )
                 })?;
                 if parent.status == TaskSessionStatus::Archived {
                     return Err(format!(
                         "Persisted open subagent `{}` belongs to archived parent session `{parent_task_session_id}`.",
-                        metadata.task_session_id
+                        mirror.task_session_id
                     ));
                 }
             }
             _ => {
                 return Err(format!(
                     "Persisted open subagent `{}` has an invalid parent outside root `{root_session_id}`.",
-                    metadata.task_session_id
+                    mirror.task_session_id
                 ));
             }
         }
-        let slot = (metadata.parent.clone(), metadata.public_task_id.clone());
-        if let Some(existing_session_id) = open_slots.insert(slot, metadata.task_session_id) {
+        let slot = (mirror.parent.clone(), mirror.public_task_id.clone());
+        if let Some(existing_session_id) = open_slots.insert(slot, mirror.task_session_id) {
             return Err(format!(
                 "Persisted parent-scoped agent `{}` is open in both sessions `{existing_session_id}` and `{}`.",
-                metadata.public_task_id, metadata.task_session_id
+                mirror.public_task_id, mirror.task_session_id
             ));
         }
     }

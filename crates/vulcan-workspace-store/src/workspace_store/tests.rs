@@ -60,20 +60,15 @@ fn provider_request_trace_is_persisted_in_owning_session_temp_directory() {
         "final_wire_request": {"body": {"model": "test-model"}},
     });
 
-    let trace_path = persist_provider_request_trace(
-        &root,
-        session_id,
-        "100-000001-00000000-0000-0000-0000-000000000001",
-        &trace,
-    )
-    .expect("persist provider request trace");
+    let trace_path = persist_provider_request_trace(&session_dir, session_id, 2, &trace)
+        .expect("persist provider request trace");
 
     assert_eq!(
         trace_path,
         session_dir
             .join("temp")
             .join(PROVIDER_REQUEST_TRACE_DIRECTORY)
-            .join("100-000001-00000000-0000-0000-0000-000000000001.json")
+            .join("slot-02.json")
     );
     let restored = serde_json::from_slice::<serde_json::Value>(
         &std::fs::read(&trace_path).expect("read provider request trace"),
@@ -81,11 +76,92 @@ fn provider_request_trace_is_persisted_in_owning_session_temp_directory() {
     .expect("decode provider request trace");
     assert_eq!(restored, trace);
     assert!(
-        persist_provider_request_trace(&root, session_id, "../escape", &trace).is_err(),
-        "path-like trace identities must be rejected"
+        persist_provider_request_trace(
+            &session_dir,
+            session_id,
+            PROVIDER_REQUEST_TRACE_SLOT_COUNT,
+            &trace,
+        )
+        .is_err(),
+        "out-of-range trace slots must be rejected"
     );
 
     std::fs::remove_dir_all(&root).expect("remove provider trace test root");
+}
+
+/// Verifies exact trace slots rotate without discovery and oversized bodies become bounded summaries.
+/// 验证精确追踪槽位无需发现即可轮转，且超大正文会变成有界摘要。
+#[test]
+fn provider_request_trace_slot_is_bounded_and_exactly_replaceable() {
+    let root = std::env::temp_dir().join(format!(
+        "vulcan-provider-request-trace-bound-test-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let session_id = SessionId::from_u128(7021);
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        SegmentedSessionCreateRequest {
+            session_id: session_id.to_string(),
+            project_tag: String::from("provider-trace-bound-project"),
+            created_date: String::from("2026-08-22"),
+            created_at: String::from("101"),
+            project_id: Some(String::from("provider-trace-bound-project")),
+            title: Some(String::from("provider trace bound")),
+            title_source: Some(String::from("test")),
+            segment_policy: SegmentPolicy::default(),
+        },
+    )
+    .expect("create bounded provider trace session");
+    let oversized = serde_json::json!({
+        "schema_version": "vulcan.provider-request-trace.v3",
+        "execution_id": "oversized",
+        "api_request": {
+            "capture_point": "transport_dispatch",
+            "body": "x".repeat(
+                usize::try_from(PROVIDER_REQUEST_TRACE_MAX_BYTES)
+                    .expect("trace byte bound should fit usize")
+                    + 1
+            ),
+        },
+    });
+    let trace_path = persist_provider_request_trace(&session_dir, session_id, 0, &oversized)
+        .expect("oversized provider trace should publish a summary");
+    let summary_bytes = std::fs::read(&trace_path).expect("bounded trace summary should read");
+    assert!(
+        u64::try_from(summary_bytes.len()).unwrap_or(u64::MAX) <= PROVIDER_REQUEST_TRACE_MAX_BYTES
+    );
+    let summary: serde_json::Value =
+        serde_json::from_slice(&summary_bytes).expect("bounded trace summary should decode");
+    assert_eq!(
+        summary
+            .pointer("/trace_omission/reason")
+            .and_then(serde_json::Value::as_str),
+        Some("encoded_trace_exceeded_bounded_slot_capacity")
+    );
+    assert_eq!(
+        summary
+            .pointer("/api_request/body_omitted")
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+
+    let replacement = serde_json::json!({
+        "schema_version": "vulcan.provider-request-trace.v3",
+        "execution_id": "replacement",
+        "api_request": {"body": {"model": "replacement-model"}},
+    });
+    let replacement_path =
+        persist_provider_request_trace(&session_dir, session_id, 0, &replacement)
+            .expect("the same exact trace slot should replace its prior summary");
+    assert_eq!(replacement_path, trace_path);
+    let restored: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(replacement_path).expect("replacement trace should read"),
+    )
+    .expect("replacement trace should decode");
+    assert_eq!(restored, replacement);
+
+    std::fs::remove_dir_all(&root).expect("remove bounded provider trace test root");
 }
 
 /// Verifies configured-inference traces are atomically isolated by their authenticated consumer profile.
@@ -101,20 +177,15 @@ fn configured_inference_provider_request_trace_is_consumer_scoped() {
         "api_request": {"body": {"reasoning": {"effort": "none"}}},
     });
 
-    let trace_path = persist_configured_inference_provider_request_trace(
-        &root,
-        "vmm",
-        "100-000001-00000000-0000-0000-0000-000000000001",
-        &trace,
-    )
-    .expect("persist configured-inference provider request trace");
+    let trace_path = persist_configured_inference_provider_request_trace(&root, "vmm", 1, &trace)
+        .expect("persist configured-inference provider request trace");
 
     assert_eq!(
         trace_path,
         root.join("diagnostics")
             .join(CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_DIRECTORY)
             .join("vmm")
-            .join("100-000001-00000000-0000-0000-0000-000000000001.json")
+            .join("slot-01.json")
     );
     let restored = serde_json::from_slice::<serde_json::Value>(
         &std::fs::read(&trace_path).expect("read configured-inference trace"),
@@ -122,13 +193,8 @@ fn configured_inference_provider_request_trace_is_consumer_scoped() {
     .expect("decode configured-inference trace");
     assert_eq!(restored, trace);
     assert!(
-        persist_configured_inference_provider_request_trace(
-            &root,
-            "../escape",
-            "valid-stem",
-            &trace,
-        )
-        .is_err(),
+        persist_configured_inference_provider_request_trace(&root, "../escape", 0, &trace,)
+            .is_err(),
         "path-like consumer profiles must be rejected"
     );
 
@@ -942,6 +1008,7 @@ fn session_addon_state_write_does_not_rewrite_segmented_state_document() {
             context_compaction_window_node_id: None,
             provider_route_lease: None,
             provider_tool_selections: Default::default(),
+            media_understanding_modes: Default::default(),
             provider_tool_enabled_capabilities: Default::default(),
             provider_extension_target_sets: Default::default(),
             provider_tool_settings_initialized: false,
@@ -968,6 +1035,76 @@ fn session_addon_state_write_does_not_rewrite_segmented_state_document() {
             .and_then(|controls| controls.active_provider_id),
         Some(String::from("new-provider"))
     );
+}
+
+/// Verifies exact-directory addon updates merge only the named session document.
+/// 验证精确目录附属状态更新只合并指定会话文档。
+#[tokio::test]
+async fn exact_session_directory_addon_update_merges_without_discovery() {
+    // root owns one isolated segmented session and no catalog metadata outside that session.
+    // root 持有单个隔离分段会话，且该会话之外不存在目录索引元数据。
+    let root = std::env::temp_dir().join(format!(
+        "vulcan-workspace-exact-addon-test-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let session_id = SessionId::from_u128(7012);
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        SegmentedSessionCreateRequest {
+            session_id: session_id.to_string(),
+            project_tag: String::from("project-exact-addon"),
+            created_date: String::from("2026-08-22"),
+            created_at: String::from("100"),
+            project_id: Some(String::from("project-exact-addon")),
+            title: Some(String::from("exact addon")),
+            title_source: Some(String::from("test")),
+            segment_policy: SegmentPolicy::default(),
+        },
+    )
+    .expect("create exact addon session");
+    let mut first_update = SessionAddonState::new(session_id);
+    let _ = first_update.set_json_namespace(
+        SessionAddonNamespace::Vmm,
+        serde_json::json!({"enabled": true}),
+        String::from("101"),
+    );
+    persist_single_session_addon_state_update_in_directory(
+        session_dir.clone(),
+        session_id,
+        &first_update,
+    )
+    .await
+    .expect("persist first exact addon update");
+    let mut second_update = SessionAddonState::new(session_id);
+    let _ = second_update.set_json_namespace(
+        SessionAddonNamespace::OutputStyle,
+        serde_json::json!({"override_style_id": "concise"}),
+        String::from("102"),
+    );
+
+    let merged = persist_single_session_addon_state_update_in_directory(
+        session_dir,
+        session_id,
+        &second_update,
+    )
+    .await
+    .expect("persist second exact addon update");
+
+    assert!(merged.namespace(SessionAddonNamespace::Vmm).is_some());
+    assert!(
+        merged
+            .namespace(SessionAddonNamespace::OutputStyle)
+            .is_some()
+    );
+    let missing_error = persist_single_session_addon_state_update_in_directory(
+        root.join("missing-session"),
+        session_id,
+        &second_update,
+    )
+    .await
+    .expect_err("missing exact session directory must not trigger discovery");
+    assert!(missing_error.contains("精确会话目录不存在"));
 }
 
 /// Verifies runtime recovery does not synthesize provider context from segmented display JSONL.
@@ -1227,20 +1364,10 @@ fn segmented_context_public_apis_write_state_and_turn_context() {
         ..SessionRuntimeStateEntry::default()
     };
 
-    persist_segmented_session_context_current_document(
-        &root,
-        "project-context",
-        session_id,
-        &runtime_state,
-    )
-    .expect("persist segmented current context");
-    snapshot_segmented_session_context_before_user_prompt(
-        &root,
-        "project-context",
-        session_id,
-        &runtime_state,
-    )
-    .expect("snapshot segmented context");
+    persist_segmented_session_context_current_document(&session_dir, session_id, &runtime_state)
+        .expect("persist segmented current context");
+    snapshot_segmented_session_context_before_user_prompt(&session_dir, session_id, &runtime_state)
+        .expect("snapshot segmented context");
 
     let state = read_state(&session_dir)
         .expect("read segmented state")
@@ -1267,6 +1394,23 @@ fn segmented_session_boundary_public_api_appends_events() {
         uuid::Uuid::new_v4()
     ));
     let session_id = SessionId::from_u128(7002);
+    // session_dir is the only exact persistence target accepted by the boundary API.
+    // session_dir 是边界 API 接受的唯一精确持久化目标。
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        SegmentedSessionCreateRequest {
+            session_id: session_id.to_string(),
+            project_tag: String::from("project-context"),
+            created_date: String::from("2026-06-07"),
+            created_at: String::from("100"),
+            project_id: Some(String::from("project-context")),
+            title: Some(String::from("session boundary")),
+            title_source: Some(String::from("test")),
+            segment_policy: SegmentPolicy::default(),
+        },
+    )
+    .expect("create exact session directory");
     let event = SessionBoundaryEvent::new(
         "boundary-1",
         SessionNodeId::from(session_id),
@@ -1279,19 +1423,9 @@ fn segmented_session_boundary_public_api_appends_events() {
     .with_turn_id("turn-1")
     .with_payload(serde_json::json!({ "source": "user_followup" }));
 
-    append_segmented_session_boundary_events(
-        &root,
-        "project-context",
-        session_id,
-        "会话边界",
-        &[event],
-    )
-    .expect("append session boundary events");
+    append_segmented_session_boundary_events(&session_dir, session_id, &[event])
+        .expect("append session boundary events");
 
-    let session_dir =
-        find_existing_segmented_context_session_dir(&root, "project-context", session_id)
-            .expect("find session dir")
-            .expect("session dir should exist");
     let lines =
         read_segmented_session_event_window(&session_dir, None, 8).expect("read segmented events");
     assert!(lines.iter().any(
@@ -1311,6 +1445,23 @@ fn segmented_session_boundary_payload_sequence_matches_jsonl_sequence() {
         uuid::Uuid::new_v4()
     ));
     let session_id = SessionId::from_u128(7003);
+    // session_dir binds both writes and reads to one deterministic session directory.
+    // session_dir 将写入与读取绑定到同一个确定性会话目录。
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        SegmentedSessionCreateRequest {
+            session_id: session_id.to_string(),
+            project_tag: String::from("project-context"),
+            created_date: String::from("2026-06-07"),
+            created_at: String::from("100"),
+            project_id: Some(String::from("project-context")),
+            title: Some(String::from("session boundary sequence")),
+            title_source: Some(String::from("test")),
+            segment_policy: SegmentPolicy::default(),
+        },
+    )
+    .expect("create exact session directory");
     let thread_id = SessionNodeId::from(session_id);
     let first_turn_events = vec![
         SessionBoundaryEvent::new(
@@ -1357,27 +1508,11 @@ fn segmented_session_boundary_payload_sequence_matches_jsonl_sequence() {
         .with_turn_id("turn-2"),
     ];
 
-    append_segmented_session_boundary_events(
-        &root,
-        "project-context",
-        session_id,
-        "会话边界序号",
-        &first_turn_events,
-    )
-    .expect("append first session boundary turn");
-    append_segmented_session_boundary_events(
-        &root,
-        "project-context",
-        session_id,
-        "会话边界序号",
-        &second_turn_events,
-    )
-    .expect("append second session boundary turn");
+    append_segmented_session_boundary_events(&session_dir, session_id, &first_turn_events)
+        .expect("append first session boundary turn");
+    append_segmented_session_boundary_events(&session_dir, session_id, &second_turn_events)
+        .expect("append second session boundary turn");
 
-    let session_dir =
-        find_existing_segmented_context_session_dir(&root, "project-context", session_id)
-            .expect("find session dir")
-            .expect("session dir should exist");
     let lines =
         read_segmented_session_event_window(&session_dir, None, 8).expect("read segmented events");
     let boundary_lines = lines
@@ -1389,9 +1524,8 @@ fn segmented_session_boundary_payload_sequence_matches_jsonl_sequence() {
         assert_eq!(line.payload["sequence"], serde_json::json!(line.seq));
         assert_eq!(line.payload["thread_id"], serde_json::json!(thread_id));
     }
-    let restored_events =
-        load_segmented_session_boundary_events(&root, "project-context", session_id, None, 8)
-            .expect("restore session boundary events");
+    let restored_events = load_segmented_session_boundary_events(&session_dir, session_id, None, 8)
+        .expect("restore session boundary events");
     assert_eq!(restored_events.len(), 4);
     assert_eq!(restored_events[0].thread_id, thread_id);
     assert_eq!(restored_events[0].sequence, boundary_lines[0].seq);
@@ -1437,12 +1571,7 @@ fn workspace_segmented_boundary_store_runs_external_lifecycle_without_overwritin
         },
     )
     .expect("write existing state");
-    let store = WorkspaceSegmentedSessionBoundaryStore::new(
-        &root,
-        "project-context",
-        session_id,
-        "session lifecycle runner",
-    );
+    let store = WorkspaceSegmentedSessionBoundaryStore::new(&session_dir, session_id);
     let runner = SessionLifecycleRunner::new(store, NoopSessionLifecycleHook);
 
     runner
@@ -1490,9 +1619,8 @@ fn workspace_segmented_boundary_store_runs_external_lifecycle_without_overwritin
     assert_eq!(state.runtime_state["phase"], "existing-runtime");
     assert_eq!(state.current_context["cursor"], 42);
     assert_eq!(state.session_boundary_state["status"], "idle");
-    let restored_events =
-        load_segmented_session_boundary_events(&root, "project-context", session_id, None, 8)
-            .expect("session events should restore");
+    let restored_events = load_segmented_session_boundary_events(&session_dir, session_id, None, 8)
+        .expect("session events should restore");
     assert_eq!(restored_events.len(), 2);
     assert_eq!(restored_events[0].sequence, 1);
     assert_eq!(restored_events[1].sequence, 2);

@@ -2,6 +2,7 @@
 //! 针对已分类服务引导失败的明确用户授权恢复。
 
 use super::*;
+use crate::require_segmented_session_directory_from_state;
 use uuid::Uuid;
 
 /// Discards one classified historical session VMM state and starts a clean bootstrap retry.
@@ -91,6 +92,21 @@ pub(crate) fn service_rebuild_startup_session_vmm(
             ));
         }
     };
+    let session_directory = match require_segmented_session_directory_from_state(
+        &state,
+        &controller_runtime.data_root,
+        session_id,
+    ) {
+        Ok(session_directory) => session_directory,
+        Err(error) => {
+            return Err(restore_startup_recovery_failure(
+                &state,
+                &event_emitter,
+                recovery,
+                format!("解析 VMM 恢复目标的精确会话目录失败：{error}"),
+            ));
+        }
+    };
     // lifecycle_fence closes any stale controller and blocks reopening during exact artifact removal.
     // lifecycle_fence 关闭任何陈旧控制器，并在精确工件移除期间阻止重新打开。
     let lifecycle_fence = match registry.begin_lifecycle_transition([session_id]) {
@@ -109,7 +125,7 @@ pub(crate) fn service_rebuild_startup_session_vmm(
     let rebuilt_at = current_unix_millis_text();
     let rebuilt =
         match vulcan_workspace_store::workspace_store::rebuild_damaged_core_session_vmm_state(
-            &controller_runtime.data_root,
+            &session_directory,
             session_id,
             &rebuilt_at,
         ) {

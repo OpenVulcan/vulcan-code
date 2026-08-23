@@ -171,13 +171,15 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         &prompt_skills_global_config,
     ));
     after_precheck_trace(
-        "after_precheck_25a5_prompt_skill_catalog_load_enter",
+        "after_precheck_25a5_prompt_skill_catalog_snapshot_enter",
         format!("session={}", request.session_id),
     );
-    let mut prompt_skill_catalog =
-        vulcan_prompt_skills::load_prompt_skills(&prompt_skills_global_config);
+    // promptSkillCatalog is an immutable generation captured before submission; execution
+    // preparation must never enumerate skill directories.
+    // promptSkillCatalog 是提交前捕获的不可变代次；执行准备绝不能枚举技能目录。
+    let mut prompt_skill_catalog = foundation.prompt_skill_catalog().as_ref().clone();
     after_precheck_trace(
-        "after_precheck_25a6_prompt_skill_catalog_loaded",
+        "after_precheck_25a6_prompt_skill_catalog_snapshot_ready",
         format!(
             "session={} errors={}",
             request.session_id,
@@ -397,6 +399,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         prompt_preview: execution_prompt_preview(request),
         workspace_path,
         task_session_store_root: request.task_session_store_root.clone(),
+        session_storage_directory: request.session_storage_directory.clone(),
         conversation_attachments,
         context_history_count: request.conversation_state.messages.len(),
         execution_mode: request.execution_mode.clone(),

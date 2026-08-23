@@ -108,18 +108,13 @@ pub fn sync_segmented_session_display_from_conversation_state(
 /// Returns success when the document is written or the session directory no longer exists.
 /// 当文档写入成功或会话目录已不存在时返回成功。
 pub fn persist_segmented_session_context_current_document(
-    data_root: &std::path::Path,
-    project_id: &str,
+    session_directory: &std::path::Path,
     session_id: SessionId,
     runtime_state: &SessionRuntimeStateEntry,
 ) -> Result<(), String> {
-    let Some(session_dir) =
-        find_existing_segmented_context_session_dir(data_root, project_id, session_id)?
-    else {
-        return Ok(());
-    };
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
     let state_document = state_document_from_runtime_state(&session_id.to_string(), runtime_state)?;
-    write_state(&session_dir, &state_document)
+    write_state(session_directory, &state_document)
 }
 
 /// Backs up provider-facing runtime JSONL files before context compaction changes a session.
@@ -141,17 +136,13 @@ pub fn persist_segmented_session_context_current_document(
 /// Relative paths copied into the runtime backup directory; missing sessions return an empty list.
 /// 已复制到运行时备份目录的相对路径；会话缺失时返回空列表。
 pub fn backup_session_runtime_log_before_compaction(
-    data_root: &std::path::Path,
+    session_directory: &std::path::Path,
     session_id: SessionId,
     compaction_id: &str,
     timestamp: &str,
 ) -> Result<Vec<String>, String> {
-    let Some(session_dir) =
-        find_segmented_session_directory_by_id(data_root, &session_id.to_string())?
-    else {
-        return Ok(Vec::new());
-    };
-    backup_runtime_log_before_compaction(&session_dir, compaction_id, timestamp)
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    backup_runtime_log_before_compaction(session_directory, compaction_id, timestamp)
 }
 
 /// Request for recording the provider-facing injection view applied to one session turn.
@@ -179,7 +170,7 @@ pub fn backup_session_runtime_log_before_compaction(
 pub struct SessionRuntimeInjectionAppliedRecord<'a> {
     /// Vulcan Code data root containing segmented session directories.
     /// 包含分段会话目录的 Vulcan Code 数据根目录。
-    pub data_root: &'a std::path::Path,
+    pub session_directory: &'a std::path::Path,
     /// Session whose runtime log should receive the audit event.
     /// 需要写入审计事件的会话。
     pub session_id: SessionId,
@@ -245,7 +236,7 @@ pub fn record_session_runtime_injection_applied(
     request: SessionRuntimeInjectionAppliedRecord<'_>,
 ) -> Result<bool, String> {
     let SessionRuntimeInjectionAppliedRecord {
-        data_root,
+        session_directory,
         session_id,
         turn_id,
         combined_fingerprint,
@@ -262,16 +253,12 @@ pub fn record_session_runtime_injection_applied(
         reclaimable_anchor_estimated_tokens,
         timestamp,
     } = request;
-    let Some(session_dir) =
-        find_segmented_session_directory_by_id(data_root, &session_id.to_string())?
-    else {
-        return Ok(false);
-    };
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
     let persistent_fingerprint = injection_text_parts_fingerprint(persistent_blocks);
     let transient_fingerprint = transient_prefix.and_then(injection_text_fingerprint);
     let source_node_ids = injection_applied_source_node_ids(persistent_blocks, transient_prefix);
     record_runtime_injection_applied(
-        &session_dir,
+        session_directory,
         timestamp,
         vulcan_context::RuntimeInjectionAppliedEvent {
             turn_id,
@@ -362,13 +349,13 @@ fn injection_applied_source_node_ids(
 /// Persisted runtime damage and I/O failures remain observable as errors.
 /// 已持久化的运行时损坏与 I/O 失败会保持为可观察错误。
 pub fn record_session_runtime_injection_cancelled(
-    data_root: &std::path::Path,
+    session_directory: &std::path::Path,
     session_id: SessionId,
     event: vulcan_context::RuntimeInjectionCancelledEvent,
     timestamp: &str,
 ) -> Result<bool, String> {
     record_session_runtime_audit_event(
-        data_root,
+        session_directory,
         session_id,
         vulcan_context::RuntimeLogEvent::InjectionCancelled(event),
         timestamp,
@@ -396,13 +383,13 @@ pub fn record_session_runtime_injection_cancelled(
 /// Persisted runtime damage and I/O failures remain observable as errors.
 /// 已持久化的运行时损坏与 I/O 失败会保持为可观察错误。
 pub fn record_session_runtime_injection_merged(
-    data_root: &std::path::Path,
+    session_directory: &std::path::Path,
     session_id: SessionId,
     event: vulcan_context::RuntimeInjectionMergedEvent,
     timestamp: &str,
 ) -> Result<bool, String> {
     record_session_runtime_audit_event(
-        data_root,
+        session_directory,
         session_id,
         vulcan_context::RuntimeLogEvent::InjectionMerged(event),
         timestamp,
@@ -430,17 +417,13 @@ pub fn record_session_runtime_injection_merged(
 /// Persisted runtime damage and I/O failures remain observable as errors.
 /// 已持久化的运行时损坏与 I/O 失败会保持为可观察错误。
 pub fn record_session_runtime_audit_event(
-    data_root: &std::path::Path,
+    session_directory: &std::path::Path,
     session_id: SessionId,
     event: vulcan_context::RuntimeLogEvent,
     timestamp: &str,
 ) -> Result<bool, String> {
-    let Some(session_dir) =
-        find_segmented_session_directory_by_id(data_root, &session_id.to_string())?
-    else {
-        return Ok(false);
-    };
-    record_runtime_audit_event(&session_dir, timestamp, event)
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    record_runtime_audit_event(session_directory, timestamp, event)
 }
 
 /// Loads chronological runtime system updates for one segmented session.
@@ -460,15 +443,11 @@ pub fn record_session_runtime_audit_event(
 /// Persisted runtime damage and I/O failures remain observable as errors.
 /// 已持久化的运行时损坏与 I/O 失败会保持为可观察错误。
 pub fn load_session_runtime_system_updates(
-    data_root: &std::path::Path,
+    session_directory: &std::path::Path,
     session_id: SessionId,
 ) -> Result<Vec<vulcan_context::RuntimeSystemUpdateEvent>, String> {
-    let Some(session_dir) =
-        find_segmented_session_directory_by_id(data_root, &session_id.to_string())?
-    else {
-        return Ok(Vec::new());
-    };
-    let Some(lines) = read_runtime_log_lines(&session_dir)? else {
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    let Some(lines) = read_runtime_log_lines(session_directory)? else {
         return Ok(Vec::new());
     };
     Ok(lines

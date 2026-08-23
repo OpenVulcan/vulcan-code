@@ -340,6 +340,7 @@ mod tests {
     fn build_test_preparation() -> ExecutionPreparation {
         ExecutionPreparation {
             session_id: Uuid::nil(),
+            session_storage_directory: None,
             conversation_hook_turn_id: None,
             session_title: String::from("测试会话"),
             agent_id: String::from("default-agent"),
@@ -416,6 +417,7 @@ mod tests {
     fn build_test_request() -> ExecutionPreparationRequest {
         ExecutionPreparationRequest {
             session_id: Uuid::nil(),
+            session_storage_directory: None,
             managed_codebase_memory: None,
             execution_scope: vulcan_session_core::ExecutionScope::MainSession {
                 session_id: vulcan_session_core::SessionNodeId::from(Uuid::nil()),
@@ -721,9 +723,12 @@ mod tests {
             kind: ConversationAttachmentKind::Image,
             file_name: String::from("image.png"),
             local_path: String::from(r"D:\workspace\image.png"),
+            resource_path: None,
             source_path: None,
             asset_id: None,
             byte_len: Some(1024),
+            source_sha256: None,
+            delivery_mode: None,
             preview_local_path: None,
             mime_type: String::from("image/png"),
         };
@@ -741,6 +746,7 @@ mod tests {
                 hidden_model_guidance: None,
                 provider_visible_agent_messages: Vec::new(),
                 attachments: vec![attachment],
+                provider_attachments: None,
                 append_canonical_user_message: true,
                 append_visible_user_prompt_record: true,
                 source: PendingSessionPromptSource::UserFollowup,
@@ -813,7 +819,7 @@ mod tests {
             panic!("latest projected message should be user text");
         };
         assert!(projected_text.contains(prompt));
-        assert!(projected_text.contains("Attachment"));
+        assert!(projected_text.contains("ATTACHMENT:"));
         assert_ne!(projected_text, prompt);
         assert!(projected_attachments.is_empty());
         let expected_effective_prompt = projected_text.clone();

@@ -52,7 +52,9 @@ pub(crate) fn composer_attachment_capabilities(
             ComposerAttachmentCapabilitySummary {
                 kind: kind.modality_name().to_string(),
                 label: composer_attachment_kind_label(&kind).to_string(),
-                enabled: native || bridged,
+                // Admission is capability-independent; native and bridged remain delivery facts.
+                // 准入与能力无关；native 与 bridged 继续作为传输事实保留。
+                enabled: true,
                 native,
                 bridged,
                 accept: composer_attachment_kind_accept(&kind).to_string(),
@@ -65,10 +67,10 @@ pub(crate) fn composer_attachment_capabilities(
 mod tests {
     use super::*;
 
-    /// Verifies native image and video declarations directly control composer attachment gates.
-    /// 验证模型原生图片与视频声明会直接控制输入区附件门控。
+    /// Verifies attachment admission stays open while native support remains route-specific.
+    /// 验证附件准入保持开放，同时原生支持仍由精确路由决定。
     #[test]
-    fn native_resource_capabilities_enable_only_declared_media() {
+    fn attachment_admission_is_independent_from_native_media_support() {
         // capabilities differs from the default only by its declared native input resources.
         // capabilities 仅通过已声明的原生输入资源区别于默认值。
         let capabilities = vulcan_ai_contract::ModelCapabilities {
@@ -96,10 +98,15 @@ mod tests {
             .iter()
             .find(|summary| summary.kind == "audio")
             .expect("audio attachment summary");
+        let file = summaries
+            .iter()
+            .find(|summary| summary.kind == "file")
+            .expect("file attachment summary");
 
         assert!(image.enabled && image.native);
         assert!(video.enabled && video.native);
-        assert!(!audio.enabled && !audio.native);
+        assert!(audio.enabled && !audio.native);
+        assert!(file.enabled && !file.native);
     }
 
     /// Verifies selected understanding bridges enable every matching non-native media input.

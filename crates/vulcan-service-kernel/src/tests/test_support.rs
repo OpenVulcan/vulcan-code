@@ -241,6 +241,7 @@ pub(super) fn seed_test_subagent_registry_from_panel_states(
         "{NAVIGATION_TEST_ROOT_CREATED_DATE_FOR_SUPPORT}-{root_session_id}"
     ));
     std::fs::create_dir_all(&session_dir).expect("create registry fixture session dir");
+    write_test_subagent_root_metadata(&session_dir, root_session_id);
     let task_store = vulcan_task_session::SegmentedTaskSessionStore::new(&session_dir);
     let root_session_node = SessionNodeId::from(root_session_id);
     for state in states {
@@ -290,6 +291,67 @@ pub(super) fn seed_test_subagent_registry_from_panel_states(
         .restore_persisted_subagent_registry_for_parent_tree(root_session_id)
         .expect("restore registry fixture during test hydration");
     project_root
+}
+
+/// Writes the exact root task-mirror index used by persisted subagent registry fixtures.
+/// 写入持久化子代理注册表夹具使用的精确根任务镜像索引。
+///
+/// # Parameters
+/// 参数
+/// `session_directory` is the exact root-session directory and `session_id` is its owner.
+/// `session_directory` 是精确根会话目录，`session_id` 是其所有者。
+///
+/// # Returns
+/// 返回值
+/// This fixture helper returns nothing and panics only when isolated file setup fails.
+/// 此夹具辅助函数不返回值，仅在隔离文件准备失败时触发 panic。
+fn write_test_subagent_root_metadata(session_directory: &std::path::Path, session_id: SessionId) {
+    // metadata is the authoritative exact task membership index; child directories are never enumerated.
+    // metadata 是权威的精确任务成员索引；绝不枚举子目录。
+    let metadata = serde_json::json!({
+        "schema_version": 1,
+        "session_id": session_id.to_string(),
+        "project_tag": "project-a",
+        "created_at": "1",
+        "updated_at": "1",
+        "archived_at": null,
+        "project_id": "project-a",
+        "title": "subagent registry fixture",
+        "title_source": "test",
+        "canonical_source": "segmented_rollout",
+        "active_segment": "s001.jsonl",
+        "task_dir": "task",
+        "next_global_seq": 0,
+        "message_count": 0,
+        "last_message_id": null,
+        "last_message_fingerprint": null,
+        "latest_rollback_seq": null,
+        "segment_policy": {
+            "max_lines": 3000,
+            "max_bytes": 8388608
+        },
+        "segments": [{
+            "file": "s001.jsonl",
+            "start_seq": 0,
+            "line_count": 0,
+            "byte_len": 0,
+            "first_timestamp": null,
+            "last_timestamp": null,
+            "first_turn_index": null,
+            "last_turn_index": null,
+            "last_compaction_seq": null
+        }],
+        "tasks": [],
+        "fork_source": null
+    });
+    // encoded_metadata is fully serialized before the exact index file is published.
+    // encoded_metadata 在精确索引文件发布前完成完整序列化。
+    let mut encoded_metadata =
+        serde_json::to_vec_pretty(&metadata).expect("encode subagent root metadata");
+    encoded_metadata.push(b'\n');
+    std::fs::write(session_directory.join("metadata.json"), encoded_metadata)
+        .expect("write subagent root metadata");
+    std::fs::write(session_directory.join("s001.jsonl"), b"").expect("write subagent root segment");
 }
 
 /// Seeds the authoritative in-memory TaskRuntime registry from test panel states.
@@ -437,16 +499,19 @@ pub(crate) fn test_service_state_with_parent_session(
         workspace_snapshot: Some(WorkspaceSnapshot {
             task_projects: Vec::new(),
             archived_task_projects: Vec::new(),
-            sessions: vec![SessionSummary::new(
-                parent_session_id,
-                Some(String::from("project-a")),
-                "父会话",
-                "",
-                SessionState::Completed,
-                0,
-                0,
-                "刚刚",
-            )],
+            sessions: vec![
+                SessionSummary::new(
+                    parent_session_id,
+                    Some(String::from("project-a")),
+                    "父会话",
+                    "",
+                    SessionState::Completed,
+                    0,
+                    0,
+                    "刚刚",
+                )
+                .with_created_at("1"),
+            ],
             archived_sessions: Vec::new(),
             session_messages: BTreeMap::new(),
             archived_session_messages: BTreeMap::new(),
@@ -502,6 +567,9 @@ pub(crate) struct TestControllerRuntimeRoot {
     /// Exact temporary data root removed when the fixture leaves scope.
     /// 夹具离开作用域时移除的精确临时数据根。
     data_root: std::path::PathBuf,
+    /// Exact segmented session directory created inside the temporary data root.
+    /// 在临时数据根内创建的精确分段会话目录。
+    session_directory: std::path::PathBuf,
 }
 
 impl TestControllerRuntimeRoot {
@@ -575,7 +643,10 @@ impl TestControllerRuntimeRoot {
         encoded_metadata.push(b'\n');
         std::fs::write(session_dir.join("metadata.json"), encoded_metadata)
             .expect("write isolated VMM session metadata");
-        Self { data_root }
+        Self {
+            data_root,
+            session_directory: session_dir,
+        }
     }
 
     /// Builds an offline controller handle bound to this isolated data root.
@@ -627,6 +698,17 @@ impl TestControllerRuntimeRoot {
     pub(crate) fn data_root(&self) -> &std::path::Path {
         &self.data_root
     }
+
+    /// Returns the exact isolated segmented session directory owned by this fixture.
+    /// 返回当前夹具持有的精确隔离分段会话目录。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The borrowed exact session-directory path.
+    /// 返回借用的精确会话目录路径。
+    pub(crate) fn session_directory(&self) -> &std::path::Path {
+        &self.session_directory
+    }
 }
 
 impl Drop for TestControllerRuntimeRoot {
@@ -670,6 +752,7 @@ pub(super) fn test_agent_runtime_bridge() -> AgentRuntimeBridge {
             0,
             Some(vulcan_plugin_runtime.snapshot()),
             vulcan_agent_runtime::mcp::configured_mcp_runtime_access(&provider_configuration),
+            None,
         ),
     );
     // publicAiRuntime is shared by ordinary provider tests and configured-inference isolation.
@@ -693,6 +776,7 @@ pub(super) fn test_agent_runtime_bridge() -> AgentRuntimeBridge {
         model_id_override: None,
         connection_id_override: None,
         agent_profile_catalog: AgentProfileCatalog::default(),
+        subagent_catalog: Arc::new(vulcan_task_session::SubagentCatalog::default()),
         luaskills_runtime: None,
         vulcan_plugin_runtime,
         extension_generation,

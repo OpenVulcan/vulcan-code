@@ -17,12 +17,13 @@ mod stream_exit;
 #[cfg(test)]
 pub(crate) use conversation_checkpoint::persist_execution_retry_tool_recovery_boundary;
 use conversation_checkpoint::{
-    handle_conversation_checkpoint_stream_event, persist_prepared_execution_retry_checkpoint,
+    handle_conversation_checkpoint_stream_event, retain_prepared_execution_retry_checkpoint,
 };
 pub(crate) use conversation_checkpoint::{
     invalidate_execution_retry_reference, invalidate_execution_retry_reference_if_matches,
     invalidate_execution_retry_runtime_state,
     mark_execution_retry_snapshot_provider_dispatch_unknown,
+    reconcile_interrupted_execution_retry_canonical_state,
     refreeze_claimed_execution_retry_snapshot_before_provider_dispatch,
     refreeze_claimed_execution_retry_snapshot_with_canonical_state,
 };
@@ -132,8 +133,8 @@ mod rejected_provider_boundary_tests {
     }
 }
 
-/// Materializes and returns the durable workspace boundary for an owned stream exit without `Finished`.
-/// 为未产生 `Finished` 的自有流退出物化并返回可靠工作区边界。
+/// Materializes the retained terminal boundary for an owned stream exit without `Finished`.
+/// 为未产生 `Finished` 的自有流退出物化保留终态边界。
 ///
 /// # Parameters
 /// 参数
@@ -142,12 +143,12 @@ mod rejected_provider_boundary_tests {
 ///
 /// # Returns
 /// 返回值
-/// A detached workspace snapshot after the failed terminal continuation ledger is committed in memory.
-/// 在失败终态 Continue 账本写入内存后返回一份分离工作区快照。
+/// Success after the failed terminal continuation ledger is committed in authoritative memory.
+/// 失败终态 Continue 账本写入权威内存后返回成功。
 pub(crate) fn materialize_early_stream_terminal_snapshot(
     task_state: &SharedServiceBridgeState,
     session_id: SessionId,
-) -> Result<WorkspaceSnapshot, String> {
+) -> Result<(), String> {
     // terminalAt is shared by the continuation ledger and retained runtime update.
     // terminalAt 由 Continue 账本与保留运行态更新时间共同使用。
     let terminal_at = current_unix_millis_text();
@@ -170,7 +171,7 @@ pub(crate) fn materialize_early_stream_terminal_snapshot(
         refresh_terminal_continuation_state(runtime_state, false, terminal_at.as_str())?;
         runtime_state.updated_at = terminal_at;
     }
-    Ok(workspace.clone())
+    Ok(())
 }
 
 /// Describes the exact dispatch evidence owned by a terminal stream failure cleanup.
@@ -371,43 +372,24 @@ async fn finalize_failed_execution_stream_retry_lifecycle(
             "[webui-service] terminal stream failure continuation projection failed: session={session_id} error={error}"
         );
     }
-    // persistenceSnapshot freezes the latest terminal revision after refreeze and projection.
-    // persistenceSnapshot 在重冻与投影后冻结最新终态修订。
-    let persistence_snapshot = match current_workspace_snapshot_from_shared_state(&task_state) {
-        Ok(Some(snapshot)) => Some(snapshot),
-        Ok(None) => {
-            eprintln!(
-                "[webui-service] terminal stream failure persistence skipped: session={session_id} workspace unavailable"
-            );
-            None
-        }
-        Err(error) => {
-            eprintln!(
-                "[webui-service] terminal stream failure persistence snapshot failed: session={session_id} error={error}"
-            );
-            None
-        }
-    };
     // terminal_state_persisted is the only condition that may reopen admission after this failed launch.
     // terminal_state_persisted 是当前失败启动后允许重新开放准入的唯一条件。
     let mut terminal_state_persisted = false;
-    if let Some(persistence_snapshot) = persistence_snapshot {
-        match persist_workspace_session_update(
-            Some(&task_state),
-            controller_runtime.clone(),
-            &persistence_snapshot,
-            session_id,
-        )
-        .await
-        {
-            Ok(()) => terminal_state_persisted = true,
-            Err(error) => {
-                eprintln!(
-                    "[webui-service] terminal stream failure persistence failed: session={session_id} error={error}"
-                );
-                // Exact invalidation cannot damage a replacement Continue claim or a newer user turn.
-                // 精确失效不会损坏替代 Continue 领取或更新的用户回合。
-                if let Some(settled_reference) = settled_reference.as_ref()
+    match persist_latest_retained_workspace_session_update(
+        &task_state,
+        controller_runtime.clone(),
+        session_id,
+    )
+    .await
+    {
+        Ok(()) => terminal_state_persisted = true,
+        Err(error) => {
+            eprintln!(
+                "[webui-service] terminal stream failure persistence failed: session={session_id} error={error}"
+            );
+            // Exact invalidation cannot damage a replacement Continue claim or a newer user turn.
+            // 精确失效不会损坏替代 Continue 领取或更新的用户回合。
+            if let Some(settled_reference) = settled_reference.as_ref()
                     && invalidate_execution_retry_reference_if_matches(
                         &task_state,
                         session_id,
@@ -422,25 +404,19 @@ async fn finalize_failed_execution_stream_retry_lifecycle(
                         &task_state,
                         session_id,
                     );
-                    if let Ok(Some(blocked_snapshot)) =
-                        current_workspace_snapshot_from_shared_state(&task_state)
-                    {
-                        match persist_workspace_session_update(
-                            Some(&task_state),
+                    match persist_latest_retained_workspace_session_update(
+                            &task_state,
                             controller_runtime.clone(),
-                            &blocked_snapshot,
                             session_id,
                         )
                         .await
-                        {
+                    {
                             Ok(()) => terminal_state_persisted = true,
                             Err(fallback_error) => eprintln!(
                                 "[webui-service] terminal stream failure blocked fallback persistence failed: session={session_id} error={fallback_error}"
                             ),
-                        }
                     }
                 }
-            }
         }
     }
     // The guard opens admission only after the latest terminal or fail-closed replacement state is durable.
@@ -776,12 +752,20 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     // A request checkpoint is emitted before the Started durability gate and therefore proves that this attempt has not dispatched yet.
                     // 请求检查点在 Started 可靠闸门之前发出，因此证明当前 attempt 尚未分派。
                     provider_dispatch_proven_absent = true;
-                    if let Err(error) = record_webui_provider_request_checkpoint(
-                        &controller_runtime,
+                    let checkpoint_result = require_segmented_session_directory_from_state(
+                        &task_state,
+                        &controller_runtime.data_root,
                         session_id,
-                        &provider_family,
-                        &snapshot,
-                    ) {
+                    )
+                    .and_then(|session_directory| {
+                        record_webui_provider_request_checkpoint(
+                            &session_directory,
+                            session_id,
+                            &provider_family,
+                            &snapshot,
+                        )
+                    });
+                    if let Err(error) = checkpoint_result {
                         eprintln!("[webui-service] provider request checkpoint failed: {error}");
                     }
                     // retryCheckpointExpected distinguishes legacy display-only snapshots from exact pre-dispatch checkpoints.
@@ -810,9 +794,8 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                                 )
                             })
                             .and_then(|preparation| {
-                                persist_prepared_execution_retry_checkpoint(
+                                retain_prepared_execution_retry_checkpoint(
                                     &task_state,
-                                    &controller_runtime,
                                     session_id,
                                     active_stream_task_id,
                                     logical_request_id,
@@ -917,11 +900,15 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     }
                 }
                 ExecutionStreamEvent::ProviderLoweringRepair { session_id, event } => {
-                    if let Err(error) = record_webui_provider_lowering_repair(
-                        &controller_runtime,
+                    let repair_result = require_segmented_session_directory_from_state(
+                        &task_state,
+                        &controller_runtime.data_root,
                         session_id,
-                        event,
-                    ) {
+                    )
+                    .and_then(|session_directory| {
+                        record_webui_provider_lowering_repair(&session_directory, session_id, event)
+                    });
+                    if let Err(error) = repair_result {
                         eprintln!("[webui-service] provider lowering repair failed: {error}");
                     }
                 }
@@ -1548,11 +1535,11 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
             }
             // terminalSnapshot records a real failed continuation boundary for both ordinary and resumed executions.
             // terminalSnapshot 为普通执行与恢复执行同时记录真实的失败 Continue 边界。
-            let terminal_snapshot = match materialize_early_stream_terminal_snapshot(
+            let terminal_boundary_materialized = match materialize_early_stream_terminal_snapshot(
                 &task_state,
                 session_id,
             ) {
-                Ok(snapshot) => Some(snapshot),
+                Ok(()) => true,
                 Err(error) => {
                     eprintln!(
                         "[webui-service] materialize early stream terminal boundary failed: {error}"
@@ -1567,19 +1554,16 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                             "[webui-service] early stream terminal invalidation failed: {invalidation_error}"
                         );
                     }
-                    current_workspace_snapshot_from_shared_state(&task_state)
-                        .ok()
-                        .flatten()
+                    true
                 }
             };
             // terminal_state_persisted is the only condition that may reopen admission after an early exit.
             // terminal_state_persisted 是提前退出后允许重新开放准入的唯一条件。
             let mut terminal_state_persisted = false;
-            if let Some(terminal_snapshot) = terminal_snapshot {
-                match persist_workspace_session_update(
-                    Some(&task_state),
+            if terminal_boundary_materialized {
+                match persist_latest_retained_workspace_session_update(
+                    &task_state,
                     controller_runtime.clone(),
-                    &terminal_snapshot,
                     session_id,
                 )
                 .await
@@ -1598,22 +1582,17 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                             "The early stream terminal boundary could not be persisted and was invalidated.",
                         ) {
                             Ok(()) => {
-                                if let Ok(Some(blocked_snapshot)) =
-                                    current_workspace_snapshot_from_shared_state(&task_state)
+                                match persist_latest_retained_workspace_session_update(
+                                    &task_state,
+                                    controller_runtime.clone(),
+                                    session_id,
+                                )
+                                .await
                                 {
-                                    match persist_workspace_session_update(
-                                        Some(&task_state),
-                                        controller_runtime.clone(),
-                                        &blocked_snapshot,
-                                        session_id,
-                                    )
-                                    .await
-                                    {
-                                        Ok(()) => terminal_state_persisted = true,
-                                        Err(fallback_error) => eprintln!(
-                                            "[webui-service] persist blocked early stream fallback failed: {fallback_error}"
-                                        ),
-                                    }
+                                    Ok(()) => terminal_state_persisted = true,
+                                    Err(fallback_error) => eprintln!(
+                                        "[webui-service] persist blocked early stream fallback failed: {fallback_error}"
+                                    ),
                                 }
                             }
                             Err(invalidation_error) => eprintln!(

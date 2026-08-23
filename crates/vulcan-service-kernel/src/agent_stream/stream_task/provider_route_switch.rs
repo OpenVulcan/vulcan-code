@@ -54,66 +54,82 @@ pub(super) async fn refreshed_execution_request_after_pending_provider_route_swi
     // configurationTransaction serializes route promotion with every model-picker and configuration mutation.
     // configurationTransaction 将路由提升与全部模型选择器及配置变更串行化。
     let _configuration_transaction = begin_public_ai_configuration_transaction().await;
-    // persistenceGuard freezes the storage write order and captures the newest retained workspace only after admission.
-    // persistenceGuard 冻结存储写入顺序，并且只在获准后捕获最新保留工作区。
-    let (_persistence_guard, mut promoted_workspace) =
-        lock_latest_retained_workspace_session_persistence_snapshot(task_state, request.session_id)
-            .await?;
-    {
-        // ownershipCheck rejects a stale stream before it can stage or persist a replacement route.
-        // ownershipCheck 在过期流暂存或持久化替代路由前将其拒绝。
-        let guard = task_state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        if !active_stream_task_matches_id(&guard, request.session_id, active_stream_task_id) {
-            return Err(String::from(
-                "Pending Provider route activation lost exact active-stream ownership.",
-            ));
-        }
-    }
-    // selection is applied to the detached persistence candidate first, leaving retained memory and
-    // process-local route leases untouched until durable storage accepts the exact tuple.
-    // selection 先应用到分离的持久化候选，直到可靠存储接受精确三元组前都不修改保留内存与进程内路由租约。
-    let selection =
-        crate::conversation_submission::apply_pending_model_selection_for_provider_request(
-            agent_runtime.public_ai_runtime.as_ref(),
-            &mut promoted_workspace,
-            request.session_id,
-        )?;
-    // providerRouteLeaseIdentity is deliberately empty because the old physical route cannot
-    // authorize the next Provider request; preparation will capture a new exact lease.
-    // providerRouteLeaseIdentity 刻意为空，因为旧物理路由不能授权下一次 Provider 请求；准备阶段会捕获新的精确租约。
-    let provider_route_lease_identity = promoted_workspace
-        .session_runtime_state
-        .get(&request.session_id)
-        .and_then(|runtime_state| runtime_state.provider_route_lease.clone());
-    // promotedRouteState is validated before durable publication so a malformed candidate can never
-    // require compensation after it reaches storage.
-    // promotedRouteState 在可靠发布前完成校验，确保格式错误的候选绝不会在落盘后才需要补偿。
-    let promoted_route_state = promoted_workspace
-        .session_runtime_state
-        .get(&request.session_id)
-        .map(|runtime_state| {
-            (
+    invalidate_webui_session_persist_version(task_state, request.session_id)?;
+    // persistenceGuard freezes only storage order; candidate construction borrows one exact runtime row.
+    // persistenceGuard 只冻结存储顺序；候选构建仅借用一条精确运行态记录。
+    let _persistence_guard = webui_session_persist_lock(request.session_id)
+        .lock_owned()
+        .await;
+    let (selection, session_directory, promoted_updated_at, promoted_projection) =
+        {
+            let mut guard = task_state
+                .lock()
+                .map_err(|error| format!("failed to lock service state: {error}"))?;
+            if !active_stream_task_matches_id(&guard, request.session_id, active_stream_task_id) {
+                return Err(String::from(
+                    "Pending Provider route activation lost exact active-stream ownership.",
+                ));
+            }
+            let session_directory = require_segmented_session_directory_for_retained_session(
+                &guard,
+                &controller_runtime.data_root,
+                request.session_id,
+            )?;
+            let runtime_state = guard
+                .workspace_snapshot
+                .as_mut()
+                .and_then(|workspace| workspace.session_runtime_state.get_mut(&request.session_id))
+                .ok_or_else(|| {
+                    String::from("Pending Provider route candidate has no session runtime state.")
+                })?;
+            let selection = crate::conversation_submission::
+            validated_pending_model_selection_for_provider_request(
+                agent_runtime.public_ai_runtime.as_ref(),
+                runtime_state,
+            )?;
+            // savedRouteFields are constant-size and restore retained memory before the storage write starts.
+            // savedRouteFields 为常量大小，并在存储写入开始前恢复保留内存。
+            let saved_route_fields = (
                 runtime_state.active_provider_id.clone(),
                 runtime_state.active_connection_id.clone(),
                 runtime_state.active_model_id.clone(),
+                runtime_state.pending_model_selection.clone(),
                 runtime_state.provider_route_lease.clone(),
                 runtime_state.updated_at.clone(),
+            );
+            let promoted_updated_at = current_unix_millis_text();
+            runtime_state.active_provider_id = Some(selection.provider_id.clone());
+            runtime_state.active_connection_id = Some(selection.connection_id.clone());
+            runtime_state.active_model_id = Some(selection.model_id.clone());
+            runtime_state.pending_model_selection = None;
+            runtime_state.provider_route_lease = None;
+            runtime_state.updated_at = promoted_updated_at.clone();
+            let promoted_projection = vulcan_workspace_store::workspace_store::
+            project_single_session_runtime_state_update(request.session_id, runtime_state);
+            runtime_state.active_provider_id = saved_route_fields.0;
+            runtime_state.active_connection_id = saved_route_fields.1;
+            runtime_state.active_model_id = saved_route_fields.2;
+            runtime_state.pending_model_selection = saved_route_fields.3;
+            runtime_state.provider_route_lease = saved_route_fields.4;
+            runtime_state.updated_at = saved_route_fields.5;
+            (
+                selection,
+                session_directory,
+                promoted_updated_at,
+                promoted_projection?,
             )
-        })
-        .ok_or_else(|| {
-            String::from("Pending Provider route candidate has no session runtime state.")
-        })?;
-
-    // Persisting through the authoritative retained-state gate makes the promoted tuple durable before any replacement transport starts.
-    // 通过权威保留状态写入闸门持久化，确保已提升三元组在任何替代传输启动前可靠落盘。
-    persist_workspace_session_update_unlocked(
-        controller_runtime.clone(),
-        &promoted_workspace,
+        };
+    // Only the history-free promoted route projection becomes durable before the replacement transport starts.
+    // 只有无历史的已提升路由投影会在替代传输启动前可靠落盘。
+    vulcan_workspace_store::workspace_store::persist_projected_single_session_runtime_state_update(
+        session_directory.clone(),
         request.session_id,
+        &promoted_projection,
     )
     .await?;
+    // providerRouteLeaseIdentity is empty because preparation must capture a lease for the new exact route.
+    // providerRouteLeaseIdentity 为空，因为准备阶段必须为新的精确路由捕获租约。
+    let provider_route_lease_identity = None;
 
     // leaseScope identifies the old process-local route that must disappear in the same synchronous
     // publication that replaces the retained session tuple.
@@ -125,9 +141,8 @@ pub(super) async fn refreshed_execution_request_after_pending_provider_route_swi
             std::slice::from_ref(&lease_scope),
             &[],
         )?;
-    // rollbackCandidate is populated only when a replacement owner or changed intent invalidates
-    // publication after the promoted candidate has already crossed durable storage.
-    // rollbackCandidate 仅在替代所有者或已变化意图使发布失效、且提升候选已经可靠落盘时填充。
+    // rollbackCandidate carries only a history-free projection when publication loses ownership.
+    // rollbackCandidate 仅在发布失去所有权时携带一份无历史投影。
     let rollback_candidate = {
         // retainedPublication changes only route-owned fields so unrelated state written while disk I/O
         // was pending remains intact. The exact pending tuple and stream owner are revalidated first.
@@ -172,36 +187,50 @@ pub(super) async fn refreshed_execution_request_after_pending_provider_route_swi
             }
         };
         if let Some(publication_error) = publication_error {
-            Some((publication_error, guard.workspace_snapshot.clone()))
+            let rollback_projection = guard
+                .workspace_snapshot
+                .as_ref()
+                .and_then(|workspace| workspace.session_runtime_state.get(&request.session_id))
+                .ok_or_else(|| {
+                    format!(
+                        "{publication_error} Retained runtime state is unavailable for durable rollback."
+                    )
+                })
+                .and_then(|runtime_state| {
+                    vulcan_workspace_store::workspace_store::
+                        project_single_session_runtime_state_update(
+                            request.session_id,
+                            runtime_state,
+                        )
+                })?;
+            Some((publication_error, rollback_projection))
         } else {
             let retained_runtime_state = guard
                 .workspace_snapshot
                 .as_mut()
                 .and_then(|workspace| workspace.session_runtime_state.get_mut(&request.session_id))
                 .expect("validated pending Provider route runtime state must remain present");
-            retained_runtime_state.active_provider_id = promoted_route_state.0.clone();
-            retained_runtime_state.active_connection_id = promoted_route_state.1.clone();
-            retained_runtime_state.active_model_id = promoted_route_state.2.clone();
+            retained_runtime_state.active_provider_id = Some(selection.provider_id.clone());
+            retained_runtime_state.active_connection_id = Some(selection.connection_id.clone());
+            retained_runtime_state.active_model_id = Some(selection.model_id.clone());
             retained_runtime_state.pending_model_selection = None;
-            retained_runtime_state.provider_route_lease = promoted_route_state.3.clone();
-            retained_runtime_state.updated_at = promoted_route_state.4.clone();
+            retained_runtime_state.provider_route_lease = None;
+            retained_runtime_state.updated_at = promoted_updated_at.clone();
             None
         }
     };
-    if let Some((publication_error, rollback_workspace)) = rollback_candidate {
+    if let Some((publication_error, rollback_projection)) = rollback_candidate {
         // Dropping the uncommitted lease guard restores the old process-local lease before the
         // newest retained session row is written back over the rejected durable candidate.
         // 丢弃未提交的租约守卫会先恢复旧进程内租约，随后以最新保留会话行覆盖被拒绝的可靠候选。
         drop(lease_reconciliation);
-        let rollback_workspace = rollback_workspace.ok_or_else(|| {
-            format!("{publication_error} Retained workspace is unavailable for durable rollback.")
-        })?;
-        persist_workspace_session_update_unlocked(
-            controller_runtime.clone(),
-            &rollback_workspace,
+        vulcan_workspace_store::workspace_store::
+            persist_projected_single_session_runtime_state_update(
+                session_directory,
             request.session_id,
-        )
-        .await
+                &rollback_projection,
+            )
+            .await
         .map_err(|rollback_error| {
             format!(
                 "{publication_error} Durable rollback to the retained session failed: {rollback_error}"

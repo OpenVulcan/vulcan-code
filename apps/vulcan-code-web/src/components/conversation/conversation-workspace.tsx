@@ -129,7 +129,7 @@ export function ConversationWorkspace(props: {
   onCopyText: (text: string) => Promise<void> | void;
   // Opens one backend-backed user prompt edit flow.
   // 打开单个后端支持的用户提示词编辑流程。
-  onEditUserPrompt?: (conversationId: string, messageId: string) => Promise<void> | void;
+  onEditUserPrompt?: (message: ConversationMessage, visiblePrompt: string) => Promise<void> | void;
   // Creates a forked copy of one conversation.
   // 创建单个会话的分叉副本。
   onForkConversation?: (conversationId: string, anchorMessageId?: string) => Promise<boolean> | boolean;

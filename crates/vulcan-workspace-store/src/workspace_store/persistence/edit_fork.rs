@@ -2,17 +2,6 @@ use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-/// 从分段会话事实源加载出的持久化编辑草稿。
-#[derive(Debug, Clone, PartialEq)]
-pub struct PersistedUserPromptEditDraft {
-    /// Editable prompt text from the canonical user message.
-    /// 来自规范用户消息的可编辑提示词文本。
-    pub prompt: String,
-    /// Attachments from the canonical user message.
-    /// 来自规范用户消息的附件。
-    pub attachments: Vec<ConversationAttachment>,
-}
-
 /// Persisted rollback result written before replaying an edited prompt.
 /// 在重放编辑后提示词之前写入的持久化回滚结果。
 #[derive(Debug)]
@@ -29,6 +18,20 @@ pub struct PersistedUserPromptRollbackResult {
 }
 
 impl PersistedUserPromptRollbackResult {
+    /// Takes the rewritten transcript and runtime state for one in-memory atomic workspace commit.
+    /// 取出重写后的转录与运行态，用于一次内存工作区原子提交。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns owned rewritten state while retaining the disk rollback transaction guard.
+    /// 返回自有重写状态，同时保留磁盘回滚事务守卫。
+    pub fn take_rewritten_state(&mut self) -> (Vec<SessionMessageEntry>, SessionRuntimeStateEntry) {
+        (
+            std::mem::take(&mut self.retained_messages),
+            std::mem::take(&mut self.runtime_state),
+        )
+    }
+
     /// Commits the destructive edit by deleting its transaction backup.
     /// 通过删除事务备份提交本次破坏性编辑。
     ///
@@ -65,6 +68,12 @@ struct PersistedSessionEditRollbackBackup {
     /// Transaction root kept outside the session catalog scan tree.
     /// 位于会话目录扫描树之外的事务根目录。
     backup_root: PathBuf,
+    /// Exact relative files that may be mutated by the history rewrite.
+    /// 历史重写可能修改的精确相对文件集合。
+    mutable_relative_paths: Vec<PathBuf>,
+    /// Exact relative files that existed and were copied before the rewrite.
+    /// 重写前实际存在并已复制的精确相对文件集合。
+    backed_up_relative_paths: Vec<PathBuf>,
     /// Whether drop must still restore the original directory.
     /// Drop 时是否仍需恢复原始目录。
     restore_on_drop: bool,
@@ -97,7 +106,35 @@ impl PersistedSessionEditRollbackBackup {
             .and_then(|name| name.to_str())
             .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_BACKUP_NAME_INVALID"))?;
         let backup_dir = backup_root.join(format!("{directory_name}-{}", Uuid::new_v4()));
-        if let Err(error) = copy_segmented_directory_tree(session_dir, &backup_dir) {
+        let metadata = read_session_metadata(session_dir)?;
+        let mutable_relative_paths = history_rewrite_mutable_relative_paths(&metadata);
+        let mut backed_up_relative_paths = Vec::new();
+        let backup_result = (|| {
+            std::fs::create_dir_all(&backup_dir).map_err(to_store_error)?;
+            for relative_path in &mutable_relative_paths {
+                let source_path = session_dir.join(relative_path);
+                let target_path = backup_dir.join(relative_path);
+                match std::fs::metadata(&source_path) {
+                    Ok(file_metadata) if file_metadata.is_file() => {
+                        if let Some(parent) = target_path.parent() {
+                            std::fs::create_dir_all(parent).map_err(to_store_error)?;
+                        }
+                        std::fs::copy(&source_path, &target_path).map_err(to_store_error)?;
+                        backed_up_relative_paths.push(relative_path.clone());
+                    }
+                    Ok(_) => {
+                        return Err(format!(
+                            "ERR_USER_PROMPT_EDIT_BACKUP_TARGET_NOT_FILE: {}",
+                            source_path.display()
+                        ));
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(to_store_error(error)),
+                }
+            }
+            Ok::<(), String>(())
+        })();
+        if let Err(error) = backup_result {
             let _ = std::fs::remove_dir_all(&backup_dir);
             remove_empty_edit_backup_root(&backup_root);
             return Err(format!(
@@ -108,6 +145,8 @@ impl PersistedSessionEditRollbackBackup {
             session_dir: session_dir.to_path_buf(),
             backup_dir,
             backup_root,
+            mutable_relative_paths,
+            backed_up_relative_paths,
             restore_on_drop: true,
         })
     }
@@ -141,19 +180,33 @@ impl PersistedSessionEditRollbackBackup {
         if !self.restore_on_drop {
             return Ok(());
         }
-        let failed_dir = self.backup_root.join(format!("failed-{}", Uuid::new_v4()));
-        if self.session_dir.exists() {
-            std::fs::rename(&self.session_dir, &failed_dir).map_err(to_store_error)?;
-        }
-        if let Err(error) = std::fs::rename(&self.backup_dir, &self.session_dir) {
-            if failed_dir.exists() {
-                let _ = std::fs::rename(&failed_dir, &self.session_dir);
+        let mut paths_to_remove = self.mutable_relative_paths.clone();
+        if let Ok(current_metadata) = read_session_metadata(&self.session_dir) {
+            for current_path in history_rewrite_mutable_relative_paths(&current_metadata) {
+                if !paths_to_remove.iter().any(|path| path == &current_path) {
+                    paths_to_remove.push(current_path);
+                }
             }
-            return Err(to_store_error(error));
+        }
+        for relative_path in paths_to_remove {
+            let path = self.session_dir.join(relative_path);
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(to_store_error(error)),
+            }
+        }
+        for relative_path in &self.backed_up_relative_paths {
+            let source_path = self.backup_dir.join(relative_path);
+            let target_path = self.session_dir.join(relative_path);
+            if let Some(parent) = target_path.parent() {
+                std::fs::create_dir_all(parent).map_err(to_store_error)?;
+            }
+            std::fs::copy(&source_path, &target_path).map_err(to_store_error)?;
         }
         self.restore_on_drop = false;
-        if failed_dir.exists() {
-            let _ = std::fs::remove_dir_all(failed_dir);
+        if self.backup_dir.exists() {
+            std::fs::remove_dir_all(&self.backup_dir).map_err(to_store_error)?;
         }
         remove_empty_edit_backup_root(&self.backup_root);
         Ok(())
@@ -192,21 +245,6 @@ pub struct PersistedSessionForkResult {
     pub session: SessionSummary,
 }
 
-/// Loads one user-prompt edit draft from persisted segmented session state.
-/// 从持久化分段会话状态加载一份用户提示词编辑草稿。
-pub async fn load_persisted_user_prompt_edit_draft(
-    controller: &ControllerRuntimeHandle,
-    session: &SessionSummary,
-    project_id: &str,
-    message_id: &str,
-) -> Result<PersistedUserPromptEditDraft, String> {
-    let target = locate_persisted_user_prompt_target(controller, session, project_id, message_id)?;
-    Ok(PersistedUserPromptEditDraft {
-        prompt: target.prompt,
-        attachments: target.attachments,
-    })
-}
-
 /// Rolls one persisted session back to the point before the selected user prompt.
 /// 将一个持久化会话回滚到所选用户提示词之前。
 pub async fn rollback_persisted_session_before_user_prompt(
@@ -214,8 +252,15 @@ pub async fn rollback_persisted_session_before_user_prompt(
     session: &SessionSummary,
     project_id: &str,
     message_id: &str,
+    runtime_state: SessionRuntimeStateEntry,
 ) -> Result<PersistedUserPromptRollbackResult, String> {
-    let target = locate_persisted_user_prompt_target(controller, session, project_id, message_id)?;
+    let target = locate_persisted_user_prompt_target(
+        controller,
+        session,
+        project_id,
+        message_id,
+        runtime_state,
+    )?;
     let mut rollback_backup = PersistedSessionEditRollbackBackup::create(&target.session_dir)?;
     let rollback_result = (|| {
         truncate_segmented_session_before_message(
@@ -898,12 +943,6 @@ struct PersistedUserPromptTarget {
     /// Segmented session directory that owns the target message.
     /// 拥有目标消息的分段会话目录。
     session_dir: std::path::PathBuf,
-    /// Editable prompt text from the canonical user message.
-    /// 来自规范用户消息的可编辑提示词文本。
-    prompt: String,
-    /// Attachments from the canonical user message.
-    /// 来自规范用户消息的附件。
-    attachments: Vec<ConversationAttachment>,
     /// Retained canonical conversation state before the target user prompt.
     /// 目标用户提示词之前保留的规范会话状态。
     retained_conversation_state: SessionConversationState,
@@ -934,6 +973,7 @@ fn locate_persisted_user_prompt_target(
     session: &SessionSummary,
     project_id: &str,
     message_id: &str,
+    mut runtime_state: SessionRuntimeStateEntry,
 ) -> Result<PersistedUserPromptTarget, String> {
     let session_dir = locate_segmented_session_dir_for_summary(
         controller,
@@ -941,23 +981,10 @@ fn locate_persisted_user_prompt_target(
         project_id,
         "ERR_USER_PROMPT_EDIT_SESSION_NOT_FOUND",
     )?;
-    let _ = repair_segmented_session_display_if_needed(&session_dir)?;
-    let replay = replay_segmented_session_context(&session_dir)?
-        .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_EMPTY_SESSION"))?;
-    let mut runtime_state = read_state(&session_dir)?
-        .filter(|state| !state.runtime_state.is_null())
-        .map(|state| {
-            deserialize_session_runtime_state_entry(
-                state.runtime_state,
-                "ERR_USER_PROMPT_EDIT_RUNTIME_STATE_INVALID: ",
-            )
-        })
-        .transpose()?
-        .unwrap_or_default();
     runtime_state
         .migrate_legacy_provider_usage_summaries()
         .map_err(|error| format!("ERR_USER_PROMPT_EDIT_RUNTIME_STATE_INVALID: {error}"))?;
-    let record_index = replay
+    let record_index = runtime_state
         .conversation_state
         .records
         .iter()
@@ -968,41 +995,38 @@ fn locate_persisted_user_prompt_target(
                 && record.record_kind == SessionMessageRecordKind::Transcript
         })
         .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_NOT_FOUND"))?;
-    let message_index = replay
+    let message_index = runtime_state
         .conversation_state
         .messages
         .iter()
         .position(|message| message.id == message_id)
         .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_PROTOCOL_MISMATCH"))?;
-    let SessionConversationPayload::UserText { text, attachments } =
-        &replay.conversation_state.messages[message_index].payload
-    else {
+    if !matches!(
+        &runtime_state.conversation_state.messages[message_index].payload,
+        SessionConversationPayload::UserText { .. }
+    ) {
         return Err(String::from("ERR_USER_PROMPT_EDIT_PROTOCOL_MISMATCH"));
-    };
-    let prompt = text.clone();
-    let attachments = attachments.clone();
-    let edit_cutoff_at_ms = replay.conversation_state.records[record_index]
+    }
+    let edit_cutoff_at_ms = runtime_state.conversation_state.records[record_index]
         .created_at
         .parse::<i64>()
         .map_err(|_| String::from("ERR_USER_PROMPT_EDIT_TIMESTAMP_INVALID"))?;
-    let retained_record_ids = replay
+    let retained_record_ids = runtime_state
         .conversation_state
         .records
         .iter()
         .take(record_index)
         .map(|record| record.id.clone())
         .collect::<BTreeSet<_>>();
-    let last_compaction_id = replay.last_compaction_id;
-    let context_start_message_id = replay.context_start_message_id;
-    let mut retained_conversation_state = replay.conversation_state;
+    let last_compaction_id = runtime_state.last_compaction_id.clone();
+    let context_start_message_id = runtime_state.context_start_message_id.clone();
+    let mut retained_conversation_state = std::mem::take(&mut runtime_state.conversation_state);
     retained_conversation_state.records.truncate(record_index);
     retained_conversation_state.messages.truncate(message_index);
     retained_conversation_state.continuation = Default::default();
     let retained_messages = conversation_state_to_session_messages(&retained_conversation_state);
     Ok(PersistedUserPromptTarget {
         session_dir,
-        prompt,
-        attachments,
         retained_conversation_state,
         retained_messages,
         last_compaction_id,
@@ -1027,10 +1051,28 @@ mod tests {
     fn edit_backup_fixture() -> (PathBuf, PathBuf) {
         let root =
             std::env::temp_dir().join(format!("vulcan-user-prompt-edit-backup-{}", Uuid::new_v4()));
-        let session_dir = root.join("sessions").join("project-test").join("session");
-        std::fs::create_dir_all(session_dir.join("runtime")).expect("create edit backup fixture");
-        std::fs::write(session_dir.join("metadata.json"), "original metadata")
-            .expect("write original metadata");
+        // session_id gives the fixture a valid exact owner accepted by metadata validation.
+        // session_id 为夹具提供元数据校验接受的有效精确所有者。
+        let session_id = Uuid::new_v4().to_string();
+        // session_dir is created by the production constructor so no test-only directory guessing is involved.
+        // session_dir 由生产构造器创建，因此不涉及测试专用的目录猜测。
+        let session_dir = create_segmented_session_in_location(
+            &root,
+            false,
+            SegmentedSessionCreateRequest {
+                session_id,
+                project_tag: String::from("project-test"),
+                created_date: String::from("2026-08-22"),
+                created_at: String::from("100"),
+                project_id: Some(String::from("project-test")),
+                title: Some(String::from("original metadata")),
+                title_source: Some(String::from("test")),
+                segment_policy: SegmentPolicy::default(),
+            },
+        )
+        .expect("create edit backup fixture");
+        std::fs::create_dir_all(session_dir.join("runtime"))
+            .expect("create edit backup runtime directory");
         std::fs::write(
             session_dir.join("runtime").join("r001.jsonl"),
             "original runtime",
@@ -1039,11 +1081,15 @@ mod tests {
         (root, session_dir)
     }
 
-    /// Verifies failed prompt editing restores the exact pre-edit directory tree.
-    /// 验证提示词编辑失败时会恢复精确的编辑前目录树。
+    /// Verifies failed prompt editing restores only the declared mutable files without scanning unknown files.
+    /// 验证提示词编辑失败时仅恢复已声明的可变文件，并且不会扫描未知文件。
     #[test]
-    fn persisted_edit_backup_restores_original_tree_after_failure() {
+    fn persisted_edit_backup_restores_declared_files_without_scanning_unknown_files() {
         let (root, session_dir) = edit_backup_fixture();
+        // original_metadata is the exact byte baseline restored after the failed rewrite.
+        // original_metadata 是失败重写后要恢复的精确字节基线。
+        let original_metadata =
+            std::fs::read(session_dir.join("metadata.json")).expect("read original metadata");
         let mut backup =
             PersistedSessionEditRollbackBackup::create(&session_dir).expect("create edit backup");
         let sessions_root = session_dir
@@ -1051,24 +1097,42 @@ mod tests {
             .and_then(Path::parent)
             .expect("sessions root");
         assert!(!backup.backup_dir.starts_with(sessions_root));
-        std::fs::write(session_dir.join("metadata.json"), "rewritten metadata")
-            .expect("rewrite metadata");
+        // rewritten_metadata remains structurally valid so rollback can enumerate its declared segments directly.
+        // rewritten_metadata 保持结构有效，使回滚能够直接枚举其声明的分段。
+        let mut rewritten_metadata = read_session_metadata(&session_dir).expect("read metadata");
+        rewritten_metadata.title = Some(String::from("rewritten metadata"));
+        let mut encoded_rewritten_metadata =
+            serde_json::to_vec_pretty(&rewritten_metadata).expect("encode rewritten metadata");
+        encoded_rewritten_metadata.push(b'\n');
+        std::fs::write(
+            session_dir.join("metadata.json"),
+            encoded_rewritten_metadata,
+        )
+        .expect("rewrite metadata");
+        std::fs::write(
+            session_dir.join("runtime").join("r001.jsonl"),
+            "rewritten runtime",
+        )
+        .expect("rewrite runtime");
         std::fs::write(session_dir.join("unexpected.jsonl"), "partial edit")
             .expect("write partial edit artifact");
 
         backup.restore().expect("restore original session");
 
         assert_eq!(
-            std::fs::read_to_string(session_dir.join("metadata.json"))
-                .expect("read restored metadata"),
-            "original metadata"
+            std::fs::read(session_dir.join("metadata.json")).expect("read restored metadata"),
+            original_metadata
         );
         assert_eq!(
             std::fs::read_to_string(session_dir.join("runtime").join("r001.jsonl"))
                 .expect("read restored runtime"),
             "original runtime"
         );
-        assert!(!session_dir.join("unexpected.jsonl").exists());
+        assert_eq!(
+            std::fs::read_to_string(session_dir.join("unexpected.jsonl"))
+                .expect("read untouched unknown file"),
+            "partial edit"
+        );
         std::fs::remove_dir_all(root).expect("remove edit backup fixture");
     }
 
@@ -1080,15 +1144,27 @@ mod tests {
         let mut backup =
             PersistedSessionEditRollbackBackup::create(&session_dir).expect("create edit backup");
         let backup_dir = backup.backup_dir.clone();
-        std::fs::write(session_dir.join("metadata.json"), "rewritten metadata")
-            .expect("rewrite metadata");
+        // rewritten_metadata is a valid committed replacement of the declared metadata file.
+        // rewritten_metadata 是声明元数据文件的有效提交替代内容。
+        let mut rewritten_metadata = read_session_metadata(&session_dir).expect("read metadata");
+        rewritten_metadata.title = Some(String::from("rewritten metadata"));
+        let mut encoded_rewritten_metadata =
+            serde_json::to_vec_pretty(&rewritten_metadata).expect("encode rewritten metadata");
+        encoded_rewritten_metadata.push(b'\n');
+        std::fs::write(
+            session_dir.join("metadata.json"),
+            encoded_rewritten_metadata,
+        )
+        .expect("rewrite metadata");
 
         backup.commit().expect("commit edit backup");
 
         assert_eq!(
-            std::fs::read_to_string(session_dir.join("metadata.json"))
-                .expect("read committed metadata"),
-            "rewritten metadata"
+            read_session_metadata(&session_dir)
+                .expect("read committed metadata")
+                .title
+                .as_deref(),
+            Some("rewritten metadata")
         );
         assert!(!backup_dir.exists());
         std::fs::remove_dir_all(root).expect("remove edit backup fixture");

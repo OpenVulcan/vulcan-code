@@ -11,6 +11,7 @@ use std::path::{Component, Path, PathBuf};
 use time::macros::format_description;
 use time::{Date, OffsetDateTime, UtcOffset};
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
+use vulcan_workbench_model::SessionMediaReferenceScope;
 
 /// Stable index directory name stored beside the managed attachment category directories.
 /// 存放在托管附件分类目录旁边的稳定索引目录名称。
@@ -32,6 +33,7 @@ const ATTACHMENT_TIMESTAMP_FORMAT: &[time::format_description::FormatItem<'stati
 
 mod cleanup;
 mod lifecycle;
+mod media_references;
 mod replay;
 mod storage;
 #[cfg(test)]
@@ -42,14 +44,19 @@ mod types;
 pub use cleanup::{execute_attachment_cleanup, preview_attachment_cleanup};
 pub use lifecycle::{
     acquire_staged_attachment_ref, discard_unreferenced_staged_attachment,
-    promote_staged_attachment_to_message_ref, record_staged_attachment,
-    release_staged_attachment_ref,
+    promote_staged_attachment_to_message_ref, reconcile_staged_attachment_ref_scope,
+    record_staged_attachment, release_staged_attachment_ref,
 };
-pub use replay::{load_attachment_asset_record_for_attachment, resolve_attachment_replay_status};
+pub use media_references::{find_attachment_media_reference, record_attachment_media_reference};
+pub use replay::{
+    load_attachment_asset_record_for_attachment, resolve_attachment_replay_status,
+    resolve_indexed_attachment_resource, resolve_owned_attachment_resource,
+};
 pub use timestamp::{current_attachment_timestamp_parts, parse_attachment_cleanup_cutoff_date};
 pub use types::{
     AttachmentAssetRecord, AttachmentCleanupPreview, AttachmentCleanupReport,
-    AttachmentCleanupSelection, AttachmentReplayStatus, AttachmentTimestampParts,
+    AttachmentCleanupSelection, AttachmentMediaReferenceRecord, AttachmentReplayStatus,
+    AttachmentTimestampParts,
 };
 
 use cleanup::{CleanupManagedPath, validate_cleanup_managed_path};

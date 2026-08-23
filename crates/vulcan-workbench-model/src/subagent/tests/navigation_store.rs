@@ -49,8 +49,8 @@ fn subagent_navigation_round_visibility_tracks_coordination_work() {
 #[test]
 fn loads_nested_panel_states_from_segmented_task_session_store() {
     let temp_dir = tempfile::tempdir().expect("tempdir");
-    let store = vulcan_task_session::SegmentedTaskSessionStore::new(temp_dir.path());
     let root_session_id = vulcan_session_core::SessionNodeId::new_v4();
+    let store = indexed_segmented_task_session_test_store(temp_dir.path(), root_session_id);
     let parent_task_session_id = vulcan_session_core::SessionNodeId::new_v4();
     let child_task_session_id = vulcan_session_core::SessionNodeId::new_v4();
     store
@@ -103,8 +103,8 @@ fn loads_nested_panel_states_from_segmented_task_session_store() {
 #[test]
 fn restores_completed_panel_state_from_segmented_task_session_store() {
     let temp_dir = tempfile::tempdir().expect("tempdir");
-    let store = vulcan_task_session::SegmentedTaskSessionStore::new(temp_dir.path());
     let root_session_id = vulcan_session_core::SessionNodeId::new_v4();
+    let store = indexed_segmented_task_session_test_store(temp_dir.path(), root_session_id);
     let task_session_id = vulcan_session_core::SessionNodeId::new_v4();
     let mut metadata = navigation_store_test_metadata(
         root_session_id,

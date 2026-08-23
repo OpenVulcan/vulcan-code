@@ -49,6 +49,9 @@ pub(crate) enum ProviderStreamDelta {
         /// 会话状态写入成功后由宿主释放的完成句柄。
         completion: ProviderRequestDurabilityCompletion,
     },
+    /// Confirms the host durably retained Started and released the pre-dispatch gate.
+    /// 确认宿主已经可靠保留 Started，并释放分派前闸门。
+    RequestStartDurabilityConfirmed,
     /// Final provider-specific HTTP request JSON captured immediately before network dispatch.
     /// 在网络发送前捕获到的最终 Provider 专用 HTTP 请求 JSON。
     WireRequest(Value),

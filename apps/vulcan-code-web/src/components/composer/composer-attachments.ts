@@ -4,8 +4,12 @@ import {
   composerAttachmentAccept,
   MAX_COMPOSER_ATTACHMENTS,
 } from "@/components/composer/composer-model";
-import { inferComposerAttachmentKindFromFile } from "@/components/composer/composer-attachment-media";
+import {
+  createComposerImagePreviewFile,
+  inferComposerAttachmentKindFromFile,
+} from "@/components/composer/composer-attachment-media";
 import { useI18n, type TranslationKey } from "@/i18n";
+import { stageComposerAttachmentPreviewBytes } from "@/service/conversation-actions-service";
 import type {
   ComposerAttachmentCapabilitySummary,
   ComposerAttachmentSummary,
@@ -100,8 +104,8 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
   // attachmentFileInputRef opens the browser file picker for manual attachment selection.
   // attachmentFileInputRef 打开浏览器文件选择器用于手动选择附件。
   const attachmentFileInputRef = React.useRef<HTMLInputElement | null>(null);
-  // enabledAttachmentCapabilities resolves the kinds currently accepted by runtime capability gates.
-  // enabledAttachmentCapabilities 解析当前运行时能力门控接受的附件类型。
+  // enabledAttachmentCapabilities resolves host attachment categories; direct delivery remains route-specific.
+  // enabledAttachmentCapabilities 解析宿主附件分类；直接传输仍由具体路线决定。
   const enabledAttachmentCapabilities = React.useMemo(
     () => args.attachmentCapabilities.filter((capability) => capability.enabled),
     [args.attachmentCapabilities],
@@ -141,8 +145,24 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
     const staged: ComposerAttachmentSummary[] = [];
     for (const file of acceptedFiles) {
       try {
-        const attachment = await args.onStageAttachmentBytes(args.projectId, args.conversationId, file);
+        let attachment = await args.onStageAttachmentBytes(args.projectId, args.conversationId, file);
         if (attachment) {
+          const previewFile = await createComposerImagePreviewFile(file);
+          if (previewFile && attachment.assetId) {
+            try {
+              // previewLocalPath points at a sidecar of the canonical asset and never creates a second attachment index record.
+              // previewLocalPath 指向规范资产的旁路文件，绝不会创建第二条附件索引记录。
+              const previewLocalPath = await stageComposerAttachmentPreviewBytes(
+                args.projectId,
+                args.conversationId,
+                attachment.assetId,
+                previewFile,
+              );
+              attachment = { ...attachment, previewLocalPath };
+            } catch (error) {
+              toast.error(error instanceof Error ? error.message : String(error));
+            }
+          }
           staged.push(attachment);
         }
       } catch (error) {
@@ -237,8 +257,8 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
     void stageComposerFiles(files);
   }, [stageComposerFiles]);
 
-  // removeComposerAttachment removes one staged attachment by index.
-  // removeComposerAttachment 按索引移除单个已暂存附件。
+  // removeComposerAttachment removes one staged attachment by its currently rendered position.
+  // removeComposerAttachment 按当前渲染位置移除单个已暂存附件。
   const removeComposerAttachment = React.useCallback((index: number) => {
     setAttachments((current) => current.filter((_, currentIndex) => currentIndex !== index));
   }, []);

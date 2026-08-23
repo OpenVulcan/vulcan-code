@@ -121,7 +121,7 @@ pub(crate) fn apply_execution_preparation(
     preparation: &ExecutionPreparation,
 ) -> Result<(), String> {
     let apply_started_at = current_unix_millis_value();
-    let (events, boundary_project_id) = commit_owned_execution_preparation_state(
+    let (events, boundary_session_directory) = commit_owned_execution_preparation_state(
         state,
         preparation.session_id,
         active_stream_task_id,
@@ -138,7 +138,7 @@ pub(crate) fn apply_execution_preparation(
                     .as_ref()
                     .map(|runtime| runtime.public_ai_runtime.as_ref()),
             );
-            let (boundary_project_id, context_usage) = {
+            let (boundary_session_directory, context_usage) = {
                 // workspace passed preflight before live budget and runtime identity mutation.
                 // workspace 在 live budget 与运行时身份变更前已通过预检。
                 let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
@@ -194,8 +194,13 @@ pub(crate) fn apply_execution_preparation(
                     .as_ref()
                     .map(|baseline| baseline.fingerprint.clone());
                 runtime_state.updated_at = current_unix_millis_text();
-                let boundary_project_id =
-                    owning_project_id_for_session(workspace, preparation.session_id);
+                // boundarySessionDirectory is computed from the exact retained summary and never by scanning project siblings.
+                // boundarySessionDirectory 从精确保留摘要计算，绝不扫描项目兄弟目录。
+                let boundary_session_directory = segmented_session_directory_for_workspace_session(
+                    &controller_runtime.data_root,
+                    workspace,
+                    preparation.session_id,
+                );
                 let context_usage = context_usage_snapshot_from_runtime_state(
                     preparation.session_id,
                     workspace.session_runtime_state.get(&preparation.session_id),
@@ -205,7 +210,7 @@ pub(crate) fn apply_execution_preparation(
                         .context_compaction_policy
                         .and_then(|policy| policy.compression_window_limit),
                 );
-                (boundary_project_id, context_usage)
+                (boundary_session_directory, context_usage)
             };
             // phase_event reuses the shared workspace, Workbench, timestamp, and status projection.
             // phase_event 复用共享的工作区、Workbench、时间戳与状态投影。
@@ -228,7 +233,7 @@ pub(crate) fn apply_execution_preparation(
                         }),
                     },
                 ],
-                boundary_project_id,
+                boundary_session_directory,
             ))
         },
     )?;
@@ -240,9 +245,9 @@ pub(crate) fn apply_execution_preparation(
             current_unix_millis_value().saturating_sub(apply_started_at)
         ),
     );
-    if let Some(project_id) = boundary_project_id {
+    if let Some(session_directory) = boundary_session_directory {
         let lifecycle_started_at = current_unix_millis_value();
-        begin_session_external_turn_lifecycle(controller_runtime, &project_id, preparation)?;
+        begin_session_external_turn_lifecycle(&session_directory, preparation)?;
         webui_after_precheck_trace(
             "after_precheck_25b_lifecycle_begin_finished",
             format!(
@@ -283,8 +288,7 @@ pub(crate) fn apply_execution_preparation(
 /// Begins the session lifecycle for one WebUI provider-stream turn.
 /// 开始单个 WebUI provider 流式轮次的 会话生命周期。
 pub(crate) fn begin_session_external_turn_lifecycle(
-    controller_runtime: &ControllerRuntimeHandle,
-    project_id: &str,
+    session_directory: &Path,
     preparation: &ExecutionPreparation,
 ) -> Result<(), String> {
     let Some(turn_id) = preparation
@@ -294,12 +298,8 @@ pub(crate) fn begin_session_external_turn_lifecycle(
     else {
         return Ok(());
     };
-    let store = WorkspaceSegmentedSessionBoundaryStore::new(
-        &controller_runtime.data_root,
-        project_id,
-        preparation.session_id,
-        &preparation.session_title,
-    );
+    let store =
+        WorkspaceSegmentedSessionBoundaryStore::new(session_directory, preparation.session_id);
     let runner = SessionLifecycleRunner::new(store, WebuiSessionLifecycleHook);
     runner.begin_turn(SessionLifecycleBeginRequest {
         thread_id: SessionNodeId::from(preparation.session_id),
@@ -311,10 +311,8 @@ pub(crate) fn begin_session_external_turn_lifecycle(
 /// Finishes the session lifecycle for one WebUI provider-stream turn.
 /// 结束单个 WebUI provider 流式轮次的 会话生命周期。
 pub(crate) fn finish_session_external_turn_lifecycle(
-    controller_runtime: &ControllerRuntimeHandle,
-    project_id: &str,
+    session_directory: &Path,
     session_id: SessionId,
-    session_title: &str,
     final_events: Vec<SessionBoundaryEvent>,
     terminal_event: SessionBoundaryEvent,
 ) -> Result<(), String> {
@@ -322,12 +320,7 @@ pub(crate) fn finish_session_external_turn_lifecycle(
         return Ok(());
     };
     let terminal_status = session_lifecycle_terminal_status_from_event(&terminal_event)?;
-    let store = WorkspaceSegmentedSessionBoundaryStore::new(
-        &controller_runtime.data_root,
-        project_id,
-        session_id,
-        session_title,
-    );
+    let store = WorkspaceSegmentedSessionBoundaryStore::new(session_directory, session_id);
     let runner = SessionLifecycleRunner::new(store, WebuiSessionLifecycleHook);
     runner.finish_turn(SessionLifecycleFinishRequest {
         thread_id: SessionNodeId::from(session_id),

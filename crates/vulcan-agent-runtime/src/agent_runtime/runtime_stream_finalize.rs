@@ -299,6 +299,7 @@ mod tests {
     fn build_test_preparation() -> ExecutionPreparation {
         ExecutionPreparation {
             session_id: Uuid::nil(),
+            session_storage_directory: None,
             conversation_hook_turn_id: None,
             session_title: String::from("测试会话"),
             agent_id: String::from("default-agent"),

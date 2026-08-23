@@ -156,14 +156,18 @@ pub(crate) fn shell_session_args_schema(shell_support: &HostCommandShellSupport)
             },
             "wait_for_output_ms": {
                 "type": "integer",
+                "minimum": 0,
+                "maximum": MAX_COMMAND_SESSION_READ_WAIT_MS,
                 "description": format!(
-                    "Optional poll wait in milliseconds for `read`. Default: {DEFAULT_COMMAND_SESSION_READ_WAIT_MS} (do not wait; return immediately with whatever is already buffered)."
+                    "Optional poll wait in milliseconds for `read`. Default: {DEFAULT_COMMAND_SESSION_READ_WAIT_MS} (do not wait; return immediately with whatever is already buffered). Host maximum: {MAX_COMMAND_SESSION_READ_WAIT_MS} ms."
                 )
             },
             "max_chunks": {
                 "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_COMMAND_SESSION_READ_CHUNKS,
                 "description": format!(
-                    "Optional maximum number of buffered chunks returned by `read`. Default: {DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS}. A chunk is one decoded stdout/stderr fragment emitted by the runtime; the host opportunistically coalesces adjacent undelivered fragments toward line-sized chunks, but chunk boundaries remain implementation-defined and may still be smaller than full lines or commands."
+                    "Optional maximum number of buffered chunks returned by `read`. Default: {DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS}; host maximum: {MAX_COMMAND_SESSION_READ_CHUNKS}. A chunk is one decoded stdout/stderr fragment emitted by the runtime; the host opportunistically coalesces adjacent undelivered fragments toward line-sized chunks, but chunk boundaries remain implementation-defined and may still be smaller than full lines or commands."
                 )
             }
         },

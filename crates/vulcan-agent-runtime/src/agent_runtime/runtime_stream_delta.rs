@@ -588,6 +588,7 @@ pub(crate) fn process_provider_stream_delta(
             ]);
             events
         }
+        Ok(ProviderStreamDelta::RequestStartDurabilityConfirmed) => Vec::new(),
         Ok(ProviderStreamDelta::TransportObserved {
             transport,
             dispatched_at_ms,

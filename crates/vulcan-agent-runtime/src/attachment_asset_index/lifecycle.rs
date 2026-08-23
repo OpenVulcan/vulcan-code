@@ -38,6 +38,7 @@ pub fn record_staged_attachment(
         existing_record.managed_path = attachment.local_path.clone();
         existing_record.mime_type = attachment.mime_type.clone();
         existing_record.byte_len = attachment.byte_len;
+        existing_record.source_sha256 = attachment.source_sha256.clone();
         existing_record.staged_at_local_text = timestamp.local_timestamp_text.clone();
         existing_record.staged_date_text = timestamp.local_date_text.clone();
         existing_record.staged_at_unix_millis = timestamp.unix_millis;
@@ -54,6 +55,7 @@ pub fn record_staged_attachment(
             managed_path: vulcan_runtime_assets::native_host_path_text(&attachment.local_path),
             mime_type: attachment.mime_type.clone(),
             byte_len: attachment.byte_len,
+            source_sha256: attachment.source_sha256.clone(),
             staged_at_local_text: timestamp.local_timestamp_text.clone(),
             staged_date_text: timestamp.local_date_text.clone(),
             staged_at_unix_millis: timestamp.unix_millis,
@@ -64,6 +66,7 @@ pub fn record_staged_attachment(
             session_ids: Vec::new(),
             message_ids: Vec::new(),
             staging_refs: Vec::new(),
+            media_references: Vec::new(),
             deletion_pending: false,
             purged_at_local_text: None,
             purged_at_unix_millis: None,
@@ -91,6 +94,86 @@ pub fn release_staged_attachment_ref(
     attachments: &[ConversationAttachment],
 ) -> Result<bool, String> {
     update_staged_attachment_refs(workspace_path, scope, attachments, false)
+}
+
+/// Replaces one transient staging scope with the exact managed attachment set owned by its draft.
+/// 使用所属草稿持有的精确托管附件集合替换一个瞬时暂存作用域。
+///
+/// # Parameters
+/// 参数
+/// `workspace_path` selects the authoritative project attachment index.
+/// `workspace_path` 选择权威项目附件索引。
+/// `scope` is the stable draft-owner identity being reconciled.
+/// `scope` 是正在协调的稳定草稿所有者身份。
+/// `attachments` is the complete canonical attachment set currently owned by that draft.
+/// `attachments` 是该草稿当前持有的完整规范附件集合。
+///
+/// # Returns
+/// 返回值
+/// Whether the durable index changed, or one explicit ownership/integrity error.
+/// 返回持久索引是否发生变化，或一条明确的所有权/完整性错误。
+pub fn reconcile_staged_attachment_ref_scope(
+    workspace_path: &str,
+    scope: &str,
+    attachments: &[ConversationAttachment],
+) -> Result<bool, String> {
+    let scope = scope.trim();
+    if scope.is_empty() {
+        return Err(String::from(
+            "Composer attachment draft scope cannot be empty.",
+        ));
+    }
+    let asset_ids = collect_attachment_asset_ids(attachments)?;
+    let asset_root = resolve_managed_attachment_root(workspace_path);
+    // transactionLock makes the complete draft-set replacement indivisible from staging, promotion, and cleanup.
+    // transactionLock 使完整草稿集合替换相对于暂存、提升与清理保持不可分割。
+    let transaction_lock = attachment_index_transaction_lock(&asset_root)?;
+    // transactionGuard remains held through validation, reference replacement, orphan deletion, and publication.
+    // transactionGuard 在校验、引用替换、孤儿删除与发布期间持续持有。
+    let _transaction_guard = transaction_lock.lock().map_err(|error| {
+        format!(
+            "failed to lock attachment index transaction `{}`: {error}",
+            asset_root.display()
+        )
+    })?;
+    let mut document = load_attachment_asset_index_document_for_mutation(&asset_root)?;
+    ensure_attachment_asset_ids_are_indexed(&document, &asset_ids, "协调草稿附件租约")?;
+    let mut changed = false;
+    let mut released_asset_ids = BTreeSet::new();
+    for record in &mut document.assets {
+        let should_retain_scope = asset_ids.contains(&record.asset_id);
+        let currently_retains_scope = record.staging_refs.iter().any(|entry| entry == scope);
+        match (should_retain_scope, currently_retains_scope) {
+            (true, false) => {
+                record.staging_refs.push(scope.to_string());
+                changed = true;
+            }
+            (false, true) => {
+                record.staging_refs.retain(|entry| entry != scope);
+                released_asset_ids.insert(record.asset_id.clone());
+                changed = true;
+            }
+            _ => {}
+        }
+    }
+    let removable_indices = document
+        .assets
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| {
+            (released_asset_ids.contains(&record.asset_id) && !attachment_record_has_refs(record))
+                .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let mut persisted_during_discard = false;
+    for index in removable_indices.into_iter().rev() {
+        discard_attachment_record_at(&asset_root, &mut document, index)?;
+        persisted_during_discard = true;
+    }
+    if changed && !persisted_during_discard {
+        save_attachment_asset_index_document(&asset_root, &document)?;
+    }
+    Ok(changed)
 }
 
 /// Promotes staged attachments into canonical message references and releases their transient staging scopes.
@@ -408,9 +491,12 @@ fn finish_pending_attachment_deletion_at(
                 vulcan_runtime_assets::native_host_path_text(&document.assets[index].managed_path)
             }
         },
+        resource_path: None,
         source_path: None,
         asset_id: Some(document.assets[index].asset_id.clone()),
         byte_len: document.assets[index].byte_len,
+        source_sha256: None,
+        delivery_mode: None,
         preview_local_path: None,
         mime_type: document.assets[index].mime_type.clone(),
     };

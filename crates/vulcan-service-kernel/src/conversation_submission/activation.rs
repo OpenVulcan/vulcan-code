@@ -5,18 +5,19 @@ use vulcan_service_api::{
     ConversationSummary, ConversationSummaryChangedDelta, ServiceEvent, ServiceEventEmitter,
     WorkbenchDelta, WorkbenchDeltaEnvelope, WorkbenchSnapshot,
 };
-use vulcan_workbench_model::{SessionRunPhase, SessionState};
+use vulcan_workbench_model::{SessionMessageEntry, SessionRunPhase, SessionState};
 use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
 use crate::{
     MaterializedPromptSession, PromptSessionMaterializationKind,
     SessionContinuationRuntimeBlockers, SharedServiceBridgeState,
     conversation_continuation_summary, conversation_fork_source_summary_from_session,
-    emit_service_event_with_trace, emit_workbench_event, ensure_webui_session_runtime_state,
+    emit_service_event_with_trace, emit_workbench_event, ensure_webui_session_runtime_entry,
     is_active_session_run_phase, pending_question_snapshots_from_agent_runtime,
     refresh_conversation_attention_summary, restore_webui_runtime_controls_for_session,
     session_plan_mode_summary_from_runtime_state, session_summary_project_id_owned,
     sync_workbench_runtime_control_fields_locked, workspace_session_summary_for_session,
+    workspace_session_summary_for_session_mut,
 };
 
 /// Initializes one materialized session inside the detached submission workspace.
@@ -40,7 +41,7 @@ pub(crate) fn prepare_materialized_submission_session(
     // session_id is the single identity receiving runtime defaults.
     // session_id 是接收运行态默认值的唯一身份。
     let session_id = materialized_session.session_id;
-    ensure_webui_session_runtime_state(workspace_snapshot, session_id, None)?;
+    ensure_webui_session_runtime_entry(workspace_snapshot, session_id, None)?;
     Ok(())
 }
 
@@ -147,6 +148,134 @@ pub(crate) fn commit_created_submission_workspace_slice(
         .insert(session_id, runtime_state);
     workspace.session_run_phases.insert(session_id, run_phase);
     workspace.hydrated_session_ids.insert(session_id);
+    workspace.selected_session = session_id;
+    crate::retain_hydrated_conversation_windows_for_workspace(
+        hydrated_conversation_windows,
+        workspace,
+    );
+    Ok(())
+}
+
+/// Merges new or updated transcript records into one retained session by stable message id.
+/// 按稳定消息标识把新增或更新的转录记录合并到一个保留会话。
+///
+/// # Parameters
+/// 参数
+/// `retained_messages` owns the authoritative ordered transcript.
+/// `retained_messages` 持有权威有序转录。
+/// `incoming_messages` contains only records created or updated by the detached transaction.
+/// `incoming_messages` 仅包含分离事务新建或更新的记录。
+///
+/// # Returns
+/// 返回值
+/// This function returns no value after replacing matching ids and appending new ids in transaction order.
+/// 此函数按事务顺序替换匹配标识并追加新标识后不返回值。
+pub(crate) fn merge_submission_message_entries(
+    retained_messages: &mut Vec<SessionMessageEntry>,
+    incoming_messages: Vec<SessionMessageEntry>,
+) {
+    // incoming_message is one transaction-owned record keyed by its stable persisted identity.
+    // incoming_message 是一条由事务持有并按稳定持久身份索引的记录。
+    for incoming_message in incoming_messages {
+        if let Some(retained_message) = retained_messages
+            .iter_mut()
+            .find(|retained_message| retained_message.id == incoming_message.id)
+        {
+            *retained_message = incoming_message;
+        } else {
+            retained_messages.push(incoming_message);
+        }
+    }
+}
+
+/// Merges one admitted existing-session slice into the retained workspace by exact session key.
+/// 按精确会话键把单个已准入已有会话切片合并到保留工作区。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the authoritative retained full workspace.
+/// `state` 持有权威的保留完整工作区。
+/// `workspace_slice` contains the admitted active session, its owning project, canonical runtime context, and new transcript records.
+/// `workspace_slice` 包含已准入活动会话、所属项目、规范运行时上下文与新增转录记录。
+/// `materialized_session` identifies the exact existing session being committed.
+/// `materialized_session` 标识正在提交的精确已有会话。
+///
+/// # Returns
+/// 返回值
+/// Success after moving session-scoped runtime fields and merging transcript deltas, or an explicit retained-state mismatch.
+/// 移动会话级运行字段并合并转录增量后返回成功，否则返回明确的保留状态不一致错误。
+pub(crate) fn commit_existing_submission_workspace_slice(
+    state: &SharedServiceBridgeState,
+    workspace_slice: &mut WorkspaceSnapshot,
+    materialized_session: &MaterializedPromptSession,
+) -> Result<(), String> {
+    if materialized_session.kind != PromptSessionMaterializationKind::Existing {
+        return Err(String::from(
+            "Only an existing conversation can be committed through the exact-session merge.",
+        ));
+    }
+    let session_id = materialized_session.session_id;
+    let session = workspace_session_summary_for_session(workspace_slice, session_id)
+        .cloned()
+        .ok_or_else(|| format!("Existing conversation slice is missing `{session_id}`."))?;
+    // messages owns only transcript deltas created by this detached submission.
+    // messages 只持有本次分离提交新建的转录增量。
+    let messages = workspace_slice
+        .session_messages
+        .remove(&session_id)
+        .unwrap_or_default();
+    // compactions is present only when the detached transaction explicitly changed compaction projection state.
+    // compactions 仅在分离事务明确修改压缩投影状态时存在。
+    let compactions = workspace_slice.session_compactions.remove(&session_id);
+    let runtime_state = workspace_slice
+        .session_runtime_state
+        .remove(&session_id)
+        .ok_or_else(|| format!("Existing conversation `{session_id}` has no runtime state."))?;
+    let run_phase = workspace_slice
+        .session_run_phases
+        .remove(&session_id)
+        .unwrap_or(SessionRunPhase::Preparing);
+    let is_hydrated = workspace_slice.hydrated_session_ids.contains(&session_id);
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let crate::ServiceBridgeState {
+        workspace_snapshot,
+        hydrated_conversation_windows,
+        ..
+    } = &mut *guard;
+    let workspace = workspace_snapshot
+        .as_mut()
+        .ok_or_else(|| String::from("workspace is no longer initialized"))?;
+    let retained_session = workspace_session_summary_for_session_mut(workspace, session_id)
+        .ok_or_else(|| {
+            format!(
+                "Existing conversation `{session_id}` left the retained workspace before commit."
+            )
+        })?;
+    *retained_session = session;
+    if !messages.is_empty() {
+        merge_submission_message_entries(
+            workspace.session_messages.entry(session_id).or_default(),
+            messages,
+        );
+    }
+    // An absent compaction entry means the detached submission did not mutate compaction state.
+    // 缺少压缩条目表示分离提交没有修改压缩状态。
+    if let Some(compactions) = compactions {
+        workspace
+            .session_compactions
+            .insert(session_id, compactions);
+    }
+    workspace
+        .session_runtime_state
+        .insert(session_id, runtime_state);
+    workspace.session_run_phases.insert(session_id, run_phase);
+    if is_hydrated {
+        workspace.hydrated_session_ids.insert(session_id);
+    } else {
+        workspace.hydrated_session_ids.remove(&session_id);
+    }
     workspace.selected_session = session_id;
     crate::retain_hydrated_conversation_windows_for_workspace(
         hydrated_conversation_windows,

@@ -7349,9 +7349,9 @@ fn append_session_model_switch_record(
     connection_display_name: &str,
     model_display_name: &str,
 ) -> Result<(), String> {
-    // runtimeStateSnapshot projects the exact canonical row after the record receives its durable identity.
-    // runtimeStateSnapshot 在记录取得可靠身份后投影精确的规范运行态行。
-    let runtime_state_snapshot = {
+    // projectedEntry contains only the newly canonicalized row, never a clone of conversation history.
+    // projectedEntry 仅包含刚完成规范化的新记录，绝不克隆会话历史。
+    let projected_entry = {
         // runtimeState is the unique canonical owner of the model-switch audit record.
         // runtimeState 是模型切换审计记录的唯一规范所有者。
         let runtime_state = workspace
@@ -7380,13 +7380,24 @@ fn append_session_model_switch_record(
             "model_id": selection.model_id,
             "model_name": model_display_name,
         }));
-        crate::append_webui_session_message_entry_to_state(runtime_state, session_id, entry)?;
-        runtime_state.clone()
+        let message_id =
+            crate::append_webui_session_message_entry_to_state(runtime_state, session_id, entry)?;
+        let appended_record = runtime_state
+            .conversation_state
+            .records
+            .last()
+            .filter(|record| record.id == message_id)
+            .ok_or_else(|| {
+                String::from(
+                    "The canonical model-switch record was not retained at the append boundary.",
+                )
+            })?;
+        crate::session_message_entry_from_conversation_record(appended_record)
     };
-    crate::merge_runtime_state_records_into_display_messages(
+    crate::append_new_canonical_row_to_loaded_display_window(
         workspace,
         session_id,
-        &runtime_state_snapshot,
+        projected_entry,
     );
     crate::sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
     Ok(())
@@ -7669,18 +7680,15 @@ pub(super) async fn service_select_public_ai_model(
             },
         )?;
     if let Some(session_id) = conversation_id {
-        // persistenceContext captures the committed pending tuple and transcript record after atomic publication.
-        // persistenceContext 在原子发布后捕获已提交的待生效三元组与转录记录。
-        let (controller_runtime, workspace_snapshot) = {
-            // guard reads controller ownership and the matching committed workspace revision together.
-            // guard 同时读取控制器所有权与匹配的已提交工作区修订。
+        // controllerRuntime is captured after atomic publication; the persistence gate reads the exact retained session later.
+        // controllerRuntime 在原子发布后捕获；持久化闸门随后读取精确保留会话。
+        let controller_runtime = {
             let guard = state
                 .lock()
                 .map_err(|error| format!("Failed to lock service state: {error}"))?;
             guard
                 .controller_runtime
                 .clone()
-                .zip(guard.workspace_snapshot.clone())
                 .ok_or_else(|| {
                     String::from(
                         "Session model selection cannot persist because controller workspace storage is unavailable.",
@@ -7690,10 +7698,9 @@ pub(super) async fn service_select_public_ai_model(
         // The authoritative write gate reloads the newest retained session row, so this synchronous
         // durability boundary cannot overwrite tool, Continue, or terminal mutations committed after publication.
         // 权威写入闸门会重新加载最新保留会话行，因此该同步可靠边界不会覆盖发布后提交的工具、Continue 或终态变更。
-        crate::persist_workspace_session_update(
-            Some(&state),
+        crate::persist_latest_retained_workspace_session_update(
+            &state,
             controller_runtime,
-            &workspace_snapshot,
             session_id,
         )
         .await?;
@@ -9126,12 +9133,26 @@ pub(super) async fn service_public_ai_session_provider_tool_selections(
             .workspace_snapshot
             .as_ref()
             .ok_or_else(|| String::from("Workspace is not initialized."))?;
-        let mut planned_runtime_state =
-            workspace
-                .session_runtime_state
-                .get(&session_id)
-                .cloned()
-                .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
+        // runtimeState contains the authoritative session row whose provider-tool fields are projected below.
+        // runtimeState 包含权威会话记录，其供应商工具字段会在下方投影。
+        let runtime_state = workspace
+            .session_runtime_state
+            .get(&session_id)
+            .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
+        // plannedRuntimeState copies only fields consumed and mutated by provider-tool reconciliation.
+        // plannedRuntimeState 只复制供应商工具协调会消费和修改的字段。
+        let mut planned_runtime_state = vulcan_workbench_model::SessionRuntimeStateEntry {
+            provider_tool_selections: runtime_state.provider_tool_selections.clone(),
+            media_understanding_modes: runtime_state.media_understanding_modes.clone(),
+            provider_tool_enabled_capabilities: runtime_state
+                .provider_tool_enabled_capabilities
+                .clone(),
+            provider_extension_target_sets: runtime_state.provider_extension_target_sets.clone(),
+            provider_tool_settings_initialized: runtime_state.provider_tool_settings_initialized,
+            provider_tool_selections_overridden: runtime_state.provider_tool_selections_overridden,
+            updated_at: runtime_state.updated_at.clone(),
+            ..Default::default()
+        };
         let (
             enabled_capabilities,
             selections,
@@ -10293,7 +10314,7 @@ fn preferred_available_connection_for_model(
 /// An unchanged detached workspace candidate and an empty changed-session set.
 /// 返回一份未改写的独立工作区候选与空的会话变更集合。
 fn plan_reconciled_session_model_selections(
-    workspace: &vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+    workspace: vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
     _runtime: &PublicAiRuntime,
     _configuration: &PersistedAiConfiguration,
     _catalogs: &BTreeMap<String, ConnectionModelCatalog>,
@@ -10309,7 +10330,7 @@ fn plan_reconciled_session_model_selections(
     // provider, account, or model.
     // 对已有会话而言，目录刷新只负责观测。不可用的精确三元组由投影隐藏并要求显式重选，
     // 绝不会被改写成其他供应商、账号或模型。
-    Ok((workspace.clone(), BTreeSet::new()))
+    Ok((workspace, BTreeSet::new()))
 }
 
 /// Applies observational catalog reconciliation without rewriting explicit session selections.
@@ -10336,8 +10357,12 @@ pub(crate) fn reconcile_missing_session_model_selections(
 ) -> Result<BTreeSet<crate::SessionId>, String> {
     // plannedWorkspace is detached until every fallible lease operation succeeds.
     // plannedWorkspace 在全部可失败租约操作成功前保持独立。
-    let (planned_workspace, changed_session_ids) =
-        plan_reconciled_session_model_selections(workspace, runtime, configuration, catalogs)?;
+    let (planned_workspace, changed_session_ids) = plan_reconciled_session_model_selections(
+        workspace.clone(),
+        runtime,
+        configuration,
+        catalogs,
+    )?;
     // leaseScopeIds materializes stable strings for one exact absence/exclusion transaction.
     // leaseScopeIds 为一次精确的缺失校验/排除事务物化稳定字符串。
     let lease_scope_ids = changed_session_ids
@@ -12554,7 +12579,7 @@ where
             } = reconcile_workspace(&mut forced_workspace)?;
             let (planned_workspace, catalog_changed_session_ids) = if reconcile_session_models {
                 plan_reconciled_session_model_selections(
-                    &forced_workspace,
+                    forced_workspace,
                     runtime,
                     configuration,
                     &catalogs,
@@ -12755,39 +12780,48 @@ where
         if let Some(lease_guard) = lease_guard {
             lease_guard.commit();
         }
-        // persistenceContext captures only the exact committed session rows after the state swap.
-        // persistenceContext 只在状态交换后捕获精确的已提交会话行。
+        // persistenceContext captures only exact directory and addon payloads after the state swap.
+        // persistenceContext 只在状态交换后捕获精确目录与附属状态载荷。
         let persistence_context = if changed_session_ids.is_empty() {
             None
         } else {
-            Some((
-                guard.controller_runtime.clone(),
-                guard.workspace_snapshot.clone(),
-                changed_session_ids,
-            ))
+            let data_root = guard
+                .controller_runtime
+                .as_ref()
+                .map(|runtime| runtime.data_root.clone())
+                .ok_or_else(|| String::from("controller runtime is not ready"))?;
+            let mut payloads = Vec::with_capacity(changed_session_ids.len());
+            for session_id in changed_session_ids {
+                let Some(addon_state) = guard.workspace_snapshot.as_ref().and_then(|workspace| {
+                    crate::session_addon_state_from_workspace_snapshot(
+                        workspace,
+                        session_id,
+                        &[crate::SessionAddonNamespace::RuntimeControls],
+                    )
+                }) else {
+                    continue;
+                };
+                let session_directory =
+                    crate::require_segmented_session_directory_for_retained_session(
+                        &guard, &data_root, session_id,
+                    )?;
+                payloads.push((session_directory, session_id, addon_state));
+            }
+            Some(payloads)
         };
         (guard.workbench.clone(), persistence_context)
     };
-    if let Some((Some(controller_runtime), Some(workspace_snapshot), session_ids)) =
-        persistence_context
-    {
-        for session_id in session_ids {
-            if let Some(addon_state) = crate::session_addon_state_from_workspace_snapshot(
-                &workspace_snapshot,
+    if let Some(payloads) = persistence_context {
+        for (session_directory, session_id, addon_state) in payloads {
+            crate::spawn_exact_session_addon_state_persist_task(
+                app.clone(),
+                state.clone(),
+                session_directory,
                 session_id,
-                &[crate::SessionAddonNamespace::RuntimeControls],
-            ) {
-                crate::spawn_workspace_session_addon_state_persist_task(
-                    app.clone(),
-                    state.clone(),
-                    controller_runtime.clone(),
-                    workspace_snapshot.clone(),
-                    session_id,
-                    addon_state,
-                    vec![crate::SessionAddonNamespace::RuntimeControls],
-                    Some(String::from(persistence_reason)),
-                );
-            }
+                addon_state,
+                vec![crate::SessionAddonNamespace::RuntimeControls],
+                Some(String::from(persistence_reason)),
+            );
         }
     }
     emit_workbench_event(app, &workbench);
@@ -14537,7 +14571,8 @@ mod inference_settings_route_tests {
             Some("model_switch")
         );
         assert_eq!(
-            workspace.session_messages.get(&session_id).map(Vec::len),
+            crate::display_session_messages_from_workspace(&workspace, session_id)
+                .map(|messages| messages.len()),
             Some(1)
         );
 

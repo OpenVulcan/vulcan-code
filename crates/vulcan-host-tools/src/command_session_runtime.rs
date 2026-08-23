@@ -29,6 +29,46 @@ pub const DEFAULT_COMMAND_SESSION_READ_WAIT_MS: u64 = 0;
 /// 当调用方未提供读取上限时，`read_session` 返回的默认最大分片数量。
 pub const DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS: usize = 128;
 
+/// Hard upper bound for one command-session read wait so callers cannot monopolize one tool execution indefinitely.
+/// 单次命令会话读取等待的硬上限，避免调用方无限占用一次工具执行。
+pub const MAX_COMMAND_SESSION_READ_WAIT_MS: u64 = 30_000;
+
+/// Hard upper bound for output chunks returned by one command-session read.
+/// 单次命令会话读取返回输出分片数的硬上限。
+pub const MAX_COMMAND_SESSION_READ_CHUNKS: usize = 4_096;
+
+/// Resolves one caller-supplied read wait into the host-enforced bounded value.
+/// 将调用方提供的读取等待解析为宿主强制限制后的值。
+///
+/// # Parameters / 参数
+/// - `requested_wait_ms`: Optional caller-requested wait in milliseconds.
+/// - `requested_wait_ms`：调用方可选请求的等待毫秒数。
+///
+/// # Returns / 返回值
+/// The effective wait budget capped by the host maximum.
+/// 不超过宿主硬上限的有效等待预算。
+fn bounded_command_session_read_wait_ms(requested_wait_ms: Option<u64>) -> u64 {
+    requested_wait_ms
+        .unwrap_or(DEFAULT_COMMAND_SESSION_READ_WAIT_MS)
+        .min(MAX_COMMAND_SESSION_READ_WAIT_MS)
+}
+
+/// Resolves one caller-supplied chunk limit into the host-enforced bounded value.
+/// 将调用方提供的分片限制解析为宿主强制限制后的值。
+///
+/// # Parameters / 参数
+/// - `requested_max_chunks`: Optional caller-requested maximum output chunk count.
+/// - `requested_max_chunks`：调用方可选请求的最大输出分片数。
+///
+/// # Returns / 返回值
+/// The effective non-zero chunk limit capped by retained runtime capacity.
+/// 不超过运行时保留容量且非零的有效分片上限。
+fn bounded_command_session_read_chunks(requested_max_chunks: Option<usize>) -> usize {
+    requested_max_chunks
+        .unwrap_or(DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS)
+        .clamp(1, MAX_COMMAND_SESSION_READ_CHUNKS)
+}
+
 /// Soft byte threshold used while coalescing adjacent undelivered output fragments toward one larger read chunk.
 /// 在把相邻未读输出碎片合并成较大读取分片时使用的软字节阈值。
 const COMMAND_SESSION_OUTPUT_CHUNK_COALESCE_SOFT_LIMIT_BYTES: usize = 512;

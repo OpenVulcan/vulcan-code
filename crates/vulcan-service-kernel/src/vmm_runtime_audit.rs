@@ -261,14 +261,14 @@ pub(super) fn build_vmm_lifecycle_events_for_state_diff(
 /// Success after every event has been appended or the session is consistently absent.
 /// 在全部事件完成追加或会话一致缺失后返回成功。
 pub(super) fn record_vmm_lifecycle_events(
-    data_root: &std::path::Path,
+    session_directory: &std::path::Path,
     session_id: SessionId,
     timestamp: &str,
     events: Vec<RuntimeVmmLifecycleEvent>,
 ) -> Result<(), String> {
     for event in events {
         vulcan_workspace_store::workspace_store::record_session_runtime_audit_event(
-            data_root,
+            session_directory,
             session_id,
             RuntimeLogEvent::VmmLifecycle(event),
             timestamp,

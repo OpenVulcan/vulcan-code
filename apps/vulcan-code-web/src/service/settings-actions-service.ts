@@ -776,8 +776,8 @@ export async function saveProviderRetrySettings(request: {
   return serviceClient.request<WorkbenchSnapshot>("service_save_provider_retry_settings", { request });
 }
 
-// saveProviderRequestTraceSettings persists the global complete request trace switch.
-// saveProviderRequestTraceSettings 持久化全局完整请求追踪开关。
+// saveProviderRequestTraceSettings persists the global bounded wire-request trace switch.
+// saveProviderRequestTraceSettings 持久化全局有界线上请求追踪开关。
 export async function saveProviderRequestTraceSettings(enabled: boolean): Promise<WorkbenchSnapshot | null> {
   if (!hasServiceRuntime()) {
     return null;

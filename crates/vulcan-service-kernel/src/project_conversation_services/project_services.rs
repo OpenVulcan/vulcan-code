@@ -471,6 +471,10 @@ pub(crate) async fn service_archive_project_conversations(
     // persist_guard remains held until all authoritative child transitions finish.
     // persist_guard 持有至全部权威子转换完成。
     let persist_guard = persist_lock.lock().await;
+    // sessionPersistGuards exclude every exact child writer while project sessions move lifecycle trees.
+    // sessionPersistGuards 在项目会话移动生命周期目录树期间排除每个精确子写入者。
+    let _session_persist_guards =
+        lock_webui_session_persist_channels(project.session_ids.iter().copied()).await;
     let vmm_lifecycle_fence = begin_project_session_vmm_lifecycle_transition(&state, &project)?;
     // archive_result is inspected only after writers queued during child transitions are invalidated.
     // archive_result 仅在子转换期间排队的写入者失效后才进行检查。
@@ -567,6 +571,10 @@ pub(crate) async fn service_remove_project(
     // persist_guard covers the complete storage mutation including default-project repair.
     // persist_guard 覆盖包括默认项目修复在内的完整存储变更。
     let persist_guard = persist_lock.lock().await;
+    // sessionPersistGuards exclude every exact child writer before project removal mutates directories.
+    // sessionPersistGuards 在项目删除修改目录前排除每个精确子写入者。
+    let _session_persist_guards =
+        lock_webui_session_persist_channels(project.session_ids.iter().copied()).await;
     let vmm_lifecycle_fence = begin_project_session_vmm_lifecycle_transition(&state, &project)?;
     // removal_result covers child archival, row removal, and any required default-project repair.
     // removal_result 覆盖子会话归档、项目行移除及所需默认项目修复。

@@ -160,6 +160,7 @@ export function ToolExecutionBlock(props: {
     () => resolveToolPresentation(props.blocks, displayState, detailRef, {
       commandSessionById,
       commandSessions: props.commandSessions,
+      requestPreview: requestProgress?.preview ?? null,
       workspacePath: props.workspacePath,
     }),
     [
@@ -172,6 +173,7 @@ export function ToolExecutionBlock(props: {
       commandSessionById,
       props.blocks,
       props.commandSessions,
+      requestProgress?.preview,
       props.workspacePath,
     ],
   );

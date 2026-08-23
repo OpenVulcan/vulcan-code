@@ -9,6 +9,7 @@ use crate::workspace_path::{
     canonicalize_workspace_path, normalized_workspace_path_text_from_path,
 };
 use filetime::{FileTime, set_file_times};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
@@ -46,6 +47,10 @@ const PDF_ATTACHMENT_DIR_NAME: &str = "pdf";
 /// 宿主管理附件根目录下用于通用文件分类的稳定目录名称。
 const FILE_ATTACHMENT_DIR_NAME: &str = "files";
 
+/// Maximum JPEG preview sidecar size accepted from the browser composer.
+/// 输入区从浏览器接收的 JPEG 预览旁路文件最大尺寸。
+const IMAGE_PREVIEW_SIDECAR_MAX_BYTES: usize = 2 * 1024 * 1024;
+
 /// Structured descriptor resolved from one supported attachment file path or MIME type.
 /// 从受支持附件文件路径或 MIME 类型解析得到的结构化描述信息。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +64,46 @@ pub struct AttachmentDescriptor {
     /// Preferred file extension used when the host materializes one new managed asset.
     /// 宿主物化新的托管资产时使用的首选文件扩展名。
     pub extension: &'static str,
+}
+
+/// Returns the closed generic-file descriptor used when no media or document format is known.
+/// 当无法识别媒体或文档格式时，返回封闭的通用文件描述。
+pub fn generic_attachment_descriptor() -> AttachmentDescriptor {
+    AttachmentDescriptor {
+        kind: ConversationAttachmentKind::File,
+        mime_type: "application/octet-stream",
+        extension: "bin",
+    }
+}
+
+/// Returns a generic staging descriptor whose modality follows one validated top-level MIME type.
+/// 返回一份通用暂存描述，其模态遵循一个已校验的顶级 MIME 类型。
+///
+/// # Parameters
+/// 参数
+/// `mime_type` is normalized only for modality classification; its concrete value is persisted separately.
+/// `mime_type` 仅用于模态分类；其具体值会另行持久化。
+///
+/// # Returns
+/// 返回值
+/// A generic image, audio, video, or file descriptor without claiming protocol-native format support.
+/// 返回通用图片、音频、视频或文件描述，但不声称协议原生支持该格式。
+pub fn generic_attachment_descriptor_for_mime_type(mime_type: &str) -> AttachmentDescriptor {
+    let normalized = mime_type.trim().to_ascii_lowercase();
+    let kind = if normalized.starts_with("image/") {
+        ConversationAttachmentKind::Image
+    } else if normalized.starts_with("audio/") {
+        ConversationAttachmentKind::Audio
+    } else if normalized.starts_with("video/") {
+        ConversationAttachmentKind::Video
+    } else {
+        ConversationAttachmentKind::File
+    };
+    AttachmentDescriptor {
+        kind,
+        mime_type: "application/octet-stream",
+        extension: "bin",
+    }
 }
 
 /// Resolves the stable managed attachment root for the current workspace or falls back to the shared Vulcan home code subtree.
@@ -242,14 +287,66 @@ pub fn attachment_descriptor_from_mime_type(mime_type: &str) -> Option<Attachmen
     }
 }
 
+/// Returns every concrete MIME type that the host can resolve for one media attachment kind.
+/// 返回宿主能够为一种媒体附件类型解析的全部具体 MIME 类型。
+///
+/// # Parameters
+/// 参数
+/// `kind` is the canonical attachment modality whose closed host registry is requested.
+/// `kind` 是需要查询封闭宿主注册表的规范附件模态。
+///
+/// # Returns
+/// 返回值
+/// A stable MIME list accepted by the local media-understanding path resolver. Non-media kinds
+/// return an empty list.
+/// 返回本地媒体理解路径解析器可接受的稳定 MIME 列表；非媒体类型返回空列表。
+pub(crate) fn registered_media_attachment_mime_types(
+    kind: ConversationAttachmentKind,
+) -> &'static [&'static str] {
+    match kind {
+        ConversationAttachmentKind::Image => &[
+            "image/png",
+            "image/jpeg",
+            "image/webp",
+            "image/gif",
+            "image/bmp",
+        ],
+        ConversationAttachmentKind::Audio => &[
+            "audio/mpeg",
+            "audio/wav",
+            "audio/mp4",
+            "audio/aac",
+            "audio/flac",
+            "audio/ogg",
+            "audio/opus",
+            "audio/pcm",
+            "audio/basic",
+        ],
+        ConversationAttachmentKind::Video => &[
+            "video/mp4",
+            "video/mpeg",
+            "video/quicktime",
+            "video/x-m4v",
+            "video/x-matroska",
+            "video/webm",
+            "video/x-msvideo",
+            "video/x-flv",
+            "video/x-ms-wmv",
+            "video/3gpp",
+            "video/3gpp2",
+        ],
+        ConversationAttachmentKind::Pdf | ConversationAttachmentKind::File => &[],
+    }
+}
+
 /// Copies one supported source file into the managed attachment store and returns the normalized attachment payload used by future replays.
 /// 将一份受支持的源文件复制到托管附件存储中，并返回未来回放使用的规范化附件载荷。
 pub fn stage_attachment_file(
     workspace_path: &str,
     source_path: &Path,
 ) -> Result<ConversationAttachment, String> {
-    let descriptor = attachment_descriptor_from_path(source_path)
-        .ok_or_else(|| format!("文件 `{}` 不是受支持的附件格式。", source_path.display()))?;
+    let descriptor =
+        attachment_descriptor_from_path(source_path).unwrap_or_else(generic_attachment_descriptor);
     let canonical_source_path = canonicalize_workspace_path(source_path);
     let file_bytes = fs::read(&canonical_source_path).map_err(|error| {
         format!(
@@ -321,8 +418,13 @@ pub fn stage_attachment_file_streaming(
         )
     })?;
     let asset_id = Uuid::new_v4().to_string();
-    let sanitized_file_name =
-        sanitize_attachment_file_name(suggested_file_name, descriptor.extension);
+    let sanitized_file_name = if descriptor.kind == ConversationAttachmentKind::File
+        && descriptor.mime_type == "application/octet-stream"
+    {
+        sanitize_generic_attachment_file_name(suggested_file_name)
+    } else {
+        sanitize_attachment_file_name(suggested_file_name, descriptor.extension)
+    };
     let managed_file_path = category_directory.join(format!(
         "{}-{asset_id}-{}",
         timestamp.compact_prefix, sanitized_file_name
@@ -363,9 +465,15 @@ pub fn stage_attachment_file_streaming(
         kind: descriptor.kind.clone(),
         file_name: sanitized_file_name,
         local_path: vulcan_runtime_assets::native_host_path_text_from_path(&managed_file_path),
+        resource_path: Some(managed_attachment_resource_path(
+            workspace_path,
+            &managed_file_path,
+        )?),
         source_path: None,
         asset_id: Some(asset_id),
         byte_len: Some(source_metadata.len()),
+        source_sha256: Some(streaming_file_sha256(&managed_file_path)?),
+        delivery_mode: None,
         preview_local_path: None,
         mime_type: descriptor.mime_type.to_string(),
     };
@@ -387,6 +495,70 @@ pub fn stage_attachment_bytes(
     source_path: Option<&Path>,
     bytes: &[u8],
 ) -> Result<ConversationAttachment, String> {
+    stage_attachment_bytes_with_effective_mime_type(
+        workspace_path,
+        descriptor,
+        suggested_file_name,
+        source_path,
+        descriptor.mime_type,
+        bytes,
+    )
+}
+
+/// Materializes one generic browser attachment while preserving its validated concrete MIME metadata.
+/// 物化一份通用浏览器附件，同时保留其经过校验的具体 MIME 元数据。
+///
+/// # Parameters
+/// 参数
+/// `workspace_path` owns the managed store, `suggested_file_name` is display metadata,
+/// `source_path` is optional diagnostics provenance, `mime_type` is browser-provided metadata,
+/// and `bytes` are the immutable source bytes.
+/// `workspace_path` 持有托管存储，`suggested_file_name` 是展示元数据，`source_path` 是可选诊断来源，
+/// `mime_type` 是浏览器提供的元数据，`bytes` 是不可变源字节。
+///
+/// # Returns
+/// 返回值
+/// A canonical generic attachment with a validated MIME type, or one explicit validation/staging error.
+/// 返回带有已校验 MIME 类型的规范通用附件，或一个明确的校验/暂存错误。
+pub fn stage_generic_attachment_bytes(
+    workspace_path: &str,
+    suggested_file_name: &str,
+    source_path: Option<&Path>,
+    mime_type: &str,
+    bytes: &[u8],
+) -> Result<ConversationAttachment, String> {
+    let effective_mime_type = normalize_generic_attachment_mime_type(mime_type)?;
+    let descriptor = generic_attachment_descriptor_for_mime_type(&effective_mime_type);
+    stage_attachment_bytes_with_effective_mime_type(
+        workspace_path,
+        &descriptor,
+        suggested_file_name,
+        source_path,
+        effective_mime_type.as_str(),
+        bytes,
+    )
+}
+
+/// Implements immutable byte staging with one already validated effective MIME type.
+/// 使用一个已经校验的有效 MIME 类型实现不可变字节暂存。
+///
+/// # Parameters
+/// 参数
+/// All fields are the exact canonical staging inputs; `effective_mime_type` is persisted in the asset index.
+/// 全部字段均为精确规范暂存输入；`effective_mime_type` 会持久化到资产索引。
+///
+/// # Returns
+/// 返回值
+/// The indexed canonical attachment or one explicit staging error.
+/// 返回已建立索引的规范附件，或一个明确的暂存错误。
+fn stage_attachment_bytes_with_effective_mime_type(
+    workspace_path: &str,
+    descriptor: &AttachmentDescriptor,
+    suggested_file_name: &str,
+    source_path: Option<&Path>,
+    effective_mime_type: &str,
+    bytes: &[u8],
+) -> Result<ConversationAttachment, String> {
     let timestamp = current_attachment_timestamp_parts();
     let asset_root = resolve_managed_attachment_root(workspace_path);
     let category_directory = resolve_attachment_category_directory(&asset_root, &descriptor.kind);
@@ -400,7 +572,11 @@ pub fn stage_attachment_bytes(
 
     let asset_id = Uuid::new_v4().to_string();
     let sanitized_file_name =
-        sanitize_attachment_file_name(suggested_file_name, descriptor.extension);
+        if descriptor.mime_type == "application/octet-stream" && descriptor.extension == "bin" {
+            sanitize_generic_attachment_file_name(suggested_file_name)
+        } else {
+            sanitize_attachment_file_name(suggested_file_name, descriptor.extension)
+        };
     let managed_file_path = category_directory.join(format!(
         "{}-{asset_id}-{}",
         timestamp.compact_prefix, sanitized_file_name
@@ -424,13 +600,19 @@ pub fn stage_attachment_bytes(
         kind: descriptor.kind.clone(),
         file_name: sanitized_file_name,
         local_path: vulcan_runtime_assets::native_host_path_text_from_path(&managed_file_path),
+        resource_path: Some(managed_attachment_resource_path(
+            workspace_path,
+            &managed_file_path,
+        )?),
         source_path: source_path
             .map(canonicalize_workspace_path)
             .map(|path| normalized_workspace_path_text_from_path(&path)),
         asset_id: Some(asset_id),
         byte_len: Some(bytes.len() as u64),
+        source_sha256: Some(hex::encode(Sha256::digest(bytes))),
+        delivery_mode: None,
         preview_local_path: None,
-        mime_type: descriptor.mime_type.to_string(),
+        mime_type: effective_mime_type.to_string(),
     };
     if let Err(error) = record_staged_attachment(workspace_path, &attachment, &timestamp) {
         return Err(rollback_failed_managed_attachment(
@@ -439,6 +621,144 @@ pub fn stage_attachment_bytes(
         ));
     }
     Ok(attachment)
+}
+
+/// Normalizes one concrete generic-file MIME type without accepting parameters or invalid tokens.
+/// 规范化一个具体通用文件 MIME 类型，且不接受参数或无效 Token。
+///
+/// # Parameters
+/// 参数
+/// `mime_type` is browser-provided file metadata; an empty value means unknown content.
+/// `mime_type` 是浏览器提供的文件元数据；空值表示内容类型未知。
+///
+/// # Returns
+/// 返回值
+/// A lowercase concrete MIME type, the octet-stream fallback for empty input, or an explicit error.
+/// 返回小写具体 MIME 类型、空输入对应的八位流回退，或一个明确错误。
+fn normalize_generic_attachment_mime_type(mime_type: &str) -> Result<String, String> {
+    let normalized = mime_type.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Ok(String::from("application/octet-stream"));
+    }
+    let Some((type_name, subtype_name)) = normalized.split_once('/') else {
+        return Err(String::from("Generic attachment MIME type is invalid."));
+    };
+    if type_name.is_empty()
+        || subtype_name.is_empty()
+        || subtype_name.contains('/')
+        || !type_name.chars().all(is_mime_token_character)
+        || !subtype_name.chars().all(is_mime_token_character)
+    {
+        return Err(String::from("Generic attachment MIME type is invalid."));
+    }
+    Ok(normalized)
+}
+
+/// Returns whether one ASCII character is valid inside a concrete MIME token.
+/// 返回一个 ASCII 字符是否可用于具体 MIME Token。
+///
+/// # Parameters
+/// 参数
+/// `character` is one character from the type or subtype component.
+/// `character` 是类型或子类型分量中的一个字符。
+///
+/// # Returns
+/// 返回值
+/// `true` for RFC token characters accepted by this closed metadata boundary.
+/// 对该封闭元数据边界接受的 RFC Token 字符返回 `true`。
+fn is_mime_token_character(character: char) -> bool {
+    character.is_ascii_alphanumeric()
+        || matches!(
+            character,
+            '!' | '#'
+                | '$'
+                | '%'
+                | '&'
+                | '\''
+                | '*'
+                | '+'
+                | '-'
+                | '.'
+                | '^'
+                | '_'
+                | '`'
+                | '|'
+                | '~'
+        )
+}
+
+/// Builds the project-relative resource path used by remote models and resource-aware host tools.
+/// 构建供远程模型与资源感知宿主工具使用的项目相对资源路径。
+pub(crate) fn managed_attachment_resource_path(
+    workspace_path: &str,
+    managed_file_path: &Path,
+) -> Result<String, String> {
+    // Both paths are canonicalized before containment checks so Windows extended-path prefixes cannot diverge.
+    // 两条路径在边界检查前都完成规范化，避免 Windows 扩展路径前缀产生差异。
+    let attachment_root =
+        canonicalize_workspace_path(&resolve_managed_attachment_root(workspace_path));
+    let managed_file_path = canonicalize_workspace_path(managed_file_path);
+    let relative_path = managed_file_path
+        .strip_prefix(&attachment_root)
+        .map_err(|_| {
+            format!(
+                "Managed attachment `{}` is outside its authoritative root `{}`.",
+                managed_file_path.display(),
+                attachment_root.display()
+            )
+        })?;
+    let relative_text = normalized_workspace_path_text_from_path(relative_path).replace('\\', "/");
+    Ok(format!(".vulcan/code/attachments/{relative_text}"))
+}
+
+/// Computes the SHA-256 digest of one staged file without retaining the complete file in memory.
+/// 在不把完整文件保留在内存中的情况下计算单个已暂存文件的 SHA-256 摘要。
+fn streaming_file_sha256(path: &Path) -> Result<String, String> {
+    use std::io::Read;
+
+    let mut file = fs::File::open(path)
+        .map_err(|error| format!("打开已暂存附件 `{}` 失败：{error}", path.display()))?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("读取已暂存附件 `{}` 失败：{error}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(hex::encode(digest.finalize()))
+}
+
+/// Sanitizes an unknown file name while preserving its non-executable extension as metadata.
+/// 清洗未知文件名，同时保留其作为元数据使用的非执行扩展名。
+fn sanitize_generic_attachment_file_name(file_name: &str) -> String {
+    let trimmed = file_name.trim();
+    let raw_name = Path::new(trimmed)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("attachment.bin");
+    let normalized = raw_name
+        .chars()
+        .map(|character| {
+            if matches!(
+                character,
+                '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|'
+            ) {
+                '_'
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    if normalized.trim_matches(['.', ' ']).is_empty() {
+        String::from("attachment.bin")
+    } else {
+        normalized
+    }
 }
 
 /// Removes one managed attachment file after post-write metadata or index publication fails.
@@ -531,46 +851,148 @@ pub fn encode_rgba_image_to_png_bytes(
 /// Returns the first readable replay path for one attachment by preferring the managed copy and then falling back to the original source path.
 /// 为单条附件返回第一条可读回放路径，优先使用托管副本，再回退到原始来源路径。
 pub fn resolve_attachment_replay_path(attachment: &ConversationAttachment) -> Option<PathBuf> {
-    if matches!(
-        resolve_attachment_replay_status(attachment),
-        AttachmentReplayStatus::Purged
-    ) {
+    match resolve_attachment_replay_status(attachment) {
+        AttachmentReplayStatus::Available => Some(PathBuf::from(attachment.local_path.trim())),
+        AttachmentReplayStatus::FallbackSourceOnly => attachment
+            .source_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from),
+        AttachmentReplayStatus::Missing | AttachmentReplayStatus::Purged => None,
+    }
+}
+
+/// Writes one bounded JPEG preview beside an integrity-verified managed image without creating a second indexed attachment.
+/// 在通过完整性校验的托管图片旁写入一份受限 JPEG 预览，且不创建第二条索引附件。
+///
+/// # Parameters
+/// 参数
+/// `attachment` is the authoritative managed image and `bytes` is the browser-derived full-frame JPEG payload.
+/// `attachment` 是权威托管图片，`bytes` 是浏览器派生的完整画面 JPEG 载荷。
+///
+/// # Returns
+/// 返回值
+/// The native host path of the deterministic sidecar or one explicit validation/write error.
+/// 返回确定性旁路文件的宿主原生路径，或一个明确的校验/写入错误。
+pub fn write_attachment_image_preview_sidecar(
+    attachment: &ConversationAttachment,
+    bytes: &[u8],
+) -> Result<String, String> {
+    if attachment.kind != ConversationAttachmentKind::Image {
+        return Err(String::from(
+            "Attachment preview sidecars can only be written for managed images.",
+        ));
+    }
+    if bytes.is_empty() || bytes.len() > IMAGE_PREVIEW_SIDECAR_MAX_BYTES {
+        return Err(format!(
+            "Attachment image preview must contain 1..={IMAGE_PREVIEW_SIDECAR_MAX_BYTES} bytes."
+        ));
+    }
+    if !bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Err(String::from(
+            "Attachment image preview must use the frozen JPEG format.",
+        ));
+    }
+    let managed_path = Path::new(attachment.local_path.trim());
+    if !managed_path.is_file() {
+        return Err(String::from(
+            "Managed attachment image is unavailable for preview binding.",
+        ));
+    }
+    let preview_path = attachment_preview_sidecar_path(attachment, "jpg")?;
+    fs::write(&preview_path, bytes).map_err(|error| {
+        format!(
+            "Failed to write attachment image preview `{}`: {error}",
+            preview_path.display()
+        )
+    })?;
+    Ok(vulcan_runtime_assets::native_host_path_text_from_path(
+        &preview_path,
+    ))
+}
+
+/// Resolves one valid deterministic JPEG preview sidecar for an authoritative managed image.
+/// 为一条权威托管图片解析一份有效的确定性 JPEG 预览旁路文件。
+///
+/// # Parameters
+/// 参数
+/// `attachment` is the already integrity-verified canonical image attachment.
+/// `attachment` 是已经通过完整性校验的规范图片附件。
+///
+/// # Returns
+/// 返回值
+/// The native host path when the bounded JPEG sidecar exists and is valid; otherwise `None`.
+/// 当受限 JPEG 旁路文件存在且有效时返回宿主原生路径；否则返回 `None`。
+pub fn resolve_attachment_image_preview_sidecar(
+    attachment: &ConversationAttachment,
+) -> Option<String> {
+    use std::io::Read;
+
+    if attachment.kind != ConversationAttachmentKind::Image {
         return None;
     }
-
-    let managed_path = attachment.local_path.trim();
-    if !managed_path.is_empty() {
-        let managed_path = PathBuf::from(managed_path);
-        if managed_path.is_file() {
-            return Some(managed_path);
-        }
+    let preview_path = attachment_preview_sidecar_path(attachment, "jpg").ok()?;
+    let metadata = fs::metadata(&preview_path).ok()?;
+    if !metadata.is_file()
+        || metadata.len() == 0
+        || metadata.len() > IMAGE_PREVIEW_SIDECAR_MAX_BYTES as u64
+    {
+        return None;
     }
-
-    attachment
-        .source_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .filter(|path| path.is_file())
+    let mut file = fs::File::open(&preview_path).ok()?;
+    let mut header = [0_u8; 3];
+    file.read_exact(&mut header).ok()?;
+    if header != [0xff, 0xd8, 0xff] {
+        return None;
+    }
+    Some(vulcan_runtime_assets::native_host_path_text_from_path(
+        &preview_path,
+    ))
 }
 
 /// Removes any deterministic managed preview sidecar associated with the provided managed attachment path.
 /// 移除与给定托管附件路径关联的任意确定性托管预览旁路文件。
 pub fn remove_attachment_preview_sidecar(attachment: &ConversationAttachment) {
-    if matches!(attachment.kind, ConversationAttachmentKind::Video) {
-        let managed_path = Path::new(&attachment.local_path);
-        let parent = managed_path.parent().unwrap_or_else(|| Path::new("."));
-        let stem = managed_path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or("video");
-        let legacy_preview_path = parent.join(format!("{stem}.preview.png"));
-        if legacy_preview_path.is_file() {
-            let _ = fs::remove_file(legacy_preview_path);
-        }
+    let extension = match attachment.kind {
+        ConversationAttachmentKind::Image => "jpg",
+        ConversationAttachmentKind::Video => "png",
+        _ => return,
+    };
+    if let Ok(preview_path) = attachment_preview_sidecar_path(attachment, extension)
+        && preview_path.is_file()
+    {
+        let _ = fs::remove_file(preview_path);
     }
+}
+
+/// Derives the deterministic preview sidecar path from one managed attachment path.
+/// 根据一条托管附件路径推导确定性的预览旁路文件路径。
+///
+/// # Parameters
+/// 参数
+/// `attachment` owns the managed path and `extension` is the frozen derived-media extension.
+/// `attachment` 持有托管路径，`extension` 是冻结的派生媒体扩展名。
+///
+/// # Returns
+/// 返回值
+/// The adjacent sidecar path or one explicit invalid-path error.
+/// 返回相邻旁路文件路径，或一个明确的无效路径错误。
+fn attachment_preview_sidecar_path(
+    attachment: &ConversationAttachment,
+    extension: &str,
+) -> Result<PathBuf, String> {
+    let managed_path = Path::new(attachment.local_path.trim());
+    let parent = managed_path.parent().ok_or_else(|| {
+        String::from("Managed attachment path has no parent for a preview sidecar.")
+    })?;
+    let stem = managed_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| String::from("Managed attachment path has no valid file stem."))?;
+    Ok(parent.join(format!("{stem}.preview.{extension}")))
 }
 
 /// Returns the stable category directory path used by the provided attachment kind below the managed attachment root.
@@ -946,10 +1368,13 @@ mod tests {
     //! 覆盖暂存、回放回退与 MIME 解析的附件资产回归测试。
 
     use super::{
-        attachment_descriptor_from_mime_type, attachment_descriptor_from_path,
-        encode_rgba_image_to_png_bytes, normalize_attachment_file_name,
-        resolve_attachment_replay_path, resolve_managed_attachment_root, stage_attachment_bytes,
-        stage_attachment_file, write_attachment_bytes_to_directory,
+        IMAGE_PREVIEW_SIDECAR_MAX_BYTES, attachment_descriptor_from_mime_type,
+        attachment_descriptor_from_path, encode_rgba_image_to_png_bytes,
+        generic_attachment_descriptor, normalize_attachment_file_name,
+        remove_attachment_preview_sidecar, resolve_attachment_replay_path,
+        resolve_managed_attachment_root, stage_attachment_bytes, stage_attachment_file,
+        stage_generic_attachment_bytes, write_attachment_bytes_to_directory,
+        write_attachment_image_preview_sidecar,
     };
     use crate::workspace_path::{
         canonicalize_workspace_path, normalized_workspace_path_text_from_path,
@@ -1032,6 +1457,142 @@ mod tests {
         assert_eq!(attachment.kind, ConversationAttachmentKind::Image);
         assert!(attachment.source_path.is_none());
         assert!(std::path::Path::new(&attachment.local_path).is_file());
+
+        cleanup_workspace_directory(&workspace_directory);
+    }
+
+    /// Verifies an oversized-image derivative is stored as an adjacent sidecar and removed with its canonical asset.
+    /// 验证超大图片派生内容会作为相邻旁路文件保存，并随规范资产一起移除。
+    #[test]
+    fn image_preview_sidecar_is_bound_without_a_second_asset() {
+        let workspace_directory = unique_workspace_directory();
+        let descriptor = attachment_descriptor_from_mime_type("image/png")
+            .expect("png mime type should stay supported");
+        let attachment = stage_attachment_bytes(
+            &workspace_directory.to_string_lossy(),
+            &descriptor,
+            "oversized-image.png",
+            None,
+            &[0_u8, 1, 2, 3],
+        )
+        .expect("canonical image should stage successfully");
+        let preview_bytes = [0xff_u8, 0xd8, 0xff, 0xd9];
+
+        let preview_path = write_attachment_image_preview_sidecar(&attachment, &preview_bytes)
+            .expect("jpeg preview sidecar should write");
+        assert_eq!(
+            std::fs::read(&preview_path).expect("preview sidecar should read"),
+            preview_bytes
+        );
+
+        remove_attachment_preview_sidecar(&attachment);
+        assert!(!Path::new(&preview_path).exists());
+        cleanup_workspace_directory(&workspace_directory);
+    }
+
+    /// Verifies preview sidecars reject non-JPEG bytes, oversize payloads, and non-image attachments.
+    /// 验证预览旁路文件会拒绝非 JPEG 字节、超限载荷与非图片附件。
+    #[test]
+    fn image_preview_sidecar_rejects_invalid_payload_or_modality() {
+        let workspace_directory = unique_workspace_directory();
+        let image = stage_attachment_bytes(
+            &workspace_directory.to_string_lossy(),
+            &attachment_descriptor_from_mime_type("image/png")
+                .expect("png mime type should stay supported"),
+            "image.png",
+            None,
+            &[0_u8, 1, 2, 3],
+        )
+        .expect("canonical image should stage successfully");
+        let generic = stage_attachment_bytes(
+            &workspace_directory.to_string_lossy(),
+            &generic_attachment_descriptor(),
+            "archive.bin",
+            None,
+            b"generic bytes",
+        )
+        .expect("generic attachment should stage successfully");
+        let mut oversized = vec![0_u8; IMAGE_PREVIEW_SIDECAR_MAX_BYTES + 1];
+        oversized[..3].copy_from_slice(&[0xff, 0xd8, 0xff]);
+
+        assert!(write_attachment_image_preview_sidecar(&image, b"not-jpeg").is_err());
+        assert!(write_attachment_image_preview_sidecar(&image, &oversized).is_err());
+        assert!(
+            write_attachment_image_preview_sidecar(&generic, &[0xff, 0xd8, 0xff, 0xd9]).is_err()
+        );
+        cleanup_workspace_directory(&workspace_directory);
+    }
+
+    /// Verifies unknown files retain a safe user-visible name and canonical forward-slash resource locator.
+    /// 验证未知文件会保留安全的用户可见名称与使用正斜杠的规范资源定位符。
+    #[test]
+    fn stage_generic_attachment_preserves_safe_name_and_resource_locator() {
+        let workspace_directory = unique_workspace_directory();
+        let attachment = stage_attachment_bytes(
+            &workspace_directory.to_string_lossy(),
+            &generic_attachment_descriptor(),
+            "custom.package",
+            None,
+            b"generic bytes",
+        )
+        .expect("generic attachment should stage successfully");
+
+        assert_eq!(attachment.kind, ConversationAttachmentKind::File);
+        assert_eq!(attachment.file_name, "custom.package");
+        let resource_path = attachment
+            .resource_path
+            .as_deref()
+            .expect("generic attachment should have a safe resource locator");
+        assert!(resource_path.starts_with(".vulcan/code/attachments/files/"));
+        assert!(!resource_path.contains('\\'));
+
+        cleanup_workspace_directory(&workspace_directory);
+    }
+
+    /// Verifies generic browser files retain valid concrete MIME metadata and reject parameter injection.
+    /// 验证通用浏览器文件会保留有效具体 MIME 元数据，并拒绝参数注入。
+    #[test]
+    fn stage_generic_attachment_preserves_valid_concrete_mime_type() {
+        let workspace_directory = unique_workspace_directory();
+        let attachment = stage_generic_attachment_bytes(
+            &workspace_directory.to_string_lossy(),
+            "workbook.xlsx",
+            None,
+            "Application/Vnd.Openxmlformats-Officedocument.Spreadsheetml.Sheet",
+            b"spreadsheet bytes",
+        )
+        .expect("generic attachment should retain its validated MIME type");
+
+        assert_eq!(
+            attachment.mime_type,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        );
+        let image = stage_generic_attachment_bytes(
+            &workspace_directory.to_string_lossy(),
+            "diagram.svg",
+            None,
+            "image/svg+xml",
+            b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>",
+        )
+        .expect("unknown image formats should retain their media modality");
+        assert_eq!(image.kind, ConversationAttachmentKind::Image);
+        assert_eq!(image.mime_type, "image/svg+xml");
+        assert!(
+            image
+                .resource_path
+                .as_deref()
+                .is_some_and(|path| path.starts_with(".vulcan/code/attachments/images/"))
+        );
+        assert!(
+            stage_generic_attachment_bytes(
+                &workspace_directory.to_string_lossy(),
+                "unsafe.bin",
+                None,
+                "application/octet-stream; charset=binary",
+                b"unsafe metadata bytes",
+            )
+            .is_err()
+        );
 
         cleanup_workspace_directory(&workspace_directory);
     }

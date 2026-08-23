@@ -7,8 +7,8 @@ use super::*;
 /// 参数
 /// `controller` owns the authoritative SQLite binding and segmented data root.
 /// `controller` 持有权威 SQLite 绑定与分段数据根。
-/// `task_projects` defines the only accepted project membership for the session.
-/// `task_projects` 定义该会话唯一可接受的项目成员关系。
+/// `project_id` is the exact project owner already carried by the retained session locator.
+/// `project_id` 是保留会话定位信息已经携带的精确项目归属。
 /// `session` is the exact session summary being persisted.
 /// `session` 是正在持久化的精确会话摘要。
 /// `archived` selects the active or archived filesystem and locator state.
@@ -24,21 +24,25 @@ use super::*;
 /// 仅在分段工件与 SQLite 定位行都持久化后成功。
 pub async fn persist_single_session_update(
     controller: ControllerRuntimeHandle,
-    task_projects: &[TaskProjectSummary],
+    project_id: &str,
     session: &SessionSummary,
     archived: bool,
     messages: &[SessionMessageEntry],
     runtime_state: Option<&SessionRuntimeStateEntry>,
 ) -> Result<(), String> {
-    // session_owner_map is the authoritative project-membership projection supplied by the caller.
-    // session_owner_map 是调用方提供的权威项目成员关系投影。
-    let session_owner_map = session_owner_map_from_projects(task_projects);
-    let Some((project_id, _sort_order)) = session_owner_map.get(&session.id) else {
+    // retainedProjectId is the only accepted owner; ordinary persistence never scans every project row.
+    // retainedProjectId 是唯一接受的归属；普通持久化绝不扫描全部项目行。
+    let retained_project_id = session
+        .project_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("单会话保存失败：会话未携带所属项目：{}", session.id))?;
+    if project_id.trim().is_empty() || project_id != retained_project_id {
         return Err(format!(
-            "单会话保存失败：未找到会话所属项目：{}",
-            session.id
+            "单会话保存失败：会话 `{}` 的精确项目归属不匹配。",
+            session.id,
         ));
-    };
+    }
     // active_locator_exists records whether the authoritative index currently owns the active lifecycle.
     // active_locator_exists 记录权威索引当前是否拥有活动生命周期。
     let active_locator_exists = query_session_index_locator(&controller, session.id, false)
@@ -68,7 +72,7 @@ pub async fn persist_single_session_update(
     persist_segmented_session_update(
         &controller,
         session,
-        project_id,
+        retained_project_id,
         archived,
         effective_messages,
         runtime_state,
@@ -79,7 +83,7 @@ pub async fn persist_single_session_update(
     upsert_session_index_row(
         &controller,
         session,
-        project_id,
+        retained_project_id,
         archived,
         0,
         runtime_state.map(|state| state.updated_at.as_str()),
@@ -135,42 +139,18 @@ fn validate_single_session_update_lifecycle(
 /// Persists only one session runtime-state document without rewriting transcript or project rows.
 /// 仅持久化单个会话运行时状态文档，不重写转录或项目行。
 pub async fn persist_single_session_runtime_state_update(
-    controller: ControllerRuntimeHandle,
+    session_directory: PathBuf,
     session_id: SessionId,
     runtime_state: &SessionRuntimeStateEntry,
 ) -> Result<(), String> {
-    persist_segmented_session_runtime_state_checkpoint(&controller, session_id, runtime_state)
-        .await?;
+    persist_segmented_session_runtime_state_checkpoint(
+        &session_directory,
+        session_id,
+        runtime_state,
+    )
+    .await?;
 
     Ok(())
-}
-
-/// Persists the complete visible transcript window without touching runtime state.
-/// 持久化完整可见转录窗口，且不触碰运行态。
-///
-/// # Parameters
-/// # 参数
-/// `controller` is the workspace data-plane controller handle.
-/// `controller` 是工作区数据平面控制器句柄。
-/// `session_id` identifies the segmented session receiving the transcript update.
-/// `session_id` 标识接收转录更新的分段会话。
-/// `messages` is the complete visible transcript window retained by the WebUI.
-/// `messages` 是 WebUI 当前保留的完整可见转录窗口。
-///
-/// # Returns
-/// # 返回值
-/// Returns `Ok(())` after the transcript tail or replacement boundary is persisted.
-/// 写入转录尾部或替换边界后返回 `Ok(())`。
-pub async fn persist_single_session_transcript_messages(
-    controller: ControllerRuntimeHandle,
-    session_id: SessionId,
-    messages: &[SessionMessageEntry],
-) -> Result<(), String> {
-    persist_single_session_transcript_messages_in_data_root(
-        &controller.data_root,
-        session_id,
-        messages,
-    )
 }
 
 /// Persists one complete transcript window into its main-session or TaskSession directory.
@@ -189,21 +169,76 @@ pub async fn persist_single_session_transcript_messages(
 /// 返回值
 /// Returns success after the resolved transcript directory is updated, or when no durable owner exists.
 /// 在已解析转录目录完成更新后返回成功；不存在持久化归属时也返回成功。
-pub(crate) fn persist_single_session_transcript_messages_in_data_root(
-    data_root: &Path,
+pub fn persist_single_session_transcript_messages_in_directory(
+    session_directory: &Path,
     session_id: SessionId,
     messages: &[SessionMessageEntry],
 ) -> Result<(), String> {
     if messages.is_empty() {
         return Ok(());
     }
-    let Some(session_dir) =
-        find_segmented_session_or_task_directory_by_id(data_root, &session_id.to_string())?
-    else {
-        return Ok(());
-    };
-    let _ = repair_segmented_session_display_if_needed(&session_dir)?;
-    append_segmented_session_message_update(&session_dir, messages)?;
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    append_segmented_session_message_update(session_directory, messages)?;
+    Ok(())
+}
+
+/// Reads only the exact persisted transcript message count for one known session directory.
+/// 仅为一个已知会话目录读取精确的已持久化转录消息数量。
+///
+/// # Parameters
+/// 参数
+/// `session_directory` is the exact main-session or TaskSession directory.
+/// `session_directory` 是精确的主会话或 TaskSession 目录。
+/// `session_id` is the expected directory owner.
+/// `session_id` 是预期的目录所有者。
+///
+/// # Returns
+/// 返回值
+/// The metadata checkpoint count without opening or scanning any transcript segment.
+/// 返回元数据检查点数量，且不打开或扫描任何转录分段。
+pub fn load_single_session_transcript_message_count_in_directory(
+    session_directory: &Path,
+    session_id: SessionId,
+) -> Result<usize, String> {
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    let metadata = read_session_metadata(session_directory)?;
+    usize::try_from(metadata.message_count).map_err(to_store_error)
+}
+
+/// Appends one exact immutable transcript suffix without cloning or scanning the historical prefix.
+/// 在不克隆或扫描历史前缀的情况下追加一个精确的不可变转录后缀。
+///
+/// # Parameters
+/// 参数
+/// `session_directory` is the exact main-session or TaskSession directory.
+/// `session_directory` 是精确的主会话或 TaskSession 目录。
+/// `session_id` is the expected directory owner.
+/// `session_id` 是预期的目录所有者。
+/// `expected_message_count` is the metadata count observed before the caller captured the suffix.
+/// `expected_message_count` 是调用方捕获后缀前观察到的元数据数量。
+/// `previous_message` is the exact final row of the observed prefix when non-empty.
+/// `previous_message` 是非空已观察前缀的精确末行。
+/// `tail_messages` contains only new immutable rows.
+/// `tail_messages` 仅包含新的不可变行。
+///
+/// # Returns
+/// 返回值
+/// Success after the exact suffix and metadata checkpoint are durably appended.
+/// 精确后缀与元数据检查点持久追加后返回成功。
+pub fn persist_single_session_transcript_tail_in_directory(
+    session_directory: &Path,
+    session_id: SessionId,
+    expected_message_count: usize,
+    previous_message: Option<&SessionMessageEntry>,
+    tail_messages: &[SessionMessageEntry],
+) -> Result<(), String> {
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    append_segmented_session_message_tail_update(
+        session_directory,
+        expected_message_count,
+        previous_message,
+        tail_messages,
+    )?;
     Ok(())
 }
 

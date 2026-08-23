@@ -12,8 +12,11 @@ workspace = true
 
 [dependencies]
 encoding_rs.workspace = true
+hex.workspace = true
+regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 sys-locale.workspace = true
 tokio = { workspace = true, features = ["macros", "process", "io-util", "sync", "time", "rt"] }
 uuid.workspace = true
@@ -22,3 +25,6 @@ vulcan-runtime-assets.workspace = true
 vulcan-terminal-host-protocol.workspace = true
 vulcan-workbench-model.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[dev-dependencies]
+tempfile.workspace = true

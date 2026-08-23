@@ -25,11 +25,33 @@ pub(in crate::workspace_store) fn persist_segmented_runtime_checkpoint_transacti
     session_id: &str,
     runtime_state: &SessionRuntimeStateEntry,
 ) -> Result<(), String> {
-    // state_document is derived only from ordinary runtime state.
-    // state_document 仅从普通运行时状态派生。
-    let state_document = state_document_from_runtime_state(session_id, runtime_state)?;
-    write_state(session_dir, &state_document)?;
+    persist_segmented_runtime_state_document(session_dir, session_id, runtime_state)?;
     sync_segmented_runtime_log_for_state(session_dir, runtime_state)
+}
+
+/// Persists only the canonical runtime-state JSON document for one segmented session.
+/// 仅持久化单个分段会话的规范运行态 JSON 文档。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the exact segmented session directory, `session_id` is its canonical owner,
+/// and `runtime_state` is the complete ordinary runtime-state snapshot.
+/// `session_dir` 是精确的分段会话目录，`session_id` 是其规范归属，`runtime_state`
+/// 是完整的普通运行态快照。
+///
+/// # Returns
+/// 返回值
+/// Success after `state.json` is atomically replaced without reading or rebuilding runtime JSONL.
+/// 在不读取或重建运行时 JSONL 的情况下原子替换 `state.json` 后返回成功。
+fn persist_segmented_runtime_state_document(
+    session_dir: &std::path::Path,
+    session_id: &str,
+    runtime_state: &SessionRuntimeStateEntry,
+) -> Result<(), String> {
+    // stateDocument is derived only from ordinary runtime state; provider-ledger checkpoints do not own transcript projection.
+    // stateDocument 仅从普通运行态派生；Provider 账本检查点不拥有转录投影。
+    let state_document = state_document_from_runtime_state(session_id, runtime_state)?;
+    write_state(session_dir, &state_document)
 }
 
 /// Rejects obsolete runtime/VMM checkpoint markers instead of replaying historical state.
@@ -65,25 +87,15 @@ pub(in crate::workspace_store) fn reject_historical_segmented_runtime_checkpoint
 /// Mirrors a runtime-state checkpoint into the segmented session state file without touching append-only JSONL segments.
 /// 将运行时状态检查点镜像到分段会话状态文件，且不触碰追加式 JSONL 分段。
 pub(super) async fn persist_segmented_session_runtime_state_checkpoint(
-    controller: &ControllerRuntimeHandle,
+    session_directory: &std::path::Path,
     session_id: SessionId,
     runtime_state: &SessionRuntimeStateEntry,
 ) -> Result<(), String> {
     // session_id_text is the canonical persisted session identity.
     // session_id_text 是规范的持久化会话身份。
     let session_id_text = session_id.to_string();
-    // session_dir resolves the only existing active or archived session directory.
-    // session_dir 解析唯一存在的活动或归档会话目录。
-    let Some(session_dir) =
-        find_segmented_session_directory_by_id(&controller.data_root, &session_id_text)?
-    else {
-        return Ok(());
-    };
-    persist_segmented_runtime_checkpoint_transactionally(
-        &session_dir,
-        &session_id_text,
-        runtime_state,
-    )
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    persist_segmented_runtime_state_document(session_directory, &session_id_text, runtime_state)
 }
 
 /// Syncs one segmented runtime log using the active compaction-aware persistence policy.

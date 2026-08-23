@@ -1,7 +1,6 @@
 //! Authoritative continuation eligibility for terminated WebUI conversations.
 //! 已终止 WebUI 会话的权威 Continue 资格判定。
 
-use vulcan_host_tools::command_session_runtime::CommandSessionStatus;
 use vulcan_service_api::ConversationContinuationSummary;
 use vulcan_workbench_model::{
     EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION, ExecutionRetrySnapshotState, SessionId,
@@ -37,9 +36,6 @@ pub(crate) struct SessionContinuationRuntimeBlockers {
     /// Whether the shared Ask runtime contains a pending question for this session.
     /// 共享 Ask 运行时是否存在该会话的待回答问题。
     pub(crate) has_pending_question: bool,
-    /// Whether a live command session owned by this conversation is still running.
-    /// 该会话拥有的实时命令会话是否仍在运行。
-    pub(crate) has_running_command_session: bool,
     /// Whether a child task in this parent tree is still running.
     /// 该父会话树中是否仍有子任务在运行。
     pub(crate) has_running_task: bool,
@@ -55,7 +51,6 @@ impl SessionContinuationRuntimeBlockers {
             || self.has_terminal_persistence_owner
             || self.session_is_running
             || self.has_pending_question
-            || self.has_running_command_session
             || self.has_running_task
     }
 }
@@ -88,8 +83,8 @@ fn continuation_canonical_dispatch_state(
         &canonical_snapshot.continuation,
     ))
     .map_err(|_| "ERR_CONVERSATION_CONTINUE_RETRY_CANONICAL_STATE_CHANGED")?;
-    // digest remains lowercase so it can be compared directly with the strict versioned reference.
-    // digest 保持小写，可直接与严格版本化引用比较。
+    // digest remains lowercase so it can be compared directly with the cached snapshot digest.
+    // digest 保持小写，可直接与快照缓存摘要比较。
     let digest = {
         use sha2::{Digest, Sha256};
 
@@ -433,16 +428,10 @@ pub(crate) fn session_continuation_runtime_blockers(
         pending_question_snapshots_from_agent_runtime(state.agent_runtime.as_ref())?
             .iter()
             .any(|question| question.session_id == session_id_text);
-    let has_running_command_session = state.agent_runtime.as_ref().is_some_and(|runtime| {
-        runtime
-            .command_session_runtime
-            .try_snapshot_sessions()
-            .iter()
-            .any(|snapshot| {
-                snapshot.owner_session_id == session_id
-                    && snapshot.status == CommandSessionStatus::Running
-            })
-    });
+    // Long-lived command sessions intentionally outlive individual AI turns. Their exact real-time
+    // status remains addressable by command_session_id and cannot block recovery of the AI turn.
+    // 长生命周期命令会话会有意跨越单次 AI 回合；其精确实时状态仍可按 command_session_id 查询，
+    // 因而不能阻断 AI 回合恢复。
     let has_running_task = state
         .agent_runtime
         .as_ref()
@@ -470,7 +459,6 @@ pub(crate) fn session_continuation_runtime_blockers(
             .find(|session| session.id == session_id)
             .is_some_and(|session| session.status == SessionState::Running),
         has_pending_question,
-        has_running_command_session,
         has_running_task,
     })
 }
@@ -1312,13 +1300,6 @@ mod tests {
             (
                 SessionContinuationRuntimeBlockers {
                     has_pending_question: true,
-                    ..SessionContinuationRuntimeBlockers::default()
-                },
-                "ERR_CONVERSATION_CONTINUE_SESSION_ACTIVE",
-            ),
-            (
-                SessionContinuationRuntimeBlockers {
-                    has_running_command_session: true,
                     ..SessionContinuationRuntimeBlockers::default()
                 },
                 "ERR_CONVERSATION_CONTINUE_SESSION_ACTIVE",

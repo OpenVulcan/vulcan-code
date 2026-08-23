@@ -47,33 +47,6 @@ struct CoreVmmControllerDocument {
     state: VmmSessionMemoryState,
 }
 
-/// Returns whether one root-level file belongs to current or rejected historical VMM state.
-/// 返回一个根级文件是否归属于当前或已拒绝的历史 VMM 状态。
-///
-/// # Parameters
-/// 参数
-/// `file_name` is the exact UTF-8 file name inspected during a session fork.
-/// `file_name` 是会话分叉期间检查的精确 UTF-8 文件名。
-///
-/// # Returns
-/// 返回值
-/// `true` for the Core document, obsolete markers, and abandoned atomic staging files.
-/// 对 Core 文档、废弃标记与遗留原子暂存文件返回 `true`。
-pub(super) fn is_vmm_session_artifact_file_name(file_name: &str) -> bool {
-    // artifact_names enumerate every current or historical VMM-owned root file.
-    // artifact_names 枚举全部当前或历史 VMM 所有的根文件。
-    let artifact_names = [
-        SEGMENTED_VMM_STATE_FILE,
-        SEGMENTED_VMM_MIGRATION_FILE,
-        SEGMENTED_VMM_MIGRATION_COMPLETED_FILE,
-        SEGMENTED_VMM_CHECKPOINT_FILE,
-    ];
-    artifact_names.contains(&file_name)
-        || artifact_names
-            .iter()
-            .any(|artifact| file_name.starts_with(&format!(".{artifact}.vulcan-stage-")))
-}
-
 /// Returns the independent VMM state path for one exact session directory.
 /// 返回一个精确会话目录对应的独立 VMM 状态路径。
 ///
@@ -496,45 +469,7 @@ pub(in crate::workspace_store) fn reset_vmm_state_for_history_rewrite(
     for artifact_name in artifact_names {
         remove_exact_file_if_present(&session_dir.join(artifact_name))?;
     }
-    // directory_entries remove only explicitly recognized VMM temporary or diagnostic artifacts.
-    // directory_entries 仅移除明确识别的 VMM 临时或诊断工件。
-    for directory_entry in fs::read_dir(session_dir).map_err(to_store_error)? {
-        let directory_entry = directory_entry.map_err(to_store_error)?;
-        if !directory_entry
-            .file_type()
-            .map_err(to_store_error)?
-            .is_file()
-        {
-            continue;
-        }
-        // file_name is matched without following links or traversing child directories.
-        // file_name 在不跟随链接或遍历子目录的情况下完成匹配。
-        let file_name = directory_entry.file_name();
-        let Some(file_name) = file_name.to_str() else {
-            continue;
-        };
-        if is_removed_vmm_auxiliary_artifact(file_name) {
-            remove_exact_file_if_present(&directory_entry.path())?;
-        }
-    }
     Ok(())
-}
-
-/// Returns whether one immediate file is an obsolete VMM diagnostic or staging artifact.
-/// 返回一个直接文件是否属于废弃的 VMM 诊断或暂存工件。
-///
-/// # Parameters
-/// 参数
-/// `file_name` is one immediate non-directory file name.
-/// `file_name` 是一个直接的非目录文件名。
-///
-/// # Returns
-/// 返回值
-/// `true` only for explicitly owned VMM auxiliary naming patterns.
-/// 仅对明确归属于 VMM 的辅助命名模式返回 `true`。
-fn is_removed_vmm_auxiliary_artifact(file_name: &str) -> bool {
-    (file_name.starts_with("vmm.corrupt.") && file_name.ends_with(".json"))
-        || file_name.starts_with(".vmm.json.vulcan-stage-")
 }
 
 /// Removes copied VMM ownership from a newly forked session target.

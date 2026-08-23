@@ -167,3 +167,44 @@ fn preview_change_set_skips_verification_notice() {
     );
     assert!(change_set_host_verification_notice(&payload).is_none());
 }
+
+/// Verifies native resource correlation and bounded extension preservation survive compaction.
+/// 验证原生资源关联与有界扩展字段在压缩后仍然保留。
+#[test]
+fn compact_change_set_preserves_native_resource_extension() {
+    let host_result = json!({
+        "kind": "change_set",
+        "payload": {
+            "mode": "applied",
+            "files": [{
+                "resource_id": "resource-1",
+                "change": "modify",
+                "path": "src/example.rs",
+                "hunks": []
+            }],
+            "extensions": {
+                "vulcan.file_edit.v1": {
+                    "operation_results": [{
+                        "operation_id": "rewrite",
+                        "resource_id": "resource-1",
+                        "status": "applied"
+                    }],
+                    "transaction": {
+                        "commit_scope": "all",
+                        "rollback_state": "not_needed"
+                    }
+                },
+                "untrusted.extension": {"secret": "drop me"}
+            }
+        }
+    });
+    let compacted = compact_change_set_host_result(&host_result).expect("change_set host result");
+    let payload = &compacted["payload"];
+    let summary = change_set_modal_summary_from_payload(payload).expect("compact summary");
+    assert_eq!(summary.files[0].resource_id.as_deref(), Some("resource-1"));
+    assert_eq!(
+        payload["extensions"]["vulcan.file_edit.v1"]["operation_results"][0]["operation_id"],
+        json!("rewrite")
+    );
+    assert!(payload["extensions"].get("untrusted.extension").is_none());
+}

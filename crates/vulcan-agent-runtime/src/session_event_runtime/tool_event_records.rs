@@ -34,18 +34,18 @@ struct ToolRequestEventIdentity {
 ///
 /// # Returns
 /// 返回值
-/// `true` when the event created or advanced one correlated card.
-/// 当事件创建或推进了一张关联卡片时返回 `true`。
+/// The exact correlated card id when the event created or advanced it.
+/// 当事件创建或推进关联卡片时返回其精确标识。
 pub(super) fn append_tool_request_started_projection_to_state(
     runtime_state: &mut SessionRuntimeStateEntry,
     session_id: SessionId,
     now: &str,
     event: &RuntimeEvent,
-) -> Result<bool, String> {
+) -> Result<Vec<String>, String> {
     // identity is accepted only when every required coordinator-owned field is present.
     // identity 仅在协调器负责的所有必需字段都存在时才会被接受。
     let Some(identity) = parse_tool_request_event_identity(event) else {
-        return Ok(false);
+        return Ok(Vec::new());
     };
     // existingRecordId preserves one-card semantics for an exact logical call correlation.
     // existingRecordId 为精确逻辑调用关联保持单卡片语义。
@@ -76,7 +76,7 @@ pub(super) fn append_tool_request_started_projection_to_state(
         if advanced {
             runtime_state.updated_at = now.to_string();
         }
-        return Ok(advanced);
+        return Ok(advanced.then_some(record_id).into_iter().collect());
     }
 
     // recordId is stable for the lifetime of request generation and real execution.
@@ -112,9 +112,9 @@ pub(super) fn append_tool_request_started_projection_to_state(
         .insert(identity.request_stream_id, record_id.clone());
     runtime_state
         .tool_call_record_ids
-        .insert(identity.tool_call_id, record_id);
+        .insert(identity.tool_call_id, record_id.clone());
     runtime_state.updated_at = now.to_string();
-    Ok(true)
+    Ok(vec![record_id])
 }
 
 /// Applies a progress or ready snapshot to the exact request-stream card.
@@ -131,17 +131,17 @@ pub(super) fn append_tool_request_started_projection_to_state(
 ///
 /// # Returns
 /// 返回值
-/// `true` when a newer revision was applied to an existing card.
-/// 当较新修订被应用到已有卡片时返回 `true`。
+/// The exact existing card id when a newer revision was applied.
+/// 当较新修订被应用时返回已有卡片的精确标识。
 pub(super) fn update_tool_request_projection_to_state(
     runtime_state: &mut SessionRuntimeStateEntry,
     now: &str,
     event: &RuntimeEvent,
-) -> Result<bool, String> {
+) -> Result<Vec<String>, String> {
     // identity supplies both the temporary stream key and the final call key.
     // identity 同时提供临时请求流键与最终调用键。
     let Some(identity) = parse_tool_request_event_identity(event) else {
-        return Ok(false);
+        return Ok(Vec::new());
     };
     // recordId must come from the exact request stream; no same-name fallback is allowed.
     // recordId 必须来自精确请求流，不允许同名回退。
@@ -150,7 +150,7 @@ pub(super) fn update_tool_request_projection_to_state(
         .get(&identity.request_stream_id)
         .cloned()
     else {
-        return Ok(false);
+        return Ok(Vec::new());
     };
     // previousCallId is captured before metadata merge so canonical promotion can be atomic.
     // previousCallId 在元数据合并前捕获，以便原子提升规范关联。
@@ -170,7 +170,7 @@ pub(super) fn update_tool_request_projection_to_state(
         identity.revision,
     );
     if !advanced {
-        return Ok(false);
+        return Ok(Vec::new());
     }
     if event.kind == RuntimeEventKind::ToolRequestReady {
         if let Some(previous_call_id) = previous_call_id
@@ -180,12 +180,12 @@ pub(super) fn update_tool_request_projection_to_state(
         }
         runtime_state
             .tool_call_record_ids
-            .insert(identity.tool_call_id, record_id);
+            .insert(identity.tool_call_id, record_id.clone());
         // request correlation remains until ToolStarted so a late final background token estimate can update the ready card.
         // 请求关联会保留到 ToolStarted，使稍晚到达的最终后台 Token 估算仍可更新就绪卡片。
     }
     runtime_state.updated_at = now.to_string();
-    Ok(true)
+    Ok(vec![record_id])
 }
 
 /// Marks one exact pre-execution request card as stopped and releases its correlations.
@@ -202,17 +202,17 @@ pub(super) fn update_tool_request_projection_to_state(
 ///
 /// # Returns
 /// 返回值
-/// `true` when the exact active request was closed.
-/// 当精确活动请求被关闭时返回 `true`。
+/// The exact active request card id when it was closed.
+/// 当精确活动请求被关闭时返回其卡片标识。
 pub(super) fn abort_tool_request_projection_to_state(
     runtime_state: &mut SessionRuntimeStateEntry,
     now: &str,
     event: &RuntimeEvent,
-) -> Result<bool, String> {
+) -> Result<Vec<String>, String> {
     // identity carries the only permitted lookup key for a request-stage abort.
     // identity 携带请求阶段中止允许使用的唯一查找键。
     let Some(identity) = parse_tool_request_event_identity(event) else {
-        return Ok(false);
+        return Ok(Vec::new());
     };
     // recordId is removed from the request map first so the stopped request cannot revive.
     // recordId 会先从请求映射移除，确保已停止请求不能复活。
@@ -220,7 +220,7 @@ pub(super) fn abort_tool_request_projection_to_state(
         .tool_request_record_ids
         .remove(&identity.request_stream_id)
     else {
-        return Ok(false);
+        return Ok(Vec::new());
     };
     let advanced = merge_tool_request_event_into_record(
         &mut runtime_state.conversation_state,
@@ -240,7 +240,7 @@ pub(super) fn abort_tool_request_projection_to_state(
     if advanced {
         runtime_state.updated_at = now.to_string();
     }
-    Ok(advanced)
+    Ok(advanced.then_some(record_id).into_iter().collect())
 }
 
 pub(super) fn append_tool_started_projection_to_state(
@@ -248,10 +248,10 @@ pub(super) fn append_tool_started_projection_to_state(
     session_id: SessionId,
     now: &str,
     event: &RuntimeEvent,
-) -> Result<bool, String> {
+) -> Result<Vec<String>, String> {
     let Some((tool_call_id, tool_name)) = parse_tool_started_runtime_event_title(&event.title)
     else {
-        return Ok(false);
+        return Ok(Vec::new());
     };
     // existingRecordId upgrades the request-stage card instead of appending a duplicate card.
     // existingRecordId 会升级请求阶段卡片，而不是追加重复卡片。
@@ -279,7 +279,7 @@ pub(super) fn append_tool_started_projection_to_state(
                 .retain(|_, record_id| record_id != &existing_record_id);
             runtime_state.updated_at = now.to_string();
         }
-        return Ok(attached);
+        return Ok(attached.then_some(existing_record_id).into_iter().collect());
     }
     let record_id = build_session_record_message_id(
         session_id,
@@ -303,9 +303,9 @@ pub(super) fn append_tool_started_projection_to_state(
     .map_err(|error| format!("Invalid tool-start record identity: {error}"))?;
     runtime_state
         .tool_call_record_ids
-        .insert(tool_call_id, record_id);
+        .insert(tool_call_id, record_id.clone());
     runtime_state.updated_at = now.to_string();
-    Ok(true)
+    Ok(vec![record_id])
 }
 
 /// Parses the exact safe metadata contract emitted by the tool-request stream coordinator.
@@ -424,9 +424,9 @@ pub(super) fn append_tool_finished_projection_to_state(
     session_id: SessionId,
     now: &str,
     event: &RuntimeEvent,
-) -> Result<bool, String> {
+) -> Result<Vec<String>, String> {
     let Some(tool_call_id) = parse_tool_finished_runtime_event_title(&event.title) else {
-        return Ok(false);
+        return Ok(Vec::new());
     };
     let display_state = tool_display_state_for_finished_event(
         event.metadata.as_ref(),
@@ -465,19 +465,19 @@ pub(super) fn append_tool_finished_projection_to_state(
         detail_ref.as_ref(),
         false,
     );
-    let attached = runtime_state
+    let attached_record_id = runtime_state
         .tool_call_record_ids
         .remove(&tool_call_id)
-        .and_then(|record_id| {
+        .filter(|record_id| {
             attach_tool_result_to_record(
                 &mut runtime_state.conversation_state,
-                &record_id,
+                record_id,
                 result_metadata.clone(),
             )
-            .then_some(())
-        })
-        .is_some();
-    if !attached {
+        });
+    let changed_record_id = if let Some(record_id) = attached_record_id {
+        record_id
+    } else {
         let record_id = build_session_record_message_id(
             session_id,
             now,
@@ -488,7 +488,7 @@ pub(super) fn append_tool_finished_projection_to_state(
             object.insert(String::from("orphan"), serde_json::Value::Bool(true));
         }
         let record = SessionConversationRecord {
-            id: record_id,
+            id: record_id.clone(),
             kind: SessionMessageKind::Assistant,
             record_kind: SessionMessageRecordKind::ToolResultOutput,
             visible: true,
@@ -499,9 +499,10 @@ pub(super) fn append_tool_finished_projection_to_state(
         };
         append_record(&mut runtime_state.conversation_state, record)
             .map_err(|error| format!("Invalid orphan tool-result record identity: {error}"))?;
-    }
+        record_id
+    };
     runtime_state.updated_at = now.to_string();
-    Ok(true)
+    Ok(vec![changed_record_id])
 }
 
 /// Parses one tool-start runtime headline into its stable tool-call identifier and visible tool name.

@@ -24,11 +24,35 @@ pub fn apply_terminal_execution_report_to_state(
     now: &str,
     report: &ExecutionRunReport,
 ) -> Result<SessionTerminalReportApplyResult, String> {
-    // draft_runtime_state isolates the full multi-record terminal transaction until every identity check succeeds.
-    // draft_runtime_state 会隔离完整的多记录终态事务，直到每项身份校验成功。
+    let (draft_runtime_state, apply_result) =
+        build_terminal_execution_report_state(runtime_state, session_id, now, report)?;
+    *runtime_state = draft_runtime_state;
+    Ok(apply_result)
+}
+
+/// Builds one detached terminal runtime candidate while preserving the authoritative source state.
+/// 在保留权威源状态的同时构建一个分离的终态运行态候选。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` is the authoritative source borrowed without any caller-side clone.
+/// `runtime_state` 是无需调用方克隆即可借用的权威源状态。
+/// `session_id`, `now`, and `report` identify and describe the terminal transaction.
+/// `session_id`、`now` 与 `report` 标识并描述终态事务。
+///
+/// # Returns
+/// 返回值
+/// A validated detached terminal state and its apply result, or the first transaction error.
+/// 返回已校验的分离终态状态及其应用结果，或首个事务错误。
+pub fn build_terminal_execution_report_state(
+    runtime_state: &SessionRuntimeStateEntry,
+    session_id: SessionId,
+    now: &str,
+    report: &ExecutionRunReport,
+) -> Result<(SessionRuntimeStateEntry, SessionTerminalReportApplyResult), String> {
+    // draftRuntimeState is the single full clone required to preserve atomic terminal publication.
+    // draftRuntimeState 是保持终态发布原子性所需的唯一一次完整克隆。
     let mut draft_runtime_state = runtime_state.clone();
-    // apply_result is produced only from the detached draft and therefore cannot leak partial failure state.
-    // apply_result 仅从分离草稿产出，因此不会泄漏部分失败状态。
     let apply_result = apply_terminal_execution_report_to_draft(
         &mut draft_runtime_state,
         session_id,
@@ -43,8 +67,7 @@ pub fn apply_terminal_execution_report_to_state(
         &draft_runtime_state.conversation_state.records,
     )
     .map_err(|error| format!("Invalid terminal conversation record identity: {error}"))?;
-    *runtime_state = draft_runtime_state;
-    Ok(apply_result)
+    Ok((draft_runtime_state, apply_result))
 }
 
 /// Applies one terminal execution report to a detached runtime draft.

@@ -294,6 +294,21 @@
   background: var(--accent);
 }
 
+.composer-attachment-open {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.composer-attachment-open:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -3px;
+}
+
 .composer-attachment-tile img {
   width: 100%;
   height: 42px;
@@ -322,14 +337,113 @@
   right: 5px;
   width: 18px;
   height: 18px;
-  display: none;
+  display: inline-flex;
+  padding: 0;
+  border: 0;
   align-items: center;
   justify-content: center;
   border-radius: 999px;
   background: #ef4444;
   color: white;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 4;
 }
 
-.composer-attachment-tile:hover .composer-attachment-remove {
+.composer-attachment-tile:hover .composer-attachment-remove,
+.composer-attachment-tile:focus-within .composer-attachment-remove,
+.composer-attachment-remove:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.composer-attachment-remove:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.composer-attachment-progress {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--background) 86%, transparent);
+  color: var(--foreground);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.composer-attachment-progress svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.composer-attachment-progress circle {
+  fill: none;
+  stroke-width: 3;
+}
+
+.composer-attachment-progress-track {
+  stroke: color-mix(in oklch, var(--border) 75%, transparent);
+}
+
+.composer-attachment-progress-value {
+  stroke: var(--primary);
+  stroke-linecap: round;
+}
+
+.composer-attachment-warning {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
   display: inline-flex;
+  color: #d97706;
+  filter: drop-shadow(0 1px 1px color-mix(in oklch, var(--background) 80%, transparent));
+  pointer-events: none;
+  z-index: 2;
+}
+
+.composer-attachment-retry {
+  position: absolute;
+  inset: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: color-mix(in oklch, var(--muted-foreground) 46%, transparent);
+  color: white;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.composer-attachment-tile.attachment-degraded:hover .composer-attachment-retry,
+.composer-attachment-tile.attachment-degraded:focus-within .composer-attachment-retry,
+.composer-attachment-retry:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+  outline: 2px solid var(--ring);
+  outline-offset: -3px;
+}
+
+.composer-attachment-degradation-summary {
+  margin: 5px 14px 0;
+  color: #b45309;
+  font-size: 11px;
+  line-height: 16px;
 }

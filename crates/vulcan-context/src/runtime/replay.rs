@@ -89,12 +89,6 @@ struct RuntimeConversationProjection {
     /// Tool-batch control and exact observed cardinality keyed by runtime batch id.
     /// 按运行时批次标识索引的工具批次控制状态与精确观察基数。
     tool_batches: BTreeMap<String, RuntimeReplayToolBatchState>,
-    /// Whether the first valid batch-completion event has closed conversation-event replay.
-    /// 首条有效批次完成事件是否已经关闭会话事件重放阶段。
-    tool_batch_completion_started: bool,
-    /// Whether an audit-only event has permanently closed projection and completion replay.
-    /// 仅审计事件是否已经永久关闭投影与完成重放阶段。
-    runtime_audit_started: bool,
 }
 
 impl RuntimeConversationProjection {
@@ -111,34 +105,8 @@ impl RuntimeConversationProjection {
     /// Success after applying or intentionally ignoring the event, or a strict relationship error.
     /// 应用或有意忽略事件后返回成功，或返回严格关系错误。
     fn apply_event(&mut self, event: &RuntimeLogEvent) -> Result<(), RuntimeLogReplayError> {
-        // is_conversation_event identifies events emitted before the completion phase.
-        // is_conversation_event 标识在完成阶段前发出的事件。
-        let is_conversation_event = matches!(
-            event,
-            RuntimeLogEvent::UserMessage(_)
-                | RuntimeLogEvent::AssistantMessage(_)
-                | RuntimeLogEvent::ToolBatchStarted(_)
-                | RuntimeLogEvent::ToolCall(_)
-                | RuntimeLogEvent::ToolResult(_)
-        );
-        // is_completion_event identifies the only event allowed during the completion phase.
-        // is_completion_event 标识完成阶段唯一允许的事件。
-        let is_completion_event = matches!(event, RuntimeLogEvent::ToolBatchCompleted(_));
-        if self.runtime_audit_started && (is_conversation_event || is_completion_event) {
-            return Err(RuntimeLogReplayError::ProjectionEventAfterRuntimeAudit {
-                later_event: runtime_replay_event_kind(event),
-            });
-        }
-        if self.tool_batch_completion_started && is_conversation_event {
-            return Err(
-                RuntimeLogReplayError::ConversationEventAfterToolBatchCompletion {
-                    later_event: runtime_replay_event_kind(event),
-                },
-            );
-        }
-        if !is_conversation_event && !is_completion_event {
-            self.runtime_audit_started = true;
-        }
+        // Runtime-only audit events may be interleaved with later append-only conversation facts.
+        // 仅运行时审计事件允许与后续追加式会话事实交错出现。
         match event {
             RuntimeLogEvent::UserMessage(event) => self.push_user_message(event)?,
             RuntimeLogEvent::AssistantMessage(event) => self.push_assistant_message(event)?,
@@ -333,7 +301,6 @@ impl RuntimeConversationProjection {
             });
         }
         batch.completed = true;
-        self.tool_batch_completion_started = true;
         Ok(())
     }
 
@@ -419,6 +386,13 @@ impl RuntimeConversationProjection {
                 tool_batch_id: tool_batch_id.clone(),
             }
         })?;
+        if batch.completed {
+            return Err(
+                RuntimeLogReplayError::ConversationEventAfterToolBatchCompletion {
+                    later_event: "tool_call",
+                },
+            );
+        }
         if batch.assistant_message_id != event.assistant_message_id {
             return Err(RuntimeLogReplayError::ToolCallBatchAssistantMismatch {
                 tool_call_id: runtime_tool_call_id,
@@ -613,6 +587,13 @@ impl RuntimeConversationProjection {
                     tool_batch_id: call_batch_id.clone(),
                 }
             })?;
+            if batch.completed {
+                return Err(
+                    RuntimeLogReplayError::ConversationEventAfterToolBatchCompletion {
+                        later_event: "tool_result",
+                    },
+                );
+            }
             batch.tool_result_count = batch.tool_result_count.checked_add(1).ok_or(
                 RuntimeLogReplayError::ReplayToolBatchCardinalityOverflow {
                     tool_batch_id: call_batch_id,
@@ -722,38 +703,4 @@ struct RuntimeReplayToolBatchState {
     /// Whether a completion control event has already closed the batch.
     /// 是否已有完成控制事件关闭该批次。
     completed: bool,
-}
-
-/// Returns the stable diagnostic kind for one runtime replay event.
-/// 返回一条运行时重放事件的稳定诊断类型。
-///
-/// # Parameters
-/// 参数
-/// - `event`: Runtime event being classified for phase-order diagnostics.
-/// - `event`：为阶段顺序诊断进行分类的运行时事件。
-///
-/// # Returns
-/// 返回值
-/// A stable snake-case event kind used only in replay errors.
-/// 返回仅用于重放错误的稳定蛇形事件类型。
-fn runtime_replay_event_kind(event: &RuntimeLogEvent) -> &'static str {
-    match event {
-        RuntimeLogEvent::UserMessage(_) => "user_message",
-        RuntimeLogEvent::AssistantMessage(_) => "assistant_message",
-        RuntimeLogEvent::ToolBatchStarted(_) => "tool_batch_started",
-        RuntimeLogEvent::ToolCall(_) => "tool_call",
-        RuntimeLogEvent::ToolResult(_) => "tool_result",
-        RuntimeLogEvent::ToolBatchCompleted(_) => "tool_batch_completed",
-        RuntimeLogEvent::ProviderTurnCheckpoint(_) => "provider_turn_checkpoint",
-        RuntimeLogEvent::ContextCompactionApplied(_) => "context_compaction_applied",
-        RuntimeLogEvent::RuntimeRepair(_) => "runtime_repair",
-        RuntimeLogEvent::InjectionApplied(_) => "injection_applied",
-        RuntimeLogEvent::SystemUpdate(_) => "system_update",
-        RuntimeLogEvent::InjectionCancelled(_) => "injection_cancelled",
-        RuntimeLogEvent::InjectionMerged(_) => "injection_merged",
-        RuntimeLogEvent::ProviderRequestCheckpoint(_) => "provider_request_checkpoint",
-        RuntimeLogEvent::ProviderResponseCheckpoint(_) => "provider_response_checkpoint",
-        RuntimeLogEvent::ProviderLoweringRepair(_) => "provider_lowering_repair",
-        RuntimeLogEvent::VmmLifecycle(_) => "vmm_lifecycle",
-    }
 }

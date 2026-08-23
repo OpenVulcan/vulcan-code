@@ -41,6 +41,7 @@ import {
 import { retireMaterializedDraftSubmission } from "@/components/workspace/draft-submission-state";
 import { resolveEmptyWorkbenchDraftRoute } from "@/components/workspace/workbench-layout/empty-workbench-route";
 import { MediaUploadProgressPanel } from "@/components/workspace/media-upload-progress-panel";
+import { ComposerMediaUploadProgressContext } from "@/components/composer/composer-media-upload-context";
 import {
   mediaUploadProgressKey,
   reduceMediaUploadProgress,
@@ -402,6 +403,14 @@ export function WorkbenchLayout(props: {
   // mediaUploadProgresses keeps every active pre-dispatch or tool-triggered transfer keyed by its exact identity.
   // mediaUploadProgresses 按精确身份保存所有活跃的分派前或工具触发传输，避免并发上传互相覆盖。
   const [mediaUploadProgresses, setMediaUploadProgresses] = React.useState<Record<string, MediaUploadProgressChangedDelta>>({});
+  // floatingMediaUploadProgresses excludes draft transfers because their progress is rendered on the attachment tile.
+  // floatingMediaUploadProgresses 排除草稿传输，因为其进度直接渲染在附件块上。
+  const floatingMediaUploadProgresses = React.useMemo(
+    () => Object.values(mediaUploadProgresses).filter(
+      (progress) => !progress.clientSubmissionId.startsWith("draft-media:"),
+    ),
+    [mediaUploadProgresses],
+  );
   React.useEffect(() => {
     setProjectTerminalCountListenerReady(false);
     setProjectTerminalRunningCounts({});
@@ -1940,10 +1949,11 @@ export function WorkbenchLayout(props: {
   }, [handleCompactSelectedConversationContext, handleOpenWorkspaceSkills]);
 
   return (
+    <ComposerMediaUploadProgressContext.Provider value={mediaUploadProgresses}>
     <div className={`app-shell ${showConsoleSidebar ? "with-console-sidebar" : "without-console-sidebar"} ${showWindowControls ? "tauri-shell" : "browser-shell"}`}>
-      {Object.values(mediaUploadProgresses).length > 0 ? (
+      {floatingMediaUploadProgresses.length > 0 ? (
         <div className="media-upload-progress-stack">
-          {Object.values(mediaUploadProgresses).map((progress) => (
+          {floatingMediaUploadProgresses.map((progress) => (
             <MediaUploadProgressPanel
               key={mediaUploadProgressKey(progress)}
               progress={progress}
@@ -2174,6 +2184,7 @@ export function WorkbenchLayout(props: {
         onSubmitPendingQuestion={handlePendingQuestionSubmit}
       />
     </div>
+    </ComposerMediaUploadProgressContext.Provider>
   );
 }
 

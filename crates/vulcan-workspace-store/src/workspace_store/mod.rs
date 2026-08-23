@@ -16,6 +16,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use vldb_controller_client::ControllerSqliteValue;
@@ -40,13 +41,11 @@ use self::runtime_state_codec::{
 };
 pub use self::segmented_session_store::find_segmented_session_directory_for_task_store_created_at;
 use self::segmented_session_store::{
-    SegmentPolicy, SegmentedSessionCreateRequest, SegmentedSessionEventInput,
-    SegmentedSessionEventKind, append_segmented_boundary_events, append_segmented_session_events,
-    backup_runtime_log_before_compaction, core_vmm_rebuild_reason,
-    create_segmented_session_in_location, find_segmented_session_directory,
-    find_segmented_session_directory_by_id, find_segmented_session_or_task_directory_by_id,
-    load_core_vmm_controller_state, load_session_boundary_state, read_runtime_log_lines,
-    read_segmented_session_event_window, read_state, record_runtime_audit_event,
+    SegmentedSessionEventInput, SegmentedSessionEventKind, SegmentedSessionStateDocument,
+    append_segmented_boundary_events, append_segmented_session_events,
+    backup_runtime_log_before_compaction, core_vmm_rebuild_reason, load_core_vmm_controller_state,
+    load_session_boundary_state, read_runtime_log_lines, read_segmented_session_event_window,
+    read_session_metadata, read_state, record_runtime_audit_event,
     record_runtime_injection_applied, replace_session_boundary_state,
     reset_vmm_state_for_history_rewrite, segmented_session_directory,
     segmented_session_directory_exists, state_document_from_runtime_state,
@@ -68,17 +67,38 @@ pub use goal_store::{
     validate_thread_goal_token_budget,
 };
 pub use persistence::{
-    PersistedSessionForkResult, PersistedUserPromptEditDraft, PersistedUserPromptRollbackResult,
-    archive_project_sessions, archive_single_session, cleanup_missing_session_index,
-    delete_archived_session, fork_persisted_session, load_persisted_user_prompt_edit_draft,
+    PersistedSessionForkResult, PersistedUserPromptRollbackResult, archive_project_sessions,
+    archive_single_session, cleanup_missing_session_index, delete_archived_session,
+    fork_persisted_session, load_single_session_transcript_message_count_in_directory,
     persist_collapsed_task_project_ids, persist_new_project,
     persist_project_codebase_memory_enabled, persist_project_icon_update,
     persist_project_order_update, persist_project_pinned_and_order_update,
-    persist_single_session_addon_state_update, persist_single_session_runtime_state_update,
-    persist_single_session_transcript_messages, persist_single_session_update,
+    persist_single_session_addon_state_update,
+    persist_single_session_addon_state_update_in_directory,
+    persist_single_session_runtime_state_update,
+    persist_single_session_transcript_messages_in_directory,
+    persist_single_session_transcript_tail_in_directory, persist_single_session_update,
     remove_project_after_archiving_sessions, rename_project, rename_single_session,
     restore_archived_session, restore_project, rollback_persisted_session_before_user_prompt,
 };
+
+/// Lightweight pre-serialized metadata for one exact `state.json` update.
+/// 用于一次精确 `state.json` 更新的轻量预序列化元数据。
+#[derive(Debug, Clone)]
+pub struct SessionRuntimeStatePersistenceProjection {
+    /// Canonical string identity of the owning session.
+    /// 所属会话的规范字符串身份。
+    session_id: String,
+    /// Runtime update timestamp copied from the projected state.
+    /// 从投影运行态复制的更新时间戳。
+    updated_at: String,
+    /// Lightweight runtime JSON that never contains canonical conversation history.
+    /// 永不包含规范会话历史的轻量运行态 JSON。
+    runtime_state: Value,
+    /// Explicit current-context cursor metadata stored beside the runtime JSON.
+    /// 与运行态 JSON 一同保存的显式当前上下文游标元数据。
+    current_context: Value,
+}
 pub use provider_usage::{
     PROVIDER_USAGE_SCHEMA_REVISION, ProviderAccountUsageSnapshotRecord,
     ProviderAccountUsageSummary, ProviderRateLimitSnapshotRecord, ProviderUsageAttemptRecord,
@@ -125,6 +145,43 @@ const PROVIDER_REQUEST_TRACE_DIRECTORY: &str = "provider-request-trace";
 /// 保存无对话会话归属的已配置推理请求追踪的应用级目录。
 const CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_DIRECTORY: &str =
     "configured-inference-provider-request-trace";
+/// Number of exact rotating files retained for each Provider request-trace owner.
+/// 每个 Provider 请求追踪所有者保留的精确轮转文件数量。
+pub const PROVIDER_REQUEST_TRACE_SLOT_COUNT: u64 = 4;
+/// Maximum encoded bytes retained in one complete Provider request-trace slot.
+/// 单个完整 Provider 请求追踪槽位保留的最大编码字节数。
+pub const PROVIDER_REQUEST_TRACE_MAX_BYTES: u64 = 16 * 1024 * 1024;
+/// Serializes exact trace-slot replacement without directory discovery or cross-write races.
+/// 串行化精确追踪槽位替换，避免目录发现与并发写入竞争。
+static PROVIDER_REQUEST_TRACE_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+/// Validates that one caller-supplied segmented directory belongs to the exact requested session.
+/// 校验调用方提供的分段目录属于精确请求的会话。
+///
+/// # Parameters
+/// 参数
+/// `session_directory` is the already-resolved absolute storage target and `session_id` is its expected owner.
+/// `session_directory` 是已经解析的绝对存储目标，`session_id` 是其预期所有者。
+///
+/// # Returns
+/// 返回值
+/// Success only when the target metadata exists and carries the exact canonical session identity.
+/// 仅在目标元数据存在且携带精确规范会话身份时成功。
+fn validate_exact_segmented_session_directory_owner(
+    session_directory: &Path,
+    session_id: SessionId,
+) -> Result<(), String> {
+    // metadata is read from the one specified directory; no sibling or catalog enumeration is permitted.
+    // metadata 仅从指定目录读取；不允许枚举兄弟目录或会话目录。
+    let metadata = read_session_metadata(session_directory)?;
+    if metadata.session_id != session_id.to_string() {
+        return Err(format!(
+            "Session `{session_id}` exact segmented directory owner is `{}`.",
+            metadata.session_id
+        ));
+    }
+    Ok(())
+}
 
 /// Loads the strict Core-owned VMM state for one persisted session.
 /// 加载单个持久化会话中由 Core 所有的严格 VMM 状态。
@@ -141,39 +198,123 @@ const CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_DIRECTORY: &str =
 /// A validated state, clean absence, or an explicit storage and format error.
 /// 返回已校验状态、干净缺失，或明确的存储与格式错误。
 pub fn load_core_session_vmm_state(
-    data_root: &Path,
+    session_directory: &Path,
     session_id: SessionId,
 ) -> Result<Option<vulcan_vmm::VmmSessionMemoryState>, String> {
     // session_id_text is the canonical persisted owner spelling.
     // session_id_text 是规范的持久化所有者文本形式。
     let session_id_text = session_id.to_string();
-    // session_dir resolves the one active or archived directory indexed by the session id.
-    // session_dir 解析由会话标识索引的唯一活动或归档目录。
-    let Some(session_dir) = find_segmented_session_directory_by_id(data_root, &session_id_text)?
-    else {
-        return Ok(None);
-    };
-    load_core_vmm_controller_state(&session_dir, &session_id_text)
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    load_core_vmm_controller_state(session_directory, &session_id_text)
 }
 
-/// Atomically persists one exact retry snapshot below its owning segmented session directory.
-/// 在所属分段会话目录下原子持久化一份精确重试快照。
+/// Projects one runtime entry into lightweight `state.json` metadata without cloning history.
+/// 在不克隆历史的情况下把一个运行态条目投影为轻量 `state.json` 元数据。
 ///
 /// # Parameters
 /// 参数
-/// `data_root` is the controller-managed Vulcan data root.
-/// `data_root` 是控制器管理的 Vulcan 数据根目录。
-/// `session_id` is the exact main-session owner.
-/// `session_id` 是精确的主会话所有者。
-/// `snapshot` is the complete retry sidecar candidate.
-/// `snapshot` 是完整的重试 sidecar 候选。
+/// `session_id` is the exact owning session.
+/// `session_id` 是精确所属会话。
+/// `runtime_state` is the authoritative in-memory entry borrowed under the caller's state lock.
+/// `runtime_state` 是在调用方状态锁下借用的权威内存条目。
 ///
 /// # Returns
 /// 返回值
-/// A digest-bound lightweight reference only after atomic sidecar publication succeeds.
-/// 仅在 sidecar 原子发布成功后返回摘要绑定的轻量引用。
-pub fn persist_execution_retry_snapshot(
-    data_root: &Path,
+/// A detached metadata projection that never visits or retains canonical conversation history.
+/// 返回永不访问或保留规范会话历史的分离元数据投影。
+pub fn project_single_session_runtime_state_update(
+    session_id: SessionId,
+    runtime_state: &SessionRuntimeStateEntry,
+) -> Result<SessionRuntimeStatePersistenceProjection, String> {
+    // stateDocument uses exhaustive borrowed-field serialization and excludes canonical history before allocation.
+    // stateDocument 使用穷尽借用字段序列化，并在分配前排除规范历史。
+    let state_document = state_document_from_runtime_state(&session_id.to_string(), runtime_state)?;
+    Ok(SessionRuntimeStatePersistenceProjection {
+        session_id: state_document.session_id,
+        updated_at: state_document.updated_at,
+        runtime_state: state_document.runtime_state,
+        current_context: state_document.current_context,
+    })
+}
+
+/// Persists one previously projected runtime metadata update to an exact session directory.
+/// 把一份预先投影的运行态元数据更新持久化到精确会话目录。
+///
+/// # Parameters
+/// 参数
+/// `session_directory` is the exact deterministic main-session directory.
+/// `session_directory` 是精确确定的主会话目录。
+/// `session_id` is the expected owner identity.
+/// `session_id` 是预期所属身份。
+/// `projection` is the detached history-free metadata produced under the authoritative state lock.
+/// `projection` 是在权威状态锁下生成的分离无历史元数据。
+///
+/// # Returns
+/// 返回值
+/// Success after exact-owner validation and the overwrite-only `state.json` write.
+/// 在完成精确归属校验与覆盖式 `state.json` 写入后返回成功。
+pub async fn persist_projected_single_session_runtime_state_update(
+    session_directory: PathBuf,
+    session_id: SessionId,
+    projection: &SessionRuntimeStatePersistenceProjection,
+) -> Result<(), String> {
+    if projection.session_id != session_id.to_string() {
+        return Err(String::from(
+            "Projected runtime state owner does not match the requested session.",
+        ));
+    }
+    validate_exact_segmented_session_directory_owner(&session_directory, session_id)?;
+    // stateDocument reconstructs only the storage envelope; writeState preserves the independent session-boundary field.
+    // stateDocument 只重建存储信封；writeState 会保留独立的会话边界字段。
+    let state_document = SegmentedSessionStateDocument {
+        schema_version: 1,
+        session_id: projection.session_id.clone(),
+        updated_at: projection.updated_at.clone(),
+        runtime_state: projection.runtime_state.clone(),
+        current_context: projection.current_context.clone(),
+        session_boundary_state: Value::Null,
+    };
+    write_state(&session_directory, &state_document)
+}
+
+/// Synchronizes one borrowed canonical runtime conversation into the exact session runtime log.
+/// 将一个借用的规范运行时会话同步到精确会话运行时日志。
+///
+/// # Parameters
+/// 参数
+/// `session_directory` is the deterministic owning session directory, `session_id` is its exact owner,
+/// and `runtime_state` is borrowed from the authoritative in-memory entry without cloning history.
+/// `session_directory` 是确定性的所属会话目录，`session_id` 是其精确所有者，
+/// `runtime_state` 从权威内存条目借用且不克隆历史。
+///
+/// # Returns
+/// 返回值
+/// Success after bounded runtime-log synchronization, or a strict locator, projection, or persistence error.
+/// 在有界运行时日志同步后返回成功，或返回严格定位、投影或持久化错误。
+pub fn sync_single_session_runtime_log_update(
+    session_directory: &Path,
+    session_id: SessionId,
+    runtime_state: &SessionRuntimeStateEntry,
+) -> Result<(), String> {
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    persistence::sync_segmented_runtime_log_for_state(session_directory, runtime_state)
+}
+
+/// Projects one live in-memory retry snapshot into a lightweight runtime-state reference.
+/// 将一份实时内存重试快照投影为轻量运行态引用。
+///
+/// # Parameters
+/// 参数
+/// `session_id` is the exact main-session owner.
+/// `session_id` 是精确的主会话所有者。
+/// `snapshot` is the complete retry state retained by the live service process.
+/// `snapshot` 是由实时服务进程保留的完整重试状态。
+///
+/// # Returns
+/// 返回值
+/// A digest-bound lightweight reference without any filesystem mutation.
+/// 返回不产生任何文件系统变更的摘要绑定轻量引用。
+pub fn project_execution_retry_snapshot(
     session_id: SessionId,
     snapshot: &vulcan_workbench_model::ExecutionRetrySnapshot,
 ) -> Result<vulcan_workbench_model::ExecutionRetrySnapshotRef, String> {
@@ -182,29 +323,115 @@ pub fn persist_execution_retry_snapshot(
             "Execution retry snapshot owner does not match the requested session.",
         ));
     }
-    let session_directory = find_segmented_session_directory_by_id(
-        data_root,
-        &session_id.to_string(),
-    )?
-    .ok_or_else(|| {
-        format!(
-            "Session `{session_id}` has no segmented directory for execution retry persistence."
-        )
-    })?;
-    ExecutionRetrySnapshotStore::new(session_directory).write(snapshot)
+    ExecutionRetrySnapshotStore::project(snapshot)
 }
 
-/// Atomically persists one complete provider request trace below its owning session temp directory.
-/// 在所属会话的临时目录下原子持久化一份完整 Provider 请求追踪。
+/// Loads the exact fixed retry-file reference solely for unreferenced interruption reconciliation.
+/// 仅为协调未被引用的中断正文而加载精确固定重试文件引用。
 ///
 /// # Parameters
 /// 参数
-/// `data_root` is the controller-managed Vulcan data root.
-/// `data_root` 是控制器管理的 Vulcan 数据根目录。
+/// `session_directory` is the exact owning segmented session directory.
+/// `session_directory` 是精确的所属分段会话目录。
+/// `session_id` is the exact main-session owner required in the decoded body.
+/// `session_id` 是解码正文必须匹配的精确主会话所有者。
+///
+/// # Returns
+/// 返回值
+/// A validated reference when the fixed file exists, `None` when absent, or an explicit owner/integrity error.
+/// 固定文件存在时返回经过校验的引用；缺失时返回 `None`；所有者或完整性异常时返回明确错误。
+pub fn load_unreferenced_execution_retry_snapshot_if_present(
+    session_directory: &Path,
+    session_id: SessionId,
+) -> Result<Option<vulcan_workbench_model::ExecutionRetrySnapshotRef>, String> {
+    let loaded = ExecutionRetrySnapshotStore::new(session_directory)
+        .load_interrupted_reference_if_present()?;
+    let Some((snapshot, reference)) = loaded else {
+        return Ok(None);
+    };
+    // Directory ownership is read only after the exact retry file exists, keeping the ordinary
+    // no-sidecar submission path to one direct missing-file lookup.
+    // 仅在精确重试文件存在后读取目录所有权，使普通无 sidecar 提交路径只执行一次固定缺失文件查询。
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    if snapshot.session_id != session_id.to_string() {
+        return Err(String::from(
+            "Execution retry snapshot owner does not match the requested session.",
+        ));
+    }
+    Ok(Some(reference))
+}
+
+/// Persists one real interrupted retry boundary to the exact session-root `retry.json` file.
+/// 将一个真实中断重试边界持久化到精确的会话根目录 `retry.json` 文件。
+///
+/// # Parameters
+/// 参数
+/// `session_directory` is the exact owning segmented session directory.
+/// `session_directory` 是精确的所属分段会话目录。
+/// `session_id` is the exact main-session owner.
+/// `session_id` 是精确的主会话所有者。
+/// `snapshot` is the final retry state after the terminal boundary is classified.
+/// `snapshot` 是终止边界完成分类后的最终重试状态。
+///
+/// # Returns
+/// 返回值
+/// A digest-bound reference only after the single fixed file completes `sync_all`.
+/// 仅在唯一固定文件完成 `sync_all` 后返回摘要绑定引用。
+pub fn persist_interrupted_execution_retry_snapshot(
+    session_directory: &Path,
+    session_id: SessionId,
+    snapshot: &vulcan_workbench_model::ExecutionRetrySnapshot,
+) -> Result<vulcan_workbench_model::ExecutionRetrySnapshotRef, String> {
+    if snapshot.session_id != session_id.to_string() {
+        return Err(String::from(
+            "Execution retry snapshot owner does not match the requested session.",
+        ));
+    }
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    ExecutionRetrySnapshotStore::new(session_directory).write_interrupted(snapshot)
+}
+
+/// Persists one real terminal interruption when no current/newer retry generation is already published.
+/// 仅当尚未发布当前或更新重试代际时持久化一个真实终止中断边界。
+///
+/// # Parameters
+/// 参数
+/// `session_directory` is the exact owning segmented session directory.
+/// `session_directory` 是精确的所属分段会话目录。
+/// `session_id` is the exact main-session owner.
+/// `session_id` 是精确的主会话所有者。
+/// `snapshot` is the final memory-owned retry body from the unique terminal transaction.
+/// `snapshot` 是唯一终止事务提供的最终内存重试正文。
+///
+/// # Returns
+/// 返回值
+/// A durable reference after unique-file creation or older-generation replacement, otherwise an explicit stale-writer/storage error.
+/// 创建唯一文件或替换更旧代际后返回可靠引用，否则返回明确的陈旧写入者或存储错误。
+pub fn persist_interrupted_execution_retry_snapshot_if_absent(
+    session_directory: &Path,
+    session_id: SessionId,
+    snapshot: &vulcan_workbench_model::ExecutionRetrySnapshot,
+) -> Result<vulcan_workbench_model::ExecutionRetrySnapshotRef, String> {
+    if snapshot.session_id != session_id.to_string() {
+        return Err(String::from(
+            "Execution retry snapshot owner does not match the requested session.",
+        ));
+    }
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    ExecutionRetrySnapshotStore::new(session_directory).write_interrupted_if_absent(snapshot)
+}
+
+/// Persists one bounded provider request trace into an exact rotating session slot.
+/// 将一份有界 Provider 请求追踪持久化到精确的会话轮转槽位。
+///
+/// # Parameters
+/// 参数
+/// `session_directory` is the already-resolved exact owning session directory.
+/// `session_directory` 是已经解析的精确所属会话目录。
 /// `session_id` is the exact session that owns the traced provider request.
 /// `session_id` 是拥有被追踪 Provider 请求的精确会话。
-/// `file_stem` is an internally generated filesystem-safe trace identity without an extension.
-/// `file_stem` 是内部生成且不含扩展名的文件系统安全追踪标识。
+/// `slot_index` is the deterministic bounded rotation slot selected by the caller.
+/// `slot_index` 是调用方选择的确定性有界轮转槽位。
 /// `trace` is the complete secret-free diagnostic document.
 /// `trace` 是不含秘钥的完整诊断文档。
 ///
@@ -213,49 +440,37 @@ pub fn persist_execution_retry_snapshot(
 /// The final trace path after atomic publication, or an explicit validation and storage error.
 /// 原子发布完成后返回最终追踪路径，或返回明确的校验与存储错误。
 pub fn persist_provider_request_trace(
-    data_root: &Path,
+    session_directory: &Path,
     session_id: SessionId,
-    file_stem: &str,
+    slot_index: u64,
     trace: &Value,
 ) -> Result<PathBuf, String> {
-    if file_stem.is_empty()
-        || !file_stem
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-    {
-        return Err(String::from(
-            "Provider request trace file stem must contain only ASCII letters, digits, hyphens, or underscores.",
+    if slot_index >= PROVIDER_REQUEST_TRACE_SLOT_COUNT {
+        return Err(format!(
+            "Provider request trace slot {slot_index} is outside the 0..{} range.",
+            PROVIDER_REQUEST_TRACE_SLOT_COUNT - 1
         ));
     }
-    let session_directory = find_segmented_session_or_task_directory_by_id(
-        data_root,
-        &session_id.to_string(),
-    )?
-    .ok_or_else(|| {
-        format!("Session `{session_id}` has no segmented directory for provider request tracing.")
-    })?;
-    // encoded is completed before filesystem publication so a serialization failure cannot leave a partial trace.
-    // encoded 在文件系统发布前已经完整生成，因此序列化失败不会留下不完整追踪文件。
-    let encoded = serde_json::to_vec_pretty(trace)
-        .map_err(|error| format!("Provider request trace JSON serialization failed: {error}"))?;
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    let encoded = encode_bounded_provider_request_trace(trace)?;
     let trace_path = session_directory
         .join("temp")
         .join(PROVIDER_REQUEST_TRACE_DIRECTORY)
-        .join(format!("{file_stem}.json"));
-    write_file_bytes_atomic(&trace_path, &encoded, "provider request trace")?;
+        .join(format!("slot-{slot_index:02}.json"));
+    replace_exact_provider_request_trace_slot(&trace_path, &encoded, "provider request trace")?;
     Ok(trace_path)
 }
 
-/// Atomically persists one configured-inference provider trace below the application diagnostics root.
-/// 在应用诊断根目录下原子持久化一份已配置推理 Provider 追踪。
+/// Persists one bounded configured-inference provider trace into an exact rotating slot.
+/// 将一份有界的已配置推理 Provider 追踪持久化到精确轮转槽位。
 ///
 /// # Parameters
 /// 参数
 /// `data_root` is the controller-managed Vulcan data root; `consumer_profile_id` is the exact
-/// authenticated internal consumer; `file_stem` is an internally generated safe identity; and
+/// authenticated internal consumer; `slot_index` is the deterministic bounded slot; and
 /// `trace` is the complete secret-free diagnostic document.
 /// `data_root` 是控制器管理的 Vulcan 数据根目录；`consumer_profile_id` 是精确的
-/// 已认证内部消费者；`file_stem` 是内部生成的安全标识；`trace` 是完整的
+/// 已认证内部消费者；`slot_index` 是确定性有界槽位；`trace` 是完整的
 /// 不含秘密诊断文档。
 ///
 /// # Returns
@@ -265,7 +480,7 @@ pub fn persist_provider_request_trace(
 pub fn persist_configured_inference_provider_request_trace(
     data_root: &Path,
     consumer_profile_id: &str,
-    file_stem: &str,
+    slot_index: u64,
     trace: &Value,
 ) -> Result<PathBuf, String> {
     let safe_component = |value: &str| {
@@ -279,27 +494,128 @@ pub fn persist_configured_inference_provider_request_trace(
             "Configured-inference trace consumer profile must contain only ASCII letters, digits, hyphens, or underscores.",
         ));
     }
-    if !safe_component(file_stem) {
-        return Err(String::from(
-            "Configured-inference trace file stem must contain only ASCII letters, digits, hyphens, or underscores.",
+    if slot_index >= PROVIDER_REQUEST_TRACE_SLOT_COUNT {
+        return Err(format!(
+            "Configured-inference trace slot {slot_index} is outside the 0..{} range.",
+            PROVIDER_REQUEST_TRACE_SLOT_COUNT - 1
         ));
     }
-    // encoded is complete before publication so a serialization failure cannot leave a partial diagnostic.
-    // encoded 在发布前已完整生成，因此序列化失败不会留下局部诊断文件。
-    let encoded = serde_json::to_vec_pretty(trace).map_err(|error| {
-        format!("Configured-inference provider request trace JSON serialization failed: {error}")
-    })?;
+    let encoded = encode_bounded_provider_request_trace(trace)?;
     let trace_path = data_root
         .join("diagnostics")
         .join(CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_DIRECTORY)
         .join(consumer_profile_id)
-        .join(format!("{file_stem}.json"));
-    write_file_bytes_atomic(
+        .join(format!("slot-{slot_index:02}.json"));
+    replace_exact_provider_request_trace_slot(
         &trace_path,
         &encoded,
         "configured-inference provider request trace",
     )?;
     Ok(trace_path)
+}
+
+/// Encodes one compact trace once and replaces oversized bodies with a bounded diagnostic summary.
+/// 对单份紧凑追踪只编码一次，并将超大正文替换为有界诊断摘要。
+///
+/// # Parameters
+/// 参数
+/// `trace` is the already redacted request document captured at the transport boundary.
+/// `trace` 是已经在传输边界捕获并脱敏的请求文档。
+///
+/// # Returns
+/// 返回值
+/// Compact bytes bounded by the trace-slot capacity, or an explicit serialization error.
+/// 返回受追踪槽位容量约束的紧凑字节，或明确的序列化错误。
+fn encode_bounded_provider_request_trace(trace: &Value) -> Result<Vec<u8>, String> {
+    let encoded = serde_json::to_vec(trace)
+        .map_err(|error| format!("Provider request trace JSON serialization failed: {error}"))?;
+    let encoded_len = u64::try_from(encoded.len()).unwrap_or(u64::MAX);
+    if encoded_len <= PROVIDER_REQUEST_TRACE_MAX_BYTES {
+        return Ok(encoded);
+    }
+    let api_request = trace.get("api_request");
+    let summary = serde_json::json!({
+        "schema_version": trace.get("schema_version"),
+        "captured_at_unix_ms": trace.get("captured_at_unix_ms"),
+        "process_sequence": trace.get("process_sequence"),
+        "session_id": trace.get("session_id"),
+        "request": trace.get("request"),
+        "execution_id": trace.get("execution_id"),
+        "model_id": trace.get("model_id"),
+        "route": trace.get("route"),
+        "trace_omission": {
+            "reason": "encoded_trace_exceeded_bounded_slot_capacity",
+            "encoded_bytes": encoded_len,
+            "maximum_bytes": PROVIDER_REQUEST_TRACE_MAX_BYTES,
+        },
+        "api_request": {
+            "capture_point": api_request.and_then(|value| value.get("capture_point")),
+            "transport": api_request.and_then(|value| value.get("transport")),
+            "method": api_request.and_then(|value| value.get("method")),
+            "path": api_request.and_then(|value| value.get("path")),
+            "resolved_url": api_request.and_then(|value| value.get("resolved_url")),
+            "headers": api_request.and_then(|value| value.get("headers")),
+            "credential_values_redacted": true,
+            "body_omitted": true,
+        },
+    });
+    let summary_bytes = serde_json::to_vec(&summary).map_err(|error| {
+        format!("Bounded Provider request trace summary serialization failed: {error}")
+    })?;
+    if u64::try_from(summary_bytes.len()).unwrap_or(u64::MAX) > PROVIDER_REQUEST_TRACE_MAX_BYTES {
+        return Err(String::from(
+            "Bounded Provider request trace metadata exceeds its slot capacity.",
+        ));
+    }
+    Ok(summary_bytes)
+}
+
+/// Replaces one exact trace slot without enumerating its directory.
+/// 在不枚举目录的情况下替换一个精确追踪槽位。
+///
+/// # Parameters
+/// 参数
+/// `path` is the deterministic slot path, `encoded` contains bounded compact JSON, and
+/// `artifact_kind` labels storage diagnostics.
+/// `path` 是确定性槽位路径，`encoded` 包含有界紧凑 JSON，`artifact_kind` 用于标记存储诊断。
+///
+/// # Returns
+/// 返回值
+/// Success after exact replacement, or an explicit file-type or publication error.
+/// 精确替换后返回成功，或返回明确的文件类型与发布错误。
+fn replace_exact_provider_request_trace_slot(
+    path: &Path,
+    encoded: &[u8],
+    artifact_kind: &str,
+) -> Result<(), String> {
+    let _write_guard = PROVIDER_REQUEST_TRACE_WRITE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| String::from("Provider request trace write lock is poisoned."))?;
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            std::fs::remove_file(path).map_err(|error| {
+                format!(
+                    "Existing {artifact_kind} slot `{}` could not be removed: {error}",
+                    path.display()
+                )
+            })?;
+        }
+        Ok(_) => {
+            return Err(format!(
+                "Refusing to replace non-file {artifact_kind} slot: {}",
+                path.display()
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "Existing {artifact_kind} slot `{}` could not be inspected: {error}",
+                path.display()
+            ));
+        }
+    }
+    write_file_bytes_atomic(path, encoded, artifact_kind)
 }
 
 /// Loads one exact retry snapshot through its digest-bound runtime-state reference.
@@ -319,17 +635,11 @@ pub fn persist_configured_inference_provider_request_trace(
 /// The complete sidecar only when every strict identity and digest check succeeds.
 /// 仅当全部严格身份与摘要校验成功时返回完整 sidecar。
 pub fn load_execution_retry_snapshot(
-    data_root: &Path,
+    session_directory: &Path,
     session_id: SessionId,
     reference: &vulcan_workbench_model::ExecutionRetrySnapshotRef,
 ) -> Result<vulcan_workbench_model::ExecutionRetrySnapshot, String> {
-    let session_directory = find_segmented_session_directory_by_id(
-        data_root,
-        &session_id.to_string(),
-    )?
-    .ok_or_else(|| {
-        format!("Session `{session_id}` has no segmented directory for execution retry loading.")
-    })?;
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
     let snapshot = ExecutionRetrySnapshotStore::new(session_directory).read(reference)?;
     if snapshot.session_id != session_id.to_string() {
         return Err(String::from(
@@ -356,16 +666,12 @@ pub fn load_execution_retry_snapshot(
 /// Success when the session and sidecar are absent or the sidecar is removed.
 /// 会话或 sidecar 不存在，或 sidecar 已删除时返回成功。
 pub fn delete_execution_retry_snapshot(
-    data_root: &Path,
+    session_directory: &Path,
     session_id: SessionId,
-    snapshot_id: &str,
+    reference: &vulcan_workbench_model::ExecutionRetrySnapshotRef,
 ) -> Result<(), String> {
-    let Some(session_directory) =
-        find_segmented_session_directory_by_id(data_root, &session_id.to_string())?
-    else {
-        return Ok(());
-    };
-    ExecutionRetrySnapshotStore::new(session_directory).delete(snapshot_id)
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    ExecutionRetrySnapshotStore::new(session_directory).delete(reference)
 }
 
 /// Returns the exact rebuild reason when one session contains a rejected historical or damaged VMM attachment.
@@ -383,19 +689,14 @@ pub fn delete_execution_retry_snapshot(
 /// A user-recoverable reason only for classified historical or damaged VMM artifacts; clean or current state returns `None`.
 /// 仅对已分类的历史或损坏 VMM 工件返回用户可恢复原因；干净或当前状态返回 `None`。
 pub fn core_session_vmm_rebuild_reason(
-    data_root: &Path,
+    session_directory: &Path,
     session_id: SessionId,
 ) -> Result<Option<String>, String> {
     // session_id_text is the canonical owner used by both lookup and diagnostics.
     // session_id_text 是查找与诊断共同使用的规范所有者。
     let session_id_text = session_id.to_string();
-    // session_dir resolves only an already indexed active or archived session.
-    // session_dir 仅解析已建立索引的活动或归档会话。
-    let Some(session_dir) = find_segmented_session_directory_by_id(data_root, &session_id_text)?
-    else {
-        return Ok(None);
-    };
-    core_vmm_rebuild_reason(&session_dir, &session_id_text)
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    core_vmm_rebuild_reason(session_directory, &session_id_text)
 }
 
 /// Persists one candidate state through the strict Core VMM storage adapter.
@@ -415,20 +716,15 @@ pub fn core_session_vmm_rebuild_reason(
 /// Success only after the candidate is durably published or confirmed idempotent.
 /// 仅在候选状态持久发布或确认幂等后返回成功。
 pub fn persist_core_session_vmm_state(
-    data_root: &Path,
+    session_directory: &Path,
     session_id: SessionId,
     state: &vulcan_vmm::VmmSessionMemoryState,
 ) -> Result<(), String> {
     // session_id_text is shared by directory lookup, ownership validation, and the document.
     // session_id_text 由目录查找、所有权校验与文档共同使用。
     let session_id_text = session_id.to_string();
-    // session_dir must already exist because the controller never owns general session creation.
-    // session_dir 必须已经存在，因为控制器不拥有普通会话创建职责。
-    let session_dir = find_segmented_session_directory_by_id(data_root, &session_id_text)?
-        .ok_or_else(|| {
-            format!("Session `{session_id}` has no segmented directory for Core VMM persistence.")
-        })?;
-    write_core_vmm_controller_state(&session_dir, &session_id_text, state)
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    write_core_vmm_controller_state(session_directory, &session_id_text, state)
 }
 
 /// Deletes every VMM-owned root artifact for one exact persisted session.
@@ -446,19 +742,11 @@ pub fn persist_core_session_vmm_state(
 /// `true` when the session directory existed and its VMM artifacts are now absent.
 /// 会话目录存在且其 VMM 工件现已全部清除时返回 `true`。
 pub fn delete_core_session_vmm_state(
-    data_root: &Path,
+    session_directory: &Path,
     session_id: SessionId,
 ) -> Result<bool, String> {
-    // session_id_text is the canonical key for exact active-or-archived directory lookup.
-    // session_id_text 是精确查找活动或归档目录的规范键。
-    let session_id_text = session_id.to_string();
-    // session_dir is never created by deletion because absence is an idempotent outcome.
-    // session_dir 不会由删除操作创建，因为缺失属于幂等结果。
-    let Some(session_dir) = find_segmented_session_directory_by_id(data_root, &session_id_text)?
-    else {
-        return Ok(false);
-    };
-    reset_vmm_state_for_history_rewrite(&session_dir)?;
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    reset_vmm_state_for_history_rewrite(session_directory)?;
     Ok(true)
 }
 
@@ -479,22 +767,18 @@ pub fn delete_core_session_vmm_state(
 /// `true` only after a classified damaged attachment is replaced without changing the session transcript.
 /// 仅在已分类损坏附件被替换且会话转录未改变后返回 `true`。
 pub fn rebuild_damaged_core_session_vmm_state(
-    data_root: &Path,
+    session_directory: &Path,
     session_id: SessionId,
     updated_at: &str,
 ) -> Result<bool, String> {
     // session_id_text is the canonical key shared by classification, reset, and the new document.
     // session_id_text 是分类、重置与新文档共同使用的规范键。
     let session_id_text = session_id.to_string();
-    // session_dir resolves only an existing active or archived conversation.
-    // session_dir 仅解析一个已存在的活动或归档会话。
-    let Some(session_dir) = find_segmented_session_directory_by_id(data_root, &session_id_text)?
-    else {
-        return Ok(false);
-    };
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
     // rebuild_reason gates destructive VMM reset to a storage-classified damaged attachment.
     // rebuild_reason 将破坏性 VMM 重置限制为存储层已分类的损坏附件。
-    let Some(_rebuild_reason) = core_vmm_rebuild_reason(&session_dir, &session_id_text)? else {
+    let Some(_rebuild_reason) = core_vmm_rebuild_reason(session_directory, &session_id_text)?
+    else {
         return Err(format!(
             "Session `{session_id}` VMM attachment is healthy or absent and cannot be rebuilt."
         ));
@@ -503,8 +787,8 @@ pub fn rebuild_damaged_core_session_vmm_state(
     // replacement_state 不包含任何召回记忆，并且仅使用当前严格文档结构。
     let replacement_state =
         vulcan_vmm::VmmSessionMemoryState::new(session_id_text.clone(), updated_at)?;
-    reset_vmm_state_for_history_rewrite(&session_dir)?;
-    write_core_vmm_controller_state(&session_dir, &session_id_text, &replacement_state)?;
+    reset_vmm_state_for_history_rewrite(session_directory)?;
+    write_core_vmm_controller_state(session_directory, &session_id_text, &replacement_state)?;
     Ok(true)
 }
 
@@ -582,9 +866,7 @@ pub use loading::*;
 pub use models::*;
 pub use runtime_logs::*;
 
-use boundary_store::{
-    find_existing_segmented_context_session_dir, session_boundary_event_from_segment_line,
-};
+use boundary_store::session_boundary_event_from_segment_line;
 use loading::sanitize_loaded_runtime_state_for_fresh_process;
 use queries::*;
 use serialization::*;

@@ -27,7 +27,8 @@ use vulcan_subagent_core::{
     SUBAGENT_TASK_ID_KEY, SUBAGENT_TASK_KIND, is_readable_subagent_task_kind,
 };
 use vulcan_task_session::{
-    SegmentedTaskSessionStore, TaskSessionMetadata, TaskSessionStatus, TaskSessionStore,
+    SegmentedTaskSessionStore, TaskSessionMetadata, TaskSessionMirrorSummary, TaskSessionStatus,
+    TaskSessionStore,
 };
 
 use store::parent_session_id_from_task_session_parent;

@@ -3,8 +3,7 @@ use super::*;
 /// Appends a pre-prompt turn-context anchor to the segmented session stream when available.
 /// 可用时在分段会话流中追加用户提示词前的轮次上下文锚点。
 pub fn snapshot_segmented_session_context_before_user_prompt(
-    data_root: &std::path::Path,
-    project_id: &str,
+    session_directory: &std::path::Path,
     session_id: SessionId,
     runtime_state: &SessionRuntimeStateEntry,
 ) -> Result<(), String> {
@@ -12,13 +11,9 @@ pub fn snapshot_segmented_session_context_before_user_prompt(
     if state_document.current_context.is_null() {
         return Ok(());
     }
-    let Some(session_dir) =
-        find_existing_segmented_context_session_dir(data_root, project_id, session_id)?
-    else {
-        return Ok(());
-    };
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
     append_segmented_session_events(
-        &session_dir,
+        session_directory,
         &[SegmentedSessionEventInput {
             timestamp: current_unix_millis_text(),
             kind: SegmentedSessionEventKind::TurnContext,
@@ -38,46 +33,22 @@ pub fn snapshot_segmented_session_context_before_user_prompt(
 /// 由单个工作区分段会话目录支撑的 会话边界存储适配器。
 #[derive(Debug, Clone)]
 pub struct WorkspaceSegmentedSessionBoundaryStore {
-    /// Vulcan code data root.
-    /// Vulcan Code 数据根目录。
-    data_root: std::path::PathBuf,
-    /// Owning project identifier and project tag.
-    /// 所属项目标识与项目标签。
-    project_id: String,
+    /// Exact pre-resolved segmented session directory.
+    /// 预先解析的精确分段会话目录。
+    session_directory: std::path::PathBuf,
     /// Owning session identifier.
     /// 所属会话标识。
     session_id: SessionId,
-    /// Human-readable session title used when the directory must be created.
-    /// 需要创建目录时使用的人类可读会话标题。
-    session_title: String,
 }
 
 impl WorkspaceSegmentedSessionBoundaryStore {
     /// Creates one session boundary store adapter for a workspace segmented session.
     /// 为工作区分段会话创建一个 会话边界存储适配器。
-    pub fn new(
-        data_root: impl Into<std::path::PathBuf>,
-        project_id: impl Into<String>,
-        session_id: SessionId,
-        session_title: impl Into<String>,
-    ) -> Self {
+    pub fn new(session_directory: impl Into<std::path::PathBuf>, session_id: SessionId) -> Self {
         Self {
-            data_root: data_root.into(),
-            project_id: project_id.into(),
+            session_directory: session_directory.into(),
             session_id,
-            session_title: session_title.into(),
         }
-    }
-
-    /// Resolves or creates the backing segmented session directory.
-    /// 解析或创建背后的分段会话目录。
-    fn ensure_session_dir(&self) -> Result<std::path::PathBuf, String> {
-        ensure_session_boundary_dir(
-            &self.data_root,
-            &self.project_id,
-            self.session_id,
-            &self.session_title,
-        )
     }
 }
 
@@ -91,8 +62,11 @@ impl SessionBoundaryStore for WorkspaceSegmentedSessionBoundaryStore {
                 write.thread_id, self.session_id
             ));
         }
-        let session_dir = self.ensure_session_dir()?;
-        append_segmented_boundary_events(&session_dir, std::slice::from_ref(&write.event))?;
+        validate_exact_segmented_session_directory_owner(&self.session_directory, self.session_id)?;
+        append_segmented_boundary_events(
+            &self.session_directory,
+            std::slice::from_ref(&write.event),
+        )?;
         Ok(())
     }
 
@@ -103,8 +77,7 @@ impl SessionBoundaryStore for WorkspaceSegmentedSessionBoundaryStore {
             return Ok(Vec::new());
         }
         load_segmented_session_boundary_events(
-            &self.data_root,
-            &self.project_id,
+            &self.session_directory,
             self.session_id,
             None,
             usize::MAX,
@@ -122,8 +95,8 @@ impl SessionBoundaryStateStore for WorkspaceSegmentedSessionBoundaryStore {
                 thread_id, self.session_id
             ));
         }
-        let session_dir = self.ensure_session_dir()?;
-        replace_session_boundary_state(&session_dir, state)
+        validate_exact_segmented_session_directory_owner(&self.session_directory, self.session_id)?;
+        replace_session_boundary_state(&self.session_directory, state)
     }
 
     /// Loads the session lifecycle runner state from state.json.
@@ -132,83 +105,36 @@ impl SessionBoundaryStateStore for WorkspaceSegmentedSessionBoundaryStore {
         if thread_id != SessionNodeId::from(self.session_id) {
             return Ok(None);
         }
-        let session_id_text = self.session_id.to_string();
-        let Some(session_dir) = find_segmented_session_directory(
-            &self.data_root,
-            false,
-            &self.project_id,
-            &session_id_text,
-        )?
-        else {
-            return Ok(None);
-        };
-        load_session_boundary_state(&session_dir)
+        validate_exact_segmented_session_directory_owner(&self.session_directory, self.session_id)?;
+        load_session_boundary_state(&self.session_directory)
     }
 }
 
 /// Appends accepted session boundary events into the segmented session stream.
 /// 将已接受的 会话边界事件追加到分段会话流。
 pub fn append_segmented_session_boundary_events(
-    data_root: &std::path::Path,
-    project_id: &str,
+    session_directory: &std::path::Path,
     session_id: SessionId,
-    session_title: &str,
     events: &[SessionBoundaryEvent],
 ) -> Result<(), String> {
     if events.is_empty() {
         return Ok(());
     }
-    let session_dir =
-        ensure_session_boundary_dir(data_root, project_id, session_id, session_title)?;
-    append_segmented_boundary_events(&session_dir, events)?;
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    append_segmented_boundary_events(session_directory, events)?;
     Ok(())
-}
-
-/// Resolves or creates the segmented session directory used by session boundary storage.
-/// 解析或创建 会话边界存储使用的分段会话目录。
-pub(super) fn ensure_session_boundary_dir(
-    data_root: &std::path::Path,
-    project_id: &str,
-    session_id: SessionId,
-    session_title: &str,
-) -> Result<std::path::PathBuf, String> {
-    let session_id_text = session_id.to_string();
-    let now = current_unix_millis_text();
-    match find_segmented_session_directory(data_root, false, project_id, &session_id_text)? {
-        Some(session_dir) => Ok(session_dir),
-        None => create_segmented_session_in_location(
-            data_root,
-            false,
-            SegmentedSessionCreateRequest {
-                session_id: session_id_text,
-                project_tag: project_id.to_string(),
-                created_date: session_directory_date_from_unix_millis_text(&now)?,
-                created_at: now,
-                project_id: Some(project_id.to_string()),
-                title: Some(session_title.to_string()),
-                title_source: Some(String::from("session_boundary")),
-                segment_policy: SegmentPolicy::default(),
-            },
-        ),
-    }
 }
 
 /// Loads session boundary events from one segmented session window.
 /// 从一个分段会话窗口读取 会话边界事件。
 pub fn load_segmented_session_boundary_events(
-    data_root: &std::path::Path,
-    project_id: &str,
+    session_directory: &std::path::Path,
     session_id: SessionId,
     before_seq: Option<u64>,
     limit: usize,
 ) -> Result<Vec<SessionBoundaryEvent>, String> {
-    let session_id_text = session_id.to_string();
-    let Some(session_dir) =
-        find_segmented_session_directory(data_root, false, project_id, &session_id_text)?
-    else {
-        return Ok(Vec::new());
-    };
-    read_segmented_session_event_window(&session_dir, before_seq, limit)?
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    read_segmented_session_event_window(session_directory, before_seq, limit)?
         .iter()
         .filter(|line| line.kind == SegmentedSessionEventKind::SessionBoundary)
         .map(session_boundary_event_from_segment_line)
@@ -247,19 +173,4 @@ pub(super) fn session_boundary_event_from_segment_line(
         timestamp_ms,
         payload: payload.get("payload").cloned().unwrap_or(Value::Null),
     })
-}
-
-/// Finds the active or archived segmented session directory used by context persistence.
-/// 查找上下文持久化使用的活动或归档分段会话目录。
-pub(super) fn find_existing_segmented_context_session_dir(
-    data_root: &std::path::Path,
-    project_id: &str,
-    session_id: SessionId,
-) -> Result<Option<std::path::PathBuf>, String> {
-    match find_segmented_session_directory(data_root, false, project_id, &session_id.to_string())? {
-        Some(session_dir) => Ok(Some(session_dir)),
-        None => {
-            find_segmented_session_directory(data_root, true, project_id, &session_id.to_string())
-        }
-    }
 }

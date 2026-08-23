@@ -40,6 +40,9 @@ pub(crate) async fn service_rename_conversation(
     // controller_runtime is returned only after the selected session is still proven visible.
     // controller_runtime 仅在所选会话仍被证明可见后返回。
     let controller_runtime = controller_runtime_for_visible_session_from_state(&state, session_id)?;
+    // sessionPersistGuard serializes exact metadata and index title updates with same-session writers.
+    // sessionPersistGuard 将精确元数据及索引标题更新与同会话写入者串行化。
+    let _session_persist_guard = webui_session_persist_lock(session_id).lock_owned().await;
     vulcan_workspace_store::workspace_store::rename_single_session(
         controller_runtime,
         session_id,
@@ -88,6 +91,9 @@ pub(crate) async fn service_archive_conversation(
     // persist_guard remains held until the authoritative lifecycle mutation finishes.
     // persist_guard 持有至权威生命周期变更完成。
     let persist_guard = persist_lock.lock().await;
+    // sessionPersistGuards bridge the global lifecycle gate to the session-keyed hot writer channel.
+    // sessionPersistGuards 将全局生命周期闸门与会话键热写入通道衔接起来。
+    let _session_persist_guards = lock_webui_session_persist_channels([session_id]).await;
     // vmm_lifecycle_fence blocks both stale references and replacement controllers until refresh commits.
     // vmm_lifecycle_fence 在刷新提交前同时阻止旧引用与替代控制器。
     let vmm_controller_registry = state
@@ -207,6 +213,10 @@ async fn apply_archived_conversation_batch(
     }
     let persist_lock = webui_workspace_persist_lock();
     let persist_guard = persist_lock.lock().await;
+    // sessionPersistGuards exclude all exact child writers in deterministic shard order.
+    // sessionPersistGuards 按确定性分片顺序排除全部精确子会话写入者。
+    let _session_persist_guards =
+        lock_webui_session_persist_channels(session_ids.iter().copied()).await;
     let vmm_controller_registry = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?
@@ -456,20 +466,12 @@ pub(crate) async fn service_mark_conversation_read(
     };
 
     if runtime_state_changed {
-        // authoritativeSnapshot is loaded after the shared write gate so marking a conversation read cannot overwrite a newer Stop or Continue terminal revision.
-        // authoritativeSnapshot 在取得共享写入闸门后加载，使会话已读标记无法覆盖更新的 Stop 或 Continue 终态修订。
-        let (_persist_guard, authoritative_snapshot) =
-            lock_latest_retained_workspace_session_persistence_snapshot(&state, session_id).await?;
-        // runtimeStateUpdate carries the newest retained session revision, including the unread mutation committed above.
-        // runtimeStateUpdate 携带最新保留会话修订，并包含上方已提交的未读状态变更。
-        let runtime_state_update = authoritative_snapshot
-            .session_runtime_state
-            .get(&session_id)
-            .ok_or_else(|| format!("会话 `{session_id}` 的运行态在已读持久化前消失。"))?;
-        vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
-            controller_runtime,
+        // The synchronous metadata writer captures the newest unread state without cloning workspace history.
+        // 同步元数据写入器捕获最新未读状态，且不克隆工作区历史。
+        persist_latest_retained_session_runtime_state_update(
+            &state,
+            &controller_runtime,
             session_id,
-            runtime_state_update,
         )
         .await?;
     }
@@ -498,6 +500,9 @@ pub(crate) async fn service_select_conversation(
         // persist_guard 将本次权威检查与精确索引删除同执行写入串行化。
         let persist_lock = webui_workspace_persist_lock();
         let _persist_guard = persist_lock.lock().await;
+        // sessionPersistGuards excludes a same-session writer while the stale exact index is removed.
+        // sessionPersistGuards 在删除过期精确索引期间排除同会话写入者。
+        let _session_persist_guards = lock_webui_session_persist_channels([session_id]).await;
         // cleanup_result is true only when both lifecycle directories are absent and the exact stale index row is removed.
         // cleanup_result 仅在两个生命周期目录均缺失且精确陈旧索引行已删除时为 true。
         vulcan_workspace_store::workspace_store::cleanup_missing_session_index(

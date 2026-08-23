@@ -2,7 +2,10 @@
 //! 在 WebUI、持久化与运行时层之间复用的共享会话运行时状态与排队提示词模型。
 
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 use vulcan_context::{
     ContextCompactionWindowNodeId, ContextWindowPolicy, SessionConversationState,
 };

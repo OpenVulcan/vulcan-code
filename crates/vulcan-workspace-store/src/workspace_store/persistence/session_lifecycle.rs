@@ -45,8 +45,45 @@ pub async fn persist_single_session_addon_state_update(
     let locator = segmented_session_locator_from_summary(session, project_id, archived);
     let session_dir =
         ensure_segmented_session_directory_for_locator(&controller, &session_id_text, &locator)?;
-    let mut merged_state = read_session_addon_state(&session_dir)?
-        .unwrap_or_else(|| SessionAddonState::new(session.id));
+    persist_single_session_addon_state_update_in_directory(session_dir, session.id, addon_state)
+        .await
+}
+
+/// Persists one addon document through an already-resolved exact session directory.
+/// 通过已经解析的精确会话目录持久化单个附属状态文档。
+///
+/// # Parameters
+/// 参数
+/// `session_directory` is the authoritative absolute directory resolved from the retained locator.
+/// `session_directory` 是从保留定位信息解析出的权威绝对目录。
+/// `session_id` is the exact owner required by the addon document.
+/// `session_id` 是附属状态文档要求的精确所有者。
+/// `addon_state` contains only namespaces changed by the caller.
+/// `addon_state` 仅包含调用方修改的命名空间。
+///
+/// # Returns
+/// 返回值
+/// The merged addon document written to the exact directory without project or session discovery.
+/// 返回不进行项目或会话发现、直接写入精确目录的合并附属状态文档。
+pub async fn persist_single_session_addon_state_update_in_directory(
+    session_directory: PathBuf,
+    session_id: SessionId,
+    addon_state: &SessionAddonState,
+) -> Result<SessionAddonState, String> {
+    if addon_state.session_id != session_id {
+        return Err(format!(
+            "单会话附属状态保存失败：附属状态会话 `{}` 与目标会话 `{session_id}` 不一致",
+            addon_state.session_id
+        ));
+    }
+    if !session_directory.is_dir() {
+        return Err(format!(
+            "单会话附属状态保存失败：精确会话目录不存在：{}",
+            session_directory.display()
+        ));
+    }
+    let mut merged_state = read_session_addon_state(&session_directory)?
+        .unwrap_or_else(|| SessionAddonState::new(session_id));
     for (namespace, value) in &addon_state.namespaces {
         let _ = merged_state.set_json_namespace(
             *namespace,
@@ -54,7 +91,7 @@ pub async fn persist_single_session_addon_state_update(
             value.updated_at.clone(),
         );
     }
-    write_session_addon_state(&session_dir, &merged_state)?;
+    write_session_addon_state(&session_directory, &merged_state)?;
     Ok(merged_state)
 }
 
@@ -399,10 +436,18 @@ pub async fn remove_project_after_archiving_sessions(
     let archived_entries =
         query_session_index_locators_for_project(&controller, project_id, true).await?;
     for entry in archived_entries {
+        let created_date = session_directory_date_from_unix_millis_text(&entry.locator.created_at)?;
+        let session_directory = segmented_session_directory(
+            &controller.data_root,
+            true,
+            &created_date,
+            &entry.session_id.to_string(),
+            &entry.locator.project_tag,
+        );
         // removed is intentionally ignored because an already-absent VMM document is an idempotent deletion.
         // removed 被刻意忽略，因为已经缺失的 VMM 文档属于幂等删除。
         let _removed = crate::workspace_store::delete_core_session_vmm_state(
-            &controller.data_root,
+            &session_directory,
             entry.session_id,
         )?;
     }

@@ -59,6 +59,17 @@ fn provider_request_trace_resolves_segmented_task_session_owner() {
     // task_directory 镜像生产环境 task/<uuid> 分段布局与父元数据索引。
     let task_directory =
         write_legacy_task_session_fixture(&parent_directory, &task_session_id.to_string());
+    // compatible_root creates the production main-compatible metadata owned by current TaskSession directories.
+    // compatible_root 创建当前 TaskSession 目录持有的生产主会话兼容元数据。
+    let compatible_root = test_root("provider_request_trace_compatible_task_directory");
+    let mut compatible_request = test_session_request(SegmentPolicy::default());
+    compatible_request.session_id = task_session_id.to_string();
+    let compatible_directory =
+        create_segmented_session_in_location(&compatible_root, false, compatible_request)
+            .expect("create compatible provider trace task directory");
+    fs::remove_dir_all(&task_directory).expect("remove legacy provider trace task body");
+    fs::rename(&compatible_directory, &task_directory)
+        .expect("publish compatible provider trace task directory");
     // trace is the minimal serializable diagnostic payload required by the persistence boundary.
     // trace 是持久化边界所需的最小可序列化诊断载荷。
     let trace = json!({
@@ -69,9 +80,9 @@ fn provider_request_trace_resolves_segmented_task_session_owner() {
     // trace_path must stay inside the child TaskSession temp directory.
     // trace_path 必须保留在子 TaskSession 的临时目录内。
     let trace_path = crate::workspace_store::persist_provider_request_trace(
-        &root,
+        &task_directory,
         task_session_id,
-        "task-trace-000001",
+        0,
         &trace,
     )
     .expect("persist TaskSession provider request trace");
@@ -81,7 +92,7 @@ fn provider_request_trace_resolves_segmented_task_session_owner() {
         task_directory
             .join("temp")
             .join("provider-request-trace")
-            .join("task-trace-000001.json")
+            .join("slot-00.json")
     );
     assert_eq!(
         serde_json::from_slice::<Value>(
@@ -92,6 +103,7 @@ fn provider_request_trace_resolves_segmented_task_session_owner() {
     );
 
     fs::remove_dir_all(root).expect("remove TaskSession provider trace test root");
+    fs::remove_dir_all(compatible_root).expect("remove compatible provider trace fixture root");
 }
 
 /// Verifies a child send-message display row survives through the durable TaskSession transcript path.
@@ -136,8 +148,8 @@ fn task_session_transcript_persistence_resolves_indexed_child_directory() {
         "请优先检查未提交差异",
     );
 
-    crate::workspace_store::persistence::persist_single_session_transcript_messages_in_data_root(
-        &root,
+    crate::workspace_store::persistence::persist_single_session_transcript_messages_in_directory(
+        &task_directory,
         task_session_id,
         std::slice::from_ref(&message),
     )
@@ -185,7 +197,7 @@ fn delete_core_session_vmm_state_clears_only_vmm_artifacts() {
     fs::write(&obsolete_marker, b"obsolete").expect("write obsolete marker");
 
     assert!(
-        crate::workspace_store::delete_core_session_vmm_state(&root, session_id)
+        crate::workspace_store::delete_core_session_vmm_state(&session_dir, session_id)
             .expect("delete exact Core VMM state")
     );
     assert!(!vmm_state_path(&session_dir).exists());
@@ -196,14 +208,17 @@ fn delete_core_session_vmm_state_clears_only_vmm_artifacts() {
     assert!(session_dir.join(SEGMENTED_STATE_FILE).exists());
     assert!(session_dir.join("s001.jsonl").exists());
     assert!(
-        crate::workspace_store::delete_core_session_vmm_state(&root, session_id)
+        crate::workspace_store::delete_core_session_vmm_state(&session_dir, session_id)
             .expect("repeat idempotent Core VMM deletion")
     );
     // absent_rebuild_error proves clean absence cannot be mistaken for attachment damage.
     // absent_rebuild_error 证明干净缺失不能被误判为附件损坏。
-    let absent_rebuild_error =
-        crate::workspace_store::rebuild_damaged_core_session_vmm_state(&root, session_id, "2")
-            .expect_err("absent VMM attachment must not be rebuilt");
+    let absent_rebuild_error = crate::workspace_store::rebuild_damaged_core_session_vmm_state(
+        &session_dir,
+        session_id,
+        "2",
+    )
+    .expect_err("absent VMM attachment must not be rebuilt");
     assert!(absent_rebuild_error.contains("healthy or absent"));
 }
 
@@ -249,14 +264,19 @@ fn rebuild_damaged_core_session_vmm_state_preserves_conversation() {
     fs::write(vmm_state_path(&session_dir), malformed_bytes).expect("write damaged VMM attachment");
 
     assert!(
-        crate::workspace_store::rebuild_damaged_core_session_vmm_state(&root, session_id, "2")
-            .expect("rebuild damaged VMM attachment")
+        crate::workspace_store::rebuild_damaged_core_session_vmm_state(
+            &session_dir,
+            session_id,
+            "2",
+        )
+        .expect("rebuild damaged VMM attachment")
     );
     // rebuilt_state is the clean current-format attachment loaded through the strict adapter.
     // rebuilt_state 是通过严格适配器加载的干净当前格式附件。
-    let rebuilt_state = crate::workspace_store::load_core_session_vmm_state(&root, session_id)
-        .expect("load rebuilt VMM attachment")
-        .expect("rebuilt VMM attachment must exist");
+    let rebuilt_state =
+        crate::workspace_store::load_core_session_vmm_state(&session_dir, session_id)
+            .expect("load rebuilt VMM attachment")
+            .expect("rebuilt VMM attachment must exist");
     // expected_state contains no recalled memory from the discarded damaged attachment.
     // expected_state 不包含来自已丢弃损坏附件的任何召回记忆。
     let expected_state = vulcan_vmm::VmmSessionMemoryState::new(session_id.to_string(), "2")
@@ -276,15 +296,18 @@ fn rebuild_damaged_core_session_vmm_state_preserves_conversation() {
         transcript_before
     );
     assert_eq!(
-        crate::workspace_store::core_session_vmm_rebuild_reason(&root, session_id)
+        crate::workspace_store::core_session_vmm_rebuild_reason(&session_dir, session_id)
             .expect("inspect rebuilt VMM attachment"),
         None
     );
     // healthy_rebuild_error proves a healthy attachment cannot enter the destructive recovery path.
     // healthy_rebuild_error 证明健康附件不能进入破坏性恢复路径。
-    let healthy_rebuild_error =
-        crate::workspace_store::rebuild_damaged_core_session_vmm_state(&root, session_id, "3")
-            .expect_err("healthy VMM attachment must not be rebuilt");
+    let healthy_rebuild_error = crate::workspace_store::rebuild_damaged_core_session_vmm_state(
+        &session_dir,
+        session_id,
+        "3",
+    )
+    .expect_err("healthy VMM attachment must not be rebuilt");
     assert!(healthy_rebuild_error.contains("healthy or absent"));
 
     // next_state represents the first new VMM command committed after recovery.
@@ -300,12 +323,12 @@ fn rebuild_damaged_core_session_vmm_state_preserves_conversation() {
             "4",
         )
         .expect("record post-recovery VMM command");
-    crate::workspace_store::persist_core_session_vmm_state(&root, session_id, &next_state)
+    crate::workspace_store::persist_core_session_vmm_state(&session_dir, session_id, &next_state)
         .expect("persist post-recovery VMM command");
     // persisted_next_state proves later VMM state advances from the rebuilt document.
     // persisted_next_state 证明后续 VMM 状态从重建文档继续推进。
     let persisted_next_state =
-        crate::workspace_store::load_core_session_vmm_state(&root, session_id)
+        crate::workspace_store::load_core_session_vmm_state(&session_dir, session_id)
             .expect("reload post-recovery VMM state")
             .expect("post-recovery VMM state must exist");
     assert_eq!(persisted_next_state, next_state);

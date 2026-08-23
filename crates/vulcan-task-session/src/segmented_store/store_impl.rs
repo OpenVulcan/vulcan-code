@@ -9,64 +9,21 @@ impl SegmentedTaskSessionStore {
         }
     }
 
-    /// Lists direct child task-session identifiers by scanning task metadata only.
-    /// 仅通过扫描子任务元数据列出直接子任务会话标识符。
+    /// Lists direct child task-session identifiers from the single root mirror index.
+    /// 从单个根镜像索引列出直接子任务会话标识符。
     pub fn list_child_task_session_ids(
         &self,
         parent: ParentSessionRef,
     ) -> Result<Vec<TaskSessionId>, SessionStoreError> {
         let mut task_ids = self
-            .list_child_task_sessions(parent)?
+            .load_task_session_mirror_summaries()?
             .into_iter()
-            .map(|metadata| metadata.task_session_id)
+            .filter(|mirror| mirror.parent == parent)
+            .map(|mirror| mirror.task_session_id)
             .collect::<Vec<_>>();
         task_ids.sort();
         task_ids.dedup();
         Ok(task_ids)
-    }
-
-    /// Lists direct child task-session metadata with one metadata-only directory scan.
-    /// 通过一次仅元数据目录扫描列出直接子任务会话元数据。
-    pub fn list_child_task_sessions(
-        &self,
-        parent: ParentSessionRef,
-    ) -> Result<Vec<TaskSessionMetadata>, SessionStoreError> {
-        self.load_task_session_metadata_for_parent(parent)
-    }
-
-    /// Loads every task-session metadata record with one metadata-only directory scan.
-    /// 通过一次仅元数据目录扫描加载所有子任务会话元数据记录。
-    pub fn load_all_task_session_metadata(
-        &self,
-    ) -> Result<Vec<TaskSessionMetadata>, SessionStoreError> {
-        let mut metadata = self
-            .load_all_task_documents()?
-            .into_iter()
-            .map(|(_, document)| document.task_session)
-            .collect::<Vec<_>>();
-        metadata.sort_by_key(|metadata| metadata.task_session_id);
-        metadata.dedup_by_key(|metadata| metadata.task_session_id);
-        Ok(metadata)
-    }
-
-    /// Loads all task-session metadata grouped by direct parent with one metadata-only scan.
-    /// 通过一次仅元数据扫描加载按直接父级分组的全部子任务会话元数据。
-    pub fn load_task_session_metadata_by_parent(
-        &self,
-    ) -> Result<BTreeMap<ParentSessionRef, Vec<TaskSessionMetadata>>, SessionStoreError> {
-        let mut metadata_by_parent: BTreeMap<ParentSessionRef, Vec<TaskSessionMetadata>> =
-            BTreeMap::new();
-        for (_, document) in self.load_all_task_documents()? {
-            metadata_by_parent
-                .entry(document.task_session.parent.clone())
-                .or_default()
-                .push(document.task_session);
-        }
-        for metadata in metadata_by_parent.values_mut() {
-            metadata.sort_by_key(|metadata| metadata.task_session_id);
-            metadata.dedup_by_key(|metadata| metadata.task_session_id);
-        }
-        Ok(metadata_by_parent)
     }
 
     /// Loads root task mirror summaries without scanning child task directories.
@@ -128,52 +85,33 @@ impl SegmentedTaskSessionStore {
         )
     }
 
-    /// Loads direct child task-session metadata for one parent with one metadata-only scan.
-    /// 通过一次仅元数据扫描加载某个父级的直属子任务会话元数据。
-    pub fn load_task_session_metadata_for_parent(
-        &self,
-        parent: ParentSessionRef,
-    ) -> Result<Vec<TaskSessionMetadata>, SessionStoreError> {
-        let mut metadata = self
-            .load_all_task_documents()?
-            .into_iter()
-            .map(|(_, document)| document.task_session)
-            .filter(|metadata| metadata.parent == parent)
-            .collect::<Vec<_>>();
-        metadata.sort_by_key(|metadata| metadata.task_session_id);
-        metadata.dedup_by_key(|metadata| metadata.task_session_id);
-        Ok(metadata)
-    }
-
-    /// Loads the newest task-local event payload by reverse-scanning segmented JSONL files.
-    /// 通过反向扫描分段 JSONL 文件加载最新的子任务本地事件载荷。
+    /// Loads the newest task-local event payload from the bounded active-segment tail.
+    /// 从有界活动分段尾部加载最新的子任务本地事件载荷。
     pub fn load_latest_event_payload(
         &self,
         task_session_id: TaskSessionId,
     ) -> Result<Option<Value>, SessionStoreError> {
         let task_dir = self.indexed_task_dir(task_session_id)?;
-        let (_, lines) = read_repaired_task_segment_lines(&task_dir)?;
-        for line in lines.into_iter().rev() {
-            let Some(value) = line.payload.get("session_event").cloned() else {
-                continue;
-            };
-            let record =
-                serde_json::from_value::<SessionEventRecord>(value).map_err(to_store_error)?;
-            if !record.payload.is_null() {
-                return Ok(Some(record.payload));
-            }
-        }
-        Ok(None)
+        let metadata = read_task_main_segment_metadata(&task_dir)?;
+        read_latest_session_event_payload_from_active_segment(&task_dir, &metadata)?
+            .map(serde_json::from_value::<SessionEventRecord>)
+            .transpose()
+            .map_err(to_store_error)
+            .map(|record| {
+                record
+                    .map(|record| record.payload)
+                    .filter(|payload| !payload.is_null())
+            })
     }
 
-    /// Loads task segment summaries after repairing the task segment files.
-    /// 修复子任务分段文件后加载分段摘要。
+    /// Loads task segment summaries from the exact task metadata index only.
+    /// 仅从精确任务元数据索引加载分段摘要。
     pub fn load_task_segment_summaries(
         &self,
         task_session_id: TaskSessionId,
     ) -> Result<Vec<SessionSegmentSummary>, SessionStoreError> {
         let task_dir = self.indexed_task_dir(task_session_id)?;
-        let (metadata, _) = read_repaired_task_segment_lines(&task_dir)?;
+        let metadata = read_task_main_segment_metadata(&task_dir)?;
         Ok(metadata
             .segments
             .into_iter()
@@ -225,53 +163,6 @@ impl SegmentedTaskSessionStore {
             return Ok(Some(direct_task_dir));
         }
         Ok(None)
-    }
-
-    /// Loads every task metadata document under this root session.
-    /// 加载该根会话下的全部子任务元数据文档。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Canonically published task directories paired with their metadata documents.
-    /// 返回规范发布的子任务目录及其元数据文档。
-    pub(super) fn load_all_task_documents(
-        &self,
-    ) -> Result<Vec<(PathBuf, SegmentedTaskMetadataDocument)>, SessionStoreError> {
-        let mut documents = Vec::new();
-        let task_root = self.task_root_dir();
-        // entries uses `read_dir` as the authoritative existence and readability check.
-        // entries 使用 `read_dir` 作为存在性与可读性的权威检查。
-        let entries = match fs::read_dir(&task_root) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(documents),
-            Err(error) => {
-                return Err(SessionStoreError::new(format!(
-                    "Failed to read task directory root `{}`: {error}",
-                    task_root.display()
-                )));
-            }
-        };
-        for entry in entries {
-            let entry = entry.map_err(to_store_error)?;
-            let task_dir = entry.path();
-            if !task_dir.is_dir() {
-                continue;
-            }
-            let metadata_path = task_metadata_path(&task_dir);
-            if let Some(document) = read_task_metadata_document(&metadata_path)? {
-                // expected_directory_name derives the only published path identity from authoritative metadata.
-                // expected_directory_name 从权威元数据派生唯一已发布路径身份。
-                let expected_directory_name =
-                    sanitize_file_component(&document.task_session.task_session_id.to_string());
-                // Non-canonical siblings include unpublished staging layouts and are never discoverable tasks.
-                // 非规范同级目录包括尚未发布的暂存布局，绝不能被发现为子任务。
-                if entry.file_name() != std::ffi::OsStr::new(&expected_directory_name) {
-                    continue;
-                }
-                documents.push((task_dir, document));
-            }
-        }
-        Ok(documents)
     }
 
     /// Resolves the directory path for a newly created task session.
@@ -357,15 +248,12 @@ impl SegmentedTaskSessionStore {
         let task_dir = self.indexed_task_dir(task_session_id)?;
         let main_metadata_path = task_main_metadata_path(&task_dir);
         let mut main_metadata = read_required_task_main_metadata_document(&main_metadata_path)?;
-        repair_task_segment_jsonl_files_if_needed_locked(&task_dir, &mut main_metadata)?;
-        main_metadata.next_global_seq = main_metadata.next_global_seq.max(
-            read_segment_lines_with_owned_append_lock(&task_dir, &main_metadata.segments)?
-                .into_iter()
-                .map(|line| line.seq)
-                .max()
-                .map(|seq| seq.saturating_add(1))
-                .unwrap_or(0),
-        );
+        validate_segmented_append_boundary_locked(
+            &task_dir,
+            &main_metadata.active_segment,
+            &main_metadata.segments,
+            main_metadata.next_global_seq,
+        )?;
         let mut payload = payload;
         backfill_task_segment_payload_sequence(&mut payload, main_metadata.next_global_seq);
         let segment_policy = main_metadata.segment_policy.clone();

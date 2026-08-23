@@ -1,6 +1,6 @@
 import React from "react";
 import type { ChatAreaProps } from "@/components/conversation/chat-area/types";
-import type { UserPromptEditDraftSummary } from "@/types";
+import type { ConversationMessage, UserPromptEditDraftSummary } from "@/types";
 
 // UseUserPromptEditStateOptions carries backend handlers for prompt replay editing.
 // UseUserPromptEditStateOptions 承载提示词重放编辑所需的后端处理器。
@@ -27,7 +27,7 @@ export interface UserPromptEditState {
   saving: boolean;
   // Handler that opens the edit dialog for one user message.
   // 为单条用户消息打开编辑弹窗的处理器。
-  open: (conversationId: string, messageId: string) => Promise<void>;
+  open: (message: ConversationMessage, visiblePrompt: string) => Promise<void>;
   // Handler that closes the edit dialog.
   // 关闭编辑弹窗的处理器。
   close: () => void;
@@ -45,18 +45,45 @@ export function useUserPromptEditState(options: UseUserPromptEditStateOptions): 
   const [draft, setDraft] = React.useState<UserPromptEditDraftSummary | null>(null);
   const [text, setText] = React.useState("");
   const [saving, setSaving] = React.useState(false);
+  // validationVersion invalidates delayed backend draft responses after close or a newer edit selection.
+  // validationVersion 在关闭弹窗或选择更新编辑项后使延迟到达的后端草稿响应失效。
+  const validationVersion = React.useRef(0);
 
   const close = React.useCallback(() => {
+    validationVersion.current += 1;
     setDraft(null);
   }, []);
 
-  const open = React.useCallback(async (conversationId: string, messageId: string) => {
-    const nextDraft = await options.onGetUserPromptEditDraft(conversationId, messageId);
-    if (!nextDraft) {
+  const open = React.useCallback(async (message: ConversationMessage, visiblePrompt: string) => {
+    const requestVersion = validationVersion.current + 1;
+    validationVersion.current = requestVersion;
+    // optimisticDraft opens the dialog synchronously from the already-rendered authoritative row.
+    // optimisticDraft 直接从已经渲染的权威消息行同步打开弹窗。
+    const optimisticDraft: UserPromptEditDraftSummary = {
+      conversationId: message.conversationId,
+      messageId: message.id,
+      prompt: visiblePrompt,
+      attachments: message.attachments ?? [],
+      running: false,
+    };
+    setDraft(optimisticDraft);
+    setText(visiblePrompt);
+    const nextDraft = await options.onGetUserPromptEditDraft(message.conversationId, message.id);
+    if (validationVersion.current !== requestVersion) {
       return;
     }
-    setDraft(nextDraft);
-    setText(nextDraft.prompt);
+    if (!nextDraft) {
+      setDraft(null);
+      return;
+    }
+    setDraft((currentDraft) => (
+      currentDraft?.conversationId === message.conversationId && currentDraft.messageId === message.id
+        ? nextDraft
+        : currentDraft
+    ));
+    // Preserve text already changed by the user while the backend validation request was in flight.
+    // 后端校验请求进行期间保留用户已经修改的文本。
+    setText((currentText) => currentText === visiblePrompt ? nextDraft.prompt : currentText);
   }, [options]);
 
   const submit = React.useCallback(async () => {

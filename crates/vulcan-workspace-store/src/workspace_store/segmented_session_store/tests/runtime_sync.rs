@@ -141,6 +141,7 @@ fn runtime_log_backup_before_compaction_copies_sources_and_keeps_latest_five() {
     let mut backup_names = fs::read_dir(session_dir.join(SEGMENTED_RUNTIME_BACKUP_DIR))
         .expect("read backup dir")
         .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_dir()))
         .map(|entry| entry.file_name().to_string_lossy().to_string())
         .collect::<Vec<_>>();
     backup_names.sort();
@@ -395,6 +396,199 @@ fn runtime_log_sync_appends_tail_when_prefix_matches() {
     assert_eq!(second_metadata.created_at, "t1");
     assert_eq!(second_metadata.updated_at, "t2");
     assert_eq!(lines.len(), 2);
+}
+
+/// Verifies a conversation tail appends after an interleaved audit event without rebuilding history.
+/// 验证会话尾部会在交错审计事件之后直接追加，而不会重建历史。
+#[test]
+fn runtime_log_sync_appends_after_audit_without_rebuild() {
+    let root = test_root("runtime_log_sync_appends_after_audit_without_rebuild");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
+    let first_state = conversation_state_from_session_messages(&[test_message(
+        "m-user-1",
+        SessionMessageKind::User,
+        SessionMessageRecordKind::Transcript,
+        "first prompt",
+    )])
+    .expect("valid first state");
+    sync_runtime_log_from_conversation_state(&session_dir, &first_state, "t1")
+        .expect("sync first state");
+    record_runtime_audit_event(
+        &session_dir,
+        "t2",
+        RuntimeLogEvent::SystemUpdate(RuntimeSystemUpdateEvent {
+            turn_id: Some(String::from("turn-a")),
+            update_id: String::from("audit-between-conversation-events"),
+            effective_after_event_id: None,
+            text: String::from("Use exact paths."),
+            trust: RuntimeSystemUpdateTrust::TrustedHost,
+            lowering_hint: RuntimeSystemUpdateLoweringHint::Auto,
+            fingerprint: Some(String::from("audit-between-fingerprint")),
+            source: Some(String::from("test")),
+        }),
+    )
+    .expect("append interleaved audit event");
+    // persisted_prefix captures every byte that must remain untouched by the next hot sync.
+    // persisted_prefix 捕获下一次热同步必须保持不变的全部字节。
+    let persisted_prefix = fs::read(session_dir.join(runtime_segment_file_name()))
+        .expect("read runtime prefix after audit");
+    let second_state = conversation_state_from_session_messages(&[
+        test_message(
+            "m-user-1",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "first prompt",
+        ),
+        test_message(
+            "m-assistant-1",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "first answer",
+        ),
+    ])
+    .expect("valid second state");
+
+    let metadata = sync_runtime_log_from_conversation_state(&session_dir, &second_state, "t3")
+        .expect("append conversation after audit");
+    let persisted_after = fs::read(session_dir.join(runtime_segment_file_name()))
+        .expect("read runtime bytes after bounded append");
+    let restored = read_runtime_conversation_state(&session_dir)
+        .expect("read interleaved runtime conversation")
+        .expect("runtime conversation exists");
+
+    assert!(persisted_after.starts_with(&persisted_prefix));
+    assert_eq!(metadata.created_at, "t1");
+    assert_eq!(metadata.conversation_message_count, 2);
+    assert_eq!(metadata.conversation_event_count, 2);
+    assert_eq!(metadata.segments[0].line_count, 3);
+    assert_eq!(restored.messages.len(), 2);
+}
+
+/// Verifies parallel tool results extend one bounded open-batch anchor without rewriting prior bytes.
+/// 验证并行工具结果会扩展一个有界开放批次锚点，且不会重写先前字节。
+#[test]
+fn runtime_log_sync_appends_parallel_tool_results_from_bounded_anchor() {
+    let root = test_root("runtime_log_sync_appends_parallel_tool_results_from_bounded_anchor");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
+    let assistant = vulcan_context::protocol::SessionConversationMessage {
+        id: String::from("assistant-tools"),
+        payload: vulcan_context::protocol::SessionConversationPayload::Assistant {
+            text: String::new(),
+            reasoning: String::new(),
+            provider_message_id: None,
+            provider_message_state: None,
+            usage: None,
+            tool_calls: vec![
+                vulcan_context::protocol::SessionConversationToolCall {
+                    id: String::from("call-a"),
+                    tool_call_id: Some(String::from("call-a")),
+                    tool_name: String::from("demo_a"),
+                    arguments: json!({ "value": 1 }),
+                },
+                vulcan_context::protocol::SessionConversationToolCall {
+                    id: String::from("call-b"),
+                    tool_call_id: Some(String::from("call-b")),
+                    tool_name: String::from("demo_b"),
+                    arguments: json!({ "value": 2 }),
+                },
+            ],
+        },
+    };
+    let result_a = vulcan_context::protocol::SessionConversationMessage {
+        id: String::from("result-a"),
+        payload: vulcan_context::protocol::SessionConversationPayload::ToolResult {
+            tool_call_id: Some(String::from("call-a")),
+            is_error: false,
+            text: String::from("a"),
+        },
+    };
+    let result_b = vulcan_context::protocol::SessionConversationMessage {
+        id: String::from("result-b"),
+        payload: vulcan_context::protocol::SessionConversationPayload::ToolResult {
+            tool_call_id: Some(String::from("call-b")),
+            is_error: false,
+            text: String::from("b"),
+        },
+    };
+    let initial_state = vulcan_context::protocol::SessionConversationState {
+        messages: vec![assistant.clone()],
+        records: Vec::new(),
+        continuation: Default::default(),
+    };
+    sync_runtime_log_from_conversation_state(&session_dir, &initial_state, "t1")
+        .expect("sync open parallel batch");
+    let initial_bytes = fs::read(session_dir.join(runtime_segment_file_name()))
+        .expect("read initial open-batch bytes");
+    let first_result_state = vulcan_context::protocol::SessionConversationState {
+        messages: vec![assistant.clone(), result_a.clone()],
+        records: Vec::new(),
+        continuation: Default::default(),
+    };
+    let first_result_metadata =
+        sync_runtime_log_from_conversation_state(&session_dir, &first_result_state, "t2")
+            .expect("append first parallel result");
+    let first_result_bytes =
+        fs::read(session_dir.join(runtime_segment_file_name())).expect("read first-result bytes");
+    let completed_state = vulcan_context::protocol::SessionConversationState {
+        messages: vec![assistant, result_a, result_b],
+        records: Vec::new(),
+        continuation: Default::default(),
+    };
+    let completed_metadata =
+        sync_runtime_log_from_conversation_state(&session_dir, &completed_state, "t3")
+            .expect("append final parallel result and completion");
+    let completed_bytes = fs::read(session_dir.join(runtime_segment_file_name()))
+        .expect("read completed batch bytes");
+    let lines = read_runtime_log_lines(&session_dir)
+        .expect("read completed runtime lines")
+        .expect("runtime lines exist");
+
+    assert!(first_result_bytes.starts_with(&initial_bytes));
+    assert!(completed_bytes.starts_with(&first_result_bytes));
+    assert_eq!(first_result_metadata.conversation_anchor_message_index, 0);
+    assert!(first_result_metadata.conversation_anchor_event_count > 0);
+    assert_eq!(completed_metadata.conversation_anchor_message_index, 3);
+    assert_eq!(completed_metadata.conversation_anchor_event_count, 0);
+    assert!(
+        lines
+            .iter()
+            .any(|line| matches!(line.event, RuntimeLogEvent::ToolBatchCompleted(_)))
+    );
+}
+
+/// Guards the ordinary runtime-sync implementation against reintroducing full-history reads or projection.
+/// 防止普通运行时同步实现重新引入完整历史读取或投影。
+#[test]
+fn runtime_log_hot_sync_source_uses_only_bounded_checkpoint_inputs() {
+    // source is compile-time repository text, so this guard performs no runtime filesystem traversal.
+    // source 是编译期仓库文本，因此本守卫不会执行运行时文件系统遍历。
+    let source = include_str!("../runtime_log.rs");
+    let function_start = source
+        .find("fn sync_runtime_log_from_conversation_state_with_owned_lock(")
+        .expect("ordinary runtime sync function");
+    let function_end = source[function_start..]
+        .find("/// Rebuilds a changed or legacy conversation")
+        .map(|offset| function_start + offset)
+        .expect("ordinary runtime sync function end");
+    let function_source = &source[function_start..function_end];
+
+    assert!(function_source.contains("read_optional_runtime_metadata"));
+    assert!(function_source.contains("runtime_projection_lines_for_message_slice"));
+    assert!(!function_source.contains("read_runtime_log_snapshot_with_owned_lock"));
+    assert!(
+        !function_source.contains("runtime_log_lines_from_conversation_state(conversation_state")
+    );
+    assert!(!function_source.contains("runtime_conversation_event_lines"));
 }
 
 /// Verifies a strict projection failure propagates before any persisted runtime artifact changes.
@@ -1235,7 +1429,7 @@ fn runtime_audit_append_reports_fully_damaged_runtime_log() {
     let persisted_segment = fs::read_to_string(session_dir.join("runtime").join("r001.jsonl"))
         .expect("read damaged runtime segment");
 
-    assert!(append_error.contains("Runtime log is fully damaged"));
+    assert!(append_error.contains("Runtime segment byte length mismatch before bounded append"));
     assert!(read_error.contains("Runtime log is fully damaged"));
     assert_eq!(persisted_segment, "{ broken\n");
 }
@@ -1545,4 +1739,84 @@ fn compacted_runtime_log_sync_prunes_pre_compaction_provider_checkpoints() {
                 if event.checkpoint_id == "request-before"
         )
     }));
+}
+
+/// Verifies one applied compaction id returns all later checkpoints to the bounded append path.
+/// 验证一个已经应用的压缩标识会让全部后续检查点回到有界追加路径。
+#[test]
+fn repeated_compaction_id_uses_bounded_runtime_append() {
+    let root = test_root("repeated_compaction_id_uses_bounded_runtime_append");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
+    let initial_state = conversation_state_from_session_messages(&[test_message(
+        "m-user-before-compaction",
+        SessionMessageKind::User,
+        SessionMessageRecordKind::Transcript,
+        "old prompt",
+    )])
+    .expect("valid initial state");
+    sync_runtime_log_from_conversation_state(&session_dir, &initial_state, "t1")
+        .expect("sync initial runtime log");
+    backup_runtime_log_before_compaction(&session_dir, "compaction-stable", "t2")
+        .expect("record compaction boundary");
+    let compacted_state = conversation_state_from_session_messages(&[test_message(
+        "summary-message",
+        SessionMessageKind::User,
+        SessionMessageRecordKind::CompactionSummary,
+        "summary prompt",
+    )])
+    .expect("valid compacted state");
+    let compacted_metadata = sync_runtime_log_from_compacted_conversation_state(
+        &session_dir,
+        &compacted_state,
+        "t3",
+        "compaction-stable",
+    )
+    .expect("apply compaction boundary");
+    let compacted_bytes = fs::read(session_dir.join(runtime_segment_file_name()))
+        .expect("read compacted runtime bytes");
+    let extended_state = conversation_state_from_session_messages(&[
+        test_message(
+            "summary-message",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::CompactionSummary,
+            "summary prompt",
+        ),
+        test_message(
+            "assistant-after-compaction",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "new answer",
+        ),
+    ])
+    .expect("valid extended compacted state");
+
+    let extended_metadata = sync_runtime_log_from_compacted_conversation_state(
+        &session_dir,
+        &extended_state,
+        "t4",
+        "compaction-stable",
+    )
+    .expect("append after already applied compaction");
+    let extended_bytes = fs::read(session_dir.join(runtime_segment_file_name()))
+        .expect("read extended runtime bytes");
+    let restored = read_runtime_conversation_state(&session_dir)
+        .expect("read extended compacted conversation")
+        .expect("runtime conversation exists");
+
+    assert_eq!(
+        compacted_metadata.applied_compaction_id.as_deref(),
+        Some("compaction-stable")
+    );
+    assert!(extended_bytes.starts_with(&compacted_bytes));
+    assert_eq!(extended_metadata.created_at, "t3");
+    assert_eq!(
+        extended_metadata.applied_compaction_id.as_deref(),
+        Some("compaction-stable")
+    );
+    assert_eq!(restored.messages.len(), 2);
 }

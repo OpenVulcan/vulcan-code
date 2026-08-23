@@ -30,7 +30,7 @@ const STARTUP_SNAPSHOT = {
 describe("runtime diagnostics provider request trace setting", () => {
   // Verifies the system setting is visibly off by default and explains its sensitive session-local output.
   // 验证系统设置默认明确关闭，并说明其包含敏感内容的会话本地输出位置。
-  it("renders the complete request trace switch as disabled by default", () => {
+  it("renders the bounded wire-request trace switch as disabled by default", () => {
     const markup = renderToStaticMarkup(
       <I18nProvider initialLocale="zh-CN">
         <LogsArea

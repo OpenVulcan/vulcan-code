@@ -127,7 +127,23 @@ fn visible_user_prompt_reuses_authoritative_canonical_message_id() {
 #[test]
 fn resume_preparation_restores_exact_started_turn_without_duplicate_user_message() {
     let mut runtime_state = SessionRuntimeStateEntry::default();
-    let start = begin_user_prompt(&mut runtime_state);
+    let mut start = begin_user_prompt(&mut runtime_state);
+    // providerAttachment differs from canonical history and proves retry preserves the request-local projection.
+    // providerAttachment 与规范历史不同，用于证明重试保留单次请求局部投影。
+    let provider_attachment = ConversationAttachment {
+        kind: vulcan_core::types::ConversationAttachmentKind::Image,
+        file_name: String::from("retry-image.png"),
+        local_path: String::from("D:\\workspace\\.vulcan\\attachments\\retry-image.png"),
+        resource_path: Some(String::from(".vulcan/attachments/retry-image.png")),
+        source_path: None,
+        asset_id: Some(String::from("asset-retry-image")),
+        byte_len: Some(2048),
+        source_sha256: Some("a".repeat(64)),
+        delivery_mode: Some(vulcan_core::types::ConversationAttachmentDeliveryMode::MetadataOnly),
+        preview_local_path: None,
+        mime_type: String::from("image/png"),
+    };
+    start.provider_attachments = vec![provider_attachment.clone()];
     let original_message_count = runtime_state.conversation_state.messages.len();
     let original_record_count = runtime_state.conversation_state.records.len();
     let original_turn_id = start.preparation_turn_id.clone();
@@ -136,6 +152,11 @@ fn resume_preparation_restores_exact_started_turn_without_duplicate_user_message
     let frozen_input = start
         .execution_retry_preparation_input(&runtime_state)
         .expect("accepted prompt turn should freeze exactly");
+    assert!(frozen_input.attachments.is_empty());
+    assert_eq!(
+        frozen_input.provider_attachments,
+        vec![provider_attachment.clone()]
+    );
     let mut restored_hook_runtime = ConversationHookRuntime::new();
 
     let restored = restore_shared_prompt_turn_from_execution_retry(
@@ -152,6 +173,8 @@ fn resume_preparation_restores_exact_started_turn_without_duplicate_user_message
         original_canonical_user_message_id
     );
     assert_eq!(restored.source, PendingSessionPromptSource::UserFollowup);
+    assert!(restored.attachments.is_empty());
+    assert_eq!(restored.provider_attachments, vec![provider_attachment]);
     assert_eq!(
         runtime_state.conversation_state.messages.len(),
         original_message_count
@@ -271,6 +294,7 @@ fn begin_user_prompt(runtime_state: &mut SessionRuntimeStateEntry) -> SharedProm
             hidden_model_guidance: None,
             provider_visible_agent_messages: Vec::new(),
             attachments: Vec::new(),
+            provider_attachments: None,
             append_canonical_user_message: true,
             append_visible_user_prompt_record: true,
             source: PendingSessionPromptSource::UserFollowup,
@@ -303,6 +327,7 @@ fn idle_dispatched_interrupt_produces_conversation_hook_turn_id() {
             hidden_model_guidance: None,
             provider_visible_agent_messages: Vec::new(),
             attachments: Vec::new(),
+            provider_attachments: None,
             append_canonical_user_message: true,
             append_visible_user_prompt_record: true,
             source,
@@ -385,6 +410,7 @@ fn session_mailbox_begin_keeps_user_input_hidden_even_if_visibility_flag_is_true
             hidden_model_guidance: None,
             provider_visible_agent_messages: Vec::new(),
             attachments: Vec::new(),
+            provider_attachments: None,
             append_canonical_user_message: true,
             append_visible_user_prompt_record: true,
             source: PendingSessionPromptSource::SessionMailbox,
@@ -430,6 +456,7 @@ fn goal_continuation_begin_never_persists_user_message() {
             hidden_model_guidance: None,
             provider_visible_agent_messages: Vec::new(),
             attachments: Vec::new(),
+            provider_attachments: None,
             append_canonical_user_message: true,
             append_visible_user_prompt_record: true,
             source: PendingSessionPromptSource::GoalContinuation,
@@ -457,10 +484,10 @@ fn goal_continuation_begin_never_persists_user_message() {
     );
 }
 
-/// Verifies manual Continue preserves process-continuation semantics without opening completed-turn hooks.
-/// 验证手动 Continue 保持过程续跑语义，且不会打开完成回合 Hook。
+/// Verifies manual Continue correlates the restored process without claiming user-authored completion semantics.
+/// 验证手动 Continue 会关联恢复过程，但不会领取用户编写回合的完成语义。
 #[test]
-fn manual_continuation_preparation_does_not_claim_a_user_turn() {
+fn manual_continuation_preparation_preserves_exact_hook_correlation() {
     // runtime_state owns the retained provider-visible state resumed by Continue.
     // runtime_state 持有 Continue 要恢复的 Provider 可见状态。
     let mut runtime_state = SessionRuntimeStateEntry::default();
@@ -481,6 +508,7 @@ fn manual_continuation_preparation_does_not_claim_a_user_turn() {
             hidden_model_guidance: None,
             provider_visible_agent_messages: Vec::new(),
             attachments: Vec::new(),
+            provider_attachments: None,
             append_canonical_user_message: false,
             append_visible_user_prompt_record: false,
             source: PendingSessionPromptSource::ExecutionRetry,
@@ -491,6 +519,9 @@ fn manual_continuation_preparation_does_not_claim_a_user_turn() {
         },
     )
     .expect("manual continuation should prepare retained state");
+    // expected_hook_turn_id is the new process Hook owner created after Stop closed the former turn.
+    // expected_hook_turn_id 是 Stop 关闭原回合后新建的过程 Hook 所有者。
+    let expected_hook_turn_id = start.preparation_turn_id.clone();
     // vmm_session_memory remains unchanged because Continue owns no new user boundary.
     // vmm_session_memory 保持不变，因为 Continue 不拥有新的用户边界。
     let mut vmm_session_memory = test_vmm_session_memory(start.session_id);
@@ -515,7 +546,10 @@ fn manual_continuation_preparation_does_not_claim_a_user_turn() {
         continuation.request.prompt_purpose,
         ExecutionPromptPurpose::ExecutionRetry
     );
-    assert!(continuation.request.conversation_hook_turn_id.is_none());
+    assert_eq!(
+        continuation.request.conversation_hook_turn_id.as_deref(),
+        Some(expected_hook_turn_id.as_str())
+    );
     assert_eq!(
         continuation.request.turn_start_mode,
         Some(ExecutionTurnStartMode::RestoredCheckpoint)
@@ -554,6 +588,7 @@ fn goal_continuation_reuses_persisted_vmm_profile_baseline() {
             hidden_model_guidance: None,
             provider_visible_agent_messages: Vec::new(),
             attachments: Vec::new(),
+            provider_attachments: None,
             append_canonical_user_message: false,
             append_visible_user_prompt_record: false,
             source: PendingSessionPromptSource::GoalContinuation,
@@ -564,6 +599,9 @@ fn goal_continuation_reuses_persisted_vmm_profile_baseline() {
         },
     )
     .expect("goal continuation prompt should start");
+    // expected_hook_turn_id binds hidden Goal work to the exact active process Hook turn.
+    // expected_hook_turn_id 将隐藏目标工作绑定到精确的活动过程 Hook 回合。
+    let expected_hook_turn_id = start.preparation_turn_id.clone();
     // precheck_outcome is intentionally empty because Goal continuation skips every user precheck hook.
     // precheck_outcome 刻意为空，因为目标续轮会跳过全部用户 precheck Hook。
     let precheck_outcome = start.precheck_request.clone().skip();
@@ -601,6 +639,10 @@ fn goal_continuation_reuses_persisted_vmm_profile_baseline() {
     );
     assert_eq!(blocks[0].source.as_deref(), Some("VMM profile full"));
     assert_eq!(blocks[0].content, "[USER]\n[P1][L2][W0] stable profile");
+    assert_eq!(
+        continuation.request.conversation_hook_turn_id.as_deref(),
+        Some(expected_hook_turn_id.as_str())
+    );
 }
 
 /// Verifies precheck output cannot mutate or replace the system-profile line.
@@ -717,6 +759,7 @@ fn hidden_model_guidance_stays_out_of_visible_transcript() {
             hidden_model_guidance: Some("Plan file: D:/workspace/docs/plan/demo.md"),
             provider_visible_agent_messages: Vec::new(),
             attachments: Vec::new(),
+            provider_attachments: None,
             append_canonical_user_message: true,
             append_visible_user_prompt_record: true,
             source: PendingSessionPromptSource::UserFollowup,
@@ -915,6 +958,7 @@ fn begin_prompt_keeps_runtime_messages_when_records_are_empty() {
             hidden_model_guidance: None,
             provider_visible_agent_messages: Vec::new(),
             attachments: Vec::new(),
+            provider_attachments: None,
             append_canonical_user_message: true,
             append_visible_user_prompt_record: true,
             source: PendingSessionPromptSource::UserFollowup,
@@ -978,6 +1022,7 @@ fn begin_prompt_rejects_invalid_hydration_atomically() {
             hidden_model_guidance: None,
             provider_visible_agent_messages: Vec::new(),
             attachments: Vec::new(),
+            provider_attachments: None,
             append_canonical_user_message: true,
             append_visible_user_prompt_record: true,
             source: PendingSessionPromptSource::UserFollowup,

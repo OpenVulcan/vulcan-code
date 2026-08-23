@@ -164,6 +164,50 @@ fn queued_workspace_commit_preserves_post_preflight_state_and_mutates_once() {
     // service_state owns the retained revision that advances after the stale clone is captured.
     // service_state 持有在过期副本捕获后继续推进的保留版本。
     let mut service_state = test_service_state_with_parent_session(session_id);
+    service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("live workspace snapshot")
+        .task_projects
+        .push(TaskProjectSummary::new(
+            "project-a",
+            "Project A",
+            "D:/project-a",
+            false,
+            0,
+            None,
+            None,
+            vec![session_id],
+        ));
+    // retained_message and canonical state prove the queue slice does not clone or replace historical context.
+    // retained_message 与规范状态证明队列切片不会复制或替换历史上下文。
+    let mut retained_message = SessionMessageEntry::new(
+        SessionMessageKind::Assistant,
+        "历史输出",
+        "retained canonical history",
+    );
+    retained_message.id = String::from("retained-history-message");
+    {
+        // workspace receives matching visible and canonical retained history before the stale clone is captured.
+        // workspace 在捕获过期副本前接收匹配的可见与规范保留历史。
+        let workspace = service_state
+            .workspace_snapshot
+            .as_mut()
+            .expect("live workspace snapshot");
+        workspace
+            .session_messages
+            .insert(session_id, vec![retained_message.clone()]);
+        workspace
+            .session_runtime_state
+            .insert(session_id, SessionRuntimeStateEntry::default());
+        workspace
+            .session_runtime_state
+            .get_mut(&session_id)
+            .expect("target runtime state")
+            .conversation_state =
+            conversation_state_from_session_messages(&[retained_message.clone()])
+                .expect("canonical retained history");
+    }
     // stale_workspace simulates the hydrated snapshot captured by submission preflight.
     // stale_workspace 模拟提交预检捕获的已水合快照。
     let stale_workspace = service_state
@@ -179,12 +223,21 @@ fn queued_workspace_commit_preserves_post_preflight_state_and_mutates_once() {
         .find(|session| session.id == session_id)
         .expect("target session")
         .queued_steps;
+    // unrelated_session_id represents retained state that must never enter or be replaced by the queue transaction.
+    // unrelated_session_id 表示绝不能进入或被排队事务替换的保留状态。
+    let unrelated_session_id = SessionId::new_v4();
     service_state
         .workspace_snapshot
         .as_mut()
         .expect("live workspace snapshot")
         .session_run_phases
         .insert(session_id, SessionRunPhase::Thinking);
+    service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("live workspace snapshot")
+        .session_run_phases
+        .insert(unrelated_session_id, SessionRunPhase::ToolRunning);
     // state exposes the newer retained revision to the atomic queue commit helper.
     // state 向原子排队提交辅助函数提供较新的保留版本。
     let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
@@ -194,10 +247,30 @@ fn queued_workspace_commit_preserves_post_preflight_state_and_mutates_once() {
 
     let observed_phase = mutate_latest_workspace_for_existing_session(
         &state,
-        stale_workspace,
+        Some(stale_workspace),
         session_id,
         |latest_workspace| {
             mutation_count = mutation_count.saturating_add(1);
+            assert!(
+                latest_workspace
+                    .session_runtime_state
+                    .get(&session_id)
+                    .expect("queue slice runtime state")
+                    .conversation_state
+                    .records
+                    .is_empty(),
+                "queue metadata mutation must not clone canonical conversation history"
+            );
+            // admitted_message is the sole transcript delta produced by the queue mutation.
+            // admitted_message 是队列变更产生的唯一转录增量。
+            let mut admitted_message =
+                SessionMessageEntry::new(SessionMessageKind::User, "补充消息", "queued increment");
+            admitted_message.id = String::from("queued-increment-message");
+            latest_workspace
+                .session_messages
+                .entry(session_id)
+                .or_default()
+                .push(admitted_message);
             let session = latest_workspace
                 .sessions
                 .iter_mut()
@@ -228,12 +301,44 @@ fn queued_workspace_commit_preserves_post_preflight_state_and_mutates_once() {
     );
     assert_eq!(
         committed_workspace
+            .session_run_phases
+            .get(&unrelated_session_id),
+        Some(&SessionRunPhase::ToolRunning),
+        "queue transaction must preserve unrelated retained state"
+    );
+    assert_eq!(
+        committed_workspace
             .sessions
             .iter()
             .find(|session| session.id == session_id)
             .expect("target session")
             .queued_steps,
         initial_queued_steps.saturating_add(1)
+    );
+    // committed_messages must preserve original order and append the delta exactly once.
+    // committed_messages 必须保留原顺序并且只追加一次增量。
+    let committed_messages = committed_workspace
+        .session_messages
+        .get(&session_id)
+        .expect("committed target messages");
+    assert_eq!(
+        committed_messages
+            .iter()
+            .map(|message| message.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["retained-history-message", "queued-increment-message"],
+        "queue delta must append once without replacing retained transcript history"
+    );
+    assert_eq!(
+        committed_workspace
+            .session_runtime_state
+            .get(&session_id)
+            .expect("committed target runtime state")
+            .conversation_state
+            .records
+            .len(),
+        1,
+        "queue metadata merge must restore the retained canonical conversation"
     );
 }
 

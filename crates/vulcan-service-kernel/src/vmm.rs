@@ -19,11 +19,12 @@ use vulcan_workbench_model::{SessionRuntimeStateEntry, TaskProjectSummary};
 
 use crate::{
     SharedServiceBridgeState, compact_panel_preview, current_unix_millis_text,
-    persist_workspace_session_update, provider_configuration_from_state,
+    persist_latest_retained_workspace_session_update, provider_configuration_from_state,
     refresh_workbench_snapshot, selected_workspace_session, session_summary_project_id,
     vmm_hooks::{
-        cached_project_vmm_layer, refresh_guard_vmm_hook_snapshot,
-        refresh_service_vmm_hook_snapshot, update_cached_project_vmm_layer,
+        cached_project_vmm_layer, refresh_exact_vmm_hook_project_projection,
+        refresh_guard_vmm_hook_snapshot, refresh_service_vmm_hook_snapshot,
+        update_cached_project_vmm_layer,
     },
     vmm_project_scope_path, vmm_request_project_scope,
 };

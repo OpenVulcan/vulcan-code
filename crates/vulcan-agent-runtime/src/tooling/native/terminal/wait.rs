@@ -16,7 +16,9 @@ pub(crate) fn terminal_wait_budget_ms(
     let Some(policy) = wait_policy else {
         return Some(0);
     };
-    Some(match policy.mode {
+    // requestedBudgetMs preserves mode-specific defaults before applying the shared host hard limit.
+    // requestedBudgetMs 在应用共享宿主硬上限前保留各等待模式的默认值。
+    let requested_budget_ms = match policy.mode {
         TerminalSessionWaitMode::ReturnImmediately => 0,
         TerminalSessionWaitMode::UntilQuiet => policy.max_wait_ms.unwrap_or_else(|| {
             policy
@@ -43,7 +45,22 @@ pub(crate) fn terminal_wait_budget_ms(
                 .saturating_mul(6)
                 .clamp(300, 2_000)
         }),
-    })
+    };
+    Some(requested_budget_ms.min(MAX_COMMAND_SESSION_READ_WAIT_MS))
+}
+
+/// Returns the total output-chunk budget shared by every poll in one terminal read.
+/// 返回一次终端读取中所有轮询共同使用的输出分片总预算。
+pub(crate) fn terminal_read_chunk_budget(max_chunks: Option<usize>) -> usize {
+    max_chunks
+        .unwrap_or(DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS)
+        .clamp(1, MAX_COMMAND_SESSION_READ_CHUNKS)
+}
+
+/// Returns the unconsumed output-chunk budget for one bounded terminal read.
+/// 返回一次有界终端读取尚未消耗的输出分片预算。
+fn remaining_terminal_read_chunks(total_budget: usize, consumed_chunks: usize) -> usize {
+    total_budget.saturating_sub(consumed_chunks)
 }
 
 /// Returns the effective quiet window used by quiet-style terminal waits.
@@ -134,6 +151,7 @@ pub(crate) async fn read_terminal_session_output_with_wait(
 ) -> Result<TerminalWaitReadResult, NativeToolError> {
     let wait_mode = terminal_wait_mode(wait_policy);
     let wait_budget_ms = terminal_wait_budget_ms(wait_policy).unwrap_or(0);
+    let chunk_budget = terminal_read_chunk_budget(max_chunks);
     let started_at = Instant::now();
 
     if wait_mode == TerminalSessionWaitMode::ReturnImmediately {
@@ -144,7 +162,7 @@ pub(crate) async fn read_terminal_session_output_with_wait(
             after_seq,
             read_from_start,
             Some(0),
-            max_chunks,
+            Some(chunk_budget),
         )
         .await?;
         return Ok(TerminalWaitReadResult {
@@ -168,20 +186,28 @@ pub(crate) async fn read_terminal_session_output_with_wait(
             after_seq,
             read_from_start,
             Some(wait_budget_ms.min(500)),
-            max_chunks,
+            Some(chunk_budget),
         )
         .await?;
-        returned_chunks.extend(latest_outcome.returned_chunks.clone());
+        returned_chunks.append(&mut latest_outcome.returned_chunks);
         has_more |= latest_outcome.has_more;
         let mut pattern_matched = pattern.as_deref().is_some_and(|pattern| {
             terminal_output_chunks_contain_pattern(&returned_chunks, pattern)
         });
 
-        while !pattern_matched && remaining_terminal_wait_ms(started_at, wait_budget_ms) > 0 {
+        while !pattern_matched
+            && returned_chunks.len() < chunk_budget
+            && remaining_terminal_wait_ms(started_at, wait_budget_ms) > 0
+        {
             if latest_outcome.snapshot.status.as_str() != "running" {
                 break;
             }
             let remaining_ms = remaining_terminal_wait_ms(started_at, wait_budget_ms);
+            let remaining_chunks =
+                remaining_terminal_read_chunks(chunk_budget, returned_chunks.len());
+            if remaining_chunks == 0 {
+                break;
+            }
             latest_outcome = read_terminal_session_output_for_ai(
                 command_session_runtime,
                 owner_session_id,
@@ -189,15 +215,16 @@ pub(crate) async fn read_terminal_session_output_with_wait(
                 None,
                 false,
                 Some(remaining_ms.min(500)),
-                max_chunks,
+                Some(remaining_chunks),
             )
             .await?;
-            returned_chunks.extend(latest_outcome.returned_chunks.clone());
+            let returned_chunk_count = latest_outcome.returned_chunks.len();
+            returned_chunks.append(&mut latest_outcome.returned_chunks);
             has_more |= latest_outcome.has_more;
             pattern_matched = pattern.as_deref().is_some_and(|pattern| {
                 terminal_output_chunks_contain_pattern(&returned_chunks, pattern)
             });
-            if latest_outcome.returned_chunks.is_empty() && remaining_ms <= 500 {
+            if returned_chunk_count == 0 && remaining_ms <= 500 {
                 break;
             }
         }
@@ -223,21 +250,29 @@ pub(crate) async fn read_terminal_session_output_with_wait(
         after_seq,
         read_from_start,
         Some(quiet_ms.min(wait_budget_ms)),
-        max_chunks,
+        Some(chunk_budget),
     )
     .await?;
     loop {
         has_more |= latest_outcome.has_more;
-        if latest_outcome.returned_chunks.is_empty() {
+        let returned_chunk_count = latest_outcome.returned_chunks.len();
+        if returned_chunk_count == 0 {
             quiet_observed = true;
             break;
         }
-        returned_chunks.extend(latest_outcome.returned_chunks.clone());
+        returned_chunks.append(&mut latest_outcome.returned_chunks);
+        if returned_chunks.len() >= chunk_budget {
+            break;
+        }
         if latest_outcome.snapshot.status.as_str() != "running" {
             break;
         }
         let remaining_ms = remaining_terminal_wait_ms(started_at, wait_budget_ms);
         if remaining_ms == 0 {
+            break;
+        }
+        let remaining_chunks = remaining_terminal_read_chunks(chunk_budget, returned_chunks.len());
+        if remaining_chunks == 0 {
             break;
         }
         latest_outcome = read_terminal_session_output_for_ai(
@@ -247,7 +282,7 @@ pub(crate) async fn read_terminal_session_output_with_wait(
             None,
             false,
             Some(quiet_ms.min(remaining_ms)),
-            max_chunks,
+            Some(remaining_chunks),
         )
         .await?;
     }
@@ -272,6 +307,8 @@ pub(crate) async fn drain_terminal_interrupt_output(
     max_chunks: Option<usize>,
 ) -> Result<TerminalInterruptDrainResult, NativeToolError> {
     let started_at = Instant::now();
+    let chunk_budget = terminal_read_chunk_budget(max_chunks);
+    let mut consumed_chunk_count = 0usize;
     let mut next_after_seq = Some(after_seq);
     let mut returned_chunks = Vec::new();
     let mut discarded_chunk_count = 0usize;
@@ -282,11 +319,13 @@ pub(crate) async fn drain_terminal_interrupt_output(
         next_after_seq,
         false,
         Some(TERMINAL_INTERRUPT_DRAIN_QUIET_MS),
-        max_chunks,
+        Some(chunk_budget),
     )
     .await?;
     loop {
-        for chunk in latest_outcome.returned_chunks.iter().cloned() {
+        let returned_chunk_count = latest_outcome.returned_chunks.len();
+        consumed_chunk_count = consumed_chunk_count.saturating_add(returned_chunk_count);
+        for chunk in latest_outcome.returned_chunks.drain(..) {
             if terminal_interrupt_drain_chunk_is_visible(&chunk) {
                 returned_chunks.push(chunk);
             } else {
@@ -294,8 +333,11 @@ pub(crate) async fn drain_terminal_interrupt_output(
             }
         }
 
-        let quiet_after_wait = latest_outcome.returned_chunks.is_empty();
+        let quiet_after_wait = returned_chunk_count == 0;
         if quiet_after_wait {
+            break;
+        }
+        if consumed_chunk_count >= chunk_budget {
             break;
         }
         if latest_outcome.snapshot.status.as_str() != "running" {
@@ -306,6 +348,10 @@ pub(crate) async fn drain_terminal_interrupt_output(
         }
 
         next_after_seq = None;
+        let remaining_chunks = remaining_terminal_read_chunks(chunk_budget, consumed_chunk_count);
+        if remaining_chunks == 0 {
+            break;
+        }
         latest_outcome = read_terminal_session_output_for_ai(
             command_session_runtime,
             owner_session_id,
@@ -313,7 +359,7 @@ pub(crate) async fn drain_terminal_interrupt_output(
             next_after_seq,
             false,
             Some(TERMINAL_INTERRUPT_DRAIN_QUIET_MS),
-            max_chunks,
+            Some(remaining_chunks),
         )
         .await?;
     }
@@ -348,6 +394,8 @@ pub(crate) async fn cleanup_terminal_interrupt_input_line(
     }
 
     let started_at = Instant::now();
+    let chunk_budget = terminal_read_chunk_budget(max_chunks);
+    let mut consumed_chunk_count = 0usize;
     let after_seq = snapshot.last_seq;
     let write_outcome = match command_session_runtime
         .write_session(
@@ -375,6 +423,10 @@ pub(crate) async fn cleanup_terminal_interrupt_input_line(
     let mut latest_snapshot = write_outcome.snapshot;
     let mut next_after_seq = Some(after_seq);
     loop {
+        let remaining_chunks = remaining_terminal_read_chunks(chunk_budget, consumed_chunk_count);
+        if remaining_chunks == 0 {
+            break;
+        }
         let read_outcome = match read_terminal_session_output_for_ai(
             command_session_runtime,
             owner_session_id,
@@ -382,7 +434,7 @@ pub(crate) async fn cleanup_terminal_interrupt_input_line(
             next_after_seq,
             false,
             Some(TERMINAL_INTERRUPT_DRAIN_QUIET_MS),
-            max_chunks,
+            Some(remaining_chunks),
         )
         .await
         {
@@ -398,10 +450,14 @@ pub(crate) async fn cleanup_terminal_interrupt_input_line(
             }
         };
         let chunk_count = read_outcome.returned_chunks.len();
+        consumed_chunk_count = consumed_chunk_count.saturating_add(chunk_count);
         discarded_chunk_count = discarded_chunk_count.saturating_add(chunk_count);
         has_more |= read_outcome.has_more;
         latest_snapshot = read_outcome.snapshot;
         if chunk_count == 0 {
+            break;
+        }
+        if consumed_chunk_count >= chunk_budget {
             break;
         }
         if latest_snapshot.status.as_str() != "running" {

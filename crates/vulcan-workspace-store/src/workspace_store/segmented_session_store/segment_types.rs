@@ -99,6 +99,10 @@ pub(in crate::workspace_store) struct SegmentMetadata {
     /// First sequence number expected in this segment.
     /// 当前分段内预期的首个序号。
     pub start_seq: u64,
+    /// Last sequence number physically retained in this segment.
+    /// 当前分段物理保留的最后序号。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seq: Option<u64>,
     /// Number of JSONL lines currently written to this segment.
     /// 当前分段已经写入的 JSONL 行数。
     pub line_count: u64,
@@ -117,6 +121,14 @@ pub(in crate::workspace_store) struct SegmentMetadata {
     /// Last turn index represented by this segment when known.
     /// 已知时当前分段表示的最后轮次索引。
     pub last_turn_index: Option<i64>,
+    /// First transcript message index physically stored in this segment.
+    /// 当前分段物理存储的首个转录消息索引。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_message_index: Option<u64>,
+    /// Last transcript message index physically stored in this segment.
+    /// 当前分段物理存储的最后转录消息索引。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_message_index: Option<u64>,
     /// Last compaction sequence observed in this segment when known.
     /// 已知时当前分段内最后一次压缩事件序号。
     pub last_compaction_seq: Option<u64>,
@@ -129,12 +141,15 @@ impl SegmentMetadata {
         Self {
             file,
             start_seq,
+            last_seq: None,
             line_count: 0,
             byte_len: 0,
             first_timestamp: None,
             last_timestamp: None,
             first_turn_index: None,
             last_turn_index: None,
+            first_message_index: None,
+            last_message_index: None,
             last_compaction_seq: None,
         }
     }
@@ -210,6 +225,38 @@ pub(in crate::workspace_store) struct RuntimeLogMetadata {
     /// Timestamp captured when this runtime metadata was last updated.
     /// 最近更新该运行时元数据时捕获的时间戳。
     pub updated_at: String,
+    /// Version of the bounded canonical-conversation projection checkpoint.
+    /// 有界规范会话投影检查点版本。
+    #[serde(default)]
+    pub conversation_checkpoint_version: u32,
+    /// Number of canonical conversation messages already projected into runtime JSONL.
+    /// 已经投影进运行时 JSONL 的规范会话消息数量。
+    #[serde(default)]
+    pub conversation_message_count: u64,
+    /// Number of conversation-projecting runtime events already persisted.
+    /// 已经持久化且会投影为会话的运行时事件数量。
+    #[serde(default)]
+    pub conversation_event_count: u64,
+    /// Message index where the currently open bounded projection anchor begins.
+    /// 当前开放有界投影锚点开始处的消息索引。
+    #[serde(default)]
+    pub conversation_anchor_message_index: u64,
+    /// Number of anchor-projection events already persisted.
+    /// 已经持久化的锚点投影事件数量。
+    #[serde(default)]
+    pub conversation_anchor_event_count: u64,
+    /// SHA-256 of the final canonical message covered by the checkpoint.
+    /// 检查点覆盖的最后一条规范消息 SHA-256。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_tail_message_sha256: Option<String>,
+    /// SHA-256 of persisted event payloads projected from the active anchor.
+    /// 从活动锚点投影出的已持久化事件载荷 SHA-256。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_anchor_projection_sha256: Option<String>,
+    /// Most recent context-compaction identifier already applied to this physical runtime log.
+    /// 已经应用到当前物理运行时日志的最近上下文压缩标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_compaction_id: Option<String>,
     /// Ordered runtime segment metadata records.
     /// 有序运行时分段元数据记录。
     pub segments: Vec<RuntimeSegmentMetadata>,

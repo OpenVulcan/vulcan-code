@@ -448,6 +448,7 @@ impl SubmitPlanRequestParser {
             title_fields,
             progress_fields,
             body_preview: (!self.body_preview.is_empty()).then(|| self.body_preview.clone()),
+            structured_lines: Vec::new(),
             affected_resources,
             redaction_flags: Vec::new(),
             staging_status: ToolRequestStagingStatus::NotApplicable,
@@ -480,6 +481,8 @@ fn submit_plan_request_streaming_capability() -> ToolRequestStreamingCapability 
             ],
             redacted_json_paths: Vec::new(),
             maximum_body_preview_bytes: SUBMIT_PLAN_BODY_PREVIEW_BYTES,
+            maximum_structured_preview_lines: 0,
+            maximum_structured_preview_bytes: 0,
         },
         progress_policy: ToolRequestProgressPolicy::default(),
     }

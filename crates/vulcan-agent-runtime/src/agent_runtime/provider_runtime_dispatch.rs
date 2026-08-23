@@ -359,6 +359,7 @@ fn execute_provider_prompt_stream_with_capture_mode(
 
     let mut transport_request = build_provider_transport_execution_request(
         config.provider_request_trace_enabled && !capture_only,
+        preparation.session_storage_directory.clone(),
         preparation.model_blueprint.provider_id.clone(),
         model_id,
         preparation.workspace_path.as_str(),
@@ -492,7 +493,7 @@ mod tests {
         resolve_runtime_reasoning_effort_for_capabilities,
     };
     use crate::provider_config::ReasoningEffortLevel;
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
     use std::sync::Arc;
     use vulcan_ai_contract::{
         CapabilitySupport, ModelCapabilities, ReasoningControlMode, ReasoningEffort,

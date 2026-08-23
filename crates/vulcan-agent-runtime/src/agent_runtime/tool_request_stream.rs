@@ -352,6 +352,22 @@ impl ToolRequestStreamCoordinator {
         let Some(capability) = self.tool_capabilities.get(&tool_name).cloned() else {
             return Vec::new();
         };
+        // Replacing one physical request stream must terminate the old parser session first.
+        // 替换同一个物理请求流前必须先终止旧的解析器会话。
+        let mut events = Vec::new();
+        if let Some(mut previous_draft) = self.drafts.remove(&request_stream_id) {
+            abort_draft_parser(&mut previous_draft);
+            previous_draft.revision = previous_draft.revision.saturating_add(1);
+            events.push(self.runtime_event_for_draft(
+                RuntimeEventKind::ToolRequestAborted,
+                &request_stream_id,
+                &previous_draft,
+                "superseded",
+                Some("request_stream_superseded"),
+                None,
+                None,
+            ));
+        }
         // progressPolicy uses the tool override when present and the host default otherwise.
         // progressPolicy 优先使用工具覆盖，否则使用宿主默认值。
         let progress_policy = capability
@@ -417,7 +433,7 @@ impl ToolRequestStreamCoordinator {
         };
         // startedEvent exposes identity and counts without leaking argument content.
         // startedEvent 在不泄漏参数内容的前提下暴露身份与计数。
-        let mut events = vec![self.runtime_event_for_draft(
+        events.push(self.runtime_event_for_draft(
             RuntimeEventKind::ToolRequestStarted,
             &request_stream_id,
             &draft,
@@ -425,10 +441,19 @@ impl ToolRequestStreamCoordinator {
             None,
             None,
             None,
-        )];
+        ));
         // initialPreview consumes same-fragment arguments after the visible card identity is established.
         // initialPreview 在建立可见卡片身份后消费同碎片参数。
-        let initial_preview = if initial_arguments.is_empty() {
+        // The shared assembler is authoritative when present, including its already-received prefix.
+        // 存在共享 assembler 时它是权威来源，包括其中已经接收的前缀。
+        let initial_preview = if let Some(assembler) = draft.argument_assembler.as_ref() {
+            let initial_snapshot = assembler.snapshot();
+            if initial_snapshot.is_empty() {
+                Ok(None)
+            } else {
+                push_argument_fragment_into_draft(&mut draft, &initial_snapshot)
+            }
+        } else if initial_arguments.is_empty() {
             Ok(None)
         } else {
             push_argument_fragment_into_draft(&mut draft, &initial_arguments)
@@ -460,6 +485,9 @@ impl ToolRequestStreamCoordinator {
                 }
             }
             Err(()) => {
+                // Lexer failure can happen before the parser boundary takes ownership, so abort it explicitly.
+                // 词法失败可能发生在解析器边界接管之前，因此必须显式中止解析器。
+                abort_draft_parser(&mut draft);
                 draft.revision = draft.revision.saturating_add(1);
                 events.push(self.runtime_event_for_draft(
                     RuntimeEventKind::ToolRequestInvalid,
@@ -988,6 +1016,40 @@ fn sanitize_tool_request_preview(
     if !field_is_allowed("affected_resources") {
         preview.affected_resources.clear();
     }
+    if !field_is_allowed("structured_lines") {
+        preview.structured_lines.clear();
+    } else {
+        let maximum_lines = draft.sensitivity_policy.maximum_structured_preview_lines;
+        let maximum_bytes = draft.sensitivity_policy.maximum_structured_preview_bytes;
+        let mut retained = Vec::new();
+        let mut retained_bytes = 0usize;
+        let mut truncated = false;
+        for mut line in preview.structured_lines.drain(..) {
+            if retained.len() >= maximum_lines || retained_bytes >= maximum_bytes {
+                truncated = true;
+                break;
+            }
+            let remaining = maximum_bytes.saturating_sub(retained_bytes);
+            let original_len = line.content.len();
+            truncate_utf8_to_bytes(&mut line.content, remaining);
+            if line.content.len() < original_len {
+                truncated = true;
+            }
+            retained_bytes = retained_bytes.saturating_add(line.content.len());
+            retained.push(line);
+        }
+        preview.structured_lines = retained;
+        if truncated
+            && !preview
+                .redaction_flags
+                .iter()
+                .any(|flag| flag == "structured_preview_truncated")
+        {
+            preview
+                .redaction_flags
+                .push(String::from("structured_preview_truncated"));
+        }
+    }
     if draft.staging_policy == ToolRequestStagingPolicy::Forbidden
         && preview.staging_status != ToolRequestStagingStatus::NotApplicable
     {
@@ -1049,6 +1111,19 @@ fn tool_request_preview_json(preview: &ToolRequestPreview) -> serde_json::Value 
         "title_fields": preview.title_fields,
         "progress_fields": preview.progress_fields,
         "body_preview": preview.body_preview,
+        "structured_lines": preview
+            .structured_lines
+            .iter()
+            .map(|line| {
+                json!({
+                    "operation_index": line.operation_index,
+                    "resource_index": line.resource_index,
+                    "side": line.side,
+                    "line_index": line.line_index,
+                    "content": line.content,
+                })
+            })
+            .collect::<Vec<_>>(),
         "affected_resources": preview.affected_resources,
         "redaction_flags": preview.redaction_flags,
         "staging_status": staging_status,
@@ -1061,6 +1136,9 @@ mod tests {
     //! 工具请求协调与后台 Token 估算测试。
 
     use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use vulcan_tools_manager::ToolRequestParserFactory;
 
     /// Builds an inert coordinator that recognizes one exact test tool name.
     /// 构建一个能够识别唯一精确测试工具名称的惰性协调器。
@@ -1110,6 +1188,64 @@ mod tests {
         /// Releases no resources because this fixture owns no staging state.
         /// 不释放任何资源，因为该夹具不持有暂存状态。
         fn abort(&mut self) {}
+    }
+
+    /// Parser fixture that records whether an invalid initial fragment releases its session.
+    /// 验证无效初始碎片是否释放解析器会话的测试解析器。
+    struct AbortTrackingParser {
+        /// Shared counter observed by the test after the parser is aborted.
+        /// 测试在解析器中止后读取的共享计数器。
+        abort_count: Arc<AtomicUsize>,
+    }
+
+    impl ToolRequestParserSession for AbortTrackingParser {
+        /// Accepts semantic events because the test fails before a valid event is required.
+        /// 接受语义事件，因为测试会在需要有效事件前失败。
+        fn push_json_event(
+            &mut self,
+            _event: &vulcan_tools_manager::IncrementalJsonEvent,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        /// Emits no preview because the test only observes lifecycle cleanup.
+        /// 不生成预览，因为测试只观察生命周期清理。
+        fn snapshot(&self) -> Option<ToolRequestPreview> {
+            None
+        }
+
+        /// Emits no final preview because the request is intentionally invalid.
+        /// 不生成最终预览，因为该请求被故意设置为无效。
+        fn finish(
+            &mut self,
+            _arguments: &serde_json::Value,
+        ) -> Result<Option<ToolRequestPreview>, String> {
+            Ok(None)
+        }
+
+        /// Records the mandatory cleanup call.
+        /// 记录必须发生的清理调用。
+        fn abort(&mut self) {
+            self.abort_count.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// Factory that creates an abort-tracking parser for one request.
+    /// 为单个请求创建可跟踪中止行为解析器的工厂。
+    struct AbortTrackingParserFactory {
+        /// Shared counter passed to each isolated parser session.
+        /// 传递给每个隔离解析器会话的共享计数器。
+        abort_count: Arc<AtomicUsize>,
+    }
+
+    impl ToolRequestParserFactory for AbortTrackingParserFactory {
+        /// Creates a parser that records the coordinator cleanup boundary.
+        /// 创建记录协调器清理边界的解析器。
+        fn create(&self, _context: ToolRequestParserContext) -> Box<dyn ToolRequestParserSession> {
+            Box::new(AbortTrackingParser {
+                abort_count: Arc::clone(&self.abort_count),
+            })
+        }
     }
 
     /// Verifies immediate progress reports Unicode scalar counts without tokenization.
@@ -1381,6 +1517,77 @@ mod tests {
         assert_eq!(retained_assembler.len(), provider_assembler.len());
     }
 
+    /// Verifies an assembler-owned prefix is lexed even when the start fragment is empty.
+    /// 验证启动碎片为空时仍会词法解析 assembler 持有的前缀。
+    #[test]
+    fn shared_assembler_prefix_is_lexed_before_following_delta() {
+        let provider_assembler = ToolCallDraftAssembler::new(String::from("{\"value\":"));
+        let mut coordinator = test_coordinator();
+        let started = coordinator.apply(ToolRequestFragment::Detected {
+            request_stream_id: String::from("stream-assembler-prefix"),
+            tool_call_id: String::from("call-assembler-prefix"),
+            tool_name: String::from("test_tool"),
+            initial_arguments: String::new(),
+            argument_assembler: Some(provider_assembler.clone()),
+        });
+        assert!(
+            started
+                .iter()
+                .all(|event| event.kind != RuntimeEventKind::ToolRequestInvalid)
+        );
+
+        provider_assembler.replace(String::from("{\"value\":\"done\"}"));
+        let completed = coordinator.apply(ToolRequestFragment::ArgumentsDelta {
+            request_stream_id: String::from("stream-assembler-prefix"),
+            delta: String::from("\"done\"}"),
+        });
+        assert!(completed.iter().any(|event| {
+            event.kind == RuntimeEventKind::ToolRequestProgress
+                && event
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("tool_display_state"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("arguments_assembled")
+        }));
+        assert!(coordinator.drafts.contains_key("stream-assembler-prefix"));
+    }
+
+    /// Verifies an invalid initial fragment aborts the parser before the draft is discarded.
+    /// 验证无效初始碎片会在丢弃草稿前中止解析器。
+    #[test]
+    fn invalid_initial_fragment_aborts_parser_session() {
+        let abort_count = Arc::new(AtomicUsize::new(0));
+        let mut coordinator = ToolRequestStreamCoordinator::default();
+        coordinator.tool_capabilities.insert(
+            String::from("abort_tool"),
+            Some(ToolRequestStreamingCapability {
+                parser_factory: Some(Arc::new(AbortTrackingParserFactory {
+                    abort_count: Arc::clone(&abort_count),
+                })),
+                preview_kind: None,
+                staging_policy: ToolRequestStagingPolicy::Forbidden,
+                sensitivity_policy: ToolRequestSensitivityPolicy::default(),
+                progress_policy: ToolRequestProgressPolicy::default(),
+            }),
+        );
+
+        let events = coordinator.apply(ToolRequestFragment::Detected {
+            request_stream_id: String::from("stream-invalid-initial"),
+            tool_call_id: String::from("call-invalid-initial"),
+            tool_name: String::from("abort_tool"),
+            initial_arguments: String::from("}"),
+            argument_assembler: None,
+        });
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == RuntimeEventKind::ToolRequestInvalid)
+        );
+        assert_eq!(abort_count.load(Ordering::SeqCst), 1);
+        assert!(coordinator.drafts.is_empty());
+    }
+
     /// Builds one minimal request draft for direct preview-policy enforcement tests.
     /// 为直接测试预览策略强制执行构建一份最小请求草稿。
     fn preview_policy_draft() -> ToolRequestDraft {
@@ -1406,6 +1613,8 @@ mod tests {
                 allowed_preview_fields: vec![String::from("name"), String::from("body_preview")],
                 redacted_json_paths: Vec::new(),
                 maximum_body_preview_bytes: 5,
+                maximum_structured_preview_lines: 0,
+                maximum_structured_preview_bytes: 0,
             },
         }
     }
@@ -1541,5 +1750,58 @@ mod tests {
             Some("superseded")
         );
         assert!(coordinator.drafts.is_empty());
+    }
+
+    /// Verifies a duplicate physical request id supersedes its old card and retains only the new draft.
+    /// 验证重复物理请求标识会替换旧卡片，并且只保留新草稿。
+    #[test]
+    fn duplicate_request_stream_supersedes_previous_draft() {
+        let mut coordinator = test_coordinator();
+        coordinator.apply(ToolRequestFragment::Detected {
+            request_stream_id: String::from("stream-duplicate"),
+            tool_call_id: String::from("call-old"),
+            tool_name: String::from("test_tool"),
+            initial_arguments: String::from("{}"),
+            argument_assembler: None,
+        });
+        let events = coordinator.apply(ToolRequestFragment::Detected {
+            request_stream_id: String::from("stream-duplicate"),
+            tool_call_id: String::from("call-new"),
+            tool_name: String::from("test_tool"),
+            initial_arguments: String::from("{}"),
+            argument_assembler: None,
+        });
+        assert!(events.iter().any(|event| {
+            event.kind == RuntimeEventKind::ToolRequestAborted
+                && event
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("tool_call_id"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("call-old")
+                && event
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("tool_display_state"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("superseded")
+        }));
+        assert!(events.iter().any(|event| {
+            event.kind == RuntimeEventKind::ToolRequestStarted
+                && event
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("tool_call_id"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("call-new")
+        }));
+        assert_eq!(coordinator.drafts.len(), 1);
+        assert_eq!(
+            coordinator
+                .drafts
+                .get("stream-duplicate")
+                .map(|draft| draft.tool_call_id.as_str()),
+            Some("call-new")
+        );
     }
 }

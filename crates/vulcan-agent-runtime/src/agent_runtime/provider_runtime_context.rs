@@ -1258,6 +1258,7 @@ mod tests {
     ) -> ExecutionPreparation {
         ExecutionPreparation {
             session_id: SessionId::nil(),
+            session_storage_directory: None,
             conversation_hook_turn_id: None,
             session_title: String::from("test"),
             agent_id: String::from("default"),

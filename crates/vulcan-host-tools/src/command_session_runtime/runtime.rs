@@ -216,10 +216,8 @@ impl CommandSessionRuntime {
     ) -> Result<CommandSessionReadOutcome, String> {
         let record = self.session_for_owner(owner_session_id, command_session_id)?;
         let after_seq = after_seq.unwrap_or(0);
-        let max_chunks = max_chunks
-            .unwrap_or(DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS)
-            .max(1);
-        let wait_for_output_ms = wait_for_output_ms.unwrap_or(DEFAULT_COMMAND_SESSION_READ_WAIT_MS);
+        let max_chunks = bounded_command_session_read_chunks(max_chunks);
+        let wait_for_output_ms = bounded_command_session_read_wait_ms(wait_for_output_ms);
         let wait_started_at = Instant::now();
 
         loop {
@@ -451,13 +449,8 @@ impl CommandSessionRuntime {
         } else {
             record.ai_delivered_seq().await
         };
-        let max_chunks = request
-            .max_chunks
-            .unwrap_or(DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS)
-            .max(1);
-        let wait_for_output_ms = request
-            .wait_for_output_ms
-            .unwrap_or(DEFAULT_COMMAND_SESSION_READ_WAIT_MS);
+        let max_chunks = bounded_command_session_read_chunks(request.max_chunks);
+        let wait_for_output_ms = bounded_command_session_read_wait_ms(request.wait_for_output_ms);
         let wait_started_at = Instant::now();
 
         loop {

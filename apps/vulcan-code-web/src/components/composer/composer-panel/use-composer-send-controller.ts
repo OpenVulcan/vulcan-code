@@ -28,6 +28,11 @@ export interface UseComposerSendControllerOptions {
   // Current staged composer attachments.
   // 当前已暂存的输入区附件。
   attachments: ComposerAttachmentSummary[];
+  // Projects request-local delivery decisions without mutating canonical draft attachments.
+  // 在不修改规范草稿附件的情况下投影单次请求局部传输决策。
+  projectAttachmentsForSubmission?: (
+    attachments: ComposerAttachmentSummary[],
+  ) => ComposerAttachmentSummary[];
   // Current execution mode included in submissions.
   // 提交中包含的当前执行模式。
   executionMode: string;
@@ -208,8 +213,11 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
       // sent records whether the workbench runtime accepted this complete submission.
       // sent 记录工作台运行时是否接受本次完整提交。
       const sent = await options.onSubmitPrompt({
+        draftSlotKey: submittedDraft.draftSlotKey,
         prompt,
-        attachments: submittedDraft.attachments,
+        attachments: options.projectAttachmentsForSubmission
+          ? options.projectAttachmentsForSubmission(submittedDraft.attachments)
+          : submittedDraft.attachments,
         ...submissionSettings,
         sessionSettings: options.captureSessionSettings(),
       });
@@ -233,6 +241,7 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
     options.isConversationRunning,
     options.onSubmitPrompt,
     options.onTrace,
+    options.projectAttachmentsForSubmission,
     options.restoreFailedSubmission,
     requestStop,
     submissionSettings,
@@ -264,6 +273,7 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
       // sent records whether the workbench runtime accepted the generated first turn.
       // sent 记录工作台运行时是否接受生成的首轮。
       const sent = await options.onSubmitPrompt({
+        draftSlotKey: submissionDraftSlotKey,
         prompt: objective,
         attachments: [],
         ...submissionSettings,

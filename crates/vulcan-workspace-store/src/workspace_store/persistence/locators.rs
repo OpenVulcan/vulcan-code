@@ -23,28 +23,35 @@ pub(super) fn ensure_segmented_session_directory_for_locator(
     session_id_text: &str,
     locator: &SegmentedSessionLocator,
 ) -> Result<std::path::PathBuf, String> {
-    match find_segmented_session_directory(
+    // createdDate converts the authoritative locator timestamp into the deterministic directory component.
+    // createdDate 将权威定位时间戳转换为确定性的目录组成部分。
+    let created_date = session_directory_date_from_unix_millis_text(&locator.created_at)?;
+    // sessionDir is computed directly; persistence must never enumerate sibling session directories.
+    // sessionDir 由定位信息直接计算；持久化绝不能枚举同项目下的其他会话目录。
+    let session_dir = segmented_session_directory(
         &controller.data_root,
         locator.archived,
         &locator.project_id,
+        &created_date,
         session_id_text,
-    )? {
-        Some(session_dir) => Ok(session_dir),
-        None => create_segmented_session_in_location(
-            &controller.data_root,
-            locator.archived,
-            SegmentedSessionCreateRequest {
-                session_id: session_id_text.to_string(),
-                project_tag: locator.project_id.clone(),
-                created_date: session_directory_date_from_unix_millis_text(&locator.created_at)?,
-                created_at: locator.created_at.clone(),
-                project_id: Some(locator.project_id.clone()),
-                title: Some(locator.title.clone()),
-                title_source: Some(locator.title_source.clone()),
-                segment_policy: SegmentPolicy::default(),
-            },
-        ),
+    );
+    if session_dir.is_dir() {
+        return Ok(session_dir);
     }
+    create_segmented_session_in_location(
+        &controller.data_root,
+        locator.archived,
+        SegmentedSessionCreateRequest {
+            session_id: session_id_text.to_string(),
+            project_tag: locator.project_id.clone(),
+            created_date,
+            created_at: locator.created_at.clone(),
+            project_id: Some(locator.project_id.clone()),
+            title: Some(locator.title.clone()),
+            title_source: Some(locator.title_source.clone()),
+            segment_policy: SegmentPolicy::default(),
+        },
+    )
 }
 
 /// Stores normalized locator data after SQLite scalar decoding.

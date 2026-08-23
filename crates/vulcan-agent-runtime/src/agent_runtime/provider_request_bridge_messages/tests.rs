@@ -29,9 +29,12 @@ fn replayable_attachment(
             .join("Cargo.toml")
             .to_string_lossy()
             .to_string(),
+        resource_path: Some(format!(".vulcan/code/attachments/{file_name}")),
         source_path: None,
         asset_id: Some(format!("asset-{file_name}")),
         byte_len: Some(4),
+        source_sha256: None,
+        delivery_mode: None,
         preview_local_path: None,
         mime_type: mime_type.to_string(),
     }
@@ -245,6 +248,15 @@ fn provider_visible_history_downgrades_model_unsupported_attachments() {
     };
     assert!(attachments.is_empty());
     assert!(text.contains("selected model"));
+    assert!(text.contains(".vulcan/code/attachments/demo.png"));
+    let CoreConversationPayload::UserText {
+        attachments: canonical_attachments,
+        ..
+    } = &messages[0].payload
+    else {
+        panic!("expected canonical user text");
+    };
+    assert_eq!(canonical_attachments.len(), 1);
 }
 
 /// Verifies legacy project-scope Explore records are removed from provider-visible history.

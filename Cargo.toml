@@ -124,6 +124,7 @@ protoc-bin-vendored = "3.2.0"
 pulldown-cmark = "0.13.4"
 rcgen = "0.14"
 reqwest = { version = "0.13.4", default-features = false, features = ["form", "json", "rustls"] }
+regex = "1.13.1"
 rmcp = { version = "3.1", default-features = false }
 rustls = { version = "0.23.43", default-features = false, features = ["ring"] }
 semver = "1"

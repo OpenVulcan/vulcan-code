@@ -709,6 +709,25 @@
   font-size: 13px;
 }
 
+.file-change-read-row {
+  display: grid;
+  grid-template-columns: 4em minmax(0, 1fr);
+  gap: 10px;
+  padding: 2px 14px;
+  white-space: pre;
+}
+
+.file-change-read-line-number {
+  color: var(--muted-foreground);
+  text-align: right;
+  user-select: none;
+}
+
+.file-change-read-content {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .conversation-collapsible-motion {
     transition: none;

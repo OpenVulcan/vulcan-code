@@ -1,7 +1,10 @@
 //! Pending prompt queue service adapters for the WebUI bridge.
 //! WebUI 桥接层待发送提示词队列服务适配器。
 
-use vulcan_agent_runtime::provider_config::{ProviderConfigurationFile, ReasoningEffortLevel};
+use vulcan_agent_runtime::{
+    attachment_asset_index::{acquire_staged_attachment_ref, release_staged_attachment_ref},
+    provider_config::{ProviderConfigurationFile, ReasoningEffortLevel},
+};
 use vulcan_context::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
 use vulcan_core::controller::INTERJECTED_PROMPT_ADMISSION_ID_KEY;
 use vulcan_core::types::ConversationAttachment;
@@ -66,6 +69,14 @@ pub(super) struct QueuedPendingPromptHookEvent {
     /// User-visible queued prompt content.
     /// 用户可见的排队提示词内容。
     prompt: String,
+}
+
+impl QueuedPendingPromptHookEvent {
+    /// Returns the authoritative workspace path captured by queue admission.
+    /// 返回队列准入捕获的权威工作区路径。
+    pub(super) fn workspace_path(&self) -> &str {
+        self.workspace_path.as_str()
+    }
 }
 
 /// Prompt admission committed atomically with its immediate transcript projection.
@@ -236,7 +247,57 @@ pub(super) fn enqueue_webui_pending_prompt_from_submission(
             reasoning_effort,
         )?,
     );
-    enqueue_webui_pending_prompt_panel_entry(workspace_snapshot, session_id, workspace_path, entry)
+    let queue_scope = pending_prompt_attachment_staging_scope(&entry.id)?;
+    acquire_staged_attachment_ref(workspace_path, &queue_scope, &entry.attachments)?;
+    match enqueue_webui_pending_prompt_panel_entry(
+        workspace_snapshot,
+        session_id,
+        workspace_path,
+        entry.clone(),
+    ) {
+        Ok(event) => Ok(event),
+        Err(error) => {
+            // queueLeaseRollback prevents a failed queue admission from retaining an invisible asset owner.
+            // queueLeaseRollback 防止失败的队列准入保留不可见的资产所有者。
+            if let Err(rollback_error) =
+                release_staged_attachment_ref(workspace_path, &queue_scope, &entry.attachments)
+            {
+                return Err(format!(
+                    "{error}; failed to roll back pending attachment lease: {rollback_error}"
+                ));
+            }
+            Err(error)
+        }
+    }
+}
+
+/// Builds the deterministic transient attachment owner for one visible pending-prompt row.
+/// 为一条可见待发送提示词行构建确定性的瞬时附件所有者。
+///
+/// # Parameters
+/// 参数
+/// `panel_entry_id` is the stable visible queue-row identifier.
+/// `panel_entry_id` 是稳定的可见队列行标识。
+///
+/// # Returns
+/// 返回值
+/// The internal-only asset-index scope, or an explicit invalid-identity error.
+/// 返回仅供内部资产索引使用的作用域，或明确的身份无效错误。
+pub(super) fn pending_prompt_attachment_staging_scope(
+    panel_entry_id: &str,
+) -> Result<String, String> {
+    if panel_entry_id.chars().any(char::is_control) {
+        return Err(String::from(
+            "Pending prompt attachment owner identity is invalid.",
+        ));
+    }
+    let panel_entry_id = panel_entry_id.trim();
+    if panel_entry_id.is_empty() || panel_entry_id.len() > 256 {
+        return Err(String::from(
+            "Pending prompt attachment owner identity is invalid.",
+        ));
+    }
+    Ok(format!("pending-prompt:v1:{panel_entry_id}"))
 }
 
 /// Builds one WebUI-originated visible pending prompt entry.
@@ -854,12 +915,28 @@ mod tests {
             kind: ConversationAttachmentKind::Image,
             file_name: String::from("chart.png"),
             local_path: String::from("C:/tmp/chart.png"),
+            resource_path: None,
             source_path: None,
             asset_id: None,
             byte_len: Some(128),
+            source_sha256: None,
+            delivery_mode: None,
             preview_local_path: None,
             mime_type: String::from("image/png"),
         }
+    }
+
+    /// Verifies one visible pending row maps to exactly one stable transient asset owner.
+    /// 验证一条可见待发送行只会映射到一个稳定的瞬时资产所有者。
+    #[test]
+    fn pending_prompt_attachment_scope_is_deterministic() {
+        assert_eq!(
+            pending_prompt_attachment_staging_scope(" row-a ")
+                .expect("bounded row identity should be valid"),
+            "pending-prompt:v1:row-a"
+        );
+        assert!(pending_prompt_attachment_staging_scope("").is_err());
+        assert!(pending_prompt_attachment_staging_scope("row\na").is_err());
     }
 
     /// Verifies pending prompt previews collapse whitespace without changing visible words.

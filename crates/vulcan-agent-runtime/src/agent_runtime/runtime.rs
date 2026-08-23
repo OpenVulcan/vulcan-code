@@ -97,6 +97,9 @@ pub struct RuntimeFoundation {
     /// Immutable Vulcan Plugin catalog revision captured for this foundation.
     /// 当前基础架构捕获的不可变 Vulcan 插件目录修订版。
     vulcan_plugin_catalog: Option<Arc<VulcanPluginCatalogSnapshot>>,
+    /// Immutable system-and-user prompt-skill catalog captured before the interaction path.
+    /// 在交互路径之前捕获的不可变系统与用户提示词技能目录。
+    prompt_skill_catalog: Arc<vulcan_prompt_skills::PromptSkillCatalog>,
     /// LuaSkills-backed runtime tool descriptors exposed to the host-controlled provider execution flows.
     /// 暴露给宿主控制 Provider 执行链的 LuaSkills 运行时工具描述集合。
     luaskills_tools: Vec<RuntimeEntryDescriptor>,
@@ -190,6 +193,7 @@ impl RuntimeFoundation {
             luaskills_runtime,
             vulcan_plugin_runtime,
             None,
+            None,
             0,
             mcp_runtime_access.unwrap_or_else(|| configured_mcp_runtime_access(config)),
             task_runtime,
@@ -216,6 +220,7 @@ impl RuntimeFoundation {
             luaskills_runtime,
             vulcan_plugin_runtime,
             extension_generation.plugin_catalog(),
+            extension_generation.prompt_skill_catalog(),
             extension_generation.revision(),
             extension_generation.mcp_runtime(),
             task_runtime,
@@ -238,6 +243,7 @@ impl RuntimeFoundation {
             luaskills_runtime,
             None,
             None,
+            None,
             0,
             mcp_runtime_access,
             Arc::new(TaskRuntime::new()),
@@ -254,6 +260,7 @@ impl RuntimeFoundation {
         luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
         vulcan_plugin_runtime: Option<VulcanPluginRuntimeManager>,
         vulcan_plugin_catalog: Option<Arc<VulcanPluginCatalogSnapshot>>,
+        prompt_skill_catalog: Option<Arc<vulcan_prompt_skills::PromptSkillCatalog>>,
         extension_revision: u64,
         mcp_runtime_access: McpRuntimeAccess,
         task_runtime: Arc<TaskRuntime>,
@@ -269,17 +276,11 @@ impl RuntimeFoundation {
             "after_precheck_24a3_runtime_config_ready",
             format!("extension_revision={extension_revision}"),
         );
-        let mut subagent_catalog = vulcan_task_session::load_subagent_catalog_from_roots(
-            vulcan_runtime_assets::resolve_system_subagents_resource_directory(),
-            crate::data_plane::application_data_root().join("agents"),
-        );
+        // taskRuntime already owns the catalog generation published by service startup or an explicit settings refresh.
+        // taskRuntime 已持有服务启动或显式设置刷新发布的目录代次。
         after_precheck_trace(
-            "after_precheck_24a4_subagent_catalog_ready",
-            format!(
-                "extension_revision={} errors={}",
-                extension_revision,
-                subagent_catalog.errors.len()
-            ),
+            "after_precheck_24a4_subagent_catalog_reused",
+            format!("extension_revision={extension_revision}"),
         );
         let native_tools = build_native_tool_catalog(
             &runtime_config,
@@ -293,23 +294,23 @@ impl RuntimeFoundation {
             "after_precheck_24a5_native_tool_catalog_ready",
             format!("extension_revision={extension_revision}"),
         );
-        let mut warnings = subagent_catalog
-            .errors
-            .iter()
-            .map(|error| {
-                format!(
-                    "加载子代理定义 `{}` 失败：{}",
-                    error.path.display(),
-                    error.message
-                )
-            })
-            .collect::<Vec<_>>();
+        let mut warnings = Vec::new();
         // Capture the manager's already-published immutable generation; service lifecycle owns filesystem refreshes.
         // 捕获管理器已经发布的不可变代次；文件系统刷新由服务生命周期负责。
         let vulcan_plugin_catalog = vulcan_plugin_catalog.or_else(|| {
             vulcan_plugin_runtime
                 .as_ref()
                 .map(VulcanPluginRuntimeManager::snapshot)
+        });
+        // promptSkillCatalog is loaded only by standalone foundation construction; service
+        // executions always reuse the catalog published by startup or an explicit watcher refresh.
+        // promptSkillCatalog 仅由独立基础架构构建加载；服务执行始终复用启动或显式监视刷新发布的目录。
+        let prompt_skill_catalog = prompt_skill_catalog.unwrap_or_else(|| {
+            let prompt_skill_config =
+                crate::skills::prompt::global_config_from_persisted(&config.prompt_skills);
+            Arc::new(vulcan_prompt_skills::load_prompt_skills(
+                &prompt_skill_config,
+            ))
         });
         after_precheck_trace(
             "after_precheck_24a6_plugin_catalog_ready",
@@ -319,17 +320,8 @@ impl RuntimeFoundation {
                 vulcan_plugin_catalog.is_some()
             ),
         );
-        if let Some(catalog) = vulcan_plugin_catalog.as_ref()
-            && let Err(error) =
-                subagent_catalog.merge_plugin_definitions(catalog.enabled_agents.values().cloned())
-        {
-            warnings.push(format!("合并插件智能体目录失败：{error}"));
-        }
-        if let Err(error) = task_runtime.replace_subagent_catalog(subagent_catalog) {
-            warnings.push(error);
-        }
         after_precheck_trace(
-            "after_precheck_24a7_subagent_catalog_installed",
+            "after_precheck_24a7_subagent_catalog_retained",
             format!("extension_revision={extension_revision}"),
         );
         let (luaskills_tools, luaskills_dispatch_tools, implicit_luaskill_prompt_entries) =
@@ -369,6 +361,7 @@ impl RuntimeFoundation {
             native_tools,
             vulcan_plugin_runtime,
             vulcan_plugin_catalog,
+            prompt_skill_catalog,
             luaskills_tools,
             luaskills_dispatch_tools,
             implicit_luaskill_prompt_entries,
@@ -515,6 +508,17 @@ impl RuntimeFoundation {
     /// 返回当前基础架构捕获的不可变 Vulcan 插件目录。
     pub fn vulcan_plugin_catalog(&self) -> Option<Arc<VulcanPluginCatalogSnapshot>> {
         self.vulcan_plugin_catalog.clone()
+    }
+
+    /// Returns the immutable system-and-user prompt-skill catalog captured by this foundation.
+    /// 返回当前基础架构捕获的不可变系统与用户提示词技能目录。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The shared catalog generation without filesystem discovery.
+    /// 返回不执行文件系统发现的共享目录代次。
+    pub fn prompt_skill_catalog(&self) -> Arc<vulcan_prompt_skills::PromptSkillCatalog> {
+        Arc::clone(&self.prompt_skill_catalog)
     }
 
     /// Returns the shared resumable task runtime used by the current foundation.

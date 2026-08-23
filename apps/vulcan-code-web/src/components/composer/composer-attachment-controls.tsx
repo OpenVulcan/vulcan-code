@@ -2,6 +2,7 @@ import React from "react";
 import {
   BrainCircuit,
   CheckCircle2,
+  CircleAlert,
   FileText,
   Image as ImageIcon,
   ListChecks,
@@ -38,7 +39,9 @@ import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type {
   ComposerAttachmentCapabilitySummary,
+  ComposerAttachmentPreparationSummary,
   ComposerAttachmentSummary,
+  MediaUploadProgressChangedDelta,
   OutputStyleCatalogSummary,
   SessionOutputStyleSummary,
   SessionVmmPolicySummary,
@@ -115,7 +118,7 @@ export function ComposerAttachmentMenu(props: {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
-  const menuCapabilities = props.capabilities.filter((capability) => ["image", "video", "audio", "pdf"].includes(capability.kind));
+  const menuCapabilities = props.capabilities.filter((capability) => ["image", "video", "audio", "pdf", "file"].includes(capability.kind));
   return (
     <DropdownMenu>
       <Tooltip>
@@ -335,6 +338,7 @@ function composerAttachmentKindLabelKey(kind: string): TranslationKey | null {
   if (kind === "video") return "composer.attachment.kind.video";
   if (kind === "audio") return "composer.attachment.kind.audio";
   if (kind === "pdf") return "composer.attachment.kind.pdf";
+  if (kind === "file") return "composer.attachment.kind.file";
   return null;
 }
 
@@ -357,6 +361,12 @@ export function ComposerAttachmentStrip(props: {
   // Staged attachments shown in the strip.
   // 附件条中展示的已暂存附件。
   attachments: ComposerAttachmentSummary[];
+  // Draft preparation states indexed by stable attachment identity.
+  // 按稳定附件身份索引的草稿准备状态。
+  preparations?: Readonly<Record<string, ComposerAttachmentPreparationSummary>>;
+  // Active transfer progress indexed by stable attachment identity.
+  // 按稳定附件身份索引的活跃传输进度。
+  progresses?: Readonly<Record<string, MediaUploadProgressChangedDelta>>;
   // Resolves the minimal preview media for one attachment.
   // 解析单个附件的最小预览媒体信息。
   resolvePreview: (attachment: ComposerAttachmentSummary) => ComposerAttachmentPreviewMedia | null;
@@ -366,41 +376,114 @@ export function ComposerAttachmentStrip(props: {
   // Removes one attachment by index.
   // 按索引移除单个附件。
   onRemove?: (index: number) => void;
+  // Retries one failed provider upload by stable attachment identity.
+  // 按稳定附件身份重试单个失败供应商上传。
+  onRetry?: (attachmentId: string) => void;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
   return (
     <div className="composer-attachment-strip">
-      {props.attachments.map((attachment, index) => (
-        <button
+      {props.attachments.map((attachment, index) => {
+        const attachmentId = attachment.assetId?.trim() ?? "";
+        const preparation = attachmentId ? props.preparations?.[attachmentId] : undefined;
+        const progress = attachmentId ? props.progresses?.[attachmentId] : undefined;
+        const totalBytes = progress?.totalBytes ?? null;
+        const progressPercent = preparation?.phase === "failed"
+          || preparation?.phase === "cancelled"
+          ? null
+          : preparation?.phase === "awaiting_provider_confirmation"
+          ? 99
+          : totalBytes && totalBytes > 0
+            ? Math.min(99, Math.max(0, Math.floor((progress?.bytesSent ?? 0) * 100 / totalBytes)))
+            : preparation?.blocksSubmission ? 0 : null;
+        const degraded = preparation?.deliveryPlan === "metadata_only"
+          || preparation?.phase === "failed";
+        return (
+        <div
           className={cn("composer-attachment-tile", {
             "image-attachment": attachment.kind === "image",
+            "attachment-preparing": preparation?.blocksSubmission,
+            "attachment-degraded": degraded,
           })}
           key={`${attachment.localPath}-${index}`}
-          onClick={() => props.onOpenMedia(attachment)}
-          type="button"
         >
+          <button
+            aria-label={attachment.fileName}
+            className="composer-attachment-open"
+            onClick={() => props.onOpenMedia(attachment)}
+            type="button"
+          />
           <ComposerAttachmentPreview attachment={attachment} resolvePreview={props.resolvePreview} />
           {attachment.kind === "image" ? null : (
             <span className="composer-attachment-name">{attachment.fileName}</span>
           )}
           {props.onRemove ? (
-            <span
+            <button
               aria-label={t("composer.attachment.remove")}
               className="composer-attachment-remove"
               onClick={(event) => {
                 event.stopPropagation();
                 props.onRemove?.(index);
               }}
-              role="button"
-              tabIndex={0}
+              type="button"
             >
               <X size={12} />
+            </button>
+          ) : null}
+          {typeof progressPercent === "number" ? (
+            <span
+              aria-label={preparation?.phase === "awaiting_provider_confirmation"
+                ? t("composer.attachment.processing")
+                : `${progressPercent}%`}
+              className="composer-attachment-progress"
+              role="status"
+            >
+              <svg aria-hidden="true" viewBox="0 0 36 36">
+                <circle className="composer-attachment-progress-track" cx="18" cy="18" r="15" />
+                <circle
+                  className="composer-attachment-progress-value"
+                  cx="18"
+                  cy="18"
+                  pathLength="100"
+                  r="15"
+                  style={{ strokeDasharray: `${progressPercent} 100` }}
+                />
+              </svg>
+              <span>{progressPercent}%</span>
             </span>
           ) : null}
-        </button>
-      ))}
+          {degraded ? (
+            <>
+              <span
+                aria-label={t("composer.attachment.metadataOnly")}
+                className="composer-attachment-warning"
+                role="status"
+                title={preparation?.error ?? t("composer.attachment.metadataOnly")}
+              >
+                <CircleAlert size={16} />
+              </span>
+              {preparation?.phase === "failed"
+                && preparation.deliveryPlan === "upload_reference"
+                && props.onRetry
+                && attachmentId ? (
+                <button
+                  className="composer-attachment-retry"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    props.onRetry?.(attachmentId);
+                  }}
+                  type="button"
+                >
+                  {t("composer.attachment.retry")}
+                </button>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+        );
+      })}
     </div>
   );
 }

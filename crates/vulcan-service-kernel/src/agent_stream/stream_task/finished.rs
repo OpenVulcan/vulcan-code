@@ -162,7 +162,15 @@ pub(super) async fn handle_finished_stream_event(
     // terminalGoalId 优先使用流内物理请求绑定，并回退到原子保留的任务绑定。
     let terminal_goal_id = execution_goal_id.or(retained_goal_id.as_deref());
 
-    if let Err(error) = record_webui_provider_response_checkpoint(controller_runtime, &report) {
+    let response_checkpoint_result = require_segmented_session_directory_from_state(
+        task_state,
+        &controller_runtime.data_root,
+        finished_session_id,
+    )
+    .and_then(|session_directory| {
+        record_webui_provider_response_checkpoint(&session_directory, &report)
+    });
+    if let Err(error) = response_checkpoint_result {
         eprintln!("[webui-service] provider response checkpoint write failed: {error}");
     }
     // Goal elapsed time uses whole seconds and saturates invalid platform conversions to zero.
@@ -278,7 +286,7 @@ pub(super) async fn handle_finished_stream_event(
     );
     // clearedRetrySnapshotId is eligible for physical cleanup only after the cleared main reference is durably committed.
     // clearedRetrySnapshotId 仅在主引用清除状态可靠提交后才允许执行物理清理。
-    let mut cleared_retry_snapshot_id = None;
+    let mut cleared_retry_snapshot_reference = None;
     let retry_lifecycle_result = match (terminal_error.as_deref(), final_report_apply.is_some()) {
         (Some(error), _) => match retry_evidence {
             FailedExecutionStreamRetryEvidence::ProvenNotDispatchedBeforeProviderDispatch => {
@@ -302,8 +310,8 @@ pub(super) async fn handle_finished_stream_event(
         .map_err(|error| error.to_string()),
         (None, true) => {
             clear_execution_retry_snapshot_after_success(task_state, finished_session_id).map(
-                |snapshot_id| {
-                    cleared_retry_snapshot_id = snapshot_id;
+                |reference| {
+                    cleared_retry_snapshot_reference = reference;
                 },
             )
         }
@@ -347,26 +355,14 @@ pub(super) async fn handle_finished_stream_event(
         // finalPersistStartedAt measures both the primary write and any fail-closed replacement write.
         // finalPersistStartedAt 衡量主写入以及可能发生的失败关闭替代写入。
         let final_persist_started_at = current_unix_millis_value();
-        // primaryPersistenceResult includes exact snapshot acquisition so missing retained state also fails closed.
-        // primaryPersistenceResult 包含精确快照获取，因此保留状态缺失时同样失败关闭。
-        let primary_persistence_result =
-            match current_workspace_snapshot_from_shared_state(task_state) {
-                Ok(Some(latest_workspace_snapshot)) => {
-                    persist_workspace_session_update(
-                        Some(task_state),
-                        controller_runtime.clone(),
-                        &latest_workspace_snapshot,
-                        finished_session_id,
-                    )
-                    .await
-                }
-                Ok(None) => Err(String::from(
-                    "The retained terminal workspace is unavailable for persistence.",
-                )),
-                Err(error) => Err(format!(
-                    "Failed to read the retained terminal workspace for persistence: {error}"
-                )),
-            };
+        // primaryPersistenceResult captures only the exact retained session after write admission.
+        // primaryPersistenceResult 在取得写入许可后只捕获精确保留会话。
+        let primary_persistence_result = persist_latest_retained_workspace_session_update(
+            task_state,
+            controller_runtime.clone(),
+            finished_session_id,
+        )
+        .await;
         match primary_persistence_result {
             Ok(()) => terminal_state_persisted = true,
             Err(error) => {
@@ -398,23 +394,12 @@ pub(super) async fn handle_finished_stream_event(
                     // blockedPersistenceResult retries only the latest in-memory revision after fail-closed invalidation.
                     // blockedPersistenceResult 仅在失败关闭失效后重试最新内存修订。
                     let blocked_persistence_result =
-                        match current_workspace_snapshot_from_shared_state(task_state) {
-                            Ok(Some(blocked_workspace_snapshot)) => {
-                                persist_workspace_session_update(
-                                    Some(task_state),
-                                    controller_runtime.clone(),
-                                    &blocked_workspace_snapshot,
-                                    finished_session_id,
-                                )
-                                .await
-                            }
-                            Ok(None) => Err(String::from(
-                                "The blocked terminal workspace is unavailable for fallback persistence.",
-                            )),
-                            Err(snapshot_error) => Err(format!(
-                                "Failed to read the blocked terminal workspace for fallback persistence: {snapshot_error}"
-                            )),
-                        };
+                        persist_latest_retained_workspace_session_update(
+                            task_state,
+                            controller_runtime.clone(),
+                            finished_session_id,
+                        )
+                        .await;
                     match blocked_persistence_result {
                         Ok(()) => terminal_state_persisted = true,
                         Err(fallback_error) => eprintln!(
@@ -430,20 +415,47 @@ pub(super) async fn handle_finished_stream_event(
             format!("session={finished_session_id} persisted={terminal_state_persisted}"),
         );
     }
+    // terminalSessionDirectory is resolved once from the exact retained locator and reused by terminal side effects.
+    // terminalSessionDirectory 从精确保留定位信息解析一次，并由终态副作用复用。
+    let terminal_session_directory = if terminal_state_persisted {
+        match require_segmented_session_directory_from_state(
+            task_state,
+            &controller_runtime.data_root,
+            finished_session_id,
+        ) {
+            Ok(session_directory) => Some(session_directory),
+            Err(error) => {
+                webui_trace(
+                    "stream_terminal_exact_locator_failed",
+                    format!("session={finished_session_id} error={error}"),
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
     if terminal_state_persisted {
         // Physical cleanup occurs only after the durable main document no longer references this immutable body.
         // 只有在可靠主文档不再引用该不可变正文后，才执行物理清理。
-        if let Some(snapshot_id) = cleared_retry_snapshot_id.as_deref()
-            && let Err(error) =
-                vulcan_workspace_store::workspace_store::delete_execution_retry_snapshot(
-                    &controller_runtime.data_root,
-                    finished_session_id,
-                    snapshot_id,
-                )
-        {
-            eprintln!(
-                "[webui-service] post-persistence execution retry garbage collection failed: {error}"
-            );
+        if let Some(reference) = cleared_retry_snapshot_reference.as_ref() {
+            let cleanup_result = terminal_session_directory
+                .as_ref()
+                .ok_or_else(|| {
+                    String::from("Exact terminal session storage locator is unavailable.")
+                })
+                .and_then(|session_directory| {
+                    vulcan_workspace_store::workspace_store::delete_execution_retry_snapshot(
+                        session_directory,
+                        finished_session_id,
+                        reference,
+                    )
+                });
+            if let Err(error) = cleanup_result {
+                eprintln!(
+                    "[webui-service] post-persistence execution retry garbage collection failed: {error}"
+                );
+            }
         }
     }
     // The exact marker opens admission only after the latest terminal or fail-closed replacement revision is durable.
@@ -474,41 +486,46 @@ pub(super) async fn handle_finished_stream_event(
         // vmm_lifecycle_events contain only stable identities, hashes, counters, and byte totals.
         // vmm_lifecycle_events 仅包含稳定身份、哈希、计数与字节总量。
         let vmm_lifecycle_events = apply.vmm_lifecycle_events.clone();
-        let data_root = controller_runtime.data_root.clone();
-        spawn_service_task(async move {
-            let timestamp = current_unix_millis_text();
-            if let Err(error) = crate::vmm_runtime_audit::record_vmm_lifecycle_events(
-                &data_root,
-                finished_session_id,
-                &timestamp,
-                vmm_lifecycle_events,
-            ) {
-                webui_trace(
-                    "runtime_vmm_terminal_audit_failed",
-                    format!("session={finished_session_id} error={error}"),
-                );
-            }
-        });
+        if let Some(vmm_audit_session_directory) = terminal_session_directory.clone() {
+            spawn_service_task(async move {
+                let timestamp = current_unix_millis_text();
+                if let Err(error) = crate::vmm_runtime_audit::record_vmm_lifecycle_events(
+                    &vmm_audit_session_directory,
+                    finished_session_id,
+                    &timestamp,
+                    vmm_lifecycle_events,
+                ) {
+                    webui_trace(
+                        "runtime_vmm_terminal_audit_failed",
+                        format!("session={finished_session_id} error={error}"),
+                    );
+                }
+            });
+        } else {
+            webui_trace(
+                "runtime_vmm_terminal_audit_failed",
+                format!(
+                    "session={finished_session_id} error=exact session storage locator is unavailable"
+                ),
+            );
+        }
     }
 
     if terminal_state_persisted
-        && let (Some(apply), Some((final_boundary_events, terminal_boundary_event, session_title))) =
-            (final_report_apply.as_ref(), terminal_lifecycle)
-        && let Some(project_id) =
-            owning_project_id_for_session(&apply.workspace_snapshot, finished_session_id)
+        && final_report_apply.is_some()
+        && let Some((final_boundary_events, terminal_boundary_event, _session_title)) =
+            terminal_lifecycle
+        && let Some(session_directory) = terminal_session_directory.clone()
     {
         // The cloned runtime moves into the non-blocking external lifecycle task.
         // 克隆后的运行时移入非阻塞外部生命周期任务。
-        let controller_runtime_for_lifecycle = controller_runtime.clone();
         spawn_service_task(async move {
             // Lifecycle latency is measured inside the spawned task to exclude scheduling delay ambiguity.
             // 生命周期延迟在生成任务内部测量，以排除调度延迟歧义。
             let lifecycle_started_at = current_unix_millis_value();
             if let Err(error) = finish_session_external_turn_lifecycle(
-                &controller_runtime_for_lifecycle,
-                &project_id,
+                &session_directory,
                 finished_session_id,
-                &session_title,
                 final_boundary_events,
                 terminal_boundary_event,
             ) {
@@ -540,7 +557,7 @@ pub(super) async fn handle_finished_stream_event(
         && let Some(apply) = final_report_apply.as_ref()
         && let Some(event) = conversation_run_settled_event_from_terminal_facts(
             finished_session_id,
-            owning_project_id_for_session(&apply.workspace_snapshot, finished_session_id),
+            apply.project_id.clone(),
             active_stream_task_id,
             apply.conversation_run_outcome,
             started_next_prompt,
@@ -565,31 +582,6 @@ pub(super) async fn handle_finished_stream_event(
         );
     }
     FinishedStreamEventOutcome::Handled
-}
-
-/// Reads the latest retained workspace only when a failed terminal projection requires fallback persistence.
-/// 仅在失败的终态投影需要回退持久化时读取最新保留工作区。
-///
-/// # Parameters
-/// 参数
-/// `task_state` owns the post-invalidation workspace revision.
-/// `task_state` 持有完成失效后的工作区修订。
-/// `fallback_required` records whether the fail-closed phase was applied successfully.
-/// `fallback_required` 记录失败关闭阶段是否已经成功应用。
-///
-/// # Returns
-/// 返回值
-/// The latest retained snapshot when persistence is required, `None` otherwise, or a lock error.
-/// 需要持久化时返回最新保留快照，否则返回 `None`；加锁失败时返回错误。
-#[cfg(test)]
-fn terminal_projection_fallback_snapshot_for_persistence(
-    task_state: &SharedServiceBridgeState,
-    fallback_required: bool,
-) -> Result<Option<WorkspaceSnapshot>, String> {
-    if !fallback_required {
-        return Ok(None);
-    }
-    current_workspace_snapshot_from_shared_state(task_state)
 }
 
 /// Builds a settled lifecycle event only from terminal facts that close the visible conversation run.
@@ -664,116 +656,6 @@ fn finished_turn_terminal_status(has_error: bool) -> TurnTerminalStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Builds one frozen retry reference used to distinguish stale and latest fallback snapshots.
-    /// 构建一条冻结重试引用，用于区分过期与最新回退快照。
-    ///
-    /// # Returns
-    /// 返回值
-    /// A lightweight reference that initially proves replay safety.
-    /// 返回初始能够证明重放安全的轻量引用。
-    fn retry_reference_for_terminal_fallback_test()
-    -> vulcan_workbench_model::ExecutionRetrySnapshotRef {
-        vulcan_workbench_model::ExecutionRetrySnapshotRef {
-            schema_version: vulcan_workbench_model::EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION,
-            snapshot_id: String::from("00000000-0000-0000-0000-000000000001"),
-            generation: 1,
-            state: vulcan_workbench_model::ExecutionRetrySnapshotState::Frozen,
-            content_sha256: "0".repeat(64),
-            content_bytes: 1,
-            logical_execution_id: String::from("execution-1"),
-            pending_action_label: String::from("resume_preparation"),
-            provider_route: None,
-            preparation_route_selection: Some(
-                vulcan_workbench_model::ExecutionRetryPreparationRouteSelection {
-                    active_provider_id: None,
-                    active_connection_id: None,
-                    active_model_id: None,
-                },
-            ),
-            context_generation_id: None,
-            canonical_dispatch_sha256: "0".repeat(64),
-            retryable: true,
-            requires_manual_confirmation: false,
-            blocked_reason: None,
-            claimed_attempt_id: None,
-            error_summary: None,
-            updated_at: String::from("1"),
-        }
-    }
-
-    /// Verifies fallback persistence reads the post-invalidation state instead of a stale phase snapshot.
-    /// 验证回退持久化会读取失效后的状态，而不是过期的阶段快照。
-    #[test]
-    fn terminal_projection_fallback_persists_latest_retry_invalidation() {
-        // sessionId identifies the exact retained regular conversation under test.
-        // sessionId 标识被测的精确保留常规会话。
-        let session_id = SessionId::new_v4();
-        // serviceState supplies the minimum workspace shell and session summary required by the shared-state reader.
-        // serviceState 提供共享状态读取器所需的最小工作区壳与会话摘要。
-        let mut service_state =
-            crate::tests::test_support::test_service_state_with_parent_session(session_id);
-        service_state
-            .workspace_snapshot
-            .as_mut()
-            .expect("test workspace should exist")
-            .session_runtime_state
-            .insert(
-                session_id,
-                SessionRuntimeStateEntry {
-                    execution_retry_snapshot: Some(retry_reference_for_terminal_fallback_test()),
-                    ..SessionRuntimeStateEntry::default()
-                },
-            );
-        // taskState exposes the exact retained revision used by production fallback persistence.
-        // taskState 暴露生产回退持久化使用的精确保留修订。
-        let task_state: SharedServiceBridgeState =
-            std::sync::Arc::new(std::sync::Mutex::new(service_state));
-        // staleSnapshot models the phase-only clone that existed before retry invalidation.
-        // staleSnapshot 模拟重试失效前存在的仅阶段克隆。
-        let stale_snapshot = current_workspace_snapshot_from_shared_state(&task_state)
-            .expect("stale snapshot read should succeed")
-            .expect("stale workspace should exist");
-
-        invalidate_execution_retry_reference(
-            &task_state,
-            session_id,
-            "semantic_output_observed",
-            "The provider completed before terminal projection failed.",
-        )
-        .expect("retry invalidation should succeed");
-        // latestSnapshot is the exact state selected for fallback persistence after invalidation.
-        // latestSnapshot 是失效后被回退持久化选择的精确状态。
-        let latest_snapshot =
-            terminal_projection_fallback_snapshot_for_persistence(&task_state, true)
-                .expect("latest fallback read should succeed")
-                .expect("latest fallback workspace should exist");
-        let stale_reference = stale_snapshot.session_runtime_state[&session_id]
-            .execution_retry_snapshot
-            .as_ref()
-            .expect("stale retry reference should exist");
-        let latest_reference = latest_snapshot.session_runtime_state[&session_id]
-            .execution_retry_snapshot
-            .as_ref()
-            .expect("latest retry reference should exist");
-        assert_eq!(
-            stale_reference.state,
-            vulcan_workbench_model::ExecutionRetrySnapshotState::Frozen
-        );
-        assert_eq!(
-            latest_reference.state,
-            vulcan_workbench_model::ExecutionRetrySnapshotState::Invalidated
-        );
-        assert_eq!(
-            latest_reference.blocked_reason.as_deref(),
-            Some("semantic_output_observed")
-        );
-        assert!(
-            terminal_projection_fallback_snapshot_for_persistence(&task_state, false)
-                .expect("disabled fallback read should succeed")
-                .is_none()
-        );
-    }
 
     /// Verifies that report success and failure map to exact kernel terminal states.
     /// 验证报告成功与失败会映射到精确的内核终态。

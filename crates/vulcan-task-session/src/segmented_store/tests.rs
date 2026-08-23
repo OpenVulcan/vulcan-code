@@ -26,6 +26,21 @@ fn test_root(test_name: &str) -> PathBuf {
 /// Creates the minimal root main-session metadata needed for parent link events.
 /// 创建父级关联事件所需的最小根主会话元数据。
 fn create_root_session_metadata(root: &Path, root_session_id: SessionNodeId) {
+    // rootLine is the exact initial event written to the root JSONL segment.
+    // rootLine 是写入根 JSONL 分段的精确初始事件。
+    let root_line = SegmentedEventLine {
+        seq: 0,
+        timestamp: "100".to_string(),
+        kind: "session_meta".to_string(),
+        payload: json!({ "session_id": root_session_id }),
+        turn_index: None,
+    };
+    // rootLineByteLen matches append_json_line compact encoding plus its newline.
+    // rootLineByteLen 匹配 append_json_line 的紧凑编码及其换行字节。
+    let root_line_byte_len = serde_json::to_string(&root_line)
+        .expect("encode root segment line")
+        .len()
+        .saturating_add(1);
     let metadata = json!({
         "schema_version": 1,
         "session_id": root_session_id.to_string(),
@@ -46,7 +61,7 @@ fn create_root_session_metadata(root: &Path, root_session_id: SessionNodeId) {
                 "file": "s001.jsonl",
                 "start_seq": 0,
                 "line_count": 1,
-                "byte_len": 0,
+                "byte_len": root_line_byte_len,
                 "first_timestamp": "100",
                 "last_timestamp": "100",
                 "first_turn_index": null,
@@ -61,17 +76,7 @@ fn create_root_session_metadata(root: &Path, root_session_id: SessionNodeId) {
         "tasks": []
     });
     write_json_file(&root.join(SEGMENTED_METADATA_FILE), &metadata).expect("write root metadata");
-    append_json_line(
-        &root.join("s001.jsonl"),
-        &SegmentedEventLine {
-            seq: 0,
-            timestamp: "100".to_string(),
-            kind: "session_meta".to_string(),
-            payload: json!({ "session_id": root_session_id }),
-            turn_index: None,
-        },
-    )
-    .expect("write root segment");
+    append_json_line(&root.join("s001.jsonl"), &root_line).expect("write root segment");
 }
 
 /// Verifies optional JSON reads distinguish true absence from non-`NotFound` open failures.
@@ -105,11 +110,11 @@ fn optional_json_read_distinguishes_missing_path_from_open_failure() {
     );
 }
 
-/// Verifies root task-link appends repair a main-session JSONL tail that is missing its newline.
-/// 验证根任务关联追加会修复缺少尾部换行的主会话 JSONL 行。
+/// Verifies root task-link appends reject a main-session JSONL tail that requires load-time repair.
+/// 验证根任务关联追加会拒绝需要加载期修复的主会话 JSONL 尾行。
 #[test]
-fn root_task_link_repairs_missing_jsonl_tail_newline() {
-    let root = test_root("root_task_link_repairs_missing_jsonl_tail_newline");
+fn root_task_link_rejects_missing_jsonl_tail_newline_without_scanning() {
+    let root = test_root("root_task_link_rejects_missing_jsonl_tail_newline_without_scanning");
     let store = SegmentedTaskSessionStore::new(&root);
     let root_session_id = SessionNodeId::new_v4();
     let task_session_id = SessionNodeId::new_v4();
@@ -117,9 +122,11 @@ fn root_task_link_repairs_missing_jsonl_tail_newline() {
     let segment_path = root.join("s001.jsonl");
     let mut bytes = fs::read(&segment_path).expect("read root segment bytes");
     assert_eq!(bytes.pop(), Some(b'\n'));
-    fs::write(&segment_path, bytes).expect("rewrite root segment without trailing newline");
+    fs::write(&segment_path, &bytes).expect("rewrite root segment without trailing newline");
 
-    store
+    // error proves append does not replay or rewrite root history on the hot path.
+    // error 证明追加热路径不会重放或重写根历史。
+    let error = store
         .create_task_session(TaskSessionMetadata::new(TaskSessionMetadataInit {
             root_session_id,
             task_session_id,
@@ -131,20 +138,13 @@ fn root_task_link_repairs_missing_jsonl_tail_newline() {
             depth: 1,
             timestamp_ms: 200,
         }))
-        .expect("create task session");
+        .expect_err("append should require explicit load-time repair");
 
-    let text = fs::read_to_string(&segment_path).expect("read repaired root segment text");
-    let lines = text.lines().collect::<Vec<_>>();
-    assert_eq!(lines.len(), 2);
-    assert!(
-        lines
-            .iter()
-            .all(|line| serde_json::from_str::<Value>(line).is_ok())
+    assert!(error.message.contains("load-time repair is required"));
+    assert_eq!(
+        fs::read(&segment_path).expect("read unchanged root segment"),
+        bytes
     );
-    let metadata = read_required_json::<Value>(&root.join(SEGMENTED_METADATA_FILE))
-        .expect("read root metadata");
-    assert_eq!(metadata["next_global_seq"], json!(2));
-    assert_eq!(metadata["segments"][0]["line_count"], json!(2));
 }
 
 /// Verifies concurrent JSONL atomic rewrites use independent staging files and publish complete rows.
@@ -926,15 +926,15 @@ fn task_discovery_ignores_unpublished_staging_layouts() {
     write_json_file(&task_metadata_path(&staged_task_dir), &staged_metadata)
         .expect("write staged task metadata");
 
-    // discovered_metadata must remain empty until the directory receives its canonical final name.
-    // discovered_metadata 在目录取得规范最终名称前必须保持为空。
-    let discovered_metadata = store
-        .load_all_task_session_metadata()
-        .expect("discover published task metadata");
+    // discovered_mirrors must remain empty until the root index publishes the task.
+    // discovered_mirrors 在根索引发布任务前必须保持为空。
+    let discovered_mirrors = store
+        .load_task_session_mirror_summaries()
+        .expect("discover published task mirrors");
     remove_task_directory_staging(&staged_task_dir);
     let _ = fs::remove_dir_all(&root);
 
-    assert!(discovered_metadata.is_empty());
+    assert!(discovered_mirrors.is_empty());
 }
 
 /// Verifies root task mirrors restore child summaries without reading child metadata files.
@@ -1060,10 +1060,10 @@ fn focused_root_task_mirror_summaries_include_only_reachable_tree() {
     );
 }
 
-/// Verifies legacy root task mirrors backfill missing parent fields from root invocation events.
-/// 验证旧根任务镜像能从根调用事件补齐缺失的父级字段。
+/// Verifies incomplete root mirrors fail without traversing root invocation segments.
+/// 验证不完整根镜像会直接失败，且不会遍历根调用分段。
 #[test]
-fn legacy_root_task_mirror_backfills_parent_from_root_invocation_events() {
+fn incomplete_root_task_mirror_does_not_backfill_from_invocation_segments() {
     let root = test_root("legacy_root_task_mirror_backfills_parent_from_root_invocation_events");
     let store = SegmentedTaskSessionStore::new(&root);
     let root_session_id = SessionNodeId::new_v4();
@@ -1095,14 +1095,6 @@ fn legacy_root_task_mirror_backfills_parent_from_root_invocation_events() {
     task_mirror
         .as_object_mut()
         .expect("task mirror object")
-        .remove("parent");
-    task_mirror
-        .as_object_mut()
-        .expect("task mirror object")
-        .remove("public_task_id");
-    task_mirror
-        .as_object_mut()
-        .expect("task mirror object")
         .remove("root_session_id");
     write_json_file(&metadata_path, &root_metadata).expect("write legacy root metadata");
     let task_metadata_path = root
@@ -1111,15 +1103,36 @@ fn legacy_root_task_mirror_backfills_parent_from_root_invocation_events() {
         .join(SEGMENTED_TASK_METADATA_FILE);
     std::fs::remove_file(task_metadata_path).expect("remove child metadata");
 
-    let mirrors = store
+    let error = store
         .load_task_session_mirror_summaries_by_parent()
-        .expect("load legacy task mirrors");
-    let parent_mirrors = mirrors.get(&parent).expect("parent mirrors");
+        .expect_err("incomplete root mirror must fail without segment backfill");
 
-    assert_eq!(parent_mirrors.len(), 1);
-    assert_eq!(parent_mirrors[0].task_session_id, task_session_id);
-    assert_eq!(parent_mirrors[0].public_task_id, "legacy-review-task");
-    assert_eq!(parent_mirrors[0].root_session_id, root_session_id);
+    assert!(error.message.contains("root_session_id"));
+    // Restoring root identity and removing parent proves parent identity is never backfilled from a segment.
+    // 恢复根身份并移除 parent，证明父级身份绝不会从分段中回填。
+    root_metadata["tasks"][0]["root_session_id"] = Value::String(root_session_id.to_string());
+    root_metadata["tasks"][0]
+        .as_object_mut()
+        .expect("task mirror object")
+        .remove("parent");
+    write_json_file(&metadata_path, &root_metadata).expect("write root-only identity metadata");
+    let missing_parent_error = store
+        .load_task_session_mirror_summaries_by_parent()
+        .expect_err("missing parent must fail without segment backfill");
+    assert!(missing_parent_error.message.contains("`parent`"));
+    // Restoring parent and removing public identity proves it is not guessed from the session id.
+    // 恢复 parent 并移除公开身份，证明该身份不会根据会话标识猜测。
+    root_metadata["tasks"][0]["parent"] =
+        serde_json::to_value(&parent).expect("parent should encode");
+    root_metadata["tasks"][0]
+        .as_object_mut()
+        .expect("task mirror object")
+        .remove("public_task_id");
+    write_json_file(&metadata_path, &root_metadata).expect("write parent identity metadata");
+    let missing_public_id_error = store
+        .load_task_session_mirror_summaries_by_parent()
+        .expect_err("missing public task id must fail without session-id fallback");
+    assert!(missing_public_id_error.message.contains("public_task_id"));
 }
 
 /// Verifies task metadata writes every required agent field without relying on read repair.
@@ -1261,11 +1274,11 @@ fn nested_task_session_uses_flat_root_task_directory() {
     );
 }
 
-/// Verifies parent-grouped metadata loads direct and nested task sessions with one indexed shape.
-/// 验证按父级分组的元数据会以一份索引结构加载直属与嵌套子任务会话。
+/// Verifies the root mirror index groups direct and nested task sessions without child-file reads.
+/// 验证根镜像索引无需读取子文件即可分组直属与嵌套子任务会话。
 #[test]
-fn load_task_session_metadata_by_parent_groups_direct_and_nested_children() {
-    let root = test_root("load_task_session_metadata_by_parent_groups_direct_and_nested_children");
+fn root_mirror_index_groups_direct_and_nested_children() {
+    let root = test_root("root_mirror_index_groups_direct_and_nested_children");
     let store = SegmentedTaskSessionStore::new(&root);
     let root_session_id = SessionNodeId::new_v4();
     let parent_task_id = SessionNodeId::new_v4();
@@ -1298,38 +1311,38 @@ fn load_task_session_metadata_by_parent_groups_direct_and_nested_children() {
             .expect("create grouped task metadata");
     }
 
-    let metadata_by_parent = store
-        .load_task_session_metadata_by_parent()
-        .expect("load grouped metadata");
+    let mirrors_by_parent = store
+        .load_task_session_mirror_summaries_by_parent()
+        .expect("load grouped mirrors");
     let mut expected_direct_ids = vec![parent_task_id, sibling_task_id];
     expected_direct_ids.sort();
 
     assert_eq!(
-        metadata_by_parent
+        mirrors_by_parent
             .get(&direct_parent)
             .expect("direct parent group")
             .iter()
-            .map(|metadata| metadata.task_session_id)
+            .map(|mirror| mirror.task_session_id)
             .collect::<Vec<_>>(),
         expected_direct_ids
     );
     assert_eq!(
-        metadata_by_parent
+        mirrors_by_parent
             .get(&nested_parent)
             .expect("nested parent group")
             .iter()
-            .map(|metadata| metadata.task_session_id)
+            .map(|mirror| mirror.task_session_id)
             .collect::<Vec<_>>(),
         vec![child_task_id]
     );
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies direct-parent metadata loading does not allocate an all-parent grouping table.
-/// 验证直属父级元数据加载不需要构建全父级分组表。
+/// Verifies direct-child identifiers come only from the root mirror index.
+/// 验证直属子任务标识仅来自根镜像索引。
 #[test]
-fn load_task_session_metadata_for_parent_returns_only_direct_children() {
-    let root = test_root("load_task_session_metadata_for_parent_returns_only_direct_children");
+fn root_mirror_index_returns_only_direct_child_identifiers() {
+    let root = test_root("root_mirror_index_returns_only_direct_child_identifiers");
     let store = SegmentedTaskSessionStore::new(&root);
     let root_session_id = SessionNodeId::new_v4();
     let parent_task_id = SessionNodeId::new_v4();
@@ -1365,17 +1378,11 @@ fn load_task_session_metadata_for_parent_returns_only_direct_children() {
     let mut expected_direct_ids = vec![parent_task_id, sibling_task_id];
     expected_direct_ids.sort();
     let direct_ids = store
-        .load_task_session_metadata_for_parent(direct_parent)
-        .expect("load direct parent metadata")
-        .into_iter()
-        .map(|metadata| metadata.task_session_id)
-        .collect::<Vec<_>>();
+        .list_child_task_session_ids(direct_parent)
+        .expect("load direct child ids");
     let nested_ids = store
-        .load_task_session_metadata_for_parent(nested_parent)
-        .expect("load nested parent metadata")
-        .into_iter()
-        .map(|metadata| metadata.task_session_id)
-        .collect::<Vec<_>>();
+        .list_child_task_session_ids(nested_parent)
+        .expect("load nested child ids");
 
     assert_eq!(direct_ids, expected_direct_ids);
     assert_eq!(nested_ids, vec![child_task_id]);
@@ -1534,11 +1541,11 @@ fn parent_task_link_rejects_missing_child_metadata() {
     assert_eq!(root_lines.len(), 1);
 }
 
-/// Verifies root task-link appends follow the highest persisted sequence, not stale metadata.
-/// 验证根任务关联追加跟随已持久化最大序号，而不是陈旧元数据。
+/// Verifies root task-link appends reject stale metadata instead of scanning history for a sequence.
+/// 验证根任务关联追加会拒绝陈旧元数据，而不是扫描历史来寻找序号。
 #[test]
-fn root_task_link_uses_highest_existing_sequence_when_metadata_is_stale() {
-    let root = test_root("root_task_link_uses_highest_existing_sequence_when_metadata_is_stale");
+fn root_task_link_rejects_stale_metadata_without_scanning_history() {
+    let root = test_root("root_task_link_rejects_stale_metadata_without_scanning_history");
     let store = SegmentedTaskSessionStore::new(&root);
     let root_session_id = SessionNodeId::new_v4();
     let task_session_id = SessionNodeId::new_v4();
@@ -1560,7 +1567,9 @@ fn root_task_link_uses_highest_existing_sequence_when_metadata_is_stale() {
     metadata["segments"][0]["line_count"] = json!(2);
     write_json_file(&metadata_path, &metadata).expect("write stale root metadata");
 
-    store
+    // error is authoritative because append cannot repair an unbounded root history transactionally.
+    // error 是权威结果，因为追加无法以事务方式修复无界根历史。
+    let error = store
         .create_task_session(TaskSessionMetadata::new(TaskSessionMetadataInit {
             root_session_id,
             task_session_id,
@@ -1572,22 +1581,16 @@ fn root_task_link_uses_highest_existing_sequence_when_metadata_is_stale() {
             depth: 1,
             timestamp_ms: 200,
         }))
-        .expect("create task session");
+        .expect_err("stale root metadata should require load-time repair");
 
-    let root_lines =
-        read_json_lines::<SegmentedEventLine>(&root.join("s001.jsonl")).expect("read root lines");
-    let task_link = root_lines.last().expect("task link line");
-    assert_eq!(task_link.seq, 6);
-    let updated_metadata =
-        read_required_json::<Value>(&metadata_path).expect("read updated root metadata");
-    assert_eq!(updated_metadata["next_global_seq"], json!(7));
+    assert!(error.message.contains("load-time repair is required"));
 }
 
-/// Verifies task-local event appends follow the highest persisted sequence and backfill nested event sequence.
-/// 验证子任务本地事件追加会跟随已持久化最大序号并回填嵌套事件序号。
+/// Verifies an explicit task-history load repairs stale metadata before a bounded append.
+/// 验证显式子任务历史加载会先修复陈旧元数据，再执行有界追加。
 #[test]
-fn task_segment_append_uses_highest_existing_sequence_and_backfills_event() {
-    let root = test_root("task_segment_append_uses_highest_existing_sequence_and_backfills_event");
+fn task_segment_load_repairs_stale_metadata_before_bounded_append() {
+    let root = test_root("task_segment_load_repairs_stale_metadata_before_bounded_append");
     let store = SegmentedTaskSessionStore::new(&root);
     let root_session_id = SessionNodeId::new_v4();
     let task_session_id = SessionNodeId::new_v4();
@@ -1626,6 +1629,27 @@ fn task_segment_append_uses_highest_existing_sequence_and_backfills_event() {
     metadata["segments"][0]["line_count"] = json!(2);
     write_json_file(&metadata_path, &metadata).expect("write stale task metadata");
 
+    // staleError proves the append path refuses to discover sequence state by replaying the file.
+    // staleError 证明追加路径拒绝通过重放文件来发现序号状态。
+    let stale_error = store
+        .append_event(SessionEventRecord::new(
+            "task-local-event",
+            task_session_id,
+            0,
+            SessionEventKind::AssistantOutput,
+            300,
+            json!({ "body": "done" }),
+        ))
+        .expect_err("stale task metadata should require explicit repair");
+    assert!(stale_error.message.contains("load-time repair is required"));
+    // repairedLines are loaded only because this test explicitly requests full task history.
+    // repairedLines 仅因本测试显式请求完整子任务历史而加载。
+    let (_, repaired_lines) = read_repaired_task_segment_lines(&task_dir)
+        .expect("explicit task-history load should repair metadata");
+    assert_eq!(
+        repaired_lines.last().expect("retained high sequence").seq,
+        5
+    );
     store
         .append_event(SessionEventRecord::new(
             "task-local-event",
@@ -1635,7 +1659,7 @@ fn task_segment_append_uses_highest_existing_sequence_and_backfills_event() {
             300,
             json!({ "body": "done" }),
         ))
-        .expect("append task-local event");
+        .expect("append task-local event after explicit repair");
 
     let task_lines =
         read_json_lines::<SegmentedEventLine>(&task_dir.join("s001.jsonl")).expect("read task");
@@ -1657,11 +1681,11 @@ fn task_segment_append_uses_highest_existing_sequence_and_backfills_event() {
     assert_eq!(updated_metadata["next_global_seq"], json!(7));
 }
 
-/// Verifies task-local appends repair a truncated JSONL tail before writing the next event.
-/// 验证子任务本地追加会在写入下一条事件前修复截断的 JSONL 尾行。
+/// Verifies explicit task-history loading repairs a truncated tail before the next bounded append.
+/// 验证显式子任务历史加载会先修复截断尾行，再执行下一次有界追加。
 #[test]
-fn task_segment_append_repairs_truncated_jsonl_tail_line() {
-    let root = test_root("task_segment_append_repairs_truncated_jsonl_tail_line");
+fn task_segment_load_repairs_truncated_tail_before_bounded_append() {
+    let root = test_root("task_segment_load_repairs_truncated_tail_before_bounded_append");
     let store = SegmentedTaskSessionStore::new(&root);
     let root_session_id = SessionNodeId::new_v4();
     let task_session_id = SessionNodeId::new_v4();
@@ -1703,6 +1727,28 @@ fn task_segment_append_repairs_truncated_jsonl_tail_line() {
             .expect("append truncated task segment tail");
     }
 
+    // truncatedError proves append does not parse and repair the complete active segment.
+    // truncatedError 证明追加不会解析并修复整个活动分段。
+    let truncated_error = store
+        .append_event(SessionEventRecord::new(
+            "after-broken-tail",
+            task_session_id,
+            0,
+            SessionEventKind::AssistantOutput,
+            300,
+            json!({ "body": "after" }),
+        ))
+        .expect_err("truncated tail should require explicit repair");
+    assert!(
+        truncated_error
+            .message
+            .contains("load-time repair is required")
+    );
+    // repairedLines come from the explicit history-read repair boundary.
+    // repairedLines 来自显式历史读取修复边界。
+    let (_, repaired_lines) = read_repaired_task_segment_lines(&task_dir)
+        .expect("explicit task-history load should repair truncated tail");
+    assert_eq!(repaired_lines.last().expect("last retained line").seq, 1);
     store
         .append_event(SessionEventRecord::new(
             "after-broken-tail",
@@ -1712,7 +1758,7 @@ fn task_segment_append_repairs_truncated_jsonl_tail_line() {
             300,
             json!({ "body": "after" }),
         ))
-        .expect("append after repairing broken tail");
+        .expect("append after explicit repair");
 
     let text = fs::read_to_string(&segment_path).expect("read repaired task segment");
     assert!(
@@ -1728,11 +1774,11 @@ fn task_segment_append_repairs_truncated_jsonl_tail_line() {
     assert_eq!(updated_metadata["segments"][0]["line_count"], json!(3));
 }
 
-/// Verifies latest-payload reads repair truncated task JSONL and refresh segment metadata.
-/// 验证最新载荷读取会修复截断的子任务 JSONL，并刷新分段元数据。
+/// Verifies latest-payload reads ignore a partial tail without repairing history or metadata.
+/// 验证最新载荷读取会忽略不完整尾部，且不会修复历史或元数据。
 #[test]
-fn load_latest_event_payload_repairs_truncated_task_jsonl_tail() {
-    let root = test_root("load_latest_event_payload_repairs_truncated_task_jsonl_tail");
+fn load_latest_event_payload_is_bounded_and_read_only_for_truncated_tail() {
+    let root = test_root("load_latest_event_payload_is_bounded_and_read_only_for_truncated_tail");
     let store = SegmentedTaskSessionStore::new(&root);
     let root_session_id = SessionNodeId::new_v4();
     let task_session_id = SessionNodeId::new_v4();
@@ -1782,28 +1828,53 @@ fn load_latest_event_payload_repairs_truncated_task_jsonl_tail() {
 
     let payload = store
         .load_latest_event_payload(task_session_id)
-        .expect("load latest payload after repair")
+        .expect("load latest payload from bounded active tail")
         .expect("latest payload");
 
     assert_eq!(payload["body"], json!("latest-valid"));
-    let text = fs::read_to_string(&segment_path).expect("read repaired task segment");
-    assert!(
-        text.lines()
-            .all(|line| serde_json::from_str::<Value>(line).is_ok())
-    );
-    let refreshed_main_metadata =
-        read_required_json::<Value>(&main_metadata_path).expect("read refreshed main metadata");
+    let text = fs::read_to_string(&segment_path).expect("read untouched task segment");
+    assert!(text.ends_with("{\"seq\":999,\"timestamp\":\"broken\""));
+    let untouched_main_metadata =
+        read_required_json::<Value>(&main_metadata_path).expect("read untouched main metadata");
     assert_eq!(
-        refreshed_main_metadata["segments"][0]["line_count"],
-        json!(2)
+        untouched_main_metadata["segments"][0]["line_count"],
+        json!(99)
     );
-    assert_eq!(refreshed_main_metadata["next_global_seq"], json!(2));
-    let refreshed_task_metadata =
-        read_required_json::<Value>(&task_dir.join(SEGMENTED_TASK_METADATA_FILE))
-            .expect("read refreshed task metadata");
-    assert_eq!(
-        refreshed_task_metadata["segments"][0]["line_count"],
-        json!(2)
-    );
-    assert_eq!(refreshed_task_metadata["next_seq"], json!(2));
+}
+/// TaskSession append transactions should validate only the exact active file boundary.
+/// TaskSession 追加事务应只校验精确活动文件边界。
+#[test]
+fn task_session_append_hot_paths_never_replay_segment_history() {
+    // storeSource owns child TaskSession event appends.
+    // storeSource 持有子 TaskSession 事件追加实现。
+    let store_source = include_str!("store_impl.rs");
+    // taskAppendStart and taskAppendEnd isolate the lock-owned append implementation.
+    // taskAppendStart 与 taskAppendEnd 隔离持锁追加实现。
+    let task_append_start = store_source
+        .find("fn append_task_segment_event_with_owned_append_lock(")
+        .expect("task append implementation must exist");
+    let task_append_end = store_source[task_append_start..]
+        .find("pub(super) fn append_parent_invocation_event(")
+        .map(|offset| task_append_start + offset)
+        .expect("parent append implementation must follow task append");
+    // taskAppendSource contains only the child append transaction.
+    // taskAppendSource 只包含子会话追加事务。
+    let task_append_source = &store_source[task_append_start..task_append_end];
+    assert!(task_append_source.contains("validate_segmented_append_boundary_locked("));
+    assert!(!task_append_source.contains("repair_task_segment_jsonl_files_if_needed_locked("));
+    assert!(!task_append_source.contains("read_segment_lines_with_owned_append_lock("));
+
+    // mirrorSource owns root-session task-link appends.
+    // mirrorSource 持有根会话子任务关联追加实现。
+    let mirror_source = include_str!("mirror.rs");
+    // rootAppendEnd isolates the root append before unrelated mirror-reading helpers.
+    // rootAppendEnd 将根追加与无关镜像读取帮助函数隔离。
+    let root_append_end = mirror_source
+        .find("fn backfill_main_task_link_payload_sequence(")
+        .expect("root append helper must follow root append");
+    // rootAppendSource contains only the root append transaction.
+    // rootAppendSource 只包含根会话追加事务。
+    let root_append_source = &mirror_source[..root_append_end];
+    assert!(root_append_source.contains("validate_segmented_append_boundary_locked("));
+    assert!(!root_append_source.contains("read_segment_lines_with_owned_append_lock("));
 }

@@ -41,10 +41,12 @@ pub(super) fn append_main_session_task_link_event_with_owned_append_lock(
         .get("next_global_seq")
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    next_seq = next_seq.max(next_main_session_sequence_after_existing_lines(
+    validate_segmented_append_boundary_locked(
         root_session_dir,
+        &active_segment,
         &segments,
-    )?);
+        next_seq,
+    )?;
     let segment_policy = serde_json::from_value::<SegmentPolicy>(
         metadata
             .get("segment_policy")
@@ -131,22 +133,6 @@ fn backfill_main_task_link_payload_sequence(payload: &mut Value, assigned_sequen
     {
         task_invocation_event.insert(String::from("sequence"), json!(assigned_sequence));
     }
-}
-
-/// Returns the next root-session sequence after the highest persisted segment line.
-/// 返回已持久化根会话分段行最大序号之后的下一个序号。
-fn next_main_session_sequence_after_existing_lines(
-    root_session_dir: &Path,
-    segments: &[SegmentMetadata],
-) -> Result<u64, SessionStoreError> {
-    Ok(
-        read_segment_lines_with_owned_append_lock(root_session_dir, segments)?
-            .into_iter()
-            .map(|line| line.seq)
-            .max()
-            .map(|seq| seq.saturating_add(1))
-            .unwrap_or(0),
-    )
 }
 
 /// Refreshes the root metadata task mirror while the caller owns the shared append lock.
@@ -374,15 +360,7 @@ pub(super) fn load_main_session_task_mirror_summaries(
     if tasks.is_empty() {
         return Ok(Vec::new());
     }
-    let invocation_events_by_task = if task_mirrors_require_invocation_event_backfill(tasks) {
-        main_session_task_invocation_events_by_task(root_session_dir, &metadata)?
-    } else {
-        BTreeMap::new()
-    };
-    tasks
-        .iter()
-        .map(|task| task_mirror_summary_from_value(task, &invocation_events_by_task))
-        .collect()
+    tasks.iter().map(task_mirror_summary_from_value).collect()
 }
 
 /// Loads task mirrors reachable from one root main-session parent without building unrelated parent groups.
@@ -403,14 +381,7 @@ pub(super) fn load_main_session_task_mirror_summaries_by_parent_for_root_tree(
     if tasks.is_empty() {
         return Ok(BTreeMap::new());
     }
-    if task_mirrors_require_invocation_event_backfill(tasks) {
-        return reachable_task_mirror_summaries_by_parent(
-            load_main_session_task_mirror_summaries(root_session_dir)?,
-            root_session_id,
-        );
-    }
     let task_values_by_parent = root_task_mirror_values_by_parent(tasks, root_session_id)?;
-    let empty_invocation_events = BTreeMap::new();
     let mut mirrors_by_parent = BTreeMap::new();
     let mut visited_parent_refs = BTreeSet::new();
     let mut pending_parent_refs =
@@ -424,7 +395,7 @@ pub(super) fn load_main_session_task_mirror_summaries_by_parent_for_root_tree(
         };
         let mut mirrors = Vec::new();
         for task_value in task_values {
-            let mirror = task_mirror_summary_from_value(task_value, &empty_invocation_events)?;
+            let mirror = task_mirror_summary_from_value(task_value)?;
             pending_parent_refs.push_back(ParentSessionRef::TaskSession {
                 root_session_id,
                 parent_task_session_id: mirror.task_session_id,
@@ -457,48 +428,6 @@ fn root_task_mirror_values_by_parent(
     Ok(task_values_by_parent)
 }
 
-/// Groups already parsed task mirrors by reachable parent for legacy backfill data.
-/// 将已解析的子任务镜像按旧格式补齐数据中的可达父级分组。
-fn reachable_task_mirror_summaries_by_parent(
-    mirrors: Vec<TaskSessionMirrorSummary>,
-    root_session_id: RootSessionId,
-) -> Result<BTreeMap<ParentSessionRef, Vec<TaskSessionMirrorSummary>>, SessionStoreError> {
-    let mut all_mirrors_by_parent: BTreeMap<ParentSessionRef, Vec<TaskSessionMirrorSummary>> =
-        BTreeMap::new();
-    for mirror in mirrors {
-        if mirror.root_session_id != root_session_id {
-            continue;
-        }
-        all_mirrors_by_parent
-            .entry(mirror.parent.clone())
-            .or_default()
-            .push(mirror);
-    }
-    let mut mirrors_by_parent = BTreeMap::new();
-    let mut visited_parent_refs = BTreeSet::new();
-    let mut pending_parent_refs =
-        VecDeque::from([ParentSessionRef::MainSession { root_session_id }]);
-    while let Some(parent) = pending_parent_refs.pop_front() {
-        if !visited_parent_refs.insert(parent.clone()) {
-            continue;
-        }
-        let Some(mut mirrors) = all_mirrors_by_parent.remove(&parent) else {
-            continue;
-        };
-        normalize_task_mirror_summaries(&mut mirrors);
-        for mirror in &mirrors {
-            pending_parent_refs.push_back(ParentSessionRef::TaskSession {
-                root_session_id,
-                parent_task_session_id: mirror.task_session_id,
-            });
-        }
-        if !mirrors.is_empty() {
-            mirrors_by_parent.insert(parent, mirrors);
-        }
-    }
-    Ok(mirrors_by_parent)
-}
-
 /// Sorts and deduplicates task mirror summaries by stable task-session id.
 /// 按稳定子任务会话标识排序并去重子任务镜像摘要。
 fn normalize_task_mirror_summaries(mirrors: &mut Vec<TaskSessionMirrorSummary>) {
@@ -506,109 +435,35 @@ fn normalize_task_mirror_summaries(mirrors: &mut Vec<TaskSessionMirrorSummary>) 
     mirrors.dedup_by_key(|mirror| mirror.task_session_id);
 }
 
-/// Returns whether mirrors need deterministic data from persisted root invocation events.
-/// 返回镜像是否需要从持久化根调用事件补齐确定性数据。
-fn task_mirrors_require_invocation_event_backfill(tasks: &[Value]) -> bool {
-    tasks.iter().any(|task| {
-        task.get("parent").is_none()
-            || task.get("public_task_id").is_none()
-            || task.get("root_session_id").is_none()
-    })
-}
-
-/// Builds the latest task invocation event map from root session segments.
-/// 从根会话分段构建最新子任务调用事件映射。
-fn main_session_task_invocation_events_by_task(
-    root_session_dir: &Path,
-    root_metadata: &Value,
-) -> Result<BTreeMap<TaskSessionId, TaskInvocationEvent>, SessionStoreError> {
-    let segments = serde_json::from_value::<Vec<SegmentMetadata>>(
-        root_metadata
-            .get("segments")
-            .cloned()
-            .unwrap_or_else(|| json!([])),
-    )
-    .map_err(to_store_error)?;
-    let mut events_by_task = BTreeMap::new();
-    for line in read_segment_lines(root_session_dir, &segments)? {
-        let Some(value) = line.payload.get("task_invocation_event").cloned() else {
-            continue;
-        };
-        let mut event =
-            serde_json::from_value::<TaskInvocationEvent>(value).map_err(to_store_error)?;
-        event.sequence = line.seq;
-        events_by_task.insert(event.task_session_id, event);
-    }
-    Ok(events_by_task)
-}
-
 /// Converts one root metadata mirror entry into a stable task mirror summary.
 /// 将单条根元数据镜像转换为稳定的子任务镜像摘要。
 fn task_mirror_summary_from_value(
     task: &Value,
-    invocation_events_by_task: &BTreeMap<TaskSessionId, TaskInvocationEvent>,
 ) -> Result<TaskSessionMirrorSummary, SessionStoreError> {
     let task_session_id = required_node_id_from_task_mirror(task, "session_id")?;
-    let invocation_event = invocation_events_by_task.get(&task_session_id);
-    let parent = task
-        .get("parent")
-        .cloned()
-        .map(serde_json::from_value::<ParentSessionRef>)
-        .transpose()
-        .map_err(to_store_error)?
-        .or_else(|| invocation_event.map(|event| event.parent.clone()))
-        .ok_or_else(|| {
-            SessionStoreError::new(format!(
-                "Task mirror `{task_session_id}` is missing parent and no root invocation event can backfill it."
-            ))
-        })?;
-    let root_session_id = task
-        .get("root_session_id")
-        .cloned()
-        .map(serde_json::from_value::<RootSessionId>)
-        .transpose()
-        .map_err(to_store_error)?
-        .or_else(|| invocation_event.map(|event| event.root_session_id))
-        .or_else(|| root_session_id_from_parent_ref(&parent))
-        .ok_or_else(|| {
-            SessionStoreError::new(format!(
-                "Task mirror `{task_session_id}` is missing root_session_id."
-            ))
-        })?;
-    let public_task_id = optional_string_from_task_mirror(task, "public_task_id")
-        .or_else(|| {
-            invocation_event
-                .and_then(|event| task_invocation_payload_public_task_id(&event.payload))
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| task_session_id.to_string());
-    let display_title = optional_string_from_task_mirror(task, "display_title")
-        .or_else(|| {
-            invocation_event
-                .and_then(|event| event.payload.get("display_title"))
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| public_task_id.clone());
+    // parent and rootSessionId come only from the authoritative root mirror document.
+    // parent 与 rootSessionId 仅来自权威根镜像文档。
+    let parent = required_parent_ref_from_task_mirror(task)?;
+    let root_session_id = required_root_session_id_from_task_mirror(task)?;
+    // publicTaskId and displayTitle must never be guessed from a session id or another field.
+    // publicTaskId 与 displayTitle 绝不能根据会话标识或其他字段猜测。
+    let public_task_id = required_nonempty_string_from_task_mirror(task, "public_task_id")?;
+    let display_title = required_nonempty_string_from_task_mirror(task, "display_title")?;
     let status = task
         .get("status")
         .cloned()
         .map(serde_json::from_value::<TaskSessionStatus>)
         .transpose()
         .map_err(to_store_error)?
-        .or_else(|| invocation_event.map(|event| event.status))
         .ok_or_else(|| {
             SessionStoreError::new(format!(
                 "Task mirror `{task_session_id}` is missing status."
             ))
         })?;
-    let created_at = optional_u64_from_task_mirror(task, "created_at")
-        .or_else(|| invocation_event.map(|event| event.timestamp_ms))
-        .unwrap_or(0);
-    let updated_at = optional_u64_from_task_mirror(task, "updated_at")
-        .or_else(|| invocation_event.map(|event| event.timestamp_ms))
-        .unwrap_or(created_at);
+    // timestamps are required lifecycle facts and cannot inherit each other during initialization.
+    // 时间戳是必需生命周期事实，初始化时不能彼此继承。
+    let created_at = required_u64_from_task_mirror(task, "created_at")?;
+    let updated_at = required_u64_from_task_mirror(task, "updated_at")?;
 
     Ok(TaskSessionMirrorSummary {
         root_session_id,
@@ -619,24 +474,22 @@ fn task_mirror_summary_from_value(
         description: optional_string_from_task_mirror(task, "description"),
         subagent: task.get("subagent").cloned().unwrap_or(Value::Null),
         status,
-        agent_kind: optional_string_from_task_mirror(task, "agent_kind").unwrap_or_default(),
-        agent_profile: task.get("agent_profile").cloned().unwrap_or(Value::Null),
-        metadata_file: optional_string_from_task_mirror(task, "metadata_file"),
-        active_segment: optional_string_from_task_mirror(task, "active_segment"),
-        line_count: optional_u64_from_task_mirror(task, "line_count").unwrap_or(0),
+        agent_kind: required_nonempty_string_from_task_mirror(task, "agent_kind")?,
+        agent_profile: required_value_from_task_mirror(task, "agent_profile")?,
+        metadata_file: Some(required_nonempty_string_from_task_mirror(
+            task,
+            "metadata_file",
+        )?),
+        active_segment: Some(required_nonempty_string_from_task_mirror(
+            task,
+            "active_segment",
+        )?),
+        line_count: required_u64_from_task_mirror(task, "line_count")?,
         created_at,
         updated_at,
         last_result_summary: optional_string_from_task_mirror(task, "last_result_summary"),
         last_error: optional_string_from_task_mirror(task, "last_error"),
     })
-}
-
-/// Reads the public task id from known task invocation payload shapes.
-/// 从已知的子任务调用载荷结构读取公开任务标识符。
-fn task_invocation_payload_public_task_id(payload: &Value) -> Option<&Value> {
-    payload
-        .get("public_task_id")
-        .or_else(|| payload.get("task_id"))
 }
 
 /// Reads a required task-session identifier from a mirror entry.
@@ -694,14 +547,28 @@ fn optional_u64_from_task_mirror(task: &Value, field: &str) -> Option<u64> {
     })
 }
 
-/// Resolves the root session id carried by a parent reference.
-/// 解析父级引用携带的根会话标识符。
-fn root_session_id_from_parent_ref(parent: &ParentSessionRef) -> Option<RootSessionId> {
-    match parent {
-        ParentSessionRef::None => None,
-        ParentSessionRef::MainSession { root_session_id }
-        | ParentSessionRef::TaskSession {
-            root_session_id, ..
-        } => Some(*root_session_id),
-    }
+/// Reads one required non-empty string from an authoritative mirror entry.
+/// 从权威镜像条目读取一个必需的非空字符串。
+fn required_nonempty_string_from_task_mirror(
+    task: &Value,
+    field: &str,
+) -> Result<String, SessionStoreError> {
+    optional_string_from_task_mirror(task, field)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| SessionStoreError::new(format!("Task mirror is missing `{field}`.")))
+}
+
+/// Reads one required integer from an authoritative mirror entry.
+/// 从权威镜像条目读取一个必需整数。
+fn required_u64_from_task_mirror(task: &Value, field: &str) -> Result<u64, SessionStoreError> {
+    optional_u64_from_task_mirror(task, field)
+        .ok_or_else(|| SessionStoreError::new(format!("Task mirror is missing `{field}`.")))
+}
+
+/// Reads one required JSON value from an authoritative mirror entry.
+/// 从权威镜像条目读取一个必需 JSON 值。
+fn required_value_from_task_mirror(task: &Value, field: &str) -> Result<Value, SessionStoreError> {
+    task.get(field)
+        .cloned()
+        .ok_or_else(|| SessionStoreError::new(format!("Task mirror is missing `{field}`.")))
 }

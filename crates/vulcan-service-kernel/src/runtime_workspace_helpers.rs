@@ -343,6 +343,98 @@ pub(crate) fn segmented_session_directory_for_workspace_session(
         .and_then(|session| segmented_session_directory_for_summary(data_root, session))
 }
 
+/// Resolves one regular-session or TaskSession directory through retained exact locator indexes.
+/// 通过保留的精确定位索引解析一个普通会话或 TaskSession 目录。
+///
+/// # Parameters
+/// 参数
+/// `guard` owns the retained workspace and TaskRuntime indexes, `data_root` owns session storage,
+/// and `session_id` is the exact requested owner.
+/// `guard` 持有保留工作区与 TaskRuntime 索引，`data_root` 持有会话存储，`session_id`
+/// 是精确请求的所有者。
+///
+/// # Returns
+/// 返回值
+/// The deterministic directory, `None` for an unknown identity, or an explicit task locator error.
+/// 返回确定性目录；未知身份返回 `None`；任务定位异常返回显式错误。
+pub(crate) fn segmented_session_directory_for_retained_session(
+    guard: &ServiceBridgeState,
+    data_root: &Path,
+    session_id: SessionId,
+) -> Result<Option<PathBuf>, String> {
+    // workspaceDirectory is resolved from one retained session summary without directory enumeration.
+    // workspaceDirectory 从单条保留会话摘要解析，不进行目录枚举。
+    let workspace_directory = guard.workspace_snapshot.as_ref().and_then(|workspace| {
+        segmented_session_directory_for_workspace_session(data_root, workspace, session_id)
+    });
+    if workspace_directory.is_some() {
+        return Ok(workspace_directory);
+    }
+    // taskRuntime owns the exact task-id to root-id locator maps for child sessions.
+    // taskRuntime 持有子会话的精确任务标识到根标识定位映射。
+    let Some(task_runtime) = guard
+        .agent_runtime
+        .as_ref()
+        .map(|runtime| &runtime.task_runtime)
+    else {
+        return Ok(None);
+    };
+    task_runtime.task_session_directory_for_task(session_id)
+}
+
+/// Requires one exact retained session directory for a hot-path storage operation.
+/// 为热路径存储操作要求一个精确的保留会话目录。
+///
+/// # Parameters
+/// 参数
+/// `guard`, `data_root`, and `session_id` carry the same exact locator inputs as
+/// `segmented_session_directory_for_retained_session`.
+/// `guard`、`data_root` 与 `session_id` 携带与
+/// `segmented_session_directory_for_retained_session` 相同的精确定位输入。
+///
+/// # Returns
+/// 返回值
+/// The deterministic directory or an explicit missing-locator contract error.
+/// 返回确定性目录，或明确的定位信息缺失契约错误。
+pub(crate) fn require_segmented_session_directory_for_retained_session(
+    guard: &ServiceBridgeState,
+    data_root: &Path,
+    session_id: SessionId,
+) -> Result<PathBuf, String> {
+    segmented_session_directory_for_retained_session(guard, data_root, session_id)?.ok_or_else(
+        || {
+            format!(
+                "Session `{session_id}` has no exact retained storage locator; hot-path directory scanning is disabled."
+            )
+        },
+    )
+}
+
+/// Resolves one exact retained session directory while owning the shared service-state lock briefly.
+/// 在短暂持有共享服务状态锁期间解析一个精确保留会话目录。
+///
+/// # Parameters
+/// 参数
+/// `state` owns retained locator indexes, `data_root` owns storage, and `session_id` selects one owner.
+/// `state` 持有保留定位索引，`data_root` 持有存储，`session_id` 选择单个所有者。
+///
+/// # Returns
+/// 返回值
+/// The exact directory or a lock/missing-locator contract error.
+/// 返回精确目录，或锁/定位信息缺失契约错误。
+pub(crate) fn require_segmented_session_directory_from_state(
+    state: &SharedServiceBridgeState,
+    data_root: &Path,
+    session_id: SessionId,
+) -> Result<PathBuf, String> {
+    // guard is held only for two indexed lookups and path cloning; no filesystem I/O occurs under this lock.
+    // guard 仅用于两次索引查询与路径克隆；持锁期间不进行文件系统 I/O。
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    require_segmented_session_directory_for_retained_session(&guard, data_root, session_id)
+}
+
 /// Reads all long-lived runtime handles required by a WebUI prompt submission.
 /// 读取 WebUI 提示词提交所需的全部长生命周期运行时句柄。
 pub(crate) fn runtime_parts_from_state(
@@ -394,12 +486,64 @@ pub(crate) fn ensure_webui_session_runtime_state(
     session_id: SessionId,
     active_precheck_turn_id: Option<&str>,
 ) -> Result<(), String> {
-    let now = current_unix_millis_text();
-    let mut runtime_state = workspace_snapshot
+    ensure_webui_session_runtime_entry(workspace_snapshot, session_id, active_precheck_turn_id)?;
+    // runtime_state moves out temporarily so display repair can borrow the workspace without cloning canonical history.
+    // runtime_state 临时移出，使显示修复可以借用工作区而不复制规范历史。
+    let runtime_state = workspace_snapshot
         .session_runtime_state
-        .get(&session_id)
-        .cloned()
-        .unwrap_or_else(|| SessionRuntimeStateEntry {
+        .remove(&session_id)
+        .ok_or_else(|| {
+            format!("Conversation `{session_id}` runtime state was not materialized.")
+        })?;
+    if runtime_state_has_concrete_conversation_context(&runtime_state) {
+        merge_runtime_state_records_into_display_messages(
+            workspace_snapshot,
+            session_id,
+            &runtime_state,
+        );
+    } else {
+        workspace_snapshot
+            .session_messages
+            .entry(session_id)
+            .or_default();
+    }
+    workspace_snapshot
+        .session_runtime_state
+        .insert(session_id, runtime_state);
+    sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, session_id);
+    Ok(())
+}
+
+/// Ensures one WebUI session has a runtime entry without rebuilding presentation history.
+/// 确保一个 WebUI 会话拥有运行态条目，且不重建展示历史。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` owns the exact session runtime map.
+/// `workspace_snapshot` 持有精确会话运行态映射。
+/// `session_id` selects the session that must have an entry.
+/// `session_id` 选择必须拥有条目的会话。
+/// `active_precheck_turn_id` optionally fills an absent preparation owner.
+/// `active_precheck_turn_id` 可选填充缺失的准备所有者。
+///
+/// # Returns
+/// 返回值
+/// Success after in-place entry materialization and optional owner restoration.
+/// 原地物化条目并可选恢复所有者后返回成功。
+pub(crate) fn ensure_webui_session_runtime_entry(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    active_precheck_turn_id: Option<&str>,
+) -> Result<(), String> {
+    // now timestamps only a new entry or restored preparation owner.
+    // now 只为新条目或恢复的准备所有者提供时间戳。
+    let now = current_unix_millis_text();
+    // runtime_state is the exact in-place row; no canonical history is cloned.
+    // runtime_state 是精确的原地记录；不会复制规范历史。
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .entry(session_id)
+        .or_insert_with(|| SessionRuntimeStateEntry {
             updated_at: now.clone(),
             ..SessionRuntimeStateEntry::default()
         });
@@ -412,30 +556,8 @@ pub(crate) fn ensure_webui_session_runtime_state(
             .is_none_or(|current| current.trim().is_empty())
     {
         runtime_state.active_precheck_turn_id = Some(turn_id.to_string());
-        runtime_state.updated_at = now.clone();
+        runtime_state.updated_at = now;
     }
-    let runtime_state_snapshot = if runtime_state_has_concrete_conversation_context(&runtime_state)
-    {
-        Some(runtime_state.clone())
-    } else {
-        None
-    };
-    workspace_snapshot
-        .session_runtime_state
-        .insert(session_id, runtime_state);
-    if let Some(runtime_state_snapshot) = runtime_state_snapshot.as_ref() {
-        merge_runtime_state_records_into_display_messages(
-            workspace_snapshot,
-            session_id,
-            runtime_state_snapshot,
-        );
-    } else {
-        workspace_snapshot
-            .session_messages
-            .entry(session_id)
-            .or_default();
-    }
-    sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, session_id);
     Ok(())
 }
 
@@ -560,6 +682,7 @@ pub(crate) fn webui_turn_completion_gate_from_state(
 
 /// Returns running child task states from the authoritative runtime registry.
 /// 从权威运行时注册表返回仍在运行的子任务状态。
+#[cfg(test)]
 pub(crate) fn running_webui_subagent_task_states_for_tree_from_cache(
     guard: &mut ServiceBridgeState,
     _workspace_snapshot: &WorkspaceSnapshot,
@@ -886,10 +1009,6 @@ pub(crate) fn stop_webui_session_work(
             "ERR_CONVERSATION_CONTINUE_LEDGER_REVISION_EXHAUSTED",
         ));
     }
-    let runtime_state_snapshot = runtime_state.clone();
-    workspace_snapshot
-        .session_runtime_state
-        .insert(session_id, runtime_state);
     workspace_snapshot
         .session_run_phases
         .insert(session_id, SessionRunPhase::Stopped);
@@ -902,8 +1021,11 @@ pub(crate) fn stop_webui_session_work(
     merge_runtime_state_records_into_display_messages(
         workspace_snapshot,
         session_id,
-        &runtime_state_snapshot,
+        &runtime_state,
     );
+    workspace_snapshot
+        .session_runtime_state
+        .insert(session_id, runtime_state);
     sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, session_id);
     Ok(true)
 }

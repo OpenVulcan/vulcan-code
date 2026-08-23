@@ -78,6 +78,9 @@ pub struct VmmHookConfigSnapshot {
     /// Latest compaction identifiers keyed by session id string.
     /// 按会话标识字符串索引的最近压缩标识。
     pub last_compaction_ids: BTreeMap<String, Option<String>>,
+    /// Process-local transport override applied to at most the three layers read by one invocation.
+    /// 单次调用最多应用到三个已读取配置层的进程内传输覆盖。
+    pub runtime_transport_override: Option<VmmConfigLayer>,
 }
 
 /// Shared runtime handle used by built-in VMM hook handlers.
@@ -87,6 +90,28 @@ pub struct VmmHookRuntimeHandle {
     /// Authoritative configuration and runtime profile snapshot visible to hook handlers.
     /// hook 处理器可见的权威配置与运行时画像快照。
     state: Arc<RwLock<VmmHookConfigSnapshot>>,
+}
+
+/// Applies the five fields owned by the process-local managed transport contract.
+/// 应用由进程内托管传输契约拥有的五个字段。
+///
+/// # Parameters
+/// 参数
+/// `layer` is one invocation layer receiving the ephemeral override.
+/// `layer` 是接收临时覆盖的单个调用配置层。
+/// `runtime_override` contains only host-owned enablement, transport, and hook readiness fields.
+/// `runtime_override` 仅包含宿主持有的启用、传输与 hook 就绪字段。
+///
+/// # Returns
+/// 返回值
+/// This in-place operation returns no value.
+/// 该原地操作不返回值。
+fn apply_runtime_transport_override(layer: &mut VmmConfigLayer, runtime_override: &VmmConfigLayer) {
+    layer.enabled = runtime_override.enabled;
+    layer.grpc_target = runtime_override.grpc_target.clone();
+    layer.grpc_api_key = runtime_override.grpc_api_key.clone();
+    layer.precheck_enabled = runtime_override.precheck_enabled;
+    layer.memory_writeback_enabled = runtime_override.memory_writeback_enabled;
 }
 
 impl VmmHookRuntimeHandle {
@@ -168,6 +193,131 @@ impl VmmHookRuntimeHandle {
         let mut state = self.write_state("replace the configuration snapshot")?;
         snapshot.profile_sync = std::mem::take(&mut state.profile_sync);
         *state = snapshot;
+        Ok(())
+    }
+
+    /// Replaces the global layer and process-local transport override without touching session maps.
+    /// 替换全局配置层与进程内传输覆盖，且不触碰会话映射。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `global` is the complete authoritative global VMM layer.
+    /// `global` 是完整的权威全局 VMM 配置层。
+    /// `runtime_transport_override` is the ephemeral host-owned transport layer, when active.
+    /// `runtime_transport_override` 是宿主持有且仅在运行期存在的临时传输层。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns success after one constant-scope update, or a state-lock diagnostic.
+    /// 单次常量范围更新完成后返回成功，失败时返回状态锁诊断。
+    pub fn replace_global_projection(
+        &self,
+        global: &VmmConfigLayer,
+        runtime_transport_override: Option<&VmmConfigLayer>,
+    ) -> Result<(), String> {
+        let mut state = self.write_state("replace the global VMM projection")?;
+        state.global = global.clone();
+        state.runtime_transport_override = runtime_transport_override.cloned();
+        Ok(())
+    }
+
+    /// Replaces one exact project configuration layer without rebuilding other projects.
+    /// 替换单个精确项目配置层，且不重建其他项目。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `workspace_path` is the exact normalized project key used by hook payloads.
+    /// `workspace_path` 是 hook 载荷使用的精确规范化项目键。
+    /// `project` is the complete project layer; an empty layer removes the entry.
+    /// `project` 是完整项目配置层；空配置层会移除对应条目。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns success after one exact map update, or a state-lock diagnostic.
+    /// 单次精确映射更新完成后返回成功，失败时返回状态锁诊断。
+    pub fn replace_project_projection(
+        &self,
+        workspace_path: &str,
+        project: &VmmConfigLayer,
+    ) -> Result<(), String> {
+        let mut state = self.write_state("replace one project VMM projection")?;
+        if project.is_empty() {
+            state.projects_by_workspace.remove(workspace_path);
+        } else {
+            state
+                .projects_by_workspace
+                .insert(workspace_path.to_string(), project.clone());
+        }
+        Ok(())
+    }
+
+    /// Replaces the configuration, outbox, and compaction projection for one exact session.
+    /// 替换单个精确会话的配置、outbox 与压缩投影。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_id` identifies the only session entry allowed to change.
+    /// `session_id` 标识唯一允许发生变化的会话条目。
+    /// `vmm` is the complete session configuration layer; an empty layer removes the entry.
+    /// `vmm` 是完整会话配置层；空配置层会移除对应条目。
+    /// `outbox` is the complete pending writeback queue; an empty queue removes the entry.
+    /// `outbox` 是完整待处理写回队列；空队列会移除对应条目。
+    /// `last_compaction_id` is the latest exact compaction boundary for this session.
+    /// `last_compaction_id` 是该会话最近一次精确压缩边界。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns success after one constant-scope update, or a state-lock diagnostic.
+    /// 单次常量范围更新完成后返回成功，失败时返回状态锁诊断。
+    pub fn replace_session_projection(
+        &self,
+        session_id: SessionId,
+        vmm: &VmmConfigLayer,
+        outbox: &[VmmWritebackOutboxEntry],
+        last_compaction_id: Option<&str>,
+    ) -> Result<(), String> {
+        // sessionKey is shared by the three independently sparse session projections.
+        // sessionKey 由三个相互独立的稀疏会话投影共同使用。
+        let session_key = session_id.to_string();
+        let mut state = self.write_state("replace one session VMM projection")?;
+        if vmm.is_empty() {
+            state.sessions.remove(&session_key);
+        } else {
+            state.sessions.insert(session_key.clone(), vmm.clone());
+        }
+        if outbox.is_empty() {
+            state.outboxes.remove(&session_key);
+        } else {
+            state.outboxes.insert(session_key.clone(), outbox.to_vec());
+        }
+        if let Some(last_compaction_id) = last_compaction_id {
+            state
+                .last_compaction_ids
+                .insert(session_key, Some(last_compaction_id.to_string()));
+        } else {
+            state.last_compaction_ids.remove(&session_key);
+        }
+        Ok(())
+    }
+
+    /// Removes all non-profile VMM projections owned by one exact session.
+    /// 移除单个精确会话拥有的全部非画像 VMM 投影。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_id` identifies the exact missing or deleted session.
+    /// `session_id` 标识精确缺失或已删除的会话。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns success after removing the exact keys, or a state-lock diagnostic.
+    /// 移除精确键后返回成功，失败时返回状态锁诊断。
+    pub fn remove_session_projection(&self, session_id: SessionId) -> Result<(), String> {
+        let session_key = session_id.to_string();
+        let mut state = self.write_state("remove one session VMM projection")?;
+        state.sessions.remove(&session_key);
+        state.outboxes.remove(&session_key);
+        state.last_compaction_ids.remove(&session_key);
         Ok(())
     }
 
@@ -277,10 +427,24 @@ impl VmmHookRuntimeHandle {
         let session = session_id
             .as_deref()
             .and_then(|session_id| snapshot.sessions.get(session_id));
+        // Invocation layers are the only bounded copies needed to apply the host-owned transport override.
+        // 调用配置层是应用宿主持有传输覆盖时唯一需要的有界副本。
+        let mut global = snapshot.global.clone();
+        let mut project = project.cloned();
+        let mut session = session.cloned();
+        if let Some(runtime_override) = snapshot.runtime_transport_override.as_ref() {
+            apply_runtime_transport_override(&mut global, runtime_override);
+            if let Some(project) = project.as_mut() {
+                apply_runtime_transport_override(project, runtime_override);
+            }
+            if let Some(session) = session.as_mut() {
+                apply_runtime_transport_override(session, runtime_override);
+            }
+        }
         Ok(VmmEffectiveConfig::resolve(
-            &snapshot.global,
-            project,
-            session,
+            &global,
+            project.as_ref(),
+            session.as_ref(),
         ))
     }
 
@@ -1297,6 +1461,79 @@ mod tests {
         ] {
             assert_eq!(vmm_hook_timeout_ms(hook_id), VMM_BACKGROUND_HOOK_TIMEOUT_MS);
         }
+    }
+
+    /// Verifies one session projection update preserves every unrelated VMM entry.
+    /// 验证单会话投影更新会保留全部无关 VMM 条目。
+    #[test]
+    fn vmm_session_projection_update_is_exact_and_sparse() {
+        // targetSession identifies the only three sparse maps allowed to change.
+        // targetSession 标识唯一允许发生变化的三个稀疏映射条目。
+        let target_session = SessionId::from_u128(41);
+        // otherSession proves the update does not rebuild or discard unrelated state.
+        // otherSession 证明本次更新不会重建或丢弃无关状态。
+        let other_session = SessionId::from_u128(42);
+        let mut initial = VmmHookConfigSnapshot::default();
+        initial.sessions.insert(
+            other_session.to_string(),
+            VmmConfigLayer {
+                enabled: Some(true),
+                ..VmmConfigLayer::default()
+            },
+        );
+        initial.profile_sync.insert(
+            target_session.to_string(),
+            VmmProfileSyncState {
+                updated_at: Some(String::from("profile")),
+                ..VmmProfileSyncState::default()
+            },
+        );
+        let runtime = VmmHookRuntimeHandle::new(initial);
+        let target_layer = VmmConfigLayer {
+            ai_tools_enabled: Some(false),
+            ..VmmConfigLayer::default()
+        };
+        let target_outbox = vec![VmmWritebackOutboxEntry {
+            id: String::from("outbox-target"),
+            request: vulcan_vmm::PostActionRequest::default(),
+            attempt_count: 1,
+            last_error: None,
+            created_at: String::from("100"),
+            updated_at: String::from("100"),
+        }];
+
+        runtime
+            .replace_session_projection(
+                target_session,
+                &target_layer,
+                &target_outbox,
+                Some("compact-target"),
+            )
+            .expect("exact session projection should update");
+
+        let state = runtime
+            .read_state("verify exact session projection")
+            .expect("VMM runtime should remain readable");
+        assert_eq!(
+            state.sessions.get(&target_session.to_string()),
+            Some(&target_layer)
+        );
+        assert!(state.sessions.contains_key(&other_session.to_string()));
+        let retained_outbox = state
+            .outboxes
+            .get(&target_session.to_string())
+            .expect("target outbox should be retained");
+        assert_eq!(retained_outbox.len(), 1);
+        assert_eq!(retained_outbox[0].id, target_outbox[0].id);
+        assert_eq!(
+            state
+                .last_compaction_ids
+                .get(&target_session.to_string())
+                .and_then(Clone::clone)
+                .as_deref(),
+            Some("compact-target")
+        );
+        assert!(state.profile_sync.contains_key(&target_session.to_string()));
     }
 
     /// Verifies snapshot replacement preserves runtime profile state inside one authoritative lock.

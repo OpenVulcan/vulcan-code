@@ -43,17 +43,16 @@ pub(crate) fn editable_user_prompt_message_ids_from_entries(
     messages: &[SessionMessageEntry],
 ) -> BTreeSet<String> {
     let mut result = BTreeSet::new();
-    for (index, message) in messages.iter().enumerate() {
-        if !session_entry_allows_user_prompt_edit(message) {
-            continue;
+    // laterEditBlocker turns the former suffix scan for every user row into one reverse linear pass.
+    // laterEditBlocker 将原先针对每条用户消息重复执行的后缀扫描改为一次逆序线性遍历。
+    let mut later_edit_blocker = false;
+    for message in messages.iter().rev() {
+        if session_entry_allows_user_prompt_edit(message) && !later_edit_blocker {
+            result.insert(message.id.clone());
         }
-        if messages[index + 1..]
-            .iter()
-            .any(session_entry_blocks_user_prompt_edit)
-        {
-            continue;
+        if session_entry_blocks_user_prompt_edit(message) {
+            later_edit_blocker = true;
         }
-        result.insert(message.id.clone());
     }
     result
 }

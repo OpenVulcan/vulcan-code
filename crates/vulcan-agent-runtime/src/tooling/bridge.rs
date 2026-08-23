@@ -108,13 +108,6 @@ pub fn build_vulcan_tools_manager(
     occupied_public_tool_ids.insert(ask_candidate.descriptor.id.clone());
     candidates.push(ask_candidate);
 
-    for candidate in candidate_provider_tools {
-        let tool_id = candidate.descriptor.id.clone();
-        if occupied_public_tool_ids.insert(tool_id.clone()) {
-            candidates.push(candidate);
-        }
-    }
-
     for tool_id in candidate_native_tool_ids {
         if native_tool_id_is_vmm_memory_tool(&tool_id) && !vmm_ai_tools_enabled {
             continue;
@@ -130,7 +123,9 @@ pub fn build_vulcan_tools_manager(
             continue;
         };
         let descriptor = native_descriptor_to_vulcan(&definition.descriptor);
-        occupied_public_tool_ids.insert(descriptor.id.clone());
+        if !occupied_public_tool_ids.insert(descriptor.id.clone()) {
+            continue;
+        }
         let catalog = native_catalog.clone();
         let tool_id = definition.descriptor.id.clone();
         let workspace_root_for_context = workspace_root.clone();
@@ -183,6 +178,15 @@ pub fn build_vulcan_tools_manager(
                 })
             }),
         });
+    }
+
+    // Native public ids are reserved before provider candidates are admitted.
+    // 原生公开标识会先完成占位，再接纳 Provider 候选，确保 `file` 与 `file_edit` 保持稳定。
+    for candidate in candidate_provider_tools {
+        let tool_id = candidate.descriptor.id.clone();
+        if occupied_public_tool_ids.insert(tool_id.clone()) {
+            candidates.push(candidate);
+        }
     }
 
     if let Some(runtime) = luaskills_runtime.clone() {

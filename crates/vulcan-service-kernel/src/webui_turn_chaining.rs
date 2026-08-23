@@ -12,6 +12,7 @@ use vulcan_workspace_store::{
     workspace_store::{ThreadGoalStatus, VulcanGoalStore},
 };
 
+use super::conversation_submission::existing_submission_workspace_slice;
 use super::session_hydration::{
     capture_preserved_workspace_run_state, load_workspace_for_submission,
     preserve_active_session_run_state, retained_submission_snapshot_has_session_context,
@@ -23,9 +24,9 @@ use super::webui_prompt_lifecycle::{
 use super::{
     AgentRuntimeBridge, SharedServiceBridgeState, active_kernel_session_ids,
     active_reasoning_selection_effort, apply_webui_prompt_begin_outer_steps,
-    build_vmm_hook_config_snapshot, cache_session_goal_summary,
-    commit_workspace_snapshot_and_emit_session_phase_delta, current_unix_millis_value,
-    ensure_webui_goal_session_kernel_turn_start_allowed, ensure_webui_session_runtime_state,
+    cache_session_goal_summary, commit_workspace_snapshot_and_emit_session_phase_delta,
+    current_unix_millis_value, ensure_webui_goal_session_kernel_turn_start_allowed,
+    ensure_webui_session_runtime_entry, refresh_exact_vmm_hook_session_projection,
     runtime_state_has_queued_pending_prompt_work, session_goal_dispatch_version,
     session_has_pending_plan_artifact, start_webui_goal_session_kernel_turn,
     webui_session_has_active_run, webui_session_kernel_has_active_turn, webui_trace,
@@ -183,10 +184,16 @@ pub(super) async fn maybe_start_session_goal_continuation_if_idle(
             .workspace_snapshot
             .as_ref()
             .is_some_and(|snapshot| session_has_pending_plan_artifact(snapshot, session_id));
-        let retained_workspace_snapshot = guard.workspace_snapshot.as_ref().and_then(|snapshot| {
-            retained_submission_snapshot_has_session_context(snapshot, session_id)
-                .then(|| snapshot.clone())
-        });
+        // retainedWorkspaceSnapshot captures only the exact goal session and never clones unrelated workspace history.
+        // retainedWorkspaceSnapshot 只捕获精确目标会话，绝不复制无关工作区历史。
+        let retained_workspace_snapshot = match guard.workspace_snapshot.as_ref() {
+            Some(snapshot)
+                if retained_submission_snapshot_has_session_context(snapshot, session_id) =>
+            {
+                Some(existing_submission_workspace_slice(snapshot, session_id)?)
+            }
+            _ => None,
+        };
         (
             webui_session_has_active_run(&guard, session_id),
             webui_session_kernel_has_active_turn(&guard, session_id),
@@ -246,7 +253,7 @@ pub(super) async fn maybe_start_session_goal_continuation_if_idle(
         preserved_workspace_run_state.as_ref(),
         &mut workspace_snapshot,
     );
-    ensure_webui_session_runtime_state(&mut workspace_snapshot, session_id, None)?;
+    ensure_webui_session_runtime_entry(&mut workspace_snapshot, session_id, None)?;
     let Some(session_title) = workspace_snapshot
         .sessions
         .iter()
@@ -283,6 +290,7 @@ pub(super) async fn maybe_start_session_goal_continuation_if_idle(
                 hidden_model_guidance: None,
                 provider_visible_agent_messages: Vec::new(),
                 attachments: Vec::new(),
+                provider_attachments: None,
                 append_canonical_user_message: false,
                 append_visible_user_prompt_record: false,
                 source: PendingSessionPromptSource::GoalContinuation,
@@ -307,12 +315,11 @@ pub(super) async fn maybe_start_session_goal_continuation_if_idle(
         session_id,
         &session_title,
     );
-    agent_runtime
-        .vmm_hook_runtime
-        .replace_snapshot(build_vmm_hook_config_snapshot(
-            &agent_runtime.provider_configuration,
-            &workspace_snapshot,
-        ))?;
+    refresh_exact_vmm_hook_session_projection(
+        &agent_runtime.vmm_hook_runtime,
+        &workspace_snapshot,
+        session_id,
+    )?;
     commit_workspace_snapshot_and_emit_session_phase_delta(
         app,
         state,

@@ -2,6 +2,7 @@
 //! WebUI 提示词生命周期 pending dispatch 辅助逻辑。
 
 use super::*;
+use crate::conversation_submission::mutate_latest_workspace_for_existing_session;
 use crate::notify_webui_wait_agent_parent_interruption_if_waiting;
 use crate::pending_prompts::{
     clear_stale_session_goal_pending_prompts, dispatch_queued_pending_prompt_hook,
@@ -36,24 +37,6 @@ pub(crate) async fn service_insert_pending_prompt(
 ) -> Result<bool, String> {
     let (controller_runtime, agent_runtime, _, _, _) = runtime_parts_from_state(&state)?;
     let selected_session_id = selected_session_id_from_state(&state)?;
-    let mut workspace_snapshot =
-        current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
-            String::from("service is still starting; workspace snapshot is not ready")
-        })?;
-    let workspace_path = workspace_path_for_session(&workspace_snapshot, selected_session_id);
-    // queued_hook_event is dispatched only after the routed internal queue becomes authoritative.
-    // queued_hook_event 仅在路由后的内部队列成为权威状态后分发。
-    let admission = insert_webui_pending_prompt_into_internal_queue(
-        &mut workspace_snapshot,
-        selected_session_id,
-        &workspace_path,
-        &entry_id,
-    )?;
-    let admission_run_phase = workspace_snapshot
-        .session_run_phases
-        .get(&selected_session_id)
-        .copied()
-        .unwrap_or(SessionRunPhase::Idle);
     {
         let guard = state
             .lock()
@@ -64,11 +47,34 @@ pub(crate) async fn service_insert_pending_prompt(
             "user_interrupt_prompt",
         )?;
     }
-    mark_webui_session_waiting_for_guided_prompt_dispatch(
-        &mut workspace_snapshot,
+    // admission mutates and publishes only the selected-session slice under one retained-state lock.
+    // admission 在单个保留状态锁下仅变更并发布所选会话切片。
+    let (admission, admission_run_phase) = mutate_latest_workspace_for_existing_session(
+        &state,
+        None,
         selected_session_id,
-    );
-    store_workspace_snapshot_without_workbench_rebuild(&state, workspace_snapshot)?;
+        |workspace_slice| {
+            let workspace_path = workspace_path_for_session(workspace_slice, selected_session_id);
+            // queuedHookEvent is dispatched only after the routed internal queue becomes authoritative.
+            // queuedHookEvent 仅在路由后的内部队列成为权威状态后分发。
+            let admission = insert_webui_pending_prompt_into_internal_queue(
+                workspace_slice,
+                selected_session_id,
+                &workspace_path,
+                &entry_id,
+            )?;
+            let admission_run_phase = workspace_slice
+                .session_run_phases
+                .get(&selected_session_id)
+                .copied()
+                .unwrap_or(SessionRunPhase::Idle);
+            mark_webui_session_waiting_for_guided_prompt_dispatch(
+                workspace_slice,
+                selected_session_id,
+            );
+            Ok((admission, admission_run_phase))
+        },
+    )?;
     // Post-commit UI deltas are independent: one emitter failure must not hide the other accepted-state projection.
     // 提交后的 UI 增量彼此独立：单个发送失败不能遮蔽另一份已接纳状态投影。
     if let Err(error) = emit_pending_prompts_changed_delta(&app, &state, selected_session_id) {
@@ -100,13 +106,9 @@ pub(crate) async fn service_insert_pending_prompt(
             format!("session={selected_session_id} error={error}"),
         );
     }
-    let snapshot_for_persist = current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
-        String::from("service is still starting; workspace snapshot is not ready")
-    })?;
     spawn_workspace_session_persist_task(
         state.clone(),
         controller_runtime.clone(),
-        snapshot_for_persist,
         selected_session_id,
         Some(String::from("guided_insert")),
     );
@@ -252,6 +254,7 @@ pub(crate) async fn maybe_start_webui_mailbox_turn_if_ready(
                 hidden_model_guidance: None,
                 provider_visible_agent_messages: provider_visible_agent_messages.clone(),
                 attachments: Vec::new(),
+                provider_attachments: None,
                 append_canonical_user_message: false,
                 append_visible_user_prompt_record: false,
                 source: PendingSessionPromptSource::SessionMailbox,
@@ -288,12 +291,11 @@ pub(crate) async fn maybe_start_webui_mailbox_turn_if_ready(
         session_id,
         &session_title,
     );
-    agent_runtime
-        .vmm_hook_runtime
-        .replace_snapshot(build_vmm_hook_config_snapshot(
-            &agent_runtime.provider_configuration,
-            &workspace_snapshot,
-        ))?;
+    refresh_exact_vmm_hook_session_projection(
+        &agent_runtime.vmm_hook_runtime,
+        &workspace_snapshot,
+        session_id,
+    )?;
     commit_workspace_snapshot_and_emit_session_phase_delta(
         app,
         state,
@@ -426,16 +428,9 @@ pub(crate) async fn pending_prompt_dispatch_readiness(
         let current_goal_id = current_goal.as_ref().map(|goal| goal.goal_id.as_str());
         let removed = clear_stale_session_goal_pending_prompts(state, session_id, current_goal_id)?;
         if removed > 0 {
-            let workspace_snapshot = state
-                .lock()
-                .map_err(|error| format!("failed to lock service state: {error}"))?
-                .workspace_snapshot
-                .clone()
-                .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
             spawn_workspace_session_runtime_state_persist_task(
                 state.clone(),
                 controller_runtime.clone(),
-                workspace_snapshot,
                 session_id,
                 Some(String::from("stale_goal_guidance_cleanup")),
             );

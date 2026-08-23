@@ -15,7 +15,8 @@ use crate::tooling::command_session_runtime::{
     CommandSessionBackend, CommandSessionInputEvent, CommandSessionOutputChunk,
     CommandSessionReadOutcome, CommandSessionRuntime, CommandSessionSnapshot,
     CommandSessionStartRequest, DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS,
-    DEFAULT_COMMAND_SESSION_STOP_WAIT_MS,
+    DEFAULT_COMMAND_SESSION_STOP_WAIT_MS, MAX_COMMAND_SESSION_READ_CHUNKS,
+    MAX_COMMAND_SESSION_READ_WAIT_MS,
 };
 use crate::tooling::output_decode::decode_shell_output_bytes;
 use crate::tooling::shell_host::{HostCommandShell, HostCommandShellSupport};
@@ -93,12 +94,16 @@ const TERMINAL_INTERRUPT_DRAIN_MAX_MS: u64 = 1_500;
 /// Soft byte limit for coalescing adjacent model-visible terminal chunks.
 /// 合并相邻模型可见终端分片时使用的软字节限制。
 const TERMINAL_OUTPUT_CHUNK_COALESCE_SOFT_LIMIT_BYTES: usize = 2_048;
+mod file;
+mod file_edit;
 mod knowledge_base;
 mod prompt_skill;
 mod registry;
 mod shell_command;
 #[cfg(test)]
 mod shell_session;
+pub(crate) use file::*;
+pub(crate) use file_edit::*;
 pub(crate) use knowledge_base::*;
 pub(crate) use prompt_skill::*;
 pub(crate) use registry::*;
@@ -363,6 +368,8 @@ pub fn build_native_tool_catalog(
         build_vmm_turn_details_tool(snapshot.clone()),
         build_vmm_memory_write_tool(snapshot.clone()),
         build_vmm_memory_delete_tool(snapshot),
+        build_file_tool(),
+        build_file_edit_tool(),
     ];
     if let Some(runtime) = luaskills_runtime {
         definitions.push(build_runtime_config_tool(runtime));

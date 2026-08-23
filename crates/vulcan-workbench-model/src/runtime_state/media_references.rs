@@ -162,8 +162,8 @@ impl SessionMediaReferenceLedger {
         self.entries.insert(key, entry);
     }
 
-    /// Finds one retained reference that matches the exact provider upload contract, regardless of provider TTL metadata.
-    /// 查找一条匹配精确供应商上传契约的保留引用，不因供应商 TTL 元数据到期而失效。
+    /// Finds one retained reference that matches the exact provider upload contract and active TTL.
+    /// 查找一条匹配精确供应商上传契约且 TTL 仍有效的保留引用。
     #[allow(clippy::too_many_arguments)]
     pub fn find_usable(
         &self,
@@ -178,7 +178,7 @@ impl SessionMediaReferenceLedger {
         session_id: Option<&str>,
         resource_kind: &str,
         mime_type: &str,
-        _now_unix_millis: u64,
+        now_unix_millis: u64,
     ) -> Option<&SessionMediaReferenceEntry> {
         self.entries.values().find(|entry| {
             entry.source_sha256 == source_sha256
@@ -191,6 +191,8 @@ impl SessionMediaReferenceLedger {
                 && entry.resource_kind == resource_kind
                 && entry.mime_type == mime_type
                 && media_reference_entry_is_well_formed(entry)
+                && entry.created_at_unix_millis <= now_unix_millis
+                && now_unix_millis < entry.expires_at_unix_millis
                 && match reference_scope {
                     SessionMediaReferenceScope::ProviderProtocol => {
                         entry.connection_id.is_none() && entry.session_id.is_none()
@@ -258,7 +260,7 @@ fn media_reference_entry_is_well_formed(entry: &SessionMediaReferenceEntry) -> b
         && !entry.provider_reference.trim().is_empty()
         && entry.provider_reference == entry.provider_reference.trim()
         && !entry.provider_reference.chars().any(char::is_control)
-        && entry.created_at_unix_millis <= entry.expires_at_unix_millis
+        && entry.created_at_unix_millis < entry.expires_at_unix_millis
         && match entry.reference_scope {
             SessionMediaReferenceScope::ProviderProtocol => {
                 entry.connection_id.is_none() && entry.session_id.is_none()
@@ -355,6 +357,24 @@ mod tests {
                     "video",
                     "video/mp4",
                     2,
+                )
+                .is_none()
+        );
+        assert!(
+            ledger
+                .find_usable(
+                    "sha256:source",
+                    42,
+                    "minimax",
+                    "coding-plan",
+                    "cn.video-file",
+                    "sha256:contract",
+                    SessionMediaReferenceScope::ProviderProtocol,
+                    "account-b",
+                    None,
+                    "video",
+                    "video/mp4",
+                    100,
                 )
                 .is_none()
         );

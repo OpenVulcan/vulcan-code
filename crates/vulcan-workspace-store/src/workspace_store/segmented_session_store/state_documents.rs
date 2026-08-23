@@ -2,10 +2,189 @@
 //! 分段会话状态文档持久化。
 
 use super::*;
-use vulcan_context::protocol::{
-    validate_session_conversation_message_identities,
-    validate_session_conversation_record_identities,
-};
+use serde::Serializer;
+use serde::ser::SerializeStruct;
+
+/// Borrowed serializer that excludes canonical conversation payload before JSON construction.
+/// 在构建 JSON 前排除规范会话正文的借用序列化器。
+struct SegmentedRuntimeStateMetadata<'a>(&'a SessionRuntimeStateEntry);
+
+impl Serialize for SegmentedRuntimeStateMetadata<'_> {
+    /// Serializes every persisted runtime field without visiting canonical conversation messages.
+    /// 序列化每个持久运行态字段，但不访问规范会话消息。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `serializer` receives the lightweight segmented-state projection.
+    /// `serializer` 接收轻量分段状态投影。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The serializer output, or its precise serialization error.
+    /// 返回序列化器输出或其精确序列化错误。
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // Exhaustive destructuring makes every newly added runtime field a compile-time decision:
+        // it must be persisted below or explicitly classified as process-local/canonical history.
+        // 穷尽解构会把每个新增运行态字段变成编译期决策：必须在下方持久化，或明确归类为进程内/规范历史。
+        let SessionRuntimeStateEntry {
+            active_agent_id,
+            active_provider_id,
+            active_connection_id,
+            active_model_id,
+            pending_model_selection,
+            provider_route_lease,
+            active_context_window_policy,
+            context_compaction_window_node_id,
+            active_reasoning_effort,
+            active_reasoning_effort_explicit,
+            active_temperature,
+            provider_tool_selections,
+            media_understanding_modes,
+            provider_tool_enabled_capabilities,
+            media_reference_ledger,
+            provider_extension_target_sets,
+            provider_tool_settings_initialized,
+            provider_tool_selections_overridden,
+            active_work_mode,
+            prompt_skill_overrides,
+            context_injection_state,
+            vmm,
+            knowledge_library_selection: _,
+            todolist,
+            plan_mode,
+            output_style,
+            vmm_writeback_outbox,
+            vmm_profile_sync,
+            last_compaction_id,
+            auto_compaction_consecutive_failures,
+            context_start_message_id,
+            live_context_budget_fingerprint,
+            live_context_assembly_fingerprint,
+            anchor_context_budget_fingerprint,
+            anchor_context_assembly_fingerprint,
+            last_provider_request_preview_markdown,
+            ui_state,
+            conversation_state: _,
+            tool_call_record_ids,
+            tool_request_record_ids,
+            last_provider_usage: _,
+            last_successful_provider_usage: _,
+            provider_call_ledger,
+            execution_retry_snapshot,
+            transient_execution_retry_snapshot: _,
+            auto_compact_prefill_input_tokens,
+            active_precheck_turn_id,
+            session_runtime_kernel,
+            updated_at,
+        } = self.0;
+        // state contains only fields whose owning serde contract allows persistence.
+        // state 只包含所属 serde 契约允许持久化的字段。
+        let mut state = serializer.serialize_struct("SessionRuntimeStateEntry", 44)?;
+        // serializeAlways preserves fields that have no skip predicate in the model contract.
+        // serializeAlways 保留模型契约中没有跳过谓词的字段。
+        macro_rules! serialize_always {
+            ($($field:ident),+ $(,)?) => {
+                $(state.serialize_field(stringify!($field), $field)?;)+
+            };
+        }
+        // serializeOption preserves optional fields only when an exact value exists.
+        // serializeOption 仅在精确值存在时保留可选字段。
+        macro_rules! serialize_option {
+            ($($field:ident),+ $(,)?) => {
+                $(if $field.is_some() {
+                    state.serialize_field(stringify!($field), $field)?;
+                })+
+            };
+        }
+        // serializeNonEmpty preserves collection or state fields only when they contain payload.
+        // serializeNonEmpty 仅在集合或状态字段包含载荷时保留它们。
+        macro_rules! serialize_non_empty {
+            ($($field:ident),+ $(,)?) => {
+                $(if !$field.is_empty() {
+                    state.serialize_field(stringify!($field), $field)?;
+                })+
+            };
+        }
+        serialize_always!(
+            active_agent_id,
+            active_provider_id,
+            active_model_id,
+            last_compaction_id,
+            context_start_message_id,
+            ui_state,
+            updated_at,
+        );
+        serialize_option!(
+            active_connection_id,
+            pending_model_selection,
+            provider_route_lease,
+            active_context_window_policy,
+            context_compaction_window_node_id,
+            active_reasoning_effort,
+            active_temperature,
+            active_work_mode,
+            live_context_budget_fingerprint,
+            live_context_assembly_fingerprint,
+            anchor_context_budget_fingerprint,
+            anchor_context_assembly_fingerprint,
+            last_provider_request_preview_markdown,
+            auto_compact_prefill_input_tokens,
+            active_precheck_turn_id,
+            session_runtime_kernel,
+        );
+        serialize_non_empty!(
+            provider_tool_selections,
+            media_understanding_modes,
+            provider_tool_enabled_capabilities,
+            media_reference_ledger,
+            provider_extension_target_sets,
+            prompt_skill_overrides,
+            context_injection_state,
+            vmm,
+            todolist,
+            plan_mode,
+            output_style,
+            vmm_writeback_outbox,
+            vmm_profile_sync,
+            tool_call_record_ids,
+            tool_request_record_ids,
+            provider_call_ledger,
+        );
+        if *active_reasoning_effort_explicit {
+            state.serialize_field(
+                "active_reasoning_effort_explicit",
+                active_reasoning_effort_explicit,
+            )?;
+        }
+        if *provider_tool_settings_initialized {
+            state.serialize_field(
+                "provider_tool_settings_initialized",
+                provider_tool_settings_initialized,
+            )?;
+        }
+        if *provider_tool_selections_overridden {
+            state.serialize_field(
+                "provider_tool_selections_overridden",
+                provider_tool_selections_overridden,
+            )?;
+        }
+        if *auto_compaction_consecutive_failures != 0 {
+            state.serialize_field(
+                "auto_compaction_consecutive_failures",
+                auto_compaction_consecutive_failures,
+            )?;
+        }
+        if let Some(reference) = execution_retry_snapshot
+            && reference.content_bytes > 0
+        {
+            state.serialize_field("execution_retry_snapshot", execution_retry_snapshot)?;
+        }
+        state.end()
+    }
+}
 
 /// Overwrites the state document for one main session or task session directory.
 /// 覆盖写入某个主会话或子任务会话目录的状态文档。
@@ -97,19 +276,11 @@ pub(in crate::workspace_store) fn state_document_from_runtime_state(
     session_id: &str,
     runtime_state: &SessionRuntimeStateEntry,
 ) -> Result<SegmentedSessionStateDocument, String> {
-    validate_session_conversation_message_identities(&runtime_state.conversation_state.messages)
-        .map_err(|error| format!("Invalid canonical conversation message identity: {error}"))?;
-    validate_session_conversation_record_identities(&runtime_state.conversation_state.records)
-        .map_err(|error| format!("Invalid canonical conversation record identity: {error}"))?;
-    // Serialize only lightweight runtime metadata; canonical conversation history lives in append-only segments.
-    // 仅序列化轻量运行时元数据；规范会话历史保存在追加式分段中。
-    let mut runtime_state_value = serialize_session_runtime_state_entry(
-        runtime_state,
-        "serialize segmented runtime state failed: ",
-    )?;
-    if let Some(runtime_state_object) = runtime_state_value.as_object_mut() {
-        runtime_state_object.remove("conversation_state");
-    }
+    // Serialize the borrowed metadata view directly; canonical conversation history is never
+    // visited and remains solely in append-only segments.
+    // 直接序列化借用元数据视图；规范会话历史完全不被访问，并仅保存在追加式分段中。
+    let runtime_state_value = serde_json::to_value(SegmentedRuntimeStateMetadata(runtime_state))
+        .map_err(|error| format!("serialize segmented runtime state failed: {error}"))?;
     // Keep the current-context view explicit without duplicating the canonical conversation window.
     // 显式保留当前上下文视图，但不重复保存规范会话窗口。
     let current_context = json!({

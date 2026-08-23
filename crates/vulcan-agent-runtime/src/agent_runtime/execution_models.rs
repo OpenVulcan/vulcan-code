@@ -293,7 +293,7 @@ pub struct ExecutionPreparationRequest {
     pub conversation_hook_turn_id: Option<String>,
     /// Exact claimed execution snapshot that replaces prompt reconstruction for manual retry.
     /// 在手动重试时替代提示词重构的精确已领取执行快照。
-    pub execution_retry_snapshot: Option<Box<vulcan_workbench_model::ExecutionRetrySnapshot>>,
+    pub execution_retry_snapshot: Option<Arc<vulcan_workbench_model::ExecutionRetrySnapshot>>,
     /// Exact logical Provider-request continuation installed after a replay-safe host restart.
     /// 在可安全回放的宿主重启后安装的精确逻辑 Provider 请求延续身份。
     pub provider_request_continuation: Option<ExecutionProviderRequestContinuation>,
@@ -352,6 +352,9 @@ pub struct ExecutionPreparationRequest {
     /// Optional file-domain root for task-session artifacts owned by this execution.
     /// 本次执行拥有的可选子代理会话文件域根目录。
     pub task_session_store_root: Option<PathBuf>,
+    /// Exact storage directory for the session that owns this physical execution.
+    /// 拥有本次物理执行的会话对应精确存储目录。
+    pub session_storage_directory: Option<PathBuf>,
     /// Target session title.
     /// 目标会话标题。
     pub session_title: String,
@@ -609,6 +612,9 @@ pub struct ExecutionPreparation {
     /// Optional file-domain root for task-session artifacts owned by this run.
     /// 本次运行拥有的可选子代理会话文件域根目录。
     pub task_session_store_root: Option<PathBuf>,
+    /// Exact storage directory for session-local runtime artifacts emitted by this run.
+    /// 本次运行发出的会话本地运行时工件所使用的精确存储目录。
+    pub session_storage_directory: Option<PathBuf>,
     /// Latest host-visible attachment catalog captured from the canonical conversation window for this run.
     /// 为本次运行从规范会话窗口捕获的最新宿主可见附件目录。
     pub conversation_attachments: Vec<ConversationAttachment>,

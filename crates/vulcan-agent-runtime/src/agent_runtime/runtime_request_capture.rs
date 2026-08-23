@@ -63,7 +63,7 @@ pub async fn capture_runtime_provider_wire_request(
         &agent_profile_catalog,
         luaskills_runtime,
         None,
-        Arc::new(ExtensionGeneration::new(0, None, mcp_runtime_access)),
+        Arc::new(ExtensionGeneration::new(0, None, mcp_runtime_access, None)),
         task_runtime,
         question_runtime,
         command_session_runtime,

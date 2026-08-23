@@ -68,7 +68,12 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
         plugins: Vec::new(),
         lua_skills: lua_skills_catalog_summary(&empty_luaskills_catalog(), &provider_configuration),
         agent_skills: agent_skills_catalog_summary(&provider_configuration, None),
-        subagent_catalog: subagent_catalog_summary(None, None),
+        // Bootstrap fallback must remain allocation-only; the real retained catalog is published after startup loading.
+        // 启动降级快照必须仅执行内存分配；真实保留目录会在启动加载后发布。
+        subagent_catalog: subagent_catalog_summary_from_catalog(
+            &vulcan_task_session::SubagentCatalog::default(),
+            None,
+        ),
         settings: settings(),
         providers: Vec::new(),
         mcp_servers: mcp_servers(&provider_configuration),

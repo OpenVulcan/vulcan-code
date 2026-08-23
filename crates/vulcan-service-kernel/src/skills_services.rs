@@ -3577,11 +3577,14 @@ fn refresh_subagent_catalog_local_state_with_errors(
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
-    if let Some(runtime) = guard.agent_runtime.as_ref() {
+    if let Some(runtime) = guard.agent_runtime.as_mut() {
         runtime
             .task_runtime
             .replace_subagent_catalog(catalog.clone())
             .map_err(|error| format!("刷新运行时智能体目录失败：{error}"))?;
+        // subagentCatalog preserves the exact refresh generation for projection without another filesystem traversal.
+        // subagentCatalog 为投影保留本次精确刷新代次，避免再次遍历文件系统。
+        runtime.subagent_catalog = Arc::new(catalog.clone());
     }
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
@@ -3950,17 +3953,9 @@ fn normalized_optional_user_package_id(value: Option<&str>) -> Result<Option<Str
 /// 返回应用是否内置了同名系统包或分类。
 fn system_subagent_package_exists(package_id: &str) -> bool {
     let system_root = vulcan_runtime_assets::resolve_system_subagents_resource_directory();
-    std::fs::read_dir(system_root)
-        .ok()
-        .into_iter()
-        .flat_map(|entries| entries.flatten())
-        .any(|entry| {
-            entry.path().is_dir()
-                && entry
-                    .file_name()
-                    .to_str()
-                    .is_some_and(|name| name == package_id)
-        })
+    // packageId has already passed the path-separator guard, so the exact child path is authoritative.
+    // packageId 已通过路径分隔符校验，因此精确子路径就是权威定位结果。
+    system_root.join(package_id).is_dir()
 }
 
 /// Builds the target agent id for a package assignment or transfer.

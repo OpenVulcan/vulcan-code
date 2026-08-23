@@ -84,8 +84,9 @@ use vulcan_task_session::{
     SUBAGENT_MODE_DEFAULT, SUBAGENT_MODE_EXPERT, SUBAGENT_MODE_MIRROR, SegmentedTaskSessionStore,
     SubagentCatalog, SubagentDefinition, TaskInvocationConfig, TaskInvocationEvent,
     TaskInvocationEventKind, TaskSessionCompactionStore, TaskSessionConfigResolutionInput,
-    TaskSessionConfigResolver, TaskSessionMetadata, TaskSessionResolvedConfig, TaskSessionStatus,
-    TaskSessionStore, apply_task_session_compaction_result,
+    TaskSessionConfigResolver, TaskSessionMetadata, TaskSessionMirrorSummary,
+    TaskSessionResolvedConfig, TaskSessionStatus, TaskSessionStore,
+    apply_task_session_compaction_result,
 };
 use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,

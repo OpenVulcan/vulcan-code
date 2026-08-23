@@ -62,6 +62,14 @@ pub(super) fn build_task_runtime_preparation_request(
     request.subagent_prompt_context =
         build_task_subagent_prompt_context(invocation, resolved_config);
     request.task_session_store_root = context.request_template.task_session_store_root.clone();
+    // session_storage_directory carries only a deterministic published locator; an in-memory-only
+    // execution remains None and trace persistence will reject it explicitly if tracing is enabled.
+    // session_storage_directory 仅携带确定性的已发布定位；纯内存执行保持为 None，若启用追踪，
+    // 追踪持久化边界会显式拒绝该状态。
+    request.session_storage_directory = context
+        .foundation
+        .task_runtime()
+        .task_session_directory_for_task(invocation.task_id)?;
     request.session_title = invocation.display_title.clone();
     request.prompt = invocation.prompt.clone();
     request.conversation_state = core_snapshot_to_session_conversation_state(&invocation.snapshot)?;

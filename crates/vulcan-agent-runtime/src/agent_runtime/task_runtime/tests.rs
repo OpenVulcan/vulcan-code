@@ -120,6 +120,21 @@ fn resolve_persisted_task_session_status_preserves_failed_terminal_state() {
 /// 写入 TaskSession 存储测试所需的最小分段根会话元数据。
 fn write_test_segmented_root_metadata(root: &std::path::Path, root_session_id: SessionId) {
     fs::create_dir_all(root).expect("create segmented root");
+    // segmentLine is the exact initial JSONL row whose durable length the fixture metadata declares.
+    // segmentLine 是测试元数据声明其耐久长度的精确初始 JSONL 行。
+    let segment_line = json!({
+        "seq": 0,
+        "timestamp": "100",
+        "type": "session_meta",
+        "payload": { "session_id": root_session_id.to_string() },
+        "turn_index": null
+    });
+    // segmentLineText preserves the exact compact serialization written to the fixture file.
+    // segmentLineText 保留写入测试文件的精确紧凑序列化结果。
+    let segment_line_text = serde_json::to_string(&segment_line).expect("encode root segment line");
+    // segmentByteLen includes the one JSONL newline byte.
+    // segmentByteLen 包含一个 JSONL 换行字节。
+    let segment_byte_len = segment_line_text.len().saturating_add(1);
     let metadata = json!({
         "schema_version": 1,
         "session_id": root_session_id.to_string(),
@@ -140,7 +155,7 @@ fn write_test_segmented_root_metadata(root: &std::path::Path, root_session_id: S
                 "file": "s001.jsonl",
                 "start_seq": 0,
                 "line_count": 1,
-                "byte_len": 0,
+                "byte_len": segment_byte_len,
                 "first_timestamp": "100",
                 "last_timestamp": "100",
                 "first_turn_index": null,
@@ -157,18 +172,7 @@ fn write_test_segmented_root_metadata(root: &std::path::Path, root_session_id: S
     let file = File::create(root.join("metadata.json")).expect("create root metadata");
     serde_json::to_writer_pretty(file, &metadata).expect("write root metadata");
     let mut segment = File::create(root.join("s001.jsonl")).expect("create root segment");
-    writeln!(
-        segment,
-        "{}",
-        json!({
-            "seq": 0,
-            "timestamp": "100",
-            "type": "session_meta",
-            "payload": { "session_id": root_session_id.to_string() },
-            "turn_index": null
-        })
-    )
-    .expect("write root segment");
+    writeln!(segment, "{segment_line_text}").expect("write root segment");
 }
 
 /// Builds a resolved TaskSession configuration for controller-config tests.

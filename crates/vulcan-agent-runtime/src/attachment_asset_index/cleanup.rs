@@ -129,9 +129,12 @@ pub fn execute_attachment_cleanup(
                         local_path: vulcan_runtime_assets::native_host_path_text_from_path(
                             &managed_path,
                         ),
+                        resource_path: None,
                         source_path: None,
                         asset_id: Some(record.asset_id.clone()),
                         byte_len: record.byte_len,
+                        source_sha256: None,
+                        delivery_mode: None,
                         preview_local_path: None,
                         mime_type: record.mime_type.clone(),
                     };
@@ -152,9 +155,12 @@ pub fn execute_attachment_cleanup(
                     kind: record.kind.clone(),
                     file_name: record.original_file_name.clone(),
                     local_path: vulcan_runtime_assets::native_host_path_text(&record.managed_path),
+                    resource_path: None,
                     source_path: None,
                     asset_id: Some(record.asset_id.clone()),
                     byte_len: record.byte_len,
+                    source_sha256: None,
+                    delivery_mode: None,
                     preview_local_path: None,
                     mime_type: record.mime_type.clone(),
                 };

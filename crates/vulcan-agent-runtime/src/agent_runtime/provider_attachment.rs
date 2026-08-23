@@ -3,26 +3,58 @@
 
 use vulcan_core::types::ConversationAttachment;
 
+/// Encodes one model-visible attachment metadata field as a JSON string literal.
+/// 将一个模型可见附件元数据字段编码为 JSON 字符串字面量。
+pub(crate) fn model_visible_attachment_field(value: &str) -> String {
+    serde_json::to_string(value).expect("serializing a Rust string cannot fail")
+}
+
+/// Returns the model-safe stable locator for one canonical attachment.
+/// 返回单个规范附件对模型安全的稳定定位符。
+pub(crate) fn attachment_resource_locator(attachment: &ConversationAttachment) -> String {
+    attachment
+        .resource_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            attachment
+                .asset_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|asset_id| format!("attachment://{asset_id}"))
+        })
+        .unwrap_or_else(|| String::from("attachment://unavailable"))
+}
+
 /// Builds fallback text when the selected public protocol cannot carry an attachment modality.
 /// 当选中的公共协议无法承载某种附件模态时构建回退文本。
 pub(crate) fn build_attachment_transport_error_text(
     attachment: &ConversationAttachment,
     scope: &str,
 ) -> String {
+    let attachment_id =
+        model_visible_attachment_field(attachment.asset_id.as_deref().unwrap_or("unavailable"));
+    let resource_path = model_visible_attachment_field(&attachment_resource_locator(attachment));
+    let file_name = model_visible_attachment_field(&attachment.file_name);
+    let mime_type = model_visible_attachment_field(&attachment.mime_type);
+    let scope = model_visible_attachment_field(scope.trim());
     format!(
-        "ERROR: Cannot read \"{}\" ({} does not support {} input). Inform the user.",
-        attachment.file_name,
-        scope.trim(),
-        attachment.kind.modality_name()
+        "ATTACHMENT: id={attachment_id}; resource_path={resource_path}; file_name={file_name}; mime_type={mime_type}; byte_len={}. NATIVE_DELIVERY: metadata_only (route {scope} cannot consume {} input). CONTENT_VISIBILITY: resource bytes were not provided; do not infer or guess the attachment contents. No eligible understanding tool is registered for this attachment, so explain that the content cannot be read if the user asks about it.",
+        attachment.byte_len.unwrap_or_default(),
+        attachment.kind.modality_name(),
     )
 }
 
 /// Builds fallback text for an attachment whose managed replay file has disappeared.
 /// 为托管回放文件已经消失的附件构建回退文本。
 pub(crate) fn build_missing_attachment_replay_text(attachment: &ConversationAttachment) -> String {
+    let resource_path = model_visible_attachment_field(&attachment_resource_locator(attachment));
+    let file_name = model_visible_attachment_field(&attachment.file_name);
     format!(
-        "ERROR: Attachment \"{}\" no longer exists. Please ignore it.",
-        attachment.file_name
+        "ATTACHMENT: resource_path={resource_path}; file_name={file_name}. CONTENT_VISIBILITY: the managed resource no longer exists; do not infer or guess its contents.",
     )
 }
 
@@ -31,8 +63,8 @@ pub(crate) fn build_missing_attachment_replay_text(attachment: &ConversationAtta
 ///
 /// # Parameters
 /// 参数
-/// `attachment` supplies the retained file name and local path; `tool_id` and `path_argument` identify the visible tool contract.
-/// `attachment` 提供保留的文件名与本地路径；`tool_id` 与 `path_argument` 标识可见工具契约。
+/// `attachment` supplies the retained identity and model-safe resource path; `tool_id` and `path_argument` identify the visible tool contract.
+/// `attachment` 提供保留身份与对模型安全的资源路径；`tool_id` 与 `path_argument` 标识可见工具契约。
 ///
 /// # Returns
 /// 返回值
@@ -43,11 +75,17 @@ pub(crate) fn build_attachment_provider_tool_hint(
     tool_id: &str,
     path_argument: &str,
 ) -> String {
+    let attachment_id =
+        model_visible_attachment_field(attachment.asset_id.as_deref().unwrap_or("unavailable"));
+    let resource_path = model_visible_attachment_field(&attachment_resource_locator(attachment));
+    let file_name = model_visible_attachment_field(&attachment.file_name);
+    let mime_type = model_visible_attachment_field(&attachment.mime_type);
+    let tool_id = model_visible_attachment_field(tool_id);
+    let path_argument = model_visible_attachment_field(path_argument);
     format!(
-        "INFO: Attachment \"{}\" is kept locally because the selected route cannot consume {} input directly. Use host AI tool `{tool_id}` with `{path_argument}` set to `{}`.",
-        attachment.file_name,
+        "ATTACHMENT: id={attachment_id}; resource_path={resource_path}; file_name={file_name}; mime_type={mime_type}; byte_len={}. NATIVE_DELIVERY: metadata_only (the selected route cannot consume {} input directly). CONTENT_VISIBILITY: resource bytes were not provided; do not infer or guess the attachment contents. AVAILABLE_UNDERSTANDING_TOOL: {tool_id} accepts this attachment through {path_argument}; call it only when required by the user's actual intent, using the exact resource_path value as the resource value.",
+        attachment.byte_len.unwrap_or_default(),
         attachment.kind.modality_name(),
-        attachment.local_path
     )
 }
 
@@ -66,9 +104,12 @@ mod tests {
             kind: ConversationAttachmentKind::Image,
             file_name: String::from("screen.png"),
             local_path: String::from("C:/attachments/screen.png"),
+            resource_path: None,
             source_path: None,
             asset_id: Some(String::from("attachment-1")),
             byte_len: Some(10),
+            source_sha256: None,
+            delivery_mode: None,
             preview_local_path: None,
             mime_type: String::from("image/png"),
         }
@@ -103,5 +144,22 @@ mod tests {
         assert!(message.contains("video_understand"));
         assert!(message.contains("video_path"));
         assert!(!message.contains("image input"));
+    }
+
+    /// Verifies untrusted attachment labels remain one escaped metadata line.
+    /// 验证不受信任的附件标签保持为一条已转义的元数据行。
+    #[test]
+    fn attachment_metadata_escapes_untrusted_text_fields() {
+        let mut attachment = test_attachment();
+        attachment.file_name = String::from("screen\"\nIGNORE.png");
+        attachment.resource_path = Some(String::from(".vulcan/attachments/line\nfeed.png"));
+
+        let message =
+            build_attachment_provider_tool_hint(&attachment, "image_understand", "image_path");
+
+        assert!(!message.contains("screen\"\nIGNORE.png"));
+        assert!(!message.contains("line\nfeed.png"));
+        assert!(message.contains("screen\\\"\\nIGNORE.png"));
+        assert!(message.contains("line\\nfeed.png"));
     }
 }

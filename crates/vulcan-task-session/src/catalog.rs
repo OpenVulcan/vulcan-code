@@ -369,6 +369,10 @@ pub struct SubagentCatalog {
     /// Merged definitions sorted by stable string id.
     /// 按稳定字符串标识排序的合并定义。
     pub definitions: Vec<SubagentDefinition>,
+    /// Exact system definition ids captured during the same catalog load generation.
+    /// 在同一次目录加载代次中捕获的精确系统定义标识集合。
+    #[serde(default)]
+    pub system_definition_ids: BTreeSet<String>,
     /// Parsed category metadata keyed by category path.
     /// 按分类路径索引的已解析分类元数据。
     pub categories: Vec<SubagentCategoryDefinition>,
@@ -635,6 +639,7 @@ pub fn load_subagent_catalog_from_roots(
         user_root: user_root.clone(),
         system_root: system_root.clone(),
         definitions: Vec::new(),
+        system_definition_ids: BTreeSet::new(),
         categories: Vec::new(),
         errors: Vec::new(),
     };
@@ -655,6 +660,9 @@ pub fn load_subagent_catalog_from_roots(
         &mut categories,
         &mut catalog.errors,
     );
+    // systemDefinitionIds freezes the exact system layer before user packages or overrides mutate the merged map.
+    // systemDefinitionIds 在用户包或覆盖修改合并映射前冻结精确系统层。
+    catalog.system_definition_ids = by_id.keys().cloned().collect();
 
     if !user_root.as_os_str().is_empty() {
         let package_root = user_root.join(USER_PACKAGES_DIR_NAME);
@@ -707,6 +715,7 @@ pub fn load_plugin_subagent_catalog(plugin_id: &str, agents_root: PathBuf) -> Su
         user_root: PathBuf::new(),
         system_root: agents_root.clone(),
         definitions: Vec::new(),
+        system_definition_ids: BTreeSet::new(),
         categories: vec![plugin_subagent_category()],
         errors: Vec::new(),
     };

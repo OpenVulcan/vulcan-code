@@ -18,6 +18,32 @@ use vulcan_workbench_model::{
 
 use super::*;
 
+/// Returns a strictly increasing millisecond identity for successive live retry transitions.
+/// 为连续实时重试迁移返回严格递增的毫秒身份。
+///
+/// # Parameters
+/// 参数
+/// `previous` is the timestamp identity retained by the immediately preceding boundary.
+/// `previous` 是紧邻前一边界保留的时间戳身份。
+///
+/// # Returns
+/// 返回值
+/// The current wall-clock millisecond or `previous + 1`, whichever is greater.
+/// 返回当前墙钟毫秒值与 `previous + 1` 中的较大者。
+fn next_execution_retry_updated_at(previous: &str) -> String {
+    // wallClock is the current service timestamp and remains authoritative when time advances normally.
+    // wallClock 是当前服务时间戳，并在时间正常前进时保持权威。
+    let wall_clock = current_unix_millis_text()
+        .parse::<u64>()
+        .unwrap_or_default();
+    // previousBoundary is the last retained identity; malformed legacy text contributes zero.
+    // previousBoundary 是最近保留的身份；格式错误的旧版文本按零处理。
+    let previous_boundary = previous.parse::<u64>().unwrap_or_default();
+    wall_clock
+        .max(previous_boundary.saturating_add(1))
+        .to_string()
+}
+
 /// Stable blocker used when an exact per-tool recovery boundary is absent.
 /// 精确逐工具恢复边界缺失时使用的稳定阻断原因。
 pub(crate) const TOOL_RECOVERY_BOUNDARY_MISSING_REASON: &str =
@@ -54,7 +80,7 @@ fn validate_prepared_tool_batch_shape(
     if requests.is_empty() {
         return Err(coded_tool_recovery_error(
             TOOL_RECOVERY_BOUNDARY_MISSING_REASON,
-            "A durable tool recovery batch cannot be empty.",
+            "A retained tool recovery batch cannot be empty.",
         ));
     }
     // preparedToolCallIds proves the incoming boundary is duplicate-free before it can materialize or compare retained slots.
@@ -306,15 +332,13 @@ pub(super) fn handle_conversation_checkpoint_stream_event(
     }
 }
 
-/// Persists an exact pre-dispatch retry snapshot and publishes its lightweight runtime reference.
-/// 持久化一份精确的分派前重试快照并发布其轻量运行态引用。
+/// Retains an exact pre-dispatch retry snapshot in memory and publishes its lightweight runtime reference.
+/// 在内存中保留一份精确分派前重试快照并发布其轻量运行态引用。
 ///
 /// # Parameters
 /// 参数
 /// - `task_state`: Retained service state that owns the active stream and retry reference.
 /// - `task_state`：拥有活动流与重试引用的保留服务状态。
-/// - `controller_runtime`: Durable workspace store used for the immutable sidecar body.
-/// - `controller_runtime`：用于不可变 sidecar 正文的可靠工作区存储。
 /// - `session_id`: Exact session that owns the request.
 /// - `session_id`：拥有该请求的精确会话。
 /// - `active_stream_task_id`: Physical service-stream attempt that may publish the checkpoint.
@@ -336,11 +360,10 @@ pub(super) fn handle_conversation_checkpoint_stream_event(
 ///
 /// # Returns
 /// 返回值
-/// Success only after the immutable sidecar is durable and its exact reference is retained.
-/// 仅在不可变 sidecar 已可靠持久化且其精确引用已保留后返回成功。
-pub(super) fn persist_prepared_execution_retry_checkpoint(
+/// Success only after the complete process-local body and its lightweight reference are retained.
+/// 仅在完整进程内正文及其轻量引用均已保留后返回成功。
+pub(super) fn retain_prepared_execution_retry_checkpoint(
     task_state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
     session_id: SessionId,
     active_stream_task_id: Uuid,
     logical_execution_id: String,
@@ -362,7 +385,7 @@ pub(super) fn persist_prepared_execution_retry_checkpoint(
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         if !active_stream_task_matches_id(&guard, session_id, active_stream_task_id) {
             return Err(String::from(
-                "Execution retry checkpoint lost exact active-stream ownership before persistence.",
+                "Execution retry checkpoint lost exact active-stream ownership before projection.",
             ));
         }
         let runtime_state = guard
@@ -409,8 +432,11 @@ pub(super) fn persist_prepared_execution_retry_checkpoint(
         .ok_or_else(|| String::from("Provider attempt index overflowed."))?;
     // canonicalDigest covers the complete Core state rather than a transcript projection.
     // canonicalDigest 覆盖完整 Core 状态，而不是转录投影。
-    let canonical_bytes = serde_json::to_vec(&controller_snapshot)
-        .map_err(|error| format!("Failed to serialize retry checkpoint Core state: {error}"))?;
+    let canonical_bytes = serde_json::to_vec(&(
+        &controller_snapshot.messages,
+        &controller_snapshot.continuation,
+    ))
+    .map_err(|error| format!("Failed to serialize retry checkpoint Core state: {error}"))?;
     let canonical_digest = sha256_hex(&canonical_bytes);
     let now = current_unix_millis_text();
     let snapshot = ExecutionRetrySnapshot {
@@ -443,10 +469,8 @@ pub(super) fn persist_prepared_execution_retry_checkpoint(
         created_at: now.clone(),
         updated_at: now.clone(),
     };
-    let reference = vulcan_workspace_store::workspace_store::persist_execution_retry_snapshot(
-        &controller_runtime.data_root,
-        session_id,
-        &snapshot,
+    let reference = vulcan_workspace_store::workspace_store::project_execution_retry_snapshot(
+        session_id, &snapshot,
     )?;
     let mut guard = task_state
         .lock()
@@ -461,6 +485,7 @@ pub(super) fn persist_prepared_execution_retry_checkpoint(
         .as_mut()
         .and_then(|workspace| workspace.session_runtime_state.get_mut(&session_id))
         .ok_or_else(|| String::from("Execution retry checkpoint runtime state is missing."))?;
+    runtime_state.transient_execution_retry_snapshot = Some(std::sync::Arc::new(snapshot));
     runtime_state.execution_retry_snapshot = Some(reference);
     runtime_state.updated_at = now;
     Ok(())
@@ -483,7 +508,7 @@ pub(super) fn persist_prepared_execution_retry_checkpoint(
 pub(super) fn clear_execution_retry_snapshot_after_success(
     task_state: &SharedServiceBridgeState,
     session_id: SessionId,
-) -> Result<Option<String>, String> {
+) -> Result<Option<vulcan_workbench_model::ExecutionRetrySnapshotRef>, String> {
     let reference = {
         let mut guard = task_state
             .lock()
@@ -496,10 +521,11 @@ pub(super) fn clear_execution_retry_snapshot_after_success(
                 String::from("Execution retry runtime state disappeared while removing success.")
             })?;
         let reference = runtime_state.execution_retry_snapshot.take();
+        runtime_state.transient_execution_retry_snapshot = None;
         runtime_state.updated_at = current_unix_millis_text();
         reference
     };
-    Ok(reference.map(|reference| reference.snapshot_id))
+    Ok(reference)
 }
 
 /// Returns a claimed retry snapshot to the frozen state after stop or abnormal stream termination.
@@ -684,12 +710,36 @@ fn refreeze_claimed_execution_retry_snapshot_from_canonical_state(
     ) {
         return Ok(());
     }
-    let mut snapshot = vulcan_workspace_store::workspace_store::load_execution_retry_snapshot(
-        &controller_runtime.data_root,
-        session_id,
-        &reference,
-    )
-    .map_err(ExecutionRetryRefreezeFailure::BodyUnreadable)?;
+    // liveSnapshot must come from the exact process-local owner; normal running never reads retry JSON.
+    // liveSnapshot 必须来自精确的进程内所有者；正常运行期间绝不读取重试 JSON。
+    let mut snapshot = {
+        let guard = task_state.lock().map_err(|error| {
+            ExecutionRetryRefreezeFailure::TransitionFailed(format!(
+                "failed to lock service state: {error}"
+            ))
+        })?;
+        let runtime_state = guard
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+            .ok_or_else(|| {
+                ExecutionRetryRefreezeFailure::TransitionFailed(String::from(
+                    "Execution retry runtime state disappeared while loading its live body.",
+                ))
+            })?;
+        if runtime_state.execution_retry_snapshot.as_ref() != Some(&reference) {
+            return Ok(());
+        }
+        runtime_state
+            .transient_execution_retry_snapshot
+            .as_deref()
+            .cloned()
+            .ok_or_else(|| {
+                ExecutionRetryRefreezeFailure::BodyUnreadable(String::from(
+                    "The live execution retry body is missing from process memory.",
+                ))
+            })?
+    };
     // canonicalActionAdvanced reconciles every Provider-visible input committed after the frozen
     // checkpoint before terminal classification decides whether an interruption error is needed.
     // canonicalActionAdvanced 在终态分类判断是否需要中断错误前，协调冻结检查点之后提交的全部
@@ -699,7 +749,7 @@ fn refreeze_claimed_execution_retry_snapshot_from_canonical_state(
             .map_err(ExecutionRetryRefreezeFailure::TransitionFailed)?;
     snapshot.state = ExecutionRetrySnapshotState::Frozen;
     snapshot.claimed_attempt_id = None;
-    snapshot.updated_at = current_unix_millis_text();
+    snapshot.updated_at = next_execution_retry_updated_at(&snapshot.updated_at);
     if !canonical_action_advanced
         && should_replace_stop_interruption_error(snapshot.error.as_ref(), &snapshot.pending_action)
     {
@@ -728,17 +778,40 @@ fn refreeze_claimed_execution_retry_snapshot_from_canonical_state(
         };
         snapshot.error = Some(interruption_error);
     }
-    let updated_reference =
-        vulcan_workspace_store::workspace_store::persist_execution_retry_snapshot(
+    // sessionDirectory is captured after one pre-write CAS check, without retaining service state during disk I/O.
+    // sessionDirectory 在一次写入前 CAS 校验后捕获，磁盘 I/O 期间不保留服务状态。
+    let session_directory = {
+        let guard = task_state.lock().map_err(|error| {
+            ExecutionRetryRefreezeFailure::TransitionFailed(format!(
+                "failed to lock service state: {error}"
+            ))
+        })?;
+        let runtime_state = guard
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+            .ok_or_else(|| {
+                ExecutionRetryRefreezeFailure::TransitionFailed(String::from(
+                    "Execution retry runtime state disappeared while refreezing.",
+                ))
+            })?;
+        if runtime_state.execution_retry_snapshot.as_ref() != Some(&reference) {
+            return Ok(());
+        }
+        require_segmented_session_directory_for_retained_session(
+            &guard,
             &controller_runtime.data_root,
+            session_id,
+        )
+        .map_err(ExecutionRetryRefreezeFailure::TransitionFailed)?
+    };
+    let updated_reference =
+        vulcan_workspace_store::workspace_store::persist_interrupted_execution_retry_snapshot_if_absent(
+            &session_directory,
             session_id,
             &snapshot,
         )
         .map_err(ExecutionRetryRefreezeFailure::TransitionFailed)?;
-    // updatedReplaySafetyProven and updatedAt are copied before the reference moves into shared state.
-    // updatedReplaySafetyProven 与 updatedAt 在引用移入共享状态前完成复制。
-    let updated_replay_safety_proven = updated_reference.replay_safety_proven();
-    let updated_at = updated_reference.updated_at.clone();
     let mut guard = task_state.lock().map_err(|error| {
         ExecutionRetryRefreezeFailure::TransitionFailed(format!(
             "failed to lock service state: {error}"
@@ -750,14 +823,25 @@ fn refreeze_claimed_execution_retry_snapshot_from_canonical_state(
         .and_then(|workspace| workspace.session_runtime_state.get_mut(&session_id))
         .ok_or_else(|| {
             ExecutionRetryRefreezeFailure::TransitionFailed(String::from(
-                "Execution retry runtime state disappeared while refreezing.",
+                "Execution retry runtime state disappeared after retry persistence.",
             ))
         })?;
-    // A newer reference owns any concurrent transition; the completed immutable write becomes harmless garbage and must not overwrite it.
-    // 如果并发迁移已经发布新引用，则由新引用拥有状态；本次已完成的不可变写入仅成为无害垃圾，绝不能覆盖它。
+    // A changed reference rejects publication; digest-checked cleanup cannot delete a newer file.
+    // 引用发生变化时拒绝发布；摘要校验清理不会删除更新的文件。
     if runtime_state.execution_retry_snapshot.as_ref() != Some(&reference) {
+        drop(guard);
+        let _ = vulcan_workspace_store::workspace_store::delete_execution_retry_snapshot(
+            &session_directory,
+            session_id,
+            &updated_reference,
+        );
         return Ok(());
     }
+    // updatedReplaySafetyProven and updatedAt are copied before the reference moves into shared state.
+    // updatedReplaySafetyProven 与 updatedAt 在引用移入共享状态前完成复制。
+    let updated_replay_safety_proven = updated_reference.replay_safety_proven();
+    let updated_at = updated_reference.updated_at.clone();
+    runtime_state.transient_execution_retry_snapshot = Some(std::sync::Arc::new(snapshot));
     runtime_state.execution_retry_snapshot = Some(updated_reference);
     // continuationEligible refreshes the mirrored cache after a Claimed body becomes Frozen again.
     // continuationEligible 在 Claimed 正文重新变为 Frozen 后刷新镜像缓存。
@@ -1322,8 +1406,8 @@ pub(crate) fn reconcile_interrupted_execution_retry_canonical_state(
     Ok(false)
 }
 
-/// Refreshes the retry sidecar's controller state and digest from the retained canonical state.
-/// 从保留的规范状态刷新重试 sidecar 的控制器状态与摘要。
+/// Refreshes the live retry snapshot's controller state and digest from retained canonical state.
+/// 从保留的规范状态刷新实时重试快照的控制器状态与摘要。
 ///
 /// # Parameters
 /// # 参数
@@ -1343,22 +1427,25 @@ pub(crate) fn refresh_execution_retry_canonical_state(
     let controller_snapshot = vulcan_agent_runtime::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot(
         conversation_state,
     )?;
-    let canonical_bytes = serde_json::to_vec(&controller_snapshot)
-        .map_err(|error| format!("Failed to serialize refrozen retry Core state: {error}"))?;
+    let canonical_bytes = serde_json::to_vec(&(
+        &controller_snapshot.messages,
+        &controller_snapshot.continuation,
+    ))
+    .map_err(|error| format!("Failed to serialize refrozen retry Core state: {error}"))?;
     snapshot.controller_snapshot = controller_snapshot;
     snapshot.canonical_digest = sha256_hex(&canonical_bytes);
     Ok(())
 }
 
-/// Durably publishes one exact per-tool recovery transition before or after the corresponding tool boundary.
-/// 在对应工具边界之前或之后，可靠发布一次精确的逐工具恢复迁移。
+/// Publishes one exact process-local recovery transition before or after the corresponding tool boundary.
+/// 在对应工具边界之前或之后发布一次精确的进程内逐工具恢复迁移。
 ///
 /// # Parameters
 /// 参数
 /// `task_state` owns the authoritative live retry reference and mirrored continuation ledger.
 /// `task_state` 持有权威实时重试引用及其镜像 Continue 账本。
-/// `controller_runtime` owns immutable sidecar storage and durable main-session persistence.
-/// `controller_runtime` 持有不可变 sidecar 存储及可靠主会话持久化能力。
+/// `controller_runtime` owns exact main-session metadata persistence; the retry body stays in memory.
+/// `controller_runtime` 持有精确主会话元数据持久化能力；重试正文保持在内存中。
 /// `session_id` selects the exact conversation whose tool recovery boundary is being persisted.
 /// `session_id` 选择正在持久化工具恢复边界的精确会话。
 /// `expected_reference` is the immutable owner captured before asynchronous persistence starts.
@@ -1368,8 +1455,8 @@ pub(crate) fn refresh_execution_retry_canonical_state(
 ///
 /// # Returns
 /// 返回值
-/// Success only after the exact sidecar reference is represented by a durable main-session revision.
-/// 仅当精确 sidecar 引用已由可靠主会话修订表示后返回成功。
+/// Success after the live retry transition is retained and lightweight tool metadata is persisted.
+/// 在实时重试迁移已保留且轻量工具元数据已持久化后返回成功。
 pub(crate) async fn persist_execution_retry_tool_recovery_boundary(
     task_state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
@@ -1377,7 +1464,11 @@ pub(crate) async fn persist_execution_retry_tool_recovery_boundary(
     expected_reference: &vulcan_workbench_model::ExecutionRetrySnapshotRef,
     boundary: &ToolExecutionRecoveryBoundary,
 ) -> Result<(), String> {
-    let (reference, conversation_state) = {
+    // requiresCanonicalRefresh is true only when Provider output first materializes the complete batch.
+    // requiresCanonicalRefresh 仅在 Provider 输出首次物化完整批次时为真。
+    let requires_canonical_refresh =
+        matches!(boundary, ToolExecutionRecoveryBoundary::BatchPrepared(_));
+    let (reference, snapshot, conversation_state) = {
         let guard = task_state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -1388,9 +1479,15 @@ pub(crate) async fn persist_execution_retry_tool_recovery_boundary(
             .ok_or_else(|| {
                 String::from("Execution retry runtime state disappeared at a tool boundary.")
             })?;
+        // conversationState is never cloned for per-tool Started or Finished events.
+        // conversationState 绝不会为逐工具 Started 或 Finished 事件克隆。
         (
             runtime_state.execution_retry_snapshot.clone(),
-            runtime_state.conversation_state.clone(),
+            runtime_state
+                .transient_execution_retry_snapshot
+                .as_deref()
+                .cloned(),
+            requires_canonical_refresh.then(|| runtime_state.conversation_state.clone()),
         )
     };
     let Some(reference) = reference else {
@@ -1414,15 +1511,22 @@ pub(crate) async fn persist_execution_retry_tool_recovery_boundary(
             "The retained recovery owner is no longer frozen or claimed.",
         ));
     }
-    let mut snapshot = vulcan_workspace_store::workspace_store::load_execution_retry_snapshot(
-        &controller_runtime.data_root,
-        session_id,
-        &reference,
-    )?;
+    let mut snapshot = snapshot.ok_or_else(|| {
+        coded_tool_recovery_error(
+            TOOL_RECOVERY_BOUNDARY_MISSING_REASON,
+            "The live execution retry body is missing from process memory.",
+        )
+    })?;
     match boundary {
         ToolExecutionRecoveryBoundary::BatchPrepared(requests) => {
             validate_prepared_tool_batch_shape(requests, None)?;
-            refresh_execution_retry_canonical_state(&mut snapshot, &conversation_state)?;
+            let conversation_state = conversation_state.as_ref().ok_or_else(|| {
+                coded_tool_recovery_error(
+                    TOOL_RECOVERY_BOUNDARY_MISSING_REASON,
+                    "The prepared tool batch has no canonical conversation state.",
+                )
+            })?;
+            refresh_execution_retry_canonical_state(&mut snapshot, conversation_state)?;
             match &mut snapshot.pending_action {
                 ExecutionRetryPendingAction::ExecuteToolBatch { tools } => {
                     validate_prepared_tool_batch_shape(requests, Some(tools.len()))?;
@@ -1456,9 +1560,9 @@ pub(crate) async fn persist_execution_retry_tool_recovery_boundary(
                             Some(binding_fingerprint)
                                 if binding_fingerprint == &prepared.binding_fingerprint => {}
                             None => {
-                                // The durable batch-prepared barrier freezes the first exact binding
-                                // before Core is allowed to emit any tool-started boundary.
-                                // 可靠批次准备屏障会在 Core 获准发出任何工具启动边界前，
+                                // The process-local batch-prepared barrier freezes the first exact
+                                // binding before Core may emit any tool-started boundary.
+                                // 进程内批次准备屏障会在 Core 获准发出任何工具启动边界前，
                                 // 冻结首个精确绑定。
                                 retained.binding_fingerprint =
                                     Some(prepared.binding_fingerprint.clone());
@@ -1500,7 +1604,7 @@ pub(crate) async fn persist_execution_retry_tool_recovery_boundary(
             else {
                 return Err(coded_tool_recovery_error(
                     TOOL_RECOVERY_BOUNDARY_MISSING_REASON,
-                    "A tool started before its complete recovery batch became durable.",
+                    "A tool started before its complete recovery batch was retained in memory.",
                 ));
             };
             let progress = tools
@@ -1596,16 +1700,14 @@ pub(crate) async fn persist_execution_retry_tool_recovery_boundary(
             }
         }
     }
-    snapshot.updated_at = current_unix_millis_text();
+    snapshot.updated_at = next_execution_retry_updated_at(&snapshot.updated_at);
     let updated_reference =
-        vulcan_workspace_store::workspace_store::persist_execution_retry_snapshot(
-            &controller_runtime.data_root,
-            session_id,
-            &snapshot,
+        vulcan_workspace_store::workspace_store::project_execution_retry_snapshot(
+            session_id, &snapshot,
         )?;
-    if !updated_reference.replay_safety_proven() {
+    if !updated_reference.live_boundary_safety_proven() {
         return Err(format!(
-            "The persisted tool recovery boundary is not continuable: {}",
+            "The retained tool recovery boundary is not continuable: {}",
             updated_reference
                 .blocked_reason
                 .as_deref()
@@ -1631,6 +1733,8 @@ pub(crate) async fn persist_execution_retry_tool_recovery_boundary(
         let current_reference = runtime_state.execution_retry_snapshot.clone();
         match current_reference.as_ref() {
             Some(current) if current == &reference => {
+                runtime_state.transient_execution_retry_snapshot =
+                    Some(std::sync::Arc::new(snapshot));
                 runtime_state.execution_retry_snapshot = Some(updated_reference);
             }
             _ => {
@@ -1646,25 +1750,13 @@ pub(crate) async fn persist_execution_retry_tool_recovery_boundary(
             .map(|current| current.updated_at.clone())
             .unwrap_or_else(current_unix_millis_text);
     }
-    // authoritativeSnapshot is read only after the shared write gate is held, preserving newer same-session recovery mutations.
-    // authoritativeSnapshot 仅在持有共享写入闸门后读取，从而保留较新的同会话恢复变更。
-    let (_persist_guard, authoritative_snapshot) =
-        lock_latest_retained_workspace_session_persistence_snapshot(task_state, session_id).await?;
-    // runtimeStateUpdate is the newest retained revision containing the exact per-tool boundary published above.
-    // runtimeStateUpdate 是包含上方精确逐工具边界的最新保留修订。
-    let runtime_state_update = authoritative_snapshot
-        .session_runtime_state
-        .get(&session_id)
-        .ok_or_else(|| {
-            String::from("Execution retry runtime state disappeared before durable tool recovery.")
-        })?;
-    vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
-        controller_runtime.clone(),
-        session_id,
-        runtime_state_update,
-    )
-    .await
-    .map_err(|error| format!("Failed to durably publish the exact tool recovery boundary: {error}"))
+    // The synchronous metadata writer borrows the newest exact state after write admission and clones no history.
+    // 同步元数据写入器在取得写入许可后借用最新精确状态，且不克隆历史。
+    persist_latest_retained_session_runtime_state_update(task_state, controller_runtime, session_id)
+        .await
+        .map_err(|error| {
+            format!("Failed to durably publish the exact tool recovery boundary: {error}")
+        })
 }
 
 /// Builds structured interruption evidence for a tool whose body may already have external effects.
@@ -1729,15 +1821,28 @@ pub(crate) fn mark_execution_retry_snapshot_provider_dispatch_unknown(
     session_id: SessionId,
     message: &str,
 ) -> Result<(), String> {
-    let reference = {
+    let (reference, snapshot, session_directory) = {
         let guard = task_state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        guard
+        let runtime_state = guard
             .workspace_snapshot
             .as_ref()
-            .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
-            .and_then(|runtime_state| runtime_state.execution_retry_snapshot.clone())
+            .and_then(|workspace| workspace.session_runtime_state.get(&session_id));
+        let reference =
+            runtime_state.and_then(|runtime_state| runtime_state.execution_retry_snapshot.clone());
+        let snapshot = runtime_state.and_then(|runtime_state| {
+            runtime_state
+                .transient_execution_retry_snapshot
+                .as_deref()
+                .cloned()
+        });
+        let session_directory = require_segmented_session_directory_for_retained_session(
+            &guard,
+            &controller_runtime.data_root,
+            session_id,
+        )?;
+        (reference, snapshot, session_directory)
     };
     let Some(reference) = reference else {
         return Ok(());
@@ -1748,11 +1853,9 @@ pub(crate) fn mark_execution_retry_snapshot_provider_dispatch_unknown(
     ) {
         return Ok(());
     }
-    let mut snapshot = vulcan_workspace_store::workspace_store::load_execution_retry_snapshot(
-        &controller_runtime.data_root,
-        session_id,
-        &reference,
-    )?;
+    let mut snapshot = snapshot.ok_or_else(|| {
+        String::from("The live execution retry body is missing from process memory.")
+    })?;
     snapshot.state = ExecutionRetrySnapshotState::Frozen;
     snapshot.claimed_attempt_id = None;
     snapshot.error = Some(vulcan_ai_contract::AiExecutionError {
@@ -1784,10 +1887,29 @@ pub(crate) fn mark_execution_retry_snapshot_provider_dispatch_unknown(
         retryable: true,
         retry_after: None,
     });
-    snapshot.updated_at = current_unix_millis_text();
+    snapshot.updated_at = next_execution_retry_updated_at(&snapshot.updated_at);
+    {
+        // prewriteStateGuard performs only the CAS check and is released before serialization or disk I/O.
+        // prewriteStateGuard 仅执行 CAS 校验，并在序列化或磁盘 I/O 前释放。
+        let guard = task_state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let runtime_state = guard
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+            .ok_or_else(|| {
+                String::from(
+                    "Execution retry runtime state disappeared at provider-boundary failure.",
+                )
+            })?;
+        if runtime_state.execution_retry_snapshot.as_ref() != Some(&reference) {
+            return Ok(());
+        }
+    }
     let blocked_reference =
-        vulcan_workspace_store::workspace_store::persist_execution_retry_snapshot(
-            &controller_runtime.data_root,
+        vulcan_workspace_store::workspace_store::persist_interrupted_execution_retry_snapshot_if_absent(
+            &session_directory,
             session_id,
             &snapshot,
         )?;
@@ -1799,10 +1921,25 @@ pub(crate) fn mark_execution_retry_snapshot_provider_dispatch_unknown(
         .as_mut()
         .and_then(|workspace| workspace.session_runtime_state.get_mut(&session_id))
         .ok_or_else(|| {
-            String::from("Execution retry runtime state disappeared at provider-boundary failure.")
+            String::from(
+                "Execution retry runtime state disappeared after provider-boundary persistence.",
+            )
         })?;
+    if runtime_state.execution_retry_snapshot.as_ref() != Some(&reference) {
+        drop(guard);
+        let _ = vulcan_workspace_store::workspace_store::delete_execution_retry_snapshot(
+            &session_directory,
+            session_id,
+            &blocked_reference,
+        );
+        return Ok(());
+    }
+    // updatedAt is the only value needed after the complete snapshot moves back into memory.
+    // updatedAt 是完整快照移回内存后唯一仍需使用的值。
+    let updated_at = snapshot.updated_at.clone();
+    runtime_state.transient_execution_retry_snapshot = Some(std::sync::Arc::new(snapshot));
     runtime_state.execution_retry_snapshot = Some(blocked_reference);
-    runtime_state.updated_at = snapshot.updated_at;
+    runtime_state.updated_at = updated_at;
     Ok(())
 }
 
@@ -1937,6 +2074,7 @@ pub(crate) fn invalidate_execution_retry_runtime_state(
         message.to_string(),
         updated_at.clone(),
     );
+    runtime_state.transient_execution_retry_snapshot = None;
     runtime_state.updated_at = updated_at;
     true
 }
@@ -1961,8 +2099,8 @@ mod tests {
         ConversationMessage, ConversationPayload, ConversationRecord, ToolInvocationRequest,
     };
 
-    /// Verifies a durable prepared boundary rejects duplicate identities and retained-batch subsets.
-    /// 验证可靠的已准备边界会拒绝重复身份与保留批次子集。
+    /// Verifies a retained prepared boundary rejects duplicate identities and retained-batch subsets.
+    /// 验证已保留的准备边界会拒绝重复身份与保留批次子集。
     #[test]
     fn prepared_tool_batch_shape_requires_exact_duplicate_free_cardinality() {
         // request is the exact Provider invocation reused to construct malformed batch shapes.
@@ -1993,6 +2131,19 @@ mod tests {
         let incomplete_error = validate_prepared_tool_batch_shape(&[recovery_request], Some(2))
             .expect_err("prepared subset must be rejected");
         assert!(incomplete_error.starts_with(TOOL_RECOVERY_BOUNDARY_MISSING_REASON));
+    }
+
+    /// Verifies live retry identities advance even when the wall clock has not reached the prior boundary.
+    /// 验证即使墙钟尚未追上前一边界，实时重试身份仍会递增。
+    #[test]
+    fn live_retry_updated_at_is_strictly_monotonic() {
+        // previous is intentionally far ahead of the current wall clock to force logical advancement.
+        // previous 故意远超当前墙钟，以强制使用逻辑递增。
+        let previous = "999999999999999999";
+        // next must advance exactly once instead of reusing a colliding timestamp identity.
+        // next 必须精确递增一次，不能复用冲突的时间戳身份。
+        let next = next_execution_retry_updated_at(previous);
+        assert_eq!(next, "1000000000000000000");
     }
 
     /// Verifies each refreeze failure category exposes its exact stable localized reason.
@@ -2094,7 +2245,9 @@ mod tests {
                 .expect("successful consumption should clear the live reference");
 
         assert_eq!(
-            cleared_snapshot_id.as_deref(),
+            cleared_snapshot_id
+                .as_ref()
+                .map(|snapshot| snapshot.snapshot_id.as_str()),
             Some(reference.snapshot_id.as_str())
         );
         assert!(

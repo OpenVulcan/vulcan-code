@@ -1422,8 +1422,8 @@ impl ConfiguredInferenceService {
     ///
     /// # Parameters
     /// 参数
-    /// `enabled` is the newly committed complete Provider request-trace switch.
-    /// `enabled` 是新提交的完整 Provider 请求追踪开关。
+    /// `enabled` is the newly committed bounded Provider wire-request trace switch.
+    /// `enabled` 是新提交的有界 Provider 线上请求追踪开关。
     ///
     /// # Returns
     /// 返回值
@@ -3067,6 +3067,8 @@ impl ConfiguredInferenceService {
             let sequence = CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_SEQUENCE
                 .fetch_add(1, Ordering::Relaxed)
                 .saturating_add(1);
+            let slot_index = sequence.saturating_sub(1)
+                % vulcan_workspace_store::workspace_store::PROVIDER_REQUEST_TRACE_SLOT_COUNT;
             let trace = json!({
                 "schema_version": CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_SCHEMA_VERSION,
                 "captured_at_unix_ms": captured_at_unix_ms,
@@ -3084,14 +3086,12 @@ impl ConfiguredInferenceService {
                     "body": captured.body,
                 },
             });
-            let file_stem =
-                format!("{captured_at_unix_ms}-{sequence:06}-{execution_id}-{attempt_index}");
             let data_root = vulcan_workspace_store::data_plane::application_data_root();
             let persisted = tokio::task::spawn_blocking(move || {
                 vulcan_workspace_store::workspace_store::persist_configured_inference_provider_request_trace(
                     &data_root,
                     consumer_profile_id.as_str(),
-                    file_stem.as_str(),
+                    slot_index,
                     &trace,
                 )
             })
@@ -6239,7 +6239,7 @@ mod tests {
                     0,
                 )
                 .is_none(),
-            "non-VMM consumers must not receive complete request tracing"
+            "non-VMM consumers must not receive bounded wire-request tracing"
         );
 
         request.consumer_profile_id = String::from(VMM_CONSUMER_PROFILE_ID);
@@ -6337,6 +6337,7 @@ mod tests {
                 source_kind: vulcan_ai_contract::ResourceSourceKind::RemoteUrl,
                 file_name: None,
                 image_detail: Some(vulcan_ai_contract::ImageInputDetail::High),
+                resource_path: None,
                 local_path: None,
                 url: Some(String::from("https://example.invalid/image.png")),
             },

@@ -411,6 +411,10 @@ pub struct ProviderModelSummary {
     /// 该模型是否已在该供应商下启用。
     #[serde(default)]
     pub enabled: bool,
+    /// Content-addressed revision of the exact executable route when this row is selectable.
+    /// 当该行可选择时，其精确可执行路线的内容寻址修订号。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_revision: Option<String>,
     /// Optional lifecycle status from the provider catalog.
     /// 来自供应商目录的可选生命周期状态。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -751,6 +755,7 @@ mod provider_model_summary_tests {
             active: true,
             preferred_connection: true,
             enabled: true,
+            route_revision: Some(String::from("sha256:route")),
             status: None,
             family: None,
             context_limit: Some(131_072),
@@ -772,5 +777,6 @@ mod provider_model_summary_tests {
             value["providerNativeTools"],
             serde_json::json!(["web_search"])
         );
+        assert_eq!(value["routeRevision"], "sha256:route");
     }
 }

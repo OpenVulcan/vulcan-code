@@ -357,6 +357,66 @@ fn truncate_before_message_removes_tail_without_rollback_marker() {
     );
 }
 
+/// Verifies prompt-edit truncation reads only the metadata-selected target segment.
+/// 验证提示词编辑截断仅读取元数据选定的目标分段。
+#[test]
+fn truncate_before_message_does_not_read_earlier_segments() {
+    let root = test_root("truncate_before_message_does_not_read_earlier_segments");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy {
+            max_lines: 2,
+            max_bytes: DEFAULT_SEGMENT_MAX_BYTES,
+        }),
+    )
+    .expect("create session");
+    let messages = vec![
+        test_message(
+            "m-user-1",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "first prompt",
+        ),
+        test_message(
+            "m-assistant-1",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "first answer",
+        ),
+        test_message(
+            "m-user-2",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "second prompt",
+        ),
+        test_message(
+            "m-assistant-2",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "second answer",
+        ),
+    ];
+    append_segmented_session_message_update(&session_dir, &messages)
+        .expect("append messages across segments");
+    let corrupt_earlier_segment = b"unreadable earlier segment";
+    fs::write(session_dir.join("s001.jsonl"), corrupt_earlier_segment)
+        .expect("corrupt earlier segment");
+
+    truncate_segmented_session_before_message(&session_dir, "m-user-2", &messages[..2])
+        .expect("truncate through exact target segment");
+
+    assert_eq!(
+        fs::read(session_dir.join("s001.jsonl")).expect("read untouched earlier segment"),
+        corrupt_earlier_segment
+    );
+    let metadata: SegmentedSessionMetadata =
+        read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE)).expect("read metadata");
+    assert_eq!(metadata.message_count, 2);
+    assert_eq!(metadata.active_segment, "s002.jsonl");
+    assert!(!session_dir.join("s003.jsonl").exists());
+}
+
 /// Verifies anchor truncation keeps the selected message and drops only later rows.
 /// 验证锚点截断会保留所选消息且只丢弃后续行。
 #[test]

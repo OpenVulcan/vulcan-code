@@ -2,6 +2,7 @@
 //! 输入区附件转换辅助逻辑。
 
 use super::*;
+use vulcan_service_api::ComposerAttachmentDeliveryPlan;
 
 /// Static metadata for one composer attachment kind.
 /// 单个输入区附件类型的静态元数据。
@@ -30,12 +31,13 @@ impl ComposerAttachmentKindMetadata {
 
 /// Ordered composer attachment kinds shown by the WebUI capability controls.
 /// WebUI 能力控件展示的输入区附件类型顺序。
-pub(crate) fn composer_attachment_kinds() -> [ConversationAttachmentKind; 4] {
+pub(crate) fn composer_attachment_kinds() -> [ConversationAttachmentKind; 5] {
     [
         ConversationAttachmentKind::Image,
         ConversationAttachmentKind::Video,
         ConversationAttachmentKind::Audio,
         ConversationAttachmentKind::Pdf,
+        ConversationAttachmentKind::File,
     ]
 }
 
@@ -73,7 +75,7 @@ fn composer_attachment_kind_metadata(
             key: "file",
             aliases: &[],
             label: "文件",
-            accept: "application/json,text/plain",
+            accept: "*/*",
         },
     }
 }
@@ -97,9 +99,14 @@ pub(crate) fn composer_attachment_summary_from_core(
         kind: attachment.kind.modality_name().to_string(),
         file_name: attachment.file_name.clone(),
         local_path: attachment.local_path.clone(),
+        resource_path: attachment.resource_path.clone(),
         source_path: attachment.source_path.clone(),
         asset_id: attachment.asset_id.clone(),
         byte_len: attachment.byte_len,
+        source_sha256: attachment.source_sha256.clone(),
+        delivery_plan: attachment
+            .delivery_mode
+            .map(core_delivery_mode_to_service_plan),
         preview_local_path: attachment.preview_local_path.clone(),
         mime_type: attachment.mime_type.clone(),
     }
@@ -124,12 +131,88 @@ pub(crate) fn composer_attachment_summary_to_core(
         kind: parse_composer_attachment_kind(&summary.kind)?,
         file_name: summary.file_name,
         local_path: summary.local_path,
+        resource_path: summary.resource_path,
         source_path: summary.source_path,
         asset_id: summary.asset_id,
         byte_len: summary.byte_len,
+        source_sha256: summary.source_sha256,
+        delivery_mode: None,
         preview_local_path: summary.preview_local_path,
         mime_type: summary.mime_type,
     })
+}
+
+/// Rebuilds one browser attachment summary from the authoritative project-scoped asset index.
+/// 从权威项目范围资产索引重建一条浏览器附件摘要。
+///
+/// # Parameters
+/// 参数
+/// `workspace_path` identifies the project asset store and `summary` contributes only the opaque asset id plus its transient delivery plan.
+/// `workspace_path` 标识项目资产存储，`summary` 仅贡献不透明资产标识及其临时传输规划。
+///
+/// # Returns
+/// 返回值
+/// An integrity-verified canonical summary whose paths, names, MIME type, length, digest, and preview all come from host-owned state.
+/// 返回一条通过完整性校验的规范摘要，其路径、名称、MIME 类型、长度、摘要与预览全部来自宿主持有状态。
+pub(crate) fn resolve_composer_attachment_summary_for_workspace(
+    workspace_path: &str,
+    summary: ComposerAttachmentSummary,
+) -> Result<ComposerAttachmentSummary, String> {
+    let expected_kind = parse_composer_attachment_kind(&summary.kind)?;
+    let asset_id = summary
+        .asset_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| String::from("Composer attachment is missing its stable asset id."))?;
+    let mut attachment = resolve_indexed_attachment_resource(
+        workspace_path,
+        format!("attachment://{asset_id}").as_str(),
+        expected_kind,
+    )?;
+    attachment.preview_local_path = resolve_attachment_image_preview_sidecar(&attachment);
+    let mut authoritative = composer_attachment_summary_from_core(&attachment);
+    authoritative.delivery_plan = summary.delivery_plan;
+    Ok(authoritative)
+}
+
+/// Converts a WebUI attachment DTO into one conservative request-local Provider preference.
+/// 将 WebUI 附件 DTO 转换为单次请求局部的保守 Provider 偏好。
+///
+/// # Parameters
+/// 参数
+/// `summary` carries host-rebuilt canonical resource fields plus one browser-reported draft outcome.
+/// `summary` 携带由宿主重建的规范资源字段以及一项浏览器报告的草稿结果。
+///
+/// # Returns
+/// 返回值
+/// A core attachment copy that retains only metadata-only as a safe reduction; every direct-delivery
+/// mode is recomputed from the current authoritative route before Provider preparation.
+/// 返回一份仅保留“仅元数据”安全降级的核心附件副本；每种直接传输模式都会在 Provider 准备前
+/// 根据当前权威路线重新计算。
+pub(crate) fn composer_attachment_summary_to_provider_core(
+    summary: ComposerAttachmentSummary,
+) -> Result<ConversationAttachment, String> {
+    let delivery_mode = (summary.delivery_plan
+        == Some(ComposerAttachmentDeliveryPlan::MetadataOnly))
+    .then_some(vulcan_core::types::ConversationAttachmentDeliveryMode::MetadataOnly);
+    let mut attachment = composer_attachment_summary_to_core(summary)?;
+    attachment.delivery_mode = delivery_mode;
+    Ok(attachment)
+}
+
+/// Converts one core request-local delivery mode into its browser service representation.
+/// 将单个核心单次请求局部传输模式转换为浏览器服务表示。
+fn core_delivery_mode_to_service_plan(
+    mode: vulcan_core::types::ConversationAttachmentDeliveryMode,
+) -> ComposerAttachmentDeliveryPlan {
+    use vulcan_core::types::ConversationAttachmentDeliveryMode as CoreMode;
+    match mode {
+        CoreMode::InlineOriginal => ComposerAttachmentDeliveryPlan::InlineOriginal,
+        CoreMode::UploadReference => ComposerAttachmentDeliveryPlan::UploadReference,
+        CoreMode::InlineDerivedPreview => ComposerAttachmentDeliveryPlan::InlineDerivedPreview,
+        CoreMode::MetadataOnly => ComposerAttachmentDeliveryPlan::MetadataOnly,
+    }
 }
 
 /// Validates one WebUI attachment summary without cloning its payload fields.
@@ -303,9 +386,12 @@ mod tests {
             kind: String::from("spreadsheet"),
             file_name: String::from("data.xlsx"),
             local_path: String::from("C:/tmp/data.xlsx"),
+            resource_path: None,
             source_path: None,
             asset_id: Some(String::from("asset")),
             byte_len: Some(4),
+            source_sha256: None,
+            delivery_plan: None,
             preview_local_path: None,
             mime_type: String::from(
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -318,6 +404,116 @@ mod tests {
         assert!(error.contains("spreadsheet"));
     }
 
+    /// Verifies browser-controlled attachment fields are replaced by project-index authority before planning or submission.
+    /// 验证在规划或提交前，浏览器可控附件字段会被项目索引权威状态替换。
+    #[test]
+    fn resolve_composer_attachment_summary_rebuilds_authoritative_fields() {
+        let workspace = tempfile::tempdir().expect("temporary workspace should create");
+        let workspace_path = workspace.path().to_string_lossy();
+        let attachment = stage_attachment_bytes(
+            workspace_path.as_ref(),
+            &attachment_descriptor_from_mime_type("image/png")
+                .expect("png descriptor should resolve"),
+            "canonical.png",
+            None,
+            b"canonical immutable bytes",
+        )
+        .expect("canonical image should stage");
+        let preview_path =
+            write_attachment_image_preview_sidecar(&attachment, &[0xff_u8, 0xd8, 0xff, 0xd9])
+                .expect("canonical preview should stage");
+        let forged = ComposerAttachmentSummary {
+            kind: String::from("image"),
+            file_name: String::from("forged.jpg"),
+            local_path: String::from("C:/forged/source.jpg"),
+            resource_path: Some(String::from("../forged")),
+            source_path: Some(String::from("C:/forged/original.jpg")),
+            asset_id: attachment.asset_id.clone(),
+            byte_len: Some(999),
+            source_sha256: Some(String::from("forged")),
+            delivery_plan: Some(ComposerAttachmentDeliveryPlan::InlineDerivedPreview),
+            preview_local_path: Some(String::from("C:/forged/preview.jpg")),
+            mime_type: String::from("image/jpeg"),
+        };
+
+        let resolved =
+            resolve_composer_attachment_summary_for_workspace(workspace_path.as_ref(), forged)
+                .expect("indexed attachment should resolve");
+
+        assert_eq!(resolved.file_name, attachment.file_name);
+        assert_eq!(resolved.local_path, attachment.local_path);
+        assert_eq!(resolved.resource_path, attachment.resource_path);
+        assert_eq!(resolved.byte_len, attachment.byte_len);
+        assert_eq!(resolved.source_sha256, attachment.source_sha256);
+        assert_eq!(resolved.mime_type, attachment.mime_type);
+        assert_eq!(
+            resolved.preview_local_path.as_deref(),
+            Some(preview_path.as_str())
+        );
+        assert_eq!(
+            resolved.delivery_plan,
+            Some(ComposerAttachmentDeliveryPlan::InlineDerivedPreview)
+        );
+    }
+
+    /// Verifies browser-reported direct modes cannot choose Provider-visible bytes or paths.
+    /// 验证浏览器报告的直接模式无法选择 Provider 可见字节或路径。
+    #[test]
+    fn provider_conversion_discards_browser_direct_delivery_modes() {
+        let summary = ComposerAttachmentSummary {
+            kind: String::from("image"),
+            file_name: String::from("canonical.png"),
+            local_path: String::from("D:/workspace/.vulcan/attachments/canonical.png"),
+            resource_path: Some(String::from(".vulcan/attachments/canonical.png")),
+            source_path: None,
+            asset_id: Some(String::from("asset-image")),
+            byte_len: Some(128),
+            source_sha256: Some(String::from("sha256-source")),
+            delivery_plan: Some(ComposerAttachmentDeliveryPlan::InlineDerivedPreview),
+            preview_local_path: Some(String::from(
+                "D:/workspace/.vulcan/attachments/canonical.preview.jpg",
+            )),
+            mime_type: String::from("image/png"),
+        };
+
+        let attachment = composer_attachment_summary_to_provider_core(summary)
+            .expect("direct browser plan should convert conservatively");
+
+        assert_eq!(attachment.delivery_mode, None);
+        assert_eq!(
+            attachment.local_path,
+            "D:/workspace/.vulcan/attachments/canonical.png"
+        );
+        assert_eq!(attachment.mime_type, "image/png");
+    }
+
+    /// Verifies a browser may explicitly reduce one failed preparation to metadata only.
+    /// 验证浏览器可以把一次失败准备显式降级为仅元数据。
+    #[test]
+    fn provider_conversion_retains_metadata_only_reduction() {
+        let summary = ComposerAttachmentSummary {
+            kind: String::from("video"),
+            file_name: String::from("clip.mp4"),
+            local_path: String::from("D:/workspace/.vulcan/attachments/clip.mp4"),
+            resource_path: Some(String::from(".vulcan/attachments/clip.mp4")),
+            source_path: None,
+            asset_id: Some(String::from("asset-video")),
+            byte_len: Some(1_024),
+            source_sha256: Some(String::from("sha256-video")),
+            delivery_plan: Some(ComposerAttachmentDeliveryPlan::MetadataOnly),
+            preview_local_path: None,
+            mime_type: String::from("video/mp4"),
+        };
+
+        let attachment = composer_attachment_summary_to_provider_core(summary)
+            .expect("metadata-only browser reduction should convert");
+
+        assert_eq!(
+            attachment.delivery_mode,
+            Some(vulcan_core::types::ConversationAttachmentDeliveryMode::MetadataOnly)
+        );
+    }
+
     /// Verifies composer capabilities keep the expected kind ordering source.
     /// 验证输入区能力保持预期的附件类型顺序来源。
     #[test]
@@ -327,7 +523,7 @@ mod tests {
                 .iter()
                 .map(ConversationAttachmentKind::modality_name)
                 .collect::<Vec<_>>(),
-            vec!["image", "video", "audio", "pdf"]
+            vec!["image", "video", "audio", "pdf", "file"]
         );
     }
 }

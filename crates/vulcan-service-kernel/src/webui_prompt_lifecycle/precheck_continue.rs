@@ -17,8 +17,9 @@ use crate::{
     emit_context_injection_changed_delta, emit_conversation_continuation_summary_changed,
     emit_service_event_with_trace, is_prompt_free_continuation_tail_kind,
     merge_runtime_state_records_into_display_messages, owning_project_id_for_session,
-    persist_workspace_session_update, register_session_terminal_persistence_owner,
+    persist_latest_retained_workspace_session_update, register_session_terminal_persistence_owner,
     replace_conversation_messages_in_workbench_window,
+    require_segmented_session_directory_for_retained_session,
     retain_hydrated_conversation_windows_for_workspace,
     sync_hydrated_session_dialogue_ready_marker, workbench_surface_matches_conversation,
 };
@@ -183,13 +184,12 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         spawn_workspace_session_persist_task(
             state.clone(),
             controller_runtime.clone(),
-            workspace_snapshot,
             session_id,
             Some(String::from("precheck_stopped")),
         );
         return Ok(None);
     }
-    ensure_webui_session_runtime_state(
+    ensure_webui_session_runtime_entry(
         &mut workspace_snapshot,
         session_id,
         Some(&start.preparation_turn_id),
@@ -203,8 +203,14 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         .clone();
     // vmm_controller is the sole authoritative state owner for this session.
     // vmm_controller 是该会话唯一的权威状态所有者。
-    let vmm_controller = vmm_controller_registry.get_or_open(
+    let session_directory = segmented_session_directory_for_workspace_session(
         &controller_runtime.data_root,
+        &workspace_snapshot,
+        session_id,
+    )
+    .ok_or_else(|| format!("Session `{session_id}` has no exact VMM storage locator."))?;
+    let vmm_controller = vmm_controller_registry.get_or_open(
+        &session_directory,
         session_id,
         &current_unix_millis_text(),
     )?;
@@ -520,6 +526,12 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         &workspace_snapshot,
         session_id,
     );
+    // sessionDirectory is the exact main-session storage locator reused by every hot-path audit write.
+    // sessionDirectory 是由全部热路径审计写入复用的精确主会话存储定位。
+    let session_directory = request.task_session_store_root.clone().ok_or_else(|| {
+        format!("Session `{session_id}` has no exact storage locator before prompt continuation.")
+    })?;
+    request.session_storage_directory = Some(session_directory.clone());
     webui_after_precheck_trace(
         "after_precheck_11_task_session_root_ready",
         format!(
@@ -552,6 +564,25 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         session.focus = String::from("正在请求");
         session.last_updated_label = String::from("刚刚");
     }
+    // vmmProjection and contextProjection are exact, history-free payloads retained after the detached slice moves into commit.
+    // vmmProjection 与 contextProjection 是在分离切片移入提交后继续保留的精确无历史载荷。
+    let (vmm_layer, vmm_outbox, last_compaction_id, context_projection) = {
+        let runtime_state = workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .ok_or_else(|| {
+                format!("Prompt continuation is missing runtime state for session `{session_id}`.")
+            })?;
+        (
+            runtime_state.vmm.clone(),
+            runtime_state.vmm_writeback_outbox.clone(),
+            runtime_state.last_compaction_id.clone(),
+            vulcan_workspace_store::workspace_store::project_single_session_runtime_state_update(
+                session_id,
+                runtime_state,
+            )?,
+        )
+    };
     // phase_commit_started_at measures the authoritative in-memory commit and its required projections.
     // phase_commit_started_at 测量权威内存提交及其必要投影的耗时。
     let phase_commit_started_at = current_unix_millis_value();
@@ -559,7 +590,7 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         commit_workspace_snapshot_and_emit_session_phase_delta_if_prompt_owner_current(
             app,
             state,
-            workspace_snapshot.clone(),
+            workspace_snapshot,
             session_id,
             SessionRunPhase::Preparing,
             expected_kernel_generation,
@@ -579,12 +610,12 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
     // vmm_snapshot_started_at measures the derived Hook projection refresh.
     // vmm_snapshot_started_at 测量派生 Hook 投影刷新的耗时。
     let vmm_snapshot_started_at = current_unix_millis_value();
-    agent_runtime
-        .vmm_hook_runtime
-        .replace_snapshot(build_vmm_hook_config_snapshot(
-            &agent_runtime.provider_configuration,
-            &workspace_snapshot,
-        ))?;
+    agent_runtime.vmm_hook_runtime.replace_session_projection(
+        session_id,
+        &vmm_layer,
+        &vmm_outbox,
+        last_compaction_id.as_deref(),
+    )?;
     webui_trace(
         "precheck_continue_hook_snapshot_ready",
         format!(
@@ -629,11 +660,11 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
             super::super::vmm_runtime_audit::VmmRemovedLeaseAuditAction::Revoked,
         );
     if !vmm_lifecycle_events.is_empty() {
-        let data_root = controller_runtime.data_root.clone();
+        let vmm_audit_session_directory = session_directory.clone();
         spawn_service_task(async move {
             let timestamp = current_unix_millis_text();
             if let Err(error) = super::super::vmm_runtime_audit::record_vmm_lifecycle_events(
-                &data_root,
+                &vmm_audit_session_directory,
                 session_id,
                 &timestamp,
                 vmm_lifecycle_events,
@@ -648,7 +679,7 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
     let runtime_updates_started_at = current_unix_millis_value();
     request.runtime_system_updates =
         match vulcan_workspace_store::workspace_store::load_session_runtime_system_updates(
-            &controller_runtime.data_root,
+            &session_directory,
             session_id,
         ) {
             Ok(updates) => updates,
@@ -669,7 +700,7 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         ),
     );
     if let Some(injection) = request.context_injection.as_ref() {
-        let data_root = controller_runtime.data_root.clone();
+        let session_directory = session_directory.clone();
         let prompt_turn_id_for_audit = prompt_turn_id.clone();
         let fingerprint = injection.fingerprint.clone();
         let persistent_blocks = injection.persistent_blocks.clone();
@@ -710,7 +741,7 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
             if let Err(error) =
                 vulcan_workspace_store::workspace_store::record_session_runtime_injection_applied(
                     vulcan_workspace_store::workspace_store::SessionRuntimeInjectionAppliedRecord {
-                        data_root: &data_root,
+                        session_directory: &session_directory,
                         session_id,
                         turn_id: Some(prompt_turn_id_for_audit),
                         combined_fingerprint: Some(fingerprint),
@@ -746,24 +777,20 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         );
     }
     if runs_user_prompt_precheck {
-        let controller_runtime_for_context = controller_runtime.clone();
-        let workspace_snapshot_for_context = workspace_snapshot.clone();
-        spawn_service_task(async move {
-            let context_persist_started_at = current_unix_millis_value();
-            persist_webui_context_current_document(
-                &controller_runtime_for_context,
-                &workspace_snapshot_for_context,
-                session_id,
-                &session_title_for_context,
-            );
-            webui_trace(
-                "precheck_continue_context_document_persisted",
-                format!(
-                    "session={session_id} elapsed_ms={}",
-                    current_unix_millis_value().saturating_sub(context_persist_started_at)
-                ),
-            );
-        });
+        let context_persist_started_at = current_unix_millis_value();
+        spawn_projected_webui_context_current_document_persist_task(
+            session_directory.clone(),
+            session_id,
+            context_projection,
+            session_title_for_context,
+        );
+        webui_trace(
+            "precheck_continue_context_document_persisted",
+            format!(
+                "session={session_id} elapsed_ms={}",
+                current_unix_millis_value().saturating_sub(context_persist_started_at)
+            ),
+        );
         webui_after_precheck_trace(
             "after_precheck_14_context_persist_spawned",
             format!("session={session_id}"),
@@ -775,25 +802,12 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         );
     }
     if runs_user_prompt_precheck {
-        let state_for_persist = state.clone();
-        let controller_runtime_for_persist = controller_runtime.clone();
-        spawn_service_task(async move {
-            let snapshot = match current_workspace_snapshot_from_shared_state(&state_for_persist) {
-                Ok(Some(snapshot)) => snapshot,
-                Ok(None) => return,
-                Err(error) => {
-                    eprintln!("[webui-service] precheck continue persist snapshot failed: {error}");
-                    return;
-                }
-            };
-            spawn_workspace_session_persist_task(
-                state_for_persist,
-                controller_runtime_for_persist,
-                snapshot,
-                session_id,
-                Some(String::from("precheck_continue")),
-            );
-        });
+        spawn_workspace_session_persist_task(
+            state.clone(),
+            controller_runtime.clone(),
+            session_id,
+            Some(String::from("precheck_continue")),
+        );
         webui_after_precheck_trace(
             "after_precheck_16_snapshot_persist_spawned",
             format!("session={session_id}"),
@@ -1030,8 +1044,8 @@ pub(crate) fn start_webui_precheck_or_continue(
     let session_id = start.session_id;
     // expectedKernelGeneration is captured before any phase mutation so Stop can close every later detached write.
     // expectedKernelGeneration 在任何阶段变更前捕获，使 Stop 能关闭所有后续分离写入。
-    let Some((_, expected_kernel_generation)) =
-        capture_webui_prompt_preparation_workspace(state, session_id, &start.preparation_turn_id)?
+    let Some(expected_kernel_generation) =
+        capture_webui_prompt_preparation_generation(state, session_id, &start.preparation_turn_id)?
     else {
         webui_trace(
             "precheck_dispatch_owner_closed",
@@ -1342,18 +1356,17 @@ pub(crate) fn commit_prompt_preparation_failure_boundary(
             "Prompt preparation failure runtime state is unavailable.",
         ));
     }
-    // runtime_state_snapshot projects the just-committed canonical failure record into the display layer.
-    // runtime_state_snapshot 将刚提交的规范失败记录投影到显示层。
-    let runtime_state_snapshot = workspace_snapshot
-        .session_runtime_state
-        .get(&session_id)
-        .cloned();
-    if let Some(runtime_state_snapshot) = runtime_state_snapshot.as_ref() {
+    // runtime_state moves temporarily so failure display projection never clones canonical history.
+    // runtime_state 临时移出，使失败显示投影绝不复制规范历史。
+    if let Some(runtime_state) = workspace_snapshot.session_runtime_state.remove(&session_id) {
         merge_runtime_state_records_into_display_messages(
             &mut workspace_snapshot,
             session_id,
-            runtime_state_snapshot,
+            &runtime_state,
         );
+        workspace_snapshot
+            .session_runtime_state
+            .insert(session_id, runtime_state);
         sync_hydrated_session_dialogue_ready_marker(&mut workspace_snapshot, session_id);
     }
     workspace_snapshot
@@ -1639,39 +1652,11 @@ pub(crate) async fn mark_webui_prompt_preparation_failed(
             "Prompt preparation unsafe-boundary invalidation failed: {invalidation_error}"
         ));
     }
-    // snapshot captures every post-boundary invalidation before the terminal owner can be released.
-    // snapshot 在终态所有者可释放前捕获所有边界后失效变更。
-    let snapshot = match current_workspace_snapshot_from_shared_state(state) {
-        Ok(Some(snapshot)) => snapshot,
-        Ok(None) => {
-            if let Err(projection_error) =
-                emit_conversation_continuation_summary_changed(app, state, session_id)
-            {
-                eprintln!(
-                    "[webui-service] continuation summary refresh after missing failure snapshot failed: {projection_error}"
-                );
-            }
-            return Err(String::from(
-                "precheck failed persist snapshot is unavailable; terminal owner retained",
-            ));
-        }
-        Err(snapshot_error) => {
-            if let Err(projection_error) =
-                emit_conversation_continuation_summary_changed(app, state, session_id)
-            {
-                eprintln!(
-                    "[webui-service] continuation summary refresh after failure snapshot error failed: {projection_error}"
-                );
-            }
-            return Err(format!(
-                "precheck failed persist snapshot could not be read: {snapshot_error}; terminal owner retained"
-            ));
-        }
-    };
-    if let Err(persist_error) = persist_workspace_session_update(
-        Some(state),
+    // exact retained persistence captures only the target session after every boundary invalidation.
+    // 精确保留持久化仅在全部边界失效变更完成后捕获目标会话。
+    if let Err(persist_error) = persist_latest_retained_workspace_session_update(
+        state,
         controller_runtime.clone(),
-        &snapshot,
         session_id,
     )
     .await
@@ -1731,14 +1716,20 @@ fn abandon_failed_webui_prompt_vmm_turn(
 ) -> Result<(), String> {
     // registry is cloned without retaining the shared service lock during controller I/O.
     // registry 在 Controller I/O 期间不保留共享服务锁。
-    let registry = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?
-        .vmm_controller_registry
-        .clone();
+    let (registry, session_directory) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let session_directory = require_segmented_session_directory_for_retained_session(
+            &guard,
+            &controller_runtime.data_root,
+            session_id,
+        )?;
+        (guard.vmm_controller_registry.clone(), session_directory)
+    };
     // controller is the sole authority for active VMM logical-turn ownership.
     // controller 是 VMM 活动逻辑回合所有权的唯一权威。
-    let controller = registry.get_or_open(&controller_runtime.data_root, session_id, updated_at)?;
+    let controller = registry.get_or_open(&session_directory, session_id, updated_at)?;
     // active_turn_id distinguishes failures before the Provider-boundary command from committed failures.
     // active_turn_id 区分 Provider 边界命令前的失败与已经提交的失败。
     let active_turn_id = controller.snapshot()?.active_turn_id;

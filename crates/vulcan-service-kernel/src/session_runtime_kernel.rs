@@ -863,8 +863,8 @@ pub(crate) fn webui_prompt_preparation_owner_is_current(
         == Some(expected_generation)
 }
 
-/// Captures one authoritative workspace snapshot together with its exact prompt-preparation generation.
-/// 捕获一份权威工作区快照及其精确提示词准备代际。
+/// Captures one authoritative existing-session slice together with its exact prompt-preparation generation.
+/// 捕获一份权威已有会话切片及其精确提示词准备代际。
 ///
 /// # Parameters
 /// 参数
@@ -875,15 +875,15 @@ pub(crate) fn webui_prompt_preparation_owner_is_current(
 ///
 /// # Returns
 /// 返回值
-/// `Some((workspace, generation))` for the current owner, `None` after Stop/replacement, or a lock/state error.
-/// 当前所有者返回 `Some((workspace, generation))`；Stop/替代后返回 `None`；加锁或状态异常时返回错误。
+/// `Some((session_slice, generation))` for the current owner, `None` after Stop/replacement, or a lock/state error.
+/// 当前所有者返回 `Some((session_slice, generation))`；Stop/替代后返回 `None`；加锁或状态异常时返回错误。
 pub(crate) fn capture_webui_prompt_preparation_workspace(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
     turn_id: &str,
 ) -> Result<Option<(WorkspaceSnapshot, u64)>, String> {
-    // guard makes owner validation and workspace cloning one indivisible read boundary.
-    // guard 让所有者校验与工作区克隆成为不可分割的读取边界。
+    // guard makes owner validation and exact-session capture one indivisible read boundary.
+    // guard 让所有者校验与精确会话捕获成为不可分割的读取边界。
     let guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -891,11 +891,48 @@ pub(crate) fn capture_webui_prompt_preparation_workspace(
     else {
         return Ok(None);
     };
+    // workspace_snapshot contains only the target summary, owning project, and canonical runtime context.
+    // workspace_snapshot 只包含目标摘要、所属项目与规范运行时上下文。
     let workspace_snapshot = guard
         .workspace_snapshot
-        .clone()
-        .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+        .as_ref()
+        .ok_or_else(|| String::from("workspace snapshot is not ready"))
+        .and_then(|workspace_snapshot| {
+            crate::conversation_submission::existing_submission_workspace_slice(
+                workspace_snapshot,
+                session_id,
+            )
+        })?;
     Ok(Some((workspace_snapshot, generation)))
+}
+
+/// Captures one prompt-preparation generation without cloning the retained workspace.
+/// 在不克隆保留工作区的情况下捕获一个提示词准备代际。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the live kernel, while `session_id` and `turn_id` identify the accepted turn.
+/// `state` 持有实时 kernel，`session_id` 与 `turn_id` 标识已接纳回合。
+///
+/// # Returns
+/// 返回值
+/// The current generation, `None` after Stop/replacement, or an explicit lock/readiness error.
+/// 返回当前代际；Stop/替代后返回 `None`；否则返回明确的加锁或就绪错误。
+pub(crate) fn capture_webui_prompt_preparation_generation(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    turn_id: &str,
+) -> Result<Option<u64>, String> {
+    // guard makes owner validation and readiness observation one lock-bounded read.
+    // guard 让所有者校验与就绪观察成为一次受锁约束的读取。
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let generation = current_webui_prompt_preparation_generation(&guard, session_id, turn_id);
+    if generation.is_some() && guard.workspace_snapshot.is_none() {
+        return Err(String::from("workspace snapshot is not ready"));
+    }
+    Ok(generation)
 }
 
 /// Returns the session ids whose runtime kernels currently own active turns.

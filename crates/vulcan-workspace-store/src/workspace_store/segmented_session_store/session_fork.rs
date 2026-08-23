@@ -77,74 +77,68 @@ fn copy_segmented_session_tree_without_tasks(
 ) -> Result<SegmentedSessionMetadata, String> {
     let metadata = read_session_metadata(source_dir)?;
     create_dir_all(target_dir)?;
-    let display_segment_files: BTreeSet<&str> = metadata
-        .segments
-        .iter()
-        .map(|segment| segment.file.as_str())
-        .collect();
-    for entry in fs::read_dir(source_dir).map_err(to_store_error)? {
-        let entry = entry.map_err(to_store_error)?;
-        let source_path = entry.path();
-        let target_path = target_dir.join(entry.file_name());
-        let file_type = entry.file_type().map_err(to_store_error)?;
-        let file_name = entry.file_name();
-        let file_name_text = file_name.to_string_lossy();
-        if file_type.is_dir() {
-            let directory_name = source_path.file_name().and_then(|name| name.to_str());
-            if forked_session_should_skip_top_level_directory(directory_name, &metadata.task_dir) {
-                continue;
-            }
-        }
-        if file_type.is_dir() {
-            copy_segmented_directory_tree(&source_path, &target_path)?;
-        } else if file_type.is_file() {
-            if file_name_text == SEGMENTED_METADATA_FILE
-                || is_vmm_session_artifact_file_name(file_name_text.as_ref())
-                || display_segment_files.contains(file_name_text.as_ref())
-            {
-                continue;
-            }
-            fs::copy(&source_path, &target_path).map_err(to_store_error)?;
-        }
+    let exact_relative_files = [
+        PathBuf::from(SEGMENTED_STATE_FILE),
+        PathBuf::from(SEGMENTED_RUNTIME_METADATA_FILE),
+        PathBuf::from(SEGMENTED_RUNTIME_INDEX_FILE),
+        PathBuf::from(runtime_segment_file_name()),
+        PathBuf::from(crate::workspace_store::session_addon_store::SESSION_ADDON_STATE_FILE),
+    ];
+    for relative_path in exact_relative_files {
+        copy_optional_fork_file(source_dir, target_dir, &relative_path)?;
     }
     create_dir_all(&target_dir.join(&metadata.task_dir))?;
+    create_dir_all(&target_dir.join(SEGMENTED_BLOB_DIR))?;
     Ok(metadata)
 }
 
-/// Returns whether a top-level source directory should be omitted from a forked session copy.
-/// 返回源会话顶层目录是否应从分叉复制中排除。
-fn forked_session_should_skip_top_level_directory(
-    directory_name: Option<&str>,
-    task_dir_name: &str,
-) -> bool {
-    matches!(
-        directory_name,
-        Some(name)
-            if name == task_dir_name
-                || name == SEGMENTED_RUNTIME_BACKUP_DIR
-                || name == SEGMENTED_DISPLAY_MAINTENANCE_BACKUP_DIR
-    )
-}
-
-/// Copies a segmented session directory recursively without changing file contents.
-/// 递归复制分段会话目录，且不改变文件内容。
-pub(in crate::workspace_store) fn copy_segmented_directory_tree(
+/// Copies one exact optional fork artifact without enumerating its parent directory.
+/// 无需枚举父目录即可复制一个精确可选分叉工件。
+fn copy_optional_fork_file(
     source_dir: &Path,
     target_dir: &Path,
+    relative_path: &Path,
 ) -> Result<(), String> {
-    create_dir_all(target_dir)?;
-    for entry in fs::read_dir(source_dir).map_err(to_store_error)? {
-        let entry = entry.map_err(to_store_error)?;
-        let source_path = entry.path();
-        let target_path = target_dir.join(entry.file_name());
-        let file_type = entry.file_type().map_err(to_store_error)?;
-        if file_type.is_dir() {
-            copy_segmented_directory_tree(&source_path, &target_path)?;
-        } else if file_type.is_file() {
+    let source_path = source_dir.join(relative_path);
+    let target_path = target_dir.join(relative_path);
+    match fs::metadata(&source_path) {
+        Ok(metadata) if metadata.is_file() => {
+            if let Some(parent) = target_path.parent() {
+                create_dir_all(parent)?;
+            }
             fs::copy(&source_path, &target_path).map_err(to_store_error)?;
         }
+        Ok(_) => {
+            return Err(format!(
+                "Fork source artifact is not a regular file: {}",
+                source_path.display()
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(to_store_error(error)),
     }
     Ok(())
+}
+
+/// Returns the exact files that a persisted history rewrite may mutate.
+/// 返回持久化历史重写可能修改的精确文件集合。
+pub(in crate::workspace_store) fn history_rewrite_mutable_relative_paths(
+    metadata: &SegmentedSessionMetadata,
+) -> Vec<PathBuf> {
+    let mut paths = BTreeSet::new();
+    paths.insert(PathBuf::from(SEGMENTED_METADATA_FILE));
+    paths.insert(PathBuf::from(SEGMENTED_STATE_FILE));
+    paths.insert(PathBuf::from(SEGMENTED_RUNTIME_METADATA_FILE));
+    paths.insert(PathBuf::from(SEGMENTED_RUNTIME_INDEX_FILE));
+    paths.insert(PathBuf::from(runtime_segment_file_name()));
+    paths.insert(PathBuf::from(SEGMENTED_VMM_STATE_FILE));
+    paths.insert(PathBuf::from(SEGMENTED_VMM_MIGRATION_FILE));
+    paths.insert(PathBuf::from(SEGMENTED_VMM_MIGRATION_COMPLETED_FILE));
+    paths.insert(PathBuf::from(SEGMENTED_VMM_CHECKPOINT_FILE));
+    for segment in &metadata.segments {
+        paths.insert(PathBuf::from(&segment.file));
+    }
+    paths.into_iter().collect()
 }
 
 /// Builds target metadata from source metadata before the transformed display segments are attached.

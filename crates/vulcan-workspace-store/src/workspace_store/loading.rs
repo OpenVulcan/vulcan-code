@@ -1053,6 +1053,9 @@ pub(super) fn ensure_project_summary_for_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workspace_store::segmented_session_store::{
+        SegmentPolicy, SegmentedSessionCreateRequest, create_segmented_session_in_location,
+    };
 
     /// Builds one canonical raw project row for strict loading tests.
     /// 为严格加载测试构建一条规范原始项目行。

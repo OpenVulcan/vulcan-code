@@ -1,7 +1,7 @@
 //! Segmented append-only session storage used by the new Vulcan session fact source.
 //! Vulcan 新会话事实源使用的分段追加式会话存储。
 
-use super::{current_unix_millis_text, serialize_session_runtime_state_entry};
+use super::current_unix_millis_text;
 use crate::conversation_protocol::{
     SessionConversationState, conversation_state_from_session_messages,
     conversation_state_to_session_messages,
@@ -77,6 +77,9 @@ pub(super) const DEFAULT_SEGMENT_MAX_BYTES: u64 = 8 * 1024 * 1024;
 /// Maximum runtime-log backups retained after context compaction.
 /// 上下文压缩后保留的运行时日志备份最大数量。
 const RUNTIME_COMPACTION_BACKUP_LIMIT: usize = 5;
+/// Version of the bounded conversation-projection checkpoint stored in runtime metadata.
+/// 保存在运行时元数据中的有界会话投影检查点版本。
+const SEGMENTED_RUNTIME_PROJECTION_CHECKPOINT_VERSION: u32 = 1;
 /// Process-local mutex protecting overwrite-only state read/modify/write operations.
 /// 保护覆盖式状态读改写操作的进程内互斥锁。
 static SEGMENTED_STATE_FILE_IO_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -219,44 +222,6 @@ pub(super) fn create_segmented_session_in_location(
     Ok(session_dir)
 }
 
-/// Finds an existing segmented session directory by project tag and session id.
-/// 按项目标签与会话标识查找既有分段会话目录。
-pub(super) fn find_segmented_session_directory(
-    data_root: &Path,
-    archived: bool,
-    project_tag: &str,
-    session_id: &str,
-) -> Result<Option<PathBuf>, String> {
-    // Resolve the project root using the same sanitization as path construction.
-    // 使用与路径构建相同的清理规则解析项目根目录。
-    let root_name = if archived {
-        SEGMENTED_ARCHIVED_SESSIONS_DIR
-    } else {
-        SEGMENTED_SESSIONS_DIR
-    };
-    let project_root = data_root
-        .join(root_name)
-        .join(sanitize_file_component(project_tag));
-    if !project_root.exists() {
-        return Ok(None);
-    }
-    let expected_suffix = format!("-{}", sanitize_file_component(session_id));
-    for entry in fs::read_dir(&project_root).map_err(to_store_error)? {
-        let entry = entry.map_err(to_store_error)?;
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if name.ends_with(&expected_suffix) {
-            return Ok(Some(path));
-        }
-    }
-    Ok(None)
-}
-
 /// Finds an existing segmented session directory by its deterministic project/created-at/session locator.
 /// 通过确定性的项目、创建时间与会话标识定位既有分段会话目录。
 ///
@@ -295,89 +260,6 @@ pub fn find_segmented_session_directory_for_task_store_created_at(
     let archived_dir =
         segmented_session_directory(data_root, true, project_tag, &created_date, session_id);
     archived_dir.is_dir().then_some(archived_dir)
-}
-
-/// Lists active and archived segmented sessions from text metadata.
-/// 从文本元数据列出活动与归档分段会话。
-pub(super) fn list_segmented_session_catalog(
-    data_root: &Path,
-) -> Result<Vec<SegmentedSessionCatalogEntry>, String> {
-    let mut entries = Vec::new();
-    entries.extend(list_segmented_session_catalog_for_root(data_root, false)?);
-    entries.extend(list_segmented_session_catalog_for_root(data_root, true)?);
-    Ok(entries)
-}
-
-/// Finds one segmented session directory by id without consulting the database.
-/// 不查询数据库，仅按会话标识查找分段会话目录。
-pub(super) fn find_segmented_session_directory_by_id(
-    data_root: &Path,
-    session_id: &str,
-) -> Result<Option<PathBuf>, String> {
-    for entry in list_segmented_session_catalog(data_root)? {
-        if entry.metadata.session_id == session_id {
-            return Ok(Some(entry.session_dir));
-        }
-    }
-    Ok(None)
-}
-
-/// Resolves one durable main-session or TaskSession segmented directory.
-/// 解析一个持久化主会话或 TaskSession 分段目录。
-///
-/// # Parameters
-/// 参数
-/// `data_root` is the application data root and `session_id` is either a main-session or TaskSession identifier.
-/// `data_root` 是应用数据根目录，`session_id` 是主会话或 TaskSession 标识。
-///
-/// # Returns
-/// 返回值
-/// Returns the exact main-session or indexed child-task directory without creating missing lifecycle state.
-/// 返回精确的主会话或已索引子任务目录，且不会创建缺失的生命周期状态。
-pub(super) fn find_segmented_session_or_task_directory_by_id(
-    data_root: &Path,
-    session_id: &str,
-) -> Result<Option<PathBuf>, String> {
-    // catalog is the authoritative main-session index and carries every durable child-task mirror.
-    // catalog 是主会话权威索引，并携带每个持久化子任务镜像。
-    let catalog = list_segmented_session_catalog(data_root)?;
-    for entry in catalog {
-        if entry.metadata.session_id == session_id {
-            return Ok(Some(entry.session_dir));
-        }
-        // mirrored_task proves this identifier belongs to the current root session tree.
-        // mirrored_task 证明该标识属于当前根会话树。
-        let Some(mirrored_task) = entry
-            .metadata
-            .tasks
-            .iter()
-            .find(|task| task.session_id == session_id)
-        else {
-            continue;
-        };
-        // task_component retains the canonical TaskSession directory identity.
-        // task_component 保留规范的 TaskSession 目录标识。
-        let task_component = sanitize_file_component(session_id);
-        // expected_relative_directory rejects corrupted mirror paths instead of following metadata outside the session root.
-        // expected_relative_directory 拒绝损坏的镜像路径，避免跟随元数据越出会话根目录。
-        let expected_relative_directory = Path::new(SEGMENTED_TASK_DIR).join(task_component);
-        if Path::new(&mirrored_task.dir) != expected_relative_directory {
-            return Err(format!(
-                "TaskSession `{session_id}` segmented mirror points to unexpected directory `{}`.",
-                mirrored_task.dir
-            ));
-        }
-        // task_directory is valid only after the TaskSession main-compatible metadata is durable.
-        // task_directory 仅在 TaskSession 主会话兼容元数据持久化后才有效。
-        let task_directory = entry.session_dir.join(expected_relative_directory);
-        if !task_directory.join(SEGMENTED_METADATA_FILE).is_file() {
-            return Err(format!(
-                "TaskSession `{session_id}` segmented directory has no durable metadata."
-            ));
-        }
-        return Ok(Some(task_directory));
-    }
-    Ok(None)
 }
 
 #[cfg(test)]

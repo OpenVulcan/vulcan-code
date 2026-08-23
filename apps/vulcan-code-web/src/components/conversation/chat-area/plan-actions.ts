@@ -11,6 +11,9 @@ import {
 // UseChatAreaPlanActionsOptions carries the Plan artifact action dependencies from ChatArea.
 // UseChatAreaPlanActionsOptions 承载来自 ChatArea 的计划 artifact 动作依赖。
 export interface UseChatAreaPlanActionsOptions {
+  // Persisted conversation that owns the generated Plan action submission.
+  // 持有生成式计划动作提交的持久会话。
+  conversationId: string | null;
   // Pending Plan artifact captured from the transcript.
   // 从转录中捕获的待处理计划 artifact。
   pendingPlanArtifact: ConversationPlanArtifact | null;
@@ -39,6 +42,9 @@ export interface UseChatAreaPlanActionsOptions {
 // useChatAreaPlanActions 为执行、建议和取消计划 artifact 动作构建稳定处理器。
 export function useChatAreaPlanActions(options: UseChatAreaPlanActionsOptions) {
   const handlePlanArtifactExecute = React.useCallback(async (payload: PlanArtifactActionPayload) => {
+    if (!options.conversationId) {
+      return;
+    }
     const artifact = options.pendingPlanArtifact && options.pendingPlanArtifact.content.trim() === payload.artifact.content.trim()
       ? options.pendingPlanArtifact
       : payload.artifact;
@@ -49,6 +55,7 @@ export function useChatAreaPlanActions(options: UseChatAreaPlanActionsOptions) {
     const note = payload.note?.trim();
     const prompt = planArtifactExecuteVisiblePrompt(options.executeLabel, note, options.locale);
     await options.onSubmitPrompt({
+      draftSlotKey: `conversation:${options.conversationId}`,
       prompt,
       hiddenModelGuidance: planArtifactExecuteHiddenGuidance(artifact),
       attachments: [],
@@ -60,6 +67,9 @@ export function useChatAreaPlanActions(options: UseChatAreaPlanActionsOptions) {
   }, [options]);
 
   const handlePlanArtifactSuggest = React.useCallback(async (payload: PlanArtifactActionPayload) => {
+    if (!options.conversationId) {
+      return;
+    }
     const artifact = options.pendingPlanArtifact && options.pendingPlanArtifact.content.trim() === payload.artifact.content.trim()
       ? options.pendingPlanArtifact
       : payload.artifact;
@@ -69,6 +79,7 @@ export function useChatAreaPlanActions(options: UseChatAreaPlanActionsOptions) {
     }
     const note = payload.note?.trim() ?? "";
     await options.onSubmitPrompt({
+      draftSlotKey: `conversation:${options.conversationId}`,
       prompt: note,
       hiddenModelGuidance: planArtifactSuggestHiddenGuidance(artifact),
       attachments: [],

@@ -405,29 +405,12 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                     "detached_parent_event_persist_spawn",
                     format!("parent={parent_session_id} task={task_id}"),
                 );
-                let state_for_persist = state.clone();
-                let controller_runtime_for_persist = controller_runtime.clone();
-                spawn_service_task(async move {
-                    let snapshot = match current_workspace_snapshot_from_shared_state(
-                        &state_for_persist,
-                    ) {
-                        Ok(Some(snapshot)) => snapshot,
-                        Ok(None) => return,
-                        Err(error) => {
-                            eprintln!(
-                                "[webui-service] detached subagent persist snapshot failed: {error}"
-                            );
-                            return;
-                        }
-                    };
-                    spawn_workspace_session_persist_task(
-                        state_for_persist,
-                        controller_runtime_for_persist,
-                        snapshot,
-                        parent_session_id,
-                        Some(String::from("detached_subagent_parent_event")),
-                    );
-                });
+                spawn_workspace_session_persist_task(
+                    state.clone(),
+                    controller_runtime.clone(),
+                    parent_session_id,
+                    Some(String::from("detached_subagent_parent_event")),
+                );
             }
             if let Some(error) = mailbox_delivery_error {
                 return Err(error);
@@ -689,7 +672,12 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
             .await
         }
         ExecutionStreamEvent::ProviderLoweringRepair { session_id, event } => {
-            record_webui_provider_lowering_repair(controller_runtime, session_id, event)
+            let session_directory = require_segmented_session_directory_from_state(
+                state,
+                &controller_runtime.data_root,
+                session_id,
+            )?;
+            record_webui_provider_lowering_repair(&session_directory, session_id, event)
         }
         ExecutionStreamEvent::RequestReady { session_id }
         | ExecutionStreamEvent::WireRequestReady { session_id } => {

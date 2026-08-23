@@ -200,6 +200,9 @@ export function patchConversationMessages(
   messages: ConversationMessage[],
   delta: ConversationMessagesPatchedDelta,
 ): ConversationMessage[] {
+  if (delta.removeMessageIds.length === 0 && !delta.messageOrder) {
+    return patchConversationMessageUpserts(messages, delta);
+  }
   const patchedTargetMessages = buildPatchedConversationMessages(messages, delta);
   const firstTargetIndex = messages.findIndex((message) => message.conversationId === delta.conversationId);
   if (firstTargetIndex < 0) {
@@ -218,6 +221,44 @@ export function patchConversationMessages(
       insertedTarget = true;
     }
   }
+  return nextMessages;
+}
+
+// patchConversationMessageUpserts applies the runtime hot path in one array pass without rebuilding the target block.
+// patchConversationMessageUpserts 通过一次数组遍历应用运行时热路径，且不重建目标会话消息块。
+//
+// Parameters: messages is the retained cross-conversation array and delta contains exact upsert-only rows.
+// 参数：messages 是保留的跨会话数组，delta 包含精确的仅写入行。
+// Returns: one shallow array copy with exact rows replaced in place and new rows appended after the target block.
+// 返回值：返回一份浅数组副本，其中精确行原位替换，新行追加到目标消息块之后。
+function patchConversationMessageUpserts(
+  messages: ConversationMessage[],
+  delta: ConversationMessagesPatchedDelta,
+): ConversationMessage[] {
+  if (delta.upsertMessages.length === 0) {
+    return messages;
+  }
+  const pendingUpserts = new Map(delta.upsertMessages.map((message) => [message.id, message]));
+  const nextMessages = messages.slice();
+  let lastTargetIndex = -1;
+  for (let index = 0; index < nextMessages.length; index += 1) {
+    const message = nextMessages[index];
+    if (message.conversationId !== delta.conversationId) {
+      continue;
+    }
+    lastTargetIndex = index;
+    const replacement = pendingUpserts.get(message.id);
+    if (!replacement) {
+      continue;
+    }
+    nextMessages[index] = replacement;
+    pendingUpserts.delete(message.id);
+  }
+  if (pendingUpserts.size === 0) {
+    return nextMessages;
+  }
+  const insertionIndex = lastTargetIndex < 0 ? nextMessages.length : lastTargetIndex + 1;
+  nextMessages.splice(insertionIndex, 0, ...pendingUpserts.values());
   return nextMessages;
 }
 

@@ -41,6 +41,21 @@ struct OpenAiToolState {
     terminal: bool,
 }
 
+/// Carries the three semantically distinct projections decoded from one reasoning-details chunk.
+/// 携带从单个 reasoning-details 分片解码出的三类语义不同投影。
+#[derive(Debug, Default)]
+struct OpenAiReasoningDetailsDelta {
+    /// Newly observed durable reasoning suffix.
+    /// 新观测到的持久化推理后缀。
+    detail_reasoning: Option<String>,
+    /// Provider-indexed cumulative summary replacements.
+    /// 按供应商索引组织的累计摘要替换值。
+    summary_updates: Vec<(String, String)>,
+    /// Raw summary fragment used only to suppress an identical mirrored reasoning field.
+    /// 仅用于抑制同值镜像 reasoning 字段的原始摘要片段。
+    raw_summary_delta: Option<String>,
+}
+
 /// Returns the newly observed suffix of one cumulative provider text field.
 /// 返回单个供应商累计文本字段中新观测到的后缀。
 ///
@@ -212,8 +227,11 @@ impl OpenAiChatStreamDecoder {
         }
         // detailReasoning and summaries keep durable thinking separate from typed summary nodes.
         // detailReasoning 与 summaries 将持久化思考和类型化摘要节点分离。
-        let (detail_reasoning, summaries, summary_delta) =
-            self.decode_reasoning_details_delta(delta)?;
+        let OpenAiReasoningDetailsDelta {
+            detail_reasoning,
+            summary_updates: summaries,
+            raw_summary_delta: summary_delta,
+        } = self.decode_reasoning_details_delta(delta)?;
         // reasoningContent is an explicit durable field and therefore outranks every mirror.
         // reasoningContent 是显式持久化字段，因此优先于任何镜像字段。
         let reasoning_content = delta
@@ -281,12 +299,11 @@ impl OpenAiChatStreamDecoder {
     fn decode_reasoning_details_delta(
         &mut self,
         delta: &Value,
-    ) -> Result<(Option<String>, Vec<(String, String)>, Option<String>), ProtocolConversionError>
-    {
+    ) -> Result<OpenAiReasoningDetailsDelta, ProtocolConversionError> {
         // details is the exact provider-owned typed reasoning array for this chunk.
         // details 是当前分片中由供应商持有的精确类型化推理数组。
         let Some(details) = delta.get("reasoning_details").and_then(Value::as_array) else {
-            return Ok((None, Vec::new(), None));
+            return Ok(OpenAiReasoningDetailsDelta::default());
         };
         // reasoning concatenates only durable text parts from the current array snapshot.
         // reasoning 只拼接当前数组快照中的持久化文本部分。
@@ -337,11 +354,11 @@ impl OpenAiChatStreamDecoder {
                 accumulated.clone(),
             ));
         }
-        Ok((
-            cumulative_suffix(&mut self.reasoning_details_text, reasoning),
+        Ok(OpenAiReasoningDetailsDelta {
+            detail_reasoning: cumulative_suffix(&mut self.reasoning_details_text, reasoning),
             summary_updates,
-            (!raw_summary_delta.is_empty()).then_some(raw_summary_delta),
-        ))
+            raw_summary_delta: (!raw_summary_delta.is_empty()).then_some(raw_summary_delta),
+        })
     }
 
     /// Decodes one indexed Chat Completions tool-call delta.
@@ -1440,6 +1457,7 @@ impl OpenAiResponsesStreamDecoder {
                         source_kind: vulcan_ai_contract::ResourceSourceKind::InlineData,
                         file_name: None,
                         image_detail: None,
+                        resource_path: None,
                         local_path: None,
                         url: Some(format!("data:{media_type};base64,{result}")),
                     },

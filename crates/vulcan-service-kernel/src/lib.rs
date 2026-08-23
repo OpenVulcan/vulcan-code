@@ -34,6 +34,8 @@ use vulcan_agent_runtime::conversation_protocol::SessionConversationState;
 #[cfg(test)]
 use vulcan_agent_runtime::conversation_protocol::conversation_state_from_session_messages;
 #[cfg(test)]
+use vulcan_agent_runtime::session_event_runtime::append_runtime_event_projection_to_state;
+#[cfg(test)]
 use vulcan_agent_runtime::session_event_runtime::{
     STREAMING_RECORD_STATE_ACTIVE, STREAMING_RECORD_STATE_METADATA_KEY,
     STREAMING_RECORD_STATE_SEALED,
@@ -74,9 +76,9 @@ use vulcan_agent_runtime::{
         self, ProviderConfigurationFile, ReasoningEffortLevel, WorkbenchThinkingDisplayMode,
     },
     session_event_runtime::{
-        SessionStreamingRecordIds, append_runtime_event_projection_to_state,
+        SessionStreamingRecordIds, append_runtime_event_projection_to_owned_state,
         append_stream_delta_record_to_state, apply_checkpoint_conversation_state,
-        apply_terminal_execution_report_to_state, collapse_streaming_thinking_in_state,
+        build_terminal_execution_report_state, collapse_streaming_thinking_in_state,
         discard_active_streaming_records_in_state, seal_active_streaming_records_in_state,
         seal_streaming_record_in_state,
     },
@@ -189,8 +191,7 @@ use vulcan_workspace_store::{
     workspace_store::{
         GoalResume, GoalUpdate, SessionTaskMirrorSnapshot, ThreadGoal, ThreadGoalStatus,
         VulcanGoalStore, WorkspaceSegmentedSessionBoundaryStore, WorkspaceSnapshot,
-        fork_persisted_session, load_persisted_user_prompt_edit_draft,
-        rollback_persisted_session_before_user_prompt,
+        fork_persisted_session, rollback_persisted_session_before_user_prompt,
     },
 };
 
@@ -276,11 +277,15 @@ mod workspace_persistence_versions;
 mod workspace_session_persistence;
 use agent_stream::*;
 use attachments::{
-    composer_attachment_capabilities, composer_attachment_summary_from_core,
-    composer_attachment_summary_to_core, composer_message_attachments_from_metadata,
-    service_execute_project_attachment_cleanup, service_pick_composer_attachments,
-    service_preview_project_attachment_cleanup, service_stage_composer_attachment_bytes,
-    service_stage_composer_attachment_paths, validate_composer_attachment_summary,
+    composer_attachment_capabilities, composer_attachment_draft_scope,
+    composer_attachment_summary_from_core, composer_attachment_summary_to_core,
+    composer_attachment_summary_to_provider_core, composer_attachment_workspace_path,
+    composer_attachment_workspace_path_from_snapshot, composer_message_attachments_from_metadata,
+    resolve_composer_attachment_summary_for_workspace, service_execute_project_attachment_cleanup,
+    service_pick_composer_attachments, service_preview_project_attachment_cleanup,
+    service_reconcile_composer_attachment_draft, service_stage_composer_attachment_bytes,
+    service_stage_composer_attachment_paths, service_stage_composer_attachment_preview_bytes,
+    validate_composer_attachment_summary,
 };
 use codebase_memory_controller::*;
 use command_sessions::*;
@@ -417,7 +422,7 @@ use vmm::{
 };
 use vmm_hooks::{
     apply_vmm_writeback_effects_to_runtime_state, build_vmm_hook_config_snapshot,
-    cached_project_vmm_layer,
+    cached_project_vmm_layer, refresh_exact_vmm_hook_session_projection,
 };
 use webui_prompt_context::*;
 use webui_prompt_lifecycle::{

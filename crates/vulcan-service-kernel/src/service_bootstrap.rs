@@ -21,7 +21,7 @@ use vulcan_agent_runtime::{
     },
     luaskills_runtime::LuaSkillsRuntimeHandle,
     mcp::{bootstrap_mcp_runtime_access, plugin_mcp_server_configs, runtime_mcp_server_configs},
-    project_temp_maintenance, runtime_assets,
+    runtime_assets,
     tooling::CommandSessionRuntime,
 };
 use vulcan_provider_config::config::ProviderConfigurationFile;
@@ -39,6 +39,7 @@ use super::{
     mark_webui_service_discovery_failed, mark_webui_service_discovery_ready,
     mark_webui_service_discovery_starting, native_tool_summaries_from_agent_runtime,
     normalized_workspace_path_text_from_path, pending_question_snapshots_from_agent_runtime,
+    segmented_session_directory_for_workspace_session,
     subagent_navigation_snapshot_from_cached_state, workbench_from_runtime, workspace_root,
 };
 
@@ -453,6 +454,38 @@ fn run_service_bootstrap(
     ));
     let agent_profile_catalog = load_agent_profile_catalog()
         .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
+    // promptSkillConfig and promptSkillCatalog are captured once before the service accepts
+    // submissions; the watcher publishes later generations only after an explicit filesystem change.
+    // promptSkillConfig 与 promptSkillCatalog 在服务接受提交前仅捕获一次；监视器只在明确文件变化后发布后续代次。
+    let prompt_skill_config = vulcan_agent_runtime::skills::prompt::global_config_from_persisted(
+        &provider_configuration.prompt_skills,
+    );
+    let prompt_skill_catalog = Arc::new(vulcan_prompt_skills::load_prompt_skills(
+        &prompt_skill_config,
+    ));
+    // subagentCatalog is loaded exactly once during startup and then retained in memory for every request and workbench projection.
+    // subagentCatalog 在启动期间精确加载一次，随后由内存保留并供所有请求与工作台投影复用。
+    let mut subagent_catalog = vulcan_task_session::load_subagent_catalog_from_roots(
+        vulcan_runtime_assets::resolve_system_subagents_resource_directory(),
+        vulcan_workspace_store::data_plane::application_data_root().join("agents"),
+    );
+    if let Err(error) = subagent_catalog
+        .merge_plugin_definitions(vulcan_plugin_catalog.enabled_agents.values().cloned())
+    {
+        subagent_catalog
+            .errors
+            .push(vulcan_task_session::SubagentCatalogLoadError {
+                path: vulcan_plugin_catalog.root.clone(),
+                message: format!("合并插件智能体目录失败：{error}"),
+            });
+    }
+    for error in &subagent_catalog.errors {
+        logs.push(format!(
+            "[webui-service] subagent catalog warning: path={} error={}",
+            error.path.display(),
+            error.message
+        ));
+    }
     // agent_luaskills_runtime is absent in degraded mode while the independent plugin runtime remains mounted.
     // agent_luaskills_runtime 在降级模式下为空，而独立插件运行时仍保持挂载。
     let agent_luaskills_runtime = luaskills_runtime.as_ref().and_then(|runtime_handle| {
@@ -782,6 +815,10 @@ fn run_service_bootstrap(
         .with_native_usage_controller(controller_runtime.clone())
         .with_plugin_telemetry(vulcan_plugin_runtime.clone()),
     );
+    let task_runtime = Arc::new(TaskRuntime::new());
+    task_runtime
+        .replace_subagent_catalog(subagent_catalog.clone())
+        .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
     let agent_runtime = AgentRuntimeBridge {
         provider_configuration: provider_configuration.clone(),
         public_ai_runtime,
@@ -790,14 +827,16 @@ fn run_service_bootstrap(
         model_id_override: None,
         connection_id_override: None,
         agent_profile_catalog,
+        subagent_catalog: Arc::new(subagent_catalog),
         luaskills_runtime: agent_luaskills_runtime,
         vulcan_plugin_runtime: vulcan_plugin_runtime.clone(),
         extension_generation: Arc::new(ExtensionGeneration::new(
             vulcan_plugin_catalog.revision,
             Some(Arc::clone(&vulcan_plugin_catalog)),
             agent_mcp_runtime,
+            Some(prompt_skill_catalog),
         )),
-        task_runtime: Arc::new(TaskRuntime::new()),
+        task_runtime,
         question_runtime: Arc::new(QuestionRuntime::new()),
         command_session_runtime: Arc::new(CommandSessionRuntime::new()),
         conversation_hook_runtime: Arc::new(Mutex::new(conversation_hook_runtime)),
@@ -870,22 +909,6 @@ fn run_service_bootstrap(
         "workspace",
         "Workspace",
     )?;
-    // project_paths contains the exact persisted roots for both visible and archived projects.
-    // project_paths 包含可见项目与归档项目各自持久化的精确根目录。
-    let project_paths = workspace_snapshot
-        .task_projects
-        .iter()
-        .chain(workspace_snapshot.archived_task_projects.iter())
-        .map(|project| PathBuf::from(&project.path))
-        .collect::<Vec<_>>();
-    match project_temp_maintenance::maintain_project_temp_dirs(&project_paths) {
-        Ok(()) => logs.push(String::from(
-            "[webui-service] project temp maintenance completed",
-        )),
-        Err(error) => logs.push(format!(
-            "[webui-service] project temp maintenance warning: {error}"
-        )),
-    }
     let selected_session_id = workspace_snapshot.selected_session;
     let vmm_hook_snapshot =
         build_vmm_hook_config_snapshot(&provider_configuration, &workspace_snapshot);
@@ -972,10 +995,24 @@ fn run_service_bootstrap(
             .mcp_runtime()
             .server_states();
         if selected_session_id != uuid::Uuid::nil() {
+            let selected_session_directory = segmented_session_directory_for_workspace_session(
+                &controller_runtime.data_root,
+                &workspace_snapshot,
+                selected_session_id,
+            )
+            .ok_or_else(|| {
+                ServiceBootstrapError::new(
+                    "workspace",
+                    "Workspace",
+                    format!(
+                        "Selected session `{selected_session_id}` has no exact storage locator; startup directory scanning is disabled."
+                    ),
+                )
+            })?;
             // selected_vmm_controller eagerly validates and opens the selected session before its first UI projection.
             // selected_vmm_controller 在首次 UI 投影前主动校验并打开选中会话。
             let selected_vmm_controller = guard.vmm_controller_registry.get_or_open(
-                &controller_runtime.data_root,
+                &selected_session_directory,
                 selected_session_id,
                 &current_unix_millis_text(),
             );
@@ -1007,6 +1044,7 @@ fn run_service_bootstrap(
             command_session_runtime: Some(agent_runtime.command_session_runtime.as_ref()),
             luaskills_catalog: &luaskills_catalog,
             vulcan_plugin_catalog: Some(vulcan_plugin_catalog.as_ref()),
+            subagent_catalog: agent_runtime.subagent_catalog.as_ref(),
             mcp_server_states: &mcp_server_states,
             mcp_catalog: &mcp_catalog,
             provider_configuration: &provider_configuration,
@@ -1089,11 +1127,6 @@ fn run_service_bootstrap(
         }
         eprintln!("[webui-service] managed Codebase Memory bootstrap degraded: {error}");
     }
-    // prompt_skill_config resolves the exact roots watched by the independent Agent Skills domain.
-    // prompt_skill_config 解析独立 Agent Skills 领域监听的精确根目录。
-    let prompt_skill_config = vulcan_agent_runtime::skills::prompt::global_config_from_persisted(
-        &provider_configuration.prompt_skills,
-    );
     // runtime_guard makes the retained service runtime current while the notify loop is spawned.
     // runtime_guard 在生成 notify 循环期间使保留的服务运行时成为当前运行时。
     let _runtime_guard = runtime.enter();

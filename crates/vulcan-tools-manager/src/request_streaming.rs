@@ -74,6 +74,27 @@ impl Default for ToolRequestProgressPolicy {
     }
 }
 
+/// One bounded semantic line emitted by a request parser for structured preview renderers.
+/// 请求解析器为结构化预览渲染器发出的一条有界语义行。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolRequestPreviewLine {
+    /// Zero-based operation index in the eventual request.
+    /// 最终请求中的零基操作序号。
+    pub operation_index: usize,
+    /// Zero-based affected-resource index.
+    /// 受影响资源列表中的零基资源序号。
+    pub resource_index: usize,
+    /// Semantic side, normally `old` or `new`.
+    /// 语义侧，通常为 `old` 或 `new`。
+    pub side: String,
+    /// Zero-based line index inside the selected array.
+    /// 所选数组中的零基逻辑行序号。
+    pub line_index: usize,
+    /// One bounded logical-line content value.
+    /// 一条有界逻辑行的内容值。
+    pub content: String,
+}
+
 /// Declarative sensitivity boundary for one host-owned request preview.
 /// 单个宿主自有请求预览的声明式敏感性边界。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -87,6 +108,12 @@ pub struct ToolRequestSensitivityPolicy {
     /// Maximum UTF-8 bytes retained in the bounded body preview.
     /// 有界正文预览允许保留的最大 UTF-8 字节数。
     pub maximum_body_preview_bytes: usize,
+    /// Maximum number of structured preview lines retained by the coordinator.
+    /// 协调器允许保留的结构化预览行数上限。
+    pub maximum_structured_preview_lines: usize,
+    /// Maximum UTF-8 bytes retained across structured preview line content.
+    /// 结构化预览逻辑行内容允许保留的 UTF-8 字节总上限。
+    pub maximum_structured_preview_bytes: usize,
 }
 
 /// Request-scoped context supplied when a parser session is created.
@@ -225,6 +252,9 @@ pub struct ToolRequestPreview {
     /// Optional bounded and already-redacted plain-text body preview.
     /// 可选的有界且已脱敏纯文本正文预览。
     pub body_preview: Option<String>,
+    /// Bounded semantic lines for renderers that must not parse display text.
+    /// 供不应解析展示文本的渲染器使用的有界语义行。
+    pub structured_lines: Vec<ToolRequestPreviewLine>,
     /// Declared resources affected by the eventual request.
     /// 最终请求会影响的声明式资源。
     pub affected_resources: Vec<String>,

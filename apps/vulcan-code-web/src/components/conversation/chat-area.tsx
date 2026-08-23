@@ -454,6 +454,7 @@ export function ChatArea(props: ChatAreaProps) {
     handlePlanArtifactExecute,
     handlePlanArtifactSuggest,
   } = useChatAreaPlanActions({
+    conversationId: props.selectedConversationId,
     executeLabel: t("planArtifact.execute"),
     locale,
     onSetSessionPlanMode: props.onSetSessionPlanMode,

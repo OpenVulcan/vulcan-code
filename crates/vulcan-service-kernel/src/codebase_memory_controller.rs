@@ -1782,6 +1782,7 @@ fn publish_managed_runtime_generation(
             .saturating_add(1),
         agent_runtime.extension_generation.plugin_catalog(),
         next_runtime,
+        agent_runtime.extension_generation.prompt_skill_catalog(),
     ));
     Ok(())
 }

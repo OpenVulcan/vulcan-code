@@ -24,6 +24,10 @@ pub const CHANGE_SET_HOST_RESULT_KIND: &str = "change_set";
 /// 向 LuaSkills 公布的共享载荷字节上限，使文件编辑工具可以启用结构化宿主结果，同时避免淹没宿主元数据通道。
 pub const LUASKILLS_CHANGE_SET_HOST_RESULT_MAX_PAYLOAD_BYTES: u64 = 512 * 1024;
 
+/// Maximum retained size of one native change-set extension after compaction.
+/// 压缩后单个原生变更集扩展允许保留的最大大小。
+const NATIVE_CHANGE_SET_EXTENSION_MAX_BYTES: usize = 128 * 1024;
+
 /// Builds the host-result capability payload injected into LuaSkills request contexts.
 /// 构建注入到 LuaSkills 请求上下文中的宿主结果能力载荷。
 pub fn luaskills_change_set_host_result_capabilities() -> Value {
@@ -139,6 +143,10 @@ fn compact_change_set_payload(payload: &Value) -> Option<Value> {
     {
         let mode = ChangeSetMode::parse(object.get("mode")?.as_str()?)?;
         let mut compact = object.clone();
+        compact.remove("extensions");
+        if let Some(extensions) = compact_extensions(object.get("extensions")) {
+            compact.insert(String::from("extensions"), extensions);
+        }
         compact.insert(
             String::from("verification"),
             compact_verification_value(&build_persisted_verification_summary(mode)),
@@ -175,6 +183,9 @@ fn compact_change_set_payload(payload: &Value) -> Option<Value> {
         compact.insert(String::from("summary"), Value::String(summary.to_string()));
     }
     compact.insert(String::from("files"), Value::Array(compact_files));
+    if let Some(extensions) = compact_extensions(object.get("extensions")) {
+        compact.insert(String::from("extensions"), extensions);
+    }
     compact.insert(String::from("stats"), compact_stats_value(&stats));
     if !diagnostics.is_empty() {
         compact.insert(String::from("diagnostics"), Value::Array(diagnostics));
@@ -201,6 +212,7 @@ fn build_persisted_verification_summary(_mode: ChangeSetMode) -> ChangeSetVerifi
 fn parse_raw_file_record(file: &Value) -> Option<RawChangeSetFileRecord> {
     let object = file.as_object()?;
     let change = ChangeSetFileChangeKind::parse(object.get("change")?.as_str()?)?;
+    let resource_id = compact_optional_string(object.get("resource_id"));
     let path = compact_optional_string(object.get("path"));
     let old_path = compact_optional_string(object.get("old_path"));
     let new_path = compact_optional_string(object.get("new_path"));
@@ -225,6 +237,7 @@ fn parse_raw_file_record(file: &Value) -> Option<RawChangeSetFileRecord> {
         })
         .unwrap_or_default();
     Some(RawChangeSetFileRecord {
+        resource_id,
         change,
         path,
         old_path,
@@ -320,6 +333,12 @@ fn compact_file_record(file: &RawChangeSetFileRecord) -> Value {
     if let Some(path) = file.path.as_ref() {
         object.insert(String::from("path"), Value::String(path.clone()));
     }
+    if let Some(resource_id) = file.resource_id.as_ref() {
+        object.insert(
+            String::from("resource_id"),
+            Value::String(resource_id.clone()),
+        );
+    }
     if let Some(old_path) = file.old_path.as_ref() {
         object.insert(String::from("old_path"), Value::String(old_path.clone()));
     }
@@ -406,6 +425,7 @@ fn parse_compact_file_summary(file: &Value) -> Option<ChangeSetFileSummary> {
     let object = file.as_object()?;
     let change = ChangeSetFileChangeKind::parse(object.get("change")?.as_str()?)?;
     Some(ChangeSetFileSummary {
+        resource_id: compact_optional_string(object.get("resource_id")),
         change,
         path: compact_optional_string(object.get("path")),
         old_path: compact_optional_string(object.get("old_path")),
@@ -425,6 +445,31 @@ fn parse_compact_file_summary(file: &Value) -> Option<ChangeSetFileSummary> {
             .and_then(Value::as_bool)
             .unwrap_or(false),
     })
+}
+
+/// Retains only the bounded, registered native extension namespace supported by the shared host contract.
+/// 仅保留共享宿主契约支持且经过大小限制的已注册原生扩展命名空间。
+fn compact_extensions(value: Option<&Value>) -> Option<Value> {
+    let object = value?.as_object()?;
+    let native = object.get("vulcan.file_edit.v1")?.as_object()?;
+    let mut retained = Map::new();
+    if let Some(operation_results) = native
+        .get("operation_results")
+        .filter(|value| value.is_array())
+    {
+        retained.insert(String::from("operation_results"), operation_results.clone());
+    }
+    if let Some(transaction) = native.get("transaction").filter(|value| value.is_object()) {
+        retained.insert(String::from("transaction"), transaction.clone());
+    }
+    if retained.is_empty() {
+        return None;
+    }
+    let extension = Value::Object(retained);
+    let encoded = serde_json::to_vec(&extension).ok()?;
+    (encoded.len() <= NATIVE_CHANGE_SET_EXTENSION_MAX_BYTES).then_some(json!({
+        "vulcan.file_edit.v1": extension,
+    }))
 }
 
 /// Compacts one optional diagnostics array into the host-owned minimal JSON shape.

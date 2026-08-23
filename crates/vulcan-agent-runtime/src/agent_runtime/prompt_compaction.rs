@@ -138,6 +138,9 @@ pub struct PromptCompactionLaunchContext {
     /// Optional task-session artifact root used by task-scoped tools.
     /// 子任务范围工具使用的可选任务会话制品根目录。
     pub task_session_store_root: Option<PathBuf>,
+    /// Exact storage directory for the source session's compaction artifacts.
+    /// 来源会话压缩工件使用的精确存储目录。
+    pub session_storage_directory: Option<PathBuf>,
     /// Optional output-style snapshot rendered into the ordinary base instructions.
     /// 渲染到普通基础指令中的可选输出风格快照。
     pub output_style_snapshot: Option<PromptOutputStyleSnapshot>,
@@ -189,6 +192,7 @@ impl Default for PromptCompactionLaunchContext {
             provider_extension_target_sets_override: None,
             subagent_prompt_context: None,
             task_session_store_root: None,
+            session_storage_directory: None,
             output_style_snapshot: None,
             tool_exposure_override: Default::default(),
             tool_request_rejection_reason: None,
@@ -233,6 +237,7 @@ impl PromptCompactionLaunchContext {
                 .clone(),
             subagent_prompt_context: request.subagent_prompt_context.clone(),
             task_session_store_root: request.task_session_store_root.clone(),
+            session_storage_directory: request.session_storage_directory.clone(),
             output_style_snapshot: request.output_style_snapshot.clone(),
             tool_exposure_override: request.tool_exposure_override.clone(),
             tool_request_rejection_reason: request.tool_request_rejection_reason.clone(),
@@ -1478,6 +1483,7 @@ fn build_prompt_compaction_launch_request(
             .clone(),
         subagent_prompt_context: launch_context.subagent_prompt_context.clone(),
         task_session_store_root: launch_context.task_session_store_root.clone(),
+        session_storage_directory: launch_context.session_storage_directory.clone(),
         session_title: session_title.to_string(),
         workspace_path: workspace_path.to_string(),
         prompt: build_compaction_request_prompt_for_mode(prompt_mode),

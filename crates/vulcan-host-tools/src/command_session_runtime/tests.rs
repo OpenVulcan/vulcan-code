@@ -4,8 +4,10 @@ use super::{
     CommandSessionBackend, CommandSessionDisplayCursor, CommandSessionInputEvent,
     CommandSessionMutableState, CommandSessionOutputChunk, CommandSessionOutputStream,
     CommandSessionRecord, CommandSessionRuntime, CommandSessionSharedState, CommandSessionStatus,
-    DEFAULT_PTY_SCREEN_COLS, DEFAULT_PTY_SCREEN_ROWS, PtyScreenFrameState,
-    append_output_chunk_to_state, can_coalesce_output_chunk, encode_command_session_input_events,
+    DEFAULT_PTY_SCREEN_COLS, DEFAULT_PTY_SCREEN_ROWS, MAX_COMMAND_SESSION_READ_CHUNKS,
+    MAX_COMMAND_SESSION_READ_WAIT_MS, PtyScreenFrameState, append_output_chunk_to_state,
+    bounded_command_session_read_chunks, bounded_command_session_read_wait_ms,
+    can_coalesce_output_chunk, encode_command_session_input_events,
     output_chunk_ends_with_line_boundary,
 };
 use crate::model::SessionId;
@@ -450,6 +452,23 @@ async fn peek_session_for_ai_does_not_advance_ai_cursor() {
         .await
         .expect("second normal read should consume no duplicate output");
     assert!(second_read.returned_chunks.is_empty());
+}
+
+/// Command-session read parameters should remain bounded even when a caller supplies unreasonably large values.
+/// 即使调用方提供异常大的值，命令会话读取参数也应保持有界。
+#[test]
+fn command_session_read_parameters_are_hard_bounded() {
+    assert_eq!(bounded_command_session_read_wait_ms(None), 0);
+    assert_eq!(bounded_command_session_read_chunks(None), 128);
+    assert_eq!(bounded_command_session_read_chunks(Some(0)), 1);
+    assert_eq!(
+        bounded_command_session_read_wait_ms(Some(u64::MAX)),
+        MAX_COMMAND_SESSION_READ_WAIT_MS
+    );
+    assert_eq!(
+        bounded_command_session_read_chunks(Some(usize::MAX)),
+        MAX_COMMAND_SESSION_READ_CHUNKS
+    );
 }
 
 /// Structured terminal events should encode to one deterministic cross-platform ANSI/VT byte stream.

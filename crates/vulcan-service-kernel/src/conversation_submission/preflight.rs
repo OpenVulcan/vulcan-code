@@ -292,6 +292,90 @@ fn new_submission_workspace_slice(
     })
 }
 
+/// Builds one existing-session submission slice without cloning presentation history or unrelated state.
+/// 构建单个已有会话的提交切片，且不复制展示历史或无关状态。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` is the retained authoritative workspace.
+/// `workspace_snapshot` 是保留的权威工作区。
+/// `session_id` identifies the exact active session admitted for submission.
+/// `session_id` 标识获准提交的精确活动会话。
+///
+/// # Returns
+/// 返回值
+/// A single-project, single-session detached slice with canonical runtime context but no transcript or compaction copies,
+/// or an explicit ownership mismatch.
+/// 返回携带规范运行时上下文但不复制转录与压缩记录的单项目、单会话分离切片，或明确的归属不一致错误。
+pub(crate) fn existing_submission_workspace_slice(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Result<WorkspaceSnapshot, String> {
+    // session is the sole active summary copied into the detached transaction.
+    // session 是复制到分离事务中的唯一活动摘要。
+    let session = workspace_session_summary_for_session(workspace_snapshot, session_id)
+        .cloned()
+        .ok_or_else(|| {
+            format!("Conversation `{session_id}` is not retained as an active session.")
+        })?;
+    let project_id =
+        owning_project_id_for_session(workspace_snapshot, session_id).ok_or_else(|| {
+            format!("Conversation `{session_id}` has no retained active project owner.")
+        })?;
+    // project retains only the admitted membership so later materialization cannot inspect unrelated sessions.
+    // project 仅保留已准入成员关系，使后续物化无法检查无关会话。
+    let mut project = workspace_snapshot
+        .task_projects
+        .iter()
+        .find(|candidate| candidate.id == project_id)
+        .cloned()
+        .ok_or_else(|| format!("Project `{project_id}` is not retained for `{session_id}`."))?;
+    project.session_ids.clear();
+    project.session_ids.push(session_id);
+    let mut expanded_task_projects = std::collections::BTreeSet::new();
+    if workspace_snapshot
+        .expanded_task_projects
+        .contains(&project_id)
+    {
+        expanded_task_projects.insert(project_id);
+    }
+    // Presentation history remains authoritative in retained state; this detached transaction carries only records it creates.
+    // 展示历史继续以保留状态为权威；该分离事务只携带自身新建的记录。
+    let session_messages = std::collections::BTreeMap::new();
+    let session_compactions = std::collections::BTreeMap::new();
+    let mut session_runtime_state = std::collections::BTreeMap::new();
+    if let Some(runtime_state) = workspace_snapshot.session_runtime_state.get(&session_id) {
+        session_runtime_state.insert(session_id, runtime_state.clone());
+    }
+    let mut session_run_phases = std::collections::BTreeMap::new();
+    if let Some(run_phase) = workspace_snapshot.session_run_phases.get(&session_id) {
+        session_run_phases.insert(session_id, *run_phase);
+    }
+    let mut hydrated_session_ids = std::collections::BTreeSet::new();
+    if workspace_snapshot
+        .hydrated_session_ids
+        .contains(&session_id)
+    {
+        hydrated_session_ids.insert(session_id);
+    }
+    Ok(WorkspaceSnapshot {
+        task_projects: vec![project],
+        archived_task_projects: Vec::new(),
+        sessions: vec![session],
+        archived_sessions: Vec::new(),
+        session_messages,
+        archived_session_messages: std::collections::BTreeMap::new(),
+        session_compactions,
+        archived_session_compactions: std::collections::BTreeMap::new(),
+        session_runtime_state,
+        archived_session_runtime_state: std::collections::BTreeMap::new(),
+        session_run_phases,
+        expanded_task_projects,
+        selected_session: session_id,
+        hydrated_session_ids,
+    })
+}
+
 /// Validates retained admission gates and captures one coherent submission snapshot under a single state lock.
 /// 在单个状态锁内校验保留准入闸门并捕获一致的提交快照。
 ///
@@ -406,31 +490,6 @@ pub(crate) fn prepare_retained_submission_preflight(
     } else {
         ProjectAdmissionScope::UnresolvedSubmission
     };
-    // retained_workspace_snapshot distinguishes the exact existing-session clone from the bounded new-session slice.
-    // retained_workspace_snapshot 区分精确已有会话克隆与有界新会话切片。
-    let retained_workspace_snapshot = if submission_session_id.is_some() {
-        guard.workspace_snapshot.as_ref().and_then(|snapshot| {
-            retained_submission_snapshot_is_usable(snapshot, project_id, submission_session_id)
-                .then(|| snapshot.clone())
-        })
-    } else {
-        let exact_project_id = match &project_scope {
-            ProjectAdmissionScope::Exact(project_id) => project_id.as_str(),
-            ProjectAdmissionScope::UnresolvedSubmission => {
-                return Err(String::from(
-                    "工作区仍在初始化，当前没有可用于创建会话的项目。",
-                ));
-            }
-        };
-        let retained_workspace = guard
-            .workspace_snapshot
-            .as_ref()
-            .ok_or_else(|| String::from("工作区仍在初始化，请等待项目列表加载完成后再发送。"))?;
-        Some(new_submission_workspace_slice(
-            retained_workspace,
-            exact_project_id,
-        )?)
-    };
     // project_reservation_id uniquely owns project admission independently from the session row.
     // project_reservation_id 独立于会话行唯一拥有项目准入。
     let project_reservation_id = Uuid::new_v4();
@@ -458,6 +517,41 @@ pub(crate) fn prepare_retained_submission_preflight(
             }
         }
     }
+    // retained_workspace_snapshot is built only after cheap admission checks pass and always
+    // contains at most one project and one admitted session.
+    // retained_workspace_snapshot 仅在低成本准入检查通过后构建，且始终至多包含一个项目与
+    // 一个已准入会话。
+    let retained_workspace_snapshot = if let Some(session_id) = submission_session_id {
+        match guard.workspace_snapshot.as_ref() {
+            Some(snapshot)
+                if retained_submission_snapshot_is_usable(
+                    snapshot,
+                    project_id,
+                    submission_session_id,
+                ) =>
+            {
+                Some(existing_submission_workspace_slice(snapshot, session_id)?)
+            }
+            _ => None,
+        }
+    } else {
+        let exact_project_id = match &project_scope {
+            ProjectAdmissionScope::Exact(project_id) => project_id.as_str(),
+            ProjectAdmissionScope::UnresolvedSubmission => {
+                return Err(String::from(
+                    "工作区仍在初始化，当前没有可用于创建会话的项目。",
+                ));
+            }
+        };
+        let retained_workspace = guard
+            .workspace_snapshot
+            .as_ref()
+            .ok_or_else(|| String::from("工作区仍在初始化，请等待项目列表加载完成后再发送。"))?;
+        Some(new_submission_workspace_slice(
+            retained_workspace,
+            exact_project_id,
+        )?)
+    };
     guard.project_admission_reservations.insert(
         project_scope.clone(),
         ProjectAdmissionReservation {

@@ -273,6 +273,7 @@ mod tests {
         ));
         let store = super::SegmentedTaskSessionStore::new(temp_dir.clone());
         let root_session_id = SessionNodeId::new_v4();
+        initialize_segmented_store_root_fixture(&temp_dir, root_session_id);
         let task_session_id = SessionNodeId::new_v4();
         let parent = ParentSessionRef::MainSession { root_session_id };
         let resolved = TaskSessionConfigResolver::resolve(TaskSessionConfigResolutionInput {
@@ -464,6 +465,72 @@ mod tests {
         })
     }
 
+    /// Creates the exact root-session metadata index required by scan-free TaskSession discovery tests.
+    /// 创建无扫描 TaskSession 发现测试所需的精确根会话元数据索引。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `root_session_dir` is the exact isolated root directory and `root_session_id` is its owner.
+    /// `root_session_dir` 是精确的隔离根目录，`root_session_id` 是其所有者。
+    ///
+    /// # Returns
+    /// 返回值
+    /// This fixture helper returns nothing and panics only when isolated test setup fails.
+    /// 此夹具辅助函数不返回值，仅在隔离测试准备失败时触发 panic。
+    fn initialize_segmented_store_root_fixture(
+        root_session_dir: &std::path::Path,
+        root_session_id: SessionNodeId,
+    ) {
+        std::fs::create_dir_all(root_session_dir).expect("create TaskSession root fixture");
+        // metadata is the authoritative task mirror index used instead of enumerating task directories.
+        // metadata 是替代任务目录枚举的权威任务镜像索引。
+        let metadata = json!({
+            "schema_version": 1,
+            "session_id": root_session_id.to_string(),
+            "project_tag": "task-session-test",
+            "created_at": "0",
+            "updated_at": "0",
+            "archived_at": null,
+            "project_id": "task-session-test",
+            "title": "TaskSession test root",
+            "title_source": "test",
+            "canonical_source": "segmented_rollout",
+            "active_segment": "s001.jsonl",
+            "task_dir": "task",
+            "next_global_seq": 0,
+            "message_count": 0,
+            "last_message_id": null,
+            "last_message_fingerprint": null,
+            "latest_rollback_seq": null,
+            "segment_policy": {
+                "max_lines": 3000,
+                "max_bytes": 8388608
+            },
+            "segments": [{
+                "file": "s001.jsonl",
+                "start_seq": 0,
+                "line_count": 0,
+                "byte_len": 0,
+                "first_timestamp": null,
+                "last_timestamp": null,
+                "first_turn_index": null,
+                "last_turn_index": null,
+                "last_compaction_seq": null
+            }],
+            "tasks": [],
+            "fork_source": null
+        });
+        // encoded_metadata is completed before either exact fixture file is published.
+        // encoded_metadata 在两个精确夹具文件发布前完成编码。
+        let mut encoded_metadata =
+            serde_json::to_vec_pretty(&metadata).expect("encode TaskSession root metadata");
+        encoded_metadata.push(b'\n');
+        std::fs::write(root_session_dir.join("metadata.json"), encoded_metadata)
+            .expect("write TaskSession root metadata");
+        std::fs::write(root_session_dir.join("s001.jsonl"), b"")
+            .expect("write TaskSession root segment");
+    }
+
     /// Rejects ambiguous open ownership for one parent-scoped public task identifier.
     /// 拒绝同一父级作用域公开任务标识存在多个开放所有者的歧义状态。
     #[test]
@@ -480,6 +547,7 @@ mod tests {
         // root_session_id owns the direct parent scope used by both records.
         // root_session_id 拥有两条记录共同使用的直接父级作用域。
         let root_session_id = SessionNodeId::new_v4();
+        initialize_segmented_store_root_fixture(&temp_dir, root_session_id);
         // parent is the exact identity scope whose uniqueness must be enforced.
         // parent 是必须执行唯一性约束的精确身份作用域。
         let parent = ParentSessionRef::MainSession { root_session_id };
@@ -549,6 +617,7 @@ mod tests {
         // root_session_id owns the direct parent scope used by both generations.
         // root_session_id 拥有两代记录共同使用的直接父级作用域。
         let root_session_id = SessionNodeId::new_v4();
+        initialize_segmented_store_root_fixture(&temp_dir, root_session_id);
         // parent is the exact identity scope reused after archival.
         // parent 是归档后被复用的精确身份作用域。
         let parent = ParentSessionRef::MainSession { root_session_id };

@@ -604,6 +604,7 @@ mod tests {
     fn provider_request_preview_renders_protocol_profile_summary_line() {
         let preparation = ExecutionPreparation {
             session_id: Uuid::nil(),
+            session_storage_directory: None,
             conversation_hook_turn_id: None,
             session_title: String::from("接口族预览测试"),
             agent_id: String::from("main"),

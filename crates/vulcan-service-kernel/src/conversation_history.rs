@@ -28,6 +28,7 @@ use super::{
     emit_service_event_with_trace, emit_workbench_event, load_selected_session_display_hydration,
     load_webui_unclosed_subagent_surface_preload_once, native_tool_summaries_from_agent_runtime,
     pending_question_snapshots_from_agent_runtime, preserve_active_session_run_state,
+    require_segmented_session_directory_for_retained_session,
     restore_webui_subagent_registry_for_session_hydration, selected_session_id_after_refresh,
     session_summary_project_and_created_at, subagent_navigation_snapshot_from_cached_state,
     sync_selected_session_goal_summary_from_store, webui_trace_if_slow, workbench_from_runtime,
@@ -905,15 +906,28 @@ pub(super) async fn load_hydrated_session_workbench(
                 .server_states()
         })
         .unwrap_or_default();
+    // subagentCatalog is captured from retained runtime state; history hydration cannot reload global catalog roots.
+    // subagentCatalog 从保留运行态捕获；历史水合不得重新加载全局目录根。
+    let subagent_catalog = projection_context
+        .agent_runtime_for_status
+        .as_ref()
+        .map(|runtime| std::sync::Arc::clone(&runtime.subagent_catalog))
+        .unwrap_or_else(|| std::sync::Arc::new(vulcan_task_session::SubagentCatalog::default()));
     // vmm_controller_registry opens the hydrated session before producing read-only UI snapshots.
     // vmm_controller_registry 在生成只读界面快照前打开已水合会话。
-    let vmm_controller_registry = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?
-        .vmm_controller_registry
-        .clone();
+    let (vmm_controller_registry, session_directory) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let session_directory = require_segmented_session_directory_for_retained_session(
+            &guard,
+            &read_context.controller_runtime.data_root,
+            parsed_session_id,
+        )?;
+        (guard.vmm_controller_registry.clone(), session_directory)
+    };
     let _ = vmm_controller_registry.get_or_open(
-        &read_context.controller_runtime.data_root,
+        &session_directory,
         parsed_session_id,
         &current_unix_millis_value().to_string(),
     )?;
@@ -928,6 +942,7 @@ pub(super) async fn load_hydrated_session_workbench(
             .map(|agent_runtime| agent_runtime.command_session_runtime.as_ref()),
         luaskills_catalog: &projection_context.luaskills_catalog,
         vulcan_plugin_catalog: vulcan_plugin_catalog.as_deref(),
+        subagent_catalog: subagent_catalog.as_ref(),
         mcp_server_states: &mcp_server_states,
         mcp_catalog: &projection_context.mcp_catalog,
         provider_configuration: &projection_context.provider_configuration,

@@ -24,8 +24,9 @@ pub use public_names::public_tool_name_is_valid;
 pub use request_streaming::{
     IncrementalJsonEvent, IncrementalJsonPathSegment, IncrementalJsonScalar,
     ToolRequestParserContext, ToolRequestParserFactory, ToolRequestParserSession,
-    ToolRequestPreview, ToolRequestProgressPolicy, ToolRequestSensitivityPolicy,
-    ToolRequestStagingPolicy, ToolRequestStagingStatus, ToolRequestStreamingCapability,
+    ToolRequestPreview, ToolRequestPreviewLine, ToolRequestProgressPolicy,
+    ToolRequestSensitivityPolicy, ToolRequestStagingPolicy, ToolRequestStagingStatus,
+    ToolRequestStreamingCapability,
 };
 pub use schema_projection::project_tool_parameters_schema;
 pub use types::{

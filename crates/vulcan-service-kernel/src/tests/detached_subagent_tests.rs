@@ -200,21 +200,24 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
 
     let applied = apply_task_session_execution_report_to_memory(&state, report)
         .expect("terminal task-session report should apply to memory");
+    let guard = state
+        .lock()
+        .expect("service state lock should be available after report apply");
+    let applied_workspace = guard
+        .workspace_snapshot
+        .as_ref()
+        .expect("applied workspace should remain retained");
 
     assert!(applied.completion_request.is_none());
     assert!(!workspace_snapshot_contains_regular_session(
-        &applied.workspace_snapshot,
+        applied_workspace,
         task_session_id
     ));
     assert_eq!(
-        applied
-            .workspace_snapshot
-            .session_run_phases
-            .get(&task_session_id),
+        applied_workspace.session_run_phases.get(&task_session_id),
         Some(&SessionRunPhase::Ready)
     );
-    let messages = applied
-        .workspace_snapshot
+    let messages = applied_workspace
         .session_messages
         .get(&task_session_id)
         .expect("task session report should materialize messages");
@@ -223,9 +226,6 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
             .iter()
             .any(|message| message.body.contains("子代理完成"))
     );
-    let guard = state
-        .lock()
-        .expect("service state lock should be available after report apply");
     assert!(
         guard
             .workspace_snapshot
@@ -359,19 +359,15 @@ fn regular_execution_report_vmm_turn_mismatch_preserves_both_owners() {
         .lock()
         .expect("lock VMM mismatch controller fixture")
         .controller_runtime = Some(controller_root.controller_runtime_handle());
-    // controller_context supplies the process registry and its exact storage root without retaining the service lock.
-    // controller_context 在不保留服务锁的情况下提供进程注册表及其精确存储根。
-    let (vmm_controller_registry, vmm_data_root) = {
+    // controller_context supplies the process registry without retaining the service lock.
+    // controller_context 在不保留服务锁的情况下提供进程注册表。
+    let vmm_controller_registry = {
         let guard = state.lock().expect("lock VMM mismatch fixture");
-        let controller_runtime = guard
-            .controller_runtime
-            .as_ref()
-            .expect("test controller runtime should exist");
-        (
-            guard.vmm_controller_registry.clone(),
-            controller_runtime.data_root.clone(),
-        )
+        guard.vmm_controller_registry.clone()
     };
+    // vmm_session_directory is the deterministic target shared by seeding and opening.
+    // vmm_session_directory 是播种与打开共享的确定性目标。
+    let vmm_session_directory = controller_root.session_directory().to_path_buf();
     // seeded_vmm_state is the controller-owned durable lease with a deliberately divergent turn.
     // seeded_vmm_state 是控制器持有的持久租约，并带有刻意分歧的回合。
     let mut seeded_vmm_state = vulcan_vmm::VmmSessionMemoryState::new(session_id.to_string(), "1")
@@ -397,12 +393,12 @@ fn regular_execution_report_vmm_turn_mismatch_preserves_both_owners() {
         .register_active_turn("vmm-divergent-turn", "2")
         .expect("VMM divergent turn should be registered");
     vmm_controller_registry
-        .seed_for_test(&vmm_data_root, session_id, seeded_vmm_state)
+        .seed_for_test(&vmm_session_directory, session_id, seeded_vmm_state)
         .expect("seed VMM mismatch controller");
     // vmm_controller is the exact registry instance later used by terminal completion.
     // vmm_controller 是终态完成阶段随后使用的同一个注册表实例。
     let vmm_controller = vmm_controller_registry
-        .get_or_open(&vmm_data_root, session_id, "3")
+        .get_or_open(&vmm_session_directory, session_id, "3")
         .expect("open seeded VMM controller");
     // agent_runtime owns the real conversation Hook turn that must survive mismatch rejection.
     // agent_runtime 拥有必须在不匹配拒绝后保留的真实会话 Hook 回合。
@@ -1137,10 +1133,13 @@ fn task_session_execution_report_fast_path_projects_live_usage_stats() {
         controller_events: Vec::new(),
     };
 
-    let applied = apply_task_session_execution_report_to_memory(&state, report)
+    let _applied = apply_task_session_execution_report_to_memory(&state, report)
         .expect("terminal task-session report should apply live usage stats");
-    let messages = applied
+    let guard = state.lock().expect("lock applied TaskSession state");
+    let messages = guard
         .workspace_snapshot
+        .as_ref()
+        .expect("applied workspace should remain retained")
         .session_messages
         .get(&task_session_id)
         .expect("task session report should materialize messages");
@@ -1274,10 +1273,13 @@ fn task_session_terminal_report_replaces_seeded_prompt_with_canonical_records() 
         controller_events: Vec::new(),
     };
 
-    let applied = apply_task_session_execution_report_to_memory(&state, report)
+    let _applied = apply_task_session_execution_report_to_memory(&state, report)
         .expect("terminal task-session report should replace provisional prompt");
-    let messages = applied
+    let guard = state.lock().expect("lock applied TaskSession state");
+    let messages = guard
         .workspace_snapshot
+        .as_ref()
+        .expect("applied workspace should remain retained")
         .session_messages
         .get(&task_session_id)
         .expect("task session report should materialize canonical messages");

@@ -139,8 +139,8 @@ pub struct WorkbenchSnapshot {
     /// 从共享配置文件解析出的 Provider 重试设置。
     #[serde(default)]
     pub provider_retry: ProviderRetrySettingsSummary,
-    /// Whether complete Provider request tracing is enabled for real dispatches.
-    /// 是否为真实分派启用完整 Provider 请求追踪。
+    /// Whether bounded Provider wire-request tracing is enabled for real dispatches.
+    /// 是否为真实分派启用有界 Provider 线上请求追踪。
     #[serde(default)]
     pub provider_request_trace_enabled: bool,
     /// Host-owned tool settings resolved from the shared configuration file.

@@ -1,10 +1,11 @@
 //! Shared prompt-turn reducers used by workbench and service shells.
 //! 工作台与服务外壳共用的提示词轮次归约器。
 
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 use serde_json::Value;
 use time::OffsetDateTime;
+use vulcan_context::SessionConversationPayload;
 use vulcan_core::types::ConversationAttachment;
 use vulcan_hooks::HookRegistrationSnapshot;
 use vulcan_prompt_composer::PromptOutputStyleSnapshot;
@@ -171,6 +172,9 @@ pub struct SharedPromptTurnStart {
     /// Structured attachments bound to the prompt.
     /// 绑定在提示词上的结构化附件。
     pub attachments: Vec<ConversationAttachment>,
+    /// Request-local attachment projection used only by the current Provider execution.
+    /// 仅由当前 Provider 执行使用的单次请求局部附件投影。
+    pub provider_attachments: Vec<ConversationAttachment>,
     /// Execution mode requested by the shell command.
     /// 外壳命令请求的执行模式。
     pub execution_mode: String,
@@ -188,7 +192,7 @@ pub struct SharedPromptTurnStart {
     pub canonical_user_message_id: Option<String>,
     /// Exact claimed execution snapshot attached only by the dedicated manual retry service.
     /// 仅由专用手动重试服务附加的精确已领取执行快照。
-    pub execution_retry_snapshot: Option<Box<vulcan_workbench_model::ExecutionRetrySnapshot>>,
+    pub execution_retry_snapshot: Option<Arc<vulcan_workbench_model::ExecutionRetrySnapshot>>,
 }
 
 impl fmt::Debug for SharedPromptTurnStart {
@@ -206,6 +210,7 @@ impl fmt::Debug for SharedPromptTurnStart {
                 &self.provider_visible_agent_messages.len(),
             )
             .field("attachments", &self.attachments)
+            .field("provider_attachments", &self.provider_attachments)
             .field("execution_mode", &self.execution_mode)
             .field("reasoning_effort", &self.reasoning_effort)
             .field("boundary_events", &self.boundary_events.len())
@@ -259,6 +264,7 @@ impl SharedPromptTurnStart {
             hidden_model_guidance: self.hidden_model_guidance.clone(),
             provider_visible_agent_messages,
             attachments: self.attachments.clone(),
+            provider_attachments: self.provider_attachments.clone(),
             execution_mode: self.execution_mode.clone(),
             reasoning_effort: self.reasoning_effort,
             boundary_events,
@@ -325,6 +331,7 @@ pub fn restore_shared_prompt_turn_from_execution_retry(
         prompt: input.prompt,
         hidden_model_guidance: input.hidden_model_guidance,
         provider_visible_agent_messages,
+        provider_attachments: input.provider_attachments,
         attachments: input.attachments,
         execution_mode: input.execution_mode,
         reasoning_effort: input.reasoning_effort,
@@ -376,6 +383,9 @@ pub struct SharedPromptTurnBeginInput<'a> {
     /// Structured attachments bound to the prompt.
     /// 绑定在提示词上的结构化附件。
     pub attachments: Vec<ConversationAttachment>,
+    /// Optional request-local attachment projection; absent input reuses canonical attachments.
+    /// 可选的单次请求局部附件投影；缺省时复用规范附件。
+    pub provider_attachments: Option<Vec<ConversationAttachment>>,
     /// Whether the shared reducer should append the canonical user message.
     /// 共享归约器是否需要追加规范用户消息。
     pub append_canonical_user_message: bool,
@@ -420,6 +430,9 @@ pub struct SharedPromptTurnRuntimeBeginInput<'a> {
     /// Structured attachments bound to the prompt.
     /// 绑定在提示词上的结构化附件。
     pub attachments: Vec<ConversationAttachment>,
+    /// Optional request-local attachment projection; absent input reuses canonical attachments.
+    /// 可选的单次请求局部附件投影；缺省时复用规范附件。
+    pub provider_attachments: Option<Vec<ConversationAttachment>>,
     /// Whether the shared reducer should append the canonical user message.
     /// 共享归约器是否需要追加规范用户消息。
     pub append_canonical_user_message: bool,
@@ -528,6 +541,7 @@ pub fn begin_shared_prompt_turn(
                 hidden_model_guidance: input.hidden_model_guidance,
                 provider_visible_agent_messages: input.provider_visible_agent_messages,
                 attachments: input.attachments,
+                provider_attachments: input.provider_attachments,
                 append_canonical_user_message: input.append_canonical_user_message,
                 append_visible_user_prompt_record: input.append_visible_user_prompt_record,
                 source: input.source,
@@ -616,6 +630,12 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
     let (injection_ops, sanitized_prompt) =
         collect_builtin_manual_injection_ops_and_sanitized_prompt(input.prompt);
     let start_attachments = input.attachments.clone();
+    // providerAttachments is isolated from canonical persistence and may carry transient delivery decisions.
+    // providerAttachments 与规范持久化隔离，可以携带临时传输决策。
+    let provider_attachments = input
+        .provider_attachments
+        .clone()
+        .unwrap_or_else(|| start_attachments.clone());
     // hydrated_conversation_state remains detached until the candidate prompt identity is proven valid.
     // hydrated_conversation_state 会保持分离，直到候选提示词身份被证明有效。
     let hydrated_conversation_state = if runtime_state.conversation_state.messages.is_empty()
@@ -734,6 +754,7 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
             .map(str::to_string),
         provider_visible_agent_messages: input.provider_visible_agent_messages,
         attachments: start_attachments,
+        provider_attachments,
         execution_mode: input.execution_mode,
         reasoning_effort: input.reasoning_effort,
         boundary_events,
@@ -942,7 +963,8 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
     }
     runtime_state.active_precheck_turn_id = None;
     let mut request_prompt = input.start.prompt;
-    let request_attachments = input.start.attachments.clone();
+    let canonical_attachments = input.start.attachments.clone();
+    let request_attachments = input.start.provider_attachments.clone();
     let mut system_prompt_hook_blocks = Vec::new();
     let mut precheck_failure_detail = None;
     let mut profile_failure_detail = None;
@@ -1064,7 +1086,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
                 patch_latest_prechecked_user_prompt_record(
                     runtime_state,
                     &request_prompt,
-                    &request_attachments,
+                    &canonical_attachments,
                     input.patch_visible_user_prompt_record,
                 );
             }
@@ -1148,6 +1170,30 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
                 )
         })
         .cloned();
+    // providerConversationState is a request-owned copy; canonical history keeps original attachments unchanged.
+    // providerConversationState 是请求持有的副本；规范历史保持原始附件不变。
+    let mut provider_conversation_state = runtime_state.conversation_state.clone();
+    if let Some(canonical_user_message_id) = input.start.canonical_user_message_id.as_deref() {
+        let message = provider_conversation_state
+            .messages
+            .iter_mut()
+            .find(|message| message.id == canonical_user_message_id)
+            .ok_or_else(|| {
+                format!(
+                    "Provider attachment projection cannot find canonical user message `{canonical_user_message_id}`."
+                )
+            })?;
+        match &mut message.payload {
+            SessionConversationPayload::UserText { attachments, .. } => {
+                *attachments = request_attachments;
+            }
+            _ => {
+                return Err(format!(
+                    "Provider attachment projection target `{canonical_user_message_id}` is not a user text message."
+                ));
+            }
+        }
+    }
     let request = ExecutionPreparationRequest {
         session_id,
         managed_codebase_memory: None,
@@ -1155,11 +1201,9 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
             session_id: vulcan_session_core::SessionNodeId::from(session_id),
         },
         runtime_policy,
-        conversation_hook_turn_id: input
-            .start
-            .source
-            .runs_completed_turn_hooks()
-            .then_some(expected_turn_id),
+        // Every shared preparation creates or restores this exact Hook turn, including process-only retries and Goal continuations.
+        // 每次共享准备都会创建或恢复这个精确 Hook 回合，包括仅过程恢复与目标续轮。
+        conversation_hook_turn_id: Some(expected_turn_id),
         execution_retry_snapshot: input.start.execution_retry_snapshot,
         provider_request_continuation: None,
         execution_agent_id: None,
@@ -1198,6 +1242,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
             .then(|| runtime_state.provider_extension_target_sets.clone()),
         subagent_prompt_context: None,
         task_session_store_root: None,
+        session_storage_directory: None,
         session_title: input.start.session_title,
         workspace_path: input.start.workspace_path,
         prompt: request_prompt,
@@ -1205,7 +1250,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         provider_visible_agent_messages: input.start.provider_visible_agent_messages,
         turn_start_mode: is_restored_provider_checkpoint
             .then_some(ExecutionTurnStartMode::RestoredCheckpoint),
-        conversation_state: runtime_state.conversation_state.clone(),
+        conversation_state: provider_conversation_state,
         context_compaction_policy: None,
         context_compaction_window_node_id: runtime_state.context_compaction_window_node_id,
         context_budget_override: None,

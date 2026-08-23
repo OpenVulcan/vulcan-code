@@ -92,7 +92,7 @@ pub(crate) async fn persist_context_compaction_snapshot(
                 ));
             }
         };
-    let persist_lock = webui_workspace_persist_lock();
+    let persist_lock = webui_session_persist_lock(session_id);
     let _persist_guard = persist_lock.lock().await;
     if !webui_session_runtime_persist_version_is_current(
         &state,
@@ -105,17 +105,24 @@ pub(crate) async fn persist_context_compaction_snapshot(
     }
     let display_messages =
         context_compaction_complete_display_messages(&workspace_snapshot, session_id, &section_id);
-    let Some(mut runtime_state) = workspace_snapshot
-        .session_runtime_state
-        .get(&session_id)
-        .cloned()
-        .or_else(|| {
-            workspace_snapshot
-                .archived_session_runtime_state
-                .get(&session_id)
-                .cloned()
-        })
-    else {
+    // persistenceSnapshot is already owned by this task, so its exact session row can move without
+    // cloning the workspace or canonical conversation history a second time.
+    // persistenceSnapshot 已由当前任务独占，因此其精确会话行可以直接移动，无需再次复制工作区
+    // 或规范会话历史。
+    let mut persistence_snapshot = workspace_snapshot;
+    let archived = workspace_session_with_archive_status(&persistence_snapshot, session_id)
+        .map(|(_, archived)| archived)
+        .ok_or_else(|| format!("context-compaction session disappeared: {session_id}"))?;
+    let runtime_state = if archived {
+        persistence_snapshot
+            .archived_session_runtime_state
+            .remove(&session_id)
+    } else {
+        persistence_snapshot
+            .session_runtime_state
+            .remove(&session_id)
+    };
+    let Some(mut runtime_state) = runtime_state else {
         return Err(format!(
             "context-compaction runtime state is missing: session={session_id}"
         ));
@@ -142,41 +149,8 @@ pub(crate) async fn persist_context_compaction_snapshot(
     if let Some(current_output_style) = current_output_style {
         runtime_state.output_style = current_output_style;
     }
-
-    // Compose the exact transcript and runtime state into one session snapshot before persistence.
-    // 在持久化前将精确转录与运行态组合成同一份会话快照。
-    let mut persistence_snapshot = workspace_snapshot.clone();
-    let archived = workspace_session_with_archive_status(&persistence_snapshot, session_id)
-        .map(|(_, archived)| archived)
-        .ok_or_else(|| format!("context-compaction session disappeared: {session_id}"))?;
-    if archived {
-        persistence_snapshot
-            .archived_session_messages
-            .insert(session_id, display_messages);
-        persistence_snapshot
-            .archived_session_runtime_state
-            .insert(session_id, runtime_state.clone());
-    } else {
-        persistence_snapshot
-            .session_messages
-            .insert(session_id, display_messages);
-        persistence_snapshot
-            .session_runtime_state
-            .insert(session_id, runtime_state.clone());
-    }
-    // The workspace-store single-session API writes segmented transcript, runtime state, and its
-    // locator in one ordered operation, so a rebuilt turn cannot observe a half-written boundary.
-    // workspace-store 单会话 API 按顺序一次写入转录、运行态和定位行，重建回合不会读到半写边界。
-    persist_workspace_session_update_unlocked(
-        controller_runtime.clone(),
-        &persistence_snapshot,
-        session_id,
-    )
-    .await
-    .map_err(|error| {
-        let reason_label = reason.as_deref().unwrap_or("context_compaction");
-        format!("background context-compaction session persist failed ({reason_label}): {error}")
-    })?;
+    // outputStyleAddonState is constant-size and captured before runtimeState moves back into its exact map.
+    // outputStyleAddonState 为常量大小，并在 runtimeState 移回精确映射前完成捕获。
     let output_style_addon_state = if runtime_state.output_style.is_empty() {
         None
     } else {
@@ -192,6 +166,36 @@ pub(crate) async fn persist_context_compaction_snapshot(
         }
         Some(addon_state)
     };
+    // Compose the exact transcript and moved runtime state into one session snapshot before persistence.
+    // 在持久化前将精确转录与移动后的运行态组合成同一份会话快照。
+    if archived {
+        persistence_snapshot
+            .archived_session_messages
+            .insert(session_id, display_messages);
+        persistence_snapshot
+            .archived_session_runtime_state
+            .insert(session_id, runtime_state);
+    } else {
+        persistence_snapshot
+            .session_messages
+            .insert(session_id, display_messages);
+        persistence_snapshot
+            .session_runtime_state
+            .insert(session_id, runtime_state);
+    }
+    // The workspace-store single-session API writes segmented transcript, runtime state, and its
+    // locator in one ordered operation, so a rebuilt turn cannot observe a half-written boundary.
+    // workspace-store 单会话 API 按顺序一次写入转录、运行态和定位行，重建回合不会读到半写边界。
+    persist_workspace_session_update_unlocked(
+        controller_runtime.clone(),
+        &persistence_snapshot,
+        session_id,
+    )
+    .await
+    .map_err(|error| {
+        let reason_label = reason.as_deref().unwrap_or("context_compaction");
+        format!("background context-compaction session persist failed ({reason_label}): {error}")
+    })?;
     if let Some(addon_state) = output_style_addon_state {
         let output_style_persist_is_current = output_style_persist_version
             .map(|version| {
@@ -208,8 +212,8 @@ pub(crate) async fn persist_context_compaction_snapshot(
             ));
         }
         persist_workspace_session_addon_state_update(
+            &state,
             controller_runtime,
-            workspace_snapshot,
             session_id,
             addon_state,
         )

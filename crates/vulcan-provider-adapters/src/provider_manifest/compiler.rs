@@ -33,9 +33,6 @@ const BUNDLED_MANIFEST_INDEX_SCHEMA_VERSION: &str = "vulcan.provider-index.v1";
 /// Maximum provider entries accepted from one packaged integrity index.
 /// 单份打包完整性 Index 允许的最大供应商条目数。
 const BUNDLED_MANIFEST_INDEX_MAX_PROVIDERS: usize = 256;
-/// Maximum filesystem entries inspected in the packaged manifest directory.
-/// 打包 Manifest 目录中允许检查的文件系统条目最大数量。
-const BUNDLED_MANIFEST_DIRECTORY_MAX_ENTRIES: usize = 512;
 /// Maximum UTF-8 byte length retained for one provider-local bundled failure diagnostic.
 /// 单条逐供应商内置失败诊断保留的最大 UTF-8 字节长度。
 const BUNDLED_MANIFEST_FAILURE_MAX_BYTES: usize = 8_192;
@@ -2223,80 +2220,14 @@ fn load_bundled_manifest_generation_from_paths(
 ) -> Result<BundledManifestGenerationLoad, String> {
     let index = read_bundled_manifest_index(index_path)?;
 
-    // Every index identity is validated before any value can become a filesystem path. An invalid
-    // identity makes the index itself untrustworthy and therefore cannot be provider-isolated.
-    // 每个 Index 身份都在成为文件系统路径前校验。非法身份意味着 Index 本身不可信，
-    // 因而不能按供应商隔离。
+    // Every index identity is validated before it becomes one deterministic filesystem path.
+    // 每个 Index 身份都在成为确定性文件系统路径前完成校验。
     for (provider_id, indexed) in &index.providers {
         validate_bundled_manifest_index_entry(provider_id, indexed)?;
     }
-    // expectedFiles is derived only from validated identities before directory enumeration.
-    // expectedFiles 在目录枚举前仅由已校验身份派生。
-    let expected_files = index
-        .providers
-        .keys()
-        .map(|provider_id| format!("{provider_id}.json"))
-        .collect::<BTreeSet<_>>();
 
-    let entries = std::fs::read_dir(directory).map_err(|error| {
-        format!(
-            "bundled provider manifest directory `{}` is unavailable: {error}",
-            directory.display()
-        )
-    })?;
-    // actualFiles records exact JSON names before provider-local type checks compile documents.
-    // actualFiles 在逐供应商类型检查与文档编译前记录精确 JSON 名称。
-    let mut actual_files = BTreeSet::new();
-    // scannedEntries also bounds ignored non-JSON entries in a tampered installation directory.
-    // scannedEntries 同样限制被篡改安装目录中被忽略的非 JSON 条目。
-    let mut scanned_entries = 0usize;
-    for entry in entries {
-        scanned_entries = scanned_entries.saturating_add(1);
-        if scanned_entries > BUNDLED_MANIFEST_DIRECTORY_MAX_ENTRIES {
-            return Err(format!(
-                "bundled provider manifest directory `{}` exceeds the {BUNDLED_MANIFEST_DIRECTORY_MAX_ENTRIES}-entry scan limit",
-                directory.display()
-            ));
-        }
-        let entry = entry.map_err(|error| {
-            format!(
-                "bundled provider manifest directory `{}` contains an unreadable entry: {error}",
-                directory.display()
-            )
-        })?;
-        let path = entry.path();
-        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
-            continue;
-        }
-        let file_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| {
-                format!(
-                    "bundled provider manifest entry `{}` has no UTF-8 file name",
-                    path.display()
-                )
-            })?;
-        actual_files.insert(file_name.to_string());
-        if actual_files.len() > BUNDLED_MANIFEST_INDEX_MAX_PROVIDERS {
-            return Err(format!(
-                "bundled provider manifest directory `{}` exceeds the {BUNDLED_MANIFEST_INDEX_MAX_PROVIDERS}-manifest limit",
-                directory.display()
-            ));
-        }
-    }
-
-    // expectedFiles is derived only from validated identities. Unexpected JSON files are a global
-    // directory integrity failure; missing indexed files remain attributable to one provider.
-    // expectedFiles 仅由已校验身份派生。意外 JSON 文件属于全局目录完整性失败；缺失的
-    // 已索引文件仍可归因到单个供应商。
-    if let Some(unexpected) = actual_files.difference(&expected_files).next() {
-        return Err(format!(
-            "bundled provider manifest directory `{}` contains unexpected indexed-format file `{unexpected}`",
-            directory.display()
-        ));
-    }
-
+    // Only index-owned exact files are opened; sibling discovery is intentionally disabled.
+    // 仅打开 Index 拥有的精确文件；明确禁用同级目录发现。
     let mut manifests = BTreeMap::new();
     let mut failures = BTreeMap::new();
     for (provider_id, indexed) in &index.providers {
@@ -2659,14 +2590,15 @@ mod tests {
         // fixtureDirectory 镜像精确的已索引 JSON 文件集合。
         let fixture_directory = temporary_root.path().join("manifests");
         std::fs::create_dir_all(&fixture_directory).expect("fixture directory must create");
-        for entry in std::fs::read_dir(&source_directory).expect("source directory must read") {
-            // entry is one checked-in regular provider Manifest copied byte-for-byte.
-            // entry 是一份按字节复制的检入常规供应商 Manifest。
-            let entry = entry.expect("source entry must read");
-            if entry.path().extension().and_then(|value| value.to_str()) == Some("json") {
-                std::fs::copy(entry.path(), fixture_directory.join(entry.file_name()))
-                    .expect("provider fixture must copy");
-            }
+        let indexed = read_bundled_manifest_index(&source_index)
+            .expect("source index must load before exact fixture copy");
+        for provider_id in indexed.providers.keys() {
+            let file_name = format!("{provider_id}.json");
+            std::fs::copy(
+                source_directory.join(&file_name),
+                fixture_directory.join(&file_name),
+            )
+            .expect("indexed provider fixture must copy");
         }
         // fixtureIndex remains valid so only the tampered provider file is attributable locally.
         // fixtureIndex 保持有效，使只有被篡改供应商文件可逐项归因。
@@ -2718,34 +2650,40 @@ mod tests {
         );
     }
 
-    /// Verifies an unexpected JSON file remains a global directory-integrity failure.
-    /// 验证意外 JSON 文件仍属于全局目录完整性失败。
+    /// Verifies an unindexed sibling is ignored because bundled loading opens only exact index paths.
+    /// 验证未索引同级文件会被忽略，因为内置加载只打开精确 Index 路径。
     #[test]
-    fn bundled_generation_rejects_unindexed_json_file_globally() {
+    fn bundled_generation_ignores_unindexed_sibling_without_scanning() {
         // sourceDirectory and sourceIndex provide the complete trusted checked-in fixture.
         // sourceDirectory 与 sourceIndex 提供完整可信的检入夹具。
         let source_directory = vulcan_runtime_assets::source_bundled_provider_manifests_directory();
         let source_index = vulcan_runtime_assets::source_bundled_provider_manifest_index_path();
+        let indexed = read_bundled_manifest_index(&source_index).expect("source index must load");
         // temporaryRoot contains the isolated copied generation.
         // temporaryRoot 包含隔离复制的代际。
         let temporary_root = tempfile::tempdir().expect("temporary directory must create");
         let fixture_directory = temporary_root.path().join("manifests");
         std::fs::create_dir_all(&fixture_directory).expect("fixture directory must create");
-        for entry in std::fs::read_dir(&source_directory).expect("source directory must read") {
-            let entry = entry.expect("source entry must read");
-            if entry.path().extension().and_then(|value| value.to_str()) == Some("json") {
-                std::fs::copy(entry.path(), fixture_directory.join(entry.file_name()))
-                    .expect("provider fixture must copy");
-            }
+        for provider_id in indexed.providers.keys() {
+            let file_name = format!("{provider_id}.json");
+            std::fs::copy(
+                source_directory.join(&file_name),
+                fixture_directory.join(&file_name),
+            )
+            .expect("indexed provider fixture must copy");
         }
         let fixture_index = temporary_root.path().join("bundled-index.json");
         std::fs::copy(source_index, &fixture_index).expect("index fixture must copy");
-        // unexpectedFile has no trusted index identity and therefore cannot be isolated safely.
-        // unexpectedFile 没有可信 Index 身份，因此不能被安全地逐供应商隔离。
+        // unexpectedFile has no trusted index identity and must never be discovered or opened.
+        // unexpectedFile 没有可信 Index 身份，绝不能被发现或打开。
         std::fs::write(fixture_directory.join("unexpected.json"), b"{}")
             .expect("unexpected fixture must write");
-        let error = load_bundled_manifest_generation_from_paths(&fixture_index, &fixture_directory)
-            .expect_err("unindexed file must fail the global generation");
-        assert!(error.contains("unexpected indexed-format file"), "{error}");
+
+        let generation =
+            load_bundled_manifest_generation_from_paths(&fixture_index, &fixture_directory)
+                .expect("unindexed sibling must be ignored without directory discovery");
+
+        assert!(generation.failures.is_empty());
+        assert_eq!(generation.manifests.len(), indexed.providers.len());
     }
 }

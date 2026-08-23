@@ -15,14 +15,13 @@ mod tests;
 use super::segmented_session_store::{
     SegmentPolicy, SegmentedSessionCreateRequest, SegmentedSessionForkRequest,
     SegmentedSessionForkSource, SegmentedSessionReplayResult,
-    append_segmented_session_message_update, archive_segmented_session_by_created_date,
-    copy_segmented_directory_tree, create_segmented_session_in_location,
-    finalize_staged_archived_session_deletion, find_segmented_session_directory,
-    find_segmented_session_directory_by_id,
+    append_segmented_session_message_tail_update, append_segmented_session_message_update,
+    archive_segmented_session_by_created_date, create_segmented_session_in_location,
+    finalize_staged_archived_session_deletion,
     find_segmented_session_directory_for_task_store_created_at,
-    fork_segmented_session_directory_from_source, read_session_metadata,
-    rebuild_runtime_log_from_conversation_state, rename_segmented_session_by_created_date,
-    repair_segmented_session_display_if_needed, replay_segmented_session_context,
+    fork_segmented_session_directory_from_source, history_rewrite_mutable_relative_paths,
+    read_session_metadata, rebuild_runtime_log_from_conversation_state,
+    rename_segmented_session_by_created_date, repair_segmented_session_display_if_needed,
     replay_segmented_session_context_without_repair, restore_segmented_session_by_created_date,
     rewrite_json_value_identity_tokens, rewrite_string_identity_tokens,
     rollback_staged_archived_session_deletion, segmented_session_directory,
@@ -40,28 +39,30 @@ use crate::conversation_protocol::{
 };
 use vulcan_context::merge_session_messages_with_conversation_state_records;
 use vulcan_context::{SessionConversationMessage, SessionMessageKind};
-use vulcan_core::types::ConversationAttachment;
 
 use index::*;
 use locators::*;
-pub(in crate::workspace_store) use runtime_tail::reject_historical_segmented_runtime_checkpoint;
 use runtime_tail::{
     persist_segmented_session_runtime_state_checkpoint, persist_segmented_session_update,
 };
+pub(in crate::workspace_store) use runtime_tail::{
+    reject_historical_segmented_runtime_checkpoint, sync_segmented_runtime_log_for_state,
+};
 #[cfg(test)]
 use snapshot::effective_session_messages_for_persistence;
-#[cfg(test)]
-pub(in crate::workspace_store) use snapshot::persist_single_session_transcript_messages_in_data_root;
 
 pub use edit_fork::*;
 pub use projects::*;
 pub use session_lifecycle::{
     archive_project_sessions, archive_single_session, cleanup_missing_session_index,
     delete_archived_session, persist_single_session_addon_state_update,
+    persist_single_session_addon_state_update_in_directory,
     remove_project_after_archiving_sessions, rename_single_session, restore_archived_session,
     restore_project,
 };
 pub use snapshot::{
-    persist_single_session_runtime_state_update, persist_single_session_transcript_messages,
-    persist_single_session_update,
+    load_single_session_transcript_message_count_in_directory,
+    persist_single_session_runtime_state_update,
+    persist_single_session_transcript_messages_in_directory,
+    persist_single_session_transcript_tail_in_directory, persist_single_session_update,
 };

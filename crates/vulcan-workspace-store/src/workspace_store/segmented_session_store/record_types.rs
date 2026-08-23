@@ -295,15 +295,3 @@ pub(in crate::workspace_store) struct SegmentedSessionTurnWindow {
     /// 当前页之前是否仍存在更早的消息轮次。
     pub has_more_history: bool,
 }
-
-/// One session directory discovered from the text metadata catalog.
-/// 从文本元数据目录发现的一条会话目录记录。
-#[derive(Debug, Clone)]
-pub(in crate::workspace_store) struct SegmentedSessionCatalogEntry {
-    /// Absolute segmented session directory path.
-    /// 分段会话目录的绝对路径。
-    pub session_dir: PathBuf,
-    /// Normalized metadata read from metadata.json.
-    /// 从 metadata.json 读取并归一化后的元数据。
-    pub metadata: SegmentedSessionMetadata,
-}

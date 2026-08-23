@@ -59,7 +59,7 @@ pub fn stream_runtime_run_with_intervention(
     prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
     let mcp_runtime = mcp_runtime.unwrap_or_else(|| configured_mcp_runtime_access(&config));
-    let extension_generation = Arc::new(ExtensionGeneration::new(0, None, mcp_runtime));
+    let extension_generation = Arc::new(ExtensionGeneration::new(0, None, mcp_runtime, None));
     stream_runtime_run_with_intervention_and_plugins(
         config,
         agent_profile_catalog,
@@ -126,6 +126,7 @@ pub fn stream_runtime_run_with_intervention_plugins_and_public_ai(
                 .as_ref()
                 .map(vulcan_plugin_runtime::VulcanPluginRuntimeManager::snapshot),
             configured_mcp_runtime_access(&config),
+            None,
         ))
     });
     stream_runtime_run_with_access(

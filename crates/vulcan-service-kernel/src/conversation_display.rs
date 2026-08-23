@@ -327,6 +327,38 @@ fn set_display_session_messages(
     }
 }
 
+/// Appends one newly canonicalized row to an already loaded display transcript window.
+/// 将一条刚完成规范化的新记录追加到已加载的显示转录窗口。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` owns the optional loaded display window; `session_id` selects its exact
+/// owner; `message` is the uniquely identified canonical row that was just appended.
+/// `workspace_snapshot` 持有可选的已加载显示窗口；`session_id` 选择其精确所有者；`message` 是刚追加且
+/// 已具有唯一身份的规范记录。
+///
+/// # Returns
+/// 返回值
+/// This function has no return value. When no display window is loaded, the canonical conversation
+/// remains the only source and normal exact-session hydration will project it later.
+/// 此函数没有返回值。显示窗口尚未加载时，规范会话保持为唯一来源，后续正常的精确会话水合会再投影它。
+pub(crate) fn append_new_canonical_row_to_loaded_display_window(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    message: SessionMessageEntry,
+) {
+    if !session_message_should_remain_loaded(&message) {
+        return;
+    }
+    let Some(loaded_messages) = workspace_snapshot.session_messages.get_mut(&session_id) else {
+        return;
+    };
+    // The canonical append assigned a fresh record identity immediately before this projection.
+    // Avoiding a duplicate scan keeps this hot path independent of transcript length.
+    // 规范追加已在此次投影前分配全新记录身份；省略重复扫描可让该热路径不受转录长度影响。
+    loaded_messages.push(message);
+}
+
 /// Merges retained parent-to-child send_message notes into a rebuilt child display window.
 /// 将已保留的父到子 send_message 显示记录合并回重建后的子显示窗口。
 fn merge_task_display_messages_with_existing_send_message_notes(

@@ -4,8 +4,12 @@
 use super::*;
 use crate::{
     commit_prepared_submission_media_ledger,
-    conversation_submission::effective_pending_prompt_reasoning_effort,
-    ensure_webui_goal_session_kernel_turn_start_allowed, prepare_submission_media,
+    conversation_submission::{
+        effective_pending_prompt_reasoning_effort, promote_submission_attachment_draft_scope,
+    },
+    ensure_webui_goal_session_kernel_turn_start_allowed,
+    pending_prompts::pending_prompt_attachment_staging_scope,
+    prepare_submission_media,
     project_conversation_services::try_begin_pending_prompt_dispatch_exclusion,
     start_reserved_webui_session_kernel_user_turn, start_webui_goal_session_kernel_turn,
 };
@@ -233,7 +237,7 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
     // pendingRuntimeState supplies the exact persisted lease identity captured for this queue owner.
     // pendingRuntimeState 提供为该队列所有者捕获的精确持久化租约身份。
     let pending_runtime_state = workspace_snapshot.session_runtime_state.get(&session_id);
-    let prepared_submission_media = match prepare_submission_media(
+    let prepared_submission_projection = match prepare_submission_media(
         app,
         state,
         &entry_agent_runtime,
@@ -245,22 +249,19 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
     )
     .await
     {
-        Ok(prepared_submission_media) => prepared_submission_media,
+        Ok(prepared_submission_projection) => prepared_submission_projection,
         Err(error) => {
             // Restore before returning so cancellation or upload failure never discards the unsent queued prompt.
             // 返回前先恢复队列，确保取消或上传失败不会丢失尚未发送的排队提示词。
             restore_webui_pending_prompt(&mut workspace_snapshot, session_id, entry)?;
             store_workspace_snapshot_without_workbench_rebuild(state, workspace_snapshot)?;
             emit_pending_prompts_changed_delta(app, state, session_id)?;
-            if let Ok(Some(snapshot)) = current_workspace_snapshot_from_state(state) {
-                spawn_workspace_session_persist_task(
-                    state.clone(),
-                    controller_runtime.clone(),
-                    snapshot,
-                    session_id,
-                    Some(String::from("queued_media_prepare_failed")),
-                );
-            }
+            spawn_workspace_session_persist_task(
+                state.clone(),
+                controller_runtime.clone(),
+                session_id,
+                Some(String::from("queued_media_prepare_failed")),
+            );
             if error.starts_with("submission_cancelled:") {
                 webui_trace(
                     "pending_prompt_media_prepare_cancelled",
@@ -271,6 +272,8 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
             return Err(error);
         }
     };
+    let provider_attachments = prepared_submission_projection.provider_attachments;
+    let prepared_submission_media = prepared_submission_projection.prepared_media;
     let panel_entry_id = entry.panel_entry_id.clone();
     // reasoning_effort prevents a neutral internal queue placeholder from changing the active reasoning selection.
     // reasoning_effort 防止中性的内部队列占位值改变当前推理强度选择。
@@ -288,6 +291,19 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
         )?;
     }
     let prompt_text = entry.prompt.clone();
+    // canonicalAttachments strip every request-local delivery mode before the queued user message
+    // enters durable history; providerAttachments retain only this dispatch's authoritative copy.
+    // canonicalAttachments 在排队用户消息进入持久历史前移除全部单次请求传输模式；
+    // providerAttachments 仅保留本次分发的权威副本。
+    let canonical_attachments = entry
+        .attachments
+        .iter()
+        .cloned()
+        .map(|mut attachment| {
+            attachment.delivery_mode = None;
+            attachment
+        })
+        .collect();
     let prompt_turn_begin_input = SharedPromptTurnBeginInput {
         session_id,
         session_title: &session_title,
@@ -296,7 +312,8 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
         prompt: &prompt_text,
         hidden_model_guidance: entry.hidden_model_guidance.as_deref(),
         provider_visible_agent_messages: Vec::new(),
-        attachments: entry.attachments,
+        attachments: canonical_attachments,
+        provider_attachments: Some(provider_attachments),
         append_canonical_user_message: entry.source.persists_canonical_user_message(),
         append_visible_user_prompt_record: entry.source.appends_visible_user_prompt_record(),
         source: entry.source,
@@ -375,12 +392,11 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
         session_id,
         &session_title,
     );
-    entry_agent_runtime
-        .vmm_hook_runtime
-        .replace_snapshot(build_vmm_hook_config_snapshot(
-            &entry_agent_runtime.provider_configuration,
-            &workspace_snapshot,
-        ))?;
+    refresh_exact_vmm_hook_session_projection(
+        &entry_agent_runtime.vmm_hook_runtime,
+        &workspace_snapshot,
+        session_id,
+    )?;
     let precheck_plan = if entry.source.runs_user_prompt_precheck() {
         webui_shared_prompt_precheck_plan(
             &entry_agent_runtime,
@@ -409,29 +425,36 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
         session_id,
         SessionRunPhase::Preparing,
     )?;
+    if let Some(panel_entry_id) = panel_entry_id.as_deref() {
+        let promotion_result =
+            pending_prompt_attachment_staging_scope(panel_entry_id).and_then(|queue_scope| {
+                promote_submission_attachment_draft_scope(
+                    &workspace_path,
+                    session_id,
+                    precheck_start.canonical_user_message_id.as_deref(),
+                    entry.attachments.as_slice(),
+                    Some(queue_scope.as_str()),
+                )
+            });
+        if let Err(error) = promotion_result {
+            // The canonical queued message is already committed; retaining the queue lease is the safe repairable outcome.
+            // 规范排队消息已经提交；保留队列租约是安全且可修复的结果。
+            webui_trace(
+                "pending_prompt_attachment_lease_promotion_failed",
+                format!("session={session_id} panel_entry={panel_entry_id} error={error}"),
+            );
+        }
+    }
     if panel_entry_id.is_some() {
         emit_pending_prompts_changed_delta(app, state, session_id)?;
     }
     if entry.source.runs_user_prompt_precheck() {
-        let state_for_persist = state.clone();
-        let controller_runtime_for_persist = controller_runtime.clone();
-        spawn_service_task(async move {
-            let snapshot = match current_workspace_snapshot_from_shared_state(&state_for_persist) {
-                Ok(Some(snapshot)) => snapshot,
-                Ok(None) => return,
-                Err(error) => {
-                    eprintln!("[webui-service] queued begin persist snapshot failed: {error}");
-                    return;
-                }
-            };
-            spawn_workspace_session_runtime_state_persist_task(
-                state_for_persist,
-                controller_runtime_for_persist,
-                snapshot,
-                session_id,
-                Some(String::from("queued_begin")),
-            );
-        });
+        spawn_workspace_session_runtime_state_persist_task(
+            state.clone(),
+            controller_runtime.clone(),
+            session_id,
+            Some(String::from("queued_begin")),
+        );
     }
     start_webui_precheck_or_continue(
         app,

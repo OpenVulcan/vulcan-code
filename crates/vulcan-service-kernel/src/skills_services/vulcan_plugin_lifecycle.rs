@@ -1125,6 +1125,7 @@ pub(super) fn publish_extension_generation(
         revision,
         Some(catalog),
         mcp_runtime,
+        agent_runtime.extension_generation.prompt_skill_catalog(),
     ));
     retired_mcp_runtime
         .retire_plugin_partitions_after(plugin_id, std::time::Duration::from_secs(30));

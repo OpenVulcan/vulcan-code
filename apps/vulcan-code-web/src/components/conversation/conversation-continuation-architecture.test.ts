@@ -49,21 +49,28 @@ describe("conversation continuation architecture", () => {
     expect(handlerSource).toContain('kind: "failed"');
   });
 
-  it("binds composer text to recovery only when the selected problem turn exposes a continuation", () => {
+  it("keeps ordinary composer submissions independent from problem-turn recovery", () => {
     // actions owns the selected-conversation decision at the composer submission boundary.
     // actions 持有输入区提交边界的选中会话决策。
     const actions = readContinuationSource("../workspace/workbench-layout/conversation-actions.ts");
     // service owns the exact RPC payload sent to the desktop backend.
     // service 持有发送到桌面后端的精确 RPC 载荷。
     const service = readContinuationSource("../../service/conversation-actions-service.ts");
+    // handlerStart locates the ordinary composer submission callback.
+    // handlerStart 定位普通输入区提交回调。
+    const handlerStart = actions.indexOf("const handleSubmitConversationPrompt = React.useCallback");
+    // handlerEnd excludes the explicit Continue callback and every later action.
+    // handlerEnd 排除显式 Continue 回调及其后的全部操作。
+    const handlerEnd = actions.indexOf("// handleInsertPendingPrompt", handlerStart);
+    // handlerSource isolates the ordinary-send ownership boundary.
+    // handlerSource 隔离普通发送的所有权边界。
+    const handlerSource = actions.slice(handlerStart, handlerEnd);
 
-    expect(actions).toContain("selectedConversation?.continuation");
-    expect(actions).toContain("expectedGeneration: selectedConversation.continuation.generation");
-    expect(actions).toContain(
-      "expectedLedgerRevision: selectedConversation.continuation.expectedLedgerRevision",
-    );
-    expect(actions).toContain("submission.sessionSettings,\n      continuationExpectation,");
-    expect(service).toContain("continuationExpectation: ConversationContinuationExpectation | null = null");
-    expect(service).toContain("continuationExpectation,\n  });");
+    expect(handlerStart).toBeGreaterThanOrEqual(0);
+    expect(handlerEnd).toBeGreaterThan(handlerStart);
+    expect(handlerSource).not.toContain("continuationExpectation");
+    expect(handlerSource).not.toContain("selectedConversation?.continuation");
+    expect(service).not.toContain("ConversationContinuationExpectation");
+    expect(service).toContain("// 普通输入区提交无法通过此服务边界领取问题回合恢复。\n    continuationExpectation: null,");
   });
 });

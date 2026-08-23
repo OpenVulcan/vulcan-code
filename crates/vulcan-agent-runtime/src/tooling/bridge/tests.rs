@@ -13,7 +13,10 @@ use std::path::Path;
 use std::sync::Arc;
 use vulcan_luaskills_prompt::{LUASKILL_HELP_TOOL_NAME, LuaSkillPromptEntry};
 use vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME;
-use vulcan_tools_manager::VulcanToolsManager;
+use vulcan_tools_manager::{
+    ResolvedToolSet, VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor,
+    VulcanToolInvocationResult, VulcanToolSourceKind, VulcanToolsManager,
+};
 use vulcan_vmm::VmmConfigLayer;
 
 /// Verifies host-managed PWD injection uses the native workspace-path format expected by LuaSkills host conventions.
@@ -115,6 +118,82 @@ fn implicit_luaskills_dispatch_uses_canonical_name() {
     let view = luaskills_entry_to_call_view(&entry);
 
     assert_eq!(view.canonical_name, "vulcan-codekit-ast-tree");
+}
+
+/// Verifies native public ids win provider collisions and duplicate native selections are ignored.
+/// 验证被选中的原生文件工具会优先于同名 Provider 候选，保持稳定公开名称。
+#[test]
+fn native_file_public_ids_are_reserved_and_deduplicated() {
+    let runtime_config = crate::agent_runtime::config::AgentRuntimeConfig {
+        active_model: None,
+        active_agent_id: String::from("agent-a"),
+        agents: Vec::new(),
+        skills: Vec::new(),
+        tool_policies: Default::default(),
+        configured_mcp_server_ids: Vec::new(),
+        enabled_mcp_server_ids: Vec::new(),
+    };
+    let native_catalog = build_native_tool_catalog(
+        &runtime_config,
+        None,
+        Arc::new(crate::tooling::CommandSessionRuntime::new()),
+        VmmConfigLayer::default(),
+        None,
+        None,
+    );
+    let provider_candidate = VulcanToolCandidate {
+        descriptor: VulcanToolDescriptor {
+            id: String::from("file"),
+            name: String::from("file"),
+            description: String::from("Provider file tool."),
+            help_text: None,
+            source: VulcanToolSourceKind::AiHostBinding,
+        },
+        parameters_schema: json!({"type": "object"}),
+        ai_visible: true,
+        plan_policy: VulcanPlanToolPolicy::Visible,
+        request_streaming: None,
+        invoke: Arc::new(|_, _| {
+            Box::pin(async {
+                Ok(VulcanToolInvocationResult::from_model_output(json!(
+                    "provider"
+                )))
+            })
+        }),
+    };
+    let manager = build_vulcan_tools_manager(
+        Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
+        Arc::new(crate::agent_runtime::question_runtime::QuestionRuntime::new()),
+        native_catalog,
+        None,
+        Vec::new(),
+        vec![provider_candidate],
+        None,
+        None,
+        None,
+        None,
+        vec![String::from("file"), String::from("file")],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        None,
+        Vec::new(),
+        VmmConfigLayer::default(),
+        VmmConfigLayer::default(),
+        false,
+    );
+
+    let resolved: ResolvedToolSet = manager.resolve_for_execution_mode("Build");
+    let file_tools = resolved
+        .descriptors
+        .iter()
+        .filter(|descriptor| descriptor.id == "file")
+        .collect::<Vec<_>>();
+    assert_eq!(file_tools.len(), 1);
+    assert_eq!(file_tools[0].source, VulcanToolSourceKind::Native);
 }
 
 /// Verifies VMM memory tools require ready configuration, enabled AI tools, and one live runtime.

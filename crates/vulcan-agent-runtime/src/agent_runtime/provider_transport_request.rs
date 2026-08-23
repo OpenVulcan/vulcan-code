@@ -6,7 +6,7 @@ use crate::agent_runtime::provider_transport_retry::ProviderRetryPolicy;
 use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::model::SessionId;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 use vulcan_ai_contract::AiExecutionRequest;
 use vulcan_core::types::{
     ConversationSnapshot as CoreConversationSnapshot,
@@ -99,6 +99,9 @@ pub(crate) struct ProviderTransportExecutionRequest {
     /// Whether this real dispatch writes complete session-local request traces.
     /// 本次真实分派是否写入完整的会话本地请求追踪。
     pub(crate) provider_request_trace_enabled: bool,
+    /// Exact session directory used for trace persistence without directory discovery.
+    /// 用于无需目录发现即可持久化追踪的精确会话目录。
+    pub(crate) session_storage_directory: Option<PathBuf>,
     /// Canonical provider API family used to group transport routing and shared protocol behavior.
     /// 用于归并传输路由与共享协议行为的规范 Provider 接口族。
     /// Runtime family used to select the concrete transport adapter implementation.
@@ -202,6 +205,7 @@ pub(crate) struct ProviderTransportExecutionRequest {
 /// 返回一份可直接进入协议专用流准备阶段的完整自有请求。
 pub(crate) fn build_provider_transport_execution_request(
     provider_request_trace_enabled: bool,
+    session_storage_directory: Option<PathBuf>,
     provider_id: String,
     model_id: &str,
     workspace_path: &str,
@@ -230,6 +234,7 @@ pub(crate) fn build_provider_transport_execution_request(
 ) -> ProviderTransportExecutionRequest {
     ProviderTransportExecutionRequest {
         provider_request_trace_enabled,
+        session_storage_directory,
         provider_id,
         model_id: model_id.to_string(),
         workspace_path: workspace_path.to_string(),

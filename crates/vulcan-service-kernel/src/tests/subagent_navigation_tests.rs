@@ -120,6 +120,9 @@ fn create_navigation_test_root_metadata(session_dir: &std::path::Path, root_sess
     });
     let encoded = serde_json::to_string_pretty(&metadata).expect("encode root metadata");
     std::fs::write(session_dir.join("metadata.json"), encoded).expect("write root metadata");
+    // The exact empty active segment must exist because append hot paths never scan or synthesize it.
+    // 精确的空活动分段必须存在，因为追加热路径不会扫描或补建它。
+    std::fs::write(session_dir.join("s001.jsonl"), b"").expect("write empty root segment");
 }
 
 /// Builds one persisted navigation test task metadata document.
@@ -934,7 +937,7 @@ fn hydration_preload_ignores_child_metadata_when_root_task_mirror_is_missing() {
         &workspace_snapshot,
         parent_session_id,
     )
-    .expect("session hydration should restore metadata without root mirror membership");
+    .expect("session hydration should accept an empty exact root mirror index");
     let preload = load_webui_unclosed_subagent_surface_preload(
         &shared_state,
         &workspace_snapshot,
@@ -945,11 +948,11 @@ fn hydration_preload_ignores_child_metadata_when_root_task_mirror_is_missing() {
     let restored_count =
         apply_webui_unclosed_subagent_surface_preload(&mut guard, &mut workspace_snapshot, preload);
 
-    assert_eq!(restored_count, 1);
-    let navigation = subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot)
-        .expect("metadata-backed registry should build navigation");
-    assert_eq!(navigation.tasks.len(), 1);
-    assert_eq!(navigation.tasks[0].task_id, task_session_id.to_string());
+    assert_eq!(restored_count, 0);
+    assert!(
+        subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot).is_none(),
+        "a child directory absent from the exact root mirror index must not be discovered by scanning"
+    );
 }
 
 /// Verifies preload read failures do not mark the root session as metadata-preloaded.

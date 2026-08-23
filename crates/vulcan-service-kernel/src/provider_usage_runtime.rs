@@ -12,9 +12,9 @@ use vulcan_workbench_model::{
 };
 use vulcan_workspace_store::workspace_store::{
     ProviderAccountUsageSnapshotRecord, ProviderRateLimitSnapshotRecord,
-    ProviderUsageAttemptRecord, ProviderUsageDashboard, load_provider_usage_dashboard,
-    persist_provider_account_usage_snapshot, persist_provider_rate_limit_snapshot,
-    persist_provider_usage_attempt_and_rebuild_daily,
+    ProviderUsageAttemptRecord, ProviderUsageDashboard, SessionRuntimeStatePersistenceProjection,
+    load_provider_usage_dashboard, persist_provider_account_usage_snapshot,
+    persist_provider_rate_limit_snapshot, persist_provider_usage_attempt_and_rebuild_daily,
 };
 
 /// Loads the native provider usage dashboard through the service-owned VLDB controller.
@@ -144,13 +144,29 @@ struct ProviderUsageBoundaryRollback {
     previous_updated_at: String,
 }
 
+/// History-free Provider boundary snapshot retained for exact persistence.
+/// 为精确持久化保留的无历史 Provider 边界快照。
+#[derive(Debug, Clone)]
+pub(crate) struct ProviderUsageBoundarySnapshot {
+    /// Exact typed ledger after the Provider boundary mutation.
+    /// Provider 边界变更后的精确强类型账本。
+    pub(crate) provider_call_ledger: SessionProviderCallLedger,
+    /// Pre-serialized main-session metadata; TaskSessions persist through TaskRuntime instead.
+    /// 预序列化的主会话元数据；TaskSession 改由 TaskRuntime 持久化。
+    pub(crate) runtime_state_projection: Option<SessionRuntimeStatePersistenceProjection>,
+    /// Whether the owner is a regular active or archived workspace session.
+    /// 归属是否为普通活动或归档工作区会话。
+    pub(crate) regular_session: bool,
+}
+
 /// Captures one session ledger immediately before applying a durable Provider boundary.
 /// 在应用可靠 Provider 边界前立即捕获一个会话账本。
 ///
 /// # Parameters
 /// 参数
-/// `state` owns the authoritative workspace and `session_id` selects the exact owner.
-/// `state` 持有权威工作区，`session_id` 选择精确归属。
+/// `state` owns the authoritative workspace, `session_id` selects the exact owner, and
+/// `regular_session` comes from the Provider telemetry owner contract.
+/// `state` 持有权威工作区，`session_id` 选择精确归属，`regular_session` 来自 Provider 遥测所有者契约。
 ///
 /// # Returns
 /// 返回值
@@ -159,6 +175,7 @@ struct ProviderUsageBoundaryRollback {
 fn capture_provider_usage_boundary_rollback(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
+    regular_session: bool,
 ) -> Result<ProviderUsageBoundaryRollback, String> {
     let guard = state
         .lock()
@@ -167,10 +184,12 @@ fn capture_provider_usage_boundary_rollback(
         .workspace_snapshot
         .as_ref()
         .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
-    let archived = workspace
-        .archived_sessions
-        .iter()
-        .any(|session| session.id == session_id);
+    // Archived ownership is resolved by the exact runtime-state key; session summaries are never scanned.
+    // 归档归属通过精确运行态键解析；绝不扫描会话摘要列表。
+    let archived = regular_session
+        && workspace
+            .archived_session_runtime_state
+            .contains_key(&session_id);
     let runtime_state = if archived {
         workspace.archived_session_runtime_state.get(&session_id)
     } else {
@@ -292,9 +311,12 @@ fn restore_provider_usage_runtime_state_after_persist_failure(
 pub(crate) fn apply_provider_request_usage_telemetry(
     state: &SharedServiceBridgeState,
     event: &ProviderRequestTelemetryEvent,
-) -> Result<Option<WorkspaceSnapshot>, String> {
+) -> Result<Option<ProviderUsageBoundarySnapshot>, String> {
     let provider_call_id = telemetry_string(event, "request_id")?;
     let identity = provider_call_identity_from_event(event)?;
+    // regularSession comes from the authoritative telemetry owner contract, not workspace-list discovery.
+    // regularSession 来自权威遥测所有者契约，而不是工作区列表发现。
+    let regular_session = provider_owner_is_regular_session(event)?;
     let changed_snapshot = {
         let mut guard = state
             .lock()
@@ -303,7 +325,7 @@ pub(crate) fn apply_provider_request_usage_telemetry(
             .workspace_snapshot
             .as_mut()
             .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
-        let runtime_state = session_runtime_state_mut(workspace, event.session_id);
+        let runtime_state = session_runtime_state_mut(workspace, event.session_id, regular_session);
         // The context-start identity is frozen with the prepared call before any network dispatch.
         // 上下文起始身份会在任何网络分派前随 prepared 调用一起冻结。
         let context_start_record_id = runtime_state.context_start_message_id.clone();
@@ -462,7 +484,23 @@ pub(crate) fn apply_provider_request_usage_telemetry(
             return Ok(None);
         }
         runtime_state.updated_at = current_unix_millis_text();
-        Some(workspace.clone())
+        // runtimeStateProjection serializes only lightweight metadata while the exact entry is borrowed;
+        // canonical conversation history and the transient retry body never cross this boundary.
+        // runtimeStateProjection 只在借用精确条目时序列化轻量元数据；
+        // 规范会话历史与临时重试正文绝不跨越该边界。
+        let runtime_state_projection = regular_session
+            .then(|| {
+                vulcan_workspace_store::workspace_store::project_single_session_runtime_state_update(
+                    event.session_id,
+                    runtime_state,
+                )
+            })
+            .transpose()?;
+        Some(ProviderUsageBoundarySnapshot {
+            provider_call_ledger: runtime_state.provider_call_ledger.clone(),
+            runtime_state_projection,
+            regular_session,
+        })
     };
     Ok(changed_snapshot)
 }
@@ -506,31 +544,25 @@ pub(crate) async fn process_provider_request_telemetry_event(
             | ProviderRequestTelemetryEventKind::Completed
     );
     let accounting_result = if is_usage_boundary {
-        let rollback = capture_provider_usage_boundary_rollback(state, session_id)?;
+        let regular_session = provider_owner_is_regular_session(&event)?;
+        let rollback =
+            capture_provider_usage_boundary_rollback(state, session_id, regular_session)?;
         // Keep accounting errors separate so the ordered Hook event is still delivered.
         // 将状态记账错误与 Hook 事件投递分离，确保有序 Hook 事件仍然发送。
         match apply_provider_request_usage_telemetry(state, &event) {
             Err(error) => Err(error),
             Ok(changed_snapshot) => {
                 let persistence_result = if let Some(snapshot) = changed_snapshot {
-                    let attempted_ledger = snapshot
-                        .session_runtime_state
-                        .get(&session_id)
-                        .or_else(|| snapshot.archived_session_runtime_state.get(&session_id))
-                        .map(|runtime_state| runtime_state.provider_call_ledger.clone())
-                        .ok_or_else(|| {
-                            format!(
-                                "Session `{session_id}` lost its Provider ledger before persistence."
-                            )
-                        })?;
                     // durableBudgetBaseline is derived before persistence so malformed ledger state can still use the in-memory rollback path.
                     // durableBudgetBaseline 在持久化前派生，使格式错误的账本状态仍可使用内存回滚路径。
-                    let durable_budget_baseline =
-                        if event.kind == ProviderRequestTelemetryEventKind::Completed {
-                            durable_provider_usage_baseline(&snapshot, session_id).map(Some)
-                        } else {
-                            Ok(None)
-                        };
+                    let durable_budget_baseline = if event.kind
+                        == ProviderRequestTelemetryEventKind::Completed
+                    {
+                        durable_provider_usage_baseline(&snapshot.provider_call_ledger, session_id)
+                            .map(Some)
+                    } else {
+                        Ok(None)
+                    };
                     let durable_persistence_result = match durable_budget_baseline {
                         Err(error) => Err(error),
                         Ok(durable_budget_baseline) => persist_provider_call_boundary(
@@ -552,7 +584,7 @@ pub(crate) async fn process_provider_request_telemetry_event(
                         restore_provider_usage_boundary_after_persist_failure(
                             state,
                             session_id,
-                            &attempted_ledger,
+                            &snapshot.provider_call_ledger,
                             rollback,
                         )
                         .map_err(|rollback_error| {
@@ -603,14 +635,9 @@ pub(crate) async fn process_provider_request_telemetry_event(
 /// Resolves the exact stable call record named by one durably persisted session ledger.
 /// 解析一份已持久化会话账本所指向的精确稳定调用记录。
 fn durable_provider_usage_baseline(
-    workspace_snapshot: &WorkspaceSnapshot,
+    ledger: &SessionProviderCallLedger,
     session_id: SessionId,
 ) -> Result<Option<SessionProviderCallRecord>, String> {
-    let ledger = &workspace_snapshot
-        .session_runtime_state
-        .get(&session_id)
-        .ok_or_else(|| format!("Session `{session_id}` has no projected Provider call ledger."))?
-        .provider_call_ledger;
     let Some(baseline_ref) = ledger.last_stable_context_baseline.as_ref() else {
         return Ok(None);
     };
@@ -648,24 +675,32 @@ fn durable_provider_usage_baseline(
 async fn persist_provider_call_boundary(
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
-    workspace_snapshot: &WorkspaceSnapshot,
+    snapshot: &ProviderUsageBoundarySnapshot,
     session_id: SessionId,
 ) -> Result<(), String> {
-    if workspace_snapshot_contains_regular_session(workspace_snapshot, session_id) {
-        return persist_workspace_session_update(
-            Some(state),
-            controller_runtime.clone(),
-            workspace_snapshot,
+    if snapshot.regular_session {
+        // Provider durability owns only state.json. Transcript JSONL and provider-facing runtime JSONL have independent projection owners.
+        // Provider 可靠边界仅拥有 state.json；转录 JSONL 与面向 Provider 的运行时 JSONL 各有独立投影归属。
+        let _ = invalidate_webui_session_runtime_only_persist_version(state, session_id)?;
+        let persist_lock = webui_session_persist_lock(session_id);
+        let _persist_guard = persist_lock.lock().await;
+        // session_directory is selected from retained exact locator fields before the state-only write.
+        // session_directory 在仅状态写入前从保留的精确定位字段中选定。
+        let session_directory = require_segmented_session_directory_from_state(
+            state,
+            &controller_runtime.data_root,
             session_id,
-        )
-        .await;
+        )?;
+        let projection = snapshot.runtime_state_projection.as_ref().ok_or_else(|| {
+            String::from("Main-session Provider boundary is missing its history-free projection.")
+        })?;
+        return vulcan_workspace_store::workspace_store::persist_projected_single_session_runtime_state_update(
+                session_directory,
+                session_id,
+                projection,
+            )
+            .await;
     }
-    let provider_call_ledger = workspace_snapshot
-        .session_runtime_state
-        .get(&session_id)
-        .ok_or_else(|| format!("TaskSession `{session_id}` has no projected runtime state."))?
-        .provider_call_ledger
-        .clone();
     let task_runtime = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?
@@ -677,7 +712,7 @@ async fn persist_provider_call_boundary(
                 "TaskSession `{session_id}` has no installed TaskRuntime for Usage persistence."
             )
         })?;
-    task_runtime.persist_task_provider_call_ledger(session_id, &provider_call_ledger)
+    task_runtime.persist_task_provider_call_ledger(session_id, &snapshot.provider_call_ledger)
 }
 
 /// Persists one started or terminal Provider boundary and always releases its execution gate.
@@ -881,16 +916,17 @@ pub(crate) async fn persist_native_provider_usage_attempt(
     Ok(())
 }
 
-/// Returns the active or archived runtime entry for one session without guessing ownership.
-/// 在不猜测归属的前提下返回一个会话的活动或归档运行态条目。
+/// Returns the exact runtime entry selected by the telemetry owner contract and retained maps.
+/// 根据遥测所有者契约与保留映射返回精确运行态条目。
 fn session_runtime_state_mut(
     workspace: &mut WorkspaceSnapshot,
     session_id: SessionId,
+    regular_session: bool,
 ) -> &mut SessionRuntimeStateEntry {
-    if workspace
-        .archived_sessions
-        .iter()
-        .any(|session| session.id == session_id)
+    if regular_session
+        && workspace
+            .archived_session_runtime_state
+            .contains_key(&session_id)
     {
         workspace
             .archived_session_runtime_state
@@ -901,6 +937,30 @@ fn session_runtime_state_mut(
             .session_runtime_state
             .entry(session_id)
             .or_default()
+    }
+}
+
+/// Resolves whether a Provider event belongs to a regular main-agent session.
+/// 解析 Provider 事件是否归属于普通主智能体会话。
+///
+/// # Parameters
+/// 参数
+/// `event` contains the authoritative versioned owner identity.
+/// `event` 包含权威的版本化所有者身份。
+///
+/// # Returns
+/// 返回值
+/// Returns `true` for `main_agent`, `false` for `subagent`, and rejects unknown contracts.
+/// 对 `main_agent` 返回 `true`，对 `subagent` 返回 `false`，并拒绝未知契约。
+fn provider_owner_is_regular_session(
+    event: &ProviderRequestTelemetryEvent,
+) -> Result<bool, String> {
+    match telemetry_string(event, "owner_kind")?.as_str() {
+        "main_agent" => Ok(true),
+        "subagent" => Ok(false),
+        owner_kind => Err(format!(
+            "Provider telemetry has unsupported owner_kind `{owner_kind}`."
+        )),
     }
 }
 
@@ -1504,13 +1564,36 @@ mod tests {
         assert!(completed_error.contains("conflicting terminal facts"));
     }
 
+    /// Verifies main-agent ownership projects lightweight state without session-summary discovery.
+    /// 验证主智能体归属无需发现会话摘要即可投影轻量状态。
+    #[test]
+    fn main_agent_provider_boundary_uses_owner_contract_without_session_summary() {
+        // sessionId deliberately has no matching active or archived session summary.
+        // sessionId 特意不提供匹配的活动或归档会话摘要。
+        let session_id = SessionId::new_v4();
+        let state = provider_usage_test_state(session_id);
+        let mut started =
+            provider_usage_test_event(ProviderRequestTelemetryEventKind::Started, session_id, None);
+        started.payload["owner_kind"] = Value::String(String::from("main_agent"));
+        started.payload["owner_id"] = Value::String(String::from("main-agent"));
+        started.payload["owner_name"] = Value::String(String::from("Main Agent"));
+
+        let snapshot = apply_provider_request_usage_telemetry(&state, &started)
+            .expect("main-agent boundary should use its owner contract")
+            .expect("started boundary should change the ledger");
+
+        assert!(snapshot.regular_session);
+        assert!(snapshot.runtime_state_projection.is_some());
+        assert!(snapshot.provider_call_ledger.calls.contains_key("call-1"));
+    }
+
     /// Verifies rollback removes a runtime entry created only for the failed boundary.
     /// 验证回滚会删除仅为失败边界临时创建的运行态条目。
     #[test]
     fn failed_boundary_removes_new_runtime_state_entry() {
         let session_id = SessionId::new_v4();
         let state = provider_usage_test_state(session_id);
-        let rollback = capture_provider_usage_boundary_rollback(&state, session_id)
+        let rollback = capture_provider_usage_boundary_rollback(&state, session_id, false)
             .expect("empty runtime map should still produce rollback facts");
         assert!(!rollback.previous_runtime_state_existed);
         let started =
@@ -1518,12 +1601,7 @@ mod tests {
         let changed_snapshot = apply_provider_request_usage_telemetry(&state, &started)
             .expect("started event should create projected task state")
             .expect("started event should change the workspace");
-        let attempted_ledger = changed_snapshot
-            .session_runtime_state
-            .get(&session_id)
-            .expect("new task runtime state should exist")
-            .provider_call_ledger
-            .clone();
+        let attempted_ledger = changed_snapshot.provider_call_ledger.clone();
 
         restore_provider_usage_boundary_after_persist_failure(
             &state,

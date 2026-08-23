@@ -2,11 +2,12 @@
 //! Provider 检查点与运行时注入审计辅助函数。
 
 use super::*;
+use std::path::Path;
 
 /// Records one provider request checkpoint into the segmented session runtime audit log.
 /// 将单个 Provider 请求检查点记录到分段会话运行时审计日志。
 pub(crate) fn record_webui_provider_request_checkpoint(
-    controller_runtime: &ControllerRuntimeHandle,
+    session_directory: &Path,
     session_id: SessionId,
     provider_family: &str,
     snapshot: &ProviderRequestSnapshot,
@@ -15,7 +16,7 @@ pub(crate) fn record_webui_provider_request_checkpoint(
     // event 保留 Provider 请求转换前解析出的精确 API 协议族。
     let event = provider_request_checkpoint_event(session_id, provider_family, snapshot);
     vulcan_workspace_store::workspace_store::record_session_runtime_audit_event(
-        &controller_runtime.data_root,
+        session_directory,
         session_id,
         event,
         &current_unix_millis_text(),
@@ -68,12 +69,12 @@ fn provider_request_checkpoint_event(
 /// Records one provider lowering repair into the segmented session runtime audit log.
 /// 将单个 Provider 转换修复记录到分段会话运行时审计日志。
 pub(crate) fn record_webui_provider_lowering_repair(
-    controller_runtime: &ControllerRuntimeHandle,
+    session_directory: &Path,
     session_id: SessionId,
     event: vulcan_context::RuntimeProviderLoweringRepairEvent,
 ) -> Result<(), String> {
     vulcan_workspace_store::workspace_store::record_session_runtime_audit_event(
-        &controller_runtime.data_root,
+        session_directory,
         session_id,
         vulcan_context::RuntimeLogEvent::ProviderLoweringRepair(event),
         &current_unix_millis_text(),
@@ -84,13 +85,13 @@ pub(crate) fn record_webui_provider_lowering_repair(
 /// Records one context-injection merge event into the segmented session runtime audit log.
 /// 将单个上下文注入合并事件记录到分段会话运行时审计日志。
 pub(crate) fn record_webui_runtime_injection_merged(
-    controller_runtime: &ControllerRuntimeHandle,
+    session_directory: &Path,
     session_id: SessionId,
     event: vulcan_context::RuntimeInjectionMergedEvent,
     timestamp: &str,
 ) -> Result<(), String> {
     vulcan_workspace_store::workspace_store::record_session_runtime_injection_merged(
-        &controller_runtime.data_root,
+        session_directory,
         session_id,
         event,
         timestamp,
@@ -101,7 +102,7 @@ pub(crate) fn record_webui_runtime_injection_merged(
 /// Records one provider response checkpoint into the segmented session runtime audit log.
 /// 将单个 Provider 响应检查点记录到分段会话运行时审计日志。
 pub(crate) fn record_webui_provider_response_checkpoint(
-    controller_runtime: &ControllerRuntimeHandle,
+    session_directory: &Path,
     report: &ExecutionRunReport,
 ) -> Result<(), String> {
     let Some(preparation) = report.preparation.as_ref() else {
@@ -145,7 +146,7 @@ pub(crate) fn record_webui_provider_response_checkpoint(
         },
     );
     vulcan_workspace_store::workspace_store::record_session_runtime_audit_event(
-        &controller_runtime.data_root,
+        session_directory,
         report.session_id,
         event,
         &current_unix_millis_text(),

@@ -283,9 +283,9 @@ pub(crate) async fn service_compact_selected_conversation_context(
             mcp_catalog: &mcp_catalog,
             provider_configuration: &agent_runtime.provider_configuration,
             public_ai_runtime: Some(agent_runtime.public_ai_runtime.as_ref()),
-            workspace_source: FullWorkbenchColdRefreshWorkspaceSource::Candidate(
+            workspace_source: FullWorkbenchColdRefreshWorkspaceSource::Candidate(Box::new(
                 workspace_snapshot,
-            ),
+            )),
             logs: &logs,
             subagent_navigation_mode: SubagentNavigationRefreshMode::Rebuild,
         },
@@ -493,19 +493,11 @@ async fn service_stop_conversation_run_owned(
             Ok(())
         },
     )?;
-    // workspaceSnapshot is captured after the atomic phase commit for exact child-task discovery.
-    // workspaceSnapshot 在原子阶段提交后捕获，用于精确发现子任务。
-    let workspace_snapshot = current_workspace_snapshot_from_shared_state(&state)?
-        .ok_or_else(|| String::from("停止运行时工作区尚未就绪。"))?;
     let running_subagent_task_states = if stop_running_subagents {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        running_webui_subagent_task_states_for_tree_from_cache(
-            &mut guard,
-            &workspace_snapshot,
-            target_session_id,
-        )
+        running_webui_subagent_task_states_for_tree_from_live_cache(&mut guard, target_session_id)
     } else {
         Vec::new()
     };
@@ -630,14 +622,11 @@ async fn service_stop_conversation_run_owned(
             )?;
         }
     }
-    // workspaceSnapshot captures the exact retained settlement, including the refrozen reference published above.
-    // workspaceSnapshot 捕获精确保留结算状态，并包含上方发布的重冻引用。
-    let workspace_snapshot = current_workspace_snapshot_from_shared_state(&state)?
-        .ok_or_else(|| String::from("停止持久化时工作区尚未就绪。"))?;
-    persist_workspace_session_update(
-        Some(&state),
+    // The write gate captures the exact retained settlement after the refrozen reference is published.
+    // 写入闸门会在重冻引用发布后捕获精确保留结算状态。
+    persist_latest_retained_workspace_session_update(
+        &state,
         controller_runtime.clone(),
-        &workspace_snapshot,
         target_session_id,
     )
     .await?;
@@ -698,7 +687,7 @@ pub(crate) async fn service_set_session_plan_mode(
         .as_deref()
         .and_then(parse_session_id)
         .ok_or_else(|| String::from("当前草稿会话尚未创建，暂时不能切换计划模式。"))?;
-    let (controller_runtime, workspace_snapshot, existing_plan_mode) = {
+    let (controller_runtime, existing_plan_mode) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -716,11 +705,7 @@ pub(crate) async fn service_set_session_plan_mode(
             .get(&session_id)
             .map(|runtime_state| runtime_state.plan_mode.clone())
             .unwrap_or_default();
-        (
-            controller_runtime,
-            workspace_snapshot.clone(),
-            existing_plan_mode,
-        )
+        (controller_runtime, existing_plan_mode)
     };
     let updated_at = current_unix_millis_text();
     let mut next_plan_mode = existing_plan_mode;
@@ -748,11 +733,11 @@ pub(crate) async fn service_set_session_plan_mode(
         session_id,
         SessionAddonNamespace::WorkMode,
     )?;
-    let addon_persist_lock = webui_workspace_persist_lock();
+    let addon_persist_lock = webui_session_persist_lock(session_id);
     let _addon_persist_guard = addon_persist_lock.lock().await;
     let persisted_addon_state = persist_workspace_session_addon_state_update(
+        &state,
         controller_runtime,
-        workspace_snapshot,
         session_id,
         addon_state,
     )
@@ -811,7 +796,7 @@ pub(crate) async fn service_set_session_vmm_policy(
         .and_then(parse_session_id)
         .ok_or_else(|| String::from("当前草稿会话尚未创建，暂时不能切换 VMM 记忆策略。"))?;
     let policy_value = session_vmm_policy_mode_from_request(&request.mode)?;
-    let (controller_runtime, workspace_snapshot, mut next_vmm) = {
+    let (controller_runtime, mut next_vmm) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -829,7 +814,7 @@ pub(crate) async fn service_set_session_vmm_policy(
             .get(&session_id)
             .map(|runtime_state| runtime_state.vmm.clone())
             .unwrap_or_default();
-        (controller_runtime, workspace_snapshot.clone(), next_vmm)
+        (controller_runtime, next_vmm)
     };
     match request.policy.trim().to_ascii_lowercase().as_str() {
         "precheck" | "precheck_enabled" | "precheck-injection" | "precheck_injection" => {
@@ -845,11 +830,11 @@ pub(crate) async fn service_set_session_vmm_policy(
     let _ =
         addon_state.set_typed_namespace(SessionAddonNamespace::Vmm, &next_vmm, updated_at.clone());
     invalidate_webui_session_addon_persist_version(&state, session_id, SessionAddonNamespace::Vmm)?;
-    let addon_persist_lock = webui_workspace_persist_lock();
+    let addon_persist_lock = webui_session_persist_lock(session_id);
     let _addon_persist_guard = addon_persist_lock.lock().await;
     persist_workspace_session_addon_state_update(
+        &state,
         controller_runtime,
-        workspace_snapshot,
         session_id,
         addon_state,
     )
@@ -858,15 +843,11 @@ pub(crate) async fn service_set_session_vmm_policy(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let provider_configuration = guard
-            .agent_runtime
-            .as_ref()
-            .map(|runtime| runtime.provider_configuration.clone());
         let vmm_hook_runtime = guard
             .agent_runtime
             .as_ref()
             .map(|runtime| runtime.vmm_hook_runtime.clone());
-        let refreshed_workspace_snapshot = {
+        {
             let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
                 String::from("service is still starting; workspace snapshot is not ready")
             })?;
@@ -879,15 +860,13 @@ pub(crate) async fn service_set_session_vmm_policy(
                 });
             runtime_state.vmm = next_vmm;
             runtime_state.updated_at = updated_at.clone();
-            workspace.clone()
-        };
-        if let (Some(vmm_hook_runtime), Some(provider_configuration)) =
-            (vmm_hook_runtime, provider_configuration)
-        {
-            vmm_hook_runtime.replace_snapshot(build_vmm_hook_config_snapshot(
-                &provider_configuration,
-                &refreshed_workspace_snapshot,
-            ))?;
+            if let Some(vmm_hook_runtime) = vmm_hook_runtime {
+                refresh_exact_vmm_hook_session_projection(
+                    &vmm_hook_runtime,
+                    workspace,
+                    session_id,
+                )?;
+            }
         }
     }
     emit_session_addons_changed_delta(&app, &state, session_id)
@@ -927,9 +906,9 @@ pub(crate) async fn service_set_session_context_compaction_window(
     let configuration_transaction = begin_public_ai_configuration_transaction().await;
     // addonPersistGuard makes the runtime-controls snapshot authoritative after older queued writes.
     // addonPersistGuard 使运行控制快照在旧排队写入之后保持权威。
-    let addon_persist_lock = webui_workspace_persist_lock();
+    let addon_persist_lock = webui_session_persist_lock(session_id);
     let _addon_persist_guard = addon_persist_lock.lock().await;
-    let (controller_runtime, workspace_snapshot, addon_state) = {
+    let (controller_runtime, addon_state) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -998,16 +977,18 @@ pub(crate) async fn service_set_session_context_compaction_window(
             &runtime_controls,
             updated_at.clone(),
         );
-        (controller_runtime, workspace_snapshot.clone(), addon_state)
+        (controller_runtime, addon_state)
     };
     invalidate_webui_session_addon_persist_version(
         &state,
         session_id,
         SessionAddonNamespace::RuntimeControls,
     )?;
+    let addon_persist_lock = webui_session_persist_lock(session_id);
+    let _addon_persist_guard = addon_persist_lock.lock().await;
     let persisted_addon_state = persist_workspace_session_addon_state_update(
+        &state,
         controller_runtime,
-        workspace_snapshot,
         session_id,
         addon_state,
     )
@@ -1089,9 +1070,9 @@ pub(crate) async fn service_set_session_output_style(
         session_id,
         SessionAddonNamespace::OutputStyle,
     )?;
-    let addon_persist_lock = webui_workspace_persist_lock();
+    let addon_persist_lock = webui_session_persist_lock(session_id);
     let _addon_persist_guard = addon_persist_lock.lock().await;
-    let (workspace_snapshot, addon_state) = {
+    let addon_state = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -1110,11 +1091,11 @@ pub(crate) async fn service_set_session_output_style(
             &next_output_style,
             updated_at.clone(),
         );
-        (workspace_snapshot.clone(), addon_state)
+        addon_state
     };
     let persisted_addon_state = persist_workspace_session_addon_state_update(
+        &state,
         controller_runtime,
-        workspace_snapshot,
         session_id,
         addon_state,
     )
@@ -1184,23 +1165,26 @@ fn session_vmm_policy_mode_from_request(mode: &str) -> Result<Option<bool>, Stri
 /// A persistent hidden-user injection that clears on context compaction, or `None` when nothing model-visible changed.
 /// 调用方进入附属状态写入队列后，持久化单个完整会话附属状态文档。
 pub(crate) async fn persist_workspace_session_addon_state_update(
+    state: &SharedServiceBridgeState,
     controller_runtime: ControllerRuntimeHandle,
-    workspace_snapshot: WorkspaceSnapshot,
     session_id: SessionId,
     addon_state: SessionAddonState,
 ) -> Result<SessionAddonState, String> {
-    let Some((session, archived)) =
-        workspace_session_with_archive_status(&workspace_snapshot, session_id)
-            .map(|(session, archived)| (session.clone(), archived))
-    else {
-        return Err(format!("未找到要保存附属状态的会话：{session_id}"));
+    // sessionDirectory comes only from retained exact locator fields while the service state is borrowed.
+    // sessionDirectory 仅在借用服务状态期间从保留的精确定位字段获得。
+    let session_directory = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        require_segmented_session_directory_for_retained_session(
+            &guard,
+            &controller_runtime.data_root,
+            session_id,
+        )?
     };
-    let task_projects = workspace_task_projects_for_persistence(&workspace_snapshot);
-    vulcan_workspace_store::workspace_store::persist_single_session_addon_state_update(
-        controller_runtime,
-        &task_projects,
-        &session,
-        archived,
+    vulcan_workspace_store::workspace_store::persist_single_session_addon_state_update_in_directory(
+        session_directory,
+        session_id,
         &addon_state,
     )
     .await

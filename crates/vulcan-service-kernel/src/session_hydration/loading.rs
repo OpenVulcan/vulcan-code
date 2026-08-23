@@ -2,6 +2,7 @@
 //! 会话水合 loading 辅助逻辑。
 
 use super::*;
+use crate::segmented_session_directory_for_workspace_session;
 
 pub(crate) async fn load_workspace_for_submission(
     controller_runtime: ControllerRuntimeHandle,
@@ -433,8 +434,18 @@ async fn persist_hydrated_execution_retry_runtime_state(
         .get(&session_id)
         .cloned()
         .ok_or_else(|| String::from("Recovered retry runtime state disappeared."))?;
+    // session_directory derives from the already-hydrated session summary without querying SQLite or scanning files.
+    // session_directory 从已水合会话摘要派生，不查询 SQLite，也不扫描文件。
+    let session_directory = segmented_session_directory_for_workspace_session(
+        &controller_runtime.data_root,
+        workspace_snapshot,
+        session_id,
+    )
+    .ok_or_else(|| {
+        format!("Recovered retry session `{session_id}` has no exact hydrated storage locator.")
+    })?;
     vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
-        controller_runtime.clone(),
+        session_directory,
         session_id,
         &runtime_state,
     )
@@ -595,6 +606,18 @@ async fn recover_interrupted_execution_retry_snapshot(
     workspace_snapshot: &mut WorkspaceSnapshot,
     session_id: SessionId,
 ) -> Result<(), String> {
+    // sessionDirectory is resolved once from the retained main-session summary; recovery never enumerates sibling directories.
+    // sessionDirectory 浠庝繚鐣欎富浼氳瘽鎽樿涓竴娆℃€цВ鏋愶紱鎭㈠杩囩▼姘镐笉鏋氫妇鍚岀骇鐩綍銆?
+    let session_directory = segmented_session_directory_for_workspace_session(
+        &controller_runtime.data_root,
+        workspace_snapshot,
+        session_id,
+    )
+    .ok_or_else(|| {
+        format!(
+            "Session `{session_id}` has no exact storage locator during retry recovery; directory scanning is disabled."
+        )
+    })?;
     // reference is the exact lightweight pointer loaded from this session's durable runtime state.
     // reference 是从当前会话可靠运行态加载的精确轻量指针。
     let reference = workspace_snapshot
@@ -629,7 +652,7 @@ async fn recover_interrupted_execution_retry_snapshot(
     // snapshot is validated for every executable Frozen or crash-orphaned Claimed pointer before UI projection.
     // snapshot 会在投影到界面前校验每个可执行 Frozen 或崩溃遗留 Claimed 指针。
     let mut snapshot = match vulcan_workspace_store::workspace_store::load_execution_retry_snapshot(
-        &controller_runtime.data_root,
+        &session_directory,
         session_id,
         &reference,
     ) {
@@ -802,8 +825,8 @@ async fn recover_interrupted_execution_retry_snapshot(
     // updatedReference is published only after the complete refrozen body is durable.
     // updatedReference 仅在完整重冻正文可靠写入后发布。
     let updated_reference =
-        match vulcan_workspace_store::workspace_store::persist_execution_retry_snapshot(
-            &controller_runtime.data_root,
+        match vulcan_workspace_store::workspace_store::persist_interrupted_execution_retry_snapshot(
+            &session_directory,
             session_id,
             &snapshot,
         ) {
@@ -830,6 +853,7 @@ async fn recover_interrupted_execution_retry_snapshot(
         .session_runtime_state
         .get_mut(&session_id)
         .ok_or_else(|| String::from("Recovered retry runtime state disappeared."))?;
+    runtime_state.transient_execution_retry_snapshot = Some(std::sync::Arc::new(snapshot));
     runtime_state.execution_retry_snapshot = Some(updated_reference);
     // The mirrored cache is reopened only after the new body and every live ledger invariant agree.
     // 只有新正文与全部实时账本不变量一致后，才重新开启镜像缓存。

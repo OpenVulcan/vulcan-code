@@ -248,6 +248,140 @@ pub(in crate::workspace_store) fn append_runtime_log_tail_with_owned_lock<'guard
     Ok(snapshot.metadata)
 }
 
+/// Validates the exact active runtime segment against its constant-size metadata boundary.
+/// 针对常量大小元数据边界验证精确的活动运行时分段。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the exact segmented session directory and `metadata` is its validated runtime metadata.
+/// `session_dir` 是精确的分段会话目录，`metadata` 是其已验证运行时元数据。
+///
+/// # Returns
+/// 返回值
+/// The exact regular-file path when its durable byte length matches metadata, otherwise a strict error.
+/// 当耐久字节长度与元数据一致时返回精确普通文件路径，否则返回严格错误。
+pub(in crate::workspace_store) fn validate_runtime_segment_append_boundary(
+    session_dir: &Path,
+    metadata: &RuntimeLogMetadata,
+) -> Result<PathBuf, String> {
+    // segment is unique because metadata shape validation enforces one fixed active segment.
+    // segment 具有唯一性，因为元数据结构校验强制使用一个固定活动分段。
+    let segment = metadata
+        .segments
+        .first()
+        .ok_or_else(|| String::from("Runtime metadata has no active segment during append."))?;
+    // active_segment_path is resolved directly; no directory enumeration is permitted.
+    // active_segment_path 直接解析；不允许进行目录枚举。
+    let active_segment_path = session_dir.join(&metadata.active_segment);
+    let active_segment_metadata = fs::symlink_metadata(&active_segment_path).map_err(|error| {
+        format!(
+            "Failed to open required runtime JSONL segment `{}`: {error}",
+            active_segment_path.display()
+        )
+    })?;
+    if active_segment_metadata.file_type().is_symlink() || !active_segment_metadata.is_file() {
+        return Err(format!(
+            "Required runtime JSONL segment is not a regular file: {}",
+            active_segment_path.display()
+        ));
+    }
+    if active_segment_metadata.len() != segment.byte_len {
+        return Err(format!(
+            "Runtime segment byte length mismatch before bounded append: metadata {}, file {}.",
+            segment.byte_len,
+            active_segment_metadata.len()
+        ));
+    }
+    Ok(active_segment_path)
+}
+
+/// Appends a bounded runtime tail using only exact metadata and the fixed active segment.
+/// 仅使用精确元数据与固定活动分段追加有界运行时尾部。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the exact session directory, `metadata` is the authoritative append boundary,
+/// `tail` is the contiguous event tail, and `_append_guard` proves serialization with other writers.
+/// `session_dir` 是精确会话目录，`metadata` 是权威追加边界，`tail` 是连续事件尾部，
+/// `_append_guard` 证明该操作与其他写入者保持串行。
+///
+/// # Returns
+/// 返回值
+/// Updated metadata after durable append, or unchanged metadata for an empty tail.
+/// 耐久追加后返回更新元数据；尾部为空时返回未变元数据。
+pub(in crate::workspace_store) fn append_runtime_log_tail_from_metadata_with_owned_lock(
+    session_dir: &Path,
+    mut metadata: RuntimeLogMetadata,
+    tail: &[RuntimeLogEventLine],
+    _append_guard: &std::sync::MutexGuard<'_, ()>,
+) -> Result<RuntimeLogMetadata, String> {
+    let active_segment_path = validate_runtime_segment_append_boundary(session_dir, &metadata)?;
+    let Some(last_tail_line) = tail.last() else {
+        return Ok(metadata);
+    };
+    // next_seq validates every candidate before the first append byte is written.
+    // next_seq 在写入首个追加字节前验证每个候选事件。
+    let next_seq = validate_runtime_log_tail(&metadata, tail)?;
+    // encoded_tail preflights all serialization while metadata still references the old boundary.
+    // encoded_tail 在元数据仍指向旧边界时预检全部序列化。
+    let _encoded_tail = encode_json_lines(tail)?;
+    invalidate_runtime_index_cache(session_dir)?;
+    append_json_lines_file(&active_segment_path, tail)?;
+    let persisted_byte_len = fs::symlink_metadata(&active_segment_path)
+        .map_err(|error| {
+            format!(
+                "Failed to inspect appended runtime segment `{}`: {error}",
+                active_segment_path.display()
+            )
+        })?
+        .len();
+    let appended_line_count = u64::try_from(tail.len())
+        .map_err(|_| String::from("Runtime append tail exceeds u64 metadata capacity."))?;
+    metadata.next_seq = next_seq;
+    metadata.updated_at = last_tail_line.created_at.clone();
+    // segment is reacquired mutably after all immutable boundary checks complete.
+    // segment 在全部不可变边界校验完成后重新以可变方式取得。
+    let segment = metadata
+        .segments
+        .first_mut()
+        .ok_or_else(|| String::from("Runtime metadata has no active segment after append."))?;
+    segment.line_count = segment
+        .line_count
+        .checked_add(appended_line_count)
+        .ok_or_else(|| String::from("Runtime line count exceeds u64 metadata capacity."))?;
+    segment.byte_len = persisted_byte_len;
+    segment.end_seq = Some(last_tail_line.seq);
+    segment.updated_at = Some(last_tail_line.created_at.clone());
+    write_runtime_metadata(session_dir, &metadata)?;
+    Ok(metadata)
+}
+
+/// Invalidates the fixed rebuildable runtime index without opening historical JSONL bytes.
+/// 在不打开历史 JSONL 字节的情况下使固定的可重建运行时索引失效。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the exact segmented session directory that owns the index cache.
+/// `session_dir` 是拥有索引缓存的精确分段会话目录。
+///
+/// # Returns
+/// 返回值
+/// Success after exact removal or confirmed absence, otherwise a path-aware filesystem error.
+/// 精确删除或确认缺失后返回成功，否则返回包含路径的文件系统错误。
+pub(in crate::workspace_store) fn invalidate_runtime_index_cache(
+    session_dir: &Path,
+) -> Result<(), String> {
+    let index_path = runtime_index_path(session_dir);
+    match fs::remove_file(&index_path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "Failed to invalidate runtime index cache `{}`: {error}",
+            index_path.display()
+        )),
+    }
+}
+
 /// Validates an append tail against one already validated runtime snapshot.
 /// 针对一个已验证运行时快照校验追加尾部。
 ///
@@ -538,7 +672,107 @@ pub(in crate::workspace_store) fn validate_runtime_metadata_shape(
             metadata.next_seq
         ));
     }
+    if metadata.conversation_checkpoint_version > SEGMENTED_RUNTIME_PROJECTION_CHECKPOINT_VERSION {
+        return Err(format!(
+            "Unsupported runtime conversation checkpoint version: {}.",
+            metadata.conversation_checkpoint_version
+        ));
+    }
+    if metadata.conversation_checkpoint_version == SEGMENTED_RUNTIME_PROJECTION_CHECKPOINT_VERSION {
+        if metadata.conversation_event_count > segment.line_count {
+            return Err(format!(
+                "Runtime conversation event count {} exceeds segment line count {}.",
+                metadata.conversation_event_count, segment.line_count
+            ));
+        }
+        if metadata.conversation_anchor_message_index > metadata.conversation_message_count {
+            return Err(format!(
+                "Runtime conversation anchor message index {} exceeds message count {}.",
+                metadata.conversation_anchor_message_index, metadata.conversation_message_count
+            ));
+        }
+        if metadata.conversation_anchor_event_count > metadata.conversation_event_count {
+            return Err(format!(
+                "Runtime conversation anchor event count {} exceeds event count {}.",
+                metadata.conversation_anchor_event_count, metadata.conversation_event_count
+            ));
+        }
+        match (
+            metadata.conversation_message_count,
+            metadata.conversation_tail_message_sha256.as_deref(),
+        ) {
+            (0, None) => {}
+            (0, Some(_)) => {
+                return Err(String::from(
+                    "Empty runtime conversation checkpoint cannot declare a tail-message digest.",
+                ));
+            }
+            (_, Some(digest)) => validate_runtime_checkpoint_sha256(
+                digest,
+                "runtime conversation tail-message digest",
+            )?,
+            (_, None) => {
+                return Err(String::from(
+                    "Non-empty runtime conversation checkpoint must declare a tail-message digest.",
+                ));
+            }
+        }
+        match (
+            metadata.conversation_anchor_event_count,
+            metadata.conversation_anchor_projection_sha256.as_deref(),
+        ) {
+            (0, None) => {}
+            (0, Some(_)) => {
+                return Err(String::from(
+                    "Empty runtime conversation anchor cannot declare a projection digest.",
+                ));
+            }
+            (_, Some(digest)) => validate_runtime_checkpoint_sha256(
+                digest,
+                "runtime conversation anchor-projection digest",
+            )?,
+            (_, None) => {
+                return Err(String::from(
+                    "Non-empty runtime conversation anchor must declare a projection digest.",
+                ));
+            }
+        }
+    }
+    if metadata
+        .applied_compaction_id
+        .as_deref()
+        .is_some_and(|compaction_id| compaction_id.trim().is_empty())
+    {
+        return Err(String::from(
+            "Runtime applied compaction identifier cannot be empty.",
+        ));
+    }
     Ok(())
+}
+
+/// Validates one lowercase hexadecimal SHA-256 checkpoint digest.
+/// 验证一个小写十六进制 SHA-256 检查点摘要。
+///
+/// # Parameters
+/// 参数
+/// `digest` is the persisted digest text and `label` identifies the failing metadata field.
+/// `digest` 是持久化摘要文本，`label` 标识失败的元数据字段。
+///
+/// # Returns
+/// 返回值
+/// Success for exactly 64 lowercase hexadecimal bytes, otherwise an actionable metadata error.
+/// 对恰好 64 个小写十六进制字节返回成功，否则返回可操作的元数据错误。
+fn validate_runtime_checkpoint_sha256(digest: &str, label: &str) -> Result<(), String> {
+    if digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Ok(());
+    }
+    Err(format!(
+        "Invalid {label}; expected 64 lowercase hexadecimal characters."
+    ))
 }
 
 /// Writes the rebuildable runtime index for one segmented session directory.

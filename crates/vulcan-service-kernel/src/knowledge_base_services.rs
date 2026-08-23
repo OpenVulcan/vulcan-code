@@ -3387,14 +3387,14 @@ pub(super) async fn service_set_session_knowledge_libraries(
         return Err(format!("知识库未授权给当前项目：{denied}"));
     }
 
-    let (controller_runtime, workspace_snapshot) = {
+    let controller_runtime = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
             String::from("service is still starting; controller runtime is not ready")
         })?;
-        let workspace_snapshot = guard.workspace_snapshot.clone().ok_or_else(|| {
+        let workspace_snapshot = guard.workspace_snapshot.as_ref().ok_or_else(|| {
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
         if owning_project_id_for_session(&workspace_snapshot, session_id).as_deref()
@@ -3404,7 +3404,7 @@ pub(super) async fn service_set_session_knowledge_libraries(
                 "当前会话与请求项目不匹配，已拒绝保存知识库选择。",
             ));
         }
-        (controller_runtime, workspace_snapshot)
+        controller_runtime
     };
     let selection = SessionKnowledgeLibrarySelection {
         mode,
@@ -3424,11 +3424,11 @@ pub(super) async fn service_set_session_knowledge_libraries(
         session_id,
         SessionAddonNamespace::KnowledgeBases,
     )?;
-    let persist_lock = webui_workspace_persist_lock();
+    let persist_lock = webui_session_persist_lock(session_id);
     let _persist_guard = persist_lock.lock().await;
     let persisted = persist_workspace_session_addon_state_update(
+        &state,
         controller_runtime,
-        workspace_snapshot,
         session_id,
         addon_state,
     )

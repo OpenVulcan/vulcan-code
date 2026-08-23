@@ -1,4 +1,5 @@
 import React from "react";
+import { toast } from "sonner";
 import {
   enqueueComposerPersistence,
   flushLatestComposerPersistence,
@@ -67,6 +68,7 @@ import { useComposerSlashCommands } from "@/components/composer/composer-panel/u
 import { useComposerSendController } from "@/components/composer/composer-panel/use-composer-send-controller";
 import { useComposerPlanMode } from "@/components/composer/composer-panel/use-composer-plan-mode";
 import { useComposerDraftSessionSettings } from "@/components/composer/composer-panel/use-composer-draft-session-settings";
+import { useComposerAttachmentPreparation } from "@/components/composer/composer-panel/use-composer-attachment-preparation";
 export { ComposerSessionProgressCapsule } from "@/components/composer/composer-panel/progress-capsule";
 // ComposerPanel renders the first-version message input surface.
 // ComposerPanel 渲染第一版消息输入区域。
@@ -315,17 +317,68 @@ export function ComposerPanel(props: {
     onSelectModel: props.onSelectWorkbenchModel,
     onSelectReasoningEffort: props.onSelectWorkbenchReasoningEffort,
   });
+  // activeModelSelection freezes the exact rendered route tuple for draft media planning and final submission.
+  // activeModelSelection 为草稿媒体规划与最终提交冻结当前渲染的精确路线元组。
+  const activeModelSelection = React.useMemo(() => activeModelChoice
+    ? {
+        providerId: activeModelChoice.providerId,
+        modelId: activeModelChoice.modelId,
+        connectionId: activeModelChoice.connectionId,
+      }
+    : null, [activeModelChoice]);
   // pendingModelSelectionRef retains the latest model/account persistence request until submission.
   // pendingModelSelectionRef 将最新模型或账号持久化请求保留到提交边界。
   const pendingModelSelectionRef = React.useRef<Promise<boolean> | null>(null);
+  // modelSelectionPersistencePending blocks media planning while an optimistic model is not durable.
+  // modelSelectionPersistencePending 在乐观模型尚未持久化期间阻止媒体规划。
+  const [modelSelectionPersistencePending, setModelSelectionPersistencePending] = React.useState(false);
+  // pendingSecondaryRouteSelectionRef retains the latest provider/model route write until submission.
+  // pendingSecondaryRouteSelectionRef 将最新供应商/模型路由写入保留到提交边界。
+  const pendingSecondaryRouteSelectionRef = React.useRef<Promise<boolean> | null>(null);
+  // secondaryRoutePersistencePending blocks media planning until the route write reaches a fixed point.
+  // secondaryRoutePersistencePending 在路由写入到达不动点前阻止媒体规划。
+  const [secondaryRoutePersistencePending, setSecondaryRoutePersistencePending] = React.useState(false);
+  // secondaryRoutePersistenceQueueRef orders overlapping route writes by user intent.
+  // secondaryRoutePersistenceQueueRef 按用户意图顺序排列重叠的二级路由写入。
+  const secondaryRoutePersistenceQueueRef = React.useRef<Promise<void>>(Promise.resolve());
+  // routePlanningRevision is the backend-resolved content identity of the rendered executable route.
+  // routePlanningRevision 是后端解析出的当前可执行路线内容身份。
+  const routePlanningRevision = activeProviderModelSummary?.model.routeRevision?.trim() ?? "";
+  // routeSelectionPending closes the optimistic-selection window before any upload plan is issued.
+  // routeSelectionPending 在签发任何上传计划前封闭乐观选择窗口。
+  const routeSelectionPending = modelSelectionPersistencePending
+    || secondaryRoutePersistencePending;
+  // attachmentPreparation owns draft upload, retry, cancellation, and send-barrier state.
+  // attachmentPreparation 管理草稿上传、重试、取消与发送屏障状态。
+  const attachmentPreparation = useComposerAttachmentPreparation({
+    draftSlotKey,
+    projectId: props.projectId,
+    conversationId: props.conversationId,
+    modelSelection: activeModelSelection,
+    routePlanningRevision,
+    routeSelectionPending,
+    attachments,
+  });
+  // handleRemoveComposerAttachment cancels the stable transfer before removing the canonical draft asset.
+  // handleRemoveComposerAttachment 在移除规范草稿资源前取消稳定传输。
+  const handleRemoveComposerAttachment = React.useCallback((index: number) => {
+    const attachmentId = attachments[index]?.assetId?.trim();
+    if (attachmentId) {
+      void attachmentPreparation.cancel(attachmentId);
+    }
+    void attachmentPreparation.reconcileDraft(attachments.filter((_, currentIndex) => currentIndex !== index));
+    removeComposerAttachment(index);
+  }, [attachmentPreparation, attachments, removeComposerAttachment]);
   // handlePersistedModelChoiceChange tracks the exact optimistic write started by either picker.
   // handlePersistedModelChoiceChange 跟踪任一选择器启动的精确乐观写入。
   const handlePersistedModelChoiceChange = React.useCallback((choice: ModelPickerChoice) => {
     const pending = handleModelChoiceChange(choice);
     pendingModelSelectionRef.current = pending;
+    setModelSelectionPersistencePending(true);
     void pending.finally(() => {
       if (pendingModelSelectionRef.current === pending) {
         pendingModelSelectionRef.current = null;
+        setModelSelectionPersistencePending(false);
       }
     });
     return pending;
@@ -333,12 +386,6 @@ export function ComposerPanel(props: {
   // secondaryRouteProviderId is the exact provider adapter id, not the credential-scoped row id.
   // secondaryRouteProviderId 是精确的供应商适配器标识，而不是凭据作用域行标识。
   const secondaryRouteProviderId = activeProviderModelSummary?.provider.sourceProviderId?.trim() ?? "";
-  // pendingSecondaryRouteSelectionRef retains the latest provider/model route write until submission.
-  // pendingSecondaryRouteSelectionRef 将最新供应商/模型路由写入保留到提交边界。
-  const pendingSecondaryRouteSelectionRef = React.useRef<Promise<boolean> | null>(null);
-  // secondaryRoutePersistenceQueueRef orders overlapping route writes by user intent.
-  // secondaryRoutePersistenceQueueRef 按用户意图顺序排列重叠的二级路由写入。
-  const secondaryRoutePersistenceQueueRef = React.useRef<Promise<void>>(Promise.resolve());
   // handleSecondaryRouteSelection tracks the exact persistence request started by the route control.
   // handleSecondaryRouteSelection 跟踪路由控件启动的精确持久化请求。
   const handleSecondaryRouteSelection = React.useCallback((
@@ -357,9 +404,11 @@ export function ComposerPanel(props: {
     // pending 向提交屏障暴露精确的排队结果。
     const pending = queuedWrite.result;
     pendingSecondaryRouteSelectionRef.current = pending;
+    setSecondaryRoutePersistencePending(true);
     void pending.finally(() => {
       if (pendingSecondaryRouteSelectionRef.current === pending) {
         pendingSecondaryRouteSelectionRef.current = null;
+        setSecondaryRoutePersistencePending(false);
       }
     });
     return pending;
@@ -411,15 +460,10 @@ export function ComposerPanel(props: {
     draftSlotKey,
     draftInput,
     attachments,
+    projectAttachmentsForSubmission: attachmentPreparation.projectForSubmission,
     executionMode,
     reasoningEffort: submittedReasoningEffort,
-    modelSelection: activeModelChoice
-      ? {
-          providerId: activeModelChoice.providerId,
-          modelId: activeModelChoice.modelId,
-          connectionId: activeModelChoice.connectionId,
-        }
-      : null,
+    modelSelection: activeModelSelection,
     captureSessionSettings: draftSessionSettings.captureSubmissionSettings,
     clearSessionSettings: draftSessionSettings.clearSubmissionSettings,
     beforeSubmit: flushComposerRouteSelections,
@@ -435,8 +479,22 @@ export function ComposerPanel(props: {
   // handleComposerSend 在无效能力路由重新确认前阻止用户提交。
   const handleComposerSend = React.useCallback(async () => {
     if (providerToolSettingsBlocked && !props.isConversationRunning) return;
+    if (attachmentPreparation.blocksSubmission) {
+      toast.info(t("composer.attachment.preparationBlocked").replace(
+        "{count}",
+        String(attachmentPreparation.blockingCount),
+      ));
+      return;
+    }
     await sendDraft();
-  }, [props.isConversationRunning, providerToolSettingsBlocked, sendDraft]);
+  }, [
+    attachmentPreparation.blockingCount,
+    attachmentPreparation.blocksSubmission,
+    props.isConversationRunning,
+    providerToolSettingsBlocked,
+    sendDraft,
+    t,
+  ]);
 
   // handleOutputStyleChange keeps draft changes local and routes persisted-session changes through the safe boundary API.
   // handleOutputStyleChange 将草稿修改保留在本地，并通过安全边界 API 路由已持久化会话修改。
@@ -460,9 +518,11 @@ export function ComposerPanel(props: {
     if (!entry) {
       return;
     }
-    replaceDraft(entry.prompt, entry.attachments ?? []);
+    const replacementAttachments = entry.attachments ?? [];
+    void attachmentPreparation.reconcileDraft(replacementAttachments);
+    replaceDraft(entry.prompt, replacementAttachments);
     window.requestAnimationFrame(() => composerTextareaRef.current?.focus({ preventScroll: true }));
-  }, [props.onEditPendingPrompt, props.onTrace, replaceDraft]);
+  }, [attachmentPreparation, props.onEditPendingPrompt, props.onTrace, replaceDraft]);
 
   // Goal controller state and actions isolate goal lifecycle orchestration from the composer input flow.
   // 目标控制器状态与操作将目标生命周期编排从输入区输入流程中隔离出来。
@@ -598,12 +658,25 @@ export function ComposerPanel(props: {
           type="file"
         />
         {attachments.length ? (
-          <ComposerPanelAttachmentPreviewStrip
-            attachments={attachments}
-            onOpenMedia={setComposerMediaPlayer}
-            onRemove={removeComposerAttachment}
-            resolveMediaSourceUrl={props.resolveMediaSourceUrl}
-          />
+          <>
+            <ComposerPanelAttachmentPreviewStrip
+              attachments={attachments}
+              preparations={attachmentPreparation.preparations}
+              progresses={attachmentPreparation.progresses}
+              onOpenMedia={setComposerMediaPlayer}
+              onRemove={handleRemoveComposerAttachment}
+              onRetry={(attachmentId) => void attachmentPreparation.retry(attachmentId)}
+              resolveMediaSourceUrl={props.resolveMediaSourceUrl}
+            />
+            {attachmentPreparation.metadataOnlyCount > 0 ? (
+              <p className="composer-attachment-degradation-summary" role="status">
+                {t("composer.attachment.metadataOnlyCount").replace(
+                  "{count}",
+                  String(attachmentPreparation.metadataOnlyCount),
+                )}
+              </p>
+            ) : null}
+          </>
         ) : null}
         {slashPanelVisible ? (
           <ComposerSlashCommandPanel
@@ -704,7 +777,7 @@ export function ComposerPanel(props: {
             modelContextLimit={activeProviderModelSummary?.model.contextLimit ?? null}
             draftInput={draftInput}
             isConversationRunning={props.isConversationRunning}
-            sendBlocked={providerToolSettingsBlocked}
+            sendBlocked={providerToolSettingsBlocked || attachmentPreparation.blocksSubmission}
             onReasoningEffortChange={(value) => void handleReasoningEffortChange(value)}
             onSetSessionContextCompactionWindow={props.onSetSessionContextCompactionWindow}
             onSend={() => void handleComposerSend()}

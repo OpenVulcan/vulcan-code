@@ -2,7 +2,244 @@
 //! 分段会话的运行时日志持久化。
 
 use super::*;
-use vulcan_context::protocol::validate_session_conversation_record_identities;
+use sha2::{Digest, Sha256};
+use vulcan_context::protocol::{
+    SessionConversationMessage, validate_session_conversation_record_identities,
+};
+
+/// Bounded canonical-conversation checkpoint persisted beside runtime JSONL metadata.
+/// 与运行时 JSONL 元数据一起持久化的有界规范会话检查点。
+#[derive(Debug)]
+struct RuntimeConversationProjectionCheckpoint {
+    /// Number of canonical messages covered by the checkpoint.
+    /// 检查点覆盖的规范消息数量。
+    message_count: u64,
+    /// Number of conversation-projecting runtime events covered by the checkpoint.
+    /// 检查点覆盖的会话投影运行时事件数量。
+    event_count: u64,
+    /// Absolute canonical message index where the bounded open anchor begins.
+    /// 有界开放锚点开始处的规范消息绝对索引。
+    anchor_message_index: u64,
+    /// Number of already persisted events produced from the open anchor.
+    /// 从开放锚点生成且已经持久化的事件数量。
+    anchor_event_count: u64,
+    /// Digest of the final canonical message covered by the checkpoint.
+    /// 检查点覆盖的最后一条规范消息摘要。
+    tail_message_sha256: Option<String>,
+    /// Digest of already persisted event payloads produced from the open anchor.
+    /// 从开放锚点生成且已经持久化的事件载荷摘要。
+    anchor_projection_sha256: Option<String>,
+}
+
+/// Projects a bounded canonical message slice without carrying full conversation records.
+/// 在不携带完整会话记录的情况下投影有界规范消息切片。
+///
+/// # Parameters
+/// 参数
+/// `messages` is the exact bounded message slice and `updated_at` supplies deterministic line timestamps.
+/// `messages` 是精确的有界消息切片，`updated_at` 提供确定性的日志行时间戳。
+///
+/// # Returns
+/// 返回值
+/// Ordered runtime projection lines beginning at sequence one, or a strict projection error.
+/// 返回从序号一开始的有序运行时投影行，或严格投影错误。
+fn runtime_projection_lines_for_message_slice(
+    messages: &[SessionConversationMessage],
+    updated_at: &str,
+) -> Result<Vec<RuntimeLogEventLine>, String> {
+    let bounded_state = SessionConversationState {
+        messages: messages.to_vec(),
+        records: Vec::new(),
+        continuation: Default::default(),
+    };
+    runtime_log_lines_from_conversation_state(&bounded_state, updated_at, 1)
+        .map_err(|error| error.to_string())
+}
+
+/// Computes SHA-256 for one canonical conversation message.
+/// 计算一条规范会话消息的 SHA-256。
+///
+/// # Parameters
+/// 参数
+/// `message` is the exact canonical message covered by a persistence checkpoint.
+/// `message` 是持久化检查点覆盖的精确规范消息。
+///
+/// # Returns
+/// 返回值
+/// Lowercase hexadecimal SHA-256, or a serialization failure.
+/// 返回小写十六进制 SHA-256，或序列化失败。
+fn runtime_conversation_message_sha256(
+    message: &SessionConversationMessage,
+) -> Result<String, String> {
+    let encoded = serde_json::to_vec(message).map_err(to_store_error)?;
+    Ok(hex::encode(Sha256::digest(encoded)))
+}
+
+/// Computes a length-delimited SHA-256 over ordered runtime event payloads.
+/// 对有序运行时事件载荷计算带长度分隔的 SHA-256。
+///
+/// # Parameters
+/// 参数
+/// `lines` supplies ordered event payloads; sequence numbers and write timestamps are intentionally excluded.
+/// `lines` 提供有序事件载荷；序号与写入时间戳被有意排除。
+///
+/// # Returns
+/// 返回值
+/// Lowercase hexadecimal SHA-256 for a non-empty slice, `None` for an empty slice, or serialization failure.
+/// 对非空切片返回小写十六进制 SHA-256；空切片返回 `None`；序列化失败时返回错误。
+fn runtime_event_payloads_sha256(lines: &[RuntimeLogEventLine]) -> Result<Option<String>, String> {
+    if lines.is_empty() {
+        return Ok(None);
+    }
+    let mut digest = Sha256::new();
+    for line in lines {
+        let encoded = serde_json::to_vec(&line.event).map_err(to_store_error)?;
+        let encoded_len = u64::try_from(encoded.len())
+            .map_err(|_| String::from("Runtime event payload exceeds u64 digest capacity."))?;
+        digest.update(encoded_len.to_le_bytes());
+        digest.update(encoded);
+    }
+    Ok(Some(hex::encode(digest.finalize())))
+}
+
+/// Locates the earliest tool batch that remains open in one bounded projection.
+/// 定位一个有界投影中最早仍保持开放的工具批次。
+///
+/// # Parameters
+/// 参数
+/// `lines` is an ordered conversation-only runtime projection.
+/// `lines` 是有序的纯会话运行时投影。
+///
+/// # Returns
+/// 返回值
+/// The owning assistant message identifier for the earliest open batch, or `None` when all batches are closed.
+/// 返回最早开放批次所属的助手消息标识；全部批次已关闭时返回 `None`。
+fn earliest_open_tool_batch_assistant_message_id(lines: &[RuntimeLogEventLine]) -> Option<String> {
+    let mut open_batches = BTreeMap::<String, (u64, String)>::new();
+    for line in lines {
+        match &line.event {
+            RuntimeLogEvent::ToolBatchStarted(event) => {
+                open_batches.insert(
+                    event.tool_batch_id.clone(),
+                    (line.seq, event.assistant_message_id.clone()),
+                );
+            }
+            RuntimeLogEvent::ToolBatchCompleted(event) => {
+                open_batches.remove(&event.tool_batch_id);
+            }
+            _ => {}
+        }
+    }
+    open_batches
+        .into_values()
+        .min_by_key(|(seq, _)| *seq)
+        .map(|(_, assistant_message_id)| assistant_message_id)
+}
+
+/// Computes the bounded active-anchor checkpoint for one projected message suffix.
+/// 为一个已投影消息后缀计算有界活动锚点检查点。
+///
+/// # Parameters
+/// 参数
+/// `messages` is the bounded suffix, `absolute_start_index` is its canonical base index,
+/// `projected_lines` is its complete projection, and `updated_at` supplies deterministic timestamps.
+/// `messages` 是有界后缀，`absolute_start_index` 是其规范基准索引，
+/// `projected_lines` 是完整投影，`updated_at` 提供确定性时间戳。
+///
+/// # Returns
+/// 返回值
+/// Absolute anchor index, persisted anchor-event count, and optional event-payload digest.
+/// 返回绝对锚点索引、已持久化锚点事件数量及可选事件载荷摘要。
+fn runtime_open_anchor_checkpoint(
+    messages: &[SessionConversationMessage],
+    absolute_start_index: usize,
+    projected_lines: &[RuntimeLogEventLine],
+    updated_at: &str,
+) -> Result<(u64, u64, Option<String>), String> {
+    let Some(assistant_message_id) = earliest_open_tool_batch_assistant_message_id(projected_lines)
+    else {
+        let absolute_end_index = absolute_start_index
+            .checked_add(messages.len())
+            .ok_or_else(|| String::from("Runtime conversation anchor index exceeds usize."))?;
+        return Ok((
+            u64::try_from(absolute_end_index).map_err(|_| {
+                String::from("Runtime conversation anchor index exceeds u64 metadata capacity.")
+            })?,
+            0,
+            None,
+        ));
+    };
+    let relative_anchor_index = messages
+        .iter()
+        .position(|message| message.id == assistant_message_id)
+        .ok_or_else(|| {
+            format!(
+                "Open runtime tool batch references missing assistant message `{assistant_message_id}`."
+            )
+        })?;
+    let absolute_anchor_index = absolute_start_index
+        .checked_add(relative_anchor_index)
+        .ok_or_else(|| String::from("Runtime conversation anchor index exceeds usize."))?;
+    let anchor_lines =
+        runtime_projection_lines_for_message_slice(&messages[relative_anchor_index..], updated_at)?;
+    let anchor_event_count = u64::try_from(anchor_lines.len()).map_err(|_| {
+        String::from("Runtime conversation anchor event count exceeds u64 metadata capacity.")
+    })?;
+    Ok((
+        u64::try_from(absolute_anchor_index).map_err(|_| {
+            String::from("Runtime conversation anchor index exceeds u64 metadata capacity.")
+        })?,
+        anchor_event_count,
+        runtime_event_payloads_sha256(&anchor_lines)?,
+    ))
+}
+
+/// Builds the complete constant-size projection checkpoint after a cold rebuild.
+/// 在冷重建后构建完整的常量大小投影检查点。
+///
+/// # Parameters
+/// 参数
+/// `conversation_state` is the canonical state, `projected_lines` is its conversation-only projection,
+/// and `updated_at` supplies deterministic bounded-anchor timestamps.
+/// `conversation_state` 是规范状态，`projected_lines` 是其纯会话投影，
+/// `updated_at` 提供确定性的有界锚点时间戳。
+///
+/// # Returns
+/// 返回值
+/// A complete checkpoint suitable for metadata publication, or a strict conversion failure.
+/// 返回可发布到元数据的完整检查点，或严格转换失败。
+fn runtime_projection_checkpoint_from_conversation_state(
+    conversation_state: &SessionConversationState,
+    projected_lines: &[RuntimeLogEventLine],
+    updated_at: &str,
+) -> Result<RuntimeConversationProjectionCheckpoint, String> {
+    let message_count = u64::try_from(conversation_state.messages.len()).map_err(|_| {
+        String::from("Runtime conversation message count exceeds u64 metadata capacity.")
+    })?;
+    let event_count = u64::try_from(projected_lines.len()).map_err(|_| {
+        String::from("Runtime conversation event count exceeds u64 metadata capacity.")
+    })?;
+    let (anchor_message_index, anchor_event_count, anchor_projection_sha256) =
+        runtime_open_anchor_checkpoint(
+            &conversation_state.messages,
+            0,
+            projected_lines,
+            updated_at,
+        )?;
+    let tail_message_sha256 = conversation_state
+        .messages
+        .last()
+        .map(runtime_conversation_message_sha256)
+        .transpose()?;
+    Ok(RuntimeConversationProjectionCheckpoint {
+        message_count,
+        event_count,
+        anchor_message_index,
+        anchor_event_count,
+        tail_message_sha256,
+        anchor_projection_sha256,
+    })
+}
 
 /// Rebuilds one provider-facing runtime log inside a serialized append transaction.
 /// 在串行化追加事务中重建一份 Provider 可见运行时日志。
@@ -75,6 +312,13 @@ fn rebuild_runtime_log_with_owned_lock(
     // lines 会在接触旧运行时目录前完成完整投影与重新排序。
     let mut lines = runtime_log_lines_from_conversation_state(conversation_state, updated_at, 1)
         .map_err(|error| error.to_string())?;
+    // conversation_checkpoint is computed before audit-only events are appended to the physical log.
+    // conversation_checkpoint 在仅审计事件追加到物理日志前完成计算。
+    let conversation_checkpoint = runtime_projection_checkpoint_from_conversation_state(
+        conversation_state,
+        &lines,
+        updated_at,
+    )?;
     append_runtime_extra_events_with_fresh_sequences(&mut lines, extra_events)?;
     // next_seq validates the complete projection before any prior runtime bytes are removed.
     // next_seq 在移除任何旧运行时字节前验证完整投影。
@@ -114,6 +358,14 @@ fn rebuild_runtime_log_with_owned_lock(
         next_seq,
         created_at: updated_at.to_string(),
         updated_at: updated_at.to_string(),
+        conversation_checkpoint_version: SEGMENTED_RUNTIME_PROJECTION_CHECKPOINT_VERSION,
+        conversation_message_count: conversation_checkpoint.message_count,
+        conversation_event_count: conversation_checkpoint.event_count,
+        conversation_anchor_message_index: conversation_checkpoint.anchor_message_index,
+        conversation_anchor_event_count: conversation_checkpoint.anchor_event_count,
+        conversation_tail_message_sha256: conversation_checkpoint.tail_message_sha256,
+        conversation_anchor_projection_sha256: conversation_checkpoint.anchor_projection_sha256,
+        applied_compaction_id: None,
         segments: vec![segment],
     };
     write_runtime_metadata(session_dir, &metadata)?;
@@ -223,11 +475,174 @@ fn sync_runtime_log_from_conversation_state_with_owned_lock(
     updated_at: &str,
     append_guard: &std::sync::MutexGuard<'_, ()>,
 ) -> Result<RuntimeLogMetadata, String> {
-    let desired_lines =
-        runtime_log_lines_from_conversation_state(conversation_state, updated_at, 1)
-            .map_err(|error| error.to_string())?;
-    // snapshot is absent only when every runtime persistence artifact is genuinely absent.
-    // snapshot 仅在全部运行时持久化产物真正缺失时为空。
+    // metadata is the constant-size hot-path checkpoint; runtime JSONL is not opened here.
+    // metadata 是常量大小的热路径检查点；此处不会打开运行时 JSONL。
+    let Some(mut metadata) = read_optional_runtime_metadata(session_dir)? else {
+        ensure_runtime_metadata_absence_is_consistent(session_dir)?;
+        return rebuild_runtime_log_with_owned_lock(
+            session_dir,
+            conversation_state,
+            updated_at,
+            Vec::new(),
+            append_guard,
+        );
+    };
+    if metadata.conversation_checkpoint_version != SEGMENTED_RUNTIME_PROJECTION_CHECKPOINT_VERSION {
+        return rebuild_runtime_log_preserving_existing_audit_with_owned_lock(
+            session_dir,
+            conversation_state,
+            updated_at,
+            append_guard,
+        );
+    }
+    validate_runtime_segment_append_boundary(session_dir, &metadata)?;
+    let current_message_count = conversation_state.messages.len();
+    let persisted_message_count =
+        usize::try_from(metadata.conversation_message_count).map_err(|_| {
+            String::from("Persisted runtime conversation message count exceeds usize capacity.")
+        })?;
+    if persisted_message_count > current_message_count {
+        return rebuild_runtime_log_preserving_existing_audit_with_owned_lock(
+            session_dir,
+            conversation_state,
+            updated_at,
+            append_guard,
+        );
+    }
+    if persisted_message_count > 0 {
+        // persisted_tail is direct-indexed from metadata and proves the append-only message boundary.
+        // persisted_tail 由元数据直接索引，用于证明追加式消息边界。
+        let persisted_tail = &conversation_state.messages[persisted_message_count - 1];
+        let current_tail_sha256 = runtime_conversation_message_sha256(persisted_tail)?;
+        if metadata.conversation_tail_message_sha256.as_deref()
+            != Some(current_tail_sha256.as_str())
+        {
+            return rebuild_runtime_log_preserving_existing_audit_with_owned_lock(
+                session_dir,
+                conversation_state,
+                updated_at,
+                append_guard,
+            );
+        }
+    }
+    let anchor_message_index = usize::try_from(metadata.conversation_anchor_message_index)
+        .map_err(|_| String::from("Runtime conversation anchor index exceeds usize capacity."))?;
+    if anchor_message_index > persisted_message_count {
+        return Err(format!(
+            "Runtime conversation anchor index {anchor_message_index} exceeds persisted message count {persisted_message_count}."
+        ));
+    }
+    // bounded_messages begins at the only mutable open-batch anchor and normally contains one tool batch.
+    // bounded_messages 从唯一可变开放批次锚点开始，通常只包含一个工具批次。
+    let bounded_messages = &conversation_state.messages[anchor_message_index..];
+    let bounded_projection =
+        runtime_projection_lines_for_message_slice(bounded_messages, updated_at)?;
+    let persisted_anchor_event_count = usize::try_from(metadata.conversation_anchor_event_count)
+        .map_err(|_| String::from("Runtime anchor event count exceeds usize capacity."))?;
+    if persisted_anchor_event_count > bounded_projection.len() {
+        return rebuild_runtime_log_preserving_existing_audit_with_owned_lock(
+            session_dir,
+            conversation_state,
+            updated_at,
+            append_guard,
+        );
+    }
+    let current_anchor_sha256 =
+        runtime_event_payloads_sha256(&bounded_projection[..persisted_anchor_event_count])?;
+    if metadata.conversation_anchor_projection_sha256 != current_anchor_sha256 {
+        return rebuild_runtime_log_preserving_existing_audit_with_owned_lock(
+            session_dir,
+            conversation_state,
+            updated_at,
+            append_guard,
+        );
+    }
+    // projected_tail contains only events not covered by the validated bounded anchor prefix.
+    // projected_tail 只包含尚未被已验证有界锚点前缀覆盖的事件。
+    let projected_tail = &bounded_projection[persisted_anchor_event_count..];
+    let mut next_seq = metadata.next_seq;
+    let mut append_tail = Vec::with_capacity(projected_tail.len());
+    for projected_line in projected_tail {
+        append_tail.push(RuntimeLogEventLine::new(
+            next_seq,
+            updated_at.to_string(),
+            projected_line.event.clone(),
+        ));
+        next_seq = next_seq.checked_add(1).ok_or_else(|| {
+            String::from("Runtime sequence exceeds u64 capacity while materializing bounded tail.")
+        })?;
+    }
+    let appended_event_count = u64::try_from(append_tail.len()).map_err(|_| {
+        String::from("Runtime bounded append event count exceeds u64 metadata capacity.")
+    })?;
+    let next_conversation_event_count = metadata
+        .conversation_event_count
+        .checked_add(appended_event_count)
+        .ok_or_else(|| {
+            String::from("Runtime conversation event count exceeds u64 metadata capacity.")
+        })?;
+    let (next_anchor_message_index, next_anchor_event_count, next_anchor_sha256) =
+        runtime_open_anchor_checkpoint(
+            bounded_messages,
+            anchor_message_index,
+            &bounded_projection,
+            updated_at,
+        )?;
+    let next_message_count = u64::try_from(current_message_count).map_err(|_| {
+        String::from("Runtime conversation message count exceeds u64 metadata capacity.")
+    })?;
+    let next_tail_message_sha256 = conversation_state
+        .messages
+        .last()
+        .map(runtime_conversation_message_sha256)
+        .transpose()?;
+    let checkpoint_changed = metadata.conversation_message_count != next_message_count
+        || metadata.conversation_event_count != next_conversation_event_count
+        || metadata.conversation_anchor_message_index != next_anchor_message_index
+        || metadata.conversation_anchor_event_count != next_anchor_event_count
+        || metadata.conversation_tail_message_sha256 != next_tail_message_sha256
+        || metadata.conversation_anchor_projection_sha256 != next_anchor_sha256;
+    metadata.conversation_message_count = next_message_count;
+    metadata.conversation_event_count = next_conversation_event_count;
+    metadata.conversation_anchor_message_index = next_anchor_message_index;
+    metadata.conversation_anchor_event_count = next_anchor_event_count;
+    metadata.conversation_tail_message_sha256 = next_tail_message_sha256;
+    metadata.conversation_anchor_projection_sha256 = next_anchor_sha256;
+    if append_tail.is_empty() {
+        if checkpoint_changed {
+            metadata.updated_at = updated_at.to_string();
+            write_runtime_metadata(session_dir, &metadata)?;
+        }
+        return Ok(metadata);
+    }
+    append_runtime_log_tail_from_metadata_with_owned_lock(
+        session_dir,
+        metadata,
+        &append_tail,
+        append_guard,
+    )
+}
+
+/// Rebuilds a changed or legacy conversation while preserving exact audit-only events.
+/// 在保留精确仅审计事件的同时重建发生变化或使用旧版检查点的会话。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the exact session directory, `conversation_state` is the new canonical state,
+/// `updated_at` supplies rebuild timestamps, and `append_guard` owns the complete transaction.
+/// `session_dir` 是精确会话目录，`conversation_state` 是新的规范状态，
+/// `updated_at` 提供重建时间戳，`append_guard` 持有完整事务。
+///
+/// # Returns
+/// 返回值
+/// Rebuilt metadata after one intentional cold full read, or a strict persistence failure.
+/// 在一次有意冷路径完整读取后返回重建元数据，或严格持久化失败。
+fn rebuild_runtime_log_preserving_existing_audit_with_owned_lock(
+    session_dir: &Path,
+    conversation_state: &SessionConversationState,
+    updated_at: &str,
+    append_guard: &std::sync::MutexGuard<'_, ()>,
+) -> Result<RuntimeLogMetadata, String> {
     let Some(snapshot) = read_runtime_log_snapshot_with_owned_lock(session_dir, append_guard)?
     else {
         return rebuild_runtime_log_with_owned_lock(
@@ -238,37 +653,14 @@ fn sync_runtime_log_from_conversation_state_with_owned_lock(
             append_guard,
         );
     };
-    // extra_events preserves audit-only records if synchronization must rebuild.
-    // extra_events 在同步必须重建时保留仅审计记录。
     let extra_events = runtime_extra_event_lines(&snapshot.lines);
-    // existing_conversation_lines isolates provider-projected history for prefix comparison.
-    // existing_conversation_lines 隔离用于前缀比较的 Provider 投影历史。
-    let existing_conversation_lines = runtime_conversation_event_lines(&snapshot.lines);
-    if !runtime_log_prefix_matches(&existing_conversation_lines, &desired_lines) {
-        return rebuild_runtime_log_with_owned_lock(
-            session_dir,
-            conversation_state,
-            updated_at,
-            extra_events,
-            append_guard,
-        );
-    }
-    if existing_conversation_lines.len() == desired_lines.len() {
-        return Ok(snapshot.metadata);
-    }
-    if !extra_events.is_empty() {
-        return rebuild_runtime_log_with_owned_lock(
-            session_dir,
-            conversation_state,
-            updated_at,
-            extra_events,
-            append_guard,
-        );
-    }
-    // tail begins immediately after the validated existing provider projection.
-    // tail 紧接在已验证的现有 Provider 投影之后开始。
-    let tail = &desired_lines[existing_conversation_lines.len()..];
-    append_runtime_log_tail_with_owned_lock(session_dir, snapshot, tail, append_guard)
+    rebuild_runtime_log_with_owned_lock(
+        session_dir,
+        conversation_state,
+        updated_at,
+        extra_events,
+        append_guard,
+    )
 }
 
 /// Syncs provider-facing runtime JSONL after compaction while dropping pre-compaction audit tails.
@@ -338,6 +730,59 @@ fn sync_runtime_log_from_compacted_conversation_state_with_owned_lock(
     compaction_id: &str,
     append_guard: &std::sync::MutexGuard<'_, ()>,
 ) -> Result<RuntimeLogMetadata, String> {
+    if compaction_id.trim().is_empty() {
+        return Err(String::from(
+            "Runtime compaction synchronization requires a non-empty compaction identifier.",
+        ));
+    }
+    if let Some(metadata) = read_optional_runtime_metadata(session_dir)?
+        && metadata.applied_compaction_id.as_deref() == Some(compaction_id)
+    {
+        // The physical boundary is already current, so later checkpoints use the bounded ordinary tail path.
+        // 物理边界已经是当前边界，因此后续检查点使用有界普通尾部路径。
+        return sync_runtime_log_from_conversation_state_with_owned_lock(
+            session_dir,
+            conversation_state,
+            updated_at,
+            append_guard,
+        );
+    }
+    let mut metadata = sync_runtime_log_from_compacted_conversation_state_cold_with_owned_lock(
+        session_dir,
+        conversation_state,
+        updated_at,
+        compaction_id,
+        append_guard,
+    )?;
+    metadata.applied_compaction_id = Some(compaction_id.to_string());
+    metadata.updated_at = updated_at.to_string();
+    write_runtime_metadata(session_dir, &metadata)?;
+    Ok(metadata)
+}
+
+/// Applies one new compaction boundary through an intentional cold runtime-log reconciliation.
+/// 通过一次有意的冷路径运行时日志协调来应用新的压缩边界。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the exact session directory, `conversation_state` is the compacted canonical state,
+/// `updated_at` supplies persistence timestamps, `compaction_id` selects retained audit history,
+/// and `append_guard` owns the complete runtime transaction.
+/// `session_dir` 是精确会话目录，`conversation_state` 是已压缩规范状态，
+/// `updated_at` 提供持久化时间戳，`compaction_id` 选择保留审计历史，
+/// `append_guard` 持有完整运行时事务。
+///
+/// # Returns
+/// 返回值
+/// Reconciled metadata before the caller publishes the applied compaction identifier.
+/// 返回调用方发布已应用压缩标识之前的协调后元数据。
+fn sync_runtime_log_from_compacted_conversation_state_cold_with_owned_lock(
+    session_dir: &Path,
+    conversation_state: &SessionConversationState,
+    updated_at: &str,
+    compaction_id: &str,
+    append_guard: &std::sync::MutexGuard<'_, ()>,
+) -> Result<RuntimeLogMetadata, String> {
     let desired_lines =
         runtime_log_lines_from_conversation_state(conversation_state, updated_at, 1)
             .map_err(|error| error.to_string())?;
@@ -393,10 +838,15 @@ fn sync_runtime_log_from_compacted_conversation_state_with_owned_lock(
             append_guard,
         );
     }
-    // tail begins immediately after the validated existing provider projection.
-    // tail 紧接在已验证的现有 Provider 投影之后开始。
-    let tail = &desired_lines[existing_conversation_lines.len()..];
-    append_runtime_log_tail_with_owned_lock(session_dir, snapshot, tail, append_guard)
+    // Compaction is an intentional cold boundary and republishes a complete projection checkpoint.
+    // 压缩是有意的冷路径边界，并会重新发布完整投影检查点。
+    rebuild_runtime_log_with_owned_lock(
+        session_dir,
+        conversation_state,
+        updated_at,
+        Vec::new(),
+        append_guard,
+    )
 }
 
 /// Reads an existing provider-facing runtime log while repairing corrupt JSONL tails.
@@ -497,10 +947,16 @@ pub(in crate::workspace_store) fn read_runtime_log_lines(
     let append_guard = segmented_append_file_io_lock()
         .lock()
         .map_err(to_store_error)?;
-    Ok(
-        read_runtime_log_snapshot_with_owned_lock(session_dir, &append_guard)?
-            .map(|snapshot| snapshot.lines),
-    )
+    // snapshot performs the intentional cold full-history validation required by runtime hydration.
+    // snapshot 执行运行时加载所需的有意冷路径全历史校验。
+    let Some(snapshot) = read_runtime_log_snapshot_with_owned_lock(session_dir, &append_guard)?
+    else {
+        return Ok(None);
+    };
+    // index is rebuilt only after an explicit cold runtime read; hot audit appends invalidate this cache.
+    // index 仅在显式冷路径运行时读取后重建；热路径审计追加会使该缓存失效。
+    write_runtime_index(session_dir, &rebuild_runtime_log_index(&snapshot.lines))?;
+    Ok(Some(snapshot.lines))
 }
 
 /// Reads and repairs one validated runtime snapshot while the caller owns the append lock.
@@ -779,24 +1235,30 @@ pub(in crate::workspace_store) fn append_runtime_log_event_if_present(
     timestamp: &str,
     event: RuntimeLogEvent,
 ) -> Result<bool, String> {
-    // append_guard keeps snapshot validation, sequence allocation, and publication atomic.
-    // append_guard 使快照验证、序号分配与发布保持原子化。
-    let append_guard = segmented_append_file_io_lock()
+    // _append_guard serializes the exact metadata check and append without hydrating runtime history.
+    // _append_guard 在不加载运行时历史的情况下串行化精确元数据检查与追加。
+    let _append_guard = segmented_append_file_io_lock()
         .lock()
         .map_err(to_store_error)?;
-    // snapshot is absent only when the session has no runtime artifacts at all.
-    // snapshot 仅在会话完全没有运行时产物时为空。
-    let Some(snapshot) = read_runtime_log_snapshot_with_owned_lock(session_dir, &append_guard)?
-    else {
+    // metadata is the constant-size authoritative append checkpoint for the fixed runtime segment.
+    // metadata 是固定运行时分段使用的常量大小权威追加检查点。
+    let Some(metadata) = read_optional_runtime_metadata(session_dir)? else {
+        ensure_runtime_metadata_absence_is_consistent(session_dir)?;
         return Ok(false);
     };
-    append_runtime_log_event_to_snapshot_with_owned_lock(
+    if metadata.segments[0].line_count == 0 {
+        return Ok(false);
+    }
+    // line receives the next sequence only after the constant-size append boundary is validated.
+    // line 仅在常量大小追加边界完成校验后接收下一序号。
+    let line = RuntimeLogEventLine::new(metadata.next_seq, timestamp.to_string(), event);
+    append_runtime_log_tail_from_metadata_with_owned_lock(
         session_dir,
-        snapshot,
-        timestamp,
-        event,
-        &append_guard,
-    )
+        metadata,
+        std::slice::from_ref(&line),
+        &_append_guard,
+    )?;
+    Ok(true)
 }
 
 /// Appends one runtime event to an already validated caller-owned snapshot.

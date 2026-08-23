@@ -9,6 +9,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(test)]
 use uuid::Uuid;
 
 /// Exact version of the durable provider-task recovery document.
@@ -26,12 +27,15 @@ const PROVIDER_TASK_MAXIMUM_RECORDS: usize = 2_048;
 /// Maximum bytes accepted from or written to one recovery snapshot.
 /// 单份恢复快照允许读取或写入的最大字节数。
 const PROVIDER_TASK_SNAPSHOT_MAX_BYTES: u64 = 64 * 1024 * 1024;
-/// Maximum candidate snapshots scanned before startup fails closed.
-/// 启动关闭失败前允许扫描的候选快照文件上限。
-const PROVIDER_TASK_MAXIMUM_SNAPSHOT_FILES: usize = 64;
-/// Maximum total directory entries inspected by one recovery maintenance pass.
-/// 单次恢复维护允许检查的目录总条目上限。
-const PROVIDER_TASK_MAXIMUM_DIRECTORY_ENTRIES: usize = 256;
+/// Exact authoritative provider-task recovery snapshot file name.
+/// 精确的权威供应商任务恢复快照文件名。
+const PROVIDER_TASK_CURRENT_SNAPSHOT_FILE: &str = "snapshot.json";
+/// Exact rollback provider-task recovery snapshot file name.
+/// 精确的回滚供应商任务恢复快照文件名。
+const PROVIDER_TASK_PREVIOUS_SNAPSHOT_FILE: &str = "snapshot.previous.json";
+/// Exact same-directory staging file used during provider-task snapshot publication.
+/// 供应商任务快照发布期间使用的精确同目录暂存文件名。
+const PROVIDER_TASK_STAGED_SNAPSHOT_FILE: &str = ".snapshot.next.tmp";
 /// Maximum characters accepted in one persisted provider-task identity field.
 /// 单个持久供应商任务身份字段允许的最大字符数。
 const PROVIDER_TASK_IDENTITY_MAX_CHARACTERS: usize = 2_048;
@@ -534,8 +538,8 @@ impl ProviderTaskRecoveryStore {
         Ok(())
     }
 
-    /// Publishes the complete map using one unique temporary file and atomic rename.
-    /// 使用唯一临时文件和原子重命名发布完整映射。
+    /// Publishes the complete map through fixed current, previous, and staged files.
+    /// 通过固定的当前、上一版与暂存文件发布完整映射。
     ///
     /// # Returns
     /// 返回值
@@ -577,11 +581,28 @@ impl ProviderTaskRecoveryStore {
                 "Provider task recovery snapshot exceeds the {PROVIDER_TASK_SNAPSHOT_MAX_BYTES} byte limit."
             ));
         }
-        let identity = Uuid::new_v4();
-        let temporary = directory.join(format!(".snapshot-{next_revision:020}-{identity}.tmp"));
-        let published = directory.join(format!("snapshot-{next_revision:020}-{identity}.json"));
+        let temporary = directory.join(PROVIDER_TASK_STAGED_SNAPSHOT_FILE);
+        let published = directory.join(PROVIDER_TASK_CURRENT_SNAPSHOT_FILE);
+        let previous = directory.join(PROVIDER_TASK_PREVIOUS_SNAPSHOT_FILE);
+        match fs::symlink_metadata(&temporary) {
+            Ok(metadata) if !metadata.file_type().is_file() => {
+                return Err(format!(
+                    "Provider task recovery staging path `{}` is not a regular file.",
+                    temporary.display()
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "Provider task recovery staging path `{}` could not be inspected: {error}",
+                    temporary.display()
+                ));
+            }
+        }
         let mut file = OpenOptions::new()
-            .create_new(true)
+            .create(true)
+            .truncate(true)
             .write(true)
             .open(&temporary)
             .map_err(|error| format!("Provider task recovery temporary file failed: {error}"))?;
@@ -597,14 +618,70 @@ impl ProviderTaskRecoveryStore {
                 "Provider task recovery snapshot write failed: {error}; temporary cleanup: {cleanup:?}"
             ));
         }
+        let published_exists = match fs::symlink_metadata(&published) {
+            Ok(metadata) if metadata.file_type().is_file() => true,
+            Ok(_) => {
+                let cleanup = fs::remove_file(&temporary);
+                return Err(format!(
+                    "Provider task recovery current path `{}` is not a regular file; temporary cleanup: {cleanup:?}",
+                    published.display()
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => {
+                let cleanup = fs::remove_file(&temporary);
+                return Err(format!(
+                    "Provider task recovery current path `{}` could not be inspected: {error}; temporary cleanup: {cleanup:?}",
+                    published.display()
+                ));
+            }
+        };
+        if published_exists {
+            match fs::symlink_metadata(&previous) {
+                Ok(metadata) if metadata.file_type().is_file() => {
+                    fs::remove_file(&previous).map_err(|error| {
+                        let cleanup = fs::remove_file(&temporary);
+                        format!(
+                            "Provider task recovery previous snapshot `{}` could not be replaced: {error}; temporary cleanup: {cleanup:?}",
+                            previous.display()
+                        )
+                    })?;
+                }
+                Ok(_) => {
+                    let cleanup = fs::remove_file(&temporary);
+                    return Err(format!(
+                        "Provider task recovery previous path `{}` is not a regular file; temporary cleanup: {cleanup:?}",
+                        previous.display()
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    let cleanup = fs::remove_file(&temporary);
+                    return Err(format!(
+                        "Provider task recovery previous path `{}` could not be inspected: {error}; temporary cleanup: {cleanup:?}",
+                        previous.display()
+                    ));
+                }
+            }
+            fs::rename(&published, &previous).map_err(|error| {
+                let cleanup = fs::remove_file(&temporary);
+                format!(
+                    "Provider task recovery current snapshot could not move to the exact rollback path: {error}; temporary cleanup: {cleanup:?}"
+                )
+            })?;
+        }
         if let Err(error) = fs::rename(&temporary, &published) {
+            let rollback = if published_exists {
+                fs::rename(&previous, &published)
+            } else {
+                Ok(())
+            };
             let cleanup = fs::remove_file(&temporary);
             return Err(format!(
-                "Provider task recovery publish failed: {error}; temporary cleanup: {cleanup:?}"
+                "Provider task recovery publish failed: {error}; rollback: {rollback:?}; temporary cleanup: {cleanup:?}"
             ));
         }
         *revision = next_revision;
-        cleanup_old_snapshots(&directory, &published);
         Ok(())
     }
 }
@@ -1209,48 +1286,65 @@ fn current_unix_millis() -> Result<u64, String> {
     Ok(duration.as_millis().try_into().unwrap_or(u64::MAX))
 }
 
-/// Loads the newest complete strict snapshot or an empty version-one state.
-/// 加载最新完整严格快照，或返回空的第一版状态。
+/// Loads the newest complete strict snapshot from two exact recovery paths.
+/// 从两个精确恢复路径加载最新的完整严格快照。
 fn load_latest_snapshot(directory: &Path) -> Result<ProviderTaskRecoverySnapshot, String> {
-    let entries = fs::read_dir(directory)
-        .map_err(|error| format!("Provider task recovery directory read failed: {error}"))?;
-    let mut snapshots = BTreeMap::new();
-    for (entry_index, entry) in entries.enumerate() {
-        if entry_index >= PROVIDER_TASK_MAXIMUM_DIRECTORY_ENTRIES {
-            return Err(format!(
-                "Provider task recovery directory exceeds the {PROVIDER_TASK_MAXIMUM_DIRECTORY_ENTRIES} entry scan limit."
-            ));
-        }
-        let entry = entry
-            .map_err(|error| format!("Provider task recovery directory entry failed: {error}"))?;
-        let path = entry.path();
-        let Some(file_revision) = provider_task_snapshot_file_revision(&path)? else {
-            continue;
-        };
-        if snapshots.len() >= PROVIDER_TASK_MAXIMUM_SNAPSHOT_FILES {
-            return Err(format!(
-                "Provider task recovery directory exceeds the {PROVIDER_TASK_MAXIMUM_SNAPSHOT_FILES} snapshot-file limit."
-            ));
-        }
-        if snapshots.insert(file_revision, path.clone()).is_some() {
-            return Err(format!(
-                "Provider task recovery directory contains duplicate snapshot revision {file_revision}."
-            ));
-        }
-    }
-    let Some((file_revision, path)) = snapshots.into_iter().next_back() else {
-        return Ok(ProviderTaskRecoverySnapshot {
+    let current =
+        load_provider_task_snapshot_file(&directory.join(PROVIDER_TASK_CURRENT_SNAPSHOT_FILE))?;
+    let previous =
+        load_provider_task_snapshot_file(&directory.join(PROVIDER_TASK_PREVIOUS_SNAPSHOT_FILE))?;
+    match (current, previous) {
+        // Missing fixed files mean no recoverable Provider task exists. Startup must not
+        // enumerate legacy random-name files or infer an authoritative record from siblings.
+        // 固定文件缺失表示不存在可恢复的 Provider 任务。启动不得枚举旧随机名称文件，
+        // 也不得从同级文件推断权威记录。
+        (None, None) => Ok(ProviderTaskRecoverySnapshot {
             version: PROVIDER_TASK_RECOVERY_VERSION,
             revision: 0,
             records: BTreeMap::new(),
-        });
+        }),
+        (Some(snapshot), None) | (None, Some(snapshot)) => Ok(snapshot),
+        (Some(current), Some(previous)) => {
+            if current.revision == previous.revision && current != previous {
+                return Err(format!(
+                    "Provider task recovery current and previous snapshots disagree at revision {}.",
+                    current.revision
+                ));
+            }
+            if current.revision >= previous.revision {
+                Ok(current)
+            } else {
+                Ok(previous)
+            }
+        }
+    }
+}
+
+/// Loads and validates one exact provider-task snapshot file when it exists.
+/// 在存在时加载并校验一个精确的供应商任务快照文件。
+///
+/// # Parameters
+/// 参数
+/// `path` is either the fixed current or fixed rollback snapshot path.
+/// `path` 是固定当前快照路径或固定回滚快照路径。
+///
+/// # Returns
+/// 返回值
+/// A validated snapshot, clean absence, or an explicit bounded storage error.
+/// 返回已校验快照、干净缺失或明确的有界存储错误。
+fn load_provider_task_snapshot_file(
+    path: &Path,
+) -> Result<Option<ProviderTaskRecoverySnapshot>, String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "Provider task recovery snapshot `{}` could not be inspected: {error}",
+                path.display()
+            ));
+        }
     };
-    let metadata = fs::symlink_metadata(&path).map_err(|error| {
-        format!(
-            "Provider task recovery snapshot `{}` could not be inspected: {error}",
-            path.display()
-        )
-    })?;
     if !metadata.file_type().is_file() {
         return Err(format!(
             "Provider task recovery snapshot `{}` is not a regular file.",
@@ -1308,11 +1402,10 @@ fn load_latest_snapshot(directory: &Path) -> Result<ProviderTaskRecoverySnapshot
             path.display()
         ));
     }
-    if snapshot.revision != file_revision {
+    if snapshot.revision == 0 {
         return Err(format!(
-            "Provider task recovery snapshot `{}` declares revision {} but its file name declares revision {file_revision}.",
-            path.display(),
-            snapshot.revision
+            "Provider task recovery snapshot `{}` cannot declare revision zero.",
+            path.display()
         ));
     }
     if snapshot.records.len() > PROVIDER_TASK_MAXIMUM_RECORDS {
@@ -1336,103 +1429,7 @@ fn load_latest_snapshot(directory: &Path) -> Result<ProviderTaskRecoverySnapshot
             )
         })?;
     }
-    Ok(snapshot)
-}
-
-/// Parses one exact host-generated provider-task snapshot file identity.
-/// 解析一个精确由宿主生成的供应商任务快照文件身份。
-///
-/// # Parameters
-/// 参数
-/// `path` is one bounded directory entry under the host-owned recovery directory.
-/// `path` 是宿主持有恢复目录下的一条有界目录项。
-///
-/// # Returns
-/// 返回值
-/// `None` for unrelated files, the embedded positive revision for an exact host name, or an
-/// explicit error for a malformed file claiming the reserved snapshot prefix.
-/// 对无关文件返回 `None`，对精确宿主文件名返回其中的正修订号；对冒用保留快照前缀的
-/// 畸形文件返回明确错误。
-fn provider_task_snapshot_file_revision(path: &Path) -> Result<Option<u64>, String> {
-    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-        return Ok(None);
-    };
-    if !name.starts_with("snapshot-") || !name.ends_with(".json") {
-        return Ok(None);
-    }
-    let identity = name
-        .strip_prefix("snapshot-")
-        .and_then(|name| name.strip_suffix(".json"))
-        .expect("reserved prefix and suffix were checked");
-    let Some((revision_text, uuid_text)) = identity.split_once('-') else {
-        return Err(format!(
-            "Provider task recovery snapshot file `{name}` has an invalid host identity."
-        ));
-    };
-    if revision_text.len() != 20
-        || !revision_text.bytes().all(|byte| byte.is_ascii_digit())
-        || Uuid::parse_str(uuid_text).is_err()
-    {
-        return Err(format!(
-            "Provider task recovery snapshot file `{name}` has an invalid host identity."
-        ));
-    }
-    let revision = revision_text.parse::<u64>().map_err(|_| {
-        format!("Provider task recovery snapshot file `{name}` has an invalid revision.")
-    })?;
-    if revision == 0 {
-        return Err(format!(
-            "Provider task recovery snapshot file `{name}` cannot declare revision zero."
-        ));
-    }
-    Ok(Some(revision))
-}
-
-/// Best-effort removes obsolete snapshots after the authoritative replacement is durable.
-/// 在权威替代快照持久化后尽力移除过期快照。
-fn cleanup_old_snapshots(directory: &Path, retained: &Path) {
-    let entries = match fs::read_dir(directory) {
-        Ok(entries) => entries,
-        Err(error) => {
-            eprintln!("[provider-task] obsolete recovery snapshots could not be scanned: {error}");
-            return;
-        }
-    };
-    for (entry_index, entry) in entries.enumerate() {
-        if entry_index >= PROVIDER_TASK_MAXIMUM_DIRECTORY_ENTRIES {
-            eprintln!(
-                "[provider-task] obsolete recovery cleanup stopped at the {PROVIDER_TASK_MAXIMUM_DIRECTORY_ENTRIES} entry scan limit"
-            );
-            break;
-        }
-        let path = match entry {
-            Ok(entry) => entry.path(),
-            Err(error) => {
-                eprintln!(
-                    "[provider-task] one obsolete recovery snapshot entry could not be read: {error}"
-                );
-                continue;
-            }
-        };
-        // removable accepts only host-generated published or temporary snapshot names.
-        // removable 仅接受宿主生成的已发布或临时快照名称。
-        let removable = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| {
-                (name.starts_with("snapshot-") && name.ends_with(".json"))
-                    || (name.starts_with(".snapshot-") && name.ends_with(".tmp"))
-            });
-        if path != retained
-            && removable
-            && let Err(error) = fs::remove_file(&path)
-        {
-            eprintln!(
-                "[provider-task] obsolete recovery snapshot `{}` could not be removed: {error}",
-                path.display()
-            );
-        }
-    }
+    Ok(Some(snapshot))
 }
 
 #[cfg(test)]
@@ -1750,22 +1747,60 @@ mod tests {
             .configure(&directory)
             .expect("snapshot should reload");
         assert_eq!(records, vec![record("execution-one")]);
-        let document = fs::read_to_string(
-            fs::read_dir(&directory)
-                .expect("directory should be readable")
-                .filter_map(Result::ok)
-                .map(|entry| entry.path())
-                .find(|path| {
-                    path.extension()
-                        .is_some_and(|extension| extension == "json")
-                })
-                .expect("one snapshot should exist"),
-        )
-        .expect("snapshot should be readable");
+        let document = fs::read_to_string(directory.join(PROVIDER_TASK_CURRENT_SNAPSHOT_FILE))
+            .expect("snapshot should be readable");
         assert!(!document.contains("secret"));
         assert!(document.contains("operation.request.v1"));
         assert!(document.contains("operation.response.v1"));
         fs::remove_dir_all(directory).expect("temporary directory should be removable");
+    }
+
+    /// Verifies random-name legacy snapshots are ignored when exact recovery files are absent.
+    /// 验证精确恢复文件缺失时会忽略随机名称旧快照。
+    #[test]
+    fn recovery_store_does_not_scan_legacy_snapshot_names() {
+        let directory = std::env::temp_dir().join(format!(
+            "vulcan-provider-task-legacy-migration-{}",
+            Uuid::new_v4()
+        ));
+        fs::create_dir_all(&directory).expect("legacy migration directory should create");
+        let legacy_snapshot = ProviderTaskRecoverySnapshot {
+            version: PROVIDER_TASK_RECOVERY_VERSION,
+            revision: 7,
+            records: BTreeMap::from([(
+                String::from("execution-legacy"),
+                record("execution-legacy"),
+            )]),
+        };
+        let legacy_path = directory.join(format!(
+            "snapshot-00000000000000000007-{}.json",
+            Uuid::new_v4()
+        ));
+        fs::write(
+            &legacy_path,
+            serde_json::to_vec(&legacy_snapshot).expect("legacy snapshot should encode"),
+        )
+        .expect("legacy snapshot should write");
+
+        let first_store = ProviderTaskRecoveryStore::default();
+        let recovered = first_store
+            .configure(&directory)
+            .expect("missing exact snapshots should initialize an empty store");
+        assert!(recovered.is_empty());
+        assert!(
+            directory
+                .join(PROVIDER_TASK_CURRENT_SNAPSHOT_FILE)
+                .is_file()
+        );
+
+        fs::write(&legacy_path, b"corrupted legacy file")
+            .expect("legacy file should become invalid after exact initialization");
+        let second_store = ProviderTaskRecoveryStore::default();
+        let reloaded = second_store
+            .configure(&directory)
+            .expect("fixed locator must bypass corrupted legacy files");
+        assert!(reloaded.is_empty());
+        fs::remove_dir_all(directory).expect("legacy migration directory should be removable");
     }
 
     /// Verifies nonzero manifest revisions cannot recover through the legacy current-target path.
@@ -1796,10 +1831,9 @@ mod tests {
             revision: 1,
             records: BTreeMap::from([(invalid_record.execution_id.clone(), invalid_record)]),
         };
-        // snapshot_path follows the exact production discovery naming contract.
-        // snapshot_path 遵循生产发现使用的精确命名契约。
-        let snapshot_path = directory
-            .join("snapshot-00000000000000000001-00000000-0000-4000-8000-000000000001.json");
+        // snapshot_path is the exact production current-snapshot locator.
+        // snapshot_path 是生产环境使用的精确当前快照定位器。
+        let snapshot_path = directory.join(PROVIDER_TASK_CURRENT_SNAPSHOT_FILE);
         fs::write(
             &snapshot_path,
             serde_json::to_vec_pretty(&snapshot).expect("injected snapshot should encode"),
@@ -1847,15 +1881,7 @@ mod tests {
             .replace(completed)
             .expect("completed record should persist without its result");
 
-        let snapshot_path = fs::read_dir(&directory)
-            .expect("directory should be readable")
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .find(|path| {
-                path.extension()
-                    .is_some_and(|extension| extension == "json")
-            })
-            .expect("one snapshot should exist");
+        let snapshot_path = directory.join(PROVIDER_TASK_CURRENT_SNAPSHOT_FILE);
         let document = fs::read_to_string(snapshot_path).expect("snapshot should be readable");
         assert!(!document.contains("temporary-secret"));
         assert!(!document.contains("\"result\""));
@@ -1885,15 +1911,7 @@ mod tests {
             .replace(record("execution-two"))
             .expect("second record should persist");
 
-        let snapshot_path = fs::read_dir(&directory)
-            .expect("directory should be readable")
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .find(|path| {
-                path.extension()
-                    .is_some_and(|extension| extension == "json")
-            })
-            .expect("one published snapshot should remain");
+        let snapshot_path = directory.join(PROVIDER_TASK_CURRENT_SNAPSHOT_FILE);
         let bytes = fs::read(snapshot_path).expect("snapshot should be readable");
         let snapshot: ProviderTaskRecoverySnapshot =
             serde_json::from_slice(bytes.as_slice()).expect("snapshot should decode");
@@ -1914,29 +1932,36 @@ mod tests {
         fs::remove_dir_all(directory).expect("temporary directory should be removable");
     }
 
-    /// Verifies the selected file identity and embedded revision cannot disagree.
-    /// 验证所选文件身份与内嵌修订号不能不一致。
+    /// Verifies exact current and rollback files select the higher embedded revision.
+    /// 验证精确当前文件与回滚文件会选择较高的内嵌修订号。
     #[test]
-    fn recovery_snapshot_file_revision_must_match_document_revision() {
+    fn recovery_snapshot_uses_newest_exact_file_revision() {
         let directory =
             std::env::temp_dir().join(format!("vulcan-provider-task-revision-{}", Uuid::new_v4()));
         fs::create_dir_all(&directory).expect("temporary directory should create");
-        let snapshot = ProviderTaskRecoverySnapshot {
+        let current = ProviderTaskRecoverySnapshot {
             version: PROVIDER_TASK_RECOVERY_VERSION,
             revision: 2,
             records: BTreeMap::new(),
         };
-        let path = directory
-            .join("snapshot-00000000000000000001-00000000-0000-4000-8000-000000000001.json");
+        let previous = ProviderTaskRecoverySnapshot {
+            version: PROVIDER_TASK_RECOVERY_VERSION,
+            revision: 3,
+            records: BTreeMap::new(),
+        };
         fs::write(
-            path,
-            serde_json::to_vec_pretty(&snapshot).expect("snapshot should encode"),
+            directory.join(PROVIDER_TASK_CURRENT_SNAPSHOT_FILE),
+            serde_json::to_vec(&current).expect("current snapshot should encode"),
         )
-        .expect("snapshot should write");
+        .expect("current snapshot should write");
+        fs::write(
+            directory.join(PROVIDER_TASK_PREVIOUS_SNAPSHOT_FILE),
+            serde_json::to_vec(&previous).expect("previous snapshot should encode"),
+        )
+        .expect("previous snapshot should write");
 
-        let error = load_latest_snapshot(&directory)
-            .expect_err("file and document revisions must agree exactly");
-        assert!(error.contains("declares revision 2"), "{error}");
+        let loaded = load_latest_snapshot(&directory).expect("exact snapshots should load");
+        assert_eq!(loaded.revision, 3);
         fs::remove_dir_all(directory).expect("temporary directory should be removable");
     }
 
@@ -1958,8 +1983,7 @@ mod tests {
             revision: u64::MAX,
             records: BTreeMap::new(),
         };
-        let path = directory
-            .join("snapshot-18446744073709551615-00000000-0000-4000-8000-000000000001.json");
+        let path = directory.join(PROVIDER_TASK_CURRENT_SNAPSHOT_FILE);
         fs::write(
             path,
             serde_json::to_vec_pretty(&snapshot).expect("snapshot should encode"),
@@ -2160,15 +2184,14 @@ mod tests {
         assert!(records.contains_key("recent"));
     }
 
-    /// Verifies oversized or excessively numerous durable snapshot inputs fail before allocation.
-    /// 验证过大或数量过多的持久快照输入在分配前关闭失败。
+    /// Verifies oversized exact snapshots fail before allocation and unrelated files are ignored.
+    /// 验证过大的精确快照会在分配前关闭失败，且无关文件会被忽略。
     #[test]
-    fn recovery_snapshot_files_and_bytes_are_bounded() {
+    fn recovery_snapshot_bytes_are_bounded_and_unrelated_files_are_not_discovered() {
         let oversized_directory =
             std::env::temp_dir().join(format!("vulcan-provider-task-oversized-{}", Uuid::new_v4()));
         fs::create_dir_all(&oversized_directory).expect("oversized directory should create");
-        let oversized_path = oversized_directory
-            .join("snapshot-00000000000000000001-00000000-0000-4000-8000-000000000001.json");
+        let oversized_path = oversized_directory.join(PROVIDER_TASK_CURRENT_SNAPSHOT_FILE);
         let oversized_file = OpenOptions::new()
             .create_new(true)
             .write(true)
@@ -2184,23 +2207,31 @@ mod tests {
         fs::remove_dir_all(&oversized_directory)
             .expect("oversized temporary directory should be removable");
 
-        let crowded_directory =
-            std::env::temp_dir().join(format!("vulcan-provider-task-crowded-{}", Uuid::new_v4()));
-        fs::create_dir_all(&crowded_directory).expect("crowded directory should create");
-        for index in 1..=PROVIDER_TASK_MAXIMUM_SNAPSHOT_FILES + 1 {
-            let path = crowded_directory.join(format!(
-                "snapshot-{index:020}-00000000-0000-4000-8000-000000000001.json"
-            ));
-            fs::write(path, b"{}").expect("candidate snapshot should write");
+        let exact_directory =
+            std::env::temp_dir().join(format!("vulcan-provider-task-exact-{}", Uuid::new_v4()));
+        fs::create_dir_all(&exact_directory).expect("exact directory should create");
+        for index in 1..=65 {
+            fs::write(
+                exact_directory.join(format!("legacy-snapshot-{index:03}.json")),
+                b"not-json",
+            )
+            .expect("unrelated file should write");
         }
-        let crowded_error = load_latest_snapshot(&crowded_directory)
-            .expect_err("too many snapshot files must fail before selecting one");
-        assert!(
-            crowded_error.contains("snapshot-file limit"),
-            "{crowded_error}"
-        );
-        fs::remove_dir_all(&crowded_directory)
-            .expect("crowded temporary directory should be removable");
+        let exact_snapshot = ProviderTaskRecoverySnapshot {
+            version: PROVIDER_TASK_RECOVERY_VERSION,
+            revision: 7,
+            records: BTreeMap::new(),
+        };
+        fs::write(
+            exact_directory.join(PROVIDER_TASK_CURRENT_SNAPSHOT_FILE),
+            serde_json::to_vec(&exact_snapshot).expect("exact snapshot should encode"),
+        )
+        .expect("exact snapshot should write");
+        let loaded = load_latest_snapshot(&exact_directory)
+            .expect("only the exact current and previous files should be read");
+        assert_eq!(loaded.revision, 7);
+        fs::remove_dir_all(&exact_directory)
+            .expect("exact temporary directory should be removable");
     }
 
     /// Verifies record-cap exhaustion preserves every already active task.

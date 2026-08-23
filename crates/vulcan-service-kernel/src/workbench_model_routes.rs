@@ -16,8 +16,9 @@ use super::{
     mutate_provider_configuration, mutate_provider_configuration_with_state_validation,
     mutate_public_ai_configuration, parse_reasoning_effort, parse_thinking_display_mode,
     publish_public_ai_workbench, refresh_settings_projection_locked,
-    refresh_workbench_runtime_controls_locked, session_addon_state_from_workspace_snapshot,
-    spawn_workspace_session_addon_state_persist_task,
+    refresh_workbench_runtime_controls_locked,
+    require_segmented_session_directory_for_retained_session,
+    session_addon_state_from_workspace_snapshot, spawn_exact_session_addon_state_persist_task,
 };
 
 mod openrouter_routes;
@@ -257,7 +258,7 @@ pub(super) async fn service_select_workbench_reasoning_effort(
 ) -> Result<WorkbenchSnapshot, String> {
     let selected_effort =
         parse_reasoning_effort(effort.trim()).ok_or_else(|| format!("未知思考档位：{effort}"))?;
-    let (controller_runtime, persist_session_id, persist_workspace_snapshot, workbench) =
+    let (session_directory, addon_state, workbench) =
         mutate_provider_configuration_with_state_validation(
             &state,
             "保存思考档位失败",
@@ -286,56 +287,58 @@ pub(super) async fn service_select_workbench_reasoning_effort(
                 configuration.workbench_reasoning_effort_explicit = true;
                 Ok(())
             },
-            |guard, configuration| {
-                let controller_runtime = guard.controller_runtime.clone();
-                let persist_session_id = guard.workspace_snapshot.as_mut().map(|workspace| {
-                    // runtimeState is addressed by the immutable RPC target, so navigation while
-                    // the write is queued cannot redirect the setting into another session.
-                    // runtimeState 由不可变 RPC 目标寻址，因此写入排队期间的会话导航无法把设置
-                    // 重定向到其他会话。
-                    let runtime_state = workspace
-                        .session_runtime_state
-                        .entry(conversation_id)
-                        .or_insert_with(|| SessionRuntimeStateEntry {
-                            updated_at: current_unix_millis_text(),
-                            ..SessionRuntimeStateEntry::default()
-                        });
-                    runtime_state.active_reasoning_effort = Some(selected_effort);
-                    runtime_state.active_reasoning_effort_explicit = true;
-                    runtime_state.updated_at = current_unix_millis_text();
-                    conversation_id
-                });
-                refresh_workbench_runtime_controls_locked(guard, configuration);
-                (
-                    controller_runtime,
-                    persist_session_id,
-                    guard.workspace_snapshot.clone(),
-                    guard.workbench.clone(),
+            |guard, configuration| -> Result<_, String> {
+                let data_root = guard
+                    .controller_runtime
+                    .as_ref()
+                    .map(|runtime| runtime.data_root.clone())
+                    .ok_or_else(|| String::from("controller runtime is not ready"))?;
+                let workspace = guard
+                    .workspace_snapshot
+                    .as_mut()
+                    .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+                // runtimeState is addressed by the immutable RPC target, so navigation while
+                // the write is queued cannot redirect the setting into another session.
+                // runtimeState 由不可变 RPC 目标寻址，因此写入排队期间的会话导航无法把设置
+                // 重定向到其他会话。
+                let runtime_state = workspace
+                    .session_runtime_state
+                    .entry(conversation_id)
+                    .or_insert_with(|| SessionRuntimeStateEntry {
+                        updated_at: current_unix_millis_text(),
+                        ..SessionRuntimeStateEntry::default()
+                    });
+                runtime_state.active_reasoning_effort = Some(selected_effort);
+                runtime_state.active_reasoning_effort_explicit = true;
+                runtime_state.updated_at = current_unix_millis_text();
+                let addon_state = session_addon_state_from_workspace_snapshot(
+                    workspace,
+                    conversation_id,
+                    &[SessionAddonNamespace::RuntimeControls],
                 )
+                .ok_or_else(|| {
+                    format!("Conversation `{conversation_id}` has no runtime-controls addon state.")
+                })?;
+                refresh_workbench_runtime_controls_locked(guard, configuration);
+                let session_directory = require_segmented_session_directory_for_retained_session(
+                    guard,
+                    &data_root,
+                    conversation_id,
+                )?;
+                Ok((session_directory, addon_state, guard.workbench.clone()))
             },
         )
-        .await?;
+        .await??;
 
-    if let (Some(controller_runtime), Some(session_id), Some(workspace_snapshot)) = (
-        controller_runtime,
-        persist_session_id,
-        persist_workspace_snapshot,
-    ) && let Some(addon_state) = session_addon_state_from_workspace_snapshot(
-        &workspace_snapshot,
-        session_id,
-        &[SessionAddonNamespace::RuntimeControls],
-    ) {
-        spawn_workspace_session_addon_state_persist_task(
-            app.clone(),
-            state.clone(),
-            controller_runtime,
-            workspace_snapshot,
-            session_id,
-            addon_state,
-            vec![SessionAddonNamespace::RuntimeControls],
-            Some(String::from("reasoning_selection")),
-        );
-    }
+    spawn_exact_session_addon_state_persist_task(
+        app.clone(),
+        state.clone(),
+        session_directory,
+        conversation_id,
+        addon_state,
+        vec![SessionAddonNamespace::RuntimeControls],
+        Some(String::from("reasoning_selection")),
+    );
 
     emit_workbench_event(&app, &workbench);
     Ok(workbench)

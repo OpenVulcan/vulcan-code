@@ -31,6 +31,9 @@ export interface ComposerAttachmentSummary {
   // Managed local path used for provider replay.
   // Provider 回放使用的托管本地路径。
   localPath: string;
+  // Project-relative resource path safe for model and host-tool use.
+  // 可安全供模型与宿主工具使用的项目相对资源路径。
+  resourcePath?: string | null;
   // Optional original source path.
   // 可选原始来源路径。
   sourcePath?: string | null;
@@ -40,12 +43,70 @@ export interface ComposerAttachmentSummary {
   // Optional byte length.
   // 可选字节长度。
   byteLen?: number | null;
+  // Optional SHA-256 digest of the managed source bytes.
+  // 可选托管源字节 SHA-256 摘要。
+  sourceSha256?: string | null;
+  // Optional request-local delivery decision frozen immediately before submission.
+  // 在提交前即时冻结的可选单次请求局部传输决策。
+  deliveryPlan?: ComposerAttachmentDeliveryPlan | null;
   // Optional preview local path.
   // 可选预览本地路径。
   previewLocalPath?: string | null;
   // MIME type.
   // MIME 类型。
   mimeType: string;
+}
+
+// ComposerAttachmentDeliveryPlan names the direct-delivery decision frozen for one route.
+// ComposerAttachmentDeliveryPlan 命名单个路线冻结的直接传输决策。
+export type ComposerAttachmentDeliveryPlan =
+  | "inline_original"
+  | "upload_reference"
+  | "inline_derived_preview"
+  | "metadata_only";
+
+// ComposerAttachmentPreparationPhase names one closed draft-preparation lifecycle state.
+// ComposerAttachmentPreparationPhase 命名一个封闭的草稿准备生命周期状态。
+export type ComposerAttachmentPreparationPhase =
+  | "local_ready"
+  | "upload_queued"
+  | "uploading"
+  | "awaiting_provider_confirmation"
+  | "direct_ready"
+  | "metadata_only"
+  | "failed"
+  | "cancelled";
+
+// ComposerAttachmentPreparationSummary carries route planning and retry state for one attachment.
+// ComposerAttachmentPreparationSummary 携带单个附件的路线规划与重试状态。
+export interface ComposerAttachmentPreparationSummary {
+  // Stable attachment identity.
+  // 稳定附件身份。
+  attachmentId: string;
+  // Caller-owned generation used to ignore late results.
+  // 调用方持有、用于忽略迟到结果的代际。
+  generation: number;
+  // Exact transfer identity used by progress and cancellation.
+  // 供进度与取消使用的精确传输标识。
+  transferId: string;
+  // Frozen direct-delivery decision.
+  // 冻结的直接传输决策。
+  deliveryPlan: ComposerAttachmentDeliveryPlan;
+  // Current lifecycle phase.
+  // 当前生命周期阶段。
+  phase: ComposerAttachmentPreparationPhase;
+  // Whether submission is blocked.
+  // 是否阻止提交。
+  blocksSubmission: boolean;
+  // Optional frozen route revision.
+  // 可选冻结路线修订。
+  routeRevision?: string | null;
+  // Stable delivery or degradation reason.
+  // 稳定传输或降级原因。
+  reason: string;
+  // Optional controlled failure detail.
+  // 可选受控失败详情。
+  error?: string | null;
 }
 
 // PendingPromptSummary describes one visible queued prompt above the composer.

@@ -79,8 +79,8 @@ struct ProviderRateLimitRetrySettingsSaveRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct ProviderRequestTraceSettingsSaveRequest {
-    /// Whether real Provider dispatches write complete request traces into session temp directories.
-    /// 真实 Provider 分派是否将完整请求追踪写入会话临时目录。
+    /// Whether real Provider dispatches write bounded wire-request traces into session temp directories.
+    /// 真实 Provider 分派是否将有界线上请求追踪写入会话临时目录。
     enabled: bool,
 }
 
@@ -132,8 +132,8 @@ pub(super) async fn service_save_provider_retry_settings(
     Ok(workbench)
 }
 
-/// Saves the complete Provider request-trace diagnostic switch from system settings.
-/// 从系统设置保存完整 Provider 请求追踪诊断开关。
+/// Saves the bounded Provider wire-request trace diagnostic switch from system settings.
+/// 从系统设置保存有界 Provider 线上请求追踪诊断开关。
 ///
 /// # Parameters
 /// 参数

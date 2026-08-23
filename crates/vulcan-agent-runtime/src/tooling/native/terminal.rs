@@ -410,8 +410,8 @@ pub(crate) fn terminal_session_args_schema(shell_support: &HostCommandShellSuppo
                         "type": "string",
                         "enum": ["return_immediately", "until_quiet", "until_prompt", "until_pattern", "screen_stable"]
                     },
-                    "quiet_ms": { "type": "integer" },
-                    "max_wait_ms": { "type": "integer" },
+                    "quiet_ms": { "type": "integer", "minimum": 0, "maximum": MAX_COMMAND_SESSION_READ_WAIT_MS },
+                    "max_wait_ms": { "type": "integer", "minimum": 0, "maximum": MAX_COMMAND_SESSION_READ_WAIT_MS },
                     "pattern": { "type": "string" }
                 },
                 "required": ["mode"],
@@ -427,7 +427,9 @@ pub(crate) fn terminal_session_args_schema(shell_support: &HostCommandShellSuppo
             },
             "max_chunks": {
                 "type": "integer",
-                "description": format!("Optional maximum output chunks returned by one read-like action. Default: {DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS}.")
+                "minimum": 1,
+                "maximum": MAX_COMMAND_SESSION_READ_CHUNKS,
+                "description": format!("Optional maximum output chunks returned by one read-like action. Default: {DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS}; host maximum: {MAX_COMMAND_SESSION_READ_CHUNKS}.")
             }
         },
         "required": ["action"],

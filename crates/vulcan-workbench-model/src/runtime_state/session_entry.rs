@@ -345,10 +345,17 @@ pub struct SessionRuntimeStateEntry {
         skip_serializing_if = "SessionProviderCallLedger::is_empty"
     )]
     pub provider_call_ledger: SessionProviderCallLedger,
-    /// Lightweight durable reference to the exact execution snapshot eligible for retry.
-    /// 指向可重试精确执行快照的轻量持久化引用。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Lightweight live or interrupted reference to the exact execution snapshot eligible for retry.
+    /// 指向可重试精确执行快照的轻量实时或中断引用。
+    #[serde(
+        default,
+        skip_serializing_if = "execution_retry_snapshot_is_transient_or_none"
+    )]
     pub execution_retry_snapshot: Option<ExecutionRetrySnapshotRef>,
+    /// Complete live retry state retained only while the owning service process is running.
+    /// 仅在所属服务进程运行期间保留的完整实时重试状态。
+    #[serde(skip)]
+    pub transient_execution_retry_snapshot: Option<Arc<ExecutionRetrySnapshot>>,
     /// Absolute input-token baseline for the current BodyAfterPrefix compaction window.
     /// 当前 BodyAfterPrefix 压缩窗口使用的绝对输入 Token 基线。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -364,6 +371,26 @@ pub struct SessionRuntimeStateEntry {
     /// Unix-millis text capturing when the runtime state was last refreshed.
     /// 捕获运行时状态最近刷新时间的 Unix 毫秒文本。
     pub updated_at: String,
+}
+
+/// Returns whether a retry reference has no durable interrupted body and must stay process-local.
+/// 返回重试引用是否没有持久化中断正文并必须停留在进程内。
+///
+/// # Parameters
+/// 参数
+/// `reference` is the optional live or interrupted retry identity attached to one session.
+/// `reference` 是附加到单个会话的可选实时或中断重试身份。
+///
+/// # Returns
+/// 返回值
+/// `true` for absence or a zero-byte live projection so serde omits it from `state.json`.
+/// 缺失或零字节实时投影时返回 `true`，使 serde 从 `state.json` 省略该字段。
+fn execution_retry_snapshot_is_transient_or_none(
+    reference: &Option<ExecutionRetrySnapshotRef>,
+) -> bool {
+    reference
+        .as_ref()
+        .is_none_or(|reference| reference.content_bytes == 0)
 }
 
 impl SessionRuntimeStateEntry {

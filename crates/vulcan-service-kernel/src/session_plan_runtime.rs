@@ -14,7 +14,7 @@ pub(crate) fn session_plan_context_for_prompt_from_state(
     let mut context: Option<String> = None;
     let mut next_plan_mode: Option<SessionPlanModeState> = None;
     let mut next_execution_mode = String::from("build");
-    let workspace_snapshot = {
+    let session_directory = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -51,11 +51,22 @@ pub(crate) fn session_plan_context_for_prompt_from_state(
                 }
             }
         }
-        workspace.clone()
+        if next_plan_mode.is_some() {
+            Some(require_segmented_session_directory_for_retained_session(
+                &guard,
+                &controller_runtime.data_root,
+                session_id,
+            )?)
+        } else {
+            None
+        }
     };
     let Some(plan_mode) = next_plan_mode else {
         return Ok(context);
     };
+    let session_directory = session_directory.ok_or_else(|| {
+        format!("Session `{session_id}` plan-mode persistence target is missing.")
+    })?;
     let mut addon_state = SessionAddonState::new(session_id);
     let _ = addon_state.set_work_mode(
         &SessionWorkMode {
@@ -64,11 +75,10 @@ pub(crate) fn session_plan_context_for_prompt_from_state(
         },
         updated_at,
     );
-    spawn_workspace_session_addon_state_persist_task(
+    spawn_exact_session_addon_state_persist_task(
         app.clone(),
         state.clone(),
-        controller_runtime.clone(),
-        workspace_snapshot,
+        session_directory,
         session_id,
         addon_state,
         vec![SessionAddonNamespace::WorkMode],

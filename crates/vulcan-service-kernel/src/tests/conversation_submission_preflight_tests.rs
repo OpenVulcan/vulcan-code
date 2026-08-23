@@ -1,8 +1,8 @@
 use super::*;
 use crate::conversation_submission::{
     attach_client_submission_id_to_visible_user_record, commit_created_submission_workspace_slice,
-    continuation_submission_runtime_blockers, prepare_materialized_submission_session,
-    prepare_retained_submission_preflight,
+    commit_existing_submission_workspace_slice, continuation_submission_runtime_blockers,
+    prepare_materialized_submission_session, prepare_retained_submission_preflight,
 };
 
 /// Builds an initialized retained workspace that owns `project-a` for new-session admission tests.
@@ -57,7 +57,7 @@ fn retained_session_owner_project_blocks_submission_during_lifecycle_transition(
     let session_id = SessionId::new_v4();
     // service_state owns the retained session and the authoritative project lifecycle reservation.
     // service_state 持有保留会话与权威项目生命周期预留。
-    let mut service_state = test_service_state_with_parent_session(session_id);
+    let mut service_state = initialized_project_a_service_state(session_id);
     service_state.project_admission_reservations.insert(
         ProjectAdmissionScope::Exact(String::from("project-a")),
         ProjectAdmissionReservation {
@@ -200,7 +200,7 @@ fn existing_submission_admission_blocks_competitor_and_authorizes_owner() {
     let session_id = SessionId::new_v4();
     // service_state supplies one idle retained parent session.
     // service_state 提供一个空闲的保留父会话。
-    let service_state = test_service_state_with_parent_session(session_id);
+    let service_state = initialized_project_a_service_state(session_id);
     // state exposes reservation and kernel ownership under one shared lock.
     // state 在同一个共享锁下提供预留与 kernel 所有权。
     let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
@@ -267,11 +267,10 @@ fn existing_submission_admission_blocks_competitor_and_authorizes_owner() {
         // guard simulates a replacement row and proves stale ownership never receives the exemption.
         // guard 模拟替代预留行，并证明陈旧所有权绝不会获得排除资格。
         let mut guard = state.lock().expect("service state lock");
-        let original_reservation = guard
+        let original_reservation = *guard
             .session_turn_admission_reservations
             .get(&session_id)
-            .expect("owner reservation should exist")
-            .clone();
+            .expect("owner reservation should exist");
         guard.session_turn_admission_reservations.insert(
             session_id,
             SessionTurnAdmissionReservation {
@@ -334,9 +333,8 @@ fn existing_submission_admission_blocks_competitor_and_authorizes_owner() {
 #[test]
 fn pending_prompt_dispatch_admission_is_single_owner_and_reusable() {
     let session_id = SessionId::new_v4();
-    let state: SharedServiceBridgeState = Arc::new(Mutex::new(
-        test_service_state_with_parent_session(session_id),
-    ));
+    let state: SharedServiceBridgeState =
+        Arc::new(Mutex::new(initialized_project_a_service_state(session_id)));
 
     let first = try_begin_pending_prompt_dispatch_exclusion(&state, session_id)
         .expect("first pending dispatch admission should be readable")
@@ -375,9 +373,8 @@ fn preauthorized_existing_submission_preserves_outer_admission_ownership() {
     let session_id = SessionId::new_v4();
     // state owns retained workspace, admission rows, and the simulated runtime kernel.
     // state 持有保留工作区、准入行与模拟运行时内核。
-    let state: SharedServiceBridgeState = Arc::new(Mutex::new(
-        test_service_state_with_parent_session(session_id),
-    ));
+    let state: SharedServiceBridgeState =
+        Arc::new(Mutex::new(initialized_project_a_service_state(session_id)));
     // outer_guard retains the PromptSubmission row for the complete edit transaction.
     // outer_guard 在完整编辑事务期间保留 PromptSubmission 行。
     let outer_guard = begin_existing_prompt_submission_exclusion(&state, session_id, "编辑提示词")
@@ -464,9 +461,8 @@ fn stale_submission_admission_cannot_start_or_release_replacement() {
     let session_id = SessionId::new_v4();
     // state owns both the stale guard and the replacement reservation row.
     // state 同时持有过期守卫与替代预留行。
-    let state: SharedServiceBridgeState = Arc::new(Mutex::new(
-        test_service_state_with_parent_session(session_id),
-    ));
+    let state: SharedServiceBridgeState =
+        Arc::new(Mutex::new(initialized_project_a_service_state(session_id)));
     // preflight captures the first reservation owner that will become stale.
     // preflight 捕获即将过期的首个预留所有者。
     let preflight = prepare_retained_submission_preflight(
@@ -833,6 +829,122 @@ fn created_submission_slice_commit_preserves_retained_history() {
             .any(|session| session.id == materialized_session.session_id)
     );
     assert_eq!(workspace.sessions.len(), 2);
+}
+
+/// Verifies an existing-session commit moves runtime ownership and merges only new transcript records.
+/// 验证已有会话提交会移动运行态所有权，并且只合并新增转录记录。
+///
+/// # Parameters
+/// 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// 返回值
+/// This test returns no value and fails if the detached commit clones or replaces retained transcript history.
+/// 此测试无返回值；若分离提交复制或替换保留转录历史则失败。
+#[test]
+fn existing_submission_commit_preserves_history_and_merges_only_new_records() {
+    // session_id identifies the sole retained existing session under test.
+    // session_id 标识测试中的唯一保留已有会话。
+    let session_id = SessionId::new_v4();
+    // service_state owns the authoritative history that the detached transaction must preserve.
+    // service_state 持有分离事务必须保留的权威历史。
+    let mut service_state = initialized_project_a_service_state(session_id);
+    // retained_message is the pre-existing transcript row that must remain first.
+    // retained_message 是必须保持首位的既有转录记录。
+    let mut retained_message =
+        SessionMessageEntry::new(SessionMessageKind::Assistant, "历史输出", "retained");
+    retained_message.id = String::from("retained-message");
+    service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("retained workspace")
+        .session_messages
+        .insert(session_id, vec![retained_message]);
+    service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("retained workspace")
+        .session_runtime_state
+        .insert(session_id, SessionRuntimeStateEntry::default());
+    // state exposes the retained workspace to exact-session commit logic.
+    // state 向精确会话提交逻辑提供保留工作区。
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
+    // preflight captures only the admitted session runtime and summary.
+    // preflight 只捕获已准入会话的运行态与摘要。
+    let preflight = prepare_retained_submission_preflight(
+        &state,
+        None,
+        PromptSessionTarget::Existing(session_id),
+        None,
+    )
+    .expect("existing submission preflight");
+    // candidate owns the detached transaction whose heavy fields will transfer at commit.
+    // candidate 持有会在提交时转移重字段的分离事务。
+    let mut candidate = preflight
+        .retained_workspace_snapshot
+        .expect("exact existing-session slice");
+    assert!(
+        candidate.session_messages.is_empty(),
+        "preflight must not clone presentation history"
+    );
+    // incoming_message is the only transcript delta created by the detached submission.
+    // incoming_message 是分离提交新建的唯一转录增量。
+    let mut incoming_message =
+        SessionMessageEntry::new(SessionMessageKind::User, "用户补充", "incoming");
+    incoming_message.id = String::from("incoming-message");
+    candidate
+        .session_messages
+        .insert(session_id, vec![incoming_message]);
+    candidate
+        .session_runtime_state
+        .get_mut(&session_id)
+        .expect("candidate runtime state")
+        .active_work_mode = Some(String::from("review"));
+    // materialized_session binds the transaction to the exact existing-session identity.
+    // materialized_session 将事务绑定到精确已有会话身份。
+    let materialized_session = MaterializedPromptSession {
+        session_id,
+        project_id: Some(String::from("project-a")),
+        session_title: String::from("父会话"),
+        workspace_path: String::from("D:/project-a"),
+        kind: PromptSessionMaterializationKind::Existing,
+    };
+
+    commit_existing_submission_workspace_slice(&state, &mut candidate, &materialized_session)
+        .expect("existing submission commit");
+
+    // guard observes the final authoritative retained revision.
+    // guard 观察最终权威保留版本。
+    let guard = state.lock().expect("retained state lock");
+    // workspace contains the merged transcript delta and transferred runtime metadata.
+    // workspace 包含已合并的转录增量与已转移的运行态元数据。
+    let workspace = guard
+        .workspace_snapshot
+        .as_ref()
+        .expect("retained workspace after commit");
+    assert_eq!(
+        workspace
+            .session_messages
+            .get(&session_id)
+            .expect("retained messages")
+            .iter()
+            .map(|message| message.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["retained-message", "incoming-message"]
+    );
+    assert_eq!(
+        workspace
+            .session_runtime_state
+            .get(&session_id)
+            .and_then(|runtime_state| runtime_state.active_work_mode.as_deref()),
+        Some("review")
+    );
+    assert!(
+        candidate.session_runtime_state.get(&session_id).is_none(),
+        "runtime state should transfer instead of cloning at commit"
+    );
 }
 
 /// Verifies one browser submission identifier reaches visible and canonical user records together.

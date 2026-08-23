@@ -37,6 +37,18 @@ use vulcan_tools_manager::{
 };
 use vulcan_vmm::VmmConfigLayer;
 
+/// Verifies the conversation preparation module cannot reload prompt-skill directories.
+/// 验证会话准备模块不能重新加载提示词技能目录。
+#[test]
+fn execution_preparation_reuses_published_prompt_skill_catalog() {
+    let source = include_str!("../execution_preparation.rs");
+    assert!(
+        !source.contains("load_prompt_skills("),
+        "conversation preparation must reuse the published prompt-skill generation"
+    );
+    assert!(source.contains("foundation.prompt_skill_catalog()"));
+}
+
 /// Verifies request-scoped agent routing makes preparation use the requested agent instead of the global active worker.
 /// 验证请求级代理路由会让执行准备使用指定代理，而不是全局激活的默认工作代理。
 /// Adds one protocol variant for each protocol id to every model of one catalog.
@@ -274,6 +286,43 @@ fn execution_tool_exposure_filters_luaskills_with_family_overrides() {
 
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0].canonical_name, "vulcan-codekit-rg");
+}
+
+/// Verifies retired LuaSkills file tools are hidden while similarly named entries remain visible.
+/// 验证旧 LuaSkills 文件工具会隐藏，而相似命名的入口仍然可见。
+#[test]
+fn execution_tool_exposure_hides_retired_luaskills_file_tools() {
+    let selectors = ToolExposureSelectorState::default();
+    let entries = vec![
+        test_luaskills_entry("vulcan-file", "read"),
+        test_luaskills_entry("vulcan-file", "list"),
+        test_luaskills_entry("vulcan-file", "create"),
+        test_luaskills_entry("vulcan-file", "delete"),
+        test_luaskills_entry("vulcan-file", "edit"),
+        test_luaskills_entry("vulcan-file-tools", "readme"),
+    ];
+
+    let filtered = filter_luaskills_entries(entries, &selectors);
+
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].canonical_name, "vulcan-file-tools-readme");
+}
+
+/// Verifies retired LuaSkills file-tool prompt entries are hidden without hiding similar names.
+/// 验证旧 LuaSkills 文件工具提示词入口会隐藏，而相似命名不会被误隐藏。
+#[test]
+fn execution_tool_exposure_hides_retired_luaskills_file_prompts() {
+    let selectors = ToolExposureSelectorState::default();
+    let entries = vec![
+        LuaSkillPromptEntry::new("vulcan-file-read", "legacy read"),
+        LuaSkillPromptEntry::new("vulcan-file-edit", "legacy edit"),
+        LuaSkillPromptEntry::new("vulcan-file-tools-readme", "documentation"),
+    ];
+
+    let filtered = filter_luaskill_prompt_entries(entries, &selectors);
+
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].name, "vulcan-file-tools-readme");
 }
 
 /// Verifies LuaSkills family overrides trim implicit prompt entries with the same selectors.
@@ -735,6 +784,7 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
     let session_id = Uuid::nil();
     ExecutionPreparationRequest {
         session_id,
+        session_storage_directory: None,
         managed_codebase_memory: None,
         execution_scope: ExecutionScope::MainSession {
             session_id: SessionNodeId::from(session_id),

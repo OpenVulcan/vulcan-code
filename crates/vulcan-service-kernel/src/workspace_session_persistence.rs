@@ -4,6 +4,50 @@
 use super::*;
 use std::future::Future;
 
+/// Detached data required to persist exactly one regular workspace session.
+/// 持久化一个精确普通工作区会话所需的分离数据。
+struct WorkspaceSessionPersistencePayload {
+    /// Exact project owner carried by the retained session locator.
+    /// 保留会话定位信息携带的精确项目归属。
+    project_id: String,
+    /// Exact session summary being persisted.
+    /// 正在持久化的精确会话摘要。
+    session: SessionSummary,
+    /// Whether the exact session currently belongs to archived storage.
+    /// 精确会话当前是否属于归档存储。
+    archived: bool,
+    /// Stored display transcript supplied to the workspace-store canonical merge.
+    /// 提供给 workspace-store 规范合并的已存展示转录。
+    messages: Vec<SessionMessageEntry>,
+    /// Optional canonical runtime state for the exact session.
+    /// 精确会话的可选规范运行态。
+    runtime_state: Option<SessionRuntimeStateEntry>,
+}
+
+/// Detached history-free payload for one authoritative retained-session write.
+/// 单个权威保留会话写入使用的分离无历史载荷。
+struct RetainedWorkspaceSessionPersistencePayload {
+    /// Exact deterministic directory resolved before releasing retained state.
+    /// 释放保留状态前解析出的精确确定性目录。
+    session_directory: PathBuf,
+    /// Exact project owner carried by the retained session locator.
+    /// 保留会话定位信息携带的精确项目归属。
+    project_id: String,
+    /// Exact session summary being persisted.
+    /// 正在持久化的精确会话摘要。
+    session: SessionSummary,
+    /// Whether the exact session currently belongs to archived storage.
+    /// 精确会话当前是否属于归档存储。
+    archived: bool,
+    /// Exact display transcript for this session only.
+    /// 仅属于该会话的精确展示转录。
+    messages: Vec<SessionMessageEntry>,
+    /// Optional history-free `state.json` projection produced while borrowing runtime state.
+    /// 借用运行态期间生成的可选无历史 `state.json` 投影。
+    runtime_projection:
+        Option<vulcan_workspace_store::workspace_store::SessionRuntimeStatePersistenceProjection>,
+}
+
 /// Persists only the changed session after a WebUI runtime mutation.
 /// 在 WebUI 运行时变更后仅持久化被修改的单个会话。
 ///
@@ -20,8 +64,8 @@ use std::future::Future;
 ///
 /// # Returns
 /// 返回值
-/// Success after the newest authoritative session revision has crossed the shared write gate.
-/// 最新权威会话修订通过共享写入闸门后返回成功。
+/// Success after the newest authoritative session revision has crossed its session-keyed write channel.
+/// 最新权威会话修订通过其会话键写入通道后返回成功。
 pub(crate) async fn persist_workspace_session_update(
     state: Option<&SharedServiceBridgeState>,
     controller_runtime: ControllerRuntimeHandle,
@@ -29,50 +73,186 @@ pub(crate) async fn persist_workspace_session_update(
     session_id: SessionId,
 ) -> Result<(), String> {
     if let Some(state) = state {
-        let (_persist_guard, authoritative_snapshot) =
-            lock_latest_retained_workspace_session_persistence_snapshot(state, session_id).await?;
-        return persist_workspace_session_update_unlocked(
+        return persist_latest_retained_workspace_session_update(
+            state,
             controller_runtime,
-            &authoritative_snapshot,
             session_id,
         )
         .await;
     }
-    let persist_lock = webui_workspace_persist_lock();
+    let persist_lock = webui_session_persist_lock(session_id);
     let _persist_guard = persist_lock.lock().await;
     persist_workspace_session_update_unlocked(controller_runtime, workspace_snapshot, session_id)
         .await
 }
 
-/// Acquires the shared write gate and then clones the newest retained workspace revision.
-/// 取得共享写入闸门后再克隆最新保留工作区修订。
+/// Persists the newest authoritative revision of one retained session without cloning its workspace.
+/// 在不克隆工作区的情况下持久化一个保留会话的最新权威修订。
 ///
 /// # Parameters
 /// 参数
-/// `state` owns the authoritative retained workspace and background persistence versions.
-/// `state` 持有权威保留工作区与后台持久化版本。
-/// `session_id` selects the session whose older queued writers must be invalidated.
-/// `session_id` 选择必须使旧排队写入者失效的会话。
+/// `state` owns the authoritative retained workspace and invalidates older background writers.
+/// `state` 持有权威保留工作区，并使较早的后台写入者失效。
+/// `controller_runtime` owns the exact workspace-store persistence route.
+/// `controller_runtime` 持有精确的工作区存储持久化路由。
+/// `session_id` selects the only retained session captured after write admission.
+/// `session_id` 选择取得写入许可后唯一捕获的保留会话。
 ///
 /// # Returns
 /// 返回值
-/// The owned write guard and a snapshot read after that guard was acquired.
-/// 返回有所有权的写入守卫，以及取得该守卫后读取的快照。
-pub(crate) async fn lock_latest_retained_workspace_session_persistence_snapshot(
+/// Success after the newest exact session payload crosses its session-keyed write channel.
+/// 最新精确会话载荷通过其会话键写入通道后返回成功。
+pub(crate) async fn persist_latest_retained_workspace_session_update(
     state: &SharedServiceBridgeState,
+    controller_runtime: ControllerRuntimeHandle,
     session_id: SessionId,
-) -> Result<(tokio::sync::OwnedMutexGuard<()>, WorkspaceSnapshot), String> {
+) -> Result<(), String> {
     invalidate_webui_session_persist_version(state, session_id)?;
-    let persist_guard = webui_workspace_persist_lock().lock_owned().await;
-    // authoritativeSnapshot is read only after acquiring the write gate, so a newer retained mutation that queued first can never be overwritten by an older detached caller snapshot.
-    // authoritativeSnapshot 仅在取得写入闸门后读取，使先排队的较新保留态变更绝不会被更旧的调用方分离快照反向覆盖。
-    let authoritative_snapshot =
-        current_workspace_snapshot_from_shared_state(state)?.ok_or_else(|| {
-            String::from(
-                "cannot persist a retained session without an authoritative workspace snapshot",
+    let _persist_guard = webui_session_persist_lock(session_id).lock_owned().await;
+    persist_latest_retained_workspace_session_update_unlocked(state, controller_runtime, session_id)
+        .await
+}
+
+/// Persists one retained session after the caller has acquired its session-keyed write channel.
+/// 在调用方已经取得会话键写入通道后持久化一个保留会话。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the authoritative retained session borrowed for bounded runtime synchronization.
+/// `state` 持有为有界运行态同步而借用的权威保留会话。
+/// `controller_runtime` owns the exact data root and locator index.
+/// `controller_runtime` 持有精确数据根与定位索引。
+/// `session_id` selects the only retained session written by this transaction.
+/// `session_id` 选择该事务唯一写入的保留会话。
+///
+/// # Returns
+/// 返回值
+/// Success after transcript, runtime metadata, and locator persistence complete.
+/// 转录、运行态元数据与定位信息持久化完成后返回成功。
+async fn persist_latest_retained_workspace_session_update_unlocked(
+    state: &SharedServiceBridgeState,
+    controller_runtime: ControllerRuntimeHandle,
+    session_id: SessionId,
+) -> Result<(), String> {
+    // payload is captured after write admission and never clones canonical runtime history.
+    // payload 在取得写入许可后捕获，且绝不克隆规范运行态历史。
+    let payload = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        retained_workspace_session_persistence_payload(&guard, &controller_runtime, session_id)?
+    };
+    persist_retained_workspace_session_payload(controller_runtime, payload).await
+}
+
+/// Captures one retained session after synchronizing its borrowed bounded runtime tail.
+/// 在同步借用的有界运行态尾部后捕获一个保留会话。
+///
+/// # Parameters
+/// 参数
+/// `guard` owns authoritative retained state, `controller_runtime` owns exact storage,
+/// and `session_id` selects one regular session.
+/// `guard` 持有权威保留状态，`controller_runtime` 持有精确存储，`session_id`
+/// 选择一个普通会话。
+///
+/// # Returns
+/// 返回值
+/// A detached payload without canonical conversation history, or an exact locator or persistence error.
+/// 返回不含规范会话历史的分离载荷，或精确定位与持久化错误。
+fn retained_workspace_session_persistence_payload(
+    guard: &ServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    session_id: SessionId,
+) -> Result<RetainedWorkspaceSessionPersistencePayload, String> {
+    let session_directory = require_segmented_session_directory_for_retained_session(
+        guard,
+        &controller_runtime.data_root,
+        session_id,
+    )?;
+    let workspace_snapshot = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+        String::from(
+            "cannot persist a retained session without an authoritative workspace snapshot",
+        )
+    })?;
+    let (session, archived) = workspace_session_with_archive_status(workspace_snapshot, session_id)
+        .ok_or_else(|| format!("单会话保存失败：未找到会话：{session_id}"))?;
+    let project_id = session_summary_project_id(session)
+        .map(str::to_string)
+        .ok_or_else(|| format!("单会话保存失败：会话未携带所属项目：{session_id}"))?;
+    let session_messages = if archived {
+        &workspace_snapshot.archived_session_messages
+    } else {
+        &workspace_snapshot.session_messages
+    };
+    let session_runtime_state = if archived {
+        &workspace_snapshot.archived_session_runtime_state
+    } else {
+        &workspace_snapshot.session_runtime_state
+    };
+    let runtime_projection = match session_runtime_state.get(&session_id) {
+        Some(runtime_state) => {
+            // The append synchronizer reads constant metadata plus only the open active tail.
+            // 追加同步器仅读取常量元数据以及尚未闭合的活动尾部。
+            vulcan_workspace_store::workspace_store::sync_single_session_runtime_log_update(
+                &session_directory,
+                session_id,
+                runtime_state,
+            )?;
+            Some(
+                vulcan_workspace_store::workspace_store::
+                    project_single_session_runtime_state_update(session_id, runtime_state)?,
             )
-        })?;
-    Ok((persist_guard, authoritative_snapshot))
+        }
+        None => None,
+    };
+    Ok(RetainedWorkspaceSessionPersistencePayload {
+        session_directory,
+        project_id,
+        session: session.clone(),
+        archived,
+        messages: session_messages
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_default(),
+        runtime_projection,
+    })
+}
+
+/// Persists one detached retained-session payload without revisiting retained history.
+/// 在不重新访问保留历史的情况下持久化一个分离的保留会话载荷。
+///
+/// # Parameters
+/// 参数
+/// `controller_runtime` owns the locator database and `payload` owns one exact history-free revision.
+/// `controller_runtime` 持有定位数据库，`payload` 持有一个精确无历史修订。
+///
+/// # Returns
+/// 返回值
+/// Success after transcript, locator, and optional runtime metadata writes complete.
+/// 转录、定位信息与可选运行态元数据写入完成后返回成功。
+async fn persist_retained_workspace_session_payload(
+    controller_runtime: ControllerRuntimeHandle,
+    payload: RetainedWorkspaceSessionPersistencePayload,
+) -> Result<(), String> {
+    vulcan_workspace_store::workspace_store::persist_single_session_update(
+        controller_runtime,
+        &payload.project_id,
+        &payload.session,
+        payload.archived,
+        &payload.messages,
+        None,
+    )
+    .await?;
+    if let Some(runtime_projection) = payload.runtime_projection.as_ref() {
+        vulcan_workspace_store::workspace_store::
+            persist_projected_single_session_runtime_state_update(
+                payload.session_directory,
+                payload.session.id,
+                runtime_projection,
+            )
+            .await?;
+    }
+    Ok(())
 }
 
 /// Persists one session snapshot after the caller has acquired the shared WebUI write gate.
@@ -96,6 +276,28 @@ pub(crate) async fn persist_workspace_session_update_unlocked(
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
 ) -> Result<(), String> {
+    let payload = workspace_session_persistence_payload(workspace_snapshot, session_id)?;
+    persist_workspace_session_payload(controller_runtime, payload).await
+}
+
+/// Captures only the exact session fields required by the workspace-store persistence API.
+/// 仅捕获 workspace-store 持久化 API 所需的精确会话字段。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` is the authoritative retained or transaction-local workspace revision.
+/// `workspace_snapshot` 是权威保留或事务本地工作区修订。
+/// `session_id` selects the exact regular session to detach.
+/// `session_id` 选择需要分离的精确普通会话。
+///
+/// # Returns
+/// 返回值
+/// A single-session payload without unrelated session maps, or an explicit missing-session error.
+/// 返回不包含无关会话映射的单会话载荷，或明确的会话缺失错误。
+fn workspace_session_persistence_payload(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Result<WorkspaceSessionPersistencePayload, String> {
     let (session, archived) = workspace_session_with_archive_status(workspace_snapshot, session_id)
         .ok_or_else(|| format!("单会话保存失败：未找到会话：{session_id}"))?;
     let session_messages = if archived {
@@ -108,31 +310,48 @@ pub(crate) async fn persist_workspace_session_update_unlocked(
     } else {
         &workspace_snapshot.session_runtime_state
     };
-    let runtime_state = session_runtime_state.get(&session_id);
-    let rebuilt_messages;
-    let messages = if let Some(runtime_state) = runtime_state {
-        rebuilt_messages = merge_session_messages_with_conversation_state_records(
-            session_messages
-                .get(&session_id)
-                .map(Vec::as_slice)
-                .unwrap_or(&[]),
-            &runtime_state.conversation_state,
-        );
-        rebuilt_messages.as_slice()
-    } else if let Some(messages) = session_messages.get(&session_id) {
-        messages.as_slice()
-    } else {
-        &[]
-    };
-    let task_projects = workspace_task_projects_for_persistence(workspace_snapshot);
-
-    vulcan_workspace_store::workspace_store::persist_single_session_update(
-        controller_runtime,
-        &task_projects,
-        session,
+    let runtime_state = session_runtime_state.get(&session_id).cloned();
+    // messages remains the stored display slice because workspace-store owns the single canonical merge.
+    // messages 保持为已存展示切片，因为 workspace-store 唯一负责规范合并。
+    let messages = session_messages
+        .get(&session_id)
+        .cloned()
+        .unwrap_or_default();
+    let project_id = session_summary_project_id(session)
+        .map(str::to_string)
+        .ok_or_else(|| format!("单会话保存失败：会话未携带所属项目：{session_id}"))?;
+    Ok(WorkspaceSessionPersistencePayload {
+        project_id,
+        session: session.clone(),
         archived,
         messages,
         runtime_state,
+    })
+}
+
+/// Persists one already-scoped session payload after the caller has acquired its session write channel.
+/// 在调用方取得会话写入通道后持久化一个已限定范围的会话载荷。
+///
+/// # Parameters
+/// 参数
+/// `controller_runtime` owns the workspace-store route and `payload` owns one exact session revision.
+/// `controller_runtime` 持有 workspace-store 路由，`payload` 持有一个精确会话修订。
+///
+/// # Returns
+/// 返回值
+/// Success after the single-session segmented persistence transaction completes.
+/// 单会话分段持久化事务完成后返回成功。
+async fn persist_workspace_session_payload(
+    controller_runtime: ControllerRuntimeHandle,
+    payload: WorkspaceSessionPersistencePayload,
+) -> Result<(), String> {
+    vulcan_workspace_store::workspace_store::persist_single_session_update(
+        controller_runtime,
+        &payload.project_id,
+        &payload.session,
+        payload.archived,
+        &payload.messages,
+        payload.runtime_state.as_ref(),
     )
     .await
 }
@@ -190,26 +409,6 @@ pub(crate) fn workspace_session_with_archive_status(
         })
 }
 
-/// Collects active and archived task projects for workspace-store persistence calls.
-/// 为 workspace-store 持久化调用收集活动与归档任务项目。
-///
-/// # Parameters
-/// 参数
-/// `workspace_snapshot` is the retained WebUI workspace snapshot.
-/// `workspace_snapshot` 是保留的 WebUI 工作区快照。
-///
-/// # Returns
-/// 返回值
-/// A cloned project list containing active projects followed by archived projects.
-/// 返回克隆后的项目列表，顺序为活动项目在前、归档项目在后。
-pub(crate) fn workspace_task_projects_for_persistence(
-    workspace_snapshot: &WorkspaceSnapshot,
-) -> Vec<TaskProjectSummary> {
-    workspace_task_projects_including_archived(workspace_snapshot)
-        .cloned()
-        .collect()
-}
-
 /// Returns whether the retained workspace snapshot contains one active project.
 /// 返回保留工作区快照是否包含一个活动项目。
 ///
@@ -234,8 +433,8 @@ pub(crate) fn workspace_snapshot_contains_active_project(
         .any(|project| project.id == project_id)
 }
 
-/// Spawns one session-versioned persistence task behind the shared workspace write gate.
-/// 在共享工作区写入闸门后启动一个按会话版本保护的持久化任务。
+/// Spawns one session-versioned persistence task behind its deterministic session write channel.
+/// 在确定性会话写入通道后启动一个按会话版本保护的持久化任务。
 ///
 /// # Parameters
 /// 参数
@@ -267,7 +466,14 @@ fn spawn_session_versioned_workspace_persist_task<F, Fut>(
             }
         };
     spawn_service_task(async move {
-        let persist_lock = webui_workspace_persist_lock();
+        if !webui_session_runtime_persist_version_is_current(
+            &state,
+            session_id,
+            session_persist_version,
+        ) {
+            return;
+        }
+        let persist_lock = webui_session_persist_lock(session_id);
         let _persist_guard = persist_lock.lock().await;
         if !webui_session_runtime_persist_version_is_current(
             &state,
@@ -287,8 +493,6 @@ fn spawn_session_versioned_workspace_persist_task<F, Fut>(
 /// 参数
 /// `controller_runtime` owns the workspace store runtime bridge.
 /// `controller_runtime` 持有工作区存储运行时桥。
-/// `workspace_snapshot` is the already-rendered snapshot to save.
-/// `workspace_snapshot` 是已经渲染过、待保存的快照。
 /// `session_id` selects the session that changed.
 /// `session_id` 选择发生变更的会话。
 /// `reason` labels the write site for diagnostics.
@@ -296,27 +500,126 @@ fn spawn_session_versioned_workspace_persist_task<F, Fut>(
 pub(crate) fn spawn_workspace_session_persist_task(
     state: SharedServiceBridgeState,
     controller_runtime: ControllerRuntimeHandle,
-    workspace_snapshot: WorkspaceSnapshot,
     session_id: SessionId,
     reason: Option<String>,
 ) {
-    if !workspace_snapshot_contains_regular_session(&workspace_snapshot, session_id) {
-        return;
-    }
+    // persistence_state is read only after version admission so the caller never clones a workspace.
+    // persistence_state 仅在版本准入后读取，因此调用方绝不克隆工作区。
+    let persistence_state = state.clone();
     spawn_session_versioned_workspace_persist_task(
         state,
         session_id,
         "background persist version failed",
         move || async move {
-            if let Err(error) = persist_workspace_session_update_unlocked(
+            if let Err(error) = persist_latest_retained_workspace_session_update_unlocked(
+                &persistence_state,
                 controller_runtime,
-                &workspace_snapshot,
                 session_id,
             )
             .await
             {
                 let reason = reason.unwrap_or_else(|| String::from("session_update"));
                 eprintln!("[webui-service] background persist failed ({reason}): {error}");
+            }
+        },
+    );
+}
+
+/// Persists one canonical conversation checkpoint without cloning runtime or workspace history.
+/// 在不克隆运行时历史或工作区历史的情况下持久化一个规范会话检查点。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the authoritative retained checkpoint, `controller_runtime` owns exact storage,
+/// `session_id` selects the main session, and `reason` labels diagnostic failures.
+/// `state` 持有权威保留检查点，`controller_runtime` 持有精确存储，
+/// `session_id` 选择主会话，`reason` 标记诊断失败来源。
+pub(crate) fn spawn_latest_conversation_checkpoint_persist_task(
+    state: SharedServiceBridgeState,
+    controller_runtime: ControllerRuntimeHandle,
+    session_id: SessionId,
+    reason: Option<String>,
+) {
+    let persistence_state = state.clone();
+    spawn_session_versioned_workspace_persist_task(
+        state,
+        session_id,
+        "conversation checkpoint persist version failed",
+        move || async move {
+            // persistence_snapshot contains only history-free state.json fields after the bounded log sync.
+            // persistence_snapshot 在有界日志同步后仅包含无历史的 state.json 字段。
+            let persistence_snapshot = match persistence_state.lock() {
+                Ok(guard) => {
+                    let session_directory =
+                        match require_segmented_session_directory_for_retained_session(
+                            &guard,
+                            &controller_runtime.data_root,
+                            session_id,
+                        ) {
+                            Ok(session_directory) => session_directory,
+                            Err(error) => {
+                                eprintln!(
+                                    "[webui-service] checkpoint exact locator failed: session={session_id} error={error}"
+                                );
+                                return;
+                            }
+                        };
+                    let Some(workspace) = guard.workspace_snapshot.as_ref() else {
+                        return;
+                    };
+                    let Some(runtime_state) = workspace.session_runtime_state.get(&session_id)
+                    else {
+                        return;
+                    };
+                    let projection = match vulcan_workspace_store::workspace_store::
+                        project_single_session_runtime_state_update(session_id, runtime_state)
+                    {
+                        Ok(projection) => projection,
+                        Err(error) => {
+                            eprintln!(
+                                "[webui-service] checkpoint state projection failed: session={session_id} error={error}"
+                            );
+                            return;
+                        }
+                    };
+                    // Runtime synchronization borrows the authoritative state and projects only its bounded active tail.
+                    // 运行时同步借用权威状态，并且只投影其有界活动尾部。
+                    let runtime_log_result = vulcan_workspace_store::workspace_store::
+                        sync_single_session_runtime_log_update(
+                            &session_directory,
+                            session_id,
+                            runtime_state,
+                        );
+                    Some((session_directory, projection, runtime_log_result))
+                }
+                Err(error) => {
+                    eprintln!(
+                        "[webui-service] checkpoint retained-state lock failed: session={session_id} error={error}"
+                    );
+                    return;
+                }
+            };
+            let Some((session_directory, projection, runtime_log_result)) = persistence_snapshot
+            else {
+                return;
+            };
+            let reason_label = reason.as_deref().unwrap_or("conversation_checkpoint");
+            if let Err(error) = runtime_log_result {
+                eprintln!(
+                    "[webui-service] checkpoint bounded runtime-log persist failed ({reason_label}): {error}"
+                );
+            }
+            if let Err(error) = vulcan_workspace_store::workspace_store::
+                persist_projected_single_session_runtime_state_update(
+                    session_directory,
+                    session_id,
+                    &projection,
+                )
+                .await
+            {
+                eprintln!(
+                    "[webui-service] checkpoint runtime-state persist failed ({reason_label}): {error}"
+                );
             }
         },
     );
@@ -331,8 +634,6 @@ pub(crate) fn spawn_workspace_session_persist_task(
 /// `state` 持有保留服务状态与按会话划分的写入版本。
 /// `controller_runtime` owns the workspace store runtime bridge.
 /// `controller_runtime` 持有工作区存储运行时桥。
-/// `workspace_snapshot` is the already-rendered snapshot containing the runtime state.
-/// `workspace_snapshot` 是已经渲染过且包含运行态的快照。
 /// `session_id` selects the session runtime-state document to persist.
 /// `session_id` 选择需要持久化的会话运行态文档。
 /// `reason` labels the write site for diagnostics.
@@ -340,32 +641,156 @@ pub(crate) fn spawn_workspace_session_persist_task(
 pub(crate) fn spawn_workspace_session_runtime_state_persist_task(
     state: SharedServiceBridgeState,
     controller_runtime: ControllerRuntimeHandle,
-    workspace_snapshot: WorkspaceSnapshot,
     session_id: SessionId,
     reason: Option<String>,
 ) {
-    if !workspace_snapshot_contains_regular_session(&workspace_snapshot, session_id) {
+    spawn_latest_session_runtime_state_persist_task(state, controller_runtime, session_id, reason);
+}
+
+/// Persists the newest history-free runtime metadata for one retained session synchronously.
+/// 同步持久化一个保留会话的最新无历史运行态元数据。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the authoritative runtime entry and invalidates older runtime-only writers.
+/// `state` 持有权威运行态条目，并使较早的仅运行态写入者失效。
+/// `controller_runtime` owns exact session storage.
+/// `controller_runtime` 持有精确会话存储。
+/// `session_id` selects the only runtime metadata document to replace.
+/// `session_id` 选择唯一需要替换的运行态元数据文档。
+///
+/// # Returns
+/// 返回值
+/// Success after a projection produced under the retained-state lock is durably written.
+/// 在保留状态锁下生成的投影可靠写入后返回成功。
+pub(crate) async fn persist_latest_retained_session_runtime_state_update(
+    state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    session_id: SessionId,
+) -> Result<(), String> {
+    invalidate_webui_session_runtime_only_persist_version(state, session_id)?;
+    let persist_lock = webui_session_persist_lock(session_id);
+    let _persist_guard = persist_lock.lock().await;
+    let (session_directory, projection) =
+        {
+            let guard = state
+                .lock()
+                .map_err(|error| format!("failed to lock service state: {error}"))?;
+            let session_directory = require_segmented_session_directory_for_retained_session(
+                &guard,
+                &controller_runtime.data_root,
+                session_id,
+            )?;
+            let workspace = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+                String::from("cannot persist runtime state before workspace hydration completes")
+            })?;
+            let runtime_state = workspace
+                .session_runtime_state
+                .get(&session_id)
+                .or_else(|| workspace.archived_session_runtime_state.get(&session_id))
+                .ok_or_else(|| format!("Session `{session_id}` has no retained runtime state."))?;
+            let projection = vulcan_workspace_store::workspace_store::
+            project_single_session_runtime_state_update(session_id, runtime_state)?;
+            (session_directory, projection)
+        };
+    vulcan_workspace_store::workspace_store::persist_projected_single_session_runtime_state_update(
+        session_directory,
+        session_id,
+        &projection,
+    )
+    .await
+}
+
+/// Persists the latest retained runtime state without cloning a complete workspace snapshot.
+/// 在不克隆完整工作区快照的情况下持久化最新保留运行态。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the authoritative retained runtime entry, `controller_runtime` owns storage,
+/// `session_id` selects the exact owner, and `reason` labels diagnostic failures.
+/// `state` 持有权威保留运行态，`controller_runtime` 持有存储，`session_id` 选择精确归属，
+/// `reason` 标记诊断失败来源。
+pub(crate) fn spawn_latest_session_runtime_state_persist_task(
+    state: SharedServiceBridgeState,
+    controller_runtime: ControllerRuntimeHandle,
+    session_id: SessionId,
+    reason: Option<String>,
+) {
+    if let Err(error) = invalidate_webui_session_runtime_only_persist_version(&state, session_id) {
+        eprintln!(
+            "[webui-service] latest runtime-state persist fence failed: session={session_id} error={error}"
+        );
         return;
     }
-    spawn_session_versioned_workspace_persist_task(
-        state,
-        session_id,
-        "runtime-state persist version failed",
-        move || async move {
-            if let Err(error) = persist_workspace_session_update_unlocked(
-                controller_runtime,
-                &workspace_snapshot,
+    spawn_service_task(async move {
+        let persist_lock = webui_session_persist_lock(session_id);
+        let _persist_guard = persist_lock.lock().await;
+        let persistence_snapshot = match state.lock() {
+            Ok(guard) => {
+                // session_directory is captured from the same retained snapshot as runtime_state.
+                // session_directory 与 runtime_state 从同一份保留快照中捕获。
+                let session_directory =
+                    match require_segmented_session_directory_for_retained_session(
+                        &guard,
+                        &controller_runtime.data_root,
+                        session_id,
+                    ) {
+                        Ok(session_directory) => session_directory,
+                        Err(error) => {
+                            eprintln!(
+                                "[webui-service] latest runtime-state exact locator failed: session={session_id} error={error}"
+                            );
+                            return;
+                        }
+                    };
+                let Some(workspace) = guard.workspace_snapshot.as_ref() else {
+                    return;
+                };
+                let Some(runtime_state) = workspace
+                    .session_runtime_state
+                    .get(&session_id)
+                    .or_else(|| workspace.archived_session_runtime_state.get(&session_id))
+                else {
+                    return;
+                };
+                // projection serializes only state.json fields while the authoritative entry is borrowed.
+                // projection 在借用权威条目期间只序列化 state.json 字段。
+                match vulcan_workspace_store::workspace_store::
+                    project_single_session_runtime_state_update(session_id, runtime_state)
+                {
+                    Ok(projection) => Some((session_directory, projection)),
+                    Err(error) => {
+                        eprintln!(
+                            "[webui-service] latest runtime-state projection failed: session={session_id} error={error}"
+                        );
+                        return;
+                    }
+                }
+            }
+            Err(error) => {
+                eprintln!(
+                    "[webui-service] latest runtime-state snapshot lock failed: session={session_id} error={error}"
+                );
+                return;
+            }
+        };
+        let Some((session_directory, projection)) = persistence_snapshot else {
+            return;
+        };
+        if let Err(error) = vulcan_workspace_store::workspace_store::
+            persist_projected_single_session_runtime_state_update(
+                session_directory,
                 session_id,
+                &projection,
             )
             .await
-            {
-                let reason_label = reason.as_deref().unwrap_or("runtime_state");
-                eprintln!(
-                    "[webui-service] background runtime-state session persist failed ({reason_label}): {error}"
-                );
-            }
-        },
-    );
+        {
+            let reason_label = reason.as_deref().unwrap_or("latest_runtime_state");
+            eprintln!(
+                "[webui-service] background latest runtime-state persist failed ({reason_label}): {error}"
+            );
+        }
+    });
 }
 
 /// Spawns a background transcript write from an already-scoped session message snapshot.
@@ -379,20 +804,14 @@ pub(crate) fn spawn_workspace_session_runtime_state_persist_task(
 /// `controller_runtime` 提供工作区持久化能力。
 /// `session_id` selects the session transcript to persist.
 /// `session_id` 选择要持久化的会话转录。
-/// `loaded_messages` is the complete retained transcript for only that session.
-/// `loaded_messages` 是仅属于该会话的完整保留转录。
 /// `reason` is an optional diagnostic label for logs.
 /// `reason` 是用于日志的可选诊断标签。
 pub(crate) fn spawn_session_transcript_messages_persist_task(
     state: SharedServiceBridgeState,
     controller_runtime: ControllerRuntimeHandle,
     session_id: SessionId,
-    loaded_messages: Vec<SessionMessageEntry>,
     reason: Option<String>,
 ) {
-    if loaded_messages.is_empty() {
-        return;
-    }
     let persist_version = match next_webui_session_transcript_persist_version(&state, session_id) {
         Ok(version) => version,
         Err(error) => {
@@ -401,19 +820,107 @@ pub(crate) fn spawn_session_transcript_messages_persist_task(
         }
     };
     spawn_service_task(async move {
-        let persist_lock = webui_workspace_persist_lock();
+        if !webui_session_transcript_persist_version_is_current(&state, session_id, persist_version)
+        {
+            return;
+        }
+        let persist_lock = webui_session_persist_lock(session_id);
         let _persist_guard = persist_lock.lock().await;
         if !webui_session_transcript_persist_version_is_current(&state, session_id, persist_version)
         {
             return;
         }
-        if let Err(error) =
-            vulcan_workspace_store::workspace_store::persist_single_session_transcript_messages(
-                controller_runtime,
+        // sessionDirectory comes only from the retained exact main-session or TaskSession locator.
+        // sessionDirectory 仅来自保留态中的精确主会话或 TaskSession 定位信息。
+        let session_directory = match state.lock() {
+            Ok(guard) => match segmented_session_directory_for_retained_session(
+                &guard,
+                &controller_runtime.data_root,
                 session_id,
-                &loaded_messages,
+            ) {
+                Ok(Some(session_directory)) => session_directory,
+                Ok(None) => {
+                    eprintln!(
+                        "[webui-service] live transcript exact session directory is unavailable: session={session_id}"
+                    );
+                    return;
+                }
+                Err(error) => {
+                    eprintln!(
+                        "[webui-service] live transcript exact session directory resolution failed: session={session_id} error={error}"
+                    );
+                    return;
+                }
+            },
+            Err(error) => {
+                eprintln!(
+                    "[webui-service] live transcript locator lock failed: session={session_id} error={error}"
+                );
+                return;
+            }
+        };
+        // persistedMessageCount is read from metadata only; historical JSONL segments are never opened here.
+        // persistedMessageCount 仅从元数据读取；此处绝不打开历史 JSONL 分段。
+        let persisted_message_count = match vulcan_workspace_store::workspace_store::
+            load_single_session_transcript_message_count_in_directory(
+                &session_directory,
+                session_id,
+            ) {
+            Ok(message_count) => message_count,
+            Err(error) => {
+                eprintln!(
+                    "[webui-service] live transcript checkpoint read failed: session={session_id} error={error}"
+                );
+                return;
+            }
+        };
+        // Only one boundary row plus the new immutable suffix is cloned after writer coalescing.
+        // 写入任务合并后仅克隆一个边界行及新的不可变后缀。
+        let (previous_message, tail_messages) = match state.lock() {
+            Ok(guard) => {
+                let Some(workspace) = guard.workspace_snapshot.as_ref() else {
+                    return;
+                };
+                let Some(messages) = workspace.session_messages.get(&session_id) else {
+                    return;
+                };
+                if persisted_message_count > messages.len() {
+                    eprintln!(
+                        "[webui-service] live transcript checkpoint exceeds retained messages: session={session_id} persisted={persisted_message_count} retained={} ",
+                        messages.len()
+                    );
+                    return;
+                }
+                if persisted_message_count == messages.len() {
+                    return;
+                }
+                (
+                    persisted_message_count
+                        .checked_sub(1)
+                        .and_then(|index| messages.get(index))
+                        .cloned(),
+                    messages[persisted_message_count..].to_vec(),
+                )
+            }
+            Err(error) => {
+                eprintln!(
+                    "[webui-service] live transcript suffix lock failed: session={session_id} error={error}"
+                );
+                return;
+            }
+        };
+        if !webui_session_transcript_persist_version_is_current(&state, session_id, persist_version)
+        {
+            return;
+        }
+        if let Err(error) = vulcan_workspace_store::workspace_store::
+            persist_single_session_transcript_tail_in_directory(
+                &session_directory,
+                session_id,
+                persisted_message_count,
+                previous_message.as_ref(),
+                &tail_messages,
             )
-            .await
         {
             let reason_label = reason.as_deref().unwrap_or("live_transcript");
             eprintln!(
@@ -423,8 +930,8 @@ pub(crate) fn spawn_session_transcript_messages_persist_task(
     });
 }
 
-/// Spawns a background write for one session addon-state document.
-/// 为单个会话附属状态文档启动后台写入任务。
+/// Spawns a background write for one exact session addon-state document.
+/// 为单个精确会话附属状态文档启动后台写入任务。
 ///
 /// # Parameters
 /// 参数
@@ -432,10 +939,8 @@ pub(crate) fn spawn_session_transcript_messages_persist_task(
 /// `app` 是文件写入成功后使用的事件发送器。
 /// `state` owns the addon persistence version table used to reject stale writes.
 /// `state` 持有用于拒绝过期写入的附属状态持久化版本表。
-/// `controller_runtime` is the data-plane controller handle.
-/// `controller_runtime` 是数据平面控制器句柄。
-/// `workspace_snapshot` supplies session ownership and runtime compatibility fields.
-/// `workspace_snapshot` 提供会话归属与运行态兼容字段。
+/// `session_directory` is the deterministic target resolved before this task starts.
+/// `session_directory` 是任务启动前已经解析完成的确定性目标。
 /// `session_id` selects the addon document to persist.
 /// `session_id` 选择要持久化的附属状态文档。
 /// `addon_state` is the already-derived addon document to persist.
@@ -444,84 +949,15 @@ pub(crate) fn spawn_session_transcript_messages_persist_task(
 /// `changed_namespaces` 是本次写入代表的命名空间键。
 /// `reason` labels the write site for diagnostics.
 /// `reason` 标记写入来源，供诊断使用。
-pub(crate) fn spawn_workspace_session_addon_state_persist_task(
+pub(crate) fn spawn_exact_session_addon_state_persist_task(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
-    controller_runtime: ControllerRuntimeHandle,
-    workspace_snapshot: WorkspaceSnapshot,
+    session_directory: PathBuf,
     session_id: SessionId,
     addon_state: SessionAddonState,
     changed_namespaces: Vec<SessionAddonNamespace>,
     reason: Option<String>,
 ) {
-    if !workspace_snapshot_contains_regular_session(&workspace_snapshot, session_id) {
-        return;
-    }
-    let Some((session, archived)) =
-        workspace_session_with_archive_status(&workspace_snapshot, session_id)
-            .map(|(session, archived)| (session.clone(), archived))
-    else {
-        return;
-    };
-    let task_projects = workspace_task_projects_for_persistence(&workspace_snapshot);
-    spawn_session_addon_state_persist_task(
-        app,
-        state,
-        controller_runtime,
-        SessionAddonPersistenceScope {
-            task_projects,
-            session,
-            archived,
-        },
-        addon_state,
-        changed_namespaces,
-        reason,
-    );
-}
-
-/// Session-scoped ownership data required to persist one addon document.
-/// 持久化单个附属文档所需的会话级所有权数据。
-pub(crate) struct SessionAddonPersistenceScope {
-    /// Project ownership index required by workspace persistence.
-    /// 工作区持久化所需的项目所有权索引。
-    pub(crate) task_projects: Vec<TaskProjectSummary>,
-    /// Single active or archived session summary being updated.
-    /// 正在更新的单个活动或归档会话摘要。
-    pub(crate) session: SessionSummary,
-    /// Whether the session belongs to archived storage.
-    /// 会话是否属于归档存储。
-    pub(crate) archived: bool,
-}
-
-/// Spawns a background addon write from one pre-scoped session persistence context.
-/// 从一个预先限定的会话持久化上下文启动后台附属状态写入。
-///
-/// # Parameters
-/// 参数
-/// `app` emits the post-persistence addon revision event.
-/// `app` 发出持久化后的附属状态修订事件。
-/// `state` owns namespace persistence versions.
-/// `state` 持有命名空间持久化版本。
-/// `controller_runtime` provides the data-plane persistence handle.
-/// `controller_runtime` 提供数据面持久化句柄。
-/// `scope` contains the project index, session summary, and archive ownership required by persistence.
-/// `scope` 包含持久化所需的项目索引、会话摘要与归档所有权。
-/// `addon_state` is the already-derived addon document.
-/// `addon_state` 是已经派生完成的附属状态文档。
-/// `changed_namespaces` identifies namespaces represented by this write.
-/// `changed_namespaces` 标识本次写入代表的命名空间。
-/// `reason` labels diagnostics.
-/// `reason` 标记诊断信息。
-pub(crate) fn spawn_session_addon_state_persist_task(
-    app: ServiceEventEmitter,
-    state: SharedServiceBridgeState,
-    controller_runtime: ControllerRuntimeHandle,
-    scope: SessionAddonPersistenceScope,
-    addon_state: SessionAddonState,
-    changed_namespaces: Vec<SessionAddonNamespace>,
-    reason: Option<String>,
-) {
-    let session_id = scope.session.id;
     let mut persist_versions = Vec::new();
     for namespace in &changed_namespaces {
         match next_webui_session_addon_persist_version(&state, session_id, *namespace) {
@@ -535,17 +971,15 @@ pub(crate) fn spawn_session_addon_state_persist_task(
         }
     }
     spawn_service_task(async move {
-        let persist_lock = webui_workspace_persist_lock();
+        let persist_lock = webui_session_persist_lock(session_id);
         let _persist_guard = persist_lock.lock().await;
         if !webui_session_addon_persist_versions_are_current(&state, session_id, &persist_versions)
         {
             return;
         }
-        match vulcan_workspace_store::workspace_store::persist_single_session_addon_state_update(
-            controller_runtime,
-            &scope.task_projects,
-            &scope.session,
-            scope.archived,
+        match vulcan_workspace_store::workspace_store::persist_single_session_addon_state_update_in_directory(
+            session_directory,
+            session_id,
             &addon_state,
         )
         .await
@@ -666,110 +1100,5 @@ mod tests {
             &workspace_snapshot,
             missing_session_id
         ));
-    }
-
-    /// Verifies persistence project collection keeps active projects before archived projects.
-    /// 验证持久化项目收集会保持活动项目先于归档项目。
-    #[test]
-    fn workspace_task_projects_for_persistence_keeps_active_then_archived_projects() {
-        let workspace_snapshot =
-            test_workspace_snapshot_with_archived_rows(SessionId::new_v4(), SessionId::new_v4());
-
-        let project_ids = workspace_task_projects_for_persistence(&workspace_snapshot)
-            .into_iter()
-            .map(|project| project.id)
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            project_ids,
-            vec![
-                String::from("active-project"),
-                String::from("archived-project")
-            ]
-        );
-    }
-
-    /// Verifies a synchronous terminal writer reloads retained state after waiting for the shared persistence gate.
-    /// 验证同步终态写入者在等待共享持久化闸门后会重新读取保留状态。
-    #[tokio::test]
-    async fn retained_session_persistence_source_is_loaded_after_write_gate() {
-        // sessionId identifies the exact regular session whose retained revision changes while persistence waits.
-        // sessionId 标识持久化等待期间保留修订发生变化的精确普通会话。
-        let session_id = SessionId::new_v4();
-        // serviceState starts with the standard retained parent-session shell.
-        // serviceState 从标准保留父会话外壳开始。
-        let mut service_state =
-            crate::tests::test_support::test_service_state_with_parent_session(session_id);
-        {
-            // workspace owns the initial stale marker captured before the write gate is released.
-            // workspace 持有写入闸门释放前捕获的初始旧标记。
-            let workspace = service_state
-                .workspace_snapshot
-                .as_mut()
-                .expect("test workspace should exist");
-            workspace.session_runtime_state.insert(
-                session_id,
-                SessionRuntimeStateEntry {
-                    updated_at: String::from("stale-before-write-gate"),
-                    ..SessionRuntimeStateEntry::default()
-                },
-            );
-        }
-        // state is the shared authoritative owner read again by the synchronous persistence path.
-        // state 是同步持久化路径会重新读取的共享权威所有者。
-        let state = Arc::new(std::sync::Mutex::new(service_state));
-        // writeGate blocks the tested persistence call after it invalidates older background versions.
-        // writeGate 在被测持久化调用使旧后台版本失效后阻塞该调用。
-        let persist_lock = webui_workspace_persist_lock();
-        let write_gate = persist_lock.lock().await;
-        // persistenceTask enters the exact production source-selection helper and waits behind writeGate.
-        // persistenceTask 进入精确的生产源选择辅助函数，并在 writeGate 后等待。
-        let persistence_state = state.clone();
-        let persistence_task = tokio::spawn(async move {
-            lock_latest_retained_workspace_session_persistence_snapshot(
-                &persistence_state,
-                session_id,
-            )
-            .await
-        });
-        // versionObserved proves the spawned call reached its invalidation boundary before retained state changes.
-        // versionObserved 证明已启动调用在保留态变化前到达版本失效边界。
-        loop {
-            let version_observed = state
-                .lock()
-                .expect("test state should remain lockable")
-                .session_persist_versions
-                .contains_key(&session_id);
-            if version_observed {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-        {
-            // runtimeState is the later authoritative mutation that must survive the delayed terminal write.
-            // runtimeState 是必须在延迟终态写入后保留的较新权威变更。
-            let mut guard = state.lock().expect("test state should remain lockable");
-            let runtime_state = guard
-                .workspace_snapshot
-                .as_mut()
-                .and_then(|workspace| workspace.session_runtime_state.get_mut(&session_id))
-                .expect("test runtime state should exist");
-            runtime_state.updated_at = String::from("latest-after-write-gate");
-        }
-        drop(write_gate);
-        let (_persistence_guard, authoritative_snapshot) = persistence_task
-            .await
-            .expect("persistence task should join")
-            .expect("authoritative source selection should succeed");
-        // persistedRuntimeState is the exact source production persistence receives while its guard remains held.
-        // persistedRuntimeState 是生产持久化在守卫仍被持有时接收的精确来源。
-        let persisted_runtime_state = authoritative_snapshot
-            .session_runtime_state
-            .get(&session_id)
-            .expect("authoritative runtime state should exist");
-        assert_eq!(
-            persisted_runtime_state.updated_at,
-            "latest-after-write-gate"
-        );
     }
 }

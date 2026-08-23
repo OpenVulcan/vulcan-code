@@ -16,7 +16,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use vulcan_luaskills_prompt::{LUASKILL_HELP_TOOL_NAME, LuaSkillPromptEntry};
 use vulcan_plugin_runtime::VulcanPluginToolDescriptor;
 use vulcan_session_core::{
-    CapabilityPolicyMode, ToolExposureSnapshot, normalized_tool_selector_set, tool_selector_matches,
+    CapabilityPolicyMode, ToolExposureSnapshot, normalize_tool_selector,
+    normalized_tool_selector_set, tool_selector_matches,
 };
 use vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME;
 use vulcan_tools_manager::{ResolvedToolDefinition, ResolvedToolSet, VulcanToolSourceKind};
@@ -380,6 +381,9 @@ pub(crate) fn filter_luaskills_entries(
     entries
         .into_iter()
         .filter(|entry| {
+            if retired_luaskills_file_entry_is_hidden(entry) {
+                return false;
+            }
             if luaskills_entry_matches_any(entry, &selectors.global_disabled)
                 || luaskills_entry_matches_any(entry, &selectors.luaskills_disabled)
             {
@@ -392,6 +396,34 @@ pub(crate) fn filter_luaskills_entries(
         .collect()
 }
 
+/// Legacy LuaSkills file tool public ids that are replaced by native `file` and `file_edit`.
+/// 已由原生 `file` 与 `file_edit` 替代的旧 LuaSkills 文件工具公开标识。
+const RETIRED_LUASKILLS_FILE_TOOL_IDS: &[&str] = &[
+    "vulcan_file_read",
+    "vulcan_file_list",
+    "vulcan_file_create",
+    "vulcan_file_delete",
+    "vulcan_file_edit",
+];
+
+/// Returns whether a LuaSkills entry is one of the retired file tools hidden from new AI exposure.
+/// 判断 LuaSkills 入口是否属于新 AI 暴露中应隐藏的旧文件工具。
+fn retired_luaskills_file_entry_is_hidden(entry: &RuntimeEntryDescriptor) -> bool {
+    [
+        entry.canonical_name.as_str(),
+        entry.skill_id.as_str(),
+        entry.local_name.as_str(),
+        entry.root_name.as_str(),
+    ]
+    .into_iter()
+    .filter_map(normalize_tool_selector)
+    .any(|candidate| {
+        RETIRED_LUASKILLS_FILE_TOOL_IDS
+            .iter()
+            .any(|retired_id| *retired_id == candidate)
+    })
+}
+
 /// Filters LuaSkills prompt entries with global and LuaSkills-specific selectors.
 /// 使用全局与 LuaSkills 专属选择器过滤 LuaSkills 提示词入口。
 pub(crate) fn filter_luaskill_prompt_entries(
@@ -401,6 +433,9 @@ pub(crate) fn filter_luaskill_prompt_entries(
     entries
         .into_iter()
         .filter(|entry| {
+            if retired_luaskills_file_prompt_entry_is_hidden(entry) {
+                return false;
+            }
             if lua_prompt_entry_matches_any(entry, &selectors.global_disabled)
                 || lua_prompt_entry_matches_any(entry, &selectors.luaskills_disabled)
             {
@@ -411,6 +446,16 @@ pub(crate) fn filter_luaskill_prompt_entries(
                 || lua_prompt_entry_matches_any(entry, &selectors.luaskills_allowed)
         })
         .collect()
+}
+
+/// Returns whether a LuaSkills prompt entry advertises one of the retired file tools.
+/// 判断 LuaSkills 提示词入口是否宣传了已退役的文件工具。
+fn retired_luaskills_file_prompt_entry_is_hidden(entry: &LuaSkillPromptEntry) -> bool {
+    normalize_tool_selector(&entry.name).is_some_and(|candidate| {
+        RETIRED_LUASKILLS_FILE_TOOL_IDS
+            .iter()
+            .any(|retired_id| *retired_id == candidate)
+    })
 }
 
 /// Filters MCP bindings with global, MCP-tool, and MCP-server selectors.

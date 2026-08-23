@@ -42,10 +42,68 @@ fn append_session_events_advances_sequence_without_rewriting_first_line() {
     assert_eq!(metadata.segments[0].line_count, 3);
 }
 
-/// Verifies append repairs a historical JSONL tail that is missing its newline.
-/// 验证追加会修复缺少尾部换行的历史 JSONL 行。
+/// Verifies an explicit load upgrades legacy segment metadata with exact sequence and message locators.
+/// 验证显式加载会为旧版分段元数据补齐精确序号与消息定位信息。
 #[test]
-fn append_session_events_repairs_missing_jsonl_tail_newline() {
+fn explicit_load_upgrades_legacy_segment_locators() {
+    let root = test_root("explicit_load_upgrades_legacy_segment_locators");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create segmented session");
+    let messages = vec![
+        test_message(
+            "m-user-1",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "first prompt",
+        ),
+        test_message(
+            "m-assistant-1",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "first answer",
+        ),
+    ];
+    append_segmented_session_message_update(&session_dir, &messages)
+        .expect("append transcript messages");
+    let metadata_path = session_dir.join(SEGMENTED_METADATA_FILE);
+    let mut legacy_metadata: Value =
+        read_required_json(&metadata_path).expect("read current metadata as JSON");
+    let legacy_segment = legacy_metadata["segments"]
+        .as_array_mut()
+        .and_then(|segments| segments.first_mut())
+        .and_then(Value::as_object_mut)
+        .expect("read first segment object");
+    legacy_segment.remove("last_seq");
+    legacy_segment.remove("first_message_index");
+    legacy_segment.remove("last_message_index");
+    fs::write(
+        &metadata_path,
+        serde_json::to_vec_pretty(&legacy_metadata).expect("serialize legacy metadata"),
+    )
+    .expect("write legacy metadata fixture");
+
+    read_segmented_session_event_window(&session_dir, None, 16)
+        .expect("explicit load upgrades segment locators");
+
+    let upgraded_metadata: SegmentedSessionMetadata =
+        read_required_json(&metadata_path).expect("read upgraded metadata");
+    let upgraded_segment = upgraded_metadata
+        .segments
+        .first()
+        .expect("read upgraded segment");
+    assert_eq!(upgraded_segment.last_seq, Some(2));
+    assert_eq!(upgraded_segment.first_message_index, Some(0));
+    assert_eq!(upgraded_segment.last_message_index, Some(1));
+}
+
+/// Verifies hot append rejects a missing newline until an explicit load performs repair.
+/// 验证热路径追加会拒绝缺失换行，直至显式加载执行修复。
+#[test]
+fn append_session_events_reject_missing_jsonl_tail_newline_until_load_repair() {
     let root = test_root("append_session_events_repairs_missing_jsonl_tail_newline");
     let session_dir = create_segmented_session_in_location(
         &root,
@@ -58,6 +116,17 @@ fn append_session_events_repairs_missing_jsonl_tail_newline() {
     assert_eq!(bytes.pop(), Some(b'\n'));
     fs::write(&segment_path, bytes).expect("rewrite segment without trailing newline");
 
+    let append_error = append_segmented_session_events(
+        &session_dir,
+        &[test_event(
+            "2026-06-06T10:01:00Z",
+            SegmentedSessionEventKind::UserPrompt,
+        )],
+    )
+    .expect_err("hot append must reject a missing newline without scanning history");
+    assert!(append_error.contains("load-time repair is required"));
+    read_segmented_session_event_window(&session_dir, None, 16)
+        .expect("explicit read repairs missing newline");
     append_segmented_session_events(
         &session_dir,
         &[test_event(
@@ -65,7 +134,7 @@ fn append_session_events_repairs_missing_jsonl_tail_newline() {
             SegmentedSessionEventKind::UserPrompt,
         )],
     )
-    .expect("append event after missing newline");
+    .expect("append event after explicit load repair");
 
     let text = fs::read_to_string(&segment_path).expect("read repaired segment text");
     let lines = text.lines().collect::<Vec<_>>();
@@ -80,10 +149,10 @@ fn append_session_events_repairs_missing_jsonl_tail_newline() {
     assert_eq!(events[1].seq, 1);
 }
 
-/// Verifies append repairs a truncated JSONL tail before writing the next event.
-/// 验证追加会在写入下一条事件前修复截断的 JSONL 尾行。
+/// Verifies hot append rejects a truncated tail until an explicit load performs repair.
+/// 验证热路径追加会拒绝截断尾部，直至显式加载执行修复。
 #[test]
-fn append_session_events_repairs_truncated_jsonl_tail_line() {
+fn append_session_events_reject_truncated_jsonl_tail_until_load_repair() {
     let root = test_root("append_session_events_repairs_truncated_jsonl_tail_line");
     let session_dir = create_segmented_session_in_location(
         &root,
@@ -106,6 +175,17 @@ fn append_session_events_repairs_truncated_jsonl_tail_line() {
         .expect("open segment for corruption");
     write!(file, "{{\"seq\":999,\"timestamp\":\"broken\"").expect("append truncated json tail");
 
+    let append_error = append_segmented_session_events(
+        &session_dir,
+        &[test_event(
+            "2026-06-06T10:02:00Z",
+            SegmentedSessionEventKind::AssistantOutput,
+        )],
+    )
+    .expect_err("hot append must reject a truncated tail without scanning history");
+    assert!(append_error.contains("load-time repair is required"));
+    read_segmented_session_event_window(&session_dir, None, 16)
+        .expect("explicit read repairs truncated tail");
     append_segmented_session_events(
         &session_dir,
         &[test_event(
@@ -113,7 +193,7 @@ fn append_session_events_repairs_truncated_jsonl_tail_line() {
             SegmentedSessionEventKind::AssistantOutput,
         )],
     )
-    .expect("append event after repairing truncated tail");
+    .expect("append event after explicit load repair");
 
     let text = fs::read_to_string(&segment_path).expect("read repaired segment text");
     assert!(
@@ -266,10 +346,107 @@ fn append_message_update_is_idempotent_and_maps_transcript_kinds() {
     assert_eq!(metadata.message_count, 3);
 }
 
+/// Verifies exact suffix append opens only the active segment and ignores an unreadable inactive segment.
+/// 验证精确后缀追加仅打开活动分段，并忽略不可读的非活动分段。
+#[test]
+fn append_exact_message_tail_does_not_read_inactive_segments() {
+    let root = test_root("append_exact_message_tail_does_not_read_inactive_segments");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy {
+            max_lines: 2,
+            max_bytes: DEFAULT_SEGMENT_MAX_BYTES,
+        }),
+    )
+    .expect("create session");
+    let user = test_message(
+        "m-user-1",
+        SessionMessageKind::User,
+        SessionMessageRecordKind::Transcript,
+        "prompt",
+    );
+    let assistant = test_message(
+        "m-assistant-1",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::AssistantOutput,
+        "answer",
+    );
+    append_segmented_session_message_update(&session_dir, &[user, assistant.clone()])
+        .expect("append initial messages with rollover");
+    let metadata: SegmentedSessionMetadata =
+        read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE)).expect("read metadata");
+    assert_eq!(metadata.active_segment, "s002.jsonl");
+    fs::write(
+        session_dir.join("s001.jsonl"),
+        b"unreadable historical segment",
+    )
+    .expect("corrupt inactive segment");
+    let tool_result = test_message(
+        "m-tool-1",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::ToolResultOutput,
+        "tool output",
+    );
+
+    let appended = append_segmented_session_message_tail_update(
+        &session_dir,
+        2,
+        Some(&assistant),
+        &[tool_result],
+    )
+    .expect("append exact tail without reading inactive segment");
+
+    assert_eq!(appended.len(), 1);
+    let metadata: SegmentedSessionMetadata =
+        read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE)).expect("read metadata");
+    assert_eq!(metadata.message_count, 3);
+}
+
+/// Verifies exact suffix append rejects a stale caller checkpoint without repairing or scanning history.
+/// 验证精确后缀追加会拒绝过期调用方检查点，且不会修复或扫描历史。
+#[test]
+fn append_exact_message_tail_rejects_stale_checkpoint() {
+    let root = test_root("append_exact_message_tail_rejects_stale_checkpoint");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
+    let user = test_message(
+        "m-user-1",
+        SessionMessageKind::User,
+        SessionMessageRecordKind::Transcript,
+        "prompt",
+    );
+    append_segmented_session_message_update(&session_dir, std::slice::from_ref(&user))
+        .expect("append initial message");
+    let assistant = test_message(
+        "m-assistant-1",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::AssistantOutput,
+        "answer",
+    );
+
+    let error = append_segmented_session_message_tail_update(
+        &session_dir,
+        0,
+        None,
+        std::slice::from_ref(&assistant),
+    )
+    .expect_err("reject stale checkpoint");
+
+    assert!(error.contains("checkpoint advanced from 0 to 1"));
+    let metadata: SegmentedSessionMetadata =
+        read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE)).expect("read metadata");
+    assert_eq!(metadata.message_count, 1);
+}
+
 /// Verifies message update repairs duplicate persisted message indexes before checkpoint validation.
 /// 验证消息更新会在检查点校验前修复重复的持久化消息索引。
 #[test]
-fn append_message_update_repairs_duplicate_persisted_message_index() {
+fn append_message_update_rejects_duplicate_index_until_load_repair() {
     let root = test_root("append_message_update_repairs_duplicate_persisted_message_index");
     let session_dir = create_segmented_session_in_location(
         &root,
@@ -321,11 +498,19 @@ fn append_message_update_repairs_duplicate_persisted_message_index() {
     )
     .expect("append duplicate message index");
 
+    let append_error = append_segmented_session_message_update(
+        &session_dir,
+        &[replacement_user.clone(), assistant.clone()],
+    )
+    .expect_err("hot message append must reject external segment growth");
+    assert!(append_error.contains("load-time repair is required"));
+    read_segmented_session_event_window(&session_dir, None, 16)
+        .expect("explicit read repairs duplicate message index");
     append_segmented_session_message_update(
         &session_dir,
         &[replacement_user.clone(), assistant.clone()],
     )
-    .expect("repair duplicate message index during update");
+    .expect("update messages after explicit load repair");
 
     let lines = read_segment_event_lines(&segment_path).expect("read repaired lines");
     let messages = segmented_lines_to_session_messages(&lines).expect("project messages");

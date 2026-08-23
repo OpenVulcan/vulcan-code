@@ -2,7 +2,9 @@
 //! 上下文压缩 auto compaction 辅助逻辑。
 
 use super::*;
-use crate::applied_output_style_snapshot;
+use crate::{
+    applied_output_style_snapshot, require_segmented_session_directory_for_retained_session,
+};
 
 /// Runs budget-triggered context compaction before one exact active Provider stream continues.
 /// 在一个精确活动 Provider 流继续前执行预算触发的上下文压缩。
@@ -90,15 +92,21 @@ async fn maybe_auto_compact_webui_session_with_mode(
     };
     // vmm_controller_registry is cloned without retaining the shared service lock.
     // vmm_controller_registry 在不保留共享服务锁的情况下完成克隆。
-    let vmm_controller_registry = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?
-        .vmm_controller_registry
-        .clone();
+    let (vmm_controller_registry, session_directory) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let session_directory = require_segmented_session_directory_for_retained_session(
+            &guard,
+            &controller_runtime.data_root,
+            request.session_id,
+        )?;
+        (guard.vmm_controller_registry.clone(), session_directory)
+    };
     // vmm_controller is the sole owner used for pressure and refreshed injection projections.
     // vmm_controller 是压力与刷新注入投影使用的唯一所有者。
     let vmm_controller = vmm_controller_registry.get_or_open(
-        &controller_runtime.data_root,
+        &session_directory,
         request.session_id,
         &current_unix_millis_text(),
     )?;
@@ -130,15 +138,13 @@ async fn maybe_auto_compact_webui_session_with_mode(
     );
 
     let full_context_state = request.conversation_state.clone();
-    let context_start_message_id = current_workspace_snapshot_from_shared_state(state)
-        .ok()
-        .flatten()
-        .and_then(|workspace| {
-            workspace
-                .session_runtime_state
-                .get(&session_id)
-                .and_then(|runtime_state| runtime_state.context_start_message_id.clone())
-        });
+    let context_start_message_id = state.lock().ok().and_then(|guard| {
+        guard
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+            .and_then(|runtime_state| runtime_state.context_start_message_id.clone())
+    });
     // preparation_commit carries the previous phase, status id, and aligned delta from one exact-owner mutation.
     // preparation_commit 携带由一次精确所有者变更生成的前序阶段、状态标识与对齐增量。
     let (previous_phase, status_message_id, phase_event) = {
@@ -415,13 +421,14 @@ pub(crate) fn webui_auto_context_compaction_failure_count(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
 ) -> usize {
-    current_workspace_snapshot_from_shared_state(state)
+    state
+        .lock()
         .ok()
-        .flatten()
-        .and_then(|workspace| {
-            workspace
-                .session_runtime_state
-                .get(&session_id)
+        .and_then(|guard| {
+            guard
+                .workspace_snapshot
+                .as_ref()
+                .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
                 .map(|runtime_state| runtime_state.auto_compaction_consecutive_failures)
         })
         .unwrap_or_default()
@@ -485,22 +492,35 @@ pub(crate) fn resolve_webui_context_compaction_model_target(
     session_id: SessionId,
     source_execution: Option<(&ExecutionPreparationRequest, &ExecutionPreparation)>,
 ) -> Result<PromptCompactionModelTarget, String> {
-    let workspace_snapshot = current_workspace_snapshot_from_shared_state(state)
-        .ok()
-        .flatten();
-    let session_runtime_state = workspace_snapshot
-        .as_ref()
-        .and_then(|workspace| workspace.session_runtime_state.get(&session_id));
+    let (
+        retained_route_lease_identity,
+        active_provider_id,
+        active_connection_id,
+        active_model_id,
+        context_compaction_window_node_id,
+    ) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let runtime_state = guard
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace| workspace.session_runtime_state.get(&session_id));
+        (
+            runtime_state.and_then(|state| state.provider_route_lease.clone()),
+            runtime_state.and_then(|state| state.active_provider_id.clone()),
+            runtime_state.and_then(|state| state.active_connection_id.clone()),
+            runtime_state.and_then(|state| state.active_model_id.clone()),
+            runtime_state.and_then(|state| state.context_compaction_window_node_id),
+        )
+    };
     let route_lease_identity = source_execution
         .and_then(|(_, preparation)| {
             preparation
                 .model_blueprint
                 .session_provider_route_lease_identity()
         })
-        .or_else(|| {
-            session_runtime_state
-                .and_then(|runtime_state| runtime_state.provider_route_lease.clone())
-        });
+        .or(retained_route_lease_identity);
     let compaction_session_id = session_id.to_string();
     let target = match source_execution {
         Some((_, preparation)) => resolve_prompt_compaction_model_target(
@@ -517,14 +537,10 @@ pub(crate) fn resolve_webui_context_compaction_model_target(
             agent_runtime.public_ai_runtime.as_ref(),
             compaction_session_id.as_str(),
             route_lease_identity.as_ref(),
-            session_runtime_state
-                .and_then(|runtime_state| runtime_state.active_provider_id.as_deref()),
-            session_runtime_state
-                .and_then(|runtime_state| runtime_state.active_connection_id.as_deref()),
-            session_runtime_state
-                .and_then(|runtime_state| runtime_state.active_model_id.as_deref()),
-            session_runtime_state
-                .and_then(|runtime_state| runtime_state.context_compaction_window_node_id),
+            active_provider_id.as_deref(),
+            active_connection_id.as_deref(),
+            active_model_id.as_deref(),
+            context_compaction_window_node_id,
             None,
         )?,
     };
@@ -540,11 +556,13 @@ pub(crate) fn refreshed_execution_request_after_context_compaction(
     request: &ExecutionPreparationRequest,
     vmm_session_memory: &vulcan_vmm::VmmSessionMemoryState,
 ) -> Result<ExecutionPreparationRequest, String> {
-    let workspace_snapshot =
-        current_workspace_snapshot_from_shared_state(state)?.ok_or_else(|| {
-            String::from("service is still starting; workspace snapshot is not ready")
-        })?;
-    let runtime_state = workspace_snapshot
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let runtime_state = guard
+        .workspace_snapshot
+        .as_ref()
+        .ok_or_else(|| String::from("service is still starting; workspace snapshot is not ready"))?
         .session_runtime_state
         .get(&request.session_id)
         .ok_or_else(|| String::from("自动上下文压缩完成后未找到会话运行时状态。"))?;
@@ -595,7 +613,7 @@ pub(crate) fn persist_failed_webui_context_compaction(
     trigger: &str,
     error: &str,
 ) -> Result<(), String> {
-    let snapshot = fail_webui_context_compaction_execution(
+    fail_webui_context_compaction_execution(
         app,
         state,
         session_id,
@@ -611,7 +629,6 @@ pub(crate) fn persist_failed_webui_context_compaction(
     spawn_workspace_session_persist_task(
         state.clone(),
         controller_runtime.clone(),
-        snapshot,
         session_id,
         Some(String::from("context_compaction_failed")),
     );
@@ -648,16 +665,74 @@ pub(crate) fn build_webui_context_compaction_job_request(
             "Context compaction plan policy does not match the frozen model target.",
         ));
     }
-    // workspaceSnapshot owns the authoritative session-scoped provider, connection, model, and reasoning selections.
-    // workspaceSnapshot 持有权威会话级供应商、连接、模型与推理档位选择。
-    let workspace_snapshot = current_workspace_snapshot_from_shared_state(state)
-        .ok()
-        .flatten();
-    // sessionRuntimeState is the unique persisted source for the owning session's execution target.
-    // sessionRuntimeState 是所属会话执行目标的唯一持久化来源。
-    let session_runtime_state = workspace_snapshot
-        .as_ref()
-        .and_then(|workspace| workspace.session_runtime_state.get(&session_id));
+    // persistedControls captures only the exact session controls required by manual compaction.
+    // persistedControls 仅捕获手动压缩需要的精确会话控制。
+    let (
+        session_reasoning_effort,
+        session_active_agent_id,
+        workspace_path,
+        mut persisted_launch_context,
+    ) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+        let runtime_state = workspace.session_runtime_state.get(&session_id);
+        let mut context = PromptCompactionLaunchContext::default();
+        if source_execution.is_none()
+            && let Some(runtime_state) = runtime_state
+        {
+            if runtime_state.provider_tool_settings_initialized {
+                for capability in &runtime_state.provider_tool_enabled_capabilities {
+                    // mediaCapability uses the dedicated global backend and therefore has no session target row.
+                    // mediaCapability 使用专用全局后端，因此没有会话目标行。
+                    let media_capability = matches!(
+                        capability.as_str(),
+                        "image_understand" | "video_understand" | "audio_understand"
+                    );
+                    if !media_capability
+                        && !runtime_state
+                            .provider_tool_selections
+                            .contains_key(capability)
+                    {
+                        return Err(format!(
+                            "Provider tool capability `{capability}` is enabled but has no selected model and account; confirm the session capability settings before compacting."
+                        ));
+                    }
+                }
+                context.provider_tool_selections_override = Some(
+                    runtime_state
+                        .provider_tool_selections
+                        .iter()
+                        .filter(|(capability, _)| {
+                            runtime_state
+                                .provider_tool_enabled_capabilities
+                                .contains(*capability)
+                        })
+                        .map(|(capability, selection)| (capability.clone(), selection.clone()))
+                        .collect(),
+                );
+                context.provider_tool_enabled_capabilities_override =
+                    Some(runtime_state.provider_tool_enabled_capabilities.clone());
+                context.provider_extension_target_sets_override =
+                    Some(runtime_state.provider_extension_target_sets.clone());
+            }
+            context.execution_mode = runtime_state
+                .active_work_mode
+                .clone()
+                .unwrap_or_else(|| String::from("build"));
+            context.output_style_snapshot = applied_output_style_snapshot(runtime_state);
+            context.session_prompt_skill_overrides = runtime_state.prompt_skill_overrides.clone();
+        }
+        (
+            runtime_state.and_then(|state| state.active_reasoning_effort),
+            runtime_state.and_then(|state| state.active_agent_id.clone()),
+            workspace_path_for_session(workspace, session_id),
+            context,
+        )
+    };
     // modelLabel retains the resolved provider/model selector for terminal diagnostics.
     // modelLabel 为终态诊断保留解析后的供应商/模型选择器。
     let model_label = Some(model_target.label());
@@ -665,17 +740,11 @@ pub(crate) fn build_webui_context_compaction_job_request(
     // reasoningEffort 优先采用会话选择，其次回退到运行时默认值。
     let reasoning_effort = source_execution
         .map(|(request, _)| request.reasoning_effort)
-        .or_else(|| {
-            session_runtime_state.and_then(|runtime_state| runtime_state.active_reasoning_effort)
-        })
+        .or(session_reasoning_effort)
         .unwrap_or_else(|| {
             active_reasoning_selection_effort(&agent_runtime.provider_configuration)
                 .unwrap_or(ReasoningEffortLevel::Off)
         });
-    let workspace_path = workspace_snapshot
-        .as_ref()
-        .map(|workspace| workspace_path_for_session(workspace, session_id))
-        .unwrap_or_else(|| normalized_workspace_path_text_from_path(&workspace_root()));
     // launchContext reuses an already materialized ordinary turn when available; manual compaction derives only persisted session controls.
     // launchContext 优先复用已经物化的普通回合；手动压缩仅从持久化会话控制派生。
     let launch_context = match source_execution {
@@ -683,56 +752,11 @@ pub(crate) fn build_webui_context_compaction_job_request(
             PromptCompactionLaunchContext::from_execution_request(source_request)
         }
         None => {
-            let mut context = PromptCompactionLaunchContext::default();
-            if let Some(runtime_state) = session_runtime_state {
-                if runtime_state.provider_tool_settings_initialized {
-                    for capability in &runtime_state.provider_tool_enabled_capabilities {
-                        // mediaCapability uses the dedicated global backend and therefore has no session target row.
-                        // mediaCapability 使用专用全局后端，因此没有会话目标行。
-                        let media_capability = matches!(
-                            capability.as_str(),
-                            "image_understand" | "video_understand" | "audio_understand"
-                        );
-                        if !media_capability
-                            && !runtime_state
-                                .provider_tool_selections
-                                .contains_key(capability)
-                        {
-                            return Err(format!(
-                                "Provider tool capability `{capability}` is enabled but has no selected model and account; confirm the session capability settings before compacting."
-                            ));
-                        }
-                    }
-                    context.provider_tool_selections_override = Some(
-                        runtime_state
-                            .provider_tool_selections
-                            .iter()
-                            .filter(|(capability, _)| {
-                                runtime_state
-                                    .provider_tool_enabled_capabilities
-                                    .contains(*capability)
-                            })
-                            .map(|(capability, selection)| (capability.clone(), selection.clone()))
-                            .collect(),
-                    );
-                    context.provider_tool_enabled_capabilities_override =
-                        Some(runtime_state.provider_tool_enabled_capabilities.clone());
-                    context.provider_extension_target_sets_override =
-                        Some(runtime_state.provider_extension_target_sets.clone());
-                }
-                context.execution_mode = runtime_state
-                    .active_work_mode
-                    .clone()
-                    .unwrap_or_else(|| String::from("build"));
-                context.output_style_snapshot = applied_output_style_snapshot(runtime_state);
-                context.session_prompt_skill_overrides =
-                    runtime_state.prompt_skill_overrides.clone();
-            }
             // projectConfiguration mirrors ordinary WebUI prompt preparation for project-scoped prompt skills.
             // projectConfiguration 镜像普通 WebUI 提示准备使用的项目级提示词技能配置。
-            context.project_prompt_skills =
+            persisted_launch_context.project_prompt_skills =
                 crate::load_project_configuration(&workspace_path).prompt_skills;
-            context
+            persisted_launch_context
         }
     };
     let budget_snapshot = context_compaction_budget_snapshot_from_state(state, session_id);
@@ -753,10 +777,7 @@ pub(crate) fn build_webui_context_compaction_job_request(
         model_target: Some(model_target),
         execution_agent_id: source_execution
             .map(|(_, preparation)| preparation.agent_id.clone())
-            .or_else(|| {
-                session_runtime_state
-                    .and_then(|runtime_state| runtime_state.active_agent_id.clone())
-            }),
+            .or(session_active_agent_id),
         launch_context,
         public_ai_runtime: Arc::clone(&agent_runtime.public_ai_runtime),
         model_label,

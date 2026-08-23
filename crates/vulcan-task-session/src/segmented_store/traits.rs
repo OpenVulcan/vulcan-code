@@ -342,33 +342,55 @@ impl TaskSessionStore for SegmentedTaskSessionStore {
             return Ok(None);
         }
         let (mut open_matches, mut archived_matches): (Vec<_>, Vec<_>) = self
-            .load_task_session_metadata_for_parent(parent)?
+            .load_task_session_mirror_summaries()?
             .into_iter()
-            .filter(|metadata| metadata.public_task_id == normalized_public_task_id)
-            .partition(|metadata| metadata.status != TaskSessionStatus::Archived);
+            .filter(|mirror| {
+                mirror.parent == parent && mirror.public_task_id == normalized_public_task_id
+            })
+            .partition(|mirror| mirror.status != TaskSessionStatus::Archived);
         if open_matches.len() > 1 {
             let duplicate_session_ids = open_matches
                 .iter()
-                .map(|metadata| metadata.task_session_id.to_string())
+                .map(|mirror| mirror.task_session_id.to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(SessionStoreError::new(format!(
                 "Parent-scoped task id `{normalized_public_task_id}` has multiple open sessions: {duplicate_session_ids}."
             )));
         }
-        if let Some(open_match) = open_matches.pop() {
-            return Ok(Some(open_match));
+        let selected_mirror = if let Some(open_match) = open_matches.pop() {
+            Some(open_match)
+        } else {
+            archived_matches.sort_by(|left, right| {
+                // Select only the newest archived mirror after proving that no open owner exists.
+                // 仅在确认不存在开放所有者后，选择最新的归档镜像。
+                right
+                    .updated_at
+                    .cmp(&left.updated_at)
+                    .then_with(|| right.created_at.cmp(&left.created_at))
+                    .then_with(|| right.task_session_id.cmp(&left.task_session_id))
+            });
+            archived_matches.into_iter().next()
+        };
+        let Some(selected_mirror) = selected_mirror else {
+            return Ok(None);
+        };
+        // Only the selected task is opened; an absent exact file is treated as a stale index entry.
+        // 仅打开选中的任务；精确文件缺失时按陈旧索引条目处理。
+        let Some(metadata) = self.load_task_session(selected_mirror.task_session_id)? else {
+            return Ok(None);
+        };
+        if metadata.task_session_id != selected_mirror.task_session_id
+            || metadata.parent != selected_mirror.parent
+            || metadata.public_task_id != selected_mirror.public_task_id
+            || metadata.status != selected_mirror.status
+        {
+            return Err(SessionStoreError::new(format!(
+                "Task mirror `{}` does not match its exact metadata document.",
+                selected_mirror.task_session_id
+            )));
         }
-        archived_matches.sort_by(|left, right| {
-            // Select only the newest archived history after proving that no open owner exists.
-            // 仅在确认不存在开放所有者后，选择最新的归档历史。
-            right
-                .updated_at
-                .cmp(&left.updated_at)
-                .then_with(|| right.created_at.cmp(&left.created_at))
-                .then_with(|| right.task_session_id.cmp(&left.task_session_id))
-        });
-        Ok(archived_matches.into_iter().next())
+        Ok(Some(metadata))
     }
 
     /// Appends a task invocation event to the direct parent segmented stream.

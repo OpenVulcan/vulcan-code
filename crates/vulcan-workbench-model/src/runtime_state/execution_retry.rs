@@ -1,5 +1,5 @@
-//! Durable execution-retry snapshot contracts shared by runtime, storage, and service layers.
-//! 由运行时、存储层和服务层共享的可靠执行重试快照契约。
+//! Memory-first and interrupted-durable execution-retry contracts shared across layers.
+//! 跨层共享的内存优先与中断后持久化执行重试契约。
 
 use super::*;
 use vulcan_ai_contract::{AiExecutionError, AiExecutionRequest};
@@ -11,8 +11,8 @@ use vulcan_core::types::{
 /// 执行重试快照接受的严格 Schema 版本。
 pub const EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION: u32 = 8;
 
-/// Lifecycle state of one persisted execution-retry snapshot.
-/// 单个持久化执行重试快照的生命周期状态。
+/// Lifecycle state of one process-local or interrupted-durable execution-retry snapshot.
+/// 单个进程内或中断后持久化执行重试快照的生命周期状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionRetrySnapshotState {
@@ -42,8 +42,8 @@ pub enum ExecutionRetryPendingAction {
         /// 在规范用户消息接纳后捕获的精确不可变准备输入。
         input: Box<ExecutionRetryPreparationInput>,
     },
-    /// Dispatch an exact provider-neutral request already persisted before transport execution.
-    /// 分派在传输执行前已经持久化的精确供应商无关请求。
+    /// Dispatch an exact provider-neutral request retained before transport execution.
+    /// 分派在传输执行前已经保留的精确供应商无关请求。
     DispatchProviderRequest {
         /// Exact request bytes represented as the public provider-neutral contract.
         /// 以公共供应商无关契约表示的精确请求内容。
@@ -107,6 +107,9 @@ pub struct ExecutionRetryPreparationInput {
     /// 绑定到原始已接纳用户消息的结构化附件。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<ConversationAttachment>,
+    /// Request-local attachment projection frozen for the exact Provider retry.
+    /// 为精确 Provider 重试冻结的单次请求局部附件投影。
+    pub provider_attachments: Vec<ConversationAttachment>,
     /// Exact execution mode selected for the original submission.
     /// 原始提交选择的精确执行模式。
     pub execution_mode: String,
@@ -156,14 +159,14 @@ pub enum ExecutionRetryToolState {
     /// The tool has not started and may be executed after exact binding validation.
     /// 工具尚未开始，可在精确绑定校验后执行。
     NotStarted,
-    /// The tool body started but no durable terminal result has been retained yet.
-    /// 工具主体已经启动，但尚未保留可靠的终态结果。
+    /// The tool body started but no exact terminal result has been retained yet.
+    /// 工具主体已经启动，但尚未保留精确终态结果。
     Running,
-    /// The tool completed successfully and its exact result is retained in this sidecar.
-    /// 工具已成功完成，且精确结果保留在当前 sidecar 中。
+    /// The tool completed successfully and its exact result is retained in this snapshot.
+    /// 工具已成功完成，且精确结果保留在当前快照中。
     Completed,
-    /// The tool completed with an error and its exact result is retained in this sidecar.
-    /// 工具以错误结束，且精确结果保留在当前 sidecar 中。
+    /// The tool completed with an error and its exact result is retained in this snapshot.
+    /// 工具以错误结束，且精确结果保留在当前快照中。
     Failed,
     /// The tool may have produced an external side effect, so automatic replay is forbidden.
     /// 工具可能已产生外部副作用，因此禁止自动重放。
@@ -177,16 +180,16 @@ pub struct ExecutionRetryToolProgress {
     /// Exact original invocation request emitted by the Provider.
     /// Provider 发出的精确原始调用请求。
     pub request: ToolInvocationRequest,
-    /// Exact durable result for a completed or failed invocation.
-    /// 已完成或失败调用对应的精确可靠结果。
+    /// Exact retained result for a completed or failed invocation.
+    /// 已完成或失败调用对应的精确保留结果。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<ToolInvocationResult>,
     /// Stable fingerprint of the frozen tool binding and schema, or `None` only before the mandatory batch-prepared boundary.
     /// 冻结工具绑定与 Schema 的稳定指纹；仅在强制批次准备边界之前允许为 `None`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binding_fingerprint: Option<String>,
-    /// Replay-safety state at the persisted boundary.
-    /// 持久化边界处的重放安全状态。
+    /// Replay-safety state at the retained boundary.
+    /// 保留边界处的重放安全状态。
     pub state: ExecutionRetryToolState,
 }
 
@@ -220,8 +223,8 @@ impl ExecutionRetryUserFollowup {
     }
 }
 
-/// Complete sidecar payload required to resume the same logical execution.
-/// 恢复同一逻辑执行所需的完整 sidecar 载荷。
+/// Complete memory-first payload that becomes `retry.json` only after a real interruption.
+/// 仅在真实中断后才成为 `retry.json` 的完整内存优先载荷。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionRetrySnapshot {
     /// Strict snapshot schema version.
@@ -236,8 +239,8 @@ pub struct ExecutionRetrySnapshot {
     /// Monotonic retry generation within the session.
     /// 会话内单调递增的重试代际。
     pub generation: u64,
-    /// Authoritative sidecar lifecycle state mirrored by the lightweight reference.
-    /// 由轻量引用镜像的权威 sidecar 生命周期状态。
+    /// Authoritative snapshot lifecycle state mirrored by the lightweight reference.
+    /// 由轻量引用镜像的权威快照生命周期状态。
     pub state: ExecutionRetrySnapshotState,
     /// Stable logical execution identity preserved across physical attempts.
     /// 跨物理尝试保留的稳定逻辑执行身份。
@@ -286,8 +289,8 @@ pub struct ExecutionRetrySnapshot {
     /// 冻结当前快照的结构化终态或中断错误。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<AiExecutionError>,
-    /// Canonical conversation digest used to reject edits, forks, and changed context generations.
-    /// 用于拒绝编辑、分叉和上下文代际变化的规范会话摘要。
+    /// Cached canonical messages-and-continuation digest used to reject Provider-visible drift.
+    /// 用于拒绝 Provider 可见漂移的缓存规范消息与 continuation 摘要。
     pub canonical_digest: String,
     /// Context-generation identity frozen with the request.
     /// 与请求一起冻结的上下文代际身份。
@@ -301,8 +304,8 @@ pub struct ExecutionRetrySnapshot {
     pub updated_at: String,
 }
 
-/// Lightweight main-state reference and eligibility summary for one sidecar snapshot.
-/// 单个 sidecar 快照在主状态中的轻量引用与资格摘要。
+/// Lightweight runtime reference and eligibility summary for one live or interrupted snapshot.
+/// 单个实时或中断快照的轻量运行态引用与资格摘要。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutionRetrySnapshotRef {
     /// Strict reference schema version.
@@ -317,11 +320,11 @@ pub struct ExecutionRetrySnapshotRef {
     /// Current claim lifecycle state.
     /// 当前领取生命周期状态。
     pub state: ExecutionRetrySnapshotState,
-    /// SHA-256 digest of the exact sidecar bytes.
-    /// 精确 sidecar 字节的 SHA-256 摘要。
+    /// Live transition digest, or SHA-256 of exact `retry.json` bytes after interruption.
+    /// 实时迁移摘要；中断后则为精确 `retry.json` 字节的 SHA-256。
     pub content_sha256: String,
-    /// Exact serialized sidecar size in bytes.
-    /// sidecar 序列化后的精确字节数。
+    /// Exact serialized `retry.json` size, or zero while the body is process-local.
+    /// 精确 `retry.json` 序列化字节数；正文位于进程内时为零。
     pub content_bytes: u64,
     /// Logical execution identity mirrored for cheap eligibility checks.
     /// 为低成本资格检查镜像的逻辑执行身份。
@@ -345,8 +348,8 @@ pub struct ExecutionRetrySnapshotRef {
     /// Provider 可见消息与 continuation 游标的 SHA-256 摘要。
     #[serde(default)]
     pub canonical_dispatch_sha256: String,
-    /// Whether the complete sidecar proves that automatic replay is safe.
-    /// 完整 sidecar 是否证明可以安全自动重放。
+    /// Whether the complete retained body proves that automatic replay is safe.
+    /// 完整保留正文是否证明可以安全自动重放。
     #[serde(default)]
     pub retryable: bool,
     /// Whether an operator must verify an external outcome before continuing.
@@ -387,10 +390,30 @@ impl ExecutionRetrySnapshotRef {
     /// Returns whether the reference proves replay safety independent of lifecycle ownership.
     /// 返回引用是否证明重放安全；该判断不包含生命周期所有权。
     pub fn replay_safety_proven(&self) -> bool {
-        // Content identity must be structurally readable before the UI may advertise an executable body.
-        // 在 UI 宣称正文可执行前，内容身份必须在结构上可读取。
+        self.safety_proven_with_body_requirement(true)
+    }
+
+    /// Returns whether a process-local body proves the same action safety without durable JSON.
+    /// 返回进程内正文在没有持久 JSON 时是否证明相同动作安全性。
+    pub fn live_boundary_safety_proven(&self) -> bool {
+        self.safety_proven_with_body_requirement(false)
+    }
+
+    /// Evaluates shared action safety with an explicit durable-body requirement.
+    /// 使用显式持久正文要求评估共享动作安全性。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `require_durable_body` distinguishes user-visible Continue admission from live transitions.
+    /// `require_durable_body` 区分用户可见 Continue 准入与实时迁移。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` only when identity, action, route, digest, and safety fields are structurally complete.
+    /// 仅当身份、动作、路由、摘要与安全字段结构完整时返回 `true`。
+    fn safety_proven_with_body_requirement(&self, require_durable_body: bool) -> bool {
         let content_identity_valid = uuid::Uuid::parse_str(self.snapshot_id.as_str()).is_ok()
-            && self.content_bytes > 0
+            && (!require_durable_body || self.content_bytes > 0)
             && self.content_sha256.len() == 64
             && self
                 .content_sha256

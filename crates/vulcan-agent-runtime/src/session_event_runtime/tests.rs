@@ -2225,6 +2225,64 @@ fn terminal_report_apply_is_atomic_on_assistant_identity_collision() {
     );
 }
 
+/// Verifies an owned runtime-event projection restores exact open cards after an append collision.
+/// 验证自有运行时事件投影在追加身份冲突后会恢复精确开放卡片。
+#[test]
+fn owned_runtime_event_projection_rolls_back_without_cloning_history() {
+    // sessionId and now determine the exact provider-retry record identity that will collide.
+    // sessionId 与 now 决定将发生冲突的精确 Provider 重试记录身份。
+    let session_id = test_session_id();
+    let now = "7000";
+    let colliding_id = build_session_record_message_id(session_id, now, 1);
+    // runtimeState owns one open request card whose id deliberately matches the next append identity.
+    // runtimeState 持有一张开放请求卡片，其标识被刻意设置为下一追加身份。
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    runtime_state
+        .conversation_state
+        .records
+        .push(SessionConversationRecord {
+            id: colliding_id.clone(),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolCallOutput,
+            visible: true,
+            title: String::new(),
+            body: String::new(),
+            metadata: Some(json!({
+                "request_stream_id": "request-1",
+                "request_revision": 1,
+                "tool_call_id": "call-1",
+                "tool_name": "shell_command",
+                "tool_display_state": "receiving"
+            })),
+            created_at: String::from("6999"),
+        });
+    runtime_state
+        .tool_request_record_ids
+        .insert(String::from("request-1"), colliding_id.clone());
+    runtime_state
+        .tool_call_record_ids
+        .insert(String::from("call-1"), colliding_id);
+    runtime_state.updated_at = String::from("before-retry");
+    // originalState is the exact transaction boundary that must survive the failed projection.
+    // originalState 是失败投影后必须保持不变的精确事务边界。
+    let original_state =
+        serde_json::to_value(&runtime_state).expect("runtime state should serialize");
+    let event = RuntimeEvent::new(RuntimeEventKind::Retrying, "Provider retry", "retrying");
+
+    // restoredState must carry the pre-event row and correlations after the generated id collides.
+    // restoredState 必须在生成身份冲突后携带事件前记录与关联。
+    let (restored_state, error) =
+        append_runtime_event_projection_to_owned_state(runtime_state, session_id, now, &event)
+            .expect_err("duplicate retry-note identity must fail");
+
+    assert!(error.contains("duplicates id"));
+    assert_eq!(
+        serde_json::to_value(&restored_state)
+            .expect("restored runtime state should serialize after failure"),
+        original_state
+    );
+}
+
 /// Projects visible records into comparable test tuples.
 /// 将可见记录投影成可比较的测试元组。
 fn visible_record_projection(

@@ -35,6 +35,9 @@ export interface ToolPresentationResolveOptions {
   // Optional prebuilt lookup table for live command-session summaries.
   // 可选的实时命令会话摘要预构建查找表。
   commandSessionById?: Map<string, CommandSessionSummary>;
+  // Optional parser-sanitized request preview for a tool that is still receiving arguments.
+  // 鍙€夌殑瑙ｆ瀽鍣ㄥ噣鍖栬姹傞瑙堬紝鐢ㄤ簬浠嶅湪鎺ユ敹鍙傛暟鐨勫伐鍏枫€?
+  requestPreview?: Record<string, unknown> | null;
 }
 
 // CommandExecutionPresentation describes one one-shot command-line execution display.
@@ -110,7 +113,7 @@ export interface FileChangePresentation {
   kind: "file_change";
   // Source adapter that produced this display model.
   // 生成该展示模型的来源适配器。
-  source: "native_vulcan_file" | "host_change_set";
+  source: "native_vulcan_file" | "native_file" | "native_file_edit" | "host_change_set";
   // Stable id used for the top-level expansion state.
   // 用于顶层展开状态的稳定标识。
   id: string;
@@ -123,6 +126,9 @@ export interface FileChangePresentation {
   // File operation inferred for the row summary.
   // 行摘要推断出的文件操作。
   operation: FileChangeOperation;
+  // Read-only action selected by the native file tool, when this is not a mutation card.
+  // 原生 file 工具选择的只读动作；非只读卡片时为空。
+  accessAction?: FileAccessAction | null;
   // Files shown by this presentation.
   // 当前展示包含的文件列表。
   files: FileChangeFilePresentation[];
@@ -142,7 +148,11 @@ export interface FileChangePresentation {
 
 // FileChangeOperation names the normalized operation shown to users.
 // FileChangeOperation 命名展示给用户的规范化文件操作。
-export type FileChangeOperation = "create" | "modify" | "delete" | "mixed";
+export type FileChangeOperation = "create" | "modify" | "delete" | "rename" | "mixed";
+
+// FileAccessAction names the read-only operation displayed by the native file tool.
+// FileAccessAction 命名原生 file 工具展示的只读操作。
+export type FileAccessAction = "read" | "list" | "search" | "stat";
 
 // FileChangeFilePresentation describes one file row inside a file change presentation.
 // FileChangeFilePresentation 描述文件变更展示中的单个文件行。
@@ -153,6 +163,15 @@ export interface FileChangeFilePresentation {
   // Normalized operation for this file.
   // 当前文件的规范化操作。
   operation: FileChangeOperation;
+  // Canonical resource identity used to correlate native multi-file results.
+  // 用于关联原生多文件结果的 canonical 资源标识。
+  resourceId: string | null;
+  // Native operation identifiers mapped to this resource, when available.
+  // 映射到该资源的原生操作标识集合。
+  operationIds: string[];
+  // Previous path for a canonical rename row.
+  // canonical rename 行的原始路径。
+  previousPath: string | null;
   // Original path reported by the tool or host.
   // 工具或宿主报告的原始路径。
   path: string;
@@ -180,6 +199,9 @@ export interface FileChangeFilePresentation {
   // Whether this file has meaningful expandable rows.
   // 当前文件是否有有意义的可展开行。
   expandable: boolean;
+  // Whether rows are read-only result lines rather than a mutation diff.
+  // 当前行是否为只读结果行，而不是文件变更 diff。
+  readOnly: boolean;
 }
 
 // MarkdownToolPresentationIcon names the visual icon slot for Markdown-output tools.

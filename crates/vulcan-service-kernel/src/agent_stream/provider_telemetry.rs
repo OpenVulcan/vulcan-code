@@ -129,11 +129,12 @@ impl Drop for ProviderTelemetryHookGuard {
         if let Some(event) = self.cancellation.take_cancelled_event() {
             match apply_provider_request_usage_telemetry(&self.state, &event) {
                 Ok(Some(snapshot)) => {
-                    if let Some(controller_runtime) = self.controller_runtime.clone() {
-                        spawn_workspace_session_persist_task(
+                    if snapshot.regular_session
+                        && let Some(controller_runtime) = self.controller_runtime.clone()
+                    {
+                        spawn_latest_session_runtime_state_persist_task(
                             self.state.clone(),
                             controller_runtime,
-                            snapshot,
                             event.session_id,
                             Some(String::from("provider_usage_cancelled_drop")),
                         );

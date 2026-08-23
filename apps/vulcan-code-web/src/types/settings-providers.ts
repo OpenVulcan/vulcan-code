@@ -123,6 +123,9 @@ export interface ProviderModelSummary {
   // Whether this model is enabled.
   // 该模型是否启用。
   enabled?: boolean;
+  // Content-addressed revision of the exact executable route when this row is selectable.
+  // 当该行可选择时，其精确可执行路线的内容寻址修订号。
+  routeRevision?: string | null;
   // Optional model status.
   // 可选模型状态。
   status?: string | null;

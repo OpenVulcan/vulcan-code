@@ -2,6 +2,7 @@
 //! 上下文压缩 completion 辅助逻辑。
 
 use super::*;
+use crate::require_segmented_session_directory_for_retained_session;
 
 /// Exact active-stream ownership behavior required by one context-compaction commit.
 /// 单次上下文压缩提交所需的精确活动流所有权行为。
@@ -300,44 +301,48 @@ pub(crate) fn finish_webui_context_compaction_execution(
         .lock()
         .ok()
         .and_then(|guard| guard.controller_runtime.clone());
-    if let Some(controller_runtime) = runtime_backup_controller.as_ref() {
-        match vulcan_workspace_store::workspace_store::backup_session_runtime_log_before_compaction(
-            &controller_runtime.data_root,
-            session_id,
-            &execution.compaction_result.compaction_id,
-            &execution.compaction_result.created_at,
-        ) {
-            Ok(copied_files) if !copied_files.is_empty() => {
-                webui_trace(
-                    "context_compaction_runtime_backup",
-                    format!("session={session_id} files={}", copied_files.len()),
-                );
-            }
-            Ok(_) => {}
-            Err(error) => {
-                webui_trace(
-                    "context_compaction_runtime_backup_failed",
-                    format!("session={session_id} error={error}"),
-                );
-            }
-        }
-    }
     // controller_runtime is required because compaction must durably advance the VMM cache epoch.
     // controller_runtime 是必需的，因为压缩必须持久推进 VMM 缓存纪元。
     let controller_runtime = runtime_backup_controller.as_ref().ok_or_else(|| {
         String::from("Core VMM controller runtime is unavailable during context compaction.")
     })?;
-    // vmm_controller_registry is cloned without retaining the shared service lock.
-    // vmm_controller_registry 在不保留共享服务锁的情况下完成克隆。
-    let vmm_controller_registry = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?
-        .vmm_controller_registry
-        .clone();
+    // vmm_controller_registry is cloned together with the exact session locator.
+    // vmm_controller_registry 与精确会话定位一起克隆。
+    let (vmm_controller_registry, session_directory) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let session_directory = require_segmented_session_directory_for_retained_session(
+            &guard,
+            &controller_runtime.data_root,
+            session_id,
+        )?;
+        (guard.vmm_controller_registry.clone(), session_directory)
+    };
+    match vulcan_workspace_store::workspace_store::backup_session_runtime_log_before_compaction(
+        &session_directory,
+        session_id,
+        &execution.compaction_result.compaction_id,
+        &execution.compaction_result.created_at,
+    ) {
+        Ok(copied_files) if !copied_files.is_empty() => {
+            webui_trace(
+                "context_compaction_runtime_backup",
+                format!("session={session_id} files={}", copied_files.len()),
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            webui_trace(
+                "context_compaction_runtime_backup_failed",
+                format!("session={session_id} error={error}"),
+            );
+        }
+    }
     // vmm_controller is the sole state owner for this session's cache epoch.
     // vmm_controller 是该会话缓存纪元的唯一状态所有者。
     let vmm_controller = vmm_controller_registry.get_or_open(
-        &controller_runtime.data_root,
+        &session_directory,
         session_id,
         &execution.compaction_result.created_at,
     )?;
@@ -605,14 +610,11 @@ pub(crate) fn finish_webui_context_compaction_execution(
     project_committed_context_compaction_surfaces(app, state, session_id, phase_event);
     // VMM Hook state is a derived projection and cannot invalidate an already-committed compaction epoch.
     // VMM Hook 状态是派生投影，不得使已提交的压缩纪元失效。
-    if let Err(error) =
-        agent_runtime
-            .vmm_hook_runtime
-            .replace_snapshot(build_vmm_hook_config_snapshot(
-                &agent_runtime.provider_configuration,
-                &workspace,
-            ))
-    {
+    if let Err(error) = refresh_exact_vmm_hook_session_projection(
+        &agent_runtime.vmm_hook_runtime,
+        &workspace,
+        session_id,
+    ) {
         webui_trace(
             "context_compaction_vmm_snapshot_refresh_failed_after_commit",
             format!("session={session_id} error={error}"),
@@ -627,10 +629,9 @@ pub(crate) fn finish_webui_context_compaction_execution(
             ),
         );
     }
-    if let (Some(controller_runtime), Some(event)) =
-        (runtime_backup_controller.as_ref(), injection_merge_event)
+    if let Some(event) = injection_merge_event
         && let Err(error) = record_webui_runtime_injection_merged(
-            controller_runtime,
+            &session_directory,
             session_id,
             event,
             &injection_merge_timestamp,
@@ -641,10 +642,9 @@ pub(crate) fn finish_webui_context_compaction_execution(
             format!("session={session_id} error={error}"),
         );
     }
-    if let Some(controller_runtime) = runtime_backup_controller.as_ref()
-        && !vmm_lifecycle_events.is_empty()
+    if !vmm_lifecycle_events.is_empty()
         && let Err(error) = crate::vmm_runtime_audit::record_vmm_lifecycle_events(
-            &controller_runtime.data_root,
+            &session_directory,
             session_id,
             &execution.compaction_result.created_at,
             vmm_lifecycle_events,

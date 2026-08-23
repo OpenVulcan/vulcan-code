@@ -520,6 +520,34 @@ Upload 在任何网络副作用之前完成全部资源预检。网络通道必�
 `cancellation_supported=true`。宿主以实际读取或发送字节发布 Preparing、Uploading、Completed、
 Failed、Cancelled 终态；上传 Future 被取消或所属运行结束时也必须产生终态，不能留下永久活动的进度条。
 
+### 7.1 会话附件兼容层如何消费 Manifest
+
+Manifest 的媒体声明不控制用户能否挂载文件，只控制请求副本能否直接携带资源。宿主先保存规范附件
+事实，再对当前冻结路线生成以下封闭计划：
+
+```text
+InlineOriginal
+UploadReference
+InlineDerivedPreview
+MetadataOnly
+```
+
+只有模型资源能力、协议编码能力、精确 `input_resource_constraints`、引用策略、上传通道和当前操作的
+引用消费字段全部闭合时，宿主才使用 `UploadReference`。存在闭合上传路线时，超过 512 KiB 的资源
+在草稿阶段准备；不存在闭合路线时，原始资源内联上限为 2 MiB。全部内联资源还共享编码后 2 MiB
+Base64 宿主预算。Manifest 声明的 MIME、`max_bytes`、`max_count` 和 `reference_policy` 始终可以进一步
+收紧这些宿主上限，不能放宽宿主上限。
+
+不满足当前路线的附件不会让整次会话请求失败，而是在请求局部投影中变为 `MetadataOnly`。投影必须
+保留稳定附件 ID、项目相对 `resource_path`、文件名、MIME、字节数和不可见原因；不得包含宿主绝对
+路径、`file_id`、上传 URL 或任务 ID。规范历史不保存上述传输计划，每次请求和模型切换均从规范附件
+重新投影。
+
+预上传引用的复用键至少包含内容 SHA-256、字节数、MIME、资源类型、Provider、服务入口、上传通道、
+上传契约指纹、引用作用域、连接/会话作用域和 TTL。作者不能用“同供应商”或“同模型”代替这些精确
+边界。媒体理解 Tool 继续由 AI 主动调用；附件兼容层不得自动执行 Tool，也不得把 Tool 的上传能力
+推断成当前会话模型的原生输入能力。
+
 每项操作从凭据解析与上传准备开始共享一个不可重置的绝对截止时间；同步请求与响应读取均受该
 截止时间约束。异步任务冻结完整 target/operation/upload/credential/generation 快照。恢复、轮询与取消使用同一
 快照；热更新只影响新任务。`generic_json_async_lifecycle` 必须显式声明 start/poll/cancel 方法、

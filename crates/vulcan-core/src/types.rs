@@ -588,6 +588,25 @@ impl ConversationAttachmentKind {
     }
 }
 
+/// Selects one request-local attachment projection without changing canonical attachment history.
+/// 选择单次请求局部附件投影，而不改变规范附件历史。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationAttachmentDeliveryMode {
+    /// Sends exact managed source bytes through the selected protocol encoder.
+    /// 通过选定协议编码器发送精确托管源字节。
+    InlineOriginal,
+    /// Uses one provider-native uploaded reference resolved by the media preparation boundary.
+    /// 使用媒体准备边界解析出的供应商原生上传引用。
+    UploadReference,
+    /// Sends a host-derived full-frame preview while retaining the original canonical source.
+    /// 发送宿主派生的完整画面预览，同时保留原始规范源文件。
+    InlineDerivedPreview,
+    /// Discloses only attachment identity and metadata to the model.
+    /// 仅向模型告知附件身份与元数据。
+    MetadataOnly,
+}
+
 /// Represents one structured user attachment kept beside canonical user text.
 /// 表示一条保存在规范用户文本旁边的结构化用户附件。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -601,6 +620,10 @@ pub struct ConversationAttachment {
     /// Canonical managed local file path used to re-read the attachment during future provider replays.
     /// 在未来 Provider 回放期间用于重新读取附件的规范托管本地文件路径。
     pub local_path: String,
+    /// Project-relative canonical resource path exposed to the model and host tools.
+    /// 暴露给模型与宿主工具的项目相对规范资源路径。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_path: Option<String>,
     /// Optional original source path retained for diagnostics and replay fallback when the managed copy is missing.
     /// 当托管副本缺失时，为诊断与回放回退保留的可选原始来源路径。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -613,6 +636,14 @@ pub struct ConversationAttachment {
     /// 为宿主侧预算估算与诊断保留的可选源字节长度。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub byte_len: Option<u64>,
+    /// Optional SHA-256 digest of the exact managed source bytes.
+    /// 可选的精确托管源字节 SHA-256 摘要。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_sha256: Option<String>,
+    /// Request-local delivery decision; canonical attachments clear it while isolated retry snapshots retain it.
+    /// 单次请求局部传输决策；规范附件会清空该字段，隔离的重试快照则会保留该字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_mode: Option<ConversationAttachmentDeliveryMode>,
     /// Optional local preview image path derived from the attachment, used by host-side media cards when the primary file is not directly displayable.
     /// 当主文件本身不可直接展示时，供宿主侧媒体卡片使用的、从附件派生出的可选本地预览图片路径。
     #[serde(default, skip_serializing_if = "Option::is_none")]

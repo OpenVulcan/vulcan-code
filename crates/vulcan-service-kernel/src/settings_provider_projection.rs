@@ -372,12 +372,27 @@ pub(crate) fn public_ai_provider_rows_for_selection(
                             connection.id.as_str(),
                             model.id.as_str(),
                         )?;
+                        // routeRevision is projected only for selectable rows and comes from the
+                        // same immutable selection resolver used by provider dispatch.
+                        // routeRevision 仅投影到可选择行，并来自供应商分派使用的同一不可变选择解析器。
+                        let route_revision = enabled
+                            .then(|| {
+                                runtime.resolve_connection_model_selection(
+                                    configuration,
+                                    connection.id.as_str(),
+                                    connection.provider_id.as_str(),
+                                    model.id.as_str(),
+                                )
+                            })
+                            .transpose()?
+                            .map(|selection| selection.route_revision);
                         Ok(ProviderModelSummary {
                             id: model.id.clone(),
                             name: model.display_name.clone(),
                             active,
                             preferred_connection,
                             enabled,
+                            route_revision,
                             status: None,
                             family: None,
                             context_limit: model
@@ -453,6 +468,7 @@ pub(crate) fn public_ai_provider_rows_for_selection(
                 // 仅租约行标识当前会话路由，但它不在有效目录中，因此绝不能成为新会话账号偏好。
                 preferred_connection: false,
                 enabled: true,
+                route_revision: Some(selection.route_revision.clone()),
                 status: Some(String::from("会话路由已冻结；重新选择模型后使用最新目录")),
                 family: None,
                 context_limit: capabilities

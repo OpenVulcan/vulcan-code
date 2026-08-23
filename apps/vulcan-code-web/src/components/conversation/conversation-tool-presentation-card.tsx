@@ -1744,6 +1744,12 @@ const FILE_CHANGE_OPERATION_LABEL_KEYS: Record<FileChangeOperation, Record<"runn
     preview: "toolPresentation.file.delete.preview",
     completed: "toolPresentation.file.delete.completed",
   },
+  rename: {
+    running: "toolPresentation.file.mixed.running",
+    failed: "toolPresentation.file.mixed.failed",
+    preview: "toolPresentation.file.mixed.preview",
+    completed: "toolPresentation.file.mixed.completed",
+  },
   mixed: {
     running: "toolPresentation.file.mixed.running",
     failed: "toolPresentation.file.mixed.failed",
@@ -2258,7 +2264,7 @@ function FileChangePresentationCard(props: {
         title={presentation.files.map((file) => file.displayPath).join("\n")}
         type="button"
       >
-        <FileChangeOperationIcon operation={presentation.operation} />
+        <FileChangeOperationIcon accessAction={presentation.accessAction} operation={presentation.operation} />
           <span className={cn("tool-presentation-state", (props.requestProgress?.receiving || presentation.state === "running") && "shimmer")}>{props.requestProgress?.statusLabel ?? fileChangeStatusLabel(presentation, presentation.operation, t)} {formatTranslation(t, "toolPresentation.file.count", { count: String(presentation.files.length) })}</span>
         <span className="file-change-path multi">
           <span className="file-change-path-text">{t("toolPresentation.file.multiChange")}</span>
@@ -2349,7 +2355,7 @@ function FileChangeSummaryButton(props: {
       title={props.file.path}
       type="button"
     >
-      {showOperationIcon ? <FileChangeOperationIcon operation={props.file.operation} /> : null}
+      {showOperationIcon ? <FileChangeOperationIcon accessAction={props.presentation.accessAction} operation={props.file.operation} /> : null}
           {showStatusLabel ? <span className={cn("tool-presentation-state", (props.requestProgress?.receiving || props.presentation.state === "running") && "shimmer")}>{props.requestProgress?.statusLabel ?? fileChangeStatusLabel(props.presentation, props.file.operation, props.t)}</span> : null}
       <span className="file-change-path">
         <span className="file-change-icon-stack"><FileTypeIcon icon={props.file.icon} /></span>
@@ -2368,7 +2374,22 @@ function FileChangeOperationIcon(props: {
   // Operation represented by the row.
   // 当前行代表的操作类型。
   operation: FileChangeOperation;
+  // Read-only action represented by the row.
+  // 当前行代表的只读动作。
+  accessAction?: FileChangePresentation["accessAction"];
 }) {
+  if (props.accessAction === "read" || props.accessAction === "stat") {
+    return <FileText className="file-change-operation-icon" size={15} />;
+  }
+  if (props.accessAction === "list") {
+    return <FolderTree className="file-change-operation-icon" size={15} />;
+  }
+  if (props.accessAction === "search") {
+    return <Search className="file-change-operation-icon" size={15} />;
+  }
+  if (props.operation === "rename") {
+    return <GitBranch className="file-change-operation-icon" size={15} />;
+  }
   if (props.operation === "delete") {
     return <Trash2 className="file-change-operation-icon" size={15} />;
   }
@@ -2404,6 +2425,9 @@ function fileChangeStatusLabel(
   operation: FileChangeOperation,
   t: (key: TranslationKey) => string,
 ): string {
+  if (presentation.source === "native_file" && presentation.accessAction) {
+    return nativeFileAccessLabel(presentation.accessAction, t);
+  }
   if (presentation.state === "running") {
     return fileChangeOperationLabel(operation, "running", t);
   }
@@ -2414,6 +2438,21 @@ function fileChangeStatusLabel(
     return fileChangeOperationLabel(operation, "preview", t);
   }
   return fileChangeOperationLabel(operation, "completed", t);
+}
+
+// nativeFileAccessLabel maps read-only native actions to existing localized shell labels.
+// nativeFileAccessLabel 将原生只读动作映射到已有的本地化外壳文案。
+function nativeFileAccessLabel(
+  action: NonNullable<FileChangePresentation["accessAction"]>,
+  t: (key: TranslationKey) => string,
+): string {
+  if (action === "list") {
+    return t("toolPresentation.fileList.title");
+  }
+  if (action === "search") {
+    return t("toolPresentation.codekit.rg.title");
+  }
+  return t("toolPresentation.fileRead.title");
 }
 
 // fileChangeOperationLabel maps one operation and phase to a stable translation key.
@@ -2441,6 +2480,20 @@ function FileChangeExpandableBody(props: {
 }) {
   if (props.errorDetail) {
     return <FileChangeErrorDetail detail={props.errorDetail} />;
+  }
+  if (props.file.readOnly && props.file.rows.length) {
+    return (
+      <div className="file-change-detail">
+        <div className="file-change-code-scroll">
+          {props.file.rows.map((row, index) => (
+            <div className="file-change-read-row" data-kind={row.kind} key={`${row.lineNumber ?? "none"}:${index}`}>
+              <span className="file-change-read-line-number">{row.lineNumber ?? ""}</span>
+              <span className="file-change-read-content">{row.content}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
   }
   if (props.file.diffFile) {
     return (

@@ -91,7 +91,7 @@ pub(crate) async fn service_get_user_prompt_edit_draft(
 ) -> Result<UserPromptEditDraftSummary, String> {
     let session_id = parse_session_id(&conversation_id)
         .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_INVALID_CONVERSATION"))?;
-    let (controller_runtime, source_session, project_id) = {
+    let (prompt, attachments) = {
         let mut guard = state
             .lock()
             .map_err(|_| String::from("ERR_SERVICE_STATE_LOCK_FAILED"))?;
@@ -109,36 +109,23 @@ pub(crate) async fn service_get_user_prompt_edit_draft(
         ) {
             return Err(String::from("ERR_USER_PROMPT_EDIT_NOT_EDITABLE"));
         }
-        let source_session = workspace
-            .sessions
-            .iter()
-            .find(|session| session.id == session_id)
-            .cloned()
-            .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_SESSION_NOT_FOUND"))?;
-        let project_id = owning_project_id_for_session(workspace, session_id)
-            .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_PROJECT_NOT_FOUND"))?;
-        let controller_runtime = guard
-            .controller_runtime
-            .clone()
-            .ok_or_else(|| String::from("ERR_CONTROLLER_RUNTIME_NOT_READY"))?;
-        (controller_runtime, source_session, project_id)
+        // targetMessage is the already-hydrated authoritative row shown by the edit affordance; opening the dialog must not replay disk history.
+        // targetMessage 是编辑入口已经展示的水合权威消息行；打开弹窗不得重放磁盘历史。
+        let target_message = workspace
+            .session_messages
+            .get(&session_id)
+            .and_then(|messages| messages.iter().find(|message| message.id == message_id))
+            .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_NOT_FOUND"))?;
+        (
+            target_message.body.clone(),
+            composer_message_attachments_from_metadata(target_message.metadata.as_ref()),
+        )
     };
-    let target = load_persisted_user_prompt_edit_draft(
-        &controller_runtime,
-        &source_session,
-        &project_id,
-        &message_id,
-    )
-    .await?;
     Ok(UserPromptEditDraftSummary {
         conversation_id,
         message_id,
-        prompt: target.prompt,
-        attachments: target
-            .attachments
-            .iter()
-            .map(composer_attachment_summary_from_core)
-            .collect(),
+        prompt,
+        attachments,
         running: false,
     })
 }
@@ -195,6 +182,9 @@ pub(crate) async fn service_fork_conversation(
     // persist_guard keeps the source directory and authoritative session index at one storage version.
     // persist_guard 使源目录与权威会话索引保持在同一个存储版本。
     let persist_guard = persist_lock.lock().await;
+    // sourcePersistGuards exclude same-session transcript and state writers while its directory is copied.
+    // sourcePersistGuards 在复制源目录期间排除同会话转录与状态写入者。
+    let _source_persist_guards = lock_webui_session_persist_channels([source_session_id]).await;
     let fork_result = fork_persisted_session(
         &controller_runtime,
         &source_session,

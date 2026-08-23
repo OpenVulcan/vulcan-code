@@ -83,7 +83,20 @@ pub(in crate::workspace_store) fn repair_segmented_session_jsonl_files_if_needed
             continue;
         }
 
-        let repair_read = read_segment_event_lines_for_repair(&segment_path)?;
+        let mut repair_read = read_segment_event_lines_for_repair(&segment_path)?;
+        // exactSerializedLength detects a missing final newline even though BufRead::lines accepts the final unterminated row.
+        // exactSerializedLength 用于检测缺失的末尾换行，即使 BufRead::lines 会接受未终止的最后一行。
+        let exact_serialized_length = repair_read.lines.iter().try_fold(0_u64, |total, line| {
+            let line_length = serde_json::to_string(line).map_err(to_store_error)?.len() as u64 + 1;
+            total.checked_add(line_length).ok_or_else(|| {
+                format!(
+                    "Segment repair byte length overflowed for `{}`.",
+                    segment_path.display()
+                )
+            })
+        })?;
+        repair_read.changed |=
+            fs::metadata(&segment_path).map_err(to_store_error)?.len() != exact_serialized_length;
         changed |= repair_read.changed;
         if repair_read.truncated_at_corrupt_line {
             discard_remaining_segments = true;
@@ -182,6 +195,78 @@ pub(in crate::workspace_store) fn repair_segmented_session_jsonl_files_if_needed
     update_segmented_message_checkpoint(&mut metadata, &messages)?;
     write_metadata(session_dir, &metadata)?;
     Ok(true)
+}
+
+/// Validates only the exact active JSONL append boundary described by retained metadata.
+/// 仅校验保留元数据描述的精确活动 JSONL 追加边界。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the exact owning session directory.
+/// `session_dir` 是精确的所属会话目录。
+/// `metadata` is the authoritative metadata snapshot loaded under the append lock.
+/// `metadata` 是在追加锁下加载的权威元数据快照。
+///
+/// # Returns
+/// 返回值
+/// Success when the exact active file length, newline boundary, and next sequence agree with metadata.
+/// 当精确活动文件长度、换行边界及下一序号均与元数据一致时返回成功。
+pub(in crate::workspace_store) fn validate_segmented_session_append_boundary_locked(
+    session_dir: &Path,
+    metadata: &SegmentedSessionMetadata,
+) -> Result<(), String> {
+    let active_segment = metadata.segments.last().ok_or_else(|| {
+        String::from(
+            "Segmented session append metadata has no active segment; load-time repair is required.",
+        )
+    })?;
+    if metadata.active_segment != active_segment.file {
+        return Err(format!(
+            "Segmented session append metadata points to `{}` but the exact final segment is `{}`; load-time repair is required.",
+            metadata.active_segment, active_segment.file
+        ));
+    }
+    let active_path = session_dir.join(&active_segment.file);
+    let actual_byte_len = fs::metadata(&active_path)
+        .map_err(|error| {
+            format!(
+                "Failed to inspect exact active segment `{}` before append: {error}",
+                active_path.display()
+            )
+        })?
+        .len();
+    if actual_byte_len != active_segment.byte_len {
+        return Err(format!(
+            "Exact active segment `{}` has byte length {actual_byte_len}, expected {}; load-time repair is required.",
+            active_path.display(),
+            active_segment.byte_len
+        ));
+    }
+    if actual_byte_len == 0 {
+        if active_segment.line_count != 0 {
+            return Err(format!(
+                "Exact active segment `{}` is empty but metadata retains {} lines; load-time repair is required.",
+                active_path.display(),
+                active_segment.line_count
+            ));
+        }
+        return Ok(());
+    }
+    let mut active_file = File::open(&active_path).map_err(to_store_error)?;
+    active_file
+        .seek(SeekFrom::End(-1))
+        .map_err(to_store_error)?;
+    let mut final_byte = [0_u8; 1];
+    active_file
+        .read_exact(&mut final_byte)
+        .map_err(to_store_error)?;
+    if final_byte[0] != b'\n' {
+        return Err(format!(
+            "Exact active segment `{}` has an incomplete JSONL tail; load-time repair is required.",
+            active_path.display()
+        ));
+    }
+    Ok(())
 }
 
 /// Removes older duplicate persisted transcript rows before metadata is rebuilt.
@@ -551,9 +636,14 @@ pub(in crate::workspace_store) fn update_segment_metadata(
     }
     segment.line_count += 1;
     segment.byte_len += line_byte_len;
+    segment.last_seq = Some(line.seq);
     segment.last_timestamp = Some(line.timestamp.clone());
     if let Some(turn_index) = turn_index {
         segment.last_turn_index = Some(turn_index);
+    }
+    if let Some(message_index) = line.payload.get("message_index").and_then(Value::as_u64) {
+        segment.first_message_index.get_or_insert(message_index);
+        segment.last_message_index = Some(message_index);
     }
     if line.kind == SegmentedSessionEventKind::Compacted {
         segment.last_compaction_seq = Some(line.seq);
@@ -624,48 +714,6 @@ pub(in crate::workspace_store) fn read_session_metadata(
     session_dir: &Path,
 ) -> Result<SegmentedSessionMetadata, String> {
     read_required_json::<SegmentedSessionMetadata>(&metadata_path(session_dir))
-}
-
-/// Lists one active or archived segmented-session root from text metadata.
-/// 从文本元数据列出一个活动或归档分段会话根。
-pub(in crate::workspace_store) fn list_segmented_session_catalog_for_root(
-    data_root: &Path,
-    archived: bool,
-) -> Result<Vec<SegmentedSessionCatalogEntry>, String> {
-    let root_name = if archived {
-        SEGMENTED_ARCHIVED_SESSIONS_DIR
-    } else {
-        SEGMENTED_SESSIONS_DIR
-    };
-    let root = data_root.join(root_name);
-    if !root.exists() {
-        return Ok(Vec::new());
-    }
-    let mut entries = Vec::new();
-    for project_entry in fs::read_dir(&root).map_err(to_store_error)? {
-        let project_entry = project_entry.map_err(to_store_error)?;
-        let project_path = project_entry.path();
-        if !project_path.is_dir() {
-            continue;
-        }
-        for session_entry in fs::read_dir(&project_path).map_err(to_store_error)? {
-            let session_entry = session_entry.map_err(to_store_error)?;
-            let session_dir = session_entry.path();
-            if !session_dir.is_dir() {
-                continue;
-            }
-            let metadata_file = metadata_path(&session_dir);
-            if !metadata_file.exists() {
-                continue;
-            }
-            let metadata = read_session_metadata(&session_dir)?;
-            entries.push(SegmentedSessionCatalogEntry {
-                session_dir,
-                metadata,
-            });
-        }
-    }
-    Ok(entries)
 }
 
 /// Writes a main session metadata document atomically.

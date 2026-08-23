@@ -1296,6 +1296,7 @@ fn responses_image_resource(
         source_kind,
         file_name: None,
         image_detail,
+        resource_path: None,
         local_path: None,
         url: image_url.map(str::to_string),
     })
@@ -1396,6 +1397,7 @@ fn responses_file_resource(
         source_kind,
         file_name,
         image_detail: None,
+        resource_path: None,
         local_path: None,
         url: (*field != "file_id").then(|| (*value).to_string()),
     })
@@ -2122,6 +2124,7 @@ mod tests {
                         source_kind: ResourceSourceKind::HostResolved,
                         file_name: Some(String::from("memory.txt")),
                         image_detail: None,
+                        resource_path: None,
                         local_path: Some(String::from("C:\\private\\memory.txt")),
                         url: None,
                     },

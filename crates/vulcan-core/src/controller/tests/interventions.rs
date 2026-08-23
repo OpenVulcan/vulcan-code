@@ -67,9 +67,12 @@ fn run_user_turn_streaming_intervention_reaches_next_provider_request() {
             kind: crate::types::ConversationAttachmentKind::Image,
             file_name: String::from("reference.png"),
             local_path: String::from("D:/tmp/reference.png"),
+            resource_path: None,
             source_path: None,
             asset_id: Some(String::from("asset-reference")),
             byte_len: Some(42),
+            source_sha256: None,
+            delivery_mode: None,
             preview_local_path: None,
             mime_type: String::from("image/png"),
         };

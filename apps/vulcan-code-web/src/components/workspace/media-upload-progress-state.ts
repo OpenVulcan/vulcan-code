@@ -32,7 +32,11 @@ export function reduceMediaUploadProgress(
   // progressKey 区分同一提交中的文件，同时 clientSubmissionId 继续作为后端取消令牌。
   const progressKey = mediaUploadProgressKey(progress);
   const next = { ...current };
-  if (progress.phase === "preparing" || progress.phase === "uploading") {
+  if (
+    progress.phase === "preparing"
+    || progress.phase === "uploading"
+    || progress.phase === "awaiting_provider_confirmation"
+  ) {
     next[progressKey] = progress;
   } else {
     delete next[progressKey];

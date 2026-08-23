@@ -2,6 +2,7 @@
 //! 供WebUI原生工具集成层复用的共享宿主工具基础设施。
 
 pub mod command_session_runtime;
+pub mod file_runtime;
 pub mod output_decode;
 pub mod process_creation;
 pub mod project_temp_maintenance;

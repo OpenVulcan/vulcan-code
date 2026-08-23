@@ -101,6 +101,9 @@ export interface ComposerSessionSettingsSnapshot {
 // ComposerSubmission contains the user prompt and runtime quick-control values.
 // ComposerSubmission 包含用户提示词与运行时快捷控制取值。
 export interface ComposerSubmission {
+  // Stable composer draft slot whose attachment lease transfers with this submission.
+  // 随本次提交转移附件租约的稳定输入区草稿槽。
+  draftSlotKey: string;
   // User-entered prompt text to append into the active conversation.
   // 需要追加到当前会话中的用户输入提示词。
   prompt: string;

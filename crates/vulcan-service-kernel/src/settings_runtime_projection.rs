@@ -716,6 +716,7 @@ pub(crate) fn store_provider_and_mcp_configuration_after_change(
                 .saturating_add(1),
             agent_runtime.extension_generation.plugin_catalog(),
             next_mcp_runtime,
+            agent_runtime.extension_generation.prompt_skill_catalog(),
         ));
         agent_runtime.provider_configuration = provider_configuration.clone();
         agent_runtime.extension_generation = next_generation;
@@ -735,10 +736,14 @@ pub(crate) async fn refresh_agent_skills_local_state(
     let _configuration_transaction = begin_provider_configuration_transaction().await;
     let provider_configuration = provider_configuration_from_state(state)?;
     let plugin_catalog = service_vulcan_plugin_runtime(state)?.snapshot();
-    let summary = agent_skills_catalog_summary(&provider_configuration, Some(&plugin_catalog));
+    let (prompt_skill_catalog, summary) = load_agent_skills_runtime_generation(
+        &provider_configuration,
+        Some(plugin_catalog.as_ref()),
+    );
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
+    publish_prompt_skill_catalog_generation(&mut guard, prompt_skill_catalog);
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
     guard.workbench.agent_skills = summary.clone();
@@ -768,13 +773,17 @@ pub(crate) async fn refresh_agent_skills_local_state_if_changed(
     let _configuration_transaction = begin_provider_configuration_transaction().await;
     let provider_configuration = provider_configuration_from_state(state)?;
     let plugin_catalog = service_vulcan_plugin_runtime(state)?.snapshot();
-    let summary = agent_skills_catalog_summary(&provider_configuration, Some(&plugin_catalog));
+    let (prompt_skill_catalog, summary) = load_agent_skills_runtime_generation(
+        &provider_configuration,
+        Some(plugin_catalog.as_ref()),
+    );
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
     if !agent_skills_catalog_summary_changed(&guard.workbench.agent_skills, &summary) {
         return Ok(None);
     }
+    publish_prompt_skill_catalog_generation(&mut guard, prompt_skill_catalog);
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
     guard.workbench.agent_skills = summary.clone();
@@ -782,6 +791,74 @@ pub(crate) async fn refresh_agent_skills_local_state_if_changed(
         revision: guard.workbench_generation,
         agent_skills: summary,
     }))
+}
+
+/// Loads one base prompt-skill generation once and derives its plugin-merged UI summary in memory.
+/// 仅加载一次基础提示词技能代次，并在内存中派生合并插件后的 UI 摘要。
+///
+/// # Parameters
+/// 参数
+/// `provider_configuration` resolves exact roots and persisted state; `plugin_catalog` supplies one
+/// already-published plugin generation.
+/// `provider_configuration` 解析精确根与持久化状态；`plugin_catalog` 提供一份已经发布的插件代次。
+///
+/// # Returns
+/// 返回值
+/// The base runtime catalog and the complete user-facing summary derived without a second scan.
+/// 返回基础运行时目录，以及无需第二次扫描派生的完整面向用户摘要。
+fn load_agent_skills_runtime_generation(
+    provider_configuration: &ProviderConfigurationFile,
+    plugin_catalog: Option<&vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
+) -> (
+    Arc<vulcan_prompt_skills::PromptSkillCatalog>,
+    AgentSkillsCatalogSummary,
+) {
+    let base_catalog = load_agent_skills_catalog(provider_configuration, None);
+    let mut projected_catalog = base_catalog.clone();
+    if let Some(plugin_catalog) = plugin_catalog
+        && let Err(error) =
+            projected_catalog.merge_plugin_skills(plugin_catalog.enabled_skills.values().cloned())
+    {
+        projected_catalog
+            .errors
+            .push(vulcan_prompt_skills::PromptSkillLoadError {
+                path: plugin_catalog.root.clone(),
+                message: error,
+            });
+    }
+    let summary =
+        agent_skills_catalog_summary_from_catalog(provider_configuration, &projected_catalog);
+    (Arc::new(base_catalog), summary)
+}
+
+/// Publishes one preloaded base prompt-skill catalog while preserving plugin and MCP generations.
+/// 发布一份预加载基础提示词技能目录，同时保留插件与 MCP 代次。
+///
+/// # Parameters
+/// 参数
+/// `state` is the already locked service state; `prompt_skill_catalog` is the exact replacement.
+/// `state` 是已经加锁的服务状态；`prompt_skill_catalog` 是精确替代目录。
+///
+/// # Returns
+/// 返回值
+/// This in-place publication has no return value when no runtime exists yet.
+/// 尚无运行时时，该原地发布不返回任何值。
+fn publish_prompt_skill_catalog_generation(
+    state: &mut ServiceBridgeState,
+    prompt_skill_catalog: Arc<vulcan_prompt_skills::PromptSkillCatalog>,
+) {
+    let Some(agent_runtime) = state.agent_runtime.as_mut() else {
+        return;
+    };
+    agent_runtime.extension_generation = Arc::new(ExtensionGeneration::new(
+        agent_runtime
+            .extension_generation
+            .revision()
+            .saturating_add(1),
+        agent_runtime.extension_generation.plugin_catalog(),
+        agent_runtime.extension_generation.mcp_runtime(),
+        Some(prompt_skill_catalog),
+    ));
 }
 
 /// Returns whether two complete Agent Skills domain summaries differ.
@@ -859,11 +936,14 @@ pub(crate) async fn refresh_plugin_catalog_local_state(
         Some(plugin_catalog.as_ref()),
         &mcp_server_states,
     );
-    if let Some(runtime) = guard.agent_runtime.as_ref() {
+    if let Some(runtime) = guard.agent_runtime.as_mut() {
         runtime
             .task_runtime
-            .replace_subagent_catalog(subagent_catalog)
+            .replace_subagent_catalog(subagent_catalog.clone())
             .map_err(|error| format!("刷新运行时插件智能体目录失败：{error}"))?;
+        // subagentCatalog publishes the same immutable generation used by TaskRuntime and subsequent workbench projections.
+        // subagentCatalog 发布与 TaskRuntime 及后续工作台投影共同使用的同一不可变代次。
+        runtime.subagent_catalog = Arc::new(subagent_catalog);
     }
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;

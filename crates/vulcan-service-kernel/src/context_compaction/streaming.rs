@@ -439,15 +439,17 @@ pub(crate) fn current_session_title_from_state(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
 ) -> String {
-    current_workspace_snapshot_from_shared_state(state)
+    state
+        .lock()
         .ok()
-        .flatten()
-        .and_then(|workspace| {
-            workspace
-                .sessions
-                .into_iter()
-                .find(|session| session.id == session_id)
-                .map(|session| session.title)
+        .and_then(|guard| {
+            guard.workspace_snapshot.as_ref().and_then(|workspace| {
+                workspace
+                    .sessions
+                    .iter()
+                    .find(|session| session.id == session_id)
+                    .map(|session| session.title.clone())
+            })
         })
         .unwrap_or_else(|| format!("会话 #{session_id}"))
 }

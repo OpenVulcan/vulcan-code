@@ -548,6 +548,7 @@ async fn run_git_commit_summary_model(
         provider_extension_target_sets_override: Default::default(),
         subagent_prompt_context: None,
         task_session_store_root: None,
+        session_storage_directory: None,
         session_title: String::from("Git commit summary"),
         workspace_path: workspace_path.to_string(),
         prompt,

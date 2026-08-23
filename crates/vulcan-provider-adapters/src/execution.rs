@@ -43,6 +43,10 @@ use vulcan_llm_core::{
 
 use tokio::sync::{Mutex as TokioMutex, oneshot};
 
+/// Host-wide preferred inline ceiling before an available provider upload channel is selected.
+/// 存在 Provider 上传通道时，宿主优先内联所采用的统一字节上限。
+pub const PREFERRED_INLINE_MEDIA_MAX_BYTES: u64 = 512 * 1024;
+
 /// Stable VulcanCode user agent used by every non-Codex provider protocol.
 /// 所有非 Codex 供应商协议使用的稳定 VulcanCode 用户代理。
 const VULCAN_CODE_USER_AGENT: &str = "vulcan-code/0.1";
@@ -844,9 +848,12 @@ struct ResponsesWebsocketSessionCacheEntry {
 /// 在匹配请求分派前保存一个临时供应商媒体引用。
 #[derive(Clone)]
 struct PreparedMediaCacheEntry {
-    /// Provider-native URL or URI used by the exact request projector.
-    /// 精确请求投影器使用的供应商原生 URL 或 URI。
-    url: String,
+    /// Provider-native reference used by the exact request projector.
+    /// 精确请求投影器使用的供应商原生引用。
+    provider_reference: String,
+    /// Closed encoding that determines whether the reference is a file id or URI-shaped value.
+    /// 决定该引用是文件标识还是 URI 形值的封闭编码。
+    reference_encoding: crate::UploadReferenceEncoding,
     /// Optional monotonic expiry; durable conversation references intentionally have no process expiry.
     /// 可选的单调时钟过期点；持久会话引用有意不设置进程过期时间。
     expires_at: Option<Instant>,
@@ -918,6 +925,9 @@ pub struct PreparedMediaReferenceSnapshot {
     /// Provider-native URI or URL used by the request projector.
     /// 请求投影器使用的供应商原生 URI 或 URL。
     pub provider_reference: String,
+    /// Closed Manifest encoding required by the protocol resource projector.
+    /// 协议资源投影器所需的封闭 Manifest 编码。
+    pub reference_encoding: crate::UploadReferenceEncoding,
     /// Wall-clock time when the provider reference was cached after upload.
     /// 供应商引用上传后进入缓存的墙钟时间。
     pub created_at_unix_millis: u64,
@@ -942,6 +952,9 @@ pub struct ConversationMediaUploadContract {
     /// Provider-declared lifetime for the returned reference.
     /// 供应商声明的返回引用生命周期。
     pub cache_duration_ms: Option<u64>,
+    /// Exact wire encoding used by references returned from this channel.
+    /// 当前通道返回引用使用的精确 Wire 编码。
+    pub reference_encoding: crate::UploadReferenceEncoding,
 }
 
 /// Identifies the source-file revision used to create one prepared media reference.
@@ -1525,6 +1538,9 @@ impl ProviderExecutionClient {
                 .ok_or_else(|| String::from("Media upload contract could not be fingerprinted."))?,
             reference_scope: channel.reference_scope,
             cache_duration_ms: channel.cache_duration_ms,
+            reference_encoding: channel
+                .reference_encoding
+                .unwrap_or(crate::UploadReferenceEncoding::ProviderFileId),
         }))
     }
 
@@ -1684,6 +1700,9 @@ impl ProviderExecutionClient {
         self.remember_prepared_media_cache_entry(
             key,
             provider_reference,
+            channel
+                .reference_encoding
+                .unwrap_or(crate::UploadReferenceEncoding::ProviderFileId),
             source_fingerprint,
             cache_duration_ms,
             Some((first_used_at_unix_millis, expires_at_unix_millis)),
@@ -1707,7 +1726,8 @@ impl ProviderExecutionClient {
             return None;
         }
         Some(PreparedMediaReferenceSnapshot {
-            provider_reference: entry.url,
+            provider_reference: entry.provider_reference,
+            reference_encoding: entry.reference_encoding,
             created_at_unix_millis: entry.created_at_unix_millis,
             expires_at_unix_millis: entry.expires_at_unix_millis,
         })
@@ -1872,7 +1892,7 @@ impl ProviderExecutionClient {
             return;
         };
         let credential_role = credential_profile.credential_role.as_deref();
-        let cache_duration_ms = route
+        let channel = route
             .protocol_route
             .input_resource_constraints
             .iter()
@@ -1887,8 +1907,8 @@ impl ProviderExecutionClient {
                     credential_role,
                 )
                 .ok()
-            })
-            .and_then(|channel| channel.cache_duration_ms);
+            });
+        let cache_duration_ms = channel.and_then(|channel| channel.cache_duration_ms);
         // Timed process caches require a declared provider lifetime; durable conversation entries may retain a reference without one.
         // 有时效的进程缓存必须声明供应商生命周期；持久会话条目可以在未声明生命周期时继续保留引用。
         let cache_duration_ms = cache_duration_ms.unwrap_or_default();
@@ -1907,6 +1927,9 @@ impl ProviderExecutionClient {
         self.remember_prepared_media_cache_entry(
             key,
             url,
+            channel
+                .and_then(|channel| channel.reference_encoding)
+                .unwrap_or(crate::UploadReferenceEncoding::ProviderFileId),
             source_fingerprint,
             cache_duration_ms,
             wall_clock_lifetime,
@@ -1919,17 +1942,18 @@ impl ProviderExecutionClient {
     ///
     /// # Parameters
     /// 参数
-    /// `key`, `url`, and `source_fingerprint` identify the exact cached source; `cache_duration_ms`
+    /// `key`, `provider_reference`, `reference_encoding`, and `source_fingerprint` identify the exact cached source; `cache_duration_ms`
     /// supplies the declared lifetime for a fresh upload; `wall_clock_lifetime` preserves an
     /// existing persisted or provider-tool lifetime when available; `keep_until_process_exit`
     /// disables monotonic expiry for a durable conversation reference.
-    /// `key`、`url` 与 `source_fingerprint` 标识精确缓存源；`cache_duration_ms` 为新上传提供
+    /// `key`、`provider_reference`、`reference_encoding` 与 `source_fingerprint` 标识精确缓存源；`cache_duration_ms` 为新上传提供
     /// 声明生命周期；`wall_clock_lifetime` 在可用时保留已有持久或供应商工具生命周期；
     /// `keep_until_process_exit` 为持久会话引用关闭单调时钟过期。
     fn remember_prepared_media_cache_entry(
         &self,
         key: String,
-        url: String,
+        provider_reference: String,
+        reference_encoding: crate::UploadReferenceEncoding,
         source_fingerprint: PreparedMediaSourceFingerprint,
         cache_duration_ms: u64,
         wall_clock_lifetime: Option<(u64, u64)>,
@@ -1980,7 +2004,8 @@ impl ProviderExecutionClient {
             cache.insert(
                 key,
                 PreparedMediaCacheEntry {
-                    url,
+                    provider_reference,
+                    reference_encoding,
                     expires_at,
                     created_at: now,
                     created_at_unix_millis,
@@ -8941,7 +8966,8 @@ mod tests {
             cache.insert(
                 format!("key-{index:04}"),
                 PreparedMediaCacheEntry {
-                    url: format!("https://example.invalid/{index}"),
+                    provider_reference: format!("https://example.invalid/{index}"),
+                    reference_encoding: crate::UploadReferenceEncoding::ResponseUrl,
                     expires_at: Some(now + Duration::from_secs(60)),
                     created_at,
                     created_at_unix_millis: 1,
@@ -8957,7 +8983,8 @@ mod tests {
         cache.insert(
             String::from("expired"),
             PreparedMediaCacheEntry {
-                url: String::from("https://example.invalid/expired"),
+                provider_reference: String::from("https://example.invalid/expired"),
+                reference_encoding: crate::UploadReferenceEncoding::ResponseUrl,
                 expires_at: Some(now),
                 created_at: now,
                 created_at_unix_millis: 1,
@@ -8985,7 +9012,8 @@ mod tests {
         cache.insert(
             String::from("durable"),
             PreparedMediaCacheEntry {
-                url: String::from("mm_file://durable"),
+                provider_reference: String::from("mm_file://durable"),
+                reference_encoding: crate::UploadReferenceEncoding::Template,
                 expires_at: None,
                 created_at: now,
                 created_at_unix_millis: 1,
@@ -9007,6 +9035,7 @@ mod tests {
     fn provider_tool_reference_reuse_uses_first_use_and_provider_expiry() {
         let reference = PreparedMediaReferenceSnapshot {
             provider_reference: String::from("mm_file://video-1"),
+            reference_encoding: crate::UploadReferenceEncoding::Template,
             created_at_unix_millis: 1_000,
             expires_at_unix_millis: 1_000 + 10 * PROVIDER_TOOL_MEDIA_CACHE_DURATION_MS,
         };

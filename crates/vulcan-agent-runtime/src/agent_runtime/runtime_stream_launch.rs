@@ -55,7 +55,7 @@ pub async fn prepare_runtime_stream_launch(
         agent_profile_catalog,
         luaskills_runtime,
         None,
-        Arc::new(ExtensionGeneration::new(0, None, mcp_runtime_access)),
+        Arc::new(ExtensionGeneration::new(0, None, mcp_runtime_access, None)),
         task_runtime,
         question_runtime,
         command_session_runtime,

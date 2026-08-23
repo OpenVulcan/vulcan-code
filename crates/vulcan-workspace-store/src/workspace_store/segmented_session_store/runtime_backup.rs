@@ -3,6 +3,19 @@
 
 use super::*;
 
+/// File name of the exact ordered runtime-backup directory index.
+/// 精确有序运行时备份目录索引的文件名。
+const RUNTIME_BACKUP_INDEX_FILE: &str = "index.json";
+
+/// Ordered runtime-backup directory names owned by one session.
+/// 单个会话拥有的有序运行时备份目录名。
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+struct RuntimeBackupDirectoryIndex {
+    /// Directory names in creation order, oldest first.
+    /// 按创建顺序排列的目录名，最旧项在前。
+    directories: Vec<String>,
+}
+
 /// Backs up one validated runtime-log snapshot before context compaction.
 /// 在上下文压缩前备份一份已验证的运行时日志快照。
 ///
@@ -83,6 +96,7 @@ pub(in crate::workspace_store) fn backup_runtime_log_before_compaction(
             backup_dir.display()
         ));
     }
+    record_runtime_backup_directory(session_dir, &backup_dir)?;
     if let Err(error) = prune_runtime_log_backups(session_dir, RUNTIME_COMPACTION_BACKUP_LIMIT) {
         return Err(format!(
             "Runtime backup completed at {}, but pruning failed: {error}",
@@ -457,60 +471,91 @@ fn runtime_compaction_fingerprint(
 /// Success for an absent root or completed pruning, otherwise a strict filesystem error.
 /// 备份根目录缺失或清理完成时返回成功，否则返回严格文件系统错误。
 fn prune_runtime_log_backups(session_dir: &Path, keep: usize) -> Result<(), String> {
-    // backup_root is read directly so absence is classified from the authoritative operation.
-    // backup_root 直接读取，使缺失状态由权威操作分类。
     let backup_root = runtime_backup_dir_path(session_dir);
-    let entries = match fs::read_dir(&backup_root) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(format!(
-                "Failed to read runtime backup root {}: {error}",
-                backup_root.display()
-            ));
-        }
-    };
-    // backups stores strict modification timestamps and paths for deterministic pruning.
-    // backups 保存严格读取的修改时间与路径，以执行确定性清理。
-    let mut backups = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|error| {
-            format!(
-                "Failed to read an entry from runtime backup root {}: {error}",
-                backup_root.display()
-            )
-        })?;
-        let file_type = entry.file_type().map_err(|error| {
-            format!(
-                "Failed to classify runtime backup entry {}: {error}",
-                entry.path().display()
-            )
-        })?;
-        if !file_type.is_dir() {
-            continue;
-        }
-        let modified = entry
-            .metadata()
-            .and_then(|metadata| metadata.modified())
-            .map_err(|error| {
-                format!(
-                    "Failed to read runtime backup modification time {}: {error}",
-                    entry.path().display()
-                )
-            })?;
-        backups.push((modified, entry.path()));
-    }
-    backups.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
-    // prune_count bounds retention without underflow when fewer backups exist.
-    // prune_count 在备份较少时避免下溢，并确定需要清理的数量。
-    let prune_count = backups.len().saturating_sub(keep);
-    for (_, path) in backups.into_iter().take(prune_count) {
+    let index_path = backup_root.join(RUNTIME_BACKUP_INDEX_FILE);
+    let mut index = read_runtime_backup_directory_index(&index_path)?;
+    let prune_count = index.directories.len().saturating_sub(keep);
+    let expired = index.directories.drain(..prune_count).collect::<Vec<_>>();
+    for directory_name in expired {
+        validate_runtime_backup_directory_name(&directory_name)?;
+        let path = backup_root.join(directory_name);
         fs::remove_dir_all(&path).map_err(|error| {
             format!(
                 "Failed to remove expired runtime backup {}: {error}",
                 path.display()
             )
         })?;
+    }
+    write_runtime_backup_directory_index(&index_path, &index)
+}
+
+/// Records one completed backup directory in the exact ordered index.
+/// 在精确有序索引中记录一个已完成备份目录。
+fn record_runtime_backup_directory(session_dir: &Path, backup_dir: &Path) -> Result<(), String> {
+    let backup_root = runtime_backup_dir_path(session_dir);
+    let directory_name = backup_dir
+        .strip_prefix(&backup_root)
+        .ok()
+        .and_then(|relative| relative.to_str())
+        .ok_or_else(|| String::from("Runtime backup directory is not a direct UTF-8 child."))?;
+    validate_runtime_backup_directory_name(directory_name)?;
+    let index_path = backup_root.join(RUNTIME_BACKUP_INDEX_FILE);
+    let mut index = read_runtime_backup_directory_index(&index_path)?;
+    if !index
+        .directories
+        .iter()
+        .any(|current| current == directory_name)
+    {
+        index.directories.push(directory_name.to_string());
+    }
+    write_runtime_backup_directory_index(&index_path, &index)
+}
+
+/// Reads the exact runtime-backup index or returns an empty first-generation index.
+/// 读取精确运行时备份索引，索引尚未创建时返回空的第一代索引。
+fn read_runtime_backup_directory_index(
+    index_path: &Path,
+) -> Result<RuntimeBackupDirectoryIndex, String> {
+    match fs::read(index_path) {
+        Ok(encoded) => serde_json::from_slice(&encoded).map_err(|error| {
+            format!(
+                "Failed to decode runtime backup index {}: {error}",
+                index_path.display()
+            )
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(RuntimeBackupDirectoryIndex::default())
+        }
+        Err(error) => Err(format!(
+            "Failed to read runtime backup index {}: {error}",
+            index_path.display()
+        )),
+    }
+}
+
+/// Atomically writes the exact runtime-backup index.
+/// 原子写入精确运行时备份索引。
+fn write_runtime_backup_directory_index(
+    index_path: &Path,
+    index: &RuntimeBackupDirectoryIndex,
+) -> Result<(), String> {
+    let encoded = serde_json::to_vec(index)
+        .map_err(|error| format!("Failed to serialize runtime backup index: {error}"))?;
+    write_file_bytes_atomic(index_path, &encoded, "runtime backup index")
+}
+
+/// Rejects any indexed backup name that could escape the direct backup root.
+/// 拒绝任何可能逃逸直接备份根目录的索引备份名称。
+fn validate_runtime_backup_directory_name(directory_name: &str) -> Result<(), String> {
+    if directory_name.is_empty()
+        || directory_name.contains('/')
+        || directory_name.contains('\\')
+        || directory_name == "."
+        || directory_name == ".."
+    {
+        return Err(String::from(
+            "Runtime backup index contains an invalid directory name.",
+        ));
     }
     Ok(())
 }

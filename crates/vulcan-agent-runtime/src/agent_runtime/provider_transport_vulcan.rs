@@ -5,6 +5,9 @@ use crate::agent_runtime::events::{
     TransientReasoningStatus, TransientReasoningStatusKind, TransientReasoningSummaryItem,
     provider_request_durability_barrier,
 };
+use crate::agent_runtime::provider_attachment::{
+    build_missing_attachment_replay_text, model_visible_attachment_field,
+};
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
 use crate::agent_runtime::provider_stream::ProviderDeltaStream;
@@ -17,14 +20,16 @@ use crate::agent_runtime::provider_transport_request::ProviderTransportExecution
 use crate::agent_runtime::provider_transport_retry::REPLAYABLE_TOOL_CALL_STREAM_FAILURE_SUBCATEGORY;
 use crate::agent_runtime::provider_transport_stream_runtime::execute_host_controlled_stream_with_prepared_inputs;
 use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
-use crate::attachment_assets::{AttachmentDescriptor, stage_attachment_bytes};
+use crate::attachment_assets::{
+    AttachmentDescriptor, resolve_attachment_replay_path, stage_attachment_bytes,
+};
 use async_stream::try_stream;
 use async_trait::async_trait;
 use base64::Engine;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use vulcan_ai_contract::{
@@ -53,22 +58,112 @@ use vulcan_provider_adapters::{
     InputResourceConstraint, ProviderExecutionClient, ProviderExecutionCredentialLease,
     ProviderExecutionRoute, ProviderWireRequestCapture, ResolvedPublicAiExecution,
     ResourceReferencePolicy, ResponseProjectionProfile, ToolSchemaProjectionMode,
-    TransientReasoningStatusMode,
+    TransientReasoningStatusMode, UploadReferenceEncoding,
 };
 use vulcan_tools_manager::{VulcanToolSchemaProjectionProfile, project_tool_parameters_schema};
 
 /// Vulcan-owned default output budget used when the provider reports no independent output limit.
 /// 当供应商未报告独立输出上限时使用的 Vulcan 本地默认输出预算。
 const DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT: u64 = 32_000;
-/// Versioned on-disk contract for complete provider request traces.
-/// 完整 Provider 请求追踪使用的版本化磁盘契约。
-const PROVIDER_REQUEST_TRACE_SCHEMA_VERSION: &str = "vulcan.provider-request-trace.v2";
+/// Maximum aggregate Base64 payload bytes allowed for host-inline resources in one request.
+/// 单次请求中宿主内联资源允许使用的 Base64 聚合载荷最大字节数。
+const HOST_INLINE_RESOURCE_BASE64_BUDGET_BYTES: u64 = 2 * 1024 * 1024;
+/// Versioned on-disk contract for bounded Provider wire-request traces.
+/// 有界 Provider 线上请求追踪使用的版本化磁盘契约。
+const PROVIDER_REQUEST_TRACE_SCHEMA_VERSION: &str = "vulcan.provider-request-trace.v3";
 /// Structured subcategory emitted only after the exact OAuth account secret was refreshed.
 /// 仅在精确 OAuth 账号秘密已经刷新后发出的结构化子类别。
 pub(crate) const OAUTH_CREDENTIAL_REFRESHED_SUBCATEGORY: &str = "oauth_credential_refreshed";
 /// Process-local monotonic tie breaker used when multiple requests start within one millisecond.
 /// 多个请求在同一毫秒启动时使用的进程本地单调消歧序号。
 static PROVIDER_REQUEST_TRACE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Tracks request-wide encoded media consumption before Provider request serialization.
+/// 在 Provider 请求序列化前跟踪请求级编码媒体消耗。
+#[derive(Debug, Default)]
+struct InlineResourceProjectionBudget {
+    /// Request-wide native resource counts keyed by canonical modality.
+    /// 按规范模态索引的请求级原生资源数量。
+    retained_resource_counts: BTreeMap<ResourceKind, u64>,
+    /// Aggregate Base64 bytes already committed by earlier canonical resources.
+    /// 先前规范资源已经占用的 Base64 聚合字节数。
+    used_base64_bytes: u64,
+}
+
+impl InlineResourceProjectionBudget {
+    /// Reserves the exact Base64 expansion for one local resource.
+    /// 为一个本地资源保留精确的 Base64 膨胀字节数。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `resource_kind` and `max_count` freeze the route count contract; `raw_byte_len` is the
+    /// optional verified local payload byte count when Base64 projection is required.
+    /// `resource_kind` 与 `max_count` 冻结路线数量契约；`raw_byte_len` 是需要 Base64 投影时
+    /// 可选的已验证本地载荷字节数。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success after both budgets are atomically committed, or the exact request-wide limit name.
+    /// 两项预算原子提交后返回成功，否则返回精确的请求级限制名称。
+    fn reserve(
+        &mut self,
+        resource_kind: ResourceKind,
+        max_count: Option<u64>,
+        raw_byte_len: Option<u64>,
+    ) -> Result<(), &'static str> {
+        let current_count = self
+            .retained_resource_counts
+            .get(&resource_kind)
+            .copied()
+            .unwrap_or_default();
+        let Some(next_count) = current_count.checked_add(1) else {
+            return Err("the frozen route request-wide resource-count limit");
+        };
+        if max_count.is_some_and(|limit| next_count > limit) {
+            return Err("the frozen route request-wide resource-count limit");
+        }
+        // encodedByteLen uses the closed four-by-three Base64 expansion without approximation.
+        // encodedByteLen 使用封闭的四比三 Base64 膨胀公式，不采用近似值。
+        let encoded_byte_len = raw_byte_len
+            .unwrap_or_default()
+            .saturating_add(2)
+            .checked_div(3)
+            .unwrap_or_default()
+            .saturating_mul(4);
+        let Some(next_used) = self.used_base64_bytes.checked_add(encoded_byte_len) else {
+            return Err("the request-wide host inline-media budget");
+        };
+        if next_used > HOST_INLINE_RESOURCE_BASE64_BUDGET_BYTES {
+            return Err("the request-wide host inline-media budget");
+        }
+        self.retained_resource_counts
+            .insert(resource_kind, next_count);
+        self.used_base64_bytes = next_used;
+        Ok(())
+    }
+
+    /// Reports whether the request-wide route count is already exhausted without mutating budget state.
+    /// 在不修改预算状态的情况下报告请求级路线数量是否已经耗尽。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `resource_kind` selects one modality and `max_count` is the exact frozen route bound.
+    /// `resource_kind` 选择一种模态，`max_count` 是精确冻结路线边界。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` only when another native resource would exceed the declared request maximum.
+    /// 仅当再加入一个原生资源会超过声明的请求上限时返回 `true`。
+    fn count_limit_reached(&self, resource_kind: ResourceKind, max_count: Option<u64>) -> bool {
+        max_count.is_some_and(|limit| {
+            self.retained_resource_counts
+                .get(&resource_kind)
+                .copied()
+                .unwrap_or_default()
+                >= limit
+        })
+    }
+}
 
 /// Resolves the single transient reasoning mode frozen into one response-profile chain.
 /// 解析冻结在单条响应 Profile 链中的唯一瞬态推理模式。
@@ -120,52 +215,6 @@ fn provider_request_trace_timestamp_ms() -> Result<u128, String> {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .map_err(|error| format!("Provider request trace clock failed: {error}"))
-}
-
-/// Computes the stable SHA-256 digest of one serialized JSON stage.
-/// 计算一个已序列化 JSON 阶段的稳定 SHA-256 摘要。
-///
-/// # Parameters
-/// 参数
-/// `value` is the exact diagnostic JSON value whose bytes must be compared.
-/// `value` 是需要按字节比较的精确诊断 JSON 值。
-///
-/// # Returns
-/// 返回值
-/// A lowercase hexadecimal digest, or an explicit serialization error.
-/// 返回小写十六进制摘要，或明确的序列化错误。
-fn provider_request_trace_sha256(value: &Value) -> Result<String, String> {
-    let encoded = serde_json::to_vec(value)
-        .map_err(|error| format!("Provider request trace digest serialization failed: {error}"))?;
-    let mut hasher = Sha256::new();
-    hasher.update(encoded);
-    Ok(hex::encode(hasher.finalize()))
-}
-
-/// Computes per-field digests for every top-level JSON object member.
-/// 为 JSON 对象的每个顶层成员计算逐字段摘要。
-///
-/// # Parameters
-/// 参数
-/// `value` is the complete canonical or wire request stage.
-/// `value` 是完整的规范请求或 Wire 请求阶段。
-///
-/// # Returns
-/// 返回值
-/// A lexically ordered field-to-digest map; non-object values produce an empty map.
-/// 返回按字典序排列的字段到摘要映射；非对象值返回空映射。
-fn provider_request_trace_top_level_digests(
-    value: &Value,
-) -> Result<BTreeMap<String, String>, String> {
-    let Some(object) = value.as_object() else {
-        return Ok(BTreeMap::new());
-    };
-    object
-        .iter()
-        .map(|(field, value)| {
-            provider_request_trace_sha256(value).map(|digest| (field.clone(), digest))
-        })
-        .collect()
 }
 
 /// Redacts credential-shaped header values before a trace reaches disk.
@@ -251,6 +300,7 @@ pub(crate) fn execute_vulcan_public_stream(
     reasoning_effort: Option<ReasoningEffort>,
 ) -> ProviderDeltaStream {
     let provider_request_trace_enabled = request.provider_request_trace_enabled;
+    let session_storage_directory = request.session_storage_directory.clone();
     let cache_scope_id = request.session_id.to_string();
     let workspace_path = request.workspace_path.clone();
     let output_token_limit = resolved_public_output_token_limit(
@@ -271,6 +321,7 @@ pub(crate) fn execute_vulcan_public_stream(
         move |live_sender, adapter_inputs| {
             VulcanPublicContractAdapter::new(
                 provider_request_trace_enabled,
+                session_storage_directory.clone(),
                 resolved.route.clone(),
                 resolved.model.id.clone(),
                 cache_scope_id.clone(),
@@ -329,6 +380,7 @@ pub(crate) fn capture_vulcan_public_stream(
         let (live_sender, _live_receiver) = tokio::sync::mpsc::unbounded_channel();
         let adapter = VulcanPublicContractAdapter::new(
             false,
+            None,
             resolved.route.clone(),
             resolved.model.id.clone(),
             cache_scope_id,
@@ -374,9 +426,12 @@ pub(crate) fn capture_vulcan_public_stream(
 /// 将 Vulcan 公共请求与事件桥接到宿主控制器。
 #[derive(Clone)]
 pub(crate) struct VulcanPublicContractAdapter {
-    /// Frozen system-setting decision for complete request tracing during this controller run.
-    /// 当前控制器运行期间冻结的完整请求追踪系统设置决策。
+    /// Frozen system-setting decision for bounded wire-request tracing during this controller run.
+    /// 当前控制器运行期间冻结的有界线上请求追踪系统设置决策。
     provider_request_trace_enabled: bool,
+    /// Exact session directory for trace writes; absent when trace persistence is disabled.
+    /// 追踪写入使用的精确会话目录；关闭追踪持久化时为空。
+    session_storage_directory: Option<PathBuf>,
     /// Immutable provider execution route.
     /// 不可变供应商执行路由。
     route: ProviderExecutionRoute,
@@ -472,6 +527,7 @@ impl VulcanPublicContractAdapter {
     /// 返回在控制器运行期间路由保持固定的可复用适配器。
     pub(crate) fn new(
         provider_request_trace_enabled: bool,
+        session_storage_directory: Option<PathBuf>,
         route: ProviderExecutionRoute,
         model_id: String,
         cache_scope_id: String,
@@ -500,6 +556,7 @@ impl VulcanPublicContractAdapter {
         let public_tools = project_public_tool_definitions(&route, tools);
         Self {
             provider_request_trace_enabled,
+            session_storage_directory,
             route,
             model_id,
             cache_scope_id,
@@ -522,15 +579,11 @@ impl VulcanPublicContractAdapter {
         }
     }
 
-    /// Persists the controller, canonical, and actually dispatched API request for one execution.
-    /// 为一次执行持久化控制器请求、规范请求与实际分派的 API 请求。
+    /// Persists one bounded actually dispatched API request for one execution.
+    /// 为一次执行持久化一份有界的实际分派 API 请求。
     ///
     /// # Parameters
     /// 参数
-    /// `controller_request` is the complete secret-free controller request captured before ownership moves.
-    /// `controller_request` 是所有权移动前捕获的不含秘钥完整控制器请求。
-    /// `public` is the immutable provider-neutral request used by dispatch.
-    /// `public` 是分派使用的不可变供应商无关请求。
     /// `execution_id` is the physical call identity shared with the real execution client.
     /// `execution_id` 是与真实执行客户端共享的物理调用标识。
     /// `captured` is the exact secret-safe request projected immediately before HTTP or WebSocket dispatch.
@@ -542,8 +595,6 @@ impl VulcanPublicContractAdapter {
     /// 仅在追踪已原子发布到所属会话目录后返回成功。
     async fn persist_complete_provider_request_trace(
         &self,
-        controller_request: Value,
-        public: &AiExecutionRequest,
         execution_id: &str,
         captured: ProviderWireRequestCapture,
     ) -> Result<(), VulcanCoreError> {
@@ -552,6 +603,8 @@ impl VulcanPublicContractAdapter {
         let sequence = PROVIDER_REQUEST_TRACE_SEQUENCE
             .fetch_add(1, Ordering::Relaxed)
             .saturating_add(1);
+        let slot_index = sequence.saturating_sub(1)
+            % vulcan_workspace_store::workspace_store::PROVIDER_REQUEST_TRACE_SLOT_COUNT;
         let session_id = uuid::Uuid::parse_str(self.cache_scope_id.as_str()).map_err(|error| {
             provider_failure(
                 self.provider_id(),
@@ -561,22 +614,6 @@ impl VulcanPublicContractAdapter {
                 ),
             )
         })?;
-        let public_request = serde_json::to_value(public).map_err(|error| {
-            provider_failure(
-                self.provider_id(),
-                &format!("Canonical provider request trace serialization failed: {error}"),
-            )
-        })?;
-        let controller_sha256 = provider_request_trace_sha256(&controller_request)
-            .map_err(|error| provider_failure(self.provider_id(), &error))?;
-        let public_sha256 = provider_request_trace_sha256(&public_request)
-            .map_err(|error| provider_failure(self.provider_id(), &error))?;
-        let wire_body_sha256 = provider_request_trace_sha256(&captured.body)
-            .map_err(|error| provider_failure(self.provider_id(), &error))?;
-        let public_field_sha256 = provider_request_trace_top_level_digests(&public_request)
-            .map_err(|error| provider_failure(self.provider_id(), &error))?;
-        let wire_field_sha256 = provider_request_trace_top_level_digests(&captured.body)
-            .map_err(|error| provider_failure(self.provider_id(), &error))?;
         let headers = provider_request_trace_headers(&captured.headers);
         let trace = json!({
             "schema_version": PROVIDER_REQUEST_TRACE_SCHEMA_VERSION,
@@ -599,17 +636,6 @@ impl VulcanPublicContractAdapter {
                 "manifest_generation": self.route.manifest_generation,
                 "route_revision": self.route.route_revision,
             },
-            "digests": {
-                "controller_request_sha256": controller_sha256,
-                "canonical_public_request_sha256": public_sha256,
-                "api_request_body_sha256": wire_body_sha256,
-                "canonical_public_top_level_sha256": public_field_sha256,
-                "api_request_top_level_sha256": wire_field_sha256,
-            },
-            "stages": {
-                "controller_request": controller_request,
-                "canonical_public_request": public_request,
-            },
             "api_request": {
                 "capture_point": "transport_dispatch",
                 "transport": captured.transport,
@@ -621,13 +647,17 @@ impl VulcanPublicContractAdapter {
                 "body": captured.body,
             },
         });
-        let file_stem = format!("{captured_at_unix_ms}-{sequence:06}-{execution_id}");
-        let data_root = crate::data_plane::application_data_root();
+        let session_directory = self.session_storage_directory.clone().ok_or_else(|| {
+            provider_failure(
+                self.provider_id(),
+                "Provider request tracing is enabled but the execution has no exact session storage directory.",
+            )
+        })?;
         let trace_path = tokio::task::spawn_blocking(move || {
             vulcan_workspace_store::workspace_store::persist_provider_request_trace(
-                &data_root,
+                &session_directory,
                 session_id,
-                file_stem.as_str(),
+                slot_index,
                 &trace,
             )
         })
@@ -768,7 +798,7 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
             });
         }
         for message in &snapshot.messages {
-            let mut public_message = core_message_to_public(
+            let public_message = core_message_to_public(
                 message,
                 self.provider_id(),
                 self.route.connection.id.as_str(),
@@ -776,16 +806,22 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
                 self.route.protocol_route.protocol_profile_id.as_str(),
                 self.model_id(),
             )?;
+            messages.push(public_message);
+        }
+        // Newer canonical messages reserve the bounded inline budget first while final wire order stays unchanged.
+        // 较新的规范消息优先占用有界内联预算，同时最终 Wire 顺序保持不变。
+        let mut inline_resource_budget = InlineResourceProjectionBudget::default();
+        for public_message in messages.iter_mut().rev() {
             resolve_public_message_resources(
-                &mut public_message,
+                public_message,
                 &self.route,
                 self.model_id.as_str(),
                 self.input_resources.as_slice(),
                 &self.client,
                 Some(self.cache_scope_id.as_str()),
+                &mut inline_resource_budget,
             )
             .await?;
-            messages.push(public_message);
         }
         // continuation is emitted only after the Core configuration proves the exact append-only boundary.
         // continuation 仅在 Core 配置证明精确追加边界后才会发出。
@@ -1033,23 +1069,6 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
     where
         S: VulcanProviderDeltaSink,
     {
-        let trace_controller_request = if self.provider_request_trace_enabled {
-            let serialized_request = serde_json::to_value(&request).map_err(|error| {
-                provider_failure(
-                    self.provider_id(),
-                    &format!("Controller provider request trace serialization failed: {error}"),
-                )
-            })?;
-            Some(json!({
-                "serialized_request": serialized_request,
-                "context_budget_debug": request
-                    .context_budget
-                    .as_ref()
-                    .map(|snapshot| format!("{snapshot:#?}")),
-            }))
-        } else {
-            None
-        };
         let VulcanPublicContractRequest {
             public,
             controller_config,
@@ -1089,6 +1108,16 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                     ),
                 )
             })?;
+        self.live_sender
+            .send(Ok(
+                ProviderStreamDelta::RequestStartDurabilityConfirmed,
+            ))
+            .map_err(|_| {
+                provider_failure(
+                    self.provider_id(),
+                    "The provider request stream closed after start persistence and before dispatch.",
+                )
+            })?;
         // secret is re-read after the durable start boundary and immediately before this physical dispatch.
         // secret 在可靠起始边界之后、当前真实分派之前立即重新读取。
         let secret = self
@@ -1107,45 +1136,33 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
         // rejectedSecretRevision 将后续任何 401 恢复绑定到线上实际使用的精确 Token 修订版。
         let rejected_secret_revision = secret.revision();
         let execution_id = uuid::Uuid::new_v4().to_string();
-        // requestTraceTask waits for the exact object produced inside the selected transport.
-        // requestTraceTask 等待所选传输内部产生的精确对象。
-        // Trace I/O runs independently so it cannot delay the API dispatch being diagnosed.
-        // 追踪 I/O 独立运行，因此不会延迟待诊断的 API 分派。
-        let (wire_request_capture, request_trace_task) =
-            if let Some(controller_request) = trace_controller_request {
-                // captureSender and captureReceiver transfer the one object used by this dispatch.
-                // captureSender 与 captureReceiver 传递本次分派实际使用的唯一请求对象。
-                let (capture_sender, capture_receiver) = tokio::sync::oneshot::channel();
-                // traceAdapter owns the immutable route and storage context for background writing.
-                // traceAdapter 持有后台写入所需的不可变路由与存储上下文。
-                let trace_adapter = self.clone();
-                // tracePublic preserves the canonical request only for diagnostic comparison.
-                // tracePublic 仅为诊断对比保留规范请求。
-                let trace_public = public.clone();
-                // traceExecutionId binds the captured request to the physical provider call.
-                // traceExecutionId 将捕获请求绑定到真实 Provider 调用。
-                let trace_execution_id = execution_id.clone();
-                // task persists the captured API request without blocking transport progress.
-                // task 在不阻塞传输进度的情况下持久化捕获的 API 请求。
-                let task = tokio::spawn(async move {
-                    let Ok(captured) = capture_receiver.await else {
-                        // A closed capture channel means encoding failed before an API request existed.
-                        // 捕获通道关闭表示编码在 API 请求形成前失败，因此没有请求可保存。
-                        return Ok(());
-                    };
-                    trace_adapter
-                        .persist_complete_provider_request_trace(
-                            controller_request,
-                            &trace_public,
-                            trace_execution_id.as_str(),
-                            captured,
-                        )
-                        .await
-                });
-                (Some(capture_sender), Some(task))
-            } else {
-                (None, None)
-            };
+        // wireRequestCapture transfers only the exact dispatched request; tracing never clones the
+        // controller or canonical request and never delays Provider completion.
+        // wireRequestCapture 只传递实际分派请求；追踪不会克隆控制器请求或规范请求，也不会延迟 Provider 完成。
+        let wire_request_capture = if self.provider_request_trace_enabled {
+            let (capture_sender, capture_receiver) = tokio::sync::oneshot::channel();
+            let trace_adapter = self.clone();
+            let trace_execution_id = execution_id.clone();
+            tokio::spawn(async move {
+                let Ok(captured) = capture_receiver.await else {
+                    // A closed capture channel means encoding failed before an API request existed.
+                    // 捕获通道关闭表示编码在 API 请求形成前失败，因此没有请求可保存。
+                    return;
+                };
+                if let Err(error) = trace_adapter
+                    .persist_complete_provider_request_trace(trace_execution_id.as_str(), captured)
+                    .await
+                {
+                    eprintln!(
+                        "[provider-request-trace] session={} execution={} failed={error}",
+                        trace_adapter.cache_scope_id, trace_execution_id
+                    );
+                }
+            });
+            Some(capture_sender)
+        } else {
+            None
+        };
         let mut stream = if let Some(capture_sender) = wire_request_capture {
             self.client.execute_with_wire_request_capture(
                 self.route.clone(),
@@ -1274,14 +1291,6 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
             if terminal_event {
                 break;
             }
-        }
-        if let Some(task) = request_trace_task {
-            task.await.map_err(|error| {
-                provider_failure(
-                    self.provider_id(),
-                    &format!("Provider API request trace task failed: {error}"),
-                )
-            })??;
         }
         let final_usage = response.usage.as_ref().map(public_usage_to_core);
         let final_response = response.finish()?;
@@ -2296,125 +2305,187 @@ async fn resolve_public_message_resources(
     model_resource_kinds: &[ResourceKind],
     client: &ProviderExecutionClient,
     session_scope_id: Option<&str>,
+    inline_resource_budget: &mut InlineResourceProjectionBudget,
 ) -> Result<(), VulcanCoreError> {
-    for constraint in &route.protocol_route.input_resource_constraints {
-        let resource_count = message
-            .content
-            .iter()
-            .filter(|item| {
-                matches!(
-                    item,
-                    ContentItem::Resource { resource }
-                        if resource.kind == constraint.resource_kind
-                )
-            })
-            .count() as u64;
-        if let Some(max_count) = constraint.max_count
-            && resource_count > max_count
-        {
-            return Err(provider_failure(
-                route.provider.id.as_str(),
-                format!(
-                    "Message contains {resource_count} {:?} resources and exceeds the frozen route limit of {max_count}.",
-                    constraint.resource_kind
-                )
-                .as_str(),
-            ));
-        }
-    }
     for item in &mut message.content {
         let ContentItem::Resource { resource } = item else {
             continue;
         };
-        validate_resource_projection(route, model_id, model_resource_kinds, resource)?;
-        if resource.url.is_some() {
+        if let Some(reason) = resource_projection_unavailability_reason(
+            route,
+            model_id,
+            model_resource_kinds,
+            resource,
+        ) {
+            *item = ContentItem::Text {
+                text: resource_projection_budget_fallback_text(resource, reason.as_str(), None),
+            };
             continue;
         }
-        let local_path = resource.local_path.as_deref().ok_or_else(|| {
-            provider_failure(
-                route.provider.id.as_str(),
-                format!(
-                    "Resource `{}` has neither a local path nor a URL.",
-                    resource.id
-                )
-                .as_str(),
-            )
-        })?;
-        let media_type = resource.media_type.as_deref().ok_or_else(|| {
-            provider_failure(
-                route.provider.id.as_str(),
-                format!("Resource `{}` is missing its MIME type.", resource.id).as_str(),
-            )
-        })?;
         let constraint = input_resource_constraint(route, resource.kind);
-        if let Some(byte_limit) = constraint.and_then(|constraint| constraint.max_bytes) {
-            let metadata = tokio::fs::metadata(local_path).await.map_err(|error| {
-                provider_failure(
-                    route.provider.id.as_str(),
-                    format!(
-                        "Resource `{}` metadata could not be read: {error}",
-                        resource.id
-                    )
-                    .as_str(),
-                )
-            })?;
-            if metadata.len() > byte_limit {
-                return Err(provider_failure(
-                    route.provider.id.as_str(),
-                    format!(
-                        "Resource `{}` is {} bytes and exceeds the frozen route limit of {byte_limit} bytes.",
-                        resource.id,
-                        metadata.len()
-                    )
-                    .as_str(),
-                ));
-            }
-        }
-        if resource.kind == ResourceKind::Video {
-            if let Some(prepared_url) = client
-                .prepared_media_url(
-                    route,
-                    std::path::Path::new(local_path),
-                    resource.kind,
-                    media_type,
-                    session_scope_id,
+        let max_count = constraint.and_then(|constraint| constraint.max_count);
+        if inline_resource_budget.count_limit_reached(resource.kind, max_count) {
+            *item = ContentItem::Text {
+                text: resource_projection_budget_fallback_text(
+                    resource,
+                    "the frozen route request-wide resource-count limit",
                     None,
-                )
-                .await
+                ),
+            };
+            continue;
+        }
+        if resource.url.is_some() {
+            // inlineRawByteLen closes the aggregate-budget gap for canonical data URLs that were
+            // already materialized before this final transport pass.
+            // inlineRawByteLen 为在最终传输阶段前已物化的规范 Data URL 补齐聚合预算边界。
+            let inline_raw_byte_len = match inline_data_resource_raw_byte_len(resource) {
+                Ok(byte_len) => byte_len,
+                Err(reason) => {
+                    *item = ContentItem::Text {
+                        text: resource_projection_budget_fallback_text(resource, reason, None),
+                    };
+                    continue;
+                }
+            };
+            if let (Some(byte_limit), Some(byte_len)) = (
+                constraint.and_then(|constraint| constraint.max_bytes),
+                inline_raw_byte_len,
+            ) && byte_len > byte_limit
             {
-                resource.url = Some(prepared_url);
+                *item = ContentItem::Text {
+                    text: resource_projection_budget_fallback_text(
+                        resource,
+                        "the frozen route byte limit",
+                        Some(byte_len),
+                    ),
+                };
+                continue;
+            }
+            if let Err(reason) =
+                inline_resource_budget.reserve(resource.kind, max_count, inline_raw_byte_len)
+            {
+                *item = ContentItem::Text {
+                    text: resource_projection_budget_fallback_text(
+                        resource,
+                        reason,
+                        inline_raw_byte_len,
+                    ),
+                };
+            }
+            continue;
+        }
+        let Some(local_path) = resource.local_path.as_deref() else {
+            *item = ContentItem::Text {
+                text: resource_projection_budget_fallback_text(
+                    resource,
+                    "the managed resource has neither a local path nor a remote reference",
+                    None,
+                ),
+            };
+            continue;
+        };
+        let Some(media_type) = resource.media_type.as_deref() else {
+            *item = ContentItem::Text {
+                text: resource_projection_budget_fallback_text(
+                    resource,
+                    "the managed resource has no verified MIME type",
+                    None,
+                ),
+            };
+            continue;
+        };
+        if let Some(byte_limit) = constraint.and_then(|constraint| constraint.max_bytes) {
+            let Ok(metadata) = tokio::fs::metadata(local_path).await else {
+                *item = ContentItem::Text {
+                    text: resource_projection_budget_fallback_text(
+                        resource,
+                        "the managed resource is no longer readable",
+                        None,
+                    ),
+                };
+                continue;
+            };
+            if metadata.len() > byte_limit {
+                *item = ContentItem::Text {
+                    text: resource_projection_budget_fallback_text(
+                        resource,
+                        "the frozen route byte limit",
+                        Some(metadata.len()),
+                    ),
+                };
                 continue;
             }
         }
-        // Native video must have a provider upload reference before protocol projection.
-        // 原生视频在协议投影前必须已经拥有供应商上传引用。
-        if resource.kind == ResourceKind::Video {
-            return Err(provider_failure(
-                route.provider.id.as_str(),
-                format!(
-                    "Video resource `{}` has no prepared provider reference; refusing Base64 fallback.",
-                    resource.id
-                )
-                .as_str(),
-            ));
-        }
-        let bytes = tokio::fs::read(local_path).await.map_err(|error| {
-            provider_failure(
-                route.provider.id.as_str(),
-                format!("Resource `{}` could not be read: {error}", resource.id).as_str(),
+        if let Some(prepared_reference) = client
+            .prepared_media_reference(
+                route,
+                std::path::Path::new(local_path),
+                resource.kind,
+                media_type,
+                session_scope_id,
+                None,
             )
-        })?;
+            .await
+        {
+            match inline_resource_budget.reserve(resource.kind, max_count, None) {
+                Ok(()) => apply_prepared_media_reference(resource, prepared_reference),
+                Err(reason) => {
+                    *item = ContentItem::Text {
+                        text: resource_projection_budget_fallback_text(resource, reason, None),
+                    };
+                }
+            }
+            continue;
+        }
+        let remote_reference_required = constraint.is_some_and(|constraint| {
+            constraint.reference_policy == ResourceReferencePolicy::RemoteOnly
+        });
+        // Native video and every remote-only resource must have a prepared provider reference before projection.
+        // 原生视频与所有仅远程资源在协议投影前都必须拥有已准备的供应商引用。
+        if resource.kind == ResourceKind::Video || remote_reference_required {
+            *item = ContentItem::Text {
+                text: resource_projection_budget_fallback_text(
+                    resource,
+                    "a required Provider reference was unavailable",
+                    None,
+                ),
+            };
+            continue;
+        }
+        let Ok(bytes) = tokio::fs::read(local_path).await else {
+            *item = ContentItem::Text {
+                text: resource_projection_budget_fallback_text(
+                    resource,
+                    "the managed resource is no longer readable",
+                    None,
+                ),
+            };
+            continue;
+        };
         if let Some(byte_limit) = constraint.and_then(|constraint| constraint.max_bytes)
             && u64::try_from(bytes.len()).unwrap_or(u64::MAX) > byte_limit
         {
-            return Err(provider_failure(
-                route.provider.id.as_str(),
-                format!(
-                    "Resource `{}` changed while reading and now exceeds the frozen route limit of {byte_limit} bytes.",
-                    resource.id
-                )
-                .as_str(),
-            ));
+            *item = ContentItem::Text {
+                text: resource_projection_budget_fallback_text(
+                    resource,
+                    "the resource changed and exceeded the frozen route byte limit",
+                    Some(u64::try_from(bytes.len()).unwrap_or(u64::MAX)),
+                ),
+            };
+            continue;
+        }
+        let raw_byte_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        if let Err(reason) =
+            inline_resource_budget.reserve(resource.kind, max_count, Some(raw_byte_len))
+        {
+            *item = ContentItem::Text {
+                text: resource_projection_budget_fallback_text(
+                    resource,
+                    reason,
+                    Some(raw_byte_len),
+                ),
+            };
+            continue;
         }
         resource.url = Some(format!(
             "data:{media_type};base64,{}",
@@ -2424,8 +2495,139 @@ async fn resolve_public_message_resources(
     Ok(())
 }
 
-/// Validates one resource against both model discovery and the selected protocol projector.
-/// 同时依据模型发现结果与所选协议投影器校验一个资源。
+/// Applies one cached provider reference according to its frozen Manifest encoding.
+/// 根据冻结的 Manifest 编码应用一条已缓存供应商引用。
+///
+/// # Parameters
+/// 参数
+/// `resource` is the request-local resource projection and `prepared` carries the exact reference
+/// string plus its closed upload-channel encoding.
+/// `resource` 是单次请求局部资源投影；`prepared` 携带精确引用字符串及其封闭上传通道编码。
+///
+/// # Returns
+/// 返回值
+/// This function has no return value and rewrites only the request-local resource source fields.
+/// 本函数无返回值，且只改写单次请求局部资源的来源字段。
+fn apply_prepared_media_reference(
+    resource: &mut ResourceReference,
+    prepared: vulcan_provider_adapters::PreparedMediaReferenceSnapshot,
+) {
+    match prepared.reference_encoding {
+        UploadReferenceEncoding::ProviderFileId => {
+            resource.id = prepared.provider_reference;
+            resource.source_kind = ResourceSourceKind::ProviderFileId;
+            resource.url = None;
+        }
+        UploadReferenceEncoding::ResponseUrl | UploadReferenceEncoding::Template => {
+            resource.source_kind = ResourceSourceKind::RemoteUrl;
+            resource.url = Some(prepared.provider_reference);
+        }
+    }
+}
+
+/// Decodes the exact raw byte length of an already materialized inline Data URL.
+/// 解码一个已物化内联 Data URL 的精确原始字节长度。
+///
+/// # Parameters
+/// 参数
+/// `resource` is the request-local resource whose source-kind contract controls interpretation.
+/// `resource` 是单次请求局部资源，其来源类型契约决定解释方式。
+///
+/// # Returns
+/// 返回值
+/// `Some` raw bytes for inline data, `None` for non-inline URLs, or a controlled malformed-data reason.
+/// 内联数据返回 `Some` 原始字节数，非内联 URL 返回 `None`，畸形数据返回受控原因。
+fn inline_data_resource_raw_byte_len(
+    resource: &ResourceReference,
+) -> Result<Option<u64>, &'static str> {
+    if resource.source_kind != ResourceSourceKind::InlineData {
+        return Ok(None);
+    }
+    let encoded = resource
+        .url
+        .as_deref()
+        .and_then(|value| value.strip_prefix("data:"))
+        .and_then(|value| value.split_once(";base64,"))
+        .map(|(_, encoded)| encoded)
+        .ok_or("the inline resource is not a canonical Base64 Data URL")?;
+    if u64::try_from(encoded.len()).unwrap_or(u64::MAX) > HOST_INLINE_RESOURCE_BASE64_BUDGET_BYTES {
+        return Err("the request-wide host inline-media budget");
+    }
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|_| "the inline resource contains invalid Base64 data")?;
+    Ok(Some(u64::try_from(decoded.len()).unwrap_or(u64::MAX)))
+}
+
+/// Builds an AI-safe metadata-only replacement for one request-local resource projection.
+/// 为单次请求局部资源投影构建对 AI 安全的纯元数据替代文本。
+///
+/// # Parameters
+/// 参数
+/// `resource` supplies only provider-neutral identity and MIME facts, `reason` names the exact
+/// host boundary, and `byte_len` carries the verified local size when available.
+/// `resource` 只提供供应商无关身份与 MIME 事实，`reason` 命名精确宿主边界，`byte_len`
+/// 在可用时携带已验证本地大小。
+///
+/// # Returns
+/// 返回值
+/// A deterministic line that never exposes the managed absolute path or Provider reference.
+/// 返回一条确定性文本，绝不暴露托管绝对路径或供应商引用。
+fn resource_projection_budget_fallback_text(
+    resource: &ResourceReference,
+    reason: &str,
+    byte_len: Option<u64>,
+) -> String {
+    // resourceLocator must not derive a model-visible locator from a Provider file id. A missing
+    // canonical locator is represented explicitly instead of echoing transport-only identity.
+    // resourceLocator 绝不能从供应商文件标识派生模型可见定位符；缺失规范定位符时显式标记不可用，
+    // 而不是回显仅用于传输的身份。
+    let resource_locator = resource
+        .resource_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if resource.source_kind == ResourceSourceKind::ProviderFileId {
+                String::from("attachment://unavailable")
+            } else {
+                format!("attachment://{}", resource.id)
+            }
+        });
+    // provider file ids are transport-only secrets; a degraded model-visible line falls back to
+    // the disclosed canonical locator instead of echoing the internal Provider reference.
+    // 供应商文件标识仅用于传输；降级后的模型可见文本改用已公开的规范定位符，绝不回显内部供应商引用。
+    let model_resource_id = if resource.source_kind == ResourceSourceKind::ProviderFileId {
+        resource
+            .resource_path
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("unavailable")
+    } else {
+        resource.id.as_str()
+    };
+    let resource_id = model_visible_attachment_field(model_resource_id);
+    let resource_locator = model_visible_attachment_field(&resource_locator);
+    let file_name =
+        model_visible_attachment_field(resource.file_name.as_deref().unwrap_or("unavailable"));
+    let media_type = model_visible_attachment_field(
+        resource
+            .media_type
+            .as_deref()
+            .unwrap_or("application/octet-stream"),
+    );
+    let reason = model_visible_attachment_field(reason);
+    let byte_len = byte_len
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| String::from("unknown"));
+    format!(
+        "ATTACHMENT: id={resource_id}; resource_path={resource_locator}; file_name={file_name}; mime_type={media_type}; byte_len={byte_len}. NATIVE_DELIVERY: metadata_only (reason={reason}). CONTENT_VISIBILITY: resource bytes were not provided; do not infer or guess the attachment contents. Use the disclosed resource locator with an eligible registered understanding tool only when required by the user's actual intent.",
+    )
+}
+
+/// Explains why one resource cannot use native projection on the selected route.
+/// 说明一个资源为何无法在所选路由上使用原生投影。
 ///
 /// # Parameters
 /// 参数
@@ -2436,99 +2638,115 @@ async fn resolve_public_message_resources(
 ///
 /// # Returns
 /// 返回值
-/// Returns success only when both capability layers support the resource.
-/// 仅当两层能力均支持该资源时返回成功。
-fn validate_resource_projection(
+/// Returns the exact Provider-neutral degradation reason, or `None` when native projection is eligible.
+/// 返回精确且供应商无关的降级原因；可使用原生投影时返回 `None`。
+fn resource_projection_unavailability_reason(
     route: &ProviderExecutionRoute,
     model_id: &str,
     model_resource_kinds: &[ResourceKind],
     resource: &ResourceReference,
-) -> Result<(), VulcanCoreError> {
+) -> Option<String> {
     if !model_resource_kinds.contains(&resource.kind) {
-        return Err(provider_failure(
-            route.provider.id.as_str(),
-            format!(
-                "Model `{}` does not declare {:?} input.",
-                model_id, resource.kind
-            )
-            .as_str(),
+        return Some(format!(
+            "model `{model_id}` does not declare {:?} input",
+            resource.kind
         ));
     }
     let protocol = route.protocol_route.protocol_profile_id.as_str();
-    let protocol_supports = match protocol {
-        vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID => true,
-        vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID
-        | vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID => {
-            resource.kind == ResourceKind::Image
-        }
-        vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
-        | vulcan_ai_protocols::CLAUDE_CODE_MESSAGES_PROFILE_ID => {
-            resource.kind == ResourceKind::Image
-        }
-        vulcan_ai_protocols::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID => {
-            matches!(resource.kind, ResourceKind::Image | ResourceKind::Video)
-        }
-        vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID
-        | vulcan_ai_protocols::GEMINI_INTERACTIONS_PROFILE_ID
-        | vulcan_ai_protocols::GOOGLE_CODE_ASSIST_PROFILE_ID => true,
-        _ => false,
-    };
+    let protocol_supports = protocol_profile_supports_resource_kind(protocol, resource.kind);
     if !protocol_supports {
-        return Err(provider_failure(
-            route.provider.id.as_str(),
-            format!(
-                "Protocol profile `{protocol}` has no registered {:?} input projector.",
-                resource.kind
-            )
-            .as_str(),
+        return Some(format!(
+            "protocol profile `{protocol}` has no registered {:?} input projector",
+            resource.kind
         ));
     }
-    if resource.kind != ResourceKind::File
-        && let Some(media_type) = resource.media_type.as_deref()
+    if let Some(media_type) = resource.media_type.as_deref()
         && !vulcan_ai_protocols::protocol_profile_supports_local_media_type(
             protocol,
             resource.kind,
             media_type,
         )
     {
-        return Err(provider_failure(
-            route.provider.id.as_str(),
-            format!(
-                "Protocol profile `{protocol}` has no registered {:?} projector for MIME type `{media_type}`.",
-                resource.kind
-            )
-            .as_str(),
+        return Some(format!(
+            "protocol profile `{protocol}` has no registered {:?} projector for MIME type `{media_type}`",
+            resource.kind
         ));
     }
     if let Some(constraint) = input_resource_constraint(route, resource.kind) {
-        validate_frozen_input_resource_constraint(
-            route.provider.id.as_str(),
-            constraint,
-            resource,
-        )?;
+        if let Some(reason) = frozen_resource_constraint_unavailability_reason(constraint, resource)
+        {
+            return Some(reason);
+        }
     }
-    Ok(())
+    None
 }
 
-/// Validates one resource against one frozen manifest constraint without provider-specific logic.
-/// 使用单条冻结清单约束校验资源，不包含供应商专属逻辑。
+/// Reports whether one protocol profile has any native projector for a resource modality.
+/// 报告一个协议 Profile 是否拥有某种资源模态的原生投影器。
 ///
 /// # Parameters
 /// 参数
-/// `provider_id` labels controlled failures, `constraint` is the immutable manifest value,
-/// and `resource` is the canonical request resource.
-/// `provider_id` 标记受控失败，`constraint` 是不可变清单值，`resource` 是规范请求资源。
+/// `protocol` is the frozen protocol profile and `kind` is the canonical resource modality.
+/// `protocol` 是冻结协议 Profile，`kind` 是规范资源模态。
 ///
 /// # Returns
 /// 返回值
-/// Success when source representation and MIME type are both admitted; a pre-dispatch failure otherwise.
-/// 来源表示与 MIME 类型均获准时返回成功，否则返回分派前失败。
-fn validate_frozen_input_resource_constraint(
-    provider_id: &str,
+/// `true` only for modality/profile pairs implemented by the protocol registry; generic files
+/// always remain metadata-only until a concrete file projector is registered.
+/// 仅协议注册表已实现的模态/Profile 组合返回 `true`；通用文件在注册具体投影器前始终保持纯元数据。
+fn protocol_profile_supports_resource_kind(protocol: &str, kind: ResourceKind) -> bool {
+    match protocol {
+        vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID => matches!(
+            kind,
+            ResourceKind::Image | ResourceKind::Video | ResourceKind::Audio
+        ),
+        vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID
+        | vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID => kind == ResourceKind::Image,
+        vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
+        | vulcan_ai_protocols::CLAUDE_CODE_MESSAGES_PROFILE_ID => kind == ResourceKind::Image,
+        vulcan_ai_protocols::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID => {
+            matches!(kind, ResourceKind::Image | ResourceKind::Video)
+        }
+        vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID
+        | vulcan_ai_protocols::GEMINI_INTERACTIONS_PROFILE_ID
+        | vulcan_ai_protocols::GOOGLE_CODE_ASSIST_PROFILE_ID => matches!(
+            kind,
+            ResourceKind::Image | ResourceKind::Video | ResourceKind::Audio
+        ),
+        _ => false,
+    }
+}
+
+/// Explains one frozen route-constraint mismatch without dispatching or mutating canonical state.
+/// 说明一项冻结路由约束不匹配的原因，不进行分派，也不修改规范状态。
+///
+/// # Parameters
+/// 参数
+/// `constraint` is the immutable route declaration and `resource` is the request-local projection candidate.
+/// `constraint` 是不可变路由声明，`resource` 是单次请求局部投影候选。
+///
+/// # Returns
+/// 返回值
+/// A deterministic metadata-only reason, or `None` when the frozen constraint admits the candidate.
+/// 返回确定性的纯元数据降级原因；冻结约束允许候选资源时返回 `None`。
+fn frozen_resource_constraint_unavailability_reason(
     constraint: &InputResourceConstraint,
     resource: &ResourceReference,
-) -> Result<(), VulcanCoreError> {
-    let reference_allowed = match constraint.reference_policy {
+) -> Option<String> {
+    if !constraint.accepted_mime_types.is_empty()
+        && !resource.media_type.as_ref().is_some_and(|media_type| {
+            constraint
+                .accepted_mime_types
+                .iter()
+                .any(|accepted| accepted.eq_ignore_ascii_case(media_type))
+        })
+    {
+        return Some(format!(
+            "the frozen {:?} input constraint does not accept this MIME type",
+            resource.kind
+        ));
+    }
+    let source_admitted = match constraint.reference_policy {
         ResourceReferencePolicy::Any => true,
         ResourceReferencePolicy::LocalOnly => {
             resource.local_path.is_some()
@@ -2536,35 +2754,16 @@ fn validate_frozen_input_resource_constraint(
                     || resource.source_kind == ResourceSourceKind::HostResolved)
         }
         ResourceReferencePolicy::RemoteOnly => {
-            resource.url.is_some() && resource.local_path.is_none()
+            (resource.url.is_some() && resource.local_path.is_none())
+                || (resource.local_path.is_some() && !constraint.upload_channel_refs.is_empty())
         }
     };
-    if !reference_allowed {
-        return Err(provider_failure(
-            provider_id,
-            format!(
-                "Resource `{}` violates the frozen {:?} reference policy for {:?} input.",
-                resource.id, constraint.reference_policy, resource.kind
-            )
-            .as_str(),
-        ));
-    }
-    if !constraint.accepted_mime_types.is_empty()
-        && !resource
-            .media_type
-            .as_ref()
-            .is_some_and(|media_type| constraint.accepted_mime_types.contains(media_type))
-    {
-        return Err(provider_failure(
-            provider_id,
-            format!(
-                "Resource `{}` MIME type is not accepted by the frozen {:?} input constraint.",
-                resource.id, resource.kind
-            )
-            .as_str(),
-        ));
-    }
-    Ok(())
+    (!source_admitted).then(|| {
+        format!(
+            "the resource source violates the frozen {:?} reference policy",
+            constraint.reference_policy
+        )
+    })
 }
 
 /// Returns the frozen constraint for one resource kind on the selected route.
@@ -2643,7 +2842,7 @@ pub(crate) async fn build_responses_compaction_messages(
         projected_ids.insert(message.id.as_str());
         // publicMessage uses the normal request bridge so tool and provider item shapes cannot diverge.
         // publicMessage 使用普通请求桥接，避免工具与供应商项形态发生分歧。
-        let mut public_message = core_message_to_public(
+        let public_message = core_message_to_public(
             message,
             resolved.route.provider.id.as_str(),
             resolved.route.connection.id.as_str(),
@@ -2652,19 +2851,6 @@ pub(crate) async fn build_responses_compaction_messages(
             resolved.model.id.as_str(),
         )
         .map_err(|error| error.to_string())?;
-        resolve_public_message_resources(
-            &mut public_message,
-            &resolved.route,
-            resolved.model.id.as_str(),
-            resolved.model.capabilities.input_resources.as_slice(),
-            &resolved.client,
-            session_scope_id,
-        )
-        .await
-        .map_err(|error| error.to_string())?;
-        if public_message.content.is_empty() && public_message.provider_context_items.is_empty() {
-            continue;
-        }
         messages.push(public_message);
     }
     if projected_ids != source_ids {
@@ -2672,6 +2858,25 @@ pub(crate) async fn build_responses_compaction_messages(
             "Remote Responses compaction source no longer matches the canonical conversation.",
         ));
     }
+    // Newer compacted messages reserve inline bytes before older history to preserve current-turn relevance.
+    // 较新的压缩消息先于旧历史保留内联字节，以保持当前回合相关性。
+    let mut inline_resource_budget = InlineResourceProjectionBudget::default();
+    for public_message in messages.iter_mut().rev() {
+        resolve_public_message_resources(
+            public_message,
+            &resolved.route,
+            resolved.model.id.as_str(),
+            resolved.model.capabilities.input_resources.as_slice(),
+            &resolved.client,
+            session_scope_id,
+            &mut inline_resource_budget,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    }
+    messages.retain(|message| {
+        !message.content.is_empty() || !message.provider_context_items.is_empty()
+    });
     Ok(messages)
 }
 
@@ -2687,6 +2892,14 @@ fn core_message_to_public(
         CoreConversationPayload::UserText { text, attachments } => {
             let mut content = vec![ContentItem::Text { text: text.clone() }];
             for (index, attachment) in attachments.iter().enumerate() {
+                // replay_path is the only host path allowed to reach provider projection after index-backed integrity verification.
+                // replay_path 是经过索引完整性校验后唯一允许进入 Provider 投影的宿主路径。
+                let Some(replay_path) = resolve_attachment_replay_path(attachment) else {
+                    content.push(ContentItem::Text {
+                        text: build_missing_attachment_replay_text(attachment),
+                    });
+                    continue;
+                };
                 let resource_id = attachment
                     .asset_id
                     .clone()
@@ -2704,9 +2917,10 @@ fn core_message_to_public(
                         kind,
                         media_type: Some(attachment.mime_type.clone()),
                         source_kind: vulcan_ai_contract::ResourceSourceKind::HostResolved,
-                        file_name: None,
+                        file_name: Some(attachment.file_name.clone()),
                         image_detail: None,
-                        local_path: Some(attachment.local_path.clone()),
+                        resource_path: attachment.resource_path.clone(),
+                        local_path: Some(replay_path.to_string_lossy().into_owned()),
                         url: None,
                     },
                 });
@@ -3145,32 +3359,67 @@ mod tests {
     use serde_json::json;
     use std::path::PathBuf;
 
-    /// Verifies field digests isolate one changed wire component without obscuring stable prefixes.
-    /// 验证逐字段摘要能够隔离单个变化的 Wire 组件，同时保留稳定前缀证据。
+    /// Verifies final provider projection replaces an integrity-invalid historical attachment with model-safe metadata.
+    /// 验证最终 Provider 投影会用模型安全元数据替换完整性失效的历史附件。
     #[test]
-    fn provider_request_trace_digests_isolate_changed_wire_field() {
-        let first = json!({
-            "instructions": "stable system prompt",
-            "input": [{"role": "user", "content": "first"}],
-            "tools": [{"name": "shell_command"}],
-        });
-        let second = json!({
-            "instructions": "stable system prompt",
-            "input": [{"role": "user", "content": "second"}],
-            "tools": [{"name": "shell_command"}],
-        });
+    fn provider_projection_rejects_same_length_mutated_managed_attachment() {
+        // workspace owns the indexed attachment and is removed after the projection assertion.
+        // workspace 持有索引附件，并在投影断言后移除。
+        let workspace = std::env::temp_dir().join(format!(
+            "vulcan-provider-attachment-integrity-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace).expect("test workspace should be created");
+        // attachment retains immutable byte facts while omitting an original-source fallback.
+        // attachment 保留不可变字节事实，同时不提供原始来源回退路径。
+        let attachment = stage_attachment_bytes(
+            workspace.to_string_lossy().as_ref(),
+            &AttachmentDescriptor {
+                kind: ConversationAttachmentKind::Image,
+                mime_type: "image/png",
+                extension: "png",
+            },
+            "integrity.png",
+            None,
+            b"original-image",
+        )
+        .expect("test attachment should stage");
+        // mutated_bytes deliberately preserves length while changing the indexed content identity.
+        // mutated_bytes 故意保持长度不变，同时改变已索引的内容身份。
+        let mutated_bytes = vec![b'x'; b"original-image".len()];
+        std::fs::write(&attachment.local_path, mutated_bytes)
+            .expect("same-length attachment mutation should write");
+        // message exercises the final canonical-message bridge shared by ordinary requests and compaction.
+        // message 覆盖普通请求与压缩共同使用的最终规范消息桥接。
+        let message = vulcan_core::types::ConversationMessage {
+            id: String::from("user-integrity"),
+            payload: CoreConversationPayload::UserText {
+                text: String::from("inspect attachment"),
+                attachments: vec![attachment],
+            },
+        };
 
-        let first_digests = provider_request_trace_top_level_digests(&first)
-            .expect("first trace digests should encode");
-        let second_digests = provider_request_trace_top_level_digests(&second)
-            .expect("second trace digests should encode");
+        let projected = core_message_to_public(
+            &message,
+            "provider",
+            "connection",
+            "https://provider.invalid/v1/responses",
+            "openai-responses.v1",
+            "model",
+        )
+        .expect("integrity-invalid attachment should degrade to metadata");
 
-        assert_eq!(
-            first_digests.get("instructions"),
-            second_digests.get("instructions")
+        assert!(
+            !projected
+                .content
+                .iter()
+                .any(|item| matches!(item, ContentItem::Resource { .. }))
         );
-        assert_eq!(first_digests.get("tools"), second_digests.get("tools"));
-        assert_ne!(first_digests.get("input"), second_digests.get("input"));
+        assert!(projected.content.iter().any(|item| {
+            matches!(item, ContentItem::Text { text } if text.contains("managed resource no longer exists"))
+        }));
+
+        std::fs::remove_dir_all(&workspace).expect("test workspace should be removed");
     }
 
     /// Verifies trace headers preserve ordinary protocol fields while removing access material.
@@ -4054,6 +4303,7 @@ mod tests {
                     source_kind: vulcan_ai_contract::ResourceSourceKind::InlineData,
                     file_name: None,
                     image_detail: None,
+                    resource_path: None,
                     local_path: None,
                     url: Some(String::from("data:image/png;base64,aW1hZ2U=")),
                 },
@@ -4105,6 +4355,7 @@ mod tests {
                     source_kind: vulcan_ai_contract::ResourceSourceKind::RemoteUrl,
                     file_name: None,
                     image_detail: None,
+                    resource_path: None,
                     local_path: None,
                     url: Some(String::from("https://example.invalid/image.png")),
                 },
@@ -4240,8 +4491,8 @@ mod tests {
         assert_eq!(value["message"], error.message);
     }
 
-    /// Verifies frozen manifest constraints enforce source and MIME rules for any provider id.
-    /// 验证冻结清单约束会针对任意供应商标识执行来源与 MIME 规则。
+    /// Verifies frozen manifest constraints produce Provider-neutral degradation reasons.
+    /// 验证冻结清单约束会生成供应商无关的降级原因。
     #[test]
     fn frozen_resource_constraints_are_provider_neutral() {
         // localOnly is a generic route rule and contains no provider identity.
@@ -4263,16 +4514,12 @@ mod tests {
             source_kind: vulcan_ai_contract::ResourceSourceKind::RemoteUrl,
             file_name: None,
             image_detail: None,
+            resource_path: None,
             local_path: None,
             url: Some(String::from("https://media.example/audio.mp3")),
         };
         assert!(
-            validate_frozen_input_resource_constraint(
-                "custom:constraint-fixture",
-                &local_only,
-                &remote_audio,
-            )
-            .is_err()
+            frozen_resource_constraint_unavailability_reason(&local_only, &remote_audio).is_some()
         );
         // preparedLocalAudio retains local provenance while carrying immutable bytes prepared by the host.
         // preparedLocalAudio 保留本地来源，同时携带由宿主准备的不可变字节。
@@ -4283,15 +4530,15 @@ mod tests {
             source_kind: ResourceSourceKind::HostResolved,
             file_name: Some(String::from("audio.mp3")),
             image_detail: None,
+            resource_path: None,
             local_path: Some(String::from("C:/workspace/audio.mp3")),
             url: Some(String::from("data:audio/mpeg;base64,AA==")),
         };
-        validate_frozen_input_resource_constraint(
-            "custom:constraint-fixture",
-            &local_only,
-            &prepared_local_audio,
-        )
-        .expect("host-prepared local media should retain local-only provenance");
+        assert!(
+            frozen_resource_constraint_unavailability_reason(&local_only, &prepared_local_audio,)
+                .is_none(),
+            "host-prepared local media should retain local-only provenance"
+        );
 
         // pdfOnly proves MIME admission comes entirely from frozen manifest data.
         // pdfOnly 证明 MIME 准入完全来自冻结清单数据。
@@ -4312,16 +4559,247 @@ mod tests {
             source_kind: vulcan_ai_contract::ResourceSourceKind::RemoteUrl,
             file_name: None,
             image_detail: None,
+            resource_path: None,
             local_path: None,
             url: Some(String::from("https://media.example/file.txt")),
         };
+        assert!(frozen_resource_constraint_unavailability_reason(&pdf_only, &text_file).is_some());
+
+        // remoteOnlyUpload proves local canonical resources remain eligible only with an exact upload channel.
+        // remoteOnlyUpload 证明本地规范资源只有在存在精确上传通道时才可进入仅远程投影。
+        let remote_only_upload = InputResourceConstraint {
+            resource_kind: ResourceKind::Audio,
+            accepted_mime_types: vec![String::from("audio/mpeg")],
+            max_bytes: None,
+            max_count: None,
+            reference_policy: ResourceReferencePolicy::RemoteOnly,
+            upload_channel_refs: vec![String::from("audio-upload")],
+        };
+        let local_audio = ResourceReference {
+            id: String::from("audio-local"),
+            kind: ResourceKind::Audio,
+            media_type: Some(String::from("audio/mpeg")),
+            source_kind: ResourceSourceKind::HostResolved,
+            file_name: Some(String::from("audio.mp3")),
+            image_detail: None,
+            resource_path: None,
+            local_path: Some(String::from("C:/workspace/audio.mp3")),
+            url: None,
+        };
         assert!(
-            validate_frozen_input_resource_constraint(
-                "custom:constraint-fixture",
-                &pdf_only,
-                &text_file,
-            )
-            .is_err()
+            frozen_resource_constraint_unavailability_reason(&remote_only_upload, &local_audio)
+                .is_none()
         );
+    }
+
+    /// Verifies metadata-only projection exposes only the safe locator and never the managed host path.
+    /// 验证纯元数据投影只暴露安全定位符，绝不暴露宿主管理路径。
+    #[test]
+    fn resource_projection_fallback_uses_the_safe_resource_path() {
+        let resource = ResourceReference {
+            id: String::from("asset-1"),
+            kind: ResourceKind::Image,
+            media_type: Some(String::from("image/png")),
+            source_kind: ResourceSourceKind::HostResolved,
+            file_name: Some(String::from("screen\"\nINJECTED=1.png")),
+            image_detail: None,
+            resource_path: Some(String::from(
+                ".vulcan/code/attachments/images/screen\"\nINJECTED=1.png",
+            )),
+            local_path: Some(String::from("C:/private/screen.png")),
+            url: None,
+        };
+
+        let text = resource_projection_budget_fallback_text(
+            &resource,
+            "the request-wide host inline-media budget",
+            Some(128),
+        );
+
+        assert!(text.contains(".vulcan/code/attachments/images/screen\\\"\\nINJECTED=1.png"));
+        assert!(!text.contains("\nINJECTED=1"));
+        assert!(!text.contains("C:/private"));
+        assert!(!text.contains("file_id"));
+    }
+
+    /// Verifies provider file ids use the dedicated source channel instead of masquerading as URLs.
+    /// 验证供应商文件标识使用专用来源通道，而不会伪装成 URL。
+    #[test]
+    fn prepared_provider_file_id_preserves_reference_encoding() {
+        let mut resource = ResourceReference {
+            id: String::from("asset-1"),
+            kind: ResourceKind::Image,
+            media_type: Some(String::from("image/png")),
+            source_kind: ResourceSourceKind::HostResolved,
+            file_name: Some(String::from("screen.png")),
+            image_detail: None,
+            resource_path: Some(String::from(".vulcan/code/attachments/screen.png")),
+            local_path: Some(String::from("C:/private/screen.png")),
+            url: None,
+        };
+
+        apply_prepared_media_reference(
+            &mut resource,
+            vulcan_provider_adapters::PreparedMediaReferenceSnapshot {
+                provider_reference: String::from("file-provider-1"),
+                reference_encoding: UploadReferenceEncoding::ProviderFileId,
+                created_at_unix_millis: 1,
+                expires_at_unix_millis: 2,
+            },
+        );
+
+        assert_eq!(resource.id, "file-provider-1");
+        assert_eq!(resource.source_kind, ResourceSourceKind::ProviderFileId);
+        assert!(resource.url.is_none());
+        assert_eq!(
+            resource.resource_path.as_deref(),
+            Some(".vulcan/code/attachments/screen.png")
+        );
+        let fallback = resource_projection_budget_fallback_text(
+            &resource,
+            "the request-wide host inline-media budget",
+            Some(128),
+        );
+        assert!(!fallback.contains("file-provider-1"));
+        assert!(fallback.contains(".vulcan/code/attachments/screen.png"));
+    }
+
+    /// Verifies a Provider file id cannot leak through the fallback locator when canonical metadata is absent.
+    /// 验证缺失规范元数据时，供应商文件标识不能通过降级定位符泄漏。
+    #[test]
+    fn provider_file_id_fallback_without_resource_path_is_redacted() {
+        let resource = ResourceReference {
+            id: String::from("secret-provider-file-id"),
+            kind: ResourceKind::Image,
+            media_type: Some(String::from("image/png")),
+            source_kind: ResourceSourceKind::ProviderFileId,
+            file_name: Some(String::from("screen.png")),
+            image_detail: None,
+            resource_path: None,
+            local_path: None,
+            url: None,
+        };
+
+        let fallback = resource_projection_budget_fallback_text(
+            &resource,
+            "the request-wide host inline-media budget",
+            Some(128),
+        );
+
+        assert!(!fallback.contains("secret-provider-file-id"));
+        assert!(fallback.contains("attachment://unavailable"));
+        assert!(fallback.contains("id=\"unavailable\""));
+    }
+
+    /// Verifies URL-shaped upload references retain the canonical attachment identity.
+    /// 验证 URL 形上传引用会保留规范附件身份。
+    #[test]
+    fn prepared_response_url_preserves_canonical_resource_identity() {
+        let mut resource = ResourceReference {
+            id: String::from("asset-1"),
+            kind: ResourceKind::Video,
+            media_type: Some(String::from("video/mp4")),
+            source_kind: ResourceSourceKind::HostResolved,
+            file_name: Some(String::from("clip.mp4")),
+            image_detail: None,
+            resource_path: Some(String::from(".vulcan/code/attachments/clip.mp4")),
+            local_path: Some(String::from("C:/private/clip.mp4")),
+            url: None,
+        };
+
+        apply_prepared_media_reference(
+            &mut resource,
+            vulcan_provider_adapters::PreparedMediaReferenceSnapshot {
+                provider_reference: String::from("https://media.example/clip.mp4"),
+                reference_encoding: UploadReferenceEncoding::ResponseUrl,
+                created_at_unix_millis: 1,
+                expires_at_unix_millis: 2,
+            },
+        );
+
+        assert_eq!(resource.id, "asset-1");
+        assert_eq!(resource.source_kind, ResourceSourceKind::RemoteUrl);
+        assert_eq!(
+            resource.url.as_deref(),
+            Some("https://media.example/clip.mp4")
+        );
+    }
+
+    /// Verifies aggregate Base64 accounting uses exact expansion and fails closed at the host limit.
+    /// 验证 Base64 聚合计费使用精确膨胀值，并在宿主上限处封闭失败。
+    #[test]
+    fn inline_resource_budget_accounts_for_exact_base64_expansion() {
+        let mut budget = InlineResourceProjectionBudget::default();
+        assert_eq!(budget.reserve(ResourceKind::Image, None, Some(1)), Ok(()));
+        assert_eq!(budget.used_base64_bytes, 4);
+        assert_eq!(
+            budget.reserve(
+                ResourceKind::Image,
+                None,
+                Some((HOST_INLINE_RESOURCE_BASE64_BUDGET_BYTES - 4) / 4 * 3),
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            budget.reserve(ResourceKind::Image, None, Some(1)),
+            Err("the request-wide host inline-media budget")
+        );
+        assert_eq!(
+            budget.retained_resource_counts.get(&ResourceKind::Image),
+            Some(&2)
+        );
+    }
+
+    /// Verifies native resource counts are shared across the whole request instead of reset per message.
+    /// 验证原生资源数量在整个请求中共享，而不是按消息重置。
+    #[test]
+    fn inline_resource_budget_enforces_request_wide_resource_count() {
+        let mut budget = InlineResourceProjectionBudget::default();
+        assert_eq!(budget.reserve(ResourceKind::Image, Some(1), None), Ok(()));
+        assert!(budget.count_limit_reached(ResourceKind::Image, Some(1)));
+        assert_eq!(
+            budget.reserve(ResourceKind::Image, Some(1), None),
+            Err("the frozen route request-wide resource-count limit")
+        );
+        assert_eq!(budget.reserve(ResourceKind::Audio, Some(1), None), Ok(()));
+    }
+
+    /// Verifies pre-materialized inline data is decoded for the same aggregate budget as local files.
+    /// 验证预先物化的内联数据会被解码，并与本地文件使用同一聚合预算。
+    #[test]
+    fn inline_data_resource_reports_exact_raw_byte_length() {
+        let resource = ResourceReference {
+            id: String::from("inline-image"),
+            kind: ResourceKind::Image,
+            media_type: Some(String::from("image/png")),
+            source_kind: ResourceSourceKind::InlineData,
+            file_name: Some(String::from("image.png")),
+            image_detail: None,
+            resource_path: None,
+            local_path: None,
+            url: Some(String::from("data:image/png;base64,AQIDBA==")),
+        };
+
+        assert_eq!(inline_data_resource_raw_byte_len(&resource), Ok(Some(4)));
+    }
+
+    /// Verifies generic files never enter media projectors merely because a profile supports media.
+    /// 验证通用文件不会仅因协议 Profile 支持媒体而进入媒体投影器。
+    #[test]
+    fn protocol_resource_kind_gate_keeps_generic_files_metadata_only() {
+        for protocol in [
+            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+            vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID,
+            vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID,
+        ] {
+            assert!(!protocol_profile_supports_resource_kind(
+                protocol,
+                ResourceKind::File,
+            ));
+        }
+        assert!(protocol_profile_supports_resource_kind(
+            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+            ResourceKind::Image,
+        ));
     }
 }

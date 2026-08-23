@@ -461,12 +461,23 @@ pub(crate) fn lua_skills_catalog_summary(
     }
 }
 
-/// Projects prompt-based Agent Skills into the WebUI service API shape.
-/// 将基于提示词的 Agent Skills 投影为 WebUI service API 结构。
-pub(crate) fn agent_skills_catalog_summary(
+/// Loads one base prompt-skill catalog and merges one exact plugin generation.
+/// 加载一份基础提示词技能目录并合并一个精确插件代次。
+///
+/// # Parameters
+/// 参数
+/// `provider_configuration` resolves the exact system and user roots; `vulcan_plugin_catalog`
+/// contributes the already-published plugin skill generation.
+/// `provider_configuration` 解析精确系统与用户根；`vulcan_plugin_catalog` 提供已经发布的插件技能代次。
+///
+/// # Returns
+/// 返回值
+/// One complete immutable catalog suitable for both runtime publication and UI projection.
+/// 返回一份可同时用于运行时发布与 UI 投影的完整不可变目录。
+pub(crate) fn load_agent_skills_catalog(
     provider_configuration: &ProviderConfigurationFile,
     vulcan_plugin_catalog: Option<&VulcanPluginCatalogSnapshot>,
-) -> AgentSkillsCatalogSummary {
+) -> vulcan_prompt_skills::PromptSkillCatalog {
     // Resolve runtime roots and per-skill states from persisted configuration.
     // 从持久化配置解析运行时根目录与单技能状态。
     let runtime_config = vulcan_agent_runtime::skills::prompt::global_config_from_persisted(
@@ -486,6 +497,26 @@ pub(crate) fn agent_skills_catalog_summary(
                 message: error,
             });
     }
+    catalog
+}
+
+/// Projects one already loaded prompt-based Agent Skills catalog into the WebUI service API shape.
+/// 将一份已经加载的提示词 Agent Skills 目录投影为 WebUI service API 结构。
+///
+/// # Parameters
+/// 参数
+/// `provider_configuration` supplies persisted display policy and per-skill state; `catalog` is
+/// the exact immutable generation published for this refresh.
+/// `provider_configuration` 提供持久化展示策略与逐技能状态；`catalog` 是本次刷新发布的精确不可变代次。
+///
+/// # Returns
+/// 返回值
+/// A deterministic user-facing catalog summary without filesystem access.
+/// 返回不访问文件系统的确定性用户目录摘要。
+pub(crate) fn agent_skills_catalog_summary_from_catalog(
+    provider_configuration: &ProviderConfigurationFile,
+    catalog: &vulcan_prompt_skills::PromptSkillCatalog,
+) -> AgentSkillsCatalogSummary {
     // Build the effective path set without inferring identity from display metadata.
     // 在不从展示元数据推测身份的情况下构建有效路径集合。
     let effective_paths = catalog
@@ -606,37 +637,38 @@ pub(crate) fn agent_skills_catalog_summary(
     }
 }
 
-/// Projects agent and expert definitions into the WebUI service API shape.
-/// 将智能体与专家定义投影为 WebUI service API 结构。
-pub(crate) fn subagent_catalog_summary(
-    available_model_selectors: Option<&std::collections::BTreeSet<String>>,
+/// Loads and projects prompt-based Agent Skills into the WebUI service API shape.
+/// 加载并将基于提示词的 Agent Skills 投影为 WebUI service API 结构。
+///
+/// # Parameters
+/// 参数
+/// `provider_configuration` resolves persisted roots and state; `vulcan_plugin_catalog` supplies
+/// one optional immutable plugin generation.
+/// `provider_configuration` 解析持久化根与状态；`vulcan_plugin_catalog` 提供一份可选不可变插件代次。
+///
+/// # Returns
+/// 返回值
+/// The complete user-facing Agent Skills summary.
+/// 返回完整的面向用户 Agent Skills 摘要。
+pub(crate) fn agent_skills_catalog_summary(
+    provider_configuration: &ProviderConfigurationFile,
     vulcan_plugin_catalog: Option<&VulcanPluginCatalogSnapshot>,
-) -> SubagentCatalogSummary {
-    let system_root = vulcan_runtime_assets::resolve_system_subagents_resource_directory();
-    let user_root = vulcan_workspace_store::data_plane::application_data_root().join("agents");
-    let mut catalog =
-        vulcan_task_session::load_subagent_catalog_from_roots(system_root.clone(), user_root);
-    if let Some(plugin_catalog) = vulcan_plugin_catalog
-        && let Err(error) =
-            catalog.merge_plugin_definitions(plugin_catalog.enabled_agents.values().cloned())
-    {
-        catalog
-            .errors
-            .push(vulcan_task_session::SubagentCatalogLoadError {
-                path: plugin_catalog.root.clone(),
-                message: error,
-            });
-    }
-    subagent_catalog_summary_from_catalog(&catalog, available_model_selectors)
+) -> AgentSkillsCatalogSummary {
+    let catalog = load_agent_skills_catalog(provider_configuration, vulcan_plugin_catalog);
+    agent_skills_catalog_summary_from_catalog(provider_configuration, &catalog)
 }
 
+/// Projects agent and expert definitions into the WebUI service API shape.
+/// 将智能体与专家定义投影为 WebUI service API 结构。
 /// Projects one already loaded agent catalog into the WebUI service API shape.
 /// 将一个已加载的智能体目录投影为 WebUI service API 结构。
 pub(crate) fn subagent_catalog_summary_from_catalog(
     catalog: &vulcan_task_session::SubagentCatalog,
     available_model_selectors: Option<&std::collections::BTreeSet<String>>,
 ) -> SubagentCatalogSummary {
-    let system_definition_ids = system_subagent_definition_ids_for_summary();
+    // systemDefinitionIds belongs to the same immutable catalog generation; projection must never rescan filesystem roots.
+    // systemDefinitionIds 属于同一不可变目录代次；投影阶段绝不能重新扫描文件系统根目录。
+    let system_definition_ids = &catalog.system_definition_ids;
     let enabled_count = catalog
         .definitions
         .iter()
@@ -661,7 +693,7 @@ pub(crate) fn subagent_catalog_summary_from_catalog(
             .map(|definition| {
                 subagent_definition_summary(
                     definition,
-                    &system_definition_ids,
+                    system_definition_ids,
                     available_model_selectors,
                 )
             })
@@ -922,20 +954,6 @@ fn subagent_definition_can_restore_default(
 
 /// Loads immutable system agent ids for one summary projection pass.
 /// 为单次摘要投影加载不可变系统智能体标识集合。
-fn system_subagent_definition_ids_for_summary() -> std::collections::BTreeSet<String> {
-    vulcan_task_session::load_subagent_catalog_from_roots(
-        vulcan_runtime_assets::resolve_system_subagents_resource_directory(),
-        PathBuf::new(),
-    )
-    .definitions
-    .into_iter()
-    .filter(|definition| {
-        definition.source.scope == vulcan_task_session::SubagentDefinitionScope::System
-    })
-    .map(|definition| definition.id)
-    .collect()
-}
-
 /// Builds compact effective-capability diagnostics for one agent definition.
 /// 为单个智能体定义构建紧凑的最终能力诊断。
 fn subagent_capability_diagnostics(

@@ -13,10 +13,12 @@ use vulcan_agent_runtime::{
     attachment_asset_index::{
         AttachmentCleanupPreview, AttachmentCleanupReport, AttachmentCleanupSelection,
         execute_attachment_cleanup, preview_attachment_cleanup,
+        reconcile_staged_attachment_ref_scope, resolve_indexed_attachment_resource,
     },
     attachment_assets::{
         attachment_descriptor_from_mime_type, attachment_descriptor_from_path,
-        stage_attachment_bytes, stage_attachment_file,
+        resolve_attachment_image_preview_sidecar, stage_attachment_bytes, stage_attachment_file,
+        write_attachment_image_preview_sidecar,
     },
 };
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};

@@ -1,20 +1,22 @@
 use super::{
-    CommandSessionBackend, CommandSessionOutputChunk, CommandSessionSnapshot, NativeToolDefinition,
-    NativeToolExecutionRequest, SUBMIT_PLAN_MARKER, TerminalSessionInput,
-    TerminalSessionToolAction, TerminalSessionToolArgs, ThreadGoal, ThreadGoalStatus,
-    build_agent_list_tool, build_knowledge_browse_tool, build_knowledge_read_tool,
-    build_knowledge_search_tool, build_mcp_server_list_tool, build_prompt_skill_detail_tool,
-    build_shell_command_tool, build_shell_session_tool, build_skill_list_tool,
-    build_submit_plan_tool, build_terminal_session_host_payload,
-    build_terminal_session_render_input, build_terminal_session_tool, build_todolist_tool,
-    build_workspace_describe_tool, coalesce_terminal_output_chunks,
-    default_terminal_session_backend, display_submit_plan_path, effective_start_append_newline,
-    goal_response_value, knowledge_document_lines, normalize_terminal_session_name,
-    resolve_session_shell_behavior, resolve_shell_command_launcher,
-    resolve_shell_command_working_directory, shell_command_args_schema, shell_specific_newline,
-    strip_simple_ansi_sequences, terminal_inputs_request_interrupt,
-    terminal_interrupt_drain_chunk_is_visible, terminal_output_chunks_contain_pattern,
-    terminal_screen_text_from_chunks, terminal_session_args_schema,
+    CommandSessionBackend, CommandSessionOutputChunk, CommandSessionSnapshot,
+    DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS, MAX_COMMAND_SESSION_READ_CHUNKS,
+    MAX_COMMAND_SESSION_READ_WAIT_MS, NativeToolDefinition, NativeToolExecutionRequest,
+    SUBMIT_PLAN_MARKER, TerminalSessionInput, TerminalSessionToolAction, TerminalSessionToolArgs,
+    TerminalSessionWaitPolicy, ThreadGoal, ThreadGoalStatus, build_agent_list_tool,
+    build_knowledge_browse_tool, build_knowledge_read_tool, build_knowledge_search_tool,
+    build_mcp_server_list_tool, build_prompt_skill_detail_tool, build_shell_command_tool,
+    build_shell_session_tool, build_skill_list_tool, build_submit_plan_tool,
+    build_terminal_session_host_payload, build_terminal_session_render_input,
+    build_terminal_session_tool, build_todolist_tool, build_workspace_describe_tool,
+    coalesce_terminal_output_chunks, default_terminal_session_backend, display_submit_plan_path,
+    effective_start_append_newline, goal_response_value, knowledge_document_lines,
+    normalize_terminal_session_name, resolve_session_shell_behavior,
+    resolve_shell_command_launcher, resolve_shell_command_working_directory,
+    shell_command_args_schema, shell_session_args_schema, shell_specific_newline,
+    terminal_inputs_request_interrupt, terminal_interrupt_drain_chunk_is_visible,
+    terminal_output_chunks_contain_pattern, terminal_read_chunk_budget,
+    terminal_screen_text_from_chunks, terminal_session_args_schema, terminal_wait_budget_ms,
     validate_shell_session_start_stdin_policy, validate_terminal_session_start_shell_policy,
 };
 use crate::agent_runtime::config::{
@@ -162,6 +164,7 @@ async fn prompt_skill_detail_uses_execution_prepared_snapshot() {
     assert!(output.contains("scripts\\review.ps1") || output.contains("scripts/review.ps1"));
 }
 
+mod file_tools;
 mod knowledge_base;
 mod planning;
 mod shell;

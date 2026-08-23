@@ -191,6 +191,41 @@ fn runtime_state_serializes_session_runtime_kernel() {
     assert!(restored.session_runtime_kernel.is_some());
 }
 
+/// Verifies isolated Provider retry attachments durably retain their request-local delivery decision.
+/// 验证隔离的 Provider 重试附件会持久保留其单次请求局部传输决策。
+#[test]
+fn provider_retry_attachment_round_trip_retains_delivery_mode() {
+    let attachment = vulcan_core::types::ConversationAttachment {
+        kind: vulcan_core::types::ConversationAttachmentKind::Image,
+        file_name: String::from("screen.png"),
+        local_path: String::from("D:/workspace/.vulcan/attachments/screen.png"),
+        resource_path: Some(String::from(".vulcan/attachments/screen.png")),
+        source_path: None,
+        asset_id: Some(String::from("asset-screen")),
+        byte_len: Some(128),
+        source_sha256: Some(String::from("sha256-screen")),
+        delivery_mode: Some(vulcan_core::types::ConversationAttachmentDeliveryMode::MetadataOnly),
+        preview_local_path: None,
+        mime_type: String::from("image/png"),
+    };
+
+    let value = serde_json::to_value(&attachment)
+        .expect("provider retry attachment should serialize with its delivery mode");
+    assert_eq!(value["delivery_mode"], serde_json::json!("metadata_only"));
+    let restored: vulcan_core::types::ConversationAttachment = serde_json::from_value(value)
+        .expect("provider retry attachment should deserialize with its delivery mode");
+
+    assert_eq!(
+        restored.delivery_mode,
+        Some(vulcan_core::types::ConversationAttachmentDeliveryMode::MetadataOnly)
+    );
+    let mut canonical = restored;
+    canonical.delivery_mode = None;
+    let canonical_value = serde_json::to_value(canonical)
+        .expect("canonical attachment should serialize without transient delivery mode");
+    assert!(canonical_value.get("delivery_mode").is_none());
+}
+
 #[test]
 fn pending_prompt_panel_drop_target_matches_webui_before_semantics() {
     let mut ui_state = SessionTranscriptUiState {

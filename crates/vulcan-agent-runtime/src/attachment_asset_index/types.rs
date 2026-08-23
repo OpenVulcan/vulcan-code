@@ -41,6 +41,10 @@ pub struct AttachmentAssetRecord {
     /// 为清理统计与预算提示保留的可选字节长度。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub byte_len: Option<u64>,
+    /// SHA-256 digest of the exact immutable managed bytes.
+    /// 精确不可变托管字节的 SHA-256 摘要。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_sha256: Option<String>,
     /// Stable local timestamp text recorded when the attachment was staged.
     /// 附件被暂存时记录的稳定本地时间戳文本。
     pub staged_at_local_text: String,
@@ -66,6 +70,10 @@ pub struct AttachmentAssetRecord {
     /// 在该托管资产成为消息历史前，当前保留它的瞬时暂存作用域集合。
     #[serde(default)]
     pub staging_refs: Vec<String>,
+    /// Provider-internal media references bound to this immutable asset and an exact route scope.
+    /// 绑定到该不可变资产及精确路线作用域的供应商内部媒体引用。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub media_references: Vec<AttachmentMediaReferenceRecord>,
     /// Whether an unreferenced managed file deletion was durably planned but not fully committed.
     /// 是否已经持久规划但尚未完整提交未引用托管文件删除。
     #[serde(default, skip_serializing_if = "boolean_is_false")]
@@ -82,6 +90,84 @@ pub struct AttachmentAssetRecord {
     /// 为诊断保留的可选清理原因。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purge_reason: Option<String>,
+}
+
+/// Stores one provider-internal reference without projecting it into canonical conversation data.
+/// 保存一条供应商内部引用，但不把它投影到规范会话数据中。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AttachmentMediaReferenceRecord {
+    /// SHA-256 digest of the exact immutable source bytes.
+    /// 精确不可变源字节的 SHA-256 摘要。
+    pub source_sha256: String,
+    /// Byte length covered by the source digest.
+    /// 源摘要覆盖的字节长度。
+    pub source_byte_len: u64,
+    /// Provider identity owning the uploaded object.
+    /// 拥有已上传对象的供应商标识。
+    pub provider_id: String,
+    /// Service-entry identity owning the upload channel.
+    /// 拥有上传通道的服务入口标识。
+    pub service_entry_id: String,
+    /// Exact upload-channel identity.
+    /// 精确上传通道标识。
+    pub upload_channel_id: String,
+    /// Content fingerprint of the upload contract.
+    /// 上传契约的内容指纹。
+    pub upload_contract_fingerprint: String,
+    /// Closed provider-protocol, credential, or session reuse scope.
+    /// 封闭的供应商协议、凭据或会话复用作用域。
+    pub reference_scope: SessionMediaReferenceScope,
+    /// Exact connection identity required by credential-scoped references.
+    /// 凭据作用域引用要求的精确连接身份。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_id: Option<String>,
+    /// Exact session identity required by session-scoped references.
+    /// 会话作用域引用要求的精确会话身份。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Stable resource-kind label.
+    /// 稳定资源类型标签。
+    pub resource_kind: String,
+    /// Exact normalized MIME type.
+    /// 精确规范 MIME 类型。
+    pub mime_type: String,
+    /// Provider-native reference consumed only at the final transport boundary.
+    /// 仅在最终传输边界消费的供应商原生引用。
+    pub provider_reference: String,
+    /// Creation timestamp in Unix milliseconds.
+    /// 创建时间的 Unix 毫秒值。
+    pub created_at_unix_millis: u64,
+    /// Exclusive reuse expiry in Unix milliseconds.
+    /// 复用到期的 Unix 毫秒值。
+    pub expires_at_unix_millis: u64,
+}
+
+impl AttachmentMediaReferenceRecord {
+    /// Compares every immutable source and route field without delimiter-based key encoding.
+    /// 不使用基于分隔符的键编码，逐项比较全部不可变来源及路线字段。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `other` is the candidate reference identity.
+    /// `other` 是候选引用身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` only when every non-secret source and route field matches exactly.
+    /// 仅当全部非秘密来源及路线字段精确一致时返回 `true`。
+    pub fn matches_route_identity(&self, other: &Self) -> bool {
+        self.source_sha256 == other.source_sha256
+            && self.source_byte_len == other.source_byte_len
+            && self.provider_id == other.provider_id
+            && self.service_entry_id == other.service_entry_id
+            && self.upload_channel_id == other.upload_channel_id
+            && self.upload_contract_fingerprint == other.upload_contract_fingerprint
+            && self.reference_scope == other.reference_scope
+            && self.connection_id == other.connection_id
+            && self.session_id == other.session_id
+            && self.resource_kind == other.resource_kind
+            && self.mime_type == other.mime_type
+    }
 }
 
 /// Returns whether one persisted boolean is false for compact serde output.

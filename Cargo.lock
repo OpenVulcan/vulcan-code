@@ -6810,9 +6810,13 @@ name = "vulcan-host-tools"
 version = "0.1.0"
 dependencies = [
  "encoding_rs",
+ "hex",
+ "regex",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "sys-locale",
+ "tempfile",
  "tokio",
  "uuid",
  "vt100",

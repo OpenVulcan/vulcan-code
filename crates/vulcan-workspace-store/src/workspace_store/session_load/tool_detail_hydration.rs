@@ -2,7 +2,7 @@
 //! 分段转录窗口的历史工具详情水合逻辑。
 
 use super::*;
-use crate::workspace_store::segmented_session_store::{read_runtime_log_lines, to_store_error};
+use crate::workspace_store::segmented_session_store::read_runtime_log_lines;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -70,38 +70,48 @@ fn read_runtime_lines_for_tool_detail_hydration(
 /// 当存在压缩日志备份时，按最新优先返回运行时备份目录。
 fn runtime_backup_session_dirs(session_dir: &Path) -> Result<Vec<PathBuf>, String> {
     let backup_root = session_dir.join("runtime_backup");
-    if !backup_root.exists() {
-        return Ok(Vec::new());
+    let index_path = backup_root.join("index.json");
+    let encoded = match fs::read(&index_path) {
+        Ok(encoded) => encoded,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(format!(
+                "Failed to read runtime backup index {}: {error}",
+                index_path.display()
+            ));
+        }
+    };
+    let index =
+        serde_json::from_slice::<RuntimeBackupDirectoryIndex>(&encoded).map_err(|error| {
+            format!(
+                "Failed to decode runtime backup index {}: {error}",
+                index_path.display()
+            )
+        })?;
+    let mut dirs = Vec::with_capacity(index.directories.len());
+    for directory_name in index.directories.into_iter().rev() {
+        if directory_name.is_empty()
+            || directory_name.contains('/')
+            || directory_name.contains('\\')
+            || directory_name == "."
+            || directory_name == ".."
+        {
+            return Err(String::from(
+                "Runtime backup index contains an invalid directory name.",
+            ));
+        }
+        dirs.push(backup_root.join(directory_name));
     }
-    let mut dirs = Vec::new();
-    collect_runtime_backup_session_dirs(&backup_root, &mut dirs)?;
-    dirs.sort_by(|left, right| {
-        let left_modified = fs::metadata(left)
-            .and_then(|metadata| metadata.modified())
-            .unwrap_or(std::time::UNIX_EPOCH);
-        let right_modified = fs::metadata(right)
-            .and_then(|metadata| metadata.modified())
-            .unwrap_or(std::time::UNIX_EPOCH);
-        right_modified
-            .cmp(&left_modified)
-            .then_with(|| left.cmp(right))
-    });
     Ok(dirs)
 }
 
-/// Collects backup directories that contain a runtime metadata document.
-/// 收集包含运行时元数据文档的备份目录。
-fn collect_runtime_backup_session_dirs(root: &Path, dirs: &mut Vec<PathBuf>) -> Result<(), String> {
-    if root.join("runtime_metadata.json").exists() {
-        dirs.push(root.to_path_buf());
-    }
-    for entry in fs::read_dir(root).map_err(to_store_error)? {
-        let entry = entry.map_err(to_store_error)?;
-        if entry.file_type().map_err(to_store_error)?.is_dir() {
-            collect_runtime_backup_session_dirs(entry.path().as_path(), dirs)?;
-        }
-    }
-    Ok(())
+/// Ordered runtime-backup directory names loaded from the exact session-local index.
+/// 从精确会话本地索引读取的有序运行时备份目录名。
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RuntimeBackupDirectoryIndex {
+    /// Directory names in creation order, oldest first.
+    /// 按创建顺序排列的目录名，最旧项在前。
+    directories: Vec<String>,
 }
 
 /// Describes one visible row whose hidden detail reference is missing from the loaded window.

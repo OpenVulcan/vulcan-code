@@ -5,9 +5,10 @@ use crate::attachment_assets::{
     attachment_descriptor_from_mime_type, stage_attachment_bytes, stage_attachment_file_streaming,
 };
 use crate::media_understanding::{
-    build_model_replacement_media_candidate, media_understanding_input_schema,
-    media_understanding_tool_id, project_media_understanding_arguments,
-    render_media_understanding_provider_result,
+    build_model_replacement_media_candidate, direct_media_understanding_description,
+    media_understanding_input_schema, media_understanding_tool_id,
+    project_media_understanding_arguments, render_media_understanding_provider_result,
+    resolve_media_understanding_resource_arguments,
 };
 use futures_util::StreamExt;
 use serde_json::{Value, json};
@@ -203,7 +204,7 @@ pub(crate) fn build_provider_tool_candidates(
             configuration.clone(),
             workspace_root.clone(),
             selected,
-        ));
+        )?);
     }
     // mediaUnderstandingSelections is a closed provider-tool or model-replacement union that
     // never changes the three AI-facing tool schemas.
@@ -243,7 +244,7 @@ pub(crate) fn build_provider_tool_candidates(
                     configuration.clone(),
                     workspace_root.clone(),
                     selected,
-                ));
+                )?);
             }
             MediaUnderstandingBackendSelection::ModelReplacement {
                 selection,
@@ -939,7 +940,7 @@ fn build_direct_provider_tool_candidate(
     configuration: PersistedAiConfiguration,
     workspace_root: Option<PathBuf>,
     selected: AvailableProviderToolTarget,
-) -> VulcanToolCandidate {
+) -> Result<VulcanToolCandidate, String> {
     // targetSelection freezes the exact target and credential independently from mutable defaults.
     // targetSelection 独立于可变默认值冻结精确目标与凭据。
     let target_selection = ProviderToolTargetSelection {
@@ -964,11 +965,27 @@ fn build_direct_provider_tool_candidate(
     // mediaInputProjection is mandatory internal configuration for a fixed media facade.
     // mediaInputProjection 是固定媒体外壳必需的内部配置。
     let media_input_projection = contract.media_input_projection.clone();
-    VulcanToolCandidate {
+    // description preserves provider-authored facts and derives formats and limits only from the
+    // exact operation and upload channels used by this selection.
+    // description 保留供应商编写的事实，并只从当前选择使用的精确操作与上传通道派生格式和限制。
+    let description = if media_understanding_tool_id(capability).is_some() {
+        let profile = runtime
+            .provider_tool_media_input_profile(&configuration, capability, &target_selection)?
+            .ok_or_else(|| {
+                format!(
+                    "Media-understanding target `{}` has no media input profile.",
+                    selected.target.target_id
+                )
+            })?;
+        direct_media_understanding_description(capability, contract.description.as_str(), &profile)?
+    } else {
+        contract.description.clone()
+    };
+    Ok(VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
             id: tool_id.clone(),
             name: tool_id,
-            description: contract.description,
+            description,
             help_text: None,
             source: VulcanToolSourceKind::AiHostBinding,
         },
@@ -987,6 +1004,20 @@ fn build_direct_provider_tool_candidate(
                     Arc::clone(&runtime),
                     owner_session_id.clone(),
                 );
+                // resolvedArguments replaces only the safe conversation-owned resource locator with
+                // an internal path before provider-native projection.
+                // resolvedArguments 仅在供应商原生投影前把会话所有的安全资源定位符替换为内部路径。
+                let resolved_arguments = if media_understanding_tool_id(capability).is_some() {
+                    resolve_media_understanding_resource_arguments(
+                        workspace_root.as_deref(),
+                        owner_session_id.as_deref(),
+                        capability,
+                        arguments,
+                    )
+                    .await?
+                } else {
+                    arguments
+                };
                 // projectedArguments maps the fixed facade only through reviewed target metadata.
                 // projectedArguments 仅通过已审核目标元数据映射固定外壳。
                 let projected_arguments = if media_understanding_tool_id(capability).is_some() {
@@ -998,10 +1029,10 @@ fn build_direct_provider_tool_candidate(
                                 target_selection.target_id
                             )
                         })?,
-                        arguments,
+                        resolved_arguments,
                     )?
                 } else {
-                    arguments
+                    resolved_arguments
                 };
                 let result = runtime
                     .execute_provider_tool_target_for_owner_in_workspace(
@@ -1024,7 +1055,7 @@ fn build_direct_provider_tool_candidate(
                 rendered
             })
         }),
-    }
+    })
 }
 
 /// Stages unified provider resources and builds model/card output.
@@ -1125,11 +1156,23 @@ async fn render_provider_tool_result(
         }
         ProviderToolNormalizedOutput::Composite(composite) => {
             let resources = stage_provider_resources(workspace_root, composite.resources).await?;
-            let payload = json!({
+            let model_payload = json!({
+                "kind": "composite",
+                "composite": {
+                    "text": composite.text.clone(),
+                    "resources": resources.model_resources,
+                    "embeddings": composite.embeddings.clone(),
+                    "reranks": composite.reranks.clone(),
+                    "searches": composite.searches.clone(),
+                    "extracts": composite.extracts.clone()
+                },
+                "upstream_response_id": result.upstream_response_id.clone()
+            });
+            let host_payload = json!({
                 "kind": "composite",
                 "composite": {
                     "text": composite.text,
-                    "resources": resources,
+                    "resources": resources.host_resources,
                     "embeddings": composite.embeddings,
                     "reranks": composite.reranks,
                     "searches": composite.searches,
@@ -1138,15 +1181,27 @@ async fn render_provider_tool_result(
                 "upstream_response_id": result.upstream_response_id
             });
             Ok(
-                VulcanToolInvocationResult::from_model_output(payload.clone()).with_host_result(
+                VulcanToolInvocationResult::from_model_output(model_payload).with_host_result(
                     VulcanToolHostResult {
                         kind: String::from("provider_tool_output"),
-                        payload,
+                        payload: host_payload,
                     },
                 ),
             )
         }
     }
+}
+
+/// Separates model-visible managed resource locators from host-private local descriptors.
+/// 将模型可见的托管资源定位信息与宿主私有本地描述分离。
+#[derive(Debug)]
+struct StagedProviderResources {
+    /// Resource descriptors safe to return to the model.
+    /// 可安全返回给模型的资源描述。
+    model_resources: Vec<Value>,
+    /// Full canonical attachment descriptors retained only by the host.
+    /// 仅由宿主保留的完整规范附件描述。
+    host_resources: Vec<Value>,
 }
 
 /// Stages unified provider resources and builds model/card output.
@@ -1159,23 +1214,20 @@ async fn render_provider_tool_result(
 ///
 /// # Returns
 /// 返回值
-/// A model-visible local-file result with generated-attachment host metadata.
-/// 返回包含生成附件宿主元数据的模型可见本地文件结果。
+/// A model-visible managed-resource result with generated-attachment host metadata.
+/// 返回包含生成附件宿主元数据的模型可见托管资源结果。
 async fn render_provider_resource_result(
     workspace_root: Option<&Path>,
     upstream_response_id: Option<String>,
     resources: Vec<vulcan_provider_adapters::ProviderToolGeneratedResource>,
 ) -> Result<VulcanToolInvocationResult, String> {
-    let outputs = stage_provider_resources(workspace_root, resources).await?;
+    let resources = stage_provider_resources(workspace_root, resources).await?;
     let payload = json!({
-        "outputs": outputs,
+        "outputs": resources.host_resources,
         "upstream_response_id": upstream_response_id
     });
-    let local_files = provider_resource_local_files(outputs.as_slice());
     Ok(VulcanToolInvocationResult::from_model_output(json!({
-        "resources": {
-            "local_files": local_files
-        }
+        "resources": resources.model_resources
     }))
     .with_host_result(VulcanToolHostResult {
         kind: String::from("generated_attachments"),
@@ -1193,20 +1245,24 @@ async fn render_provider_resource_result(
 ///
 /// # Returns
 /// 返回值
-/// Ordered local descriptors suitable for model output and host cards.
-/// 返回适用于模型输出与宿主卡片的有序本地描述。
+/// Ordered public and private descriptors for model output and host cards.
+/// 返回分别用于模型输出与宿主卡片的有序公开及私有描述。
 async fn stage_provider_resources(
     workspace_root: Option<&Path>,
     resources: Vec<vulcan_provider_adapters::ProviderToolGeneratedResource>,
-) -> Result<Vec<Value>, String> {
+) -> Result<StagedProviderResources, String> {
     if resources.is_empty() {
-        return Ok(Vec::new());
+        return Ok(StagedProviderResources {
+            model_resources: Vec::new(),
+            host_resources: Vec::new(),
+        });
     }
     let workspace_root = workspace_root.ok_or_else(|| {
         String::from("Provider tools that generate resources require an active workspace root.")
     })?;
     let workspace_text = vulcan_runtime_assets::native_host_path_text_from_path(workspace_root);
-    let mut outputs = Vec::with_capacity(resources.len());
+    let mut model_resources = Vec::with_capacity(resources.len());
+    let mut host_resources = Vec::with_capacity(resources.len());
     for resource in resources {
         let descriptor = attachment_descriptor_from_mime_type(resource.mime_type.as_str())
             .ok_or_else(|| {
@@ -1249,35 +1305,30 @@ async fn stage_provider_resources(
                 ));
             }
         };
-        outputs.push(json!({
+        let asset_id = attachment.asset_id.as_deref().ok_or_else(|| {
+            String::from("Staged provider resource is missing its managed asset identifier.")
+        })?;
+        let resource_path = attachment.resource_path.as_deref().ok_or_else(|| {
+            String::from("Staged provider resource is missing its managed resource path.")
+        })?;
+        model_resources.push(json!({
             "kind": resource.kind,
-            "file_name": attachment.file_name,
-            "local_path": attachment.local_path,
-            "preview_local_path": attachment.preview_local_path,
-            "mime_type": attachment.mime_type
+            "asset_id": asset_id,
+            "resource_path": resource_path,
+            "file_name": attachment.file_name.as_str(),
+            "mime_type": attachment.mime_type.as_str(),
+            "byte_len": attachment.byte_len
         }));
+        host_resources.push(
+            serde_json::to_value(&attachment).map_err(|error| {
+                format!("Failed to serialize staged provider resource: {error}")
+            })?,
+        );
     }
-    Ok(outputs)
-}
-
-/// Collects local file paths from exact normalized resource descriptors.
-/// 从精确的归一化资源描述中收集本地文件路径。
-///
-/// # Parameters
-/// 参数
-/// `resources` are descriptors produced by `stage_provider_resources`.
-/// `resources` 是由 `stage_provider_resources` 产生的描述。
-///
-/// # Returns
-/// 返回值
-/// Ordered local paths registered with the tool invocation result.
-/// 返回注册到工具调用结果中的有序本地路径。
-fn provider_resource_local_files(resources: &[Value]) -> Vec<String> {
-    resources
-        .iter()
-        .filter_map(|output| output.get("local_path").and_then(Value::as_str))
-        .map(str::to_string)
-        .collect()
+    Ok(StagedProviderResources {
+        model_resources,
+        host_resources,
+    })
 }
 
 /// Downloads one bounded HTTPS provider resource into an automatically cleaned temporary file.
@@ -1378,7 +1429,7 @@ mod tests {
         MODEL_EXTENSION_CAPABILITIES, apply_session_provider_tool_selections,
         build_selected_model_extension_catalog, download_provider_resource_to_temp,
         model_extension_executor_schema, model_extension_parameters_schema,
-        model_extension_tool_id, render_provider_tool_result,
+        model_extension_tool_id, render_provider_resource_result, render_provider_tool_result,
         validate_enabled_media_understanding_backends,
     };
     use serde_json::json;
@@ -1387,9 +1438,9 @@ mod tests {
     use vulcan_provider_adapters::{
         AvailableProviderToolTarget, ManifestSourceLayer, ProviderToolCapabilityKind,
         ProviderToolCompositeOutput, ProviderToolEmbeddingOutput, ProviderToolEmbeddingVector,
-        ProviderToolExecutionResult, ProviderToolNormalizedOutput, ProviderToolRerankOutput,
-        ProviderToolRerankResult, ProviderToolResourceDownloadPolicy, ProviderToolResourceEncoding,
-        ProviderToolTarget, ProviderToolTargetSelection,
+        ProviderToolExecutionResult, ProviderToolGeneratedResource, ProviderToolNormalizedOutput,
+        ProviderToolRerankOutput, ProviderToolRerankResult, ProviderToolResourceDownloadPolicy,
+        ProviderToolResourceEncoding, ProviderToolTarget, ProviderToolTargetSelection,
     };
 
     /// Builds one minimal model-extension target for bridge catalog tests.
@@ -1886,6 +1937,51 @@ mod tests {
         assert_eq!(
             result.model_output["composite"]["reranks"][0]["results"][0]["score"],
             0.75
+        );
+    }
+
+    /// Verifies model-visible generated resources never expose host-private absolute paths.
+    /// 验证模型可见的生成资源绝不暴露宿主私有绝对路径。
+    #[tokio::test]
+    async fn generated_resource_output_separates_public_locator_from_private_host_path() {
+        let workspace = tempfile::tempdir().expect("temporary workspace");
+        let result = render_provider_resource_result(
+            Some(workspace.path()),
+            Some(String::from("generated-response")),
+            vec![ProviderToolGeneratedResource {
+                output_id: String::from("generated-image"),
+                kind: String::from("image"),
+                mime_type: String::from("image/png"),
+                bytes: Some(vec![0x89, b'P', b'N', b'G']),
+                download_url: None,
+                download_policy: None,
+            }],
+        )
+        .await
+        .expect("generated resource output");
+
+        let model_resource = &result.model_output["resources"][0];
+        let model_text = serde_json::to_string(&result.model_output).expect("model output json");
+        let host_output = &result
+            .host_result
+            .as_ref()
+            .expect("generated attachment host result")
+            .payload["outputs"][0];
+
+        assert!(model_resource["asset_id"].as_str().is_some());
+        assert!(
+            model_resource["resource_path"]
+                .as_str()
+                .is_some_and(|value| value.starts_with(".vulcan/code/attachments/images/"))
+        );
+        assert!(model_resource.get("local_path").is_none());
+        assert!(model_resource.get("preview_local_path").is_none());
+        assert!(!model_text.contains(workspace.path().to_string_lossy().as_ref()));
+        assert!(host_output["local_path"].as_str().is_some());
+        assert_eq!(host_output["asset_id"], model_resource["asset_id"]);
+        assert_eq!(
+            host_output["resource_path"],
+            model_resource["resource_path"]
         );
     }
 

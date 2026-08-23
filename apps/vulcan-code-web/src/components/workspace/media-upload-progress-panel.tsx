@@ -35,7 +35,11 @@ export function MediaUploadProgressPanel(props: {
   return (
     <section className="media-upload-progress-panel" role="status" aria-live="polite">
       <div className="media-upload-progress-heading">
-        <span>{props.progress.phase === "preparing" ? t("conversation.submission.preparing") : t("conversation.submission.uploading")}</span>
+        <span>{props.progress.phase === "preparing"
+          ? t("conversation.submission.preparing")
+          : props.progress.phase === "awaiting_provider_confirmation"
+            ? t("composer.attachment.processing")
+            : t("conversation.submission.uploading")}</span>
         <span>{percentage}%</span>
       </div>
       <div className="media-upload-progress-file" title={props.progress.fileName}>

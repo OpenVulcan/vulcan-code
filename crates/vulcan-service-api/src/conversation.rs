@@ -222,6 +222,9 @@ pub enum MediaUploadPhase {
     /// The source is being uploaded or read for an inline provider payload.
     /// 源文件正在上传，或正在为内联供应商载荷读取。
     Uploading,
+    /// Source bytes were sent and the provider is confirming a reusable reference.
+    /// 源字节已经发送，供应商正在确认可复用引用。
+    AwaitingProviderConfirmation,
     /// The source is ready and the actual model request may start.
     /// 源文件已就绪，可以开始实际模型请求。
     Completed,
@@ -245,6 +248,10 @@ pub struct MediaUploadProgressChangedDelta {
     /// 已有会话标识；新草稿准备期间为空。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation_id: Option<String>,
+    /// Stable managed attachment identity when the transfer belongs to a composer attachment.
+    /// 当传输属于输入区附件时使用的稳定托管附件身份。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment_id: Option<String>,
     /// Exact provider selected for the pending request.
     /// 待处理请求选定的精确供应商。
     pub provider_id: String,

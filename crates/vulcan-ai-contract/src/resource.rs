@@ -84,6 +84,10 @@ pub struct ResourceReference {
     /// 可选的标准图片输入细节策略。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_detail: Option<ImageInputDetail>,
+    /// Optional model-safe resource locator such as a project-relative attachment path.
+    /// 可选的模型安全资源定位符，例如项目相对附件路径。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_path: Option<String>,
     /// Optional local path supplied by the user or AI tool.
     /// 用户或 AI 工具提供的可选本地路径。
     #[serde(default, skip_serializing_if = "Option::is_none")]

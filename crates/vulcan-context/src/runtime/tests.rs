@@ -750,6 +750,50 @@ fn runtime_log_projection_marks_repeated_tool_result_as_orphan() {
     assert!(completed.complete);
 }
 
+/// Verifies an incomplete tool batch stays open without a mutable completion summary.
+/// 验证未完成工具批次保持打开，且不会生成后续会变化的完成汇总。
+#[test]
+fn runtime_log_projection_omits_incomplete_tool_batch_summary() {
+    // state contains one call that has not received a tool result yet.
+    // state 包含一条尚未收到工具结果的调用。
+    let state = SessionConversationState {
+        messages: vec![SessionConversationMessage {
+            id: String::from("assistant-incomplete"),
+            payload: SessionConversationPayload::Assistant {
+                text: String::new(),
+                reasoning: String::new(),
+                provider_message_id: None,
+                provider_message_state: None,
+                usage: None,
+                tool_calls: vec![tool_call("call-incomplete")],
+            },
+        }],
+        records: Vec::new(),
+        continuation: Default::default(),
+    };
+
+    // lines retain the immutable batch start and call, but no premature completion.
+    // lines 保留不可变的批次开始与调用，但不产生过早的完成事件。
+    let lines = runtime_log_lines_from_conversation_state(&state, "1", 1)
+        .expect("project incomplete tool batch");
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| matches!(line.event, RuntimeLogEvent::ToolBatchStarted(_)))
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| matches!(line.event, RuntimeLogEvent::ToolCall(_)))
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| !matches!(line.event, RuntimeLogEvent::ToolBatchCompleted(_)))
+    );
+}
+
 /// Verifies agent mailbox messages are replayed as provider-facing user messages.
 /// 验证代理 mailbox 消息会按面向 Provider 的用户消息回放。
 #[test]
@@ -1132,9 +1176,9 @@ fn runtime_log_replay_validates_tool_batch_completion_summary() {
         runtime_tool_batch_completed_line(5, "batch-a", 1, 0, false),
     ])
     .expect_err("incorrect batch summary must fail replay");
-    // completion_after_audit_error proves audit replay permanently closes completion ordering.
-    // completion_after_audit_error 证明审计重放会永久关闭完成事件顺序。
-    let completion_after_audit_error = conversation_state_from_runtime_log_lines(&[
+    // completion_after_audit_state proves audit facts may be interleaved in an append-only log.
+    // completion_after_audit_state 证明审计事实可以交错出现在追加式日志中。
+    let completion_after_audit_state = conversation_state_from_runtime_log_lines(&[
         runtime_assistant_line(1, "assistant-1"),
         runtime_tool_batch_started_line(2, "batch-a", "assistant-1"),
         runtime_tool_call_line(3, "assistant-1", "call-a", None, "batch-a"),
@@ -1150,7 +1194,7 @@ fn runtime_log_replay_validates_tool_batch_completion_summary() {
         ),
         runtime_tool_batch_completed_line(5, "batch-a", 1, 0, false),
     ])
-    .expect_err("batch completion after audit must fail replay");
+    .expect("batch completion after audit must remain replayable");
 
     assert_eq!(complete_state.messages.len(), 2);
     assert_eq!(
@@ -1177,12 +1221,7 @@ fn runtime_log_replay_validates_tool_batch_completion_summary() {
             actual_complete: false,
         }
     );
-    assert_eq!(
-        completion_after_audit_error,
-        RuntimeLogReplayError::ProjectionEventAfterRuntimeAudit {
-            later_event: "tool_batch_completed",
-        }
-    );
+    assert_eq!(completion_after_audit_state.messages.len(), 1);
 }
 
 /// Verifies no call, matched result, or second completion can mutate a closed batch.
@@ -1226,9 +1265,9 @@ fn runtime_log_replay_rejects_events_after_tool_batch_completion() {
         ),
     ])
     .expect_err("matched result after batch completion must fail replay");
-    // late_orphan_error proves explicit orphan downgrade cannot reopen conversation-event replay.
-    // late_orphan_error 证明明确孤儿降级不能重新打开会话事件重放。
-    let late_orphan_error = conversation_state_from_runtime_log_lines(&[
+    // late_orphan_state proves an unrelated orphan may follow one closed batch chronologically.
+    // late_orphan_state 证明无关孤儿结果可以按时间顺序跟在已关闭批次之后。
+    let late_orphan_state = conversation_state_from_runtime_log_lines(&[
         runtime_assistant_line(1, "assistant-1"),
         runtime_tool_batch_started_line(2, "batch-a", "assistant-1"),
         runtime_tool_call_line(3, "assistant-1", "call-a", None, "batch-a"),
@@ -1242,7 +1281,7 @@ fn runtime_log_replay_rejects_events_after_tool_batch_completion() {
             RuntimeToolResultStatus::Orphan,
         ),
     ])
-    .expect_err("orphan result after completion phase must fail replay");
+    .expect("orphan result after a closed batch must remain replayable");
 
     assert_eq!(
         duplicate_completion_error,
@@ -1262,12 +1301,7 @@ fn runtime_log_replay_rejects_events_after_tool_batch_completion() {
             later_event: "tool_result",
         }
     );
-    assert_eq!(
-        late_orphan_error,
-        RuntimeLogReplayError::ConversationEventAfterToolBatchCompletion {
-            later_event: "tool_result",
-        }
-    );
+    assert_eq!(late_orphan_state.messages.len(), 2);
 }
 
 /// Verifies matched results require a unique preceding call while explicit orphans still downgrade.

@@ -7,7 +7,9 @@ use crate::agent_runtime::provider_attachment::{
 };
 use crate::attachment_asset_index::{AttachmentReplayStatus, resolve_attachment_replay_status};
 use vulcan_ai_contract::{ModelCapabilities, ResourceKind, StructuredOutputCapability};
-use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
+use vulcan_core::types::{
+    ConversationAttachment, ConversationAttachmentDeliveryMode, ConversationAttachmentKind,
+};
 
 /// Holds the exact user payload that remains valid after protocol and model capability checks.
 /// 保存经过协议与模型能力检查后仍然有效的精确用户载荷。
@@ -100,8 +102,12 @@ pub fn normalize_provider_user_input_for_model_with_tool_bridges(
                     .contains(&attachment_resource_kind(attachment.kind.clone()))
             })
             .unwrap_or(true);
+        // metadataOnly is a request-local host decision and must override otherwise available native encoders.
+        // metadataOnly 是单次请求局部宿主决策，必须覆盖原本可用的原生编码器。
+        let metadata_only =
+            attachment.delivery_mode == Some(ConversationAttachmentDeliveryMode::MetadataOnly);
 
-        if replayable && protocol_supported && model_supported {
+        if replayable && protocol_supported && model_supported && !metadata_only {
             supported_attachments.push(attachment);
         } else {
             let diagnostic = if !replayable {
@@ -112,6 +118,8 @@ pub fn normalize_provider_user_input_for_model_with_tool_bridges(
                 // a host bridge replaces both missing model input and missing wire encoding.
                 // 宿主桥接同时替代缺失的模型输入能力与 Wire 编码能力。
                 build_attachment_provider_tool_hint(&attachment, tool_id, path_argument)
+            } else if metadata_only {
+                build_attachment_transport_error_text(&attachment, "the host delivery plan")
             } else if !protocol_supported {
                 build_attachment_transport_error_text(&attachment, "the selected protocol profile")
             } else {
@@ -321,9 +329,12 @@ mod tests {
                 .join("Cargo.toml")
                 .to_string_lossy()
                 .to_string(),
+            resource_path: None,
             source_path: Some(format!("source/{file_name}")),
             asset_id: Some(format!("asset-{file_name}")),
             byte_len: Some(4),
+            source_sha256: None,
+            delivery_mode: None,
             preview_local_path: None,
             mime_type: mime_type.to_string(),
         }

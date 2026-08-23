@@ -166,6 +166,7 @@ pub(crate) fn current_workspace_snapshot_from_state(
 
 /// Clones the latest in-memory workspace snapshot from a shared service state handle.
 /// 从共享服务状态句柄克隆最近的内存工作区快照。
+#[cfg(test)]
 pub(crate) fn current_workspace_snapshot_from_shared_state(
     state: &SharedServiceBridgeState,
 ) -> Result<Option<WorkspaceSnapshot>, String> {

@@ -89,21 +89,21 @@ fn apply_webui_prompt_intervention_transaction(
         );
     }
     let dispatch_context = webui_pending_prompt_dispatch_context(workspace, session_id, false);
-    // runtime_state_draft isolates only the session-scoped pending UI state that this transaction can modify.
-    // runtime_state_draft 仅隔离该事务能够修改的会话级待发送 UI 状态。
-    let mut runtime_state_draft = workspace.session_runtime_state.get(&session_id).cloned();
+    // ui_state_draft clones only the bounded pending UI domain that this transaction can modify.
+    // ui_state_draft 只复制该事务能够修改且有界的待发送 UI 域。
+    let mut ui_state_draft = workspace
+        .session_runtime_state
+        .get(&session_id)
+        .map(|runtime_state| runtime_state.ui_state.clone());
     // controller_draft makes guided and mailbox projections one Core commit.
     // controller_draft 使引导投影与 mailbox 投影成为一次 Core 提交。
     let mut controller_draft = controller.clone();
     // guided_entries are removed only from the detached workspace draft.
     // guided_entries 仅从分离的工作区草稿中移除。
-    let guided_entries = runtime_state_draft
+    let guided_entries = ui_state_draft
         .as_mut()
-        .map(|runtime_state| {
-            take_runtime_intervention_guided_pending_prompt_entries(
-                &mut runtime_state.ui_state,
-                dispatch_context,
-            )
+        .map(|ui_state| {
+            take_runtime_intervention_guided_pending_prompt_entries(ui_state, dispatch_context)
         })
         .unwrap_or_default();
     let mut guided_prompt_changed = false;
@@ -117,11 +117,6 @@ fn apply_webui_prompt_intervention_transaction(
             )
             .is_some();
     }
-    if !guided_entries.is_empty()
-        && let Some(runtime_state) = runtime_state_draft.as_mut()
-    {
-        runtime_state.updated_at = current_unix_millis_text();
-    }
     // kernel_draft isolates mailbox drains and consumption markers from conversion failures.
     // kernel_draft 隔离 mailbox 取出与消费标记，避免转换失败污染权威状态。
     let mut kernel_draft = guard.session_runtime_kernels.get(&session_id).cloned();
@@ -134,15 +129,22 @@ fn apply_webui_prompt_intervention_transaction(
         None => false,
     };
 
-    if let Some(runtime_state) = runtime_state_draft {
-        guard
+    if let Some(ui_state) = ui_state_draft {
+        let runtime_state = guard
             .workspace_snapshot
             .as_mut()
             .ok_or_else(|| RuntimePromptInterventionError::StateUnavailable {
                 message: String::from("workspace snapshot is not ready during commit"),
             })?
             .session_runtime_state
-            .insert(session_id, runtime_state);
+            .get_mut(&session_id)
+            .ok_or_else(|| RuntimePromptInterventionError::StateUnavailable {
+                message: format!("session `{session_id}` runtime state is not ready during commit"),
+            })?;
+        runtime_state.ui_state = ui_state;
+        if !guided_entries.is_empty() {
+            runtime_state.updated_at = current_unix_millis_text();
+        }
     }
     if mailbox_changed && let Some(kernel) = kernel_draft {
         guard.session_runtime_kernels.insert(session_id, kernel);

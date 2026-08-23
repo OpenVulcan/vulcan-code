@@ -21,6 +21,9 @@ pub(crate) struct WorkbenchRuntimeProjection<'a> {
     /// 来自共享 Agent 运行时的可选实时 Vulcan 插件目录。
     pub(crate) vulcan_plugin_catalog:
         Option<&'a vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
+    /// Retained immutable subagent catalog captured from the current runtime generation.
+    /// 从当前运行时代次捕获的保留不可变子代理目录。
+    pub(crate) subagent_catalog: &'a vulcan_task_session::SubagentCatalog,
     /// Structured MCP states captured from the same extension generation as the plugin catalog.
     /// 从与插件目录相同扩展代次捕获的结构化 MCP 状态。
     pub(crate) mcp_server_states: &'a [vulcan_agent_runtime::mcp::McpRuntimeServerState],
@@ -232,6 +235,12 @@ async fn refresh_workbench_snapshot_with_selected_session(
                 .server_states()
         })
         .unwrap_or_default();
+    // subagentCatalog is the retained immutable generation; full workbench refreshes must not touch catalog directories.
+    // subagentCatalog 是保留的不可变代次；完整工作台刷新不得接触目录文件夹。
+    let subagent_catalog = agent_runtime_for_status
+        .as_ref()
+        .map(|runtime| Arc::clone(&runtime.subagent_catalog))
+        .unwrap_or_else(|| Arc::new(vulcan_task_session::SubagentCatalog::default()));
     // vmm_controller_registry is cloned without retaining shared service ownership.
     // vmm_controller_registry 在不保留共享服务所有权的情况下完成克隆。
     let vmm_controller_registry = state
@@ -240,8 +249,18 @@ async fn refresh_workbench_snapshot_with_selected_session(
         .vmm_controller_registry
         .clone();
     if selected_session_id != SessionId::nil() {
-        let _ = vmm_controller_registry.get_or_open(
+        let session_directory = segmented_session_directory_for_workspace_session(
             &controller_runtime.data_root,
+            &refreshed_snapshot,
+            selected_session_id,
+        )
+        .ok_or_else(|| {
+            format!(
+                "Selected session `{selected_session_id}` has no exact storage locator; workbench refresh directory scanning is disabled."
+            )
+        })?;
+        let _ = vmm_controller_registry.get_or_open(
+            &session_directory,
             selected_session_id,
             &current_unix_millis_text(),
         )?;
@@ -257,6 +276,7 @@ async fn refresh_workbench_snapshot_with_selected_session(
             .map(|agent_runtime| agent_runtime.command_session_runtime.as_ref()),
         luaskills_catalog: &luaskills_catalog,
         vulcan_plugin_catalog: vulcan_plugin_catalog.as_deref(),
+        subagent_catalog: subagent_catalog.as_ref(),
         mcp_server_states: &mcp_server_states,
         mcp_catalog: &mcp_catalog,
         provider_configuration: &provider_configuration,
@@ -917,6 +937,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         command_session_runtime,
         luaskills_catalog,
         vulcan_plugin_catalog,
+        subagent_catalog,
         mcp_server_states,
         mcp_catalog,
         provider_configuration,
@@ -1138,8 +1159,8 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 let session_plan_mode = session_plan_mode_summary_from_runtime_state(
                     workspace.session_runtime_state.get(&session.id),
                 );
-                // sessionIdText is shared by the exact Ask, command-session, and child-task blocker checks.
-                // sessionIdText 由精确的 Ask、命令会话与子任务阻断检查共享。
+                // sessionIdText is shared by the exact Ask and child-task blocker checks.
+                // sessionIdText 由精确的 Ask 与子任务阻断检查共享。
                 let session_id_text = session.id.to_string();
                 ConversationSummary {
                     id: session_id_text.clone(),
@@ -1171,13 +1192,6 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                             has_pending_question: pending_questions
                                 .iter()
                                 .any(|question| question.session_id == session_id_text),
-                            has_running_command_session: projected_command_sessions.iter().any(
-                                |command_session| {
-                                    command_session.owner_session_id.as_deref()
-                                        == Some(session_id_text.as_str())
-                                        && command_session.status == "running"
-                                },
-                            ),
                             has_running_task: subagent_navigation.as_ref().is_some_and(
                                 |navigation| {
                                     navigation.parent_conversation_id == session_id_text
@@ -1240,9 +1254,9 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
             provider_configuration,
             input.vulcan_plugin_catalog,
         ),
-        subagent_catalog: subagent_catalog_summary(
+        subagent_catalog: subagent_catalog_summary_from_catalog(
+            subagent_catalog,
             public_ai_model_selectors.as_ref(),
-            input.vulcan_plugin_catalog,
         ),
         settings: settings(),
         providers: public_ai_runtime

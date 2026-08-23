@@ -12,6 +12,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_submit_conversation_prompt",
     "service_continue_conversation",
     "service_cancel_conversation_submission",
+    "service_plan_composer_attachments",
+    "service_prepare_composer_attachment",
     "service_stop_conversation_run",
     "service_stop_command_session",
     "service_get_command_session_snapshot",
@@ -53,6 +55,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_pick_composer_attachments",
     "service_stage_composer_attachment_paths",
     "service_stage_composer_attachment_bytes",
+    "service_stage_composer_attachment_preview_bytes",
+    "service_reconcile_composer_attachment_draft",
 ];
 
 /// Dispatches one RPC method owned by this domain.
@@ -106,6 +110,7 @@ pub(super) async fn dispatch(
                 rpc_required_param(params, "clientSubmissionId")?,
                 rpc_optional_param(params, "projectId")?,
                 rpc_optional_param(params, "conversationId")?,
+                rpc_required_param(params, "draftSlotKey")?,
                 rpc_required_param(params, "prompt")?,
                 rpc_optional_param(params, "hiddenModelGuidance")?,
                 rpc_optional_param(params, "executionMode")?,
@@ -132,6 +137,29 @@ pub(super) async fn dispatch(
             rpc_required_param::<String>(params, "clientSubmissionId").and_then(
                 |client_submission_id| cancel_media_upload(client_submission_id.as_str()),
             ),
+        ),
+        "service_plan_composer_attachments" => rpc_json_result(
+            service_plan_composer_attachments(
+                state,
+                rpc_optional_param(params, "projectId")?,
+                rpc_optional_param(params, "conversationId")?,
+                rpc_required_param(params, "generation")?,
+                rpc_required_param(params, "modelSelection")?,
+                rpc_required_param(params, "attachments")?,
+            )
+            .await,
+        ),
+        "service_prepare_composer_attachment" => rpc_json_result(
+            service_prepare_composer_attachment(
+                app,
+                state,
+                rpc_optional_param(params, "projectId")?,
+                rpc_optional_param(params, "conversationId")?,
+                rpc_required_param(params, "modelSelection")?,
+                rpc_required_param(params, "attachment")?,
+                rpc_required_param(params, "preparation")?,
+            )
+            .await,
         ),
         "service_stop_conversation_run" => rpc_json_result(
             service_stop_conversation_run(
@@ -357,6 +385,26 @@ pub(super) async fn dispatch(
                 rpc_required_param(params, "fileName")?,
                 rpc_required_param(params, "mimeType")?,
                 rpc_required_param(params, "dataBase64")?,
+            )
+            .await,
+        ),
+        "service_stage_composer_attachment_preview_bytes" => rpc_json_result(
+            service_stage_composer_attachment_preview_bytes(
+                state,
+                rpc_optional_param(params, "projectId")?,
+                rpc_optional_param(params, "conversationId")?,
+                rpc_required_param(params, "attachmentId")?,
+                rpc_required_param(params, "dataBase64")?,
+            )
+            .await,
+        ),
+        "service_reconcile_composer_attachment_draft" => rpc_json_result(
+            service_reconcile_composer_attachment_draft(
+                state,
+                rpc_optional_param(params, "projectId")?,
+                rpc_optional_param(params, "conversationId")?,
+                rpc_required_param(params, "draftSlotKey")?,
+                rpc_required_param(params, "attachments")?,
             )
             .await,
         ),

@@ -29,6 +29,9 @@ pub(crate) struct AgentRuntimeBridge {
     /// Agent profile catalog reused by runtime preparation.
     /// 运行时准备阶段复用的 Agent 画像目录。
     pub(crate) agent_profile_catalog: AgentProfileCatalog,
+    /// Immutable subagent catalog generation published by startup or an explicit settings refresh.
+    /// 由启动流程或显式设置刷新发布的不可变子代理目录代次。
+    pub(crate) subagent_catalog: Arc<vulcan_task_session::SubagentCatalog>,
     /// LuaSkills runtime handle reused by provider-visible tool execution.
     /// Provider 可见工具执行复用的 LuaSkills 运行时句柄。
     pub(crate) luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
@@ -1346,9 +1349,93 @@ pub(crate) fn webui_workspace_persist_lock() -> Arc<tokio::sync::Mutex<()>> {
         .clone()
 }
 
+/// Fixed number of session-persistence channels used to avoid one process-wide hot-path gate.
+/// 用于避免单一进程级热路径闸门的固定会话持久化通道数量。
+const WEBUI_SESSION_PERSIST_LOCK_SHARDS: usize = 256;
+
+/// Fixed session-keyed persistence channels with no directory scan or unbounded lock registry.
+/// 不进行目录扫描且不存在无界锁注册表的固定会话键持久化通道。
+static WEBUI_SESSION_PERSIST_LOCKS: OnceLock<
+    [Arc<tokio::sync::Mutex<()>>; WEBUI_SESSION_PERSIST_LOCK_SHARDS],
+> = OnceLock::new();
+
+/// Returns the deterministic persistence channel for one exact session.
+/// 返回单个精确会话使用的确定性持久化通道。
+///
+/// # Parameters
+/// 参数
+/// `session_id` is the exact session whose state, transcript, or addon file will be written.
+/// `session_id` 是将写入状态、转录或附属文件的精确会话。
+///
+/// # Returns
+/// 返回值
+/// A stable sharded mutex that serializes same-session writes while allowing unrelated channels to proceed.
+/// 返回稳定的分片互斥锁；同会话写入保持串行，而无关通道可以并行推进。
+pub(crate) fn webui_session_persist_lock(session_id: SessionId) -> Arc<tokio::sync::Mutex<()>> {
+    // shardHash consumes every UUID byte so ordinary adjacent session ids distribute across channels.
+    // shardHash 消费 UUID 的每个字节，使普通相邻会话标识分布到不同通道。
+    let shard_hash = session_id.as_bytes().iter().fold(0usize, |hash, byte| {
+        hash.wrapping_mul(16777619) ^ usize::from(*byte)
+    });
+    WEBUI_SESSION_PERSIST_LOCKS
+        .get_or_init(|| std::array::from_fn(|_| Arc::new(tokio::sync::Mutex::new(()))))
+        [shard_hash % WEBUI_SESSION_PERSIST_LOCK_SHARDS]
+        .clone()
+}
+
+/// Acquires every distinct persistence channel selected by an exact session set in shard order.
+/// 按分片顺序取得一组精确会话选择的全部不同持久化通道。
+///
+/// # Parameters
+/// 参数
+/// `session_ids` contains the exact lifecycle members whose files may move or disappear.
+/// `session_ids` 包含其文件可能移动或消失的精确生命周期成员。
+///
+/// # Returns
+/// 返回值
+/// Owned guards for unique shards, held until the lifecycle caller drops the returned vector.
+/// 返回不同分片的自有守卫；生命周期调用方丢弃该向量前会持续持有这些守卫。
+pub(crate) async fn lock_webui_session_persist_channels(
+    session_ids: impl IntoIterator<Item = SessionId>,
+) -> Vec<tokio::sync::OwnedMutexGuard<()>> {
+    // shardIndices are deduplicated so two sessions sharing one fixed channel cannot self-deadlock.
+    // shardIndices 会去重，避免共享固定通道的两个会话发生自死锁。
+    let shard_indices = session_ids
+        .into_iter()
+        .map(|session_id| {
+            session_id.as_bytes().iter().fold(0usize, |hash, byte| {
+                hash.wrapping_mul(16777619) ^ usize::from(*byte)
+            }) % WEBUI_SESSION_PERSIST_LOCK_SHARDS
+        })
+        .collect::<BTreeSet<_>>();
+    let locks = WEBUI_SESSION_PERSIST_LOCKS
+        .get_or_init(|| std::array::from_fn(|_| Arc::new(tokio::sync::Mutex::new(()))));
+    let mut guards = Vec::with_capacity(shard_indices.len());
+    for shard_index in shard_indices {
+        guards.push(locks[shard_index].clone().lock_owned().await);
+    }
+    guards
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies session persistence channels are stable per session and separate ordinary peers.
+    /// 验证会话持久化通道对同一会话保持稳定，并分离普通不同会话。
+    #[test]
+    fn session_persistence_channels_are_deterministic_and_sharded() {
+        // firstSession and secondSession use distinct complete UUID values for shard selection.
+        // firstSession 与 secondSession 使用不同的完整 UUID 值进行分片选择。
+        let first_session = SessionId::from_u128(1);
+        let second_session = SessionId::from_u128(2);
+        let first_lock = webui_session_persist_lock(first_session);
+        let repeated_first_lock = webui_session_persist_lock(first_session);
+        let second_lock = webui_session_persist_lock(second_session);
+
+        assert!(Arc::ptr_eq(&first_lock, &repeated_first_lock));
+        assert!(!Arc::ptr_eq(&first_lock, &second_lock));
+    }
 
     /// Verifies fork requests accept the explicit retained message anchor.
     /// 验证 fork 请求接受显式保留消息锚点。

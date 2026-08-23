@@ -84,20 +84,20 @@ pub fn normalize_orphaned_tool_request_records(
 ///
 /// # Returns
 /// 返回值
-/// The number of exact open request cards changed to the superseded state.
-/// 被改为已取代状态的精确未闭合请求卡片数量。
+/// The exact open request card ids changed to the superseded state.
+/// 被改为已取代状态的精确未闭合请求卡片标识。
 pub(super) fn supersede_open_tool_request_records(
     runtime_state: &mut SessionRuntimeStateEntry,
     now: &str,
     reason: &str,
-) -> usize {
+) -> BTreeSet<String> {
     // requestRecordIds selects only request formation that has not crossed ToolStarted.
     // requestRecordIds 仅选择尚未跨过 ToolStarted 的请求构造记录。
     let request_record_ids = std::mem::take(&mut runtime_state.tool_request_record_ids)
         .into_values()
         .collect::<BTreeSet<_>>();
     if request_record_ids.is_empty() {
-        return 0;
+        return BTreeSet::new();
     }
     let mut superseded_record_ids = BTreeSet::new();
     for record in &mut runtime_state.conversation_state.records {
@@ -127,7 +127,7 @@ pub(super) fn supersede_open_tool_request_records(
     if !superseded_record_ids.is_empty() {
         runtime_state.updated_at = now.to_string();
     }
-    superseded_record_ids.len()
+    superseded_record_ids
 }
 
 /// Converts request-stage metadata into the stopped state used after ownerless hydration.

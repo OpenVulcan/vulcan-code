@@ -469,10 +469,10 @@ fn operation_upload_target_value(
 /// # Parameters
 /// 参数
 /// `binding` defines the exact source/target pointers; `resource` carries the verified MIME;
-/// `arguments` is the canonical fixed-tool input; `provider_reference` is already validated by
-/// the selected upload channel.
+/// `arguments` is the canonical fixed-tool input; `provider_reference` and `reference_encoding`
+/// are already validated by the selected upload channel.
 /// `binding` 定义精确源/目标指针；`resource` 携带已校验 MIME；`arguments` 是规范固定工具输入；
-/// `provider_reference` 已由选中上传通道校验。
+/// `provider_reference` 与 `reference_encoding` 已由选中上传通道校验。
 ///
 /// # Returns
 /// 返回值
@@ -484,6 +484,7 @@ pub(crate) fn materialize_cached_scalar_operation_upload(
     resource: &UploadResource,
     mut arguments: Value,
     provider_reference: String,
+    reference_encoding: UploadReferenceEncoding,
 ) -> Result<Value, String> {
     if binding.item_source_path.is_some() || binding.item_target_path.is_some() {
         return Err(String::from(
@@ -504,7 +505,7 @@ pub(crate) fn materialize_cached_scalar_operation_upload(
     }
     let uploaded = UploadedResourceReference {
         reference: provider_reference,
-        encoding: UploadReferenceEncoding::ResponseUrl,
+        encoding: reference_encoding,
         response_id: None,
         response_url: None,
     };

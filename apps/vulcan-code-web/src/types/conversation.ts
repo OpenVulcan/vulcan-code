@@ -755,6 +755,9 @@ export interface MediaUploadProgressChangedDelta {
   // Existing conversation id, or null while a draft is being prepared.
   // 已有会话标识；草稿准备期间为空。
   conversationId?: string | null;
+  // Stable managed attachment identity for composer-owned transfers.
+  // 输入区持有传输使用的稳定托管附件身份。
+  attachmentId?: string | null;
   // Exact non-secret route selected for this submission.
   // 本次提交选定的精确非秘密路由。
   providerId: string;
@@ -775,7 +778,7 @@ export interface MediaUploadProgressChangedDelta {
   fileCount: number;
   // Current transfer phase.
   // 当前传输阶段。
-  phase: "preparing" | "uploading" | "completed" | "cancelled" | "failed";
+  phase: "preparing" | "uploading" | "awaiting_provider_confirmation" | "completed" | "cancelled" | "failed";
   bytesSent: number;
   totalBytes?: number | null;
   error?: string | null;

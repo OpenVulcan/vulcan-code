@@ -127,6 +127,47 @@ pub(crate) fn invalidate_webui_session_persist_version(
     Ok(())
 }
 
+/// Invalidates only whole-session/runtime-state writers without cancelling transcript-only work.
+/// 仅使整会话与运行态写入者失效，不取消仅转录写入任务。
+///
+/// # Parameters
+/// 参数
+/// `state` owns both persistence lanes and `session_id` selects the exact runtime-state owner.
+/// `state` 持有两条持久化通道，`session_id` 选择精确的运行态归属。
+///
+/// # Returns
+/// 返回值
+/// The runtime-only fence version, or an explicit version-exhaustion/lock error.
+/// 返回仅运行态隔离版本，或明确的版本耗尽/锁错误。
+pub(crate) fn invalidate_webui_session_runtime_only_persist_version(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<u64, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let current = guard
+        .session_persist_versions
+        .get(&session_id)
+        .copied()
+        .into_iter()
+        .chain(
+            guard
+                .session_transcript_persist_versions
+                .get(&session_id)
+                .copied(),
+        )
+        .max()
+        .unwrap_or_default();
+    let next = if current == 0 {
+        1
+    } else {
+        next_persistence_version(current, "session runtime")?
+    };
+    guard.session_persist_versions.insert(session_id, next);
+    Ok(next)
+}
+
 /// Invalidates every pending persistence channel before or after a session lifecycle transition.
 /// 在会话生命周期转换前后使全部待处理持久化通道失效。
 ///
@@ -641,9 +682,9 @@ pub(crate) struct FullWorkbenchColdRefreshRequest<'a> {
 /// 为一次冷路径工作台刷新选择权威工作区来源。
 #[derive(Debug, Clone)]
 pub(crate) enum FullWorkbenchColdRefreshWorkspaceSource {
-    /// Commits an exact caller-owned mutation candidate.
-    /// 提交调用方持有的精确变更候选。
-    Candidate(WorkspaceSnapshot),
+    /// Commits one heap-bound exact caller-owned mutation candidate without inflating the source enum.
+    /// 提交一个堆上保存的调用方精确变更候选，避免放大来源枚举。
+    Candidate(Box<WorkspaceSnapshot>),
     /// Captures the latest retained workspace after acquiring the shared state lock.
     /// 获取共享状态锁后捕获最新保留工作区。
     Retained,
@@ -729,7 +770,7 @@ fn resolve_full_workbench_cold_refresh_workspace(
 ) -> Result<WorkspaceSnapshot, String> {
     match workspace_source {
         FullWorkbenchColdRefreshWorkspaceSource::Candidate(workspace_snapshot) => {
-            Ok(workspace_snapshot)
+            Ok(*workspace_snapshot)
         }
         FullWorkbenchColdRefreshWorkspaceSource::Retained => {
             retained_workspace.cloned().ok_or_else(|| {
@@ -790,6 +831,7 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         hydrated_window_summaries,
         vulcan_plugin_catalog,
         mcp_server_states,
+        subagent_catalog,
     ) = {
         retain_hydrated_conversation_windows_for_workspace(
             &mut guard.hydrated_conversation_windows,
@@ -852,6 +894,13 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
             .as_ref()
             .map(|runtime| runtime.extension_generation.mcp_runtime().server_states())
             .unwrap_or_default();
+        // subagentCatalog is cloned by Arc from the retained runtime generation; cold projection performs no directory traversal.
+        // subagentCatalog 通过 Arc 从保留运行时代次克隆；冷投影不执行目录遍历。
+        let subagent_catalog = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| Arc::clone(&runtime.subagent_catalog))
+            .unwrap_or_else(|| Arc::new(vulcan_task_session::SubagentCatalog::default()));
         (
             live_context_budgets,
             surface_messages,
@@ -866,6 +915,7 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
             ),
             vulcan_plugin_catalog,
             mcp_server_states,
+            subagent_catalog,
         )
     };
     // vmm_session_states are immutable controller projections captured for this cold refresh.
@@ -877,6 +927,7 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         command_session_runtime: command_session_runtime.as_deref(),
         luaskills_catalog,
         vulcan_plugin_catalog: vulcan_plugin_catalog.as_deref(),
+        subagent_catalog: subagent_catalog.as_ref(),
         mcp_server_states: &mcp_server_states,
         mcp_catalog,
         provider_configuration,
@@ -1269,8 +1320,8 @@ mod tests {
         .expect("retained cold refresh source should resolve");
         let resolved_candidate = resolve_full_workbench_cold_refresh_workspace(
             Some(&retained_workspace),
-            FullWorkbenchColdRefreshWorkspaceSource::Candidate(cold_refresh_test_workspace(
-                candidate_session_id,
+            FullWorkbenchColdRefreshWorkspaceSource::Candidate(Box::new(
+                cold_refresh_test_workspace(candidate_session_id),
             )),
         )
         .expect("candidate cold refresh source should resolve");

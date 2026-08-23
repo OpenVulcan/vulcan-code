@@ -58,6 +58,7 @@ mod conversation_tool_detail_tests;
 mod detached_subagent_tests;
 mod execution_retry_tests;
 mod goal_todolist_tests;
+mod hot_path_scan_guard_tests;
 mod mailbox_tests;
 mod mcp_settings_tests;
 mod pending_question_projection_tests;

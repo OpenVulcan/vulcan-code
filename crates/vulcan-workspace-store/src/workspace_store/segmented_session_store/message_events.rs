@@ -12,10 +12,10 @@ pub(in crate::workspace_store) fn append_segmented_session_events(
     let _guard = segmented_append_file_io_lock()
         .lock()
         .map_err(to_store_error)?;
-    repair_segmented_session_jsonl_files_if_needed_locked(session_dir)?;
     // Load metadata first so sequence numbers and active segment remain authoritative.
     // 先加载元数据，确保序号与活动分段以元数据为准。
     let mut metadata = read_session_metadata(session_dir)?;
+    validate_segmented_session_append_boundary_locked(session_dir, &metadata)?;
     // Append all events and update the in-memory metadata only after file writes succeed.
     // 追加全部事件，并且只在文件写入成功后更新内存元数据。
     let lines = append_events_with_metadata(session_dir, &mut metadata, events)?;
@@ -37,10 +37,10 @@ pub(in crate::workspace_store) fn append_segmented_boundary_events(
     let _guard = segmented_append_file_io_lock()
         .lock()
         .map_err(to_store_error)?;
-    repair_segmented_session_jsonl_files_if_needed_locked(session_dir)?;
     // Load metadata before every batch so the store remains the only sequence authority.
     // 批量追加前先加载元数据，确保存储层始终是唯一序号来源。
     let mut metadata = read_session_metadata(session_dir)?;
+    validate_segmented_session_append_boundary_locked(session_dir, &metadata)?;
     let mut lines = Vec::new();
     for event in events {
         let assigned_sequence = metadata.next_global_seq;
@@ -83,15 +83,115 @@ pub(in crate::workspace_store) fn append_segmented_session_message_update(
     let _append_guard = segmented_append_file_io_lock()
         .lock()
         .map_err(to_store_error)?;
-    repair_segmented_session_jsonl_files_if_needed_locked(session_dir)?;
     // metadata is the single checkpoint snapshot used by both the decision and the selected write path.
     // metadata 是决策与选定写入路径共同使用的唯一检查点快照。
     let mut metadata = read_session_metadata(session_dir)?;
+    validate_segmented_session_append_boundary_locked(session_dir, &metadata)?;
     if segmented_message_tail_matches(&metadata, messages)? {
         append_segmented_session_message_tail_locked(session_dir, messages, &mut metadata)
     } else {
         rewrite_segmented_session_message_records_locked(session_dir, messages, &mut metadata)
     }
+}
+
+/// Appends only one exact stable transcript suffix after validating its persisted prefix checkpoint.
+/// 校验已持久化前缀检查点后，仅追加一个精确的稳定转录后缀。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the exact owning session directory.
+/// `session_dir` 是精确的所属会话目录。
+/// `expected_message_count` is the caller-observed persisted prefix length.
+/// `expected_message_count` 是调用方观察到的已持久化前缀长度。
+/// `previous_message` is the exact final row of that prefix when the prefix is non-empty.
+/// `previous_message` 是非空前缀的精确末行。
+/// `tail_messages` contains only new immutable rows beginning at `expected_message_count`.
+/// `tail_messages` 仅包含从 `expected_message_count` 开始的新不可变行。
+///
+/// # Returns
+/// 返回值
+/// The exact appended event lines, or an explicit stale/corrupt-boundary error without historical scanning.
+/// 返回精确追加的事件行；若边界过期或损坏，则在不扫描历史的情况下返回显式错误。
+pub(in crate::workspace_store) fn append_segmented_session_message_tail_update(
+    session_dir: &Path,
+    expected_message_count: usize,
+    previous_message: Option<&SessionMessageEntry>,
+    tail_messages: &[SessionMessageEntry],
+) -> Result<Vec<SegmentedSessionEventLine>, String> {
+    let _append_guard = segmented_append_file_io_lock()
+        .lock()
+        .map_err(to_store_error)?;
+    let mut metadata = read_session_metadata(session_dir)?;
+    validate_segmented_session_append_boundary_locked(session_dir, &metadata)?;
+    let persisted_message_count =
+        usize::try_from(metadata.message_count).map_err(to_store_error)?;
+    if persisted_message_count != expected_message_count {
+        return Err(format!(
+            "Segmented transcript checkpoint advanced from {expected_message_count} to {persisted_message_count}; retry from the exact latest checkpoint."
+        ));
+    }
+    if expected_message_count == 0 {
+        if metadata.last_message_id.is_some() || metadata.last_message_fingerprint.is_some() {
+            return Err(String::from(
+                "Empty segmented transcript checkpoint retains a last-message identity; load-time repair is required.",
+            ));
+        }
+    } else {
+        let previous_message = previous_message.ok_or_else(|| {
+            format!(
+                "Segmented transcript checkpoint {expected_message_count} requires its exact previous message."
+            )
+        })?;
+        let previous_index = expected_message_count - 1;
+        let previous_message_id = stable_segmented_message_id(previous_index, previous_message);
+        let previous_message_fingerprint = segmented_message_fingerprint(previous_message)?;
+        if metadata.last_message_id.as_deref() != Some(previous_message_id.as_str())
+            || metadata.last_message_fingerprint.as_deref()
+                != Some(previous_message_fingerprint.as_str())
+        {
+            return Err(format!(
+                "Segmented transcript checkpoint {expected_message_count} no longer matches the exact retained prefix boundary."
+            ));
+        }
+    }
+    if tail_messages.is_empty() {
+        return Ok(Vec::new());
+    }
+    let next_message_count = expected_message_count
+        .checked_add(tail_messages.len())
+        .ok_or_else(|| String::from("Segmented transcript message count overflowed."))?;
+    let mut new_message_ids = BTreeSet::new();
+    for (offset, message) in tail_messages.iter().enumerate() {
+        let message_index = expected_message_count
+            .checked_add(offset)
+            .ok_or_else(|| String::from("Segmented transcript message index overflowed."))?;
+        let message_id = stable_segmented_message_id(message_index, message);
+        if !new_message_ids.insert(message_id.clone()) {
+            return Err(format!(
+                "Segmented transcript tail rejected duplicate message `{message_id}` at index {message_index}."
+            ));
+        }
+    }
+    let turn_indexes = assign_segmented_tail_message_turn_indexes(&metadata, tail_messages);
+    let mut events = tail_messages
+        .iter()
+        .enumerate()
+        .zip(turn_indexes)
+        .map(|((offset, message), turn_index)| {
+            segmented_event_input_from_message(expected_message_count + offset, message, turn_index)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    backfill_tool_detail_ref_sequences(&mut events, metadata.next_global_seq);
+    let appended_lines = append_events_with_metadata(session_dir, &mut metadata, &events)?;
+    let final_index = next_message_count - 1;
+    let final_message = tail_messages
+        .last()
+        .expect("non-empty tail guarantees a final message");
+    metadata.message_count = next_message_count as u64;
+    metadata.last_message_id = Some(stable_segmented_message_id(final_index, final_message));
+    metadata.last_message_fingerprint = Some(segmented_message_fingerprint(final_message)?);
+    write_metadata(session_dir, &metadata)?;
+    Ok(appended_lines)
 }
 
 /// Appends the new portion of a transcript whose persisted boundary was already verified under the append lock.
@@ -314,52 +414,66 @@ pub(in crate::workspace_store) fn truncate_segmented_session_before_message(
     let _guard = segmented_append_file_io_lock()
         .lock()
         .map_err(to_store_error)?;
-    repair_segmented_session_jsonl_files_if_needed_locked(session_dir)?;
     let mut metadata = read_session_metadata(session_dir)?;
-    let mut retained_segment_lines: Vec<(String, Vec<SegmentedSessionEventLine>)> = Vec::new();
-    let mut found_cutoff = false;
-    let mut latest_rollback_seq = None;
+    validate_segmented_session_append_boundary_locked(session_dir, &metadata)?;
+    // cutoffMessageIndex is exact because retainedMessages contains every row strictly before the selected prompt.
+    // cutoffMessageIndex 是精确索引，因为 retainedMessages 包含所选提示词之前的全部消息行。
+    let cutoff_message_index = u64::try_from(retained_messages.len()).map_err(to_store_error)?;
+    if cutoff_message_index >= metadata.message_count {
+        return Err(String::from("ERR_USER_PROMPT_EDIT_NOT_FOUND"));
+    }
     let original_segments = metadata.segments.clone();
-    for segment in &original_segments {
-        let segment_path = session_dir.join(&segment.file);
-        let lines = read_segment_event_lines(&segment_path)?;
-        let mut retained_lines = Vec::new();
-        if !found_cutoff {
-            for line in lines {
-                if segmented_line_message_id(&line) == Some(message_id) {
-                    found_cutoff = true;
-                    break;
-                }
-                if line.kind == SegmentedSessionEventKind::ThreadRolledBack {
-                    latest_rollback_seq = Some(line.seq);
-                }
-                retained_lines.push(line);
+    // targetSegmentPosition comes from metadata populated during normal hydration; no historical segment probe is allowed here.
+    // targetSegmentPosition 来自正常水合期间填充的元数据；此处禁止探测历史分段。
+    let target_segment_position = original_segments
+        .iter()
+        .position(|segment| {
+            segment
+                .first_message_index
+                .zip(segment.last_message_index)
+                .is_some_and(|(first, last)| {
+                    first <= cutoff_message_index && cutoff_message_index <= last
+                })
+        })
+        .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_DISPLAY_LOCATOR_MISSING"))?;
+    let target_segment = &original_segments[target_segment_position];
+    let target_segment_path = session_dir.join(&target_segment.file);
+    let target_lines = read_segment_event_lines(&target_segment_path)?;
+    let mut retained_target_lines = Vec::new();
+    let mut found_cutoff = false;
+    for line in target_lines {
+        if line.payload.get("message_index").and_then(Value::as_u64) == Some(cutoff_message_index) {
+            if segmented_line_message_id(&line) != Some(message_id) {
+                return Err(String::from(
+                    "ERR_USER_PROMPT_EDIT_DISPLAY_LOCATOR_MISMATCH",
+                ));
             }
-        }
-        if !retained_lines.is_empty() {
-            retained_segment_lines.push((segment.file.clone(), retained_lines));
-        }
-        if found_cutoff {
+            found_cutoff = true;
             break;
         }
+        retained_target_lines.push(line);
     }
     if !found_cutoff {
         return Err(String::from("ERR_USER_PROMPT_EDIT_NOT_FOUND"));
     }
-    let mut retained_segments = Vec::new();
-    for (file, retained_lines) in &retained_segment_lines {
-        let segment_path = session_dir.join(file);
-        write_json_lines_file_atomic(&segment_path, retained_lines)?;
-        retained_segments.push(rebuild_segment_metadata(file, retained_lines)?);
+    let mut retained_segments = original_segments[..target_segment_position].to_vec();
+    if retained_target_lines.is_empty() {
+        if target_segment_path.exists() {
+            fs::remove_file(&target_segment_path).map_err(to_store_error)?;
+        }
+    } else {
+        write_json_lines_file_atomic(&target_segment_path, &retained_target_lines)?;
+        retained_segments.push(rebuild_segment_metadata(
+            &target_segment.file,
+            &retained_target_lines,
+        )?);
     }
-    for segment in original_segments.iter().filter(|segment| {
-        !retained_segment_lines
-            .iter()
-            .any(|(file, _)| file == &segment.file)
-    }) {
+    // Every removed tail file comes from the exact retained metadata list; directory enumeration is forbidden.
+    // 每个被移除的尾部文件都来自精确保留元数据列表；禁止枚举目录。
+    for segment in original_segments.iter().skip(target_segment_position + 1) {
         let segment_path = session_dir.join(&segment.file);
         if segment_path.exists() {
-            let _ = fs::remove_file(segment_path);
+            fs::remove_file(segment_path).map_err(to_store_error)?;
         }
     }
     if retained_segments.is_empty() {
@@ -377,14 +491,15 @@ pub(in crate::workspace_store) fn truncate_segmented_session_before_message(
             .last()
             .map(|segment| segment.file.clone())
             .unwrap_or_else(|| segment_file_name(1));
-        metadata.next_global_seq = retained_segment_lines
-            .iter()
-            .flat_map(|(_, lines)| lines.iter().map(|line| line.seq))
-            .max()
+        metadata.next_global_seq = retained_segments
+            .last()
+            .and_then(|segment| segment.last_seq)
             .map(|seq| seq.saturating_add(1))
-            .unwrap_or(1);
+            .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_DISPLAY_LOCATOR_MISSING"))?;
         metadata.segments = retained_segments;
-        metadata.latest_rollback_seq = latest_rollback_seq;
+        metadata.latest_rollback_seq = metadata
+            .latest_rollback_seq
+            .filter(|rollback_seq| *rollback_seq < metadata.next_global_seq);
     }
     metadata.updated_at = current_unix_millis_text();
     if let Some(anchor_message_id) = metadata

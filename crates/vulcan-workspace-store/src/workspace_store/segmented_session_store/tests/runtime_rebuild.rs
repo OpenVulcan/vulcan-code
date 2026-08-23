@@ -407,25 +407,35 @@ fn runtime_log_read_rejects_incorrect_tool_batch_completion() {
         test_session_request(SegmentPolicy::default()),
     )
     .expect("create session");
-    // state creates one open call whose production completion must declare one call and zero results.
-    // state 创建一个开放调用，其生产完成事件必须声明一个调用和零个结果。
+    // state creates one completed call whose production summary must declare one call and one result.
+    // state 创建一个已完成调用，其生产汇总必须声明一个调用和一个结果。
     let state = vulcan_context::protocol::SessionConversationState {
-        messages: vec![vulcan_context::protocol::SessionConversationMessage {
-            id: String::from("assistant-1"),
-            payload: vulcan_context::protocol::SessionConversationPayload::Assistant {
-                text: String::new(),
-                reasoning: String::new(),
-                provider_message_id: None,
-                provider_message_state: None,
-                usage: None,
-                tool_calls: vec![vulcan_context::protocol::SessionConversationToolCall {
-                    id: String::from("call-a"),
-                    tool_call_id: Some(String::from("call-a")),
-                    tool_name: String::from("demo"),
-                    arguments: json!({}),
-                }],
+        messages: vec![
+            vulcan_context::protocol::SessionConversationMessage {
+                id: String::from("assistant-1"),
+                payload: vulcan_context::protocol::SessionConversationPayload::Assistant {
+                    text: String::new(),
+                    reasoning: String::new(),
+                    provider_message_id: None,
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: vec![vulcan_context::protocol::SessionConversationToolCall {
+                        id: String::from("call-a"),
+                        tool_call_id: Some(String::from("call-a")),
+                        tool_name: String::from("demo"),
+                        arguments: json!({}),
+                    }],
+                },
             },
-        }],
+            vulcan_context::protocol::SessionConversationMessage {
+                id: String::from("result-a"),
+                payload: vulcan_context::protocol::SessionConversationPayload::ToolResult {
+                    tool_call_id: Some(String::from("call-a")),
+                    is_error: false,
+                    text: String::from("done"),
+                },
+            },
+        ],
         records: Vec::new(),
         continuation: Default::default(),
     };

@@ -44,6 +44,7 @@ import { metadataValue } from "@/components/conversation/conversation-metadata";
 import type {
   CommandSessionSummary,
   ComposerAttachmentSummary,
+  ConversationMessage,
 } from "@/types";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -536,7 +537,7 @@ export function ConversationProcessGroup(props: {
   onCopyText: (text: string) => Promise<void> | void;
   // Opens one backend-backed user prompt edit flow.
   // 打开单个后端支持的用户提示词编辑流程。
-  onEditUserPrompt?: (conversationId: string, messageId: string) => Promise<void> | void;
+  onEditUserPrompt?: (message: ConversationMessage, visiblePrompt: string) => Promise<void> | void;
   // Whether user prompt editing is locked by the current runtime boundary.
   // 用户提示词编辑是否被当前运行时边界锁定。
   userPromptEditDisabled?: boolean;
@@ -838,7 +839,7 @@ export function ConversationRenderItemView(props: {
   onCopyText: (text: string) => Promise<void> | void;
   // Opens one backend-backed user prompt edit flow.
   // 打开单个后端支持的用户提示词编辑流程。
-  onEditUserPrompt?: (conversationId: string, messageId: string) => Promise<void> | void;
+  onEditUserPrompt?: (message: ConversationMessage, visiblePrompt: string) => Promise<void> | void;
   // Whether user prompt editing is locked by the current runtime boundary.
   // 用户提示词编辑是否被当前运行时边界锁定。
   userPromptEditDisabled?: boolean;
@@ -1026,7 +1027,7 @@ export function ConversationRenderItemView(props: {
             <button
               aria-label={t("conversation.userPrompt.edit")}
               className="user-message-copy"
-              onClick={() => void props.onEditUserPrompt?.(props.item.userMessage!.conversationId, props.item.userMessage!.id)}
+              onClick={() => void props.onEditUserPrompt?.(props.item.userMessage!, userBody)}
               title={t("conversation.userPrompt.edit")}
               type="button"
             >

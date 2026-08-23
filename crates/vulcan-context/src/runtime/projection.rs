@@ -386,13 +386,18 @@ impl<'a> RuntimeLogProjectionBuilder<'a> {
                 })?;
         }
         for batch in closed_batches.into_values() {
+            // An incomplete batch remains open and must not emit a mutable completion summary.
+            // 未完成批次保持打开状态，不得发出后续会变化的完成汇总。
+            if batch.tool_call_count != batch.tool_result_count {
+                continue;
+            }
             self.append(RuntimeLogEvent::ToolBatchCompleted(
                 RuntimeToolBatchCompletedEvent {
                     turn_id: None,
                     tool_batch_id: batch.tool_batch_id,
                     tool_call_count: batch.tool_call_count,
                     tool_result_count: batch.tool_result_count,
-                    complete: batch.tool_call_count == batch.tool_result_count,
+                    complete: true,
                 },
             ))?;
         }

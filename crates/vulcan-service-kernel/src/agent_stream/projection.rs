@@ -585,6 +585,9 @@ pub(crate) fn seal_stream_content_kind(
 /// Correlates the first provider semantic delta with one accepted browser submission.
 /// 将首个 Provider 语义增量与一次已接纳浏览器提交关联。
 struct FirstSemanticSubmissionDiagnostic {
+    /// Stable canonical user-record identifier mirrored into visible transcript metadata.
+    /// 镜像到可见转录元数据的稳定规范用户记录标识。
+    user_record_id: String,
     /// Stable browser-generated submission identifier.
     /// 浏览器生成的稳定提交标识。
     client_submission_id: String,
@@ -601,21 +604,15 @@ struct FirstSemanticSubmissionDiagnostic {
 ///
 /// # Parameters
 /// 参数
-/// `workspace` owns the visible user-record projection.
-/// `workspace` 持有可见用户记录投影。
 /// `runtime_state` owns the canonical record receiving the provider delta.
 /// `runtime_state` 持有接收 Provider 增量的规范记录。
-/// `session_id` identifies the exact conversation.
-/// `session_id` 标识精确会话。
 ///
 /// # Returns
 /// 返回值
 /// Returns correlation timing exactly once for the latest user record, or `None` when it is not a browser submission.
 /// 对最近用户记录仅返回一次关联计时；若其不是浏览器提交则返回 `None`。
 fn mark_first_semantic_submission_observed(
-    workspace: &mut WorkspaceSnapshot,
     runtime_state: &mut SessionRuntimeStateEntry,
-    session_id: SessionId,
 ) -> Option<FirstSemanticSubmissionDiagnostic> {
     let latest_user_record = runtime_state
         .conversation_state
@@ -646,13 +643,42 @@ fn mark_first_semantic_submission_observed(
         String::from("client_submission_first_semantic_observed"),
         serde_json::Value::Bool(true),
     );
+    Some(FirstSemanticSubmissionDiagnostic {
+        user_record_id,
+        client_submission_id,
+        target,
+        elapsed_ms: current_unix_millis_value().saturating_sub(accepted_at_ms),
+    })
+}
+
+/// Mirrors one canonical first-semantic marker into its visible transcript record.
+/// 将一条规范首语义标记镜像到对应的可见转录记录。
+///
+/// # Parameters
+/// 参数
+/// `workspace` owns the visible user-record projection.
+/// `workspace` 持有可见用户记录投影。
+/// `session_id` identifies the exact conversation.
+/// `session_id` 标识精确会话。
+/// `diagnostic` carries the stable canonical user-record identity already marked once.
+/// `diagnostic` 携带已经标记一次的稳定规范用户记录身份。
+///
+/// # Returns
+/// 返回值
+/// This function returns no value after best-effort metadata mirroring.
+/// 此函数尽力完成元数据镜像后不返回值。
+fn mirror_first_semantic_submission_observed(
+    workspace: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    diagnostic: &FirstSemanticSubmissionDiagnostic,
+) {
     if let Some(visible_metadata) = workspace
         .session_messages
         .get_mut(&session_id)
         .and_then(|messages| {
             messages
                 .iter_mut()
-                .find(|message| message.id == user_record_id)
+                .find(|message| message.id == diagnostic.user_record_id)
         })
         .and_then(|message| message.metadata.as_mut())
         .and_then(serde_json::Value::as_object_mut)
@@ -662,11 +688,6 @@ fn mark_first_semantic_submission_observed(
             serde_json::Value::Bool(true),
         );
     }
-    Some(FirstSemanticSubmissionDiagnostic {
-        client_submission_id,
-        target,
-        elapsed_ms: current_unix_millis_value().saturating_sub(accepted_at_ms),
-    })
 }
 
 /// Appends or extends one streaming transcript record.
@@ -703,11 +724,12 @@ fn append_stream_delta_record(
             _ => SessionRunPhase::Requesting,
         };
         let (projected_entry, is_new_message, first_semantic_diagnostic) = {
-            let mut runtime_state = workspace
+            // runtime_state is mutated in place because the append reducer validates every fallible identity before mutation.
+            // runtime_state 原地更新，因为追加 reducer 会在变更前校验所有可失败身份。
+            let runtime_state = workspace
                 .session_runtime_state
-                .get(&session_id)
-                .cloned()
-                .unwrap_or_else(|| SessionRuntimeStateEntry {
+                .entry(session_id)
+                .or_insert_with(|| SessionRuntimeStateEntry {
                     updated_at: now.clone(),
                     ..SessionRuntimeStateEntry::default()
                 });
@@ -716,7 +738,7 @@ fn append_stream_delta_record(
             let previous_record_id = record_id_slot.clone();
             let mut record_id_draft = previous_record_id.clone();
             append_stream_delta_record_to_state(
-                &mut runtime_state,
+                runtime_state,
                 session_id,
                 &now,
                 &mut record_id_draft,
@@ -741,17 +763,17 @@ fn append_stream_delta_record(
                     SessionMessageRecordKind::ThinkingOutput
                         | SessionMessageRecordKind::AssistantOutput
                 ) {
-                mark_first_semantic_submission_observed(workspace, &mut runtime_state, session_id)
+                mark_first_semantic_submission_observed(runtime_state)
             } else {
                 None
             };
             runtime_state.updated_at = now.clone();
-            workspace
-                .session_runtime_state
-                .insert(session_id, runtime_state);
             *record_id_slot = record_id_draft;
             (projected_entry, is_new_message, first_semantic_diagnostic)
         };
+        if let Some(diagnostic) = first_semantic_diagnostic.as_ref() {
+            mirror_first_semantic_submission_observed(workspace, session_id, diagnostic);
+        }
         workspace.session_run_phases.insert(session_id, run_phase);
         sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
         let Some(projected_entry) = projected_entry else {
@@ -1280,6 +1302,63 @@ pub(crate) fn commit_workspace_snapshot_and_emit_session_phase_delta_if_prompt_o
     )
 }
 
+/// Moves one exact prompt-session slice into the retained workspace without replacing unrelated state.
+/// 把单个精确提示词会话切片移入保留工作区，且不替换无关状态。
+///
+/// # Parameters
+/// 参数
+/// `retained` is the authoritative full workspace borrowed under the service-state lock.
+/// `retained` 是在服务状态锁下借用的权威完整工作区。
+/// `candidate` owns the one-session detached preparation slice.
+/// `candidate` 持有单会话分离准备切片。
+/// `session_id` identifies the only retained keys allowed to change.
+/// `session_id` 标识唯一允许变化的保留键。
+/// `run_phase` is the authoritative phase committed with the slice.
+/// `run_phase` 是随切片提交的权威阶段。
+///
+/// # Returns
+/// 返回值
+/// Success after ownership transfer, or an explicit missing-session contract error.
+/// 所有权转移完成后返回成功，否则返回明确的会话缺失契约错误。
+fn merge_prompt_session_slice_into_retained_workspace(
+    retained: &mut WorkspaceSnapshot,
+    mut candidate: WorkspaceSnapshot,
+    session_id: SessionId,
+    run_phase: SessionRunPhase,
+) -> Result<(), String> {
+    let candidate_position = candidate
+        .sessions
+        .iter()
+        .position(|session| session.id == session_id)
+        .ok_or_else(|| format!("prompt preparation candidate is missing session `{session_id}`"))?;
+    let session = candidate.sessions.remove(candidate_position);
+    let retained_session = workspace_session_summary_for_session_mut(retained, session_id)
+        .ok_or_else(|| {
+            format!("prompt preparation owner session `{session_id}` left retained state")
+        })?;
+    *retained_session = session;
+    if let Some(messages) = candidate.session_messages.remove(&session_id) {
+        retained.session_messages.insert(session_id, messages);
+    }
+    if let Some(compactions) = candidate.session_compactions.remove(&session_id) {
+        retained.session_compactions.insert(session_id, compactions);
+    }
+    let runtime_state = candidate
+        .session_runtime_state
+        .remove(&session_id)
+        .ok_or_else(|| {
+            format!("prompt preparation candidate is missing runtime state for `{session_id}`")
+        })?;
+    retained
+        .session_runtime_state
+        .insert(session_id, runtime_state);
+    retained.session_run_phases.insert(session_id, run_phase);
+    if candidate.hydrated_session_ids.contains(&session_id) {
+        retained.hydrated_session_ids.insert(session_id);
+    }
+    Ok(())
+}
+
 /// Commits and emits one phase delta with an optional exact prompt-preparation owner fence.
 /// 使用可选的精确提示词准备所有者栅栏提交并发送一条阶段增量。
 ///
@@ -1341,7 +1420,20 @@ fn commit_workspace_snapshot_and_emit_session_phase_delta_internal(
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         let generation = guard.workbench_generation;
         guard.workbench.revision = generation;
-        guard.workspace_snapshot = Some(workspace_snapshot);
+        if expected_owner.is_some() {
+            let retained_workspace = guard
+                .workspace_snapshot
+                .as_mut()
+                .ok_or_else(|| String::from("retained workspace is no longer initialized"))?;
+            merge_prompt_session_slice_into_retained_workspace(
+                retained_workspace,
+                workspace_snapshot,
+                session_id,
+                run_phase,
+            )?;
+        } else {
+            guard.workspace_snapshot = Some(workspace_snapshot);
+        }
         for conversation in &mut guard.workbench.conversations {
             if conversation.id == conversation_id {
                 conversation.run_phase = run_phase.to_string();
@@ -1447,21 +1539,23 @@ fn emit_context_injection_changed_delta_internal(
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        guard
-            .controller_runtime
-            .clone()
-            .map(|controller_runtime| (controller_runtime, guard.vmm_controller_registry.clone()))
+        if let Some(controller_runtime) = guard.controller_runtime.clone() {
+            let session_directory = require_segmented_session_directory_for_retained_session(
+                &guard,
+                &controller_runtime.data_root,
+                session_id,
+            )?;
+            Some((session_directory, guard.vmm_controller_registry.clone()))
+        } else {
+            None
+        }
     };
     // vmm_session_memory is a read-only controller projection for this exact delta.
     // vmm_session_memory 是用于本次精确增量的只读控制器投影。
-    let vmm_session_memory = if let Some((controller_runtime, registry)) = vmm_runtime_context {
+    let vmm_session_memory = if let Some((session_directory, registry)) = vmm_runtime_context {
         Some(
             registry
-                .get_or_open(
-                    &controller_runtime.data_root,
-                    session_id,
-                    &current_unix_millis_text(),
-                )?
+                .get_or_open(&session_directory, session_id, &current_unix_millis_text())?
                 .snapshot()?,
         )
     } else {
@@ -1671,22 +1765,68 @@ pub(crate) fn build_conversation_messages_patched_delta(
     })
 }
 
-/// Builds a runtime-event message patch with the matching UI phase applied atomically.
-/// 构建运行时事件消息补丁，并将匹配的界面阶段原子写入同一补丁。
-fn build_runtime_event_conversation_messages_patched_delta(
+/// Builds one exact upsert-only runtime-event patch from reducer-owned changed rows.
+/// 从归约器持有的变化行构建一个精确的仅原位写入运行时事件补丁。
+///
+/// # Parameters
+/// 参数
+/// `conversation_id` identifies the exact visible conversation.
+/// `conversation_id` 标识精确的可见会话。
+/// `changed_messages` contains only rows created or updated by the current event.
+/// `changed_messages` 仅包含当前事件创建或更新的行。
+/// `event` determines the atomic visible run phase.
+/// `event` 决定原子可见运行阶段。
+///
+/// # Returns
+/// 返回值
+/// Returns no patch for an empty change set; otherwise returns exact upserts without order replacement.
+/// 变化集为空时不返回补丁；否则返回不替换顺序的精确写入项。
+fn build_exact_runtime_event_conversation_messages_patched_delta(
     conversation_id: &str,
-    before_messages: &[ConversationMessage],
-    after_messages: &[ConversationMessage],
+    changed_messages: &[ConversationMessage],
     event: &RuntimeEvent,
 ) -> Option<ConversationMessagesPatchedDelta> {
-    let mut message_patch = build_conversation_messages_patched_delta(
-        conversation_id,
-        before_messages,
-        after_messages,
-    )?;
-    message_patch.run_phase =
-        runtime_event_projection_run_phase(event).map(|phase| phase.to_string());
-    Some(message_patch)
+    if changed_messages.is_empty() {
+        return None;
+    }
+    Some(ConversationMessagesPatchedDelta {
+        conversation_id: conversation_id.to_string(),
+        upsert_messages: changed_messages.to_vec(),
+        remove_message_ids: Vec::new(),
+        message_order: None,
+        run_phase: runtime_event_projection_run_phase(event).map(|phase| phase.to_string()),
+    })
+}
+
+/// Applies exact conversation-message upserts to the retained workbench window in place.
+/// 将精确会话消息写入项原位应用到保留工作台窗口。
+///
+/// # Parameters
+/// 参数
+/// `messages` is the retained cross-conversation workbench window.
+/// `messages` 是跨会话保留的工作台窗口。
+/// `conversation_id` identifies the exact owning conversation.
+/// `conversation_id` 标识精确所属会话。
+/// `upsert_messages` contains only current-event rows to replace or append.
+/// `upsert_messages` 仅包含当前事件需要替换或追加的行。
+fn upsert_conversation_messages_in_workbench_window(
+    messages: &mut Vec<ConversationMessage>,
+    conversation_id: &str,
+    upsert_messages: Vec<ConversationMessage>,
+) {
+    for message in upsert_messages {
+        if let Some(index) = messages.iter().rposition(|existing| {
+            existing.conversation_id == conversation_id && existing.id == message.id
+        }) {
+            messages[index] = message;
+            continue;
+        }
+        let insert_index = messages
+            .iter()
+            .rposition(|existing| existing.conversation_id == conversation_id)
+            .map_or(messages.len(), |index| index + 1);
+        messages.insert(insert_index, message);
+    }
 }
 
 /// Keeps visible streaming rows ahead of a newly projected runtime tool event.
@@ -1700,6 +1840,7 @@ fn build_runtime_event_conversation_messages_patched_delta(
 /// `before_messages` 是运行时事件前的精确可见顺序，`projected_messages` 包含稳定保留记录与新投影工具记录。
 /// 返回结果会原位替换匹配的稳定记录，仅保留未进入保留存储的临时思考/Assistant 记录，并将真正新增的运行时记录
 /// 追加到此前已经可见的全部内容之后。
+#[cfg(test)]
 fn merge_visible_streaming_rows_with_runtime_projection(
     before_messages: &[ConversationMessage],
     projected_messages: &[ConversationMessage],
@@ -1741,6 +1882,7 @@ fn merge_visible_streaming_rows_with_runtime_projection(
 
 /// Returns whether one visible row is a transient stream that stable tool projection intentionally omits.
 /// 返回单条可见记录是否为稳定工具投影有意省略的临时流记录。
+#[cfg(test)]
 fn runtime_projection_retains_visible_streaming_row(message: &ConversationMessage) -> bool {
     matches!(
         message.record_kind.as_deref(),
@@ -1855,11 +1997,11 @@ struct RuntimeEventWorkspaceDraft {
     /// Parent runtime state after record, todo-list, and plan projection.
     /// 完成记录、待办列表与计划投影后的父会话运行态。
     runtime_state: SessionRuntimeStateEntry,
-    /// Replacement parent transcript when stable runtime records changed.
-    /// 稳定运行时记录变化时使用的父会话替换转录。
-    parent_messages: Option<Vec<SessionMessageEntry>>,
-    /// Provider-visible parent projection derived from the replacement transcript.
-    /// 从替换转录派生的 Provider 可见父会话投影。
+    /// Exact parent transcript entries created or updated by this event.
+    /// 本事件创建或更新的精确父会话转录项。
+    parent_message_entries: Vec<SessionMessageEntry>,
+    /// Visible parent rows derived only from the exact changed entries.
+    /// 仅从精确变化项派生的父会话可见行。
     projected_parent_messages: Vec<ConversationMessage>,
     /// Optional child transcript append and its projected surface rows.
     /// 可选的子会话转录追加及其表面投影行。
@@ -1878,11 +2020,11 @@ struct RuntimeEventChildTranscriptDraft {
     /// Child task session identity.
     /// 子任务会话身份。
     task_id: SessionId,
-    /// Complete child display transcript after append.
-    /// 追加后的完整子会话显示转录。
-    messages: Vec<SessionMessageEntry>,
-    /// Projected child workbench messages.
-    /// 投影后的子会话工作台消息。
+    /// Exact child display entry appended by this event.
+    /// 本事件追加的精确子会话展示项。
+    message: SessionMessageEntry,
+    /// Projected child workbench rows for the exact appended entry.
+    /// 精确追加项对应的子会话工作台投影行。
     projected_messages: Vec<ConversationMessage>,
     /// Whether the child hydrated marker must remain set.
     /// 子会话水合标记是否必须保持置位。
@@ -1899,25 +2041,44 @@ impl RuntimeEventWorkspaceDraft {
     /// `workspace` 是接收已验证补丁的权威工作区。
     /// `session_id` identifies the parent session owning the runtime projection.
     /// `session_id` 标识持有运行时投影的父会话。
-    fn commit(&self, workspace: &mut WorkspaceSnapshot, session_id: SessionId) {
+    fn commit(self, workspace: &mut WorkspaceSnapshot, session_id: SessionId) {
+        let parent_hydrated = runtime_state_has_concrete_conversation_context(&self.runtime_state);
         workspace
             .session_runtime_state
-            .insert(session_id, self.runtime_state.clone());
-        if let Some(messages) = self.parent_messages.as_ref() {
-            workspace
-                .session_messages
-                .insert(session_id, messages.clone());
-            set_workspace_session_hydrated_marker(
-                workspace,
-                session_id,
-                runtime_state_has_concrete_conversation_context(&self.runtime_state),
-            );
+            .insert(session_id, self.runtime_state);
+        if !self.parent_message_entries.is_empty() {
+            let messages = workspace.session_messages.entry(session_id).or_default();
+            upsert_session_message_entries(messages, self.parent_message_entries);
+            set_workspace_session_hydrated_marker(workspace, session_id, parent_hydrated);
         }
-        if let Some(child) = self.child_projection.as_ref() {
-            workspace
-                .session_messages
-                .insert(child.task_id, child.messages.clone());
+        if let Some(child) = self.child_projection {
+            upsert_session_message_entries(
+                workspace.session_messages.entry(child.task_id).or_default(),
+                vec![child.message],
+            );
             set_workspace_session_hydrated_marker(workspace, child.task_id, child.hydrated);
+        }
+    }
+}
+
+/// Upserts exact runtime-event transcript entries without cloning the retained message prefix.
+/// 在不克隆保留消息前缀的情况下原位写入精确运行时事件转录项。
+///
+/// # Parameters
+/// 参数
+/// `messages` is the retained flat transcript for one exact session.
+/// `messages` 是单个精确会话的保留平面转录。
+/// `entries` contains only exact rows created or changed by the current event.
+/// `entries` 仅包含当前事件创建或修改的精确行。
+fn upsert_session_message_entries(
+    messages: &mut Vec<SessionMessageEntry>,
+    entries: Vec<SessionMessageEntry>,
+) {
+    for entry in entries {
+        if let Some(index) = messages.iter().rposition(|message| message.id == entry.id) {
+            messages[index] = entry;
+        } else {
+            messages.push(entry);
         }
     }
 }
@@ -1941,8 +2102,8 @@ fn set_workspace_session_hydrated_marker(
 ///
 /// # Parameters
 /// 参数
-/// `workspace` is the immutable authoritative workspace used as the draft baseline.
-/// `workspace` 是作为草稿基线的不可变权威工作区。
+/// `workspace` temporarily transfers ownership of the exact parent runtime row into the draft.
+/// `workspace` 将精确父会话运行态行的所有权临时转移到草稿中。
 /// `session_id` identifies the parent runtime session.
 /// `session_id` 标识父运行时会话。
 /// `conversation_id` is the parent workbench conversation identity.
@@ -1957,48 +2118,41 @@ fn set_workspace_session_hydrated_marker(
 /// Returns the complete session-scoped patch, or an identity error without modifying workspace state.
 /// 返回完整会话级补丁；身份错误时返回错误且不修改工作区状态。
 fn build_runtime_event_workspace_draft(
-    workspace: &WorkspaceSnapshot,
+    workspace: &mut WorkspaceSnapshot,
     session_id: SessionId,
     conversation_id: &str,
     event: &RuntimeEvent,
     child_message: Option<(SessionId, SessionMessageEntry)>,
 ) -> Result<RuntimeEventWorkspaceDraft, String> {
     let now = current_unix_millis_text();
-    // runtime_state is detached from the parent session until every projection succeeds.
-    // runtime_state 与父会话分离，直到全部投影成功。
-    let mut runtime_state = workspace
+    // runtimeState moves the canonical transcript into the event draft instead of cloning its history.
+    // runtimeState 将规范转录移动到事件草稿中，而不是复制其历史。
+    let runtime_state = workspace
         .session_runtime_state
-        .get(&session_id)
-        .cloned()
+        .remove(&session_id)
         .unwrap_or_else(|| SessionRuntimeStateEntry {
             updated_at: now.clone(),
             ..SessionRuntimeStateEntry::default()
         });
-    let before_projection_records = runtime_state.conversation_state.records.clone();
-    let projection_changed =
-        append_runtime_event_projection_to_state(&mut runtime_state, session_id, &now, event)?;
-    let projection_entries = if projection_changed {
-        runtime_event_projection_entries_from_changed_records(
-            before_projection_records.as_slice(),
-            runtime_state.conversation_state.records.as_slice(),
-        )
-    } else {
-        Vec::new()
-    };
-    let parent_messages = (!projection_entries.is_empty()).then(|| {
-        merge_session_messages_with_runtime_event_entries(
-            workspace
-                .session_messages
-                .get(&session_id)
-                .map(Vec::as_slice)
-                .unwrap_or(&[]),
-            projection_entries.as_slice(),
-        )
-    });
-    let projected_parent_messages = parent_messages
-        .as_ref()
-        .map(|messages| conversation_messages_from_session(conversation_id, messages, false))
-        .unwrap_or_default();
+    // changedRecordIds comes from the reducer's exact correlation path, avoiding a clone and comparison of every historical record.
+    // changedRecordIds 来自归约器的精确关联路径，避免克隆并比较全部历史记录。
+    let (mut runtime_state, changed_record_ids) =
+        match append_runtime_event_projection_to_owned_state(runtime_state, session_id, &now, event)
+        {
+            Ok(projected) => projected,
+            Err((restored_runtime_state, error)) => {
+                workspace
+                    .session_runtime_state
+                    .insert(session_id, restored_runtime_state);
+                return Err(error);
+            }
+        };
+    let projection_entries = runtime_event_projection_entries_from_exact_record_ids(
+        runtime_state.conversation_state.records.as_slice(),
+        changed_record_ids.as_slice(),
+    );
+    let projected_parent_messages =
+        conversation_messages_from_session(conversation_id, projection_entries.as_slice(), false);
     let changed_todolist = todolist_state_from_tool_finished_event(event, &now)
         .filter(|todolist| runtime_state.todolist != *todolist);
     if let Some(todolist) = changed_todolist.as_ref() {
@@ -2016,31 +2170,33 @@ fn build_runtime_event_workspace_draft(
         runtime_state.updated_at = now;
     }
     let child_projection = child_message.and_then(|(task_id, message)| {
-        let mut messages = workspace
-            .session_messages
-            .get(&task_id)
-            .cloned()
-            .unwrap_or_default();
-        if messages.iter().any(|existing| existing.id == message.id) {
+        let messages = workspace.session_messages.get(&task_id);
+        if messages
+            .is_some_and(|messages| messages.iter().any(|existing| existing.id == message.id))
+        {
             return None;
         }
-        messages.push(message);
-        let projected_messages =
-            conversation_messages_from_session(&task_id.to_string(), messages.as_slice(), false);
+        // projectedMessages derives only the exact appended child row, never the retained child transcript.
+        // projectedMessages 仅从精确追加的子会话行派生，绝不复制已保留的子会话转录。
+        let projected_messages = conversation_messages_from_session(
+            &task_id.to_string(),
+            std::slice::from_ref(&message),
+            false,
+        );
         let hydrated = workspace
             .session_runtime_state
             .get(&task_id)
             .is_some_and(runtime_state_has_concrete_conversation_context);
         Some(RuntimeEventChildTranscriptDraft {
             task_id,
-            messages,
+            message,
             projected_messages,
             hydrated,
         })
     });
     Ok(RuntimeEventWorkspaceDraft {
         runtime_state,
-        parent_messages,
+        parent_message_entries: projection_entries,
         projected_parent_messages,
         child_projection,
         changed_todolist,
@@ -2392,48 +2548,15 @@ fn append_runtime_event_projection_with_authority(
         changed_todolist,
         changed_plan_mode,
         transcript_changed,
-        transcript_messages_for_persistence,
+        transcript_ready_for_persistence,
         child_transcript_for_persistence,
-        addon_task_projects,
-        addon_session,
         message_window_deltas,
     ) = commit_runtime_event_projection_state(state, session_id, authority, |guard| {
         let conversation_id = session_id.to_string();
-        let before_visible_messages: Vec<ConversationMessage> = guard
-            .workbench
-            .messages
-            .iter()
-            .filter(|message| message.conversation_id == conversation_id)
-            .cloned()
-            .collect();
-        let workspace = guard.workspace_snapshot.as_ref().ok_or_else(|| {
-            String::from("service is still starting; workspace snapshot is not ready")
-        })?;
-        let workspace_draft = build_runtime_event_workspace_draft(
-            workspace,
-            session_id,
-            &conversation_id,
-            event,
-            child_send_message,
-        )?;
-        let mut projected_messages = workspace_draft.projected_parent_messages.clone();
-        let transcript_changed = workspace_draft.parent_messages.is_some();
-        let changed_todolist = workspace_draft.changed_todolist.clone();
-        let changed_plan_mode = workspace_draft.changed_plan_mode.clone();
-        if changed_todolist.is_some() || changed_plan_mode.is_some() {
-            changed_addon_session_id = Some(session_id);
-        }
-        let transcript_messages_for_persistence = workspace_draft.parent_messages.clone();
-        let addon_session = workspace
-            .sessions
-            .iter()
-            .find(|session| session.id == session_id)
-            .cloned();
-        let addon_task_projects = if changed_todolist.is_some() || changed_plan_mode.is_some() {
-            workspace_task_projects_for_persistence(workspace)
-        } else {
-            Vec::new()
-        };
+        // nextGoalDispatchVersion is the last fallible preflight and must finish before the parent
+        // runtime row transfers ownership into the no-clone event draft.
+        // nextGoalDispatchVersion 是最后一项可失败预检，必须在父会话运行态行将所有权转移到
+        // 无复制事件草稿前完成。
         let next_goal_dispatch_version = goal_update
             .as_ref()
             .map(|_| {
@@ -2450,10 +2573,31 @@ fn append_runtime_event_projection_with_authority(
                     })
             })
             .transpose()?;
+        let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+        let mut workspace_draft = build_runtime_event_workspace_draft(
+            workspace,
+            session_id,
+            &conversation_id,
+            event,
+            child_send_message,
+        )?;
+        let projected_messages = std::mem::take(&mut workspace_draft.projected_parent_messages);
+        let transcript_changed = !workspace_draft.parent_message_entries.is_empty();
+        let changed_todolist = workspace_draft.changed_todolist.take();
+        let changed_plan_mode = workspace_draft.changed_plan_mode.take();
+        if changed_todolist.is_some() || changed_plan_mode.is_some() {
+            changed_addon_session_id = Some(session_id);
+        }
+        // transcriptReadyForPersistence keeps mutable request cards memory-only until the complete parallel batch closes.
+        // transcriptReadyForPersistence 在完整并行批次关闭前仅在内存中保留可变请求卡片。
+        let transcript_ready_for_persistence = transcript_changed
+            && runtime_event_closes_durable_transcript_batch(event, &workspace_draft.runtime_state);
         let child_message_projection = workspace_draft.child_projection.as_ref().map(|child| {
             (
                 child.task_id,
-                child.messages.clone(),
+                child.message.clone(),
                 child.projected_messages.clone(),
             )
         });
@@ -2462,16 +2606,10 @@ fn append_runtime_event_projection_with_authority(
         let child_transcript_for_persistence = workspace_draft
             .child_projection
             .as_ref()
-            .map(|child| (child.task_id, child.messages.clone()));
+            .map(|child| child.task_id);
         // No fallible operation may follow this commit boundary while the service lock is held.
         // 持有服务锁时，该提交边界之后不允许再出现可失败操作。
-        workspace_draft.commit(
-            guard
-                .workspace_snapshot
-                .as_mut()
-                .expect("workspace preflight guarantees commit target"),
-            session_id,
-        );
+        workspace_draft.commit(workspace, session_id);
         if let Some(goal_update) = goal_update {
             guard.session_goal_dispatch_versions.insert(
                 session_id,
@@ -2529,13 +2667,8 @@ fn append_runtime_event_projection_with_authority(
             workbench_should_emit_runtime_event_message_patch(guard, &conversation_id, session_id);
         let mut message_window_deltas = Vec::new();
         if surface_matches && transcript_changed {
-            projected_messages = merge_visible_streaming_rows_with_runtime_projection(
-                before_visible_messages.as_slice(),
-                projected_messages.as_slice(),
-            );
-            let message_patch = build_runtime_event_conversation_messages_patched_delta(
+            let message_patch = build_exact_runtime_event_conversation_messages_patched_delta(
                 &conversation_id,
-                before_visible_messages.as_slice(),
                 projected_messages.as_slice(),
                 event,
             );
@@ -2543,10 +2676,10 @@ fn append_runtime_event_projection_with_authority(
                 guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
                 let generation = guard.workbench_generation;
                 guard.workbench.revision = generation;
-                replace_conversation_messages_in_workbench_window(
+                upsert_conversation_messages_in_workbench_window(
                     &mut guard.workbench.messages,
                     &conversation_id,
-                    projected_messages.clone(),
+                    projected_messages,
                 );
                 message_window_deltas.push(WorkbenchDeltaEnvelope {
                     generation,
@@ -2554,30 +2687,29 @@ fn append_runtime_event_projection_with_authority(
                 });
             }
         }
-        if let Some((child_task_id, child_display_messages, child_projected_messages)) =
+        if let Some((child_task_id, child_display_message, child_projected_messages)) =
             child_message_projection
         {
             if let Some(cache_entry) = guard.subagent_surface_detail_cache.get_mut(&child_task_id) {
-                cache_entry.messages = child_display_messages;
+                upsert_session_message_entries(
+                    &mut cache_entry.messages,
+                    vec![child_display_message],
+                );
                 cache_entry.last_access_ms = current_unix_millis_value();
             }
             let child_conversation_id = child_task_id.to_string();
-            let before_child_visible_messages = guard
-                .workbench
-                .messages
-                .iter()
-                .filter(|message| message.conversation_id == child_conversation_id)
-                .cloned()
-                .collect::<Vec<_>>();
-            if let Some(message_patch) = build_conversation_messages_patched_delta(
-                &child_conversation_id,
-                before_child_visible_messages.as_slice(),
-                child_projected_messages.as_slice(),
-            ) {
+            if !child_projected_messages.is_empty() {
+                let message_patch = ConversationMessagesPatchedDelta {
+                    conversation_id: child_conversation_id.clone(),
+                    upsert_messages: child_projected_messages.clone(),
+                    remove_message_ids: Vec::new(),
+                    message_order: None,
+                    run_phase: None,
+                };
                 guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
                 let generation = guard.workbench_generation;
                 guard.workbench.revision = generation;
-                replace_conversation_messages_in_workbench_window(
+                upsert_conversation_messages_in_workbench_window(
                     &mut guard.workbench.messages,
                     &child_conversation_id,
                     child_projected_messages,
@@ -2592,10 +2724,8 @@ fn append_runtime_event_projection_with_authority(
             changed_todolist,
             changed_plan_mode,
             transcript_changed,
-            transcript_messages_for_persistence,
+            transcript_ready_for_persistence,
             child_transcript_for_persistence,
-            addon_task_projects,
-            addon_session,
             message_window_deltas,
         ))
     })?;
@@ -2634,29 +2764,41 @@ fn append_runtime_event_projection_with_authority(
     {
         eprintln!("[webui-service] runtime event addon delta emit failed after commit: {error}");
     }
-    if transcript_changed
-        && addon_session.is_some()
-        && let Some(messages) = transcript_messages_for_persistence
-    {
+    if transcript_changed && transcript_ready_for_persistence {
         spawn_session_transcript_messages_persist_task(
             state.clone(),
             controller_runtime.clone(),
             session_id,
-            messages,
             Some(String::from("runtime_event_projection")),
         );
     }
-    if let Some((child_task_id, messages)) = child_transcript_for_persistence {
+    if let Some(child_task_id) = child_transcript_for_persistence {
         spawn_session_transcript_messages_persist_task(
             state.clone(),
             controller_runtime.clone(),
             child_task_id,
-            messages,
             Some(String::from("subagent_send_message_projection")),
         );
     }
+    // addonSessionDirectory is resolved once by exact retained locator only when a tool changed addon state.
+    // addonSessionDirectory 仅在工具改变附属状态时通过精确保留定位信息解析一次。
+    let addon_session_directory = if changed_todolist.is_some() || changed_plan_mode.is_some() {
+        match require_segmented_session_directory_from_state(
+            state,
+            &controller_runtime.data_root,
+            session_id,
+        ) {
+            Ok(directory) => Some(directory),
+            Err(error) => {
+                eprintln!("[webui-service] runtime event addon target resolution failed: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
     if let Some(todolist) = changed_todolist
-        && let Some(session) = addon_session.as_ref()
+        && let Some(session_directory) = addon_session_directory.as_ref()
     {
         let updated_at = todolist
             .updated_at
@@ -2664,22 +2806,18 @@ fn append_runtime_event_projection_with_authority(
             .unwrap_or_else(current_unix_millis_text);
         let mut addon_state = SessionAddonState::new(session_id);
         let _ = addon_state.set_todolist(&todolist, updated_at);
-        spawn_session_addon_state_persist_task(
+        spawn_exact_session_addon_state_persist_task(
             app.clone(),
             state.clone(),
-            controller_runtime.clone(),
-            SessionAddonPersistenceScope {
-                task_projects: addon_task_projects.clone(),
-                session: session.clone(),
-                archived: false,
-            },
+            session_directory.clone(),
+            session_id,
             addon_state,
             vec![SessionAddonNamespace::Todolist],
             Some(String::from("todolist_tool")),
         );
     }
     if let Some(plan_mode) = changed_plan_mode
-        && let Some(session) = addon_session
+        && let Some(session_directory) = addon_session_directory
     {
         let updated_at = plan_mode
             .artifact
@@ -2694,15 +2832,11 @@ fn append_runtime_event_projection_with_authority(
             },
             updated_at,
         );
-        spawn_session_addon_state_persist_task(
+        spawn_exact_session_addon_state_persist_task(
             app.clone(),
             state.clone(),
-            controller_runtime,
-            SessionAddonPersistenceScope {
-                task_projects: addon_task_projects,
-                session,
-                archived: false,
-            },
+            session_directory,
+            session_id,
             addon_state,
             vec![SessionAddonNamespace::WorkMode],
             Some(String::from("submit_plan_tool")),
@@ -2738,6 +2872,35 @@ fn runtime_event_projects_conversation_transcript(event_kind: RuntimeEventKind) 
             | RuntimeEventKind::Retrying
             | RuntimeEventKind::ProviderRetryStatusChanged
     )
+}
+
+/// Reports whether one runtime event closes every mutable tool card in the current parallel batch.
+/// 判断一条运行事件是否关闭当前并行批次中的全部可变工具卡片。
+///
+/// # Parameters
+/// 参数
+/// `event` is the exact runtime lifecycle boundary being projected.
+/// `event` 是正在投影的精确运行时生命周期边界。
+/// `runtime_state` is the post-event session state that owns open request and call correlations.
+/// `runtime_state` 是事件应用后持有开放请求与调用关联的会话状态。
+///
+/// # Returns
+/// 返回值
+/// `true` only for terminal request/tool/retry boundaries after every open correlation is closed.
+/// 仅当请求、工具或重试终态边界已经关闭全部开放关联时返回 `true`。
+fn runtime_event_closes_durable_transcript_batch(
+    event: &RuntimeEvent,
+    runtime_state: &SessionRuntimeStateEntry,
+) -> bool {
+    matches!(
+        event.kind,
+        RuntimeEventKind::ToolRequestInvalid
+            | RuntimeEventKind::ToolRequestAborted
+            | RuntimeEventKind::ToolFinished
+            | RuntimeEventKind::Retrying
+            | RuntimeEventKind::ProviderRetryStatusChanged
+    ) && runtime_state.tool_request_record_ids.is_empty()
+        && runtime_state.tool_call_record_ids.is_empty()
 }
 
 /// Reports whether one runtime event completed a tool that owns command-session lifecycle state.
@@ -2793,8 +2956,37 @@ pub(crate) fn workbench_should_emit_runtime_event_message_patch(
             .contains_key(&session_id)
 }
 
-/// Returns stable transcript entries created or updated by one runtime tool projection.
-/// 返回单次运行时工具投影创建或更新的稳定转录项。
+/// Resolves exact reducer-returned record ids into stable transcript entries from the recent tail.
+/// 从最近尾部将归约器返回的精确记录标识解析为稳定转录项。
+///
+/// # Parameters
+/// 参数
+/// `records` contains the already-updated retained conversation records.
+/// `records` 包含已经更新的保留会话记录。
+/// `changed_record_ids` contains only exact identities changed by the current event.
+/// `changed_record_ids` 仅包含当前事件修改的精确标识。
+///
+/// # Returns
+/// 返回值
+/// Returns stable display entries for those exact identities without cloning or comparing history.
+/// 返回这些精确标识对应的稳定展示项，且不克隆或比较历史。
+fn runtime_event_projection_entries_from_exact_record_ids(
+    records: &[SessionConversationRecord],
+    changed_record_ids: &[String],
+) -> Vec<SessionMessageEntry> {
+    let mut emitted_record_ids = HashSet::new();
+    changed_record_ids
+        .iter()
+        .filter(|record_id| emitted_record_ids.insert(record_id.as_str()))
+        .filter_map(|record_id| records.iter().rev().find(|record| record.id == *record_id))
+        .filter(|record| runtime_event_projection_record_is_stable(record))
+        .map(session_message_entry_from_conversation_record)
+        .collect()
+}
+
+/// Returns stable transcript entries changed between two test snapshots.
+/// 返回两个测试快照之间发生变化的稳定转录项。
+#[cfg(test)]
 fn runtime_event_projection_entries_from_changed_records(
     before_records: &[SessionConversationRecord],
     after_records: &[SessionConversationRecord],
@@ -2834,6 +3026,7 @@ fn runtime_event_projection_record_is_stable(record: &SessionConversationRecord)
 
 /// Compares two runtime conversation records without requiring protocol-level PartialEq.
 /// 在不要求协议类型实现 PartialEq 的情况下比较两条运行时会话记录。
+#[cfg(test)]
 fn session_conversation_records_equal(
     left: &SessionConversationRecord,
     right: &SessionConversationRecord,
@@ -3111,20 +3304,15 @@ mod tests {
                 created_at: accepted_at_ms.to_string(),
             });
 
-        let diagnostic =
-            mark_first_semantic_submission_observed(&mut workspace, &mut runtime_state, session_id)
-                .expect("first semantic observation should expose timing correlation");
+        // diagnostic carries the canonical marker identity into the separate visible projection step.
+        // diagnostic 把规范标记身份传递到独立的可见投影步骤。
+        let diagnostic = mark_first_semantic_submission_observed(&mut runtime_state)
+            .expect("first semantic observation should expose timing correlation");
+        mirror_first_semantic_submission_observed(&mut workspace, session_id, &diagnostic);
         assert_eq!(diagnostic.client_submission_id, "submission-1");
         assert_eq!(diagnostic.target, "new");
         assert!(diagnostic.elapsed_ms >= 250);
-        assert!(
-            mark_first_semantic_submission_observed(
-                &mut workspace,
-                &mut runtime_state,
-                session_id,
-            )
-            .is_none()
-        );
+        assert!(mark_first_semantic_submission_observed(&mut runtime_state).is_none());
         assert_eq!(
             workspace.session_messages[&session_id][0]
                 .metadata
@@ -3573,7 +3761,7 @@ mod tests {
         })));
 
         let draft = build_runtime_event_workspace_draft(
-            &workspace,
+            &mut workspace,
             session_id,
             &session_id.to_string(),
             &event,
@@ -3748,9 +3936,8 @@ mod tests {
             editable_user_prompt: false,
         };
 
-        let patch = build_runtime_event_conversation_messages_patched_delta(
+        let patch = build_exact_runtime_event_conversation_messages_patched_delta(
             &conversation_id,
-            &[],
             &[tool_message],
             &started,
         )

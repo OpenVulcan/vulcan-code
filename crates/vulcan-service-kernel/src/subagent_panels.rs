@@ -296,9 +296,6 @@ pub(super) async fn service_stop_subagent_task(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let workspace_snapshot = guard.workspace_snapshot.clone().ok_or_else(|| {
-            String::from("service is still starting; workspace snapshot is not ready")
-        })?;
         let resolved_parent_session_id =
             open_subagent_registry_entry_for_task(&guard, parent_session_id, task_session_id)?
                 .map(|entry| entry.parent_session_id.as_uuid())
@@ -312,9 +309,8 @@ pub(super) async fn service_stop_subagent_task(
         let mut task_states_to_mark: Vec<SubagentTaskStopMark> =
             vec![(resolved_parent_session_id, task_session_id, root_state)];
         task_states_to_mark.extend(
-            running_webui_subagent_task_states_for_tree_from_cache(
+            running_webui_subagent_task_states_for_tree_from_live_cache(
                 &mut guard,
-                &workspace_snapshot,
                 task_session_id,
             )
             .into_iter()
@@ -402,26 +398,10 @@ pub(super) async fn service_stop_subagent_task(
         let state_for_persist = state.clone();
         let controller_runtime_for_persist = controller_runtime.clone();
         spawn_service_task(async move {
-            let snapshot = match current_workspace_snapshot_from_shared_state(&state_for_persist) {
-                Ok(Some(snapshot)) => snapshot,
-                Ok(None) => return,
-                Err(error) => {
-                    eprintln!("[webui-service] stopped subagent persist snapshot failed: {error}");
-                    return;
-                }
-            };
             for parent_session_id in stopped_parent_session_ids {
-                if !snapshot
-                    .sessions
-                    .iter()
-                    .any(|session| session.id == parent_session_id)
-                {
-                    continue;
-                }
-                if let Err(error) = persist_workspace_session_update(
-                    Some(&state_for_persist),
+                if let Err(error) = persist_latest_retained_workspace_session_update(
+                    &state_for_persist,
                     controller_runtime_for_persist.clone(),
-                    &snapshot,
                     parent_session_id,
                 )
                 .await

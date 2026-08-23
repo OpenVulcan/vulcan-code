@@ -67,8 +67,8 @@ fn builds_panel_state_from_task_session_metadata() {
 #[test]
 fn loads_panel_states_from_segmented_task_session_store() {
     let temp_dir = tempfile::tempdir().expect("tempdir");
-    let store = vulcan_task_session::SegmentedTaskSessionStore::new(temp_dir.path());
     let root_session_id = vulcan_session_core::SessionNodeId::new_v4();
+    let store = indexed_segmented_task_session_test_store(temp_dir.path(), root_session_id);
     let task_session_id = vulcan_session_core::SessionNodeId::new_v4();
     let mut metadata = panel_test_metadata(
         root_session_id,
@@ -135,6 +135,20 @@ fn loads_panel_states_from_segmented_task_session_store() {
     assert!(subagent_task_panel_state_has_recoverable_conversation(
         &detail
     ));
+
+    let task_metadata_path = temp_dir
+        .path()
+        .join("task")
+        .join(task_session_id.to_string())
+        .join("task_metadata.json");
+    std::fs::remove_file(task_metadata_path).expect("remove exact child metadata");
+    let index_only_states = subagent_task_panel_states_from_segmented_task_session_store(
+        &store,
+        root_session_id.as_uuid(),
+    )
+    .expect("root mirror list must not open child metadata");
+    assert_eq!(index_only_states.len(), 1);
+    assert_eq!(index_only_states[0].task_id, task_session_id.as_uuid());
 }
 
 /// Verifies corrupted task context is reported instead of silently downgrading the detail panel.
@@ -142,8 +156,8 @@ fn loads_panel_states_from_segmented_task_session_store() {
 #[test]
 fn detail_load_reports_corrupted_task_context() {
     let temp_dir = tempfile::tempdir().expect("tempdir");
-    let store = vulcan_task_session::SegmentedTaskSessionStore::new(temp_dir.path());
     let root_session_id = vulcan_session_core::SessionNodeId::new_v4();
+    let store = indexed_segmented_task_session_test_store(temp_dir.path(), root_session_id);
     let task_session_id = vulcan_session_core::SessionNodeId::new_v4();
     let metadata = panel_test_metadata(
         root_session_id,
@@ -176,8 +190,8 @@ fn detail_load_reports_corrupted_task_context() {
 #[test]
 fn detail_load_reports_invalid_context_conversation_state() {
     let temp_dir = tempfile::tempdir().expect("tempdir");
-    let store = vulcan_task_session::SegmentedTaskSessionStore::new(temp_dir.path());
     let root_session_id = vulcan_session_core::SessionNodeId::new_v4();
+    let store = indexed_segmented_task_session_test_store(temp_dir.path(), root_session_id);
     let task_session_id = vulcan_session_core::SessionNodeId::new_v4();
     let metadata = panel_test_metadata(
         root_session_id,
@@ -220,8 +234,8 @@ fn detail_load_reports_invalid_context_conversation_state() {
 #[test]
 fn segmented_task_session_store_omits_archived_panel_states() {
     let temp_dir = tempfile::tempdir().expect("tempdir");
-    let store = vulcan_task_session::SegmentedTaskSessionStore::new(temp_dir.path());
     let root_session_id = vulcan_session_core::SessionNodeId::new_v4();
+    let store = indexed_segmented_task_session_test_store(temp_dir.path(), root_session_id);
     let open_task_session_id = vulcan_session_core::SessionNodeId::new_v4();
     let archived_task_session_id = vulcan_session_core::SessionNodeId::new_v4();
     let mut open_metadata = panel_test_metadata(

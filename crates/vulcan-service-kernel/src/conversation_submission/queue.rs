@@ -1,11 +1,14 @@
 //! Existing-session submission queue decision and commit.
 //! 已有会话提交排队决策与提交。
 
+use vulcan_agent_runtime::attachment_asset_index::release_staged_attachment_ref;
 use vulcan_core::types::ConversationAttachment;
 use vulcan_workspace_store::{
     data_plane::ControllerRuntimeHandle, workspace_store::WorkspaceSnapshot,
 };
 
+use super::activation::merge_submission_message_entries;
+use super::preflight::existing_submission_workspace_slice;
 use super::*;
 use crate::pending_prompts::dispatch_queued_pending_prompt_hook;
 use crate::{AgentRuntimeBridge, webui_trace};
@@ -40,9 +43,13 @@ pub(crate) struct ExistingSubmissionQueueInput {
     /// Optional hidden model guidance retained for later dispatch.
     /// 为后续分发保留的可选隐藏模型引导。
     pub(crate) hidden_model_guidance: Option<String>,
-    /// Composer attachments retained by the pending entry.
-    /// 待发送条目保留的输入区附件。
+    /// Composer attachments retained by the pending entry with only an optional metadata-only
+    /// reduction; direct modes are recomputed at dispatch.
+    /// 待发送条目保留的输入区附件，仅允许包含可选的仅元数据降级；直接传输模式在分发时重算。
     pub(crate) attachments: Vec<ConversationAttachment>,
+    /// Optional internal composer-draft lease retained until this queued prompt becomes a canonical message.
+    /// 在排队提示词成为规范消息前保留的可选内部输入区草稿租约。
+    pub(crate) attachment_draft_scope: Option<String>,
     /// Optional reasoning effort retained for later dispatch.
     /// 为后续分发保留的可选推理强度。
     pub(crate) reasoning_effort: Option<String>,
@@ -65,148 +72,198 @@ pub(crate) struct ExistingSubmissionQueueInput {
 /// `fallback_workspace` 是已水合提交快照，仅在保留状态缺少目标时使用。
 /// `session_id` identifies the exact visible session whose queue is being changed.
 /// `session_id` 标识待修改队列所属的精确可见会话。
-/// `mutation` applies the queue-specific change to a lock-consistent workspace clone.
-/// `mutation` 将队列专属变更应用到与锁一致的工作区副本。
+/// `mutation` applies the queue-specific change to a lock-consistent one-session slice.
+/// `mutation` 将队列专属变更应用到与锁一致的单会话切片。
 ///
 /// # Returns
 /// 返回值
-/// Returns the mutation result after atomically replacing the retained workspace, or an explicit error.
-/// 原子替换保留工作区后返回变更结果，或返回显式错误。
+/// Returns the mutation result after atomically merging the exact session slice, or an explicit error.
+/// 原子合并精确会话切片后返回变更结果，或返回显式错误。
 pub(crate) fn mutate_latest_workspace_for_existing_session<T, F>(
     state: &SharedServiceBridgeState,
-    fallback_workspace: WorkspaceSnapshot,
+    fallback_workspace: Option<WorkspaceSnapshot>,
     session_id: Uuid,
     mutation: F,
 ) -> Result<T, String>
 where
     F: FnOnce(&mut WorkspaceSnapshot) -> Result<T, String>,
 {
-    // guard prevents stream projection from advancing the retained workspace during clone, mutation, and commit.
-    // guard 防止流式投影在克隆、变更与提交期间推进保留工作区。
+    // guard prevents stream projection from advancing the exact retained session during slice capture, mutation, and commit.
+    // guard 防止流式投影在切片捕获、变更与提交期间推进精确保留会话。
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
-    // committed_workspace starts from the latest retained revision whenever it already exists.
-    // committed_workspace 在最新保留版本已经存在时始终以该版本为起点。
-    let mut committed_workspace = match guard.workspace_snapshot.as_ref() {
+    // session_slice copies only queue metadata for the exact retained session; canonical history is detached and restored before mutation.
+    // session_slice 仅复制精确保留会话的队列元数据；规范历史会在变更前摘下并恢复。
+    let mut session_slice = match guard.workspace_snapshot.as_mut() {
         Some(current_workspace) => {
-            let mut current_workspace = current_workspace.clone();
-            merge_missing_existing_session_scope(
-                &mut current_workspace,
-                &fallback_workspace,
-                session_id,
-            )?;
-            current_workspace
+            existing_queue_mutation_workspace_slice(current_workspace, session_id)?
         }
-        None => fallback_workspace,
+        None => fallback_workspace.ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?,
     };
     // result is produced before publication so a failed mutation cannot leave a partial workspace commit.
     // result 在发布前生成，确保变更失败不会留下部分工作区提交。
-    let result = mutation(&mut committed_workspace)?;
-    guard.workspace_snapshot = Some(committed_workspace);
+    let result = mutation(&mut session_slice)?;
+    match guard.workspace_snapshot.as_mut() {
+        Some(retained_workspace) => merge_existing_session_slice_into_retained_workspace(
+            retained_workspace,
+            session_slice,
+            session_id,
+        )?,
+        None => guard.workspace_snapshot = Some(session_slice),
+    }
     Ok(result)
 }
 
-/// Reconciles only one visible session and its missing owned data into the latest workspace revision.
-/// 仅将一个可见会话及其缺失的所属数据协调到最新工作区版本。
+/// Builds a queue-mutation slice without cloning canonical conversation history.
+/// 构建不复制规范会话历史的队列变更切片。
 ///
 /// # Parameters
 /// 参数
-/// `current_workspace` is the latest retained workspace that must preserve unrelated concurrent changes.
-/// `current_workspace` 是必须保留无关并发变更的最新保留工作区。
-/// `fallback_workspace` owns the fully hydrated target session loaded during submission preflight.
-/// `fallback_workspace` 持有提交预检期间加载的完整已水合目标会话。
+/// `workspace_snapshot` is the retained authoritative workspace whose exact runtime history is borrowed temporarily.
+/// `workspace_snapshot` 是权威保留工作区，其精确运行时历史会被临时借出。
+/// `session_id` identifies the sole queue session copied into the mutation slice.
+/// `session_id` 标识复制到变更切片中的唯一队列会话。
+///
+/// # Returns
+/// 返回值
+/// A detached metadata slice with an empty canonical conversation state, or an exact retained-state error.
+/// 返回规范会话状态为空的分离元数据切片，或精确保留状态错误。
+fn existing_queue_mutation_workspace_slice(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: Uuid,
+) -> Result<WorkspaceSnapshot, String> {
+    // Queue mutations in pending_prompts, pending_prompt_services, and pending_dispatch access only UI queue state,
+    // timestamps, phase, summary, and newly admitted transcript records; none reads canonical conversation_state.
+    // pending_prompts、pending_prompt_services 与 pending_dispatch 的队列变更只访问界面队列状态、
+    // 时间戳、阶段、摘要与新接纳转录记录；均不读取规范 conversation_state。
+    // conversation_state is borrowed by ownership so cloning the remaining runtime metadata stays bounded.
+    // conversation_state 通过所有权临时借出，使其余运行态元数据的复制保持有界。
+    let Some(conversation_state) = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&session_id)
+        .map(|runtime_state| std::mem::take(&mut runtime_state.conversation_state))
+    else {
+        // Runtime state is schema-optional for legacy or not-yet-hydrated rows; metadata-only mutations preserve that absence.
+        // 对旧版或尚未水合的记录而言运行态在 Schema 中可缺失；仅元数据变更会保留该缺失状态。
+        return existing_submission_workspace_slice(workspace_snapshot, session_id);
+    };
+    // slice_result is captured before restoration so both success and error paths restore the exact canonical state.
+    // slice_result 在恢复前捕获，使成功与错误路径都会恢复精确规范状态。
+    let slice_result = existing_submission_workspace_slice(workspace_snapshot, session_id);
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&session_id)
+        .ok_or_else(|| format!("Queued conversation `{session_id}` lost its runtime state."))?;
+    runtime_state.conversation_state = conversation_state;
+    slice_result
+}
+
+/// Moves one exact queue-session slice into the retained workspace without touching unrelated state.
+/// 把一个精确排队会话切片移入保留工作区，且不触碰无关状态。
+///
+/// # Parameters
+/// 参数
+/// `retained_workspace` is the latest authoritative full workspace.
+/// `retained_workspace` 是最新权威完整工作区。
+/// `session_slice` owns only the mutated target session and its exact owned maps.
+/// `session_slice` 仅持有已变更目标会话及其精确所属映射。
 /// `session_id` identifies the only session scope allowed to merge.
 /// `session_id` 标识唯一允许合并的会话范围。
 ///
 /// # Returns
 /// 返回值
-/// Returns success when the exact target scope is complete, otherwise an integrity error.
-/// 精确目标范围完整时返回成功，否则返回完整性错误。
-fn merge_missing_existing_session_scope(
-    current_workspace: &mut WorkspaceSnapshot,
-    fallback_workspace: &WorkspaceSnapshot,
+/// Returns success after ownership transfer, otherwise an explicit integrity error.
+/// 所有权转移完成后返回成功，否则返回明确的完整性错误。
+fn merge_existing_session_slice_into_retained_workspace(
+    retained_workspace: &mut WorkspaceSnapshot,
+    mut session_slice: WorkspaceSnapshot,
     session_id: Uuid,
 ) -> Result<(), String> {
-    // project_id comes from the latest summary when present and from the hydrated fallback only for a missing summary.
-    // project_id 在最新摘要存在时取自最新摘要，仅在摘要缺失时取自已水合回退快照。
-    let (project_id, session_was_missing) = if let Some(current_session) = current_workspace
+    let session_position = session_slice
         .sessions
         .iter()
-        .find(|session| session.id == session_id)
-    {
-        (current_session.project_id.clone(), false)
-    } else {
-        // source_session is the unique visible target proven by the hydrated submission snapshot.
-        // source_session 是已水合提交快照证明存在的唯一可见目标。
-        let source_session = fallback_workspace
-            .sessions
-            .iter()
-            .find(|session| session.id == session_id)
-            .cloned()
-            .ok_or_else(|| {
-                format!("queued session `{session_id}` is missing from hydrated workspace")
-            })?;
-        // project_id retains the exact owner before the session summary moves into the current workspace.
-        // project_id 在会话摘要移入当前工作区前保留其精确所属项目。
-        let project_id = source_session.project_id.clone();
-        current_workspace.sessions.push(source_session);
-        (project_id, true)
-    };
-    if session_was_missing && let Some(project_id) = project_id {
-        if let Some(current_project) = current_workspace
-            .task_projects
-            .iter_mut()
-            .find(|project| project.id == project_id)
-        {
-            if !current_project.session_ids.contains(&session_id) {
-                current_project.session_ids.push(session_id);
-            }
-        } else {
-            // source_project is required only when the latest workspace lacks the owning project itself.
-            // source_project 仅在最新工作区连所属项目也缺失时才是必需数据。
-            let source_project = fallback_workspace
-                .task_projects
-                .iter()
-                .find(|project| project.id == project_id)
-                .cloned()
-                .ok_or_else(|| {
-                    format!("queued session `{session_id}` owns missing project `{project_id}`")
-                })?;
-            current_workspace.task_projects.push(source_project);
-        }
+        .position(|session| session.id == session_id)
+        .ok_or_else(|| format!("queued session slice is missing session `{session_id}`"))?;
+    let session = session_slice.sessions.remove(session_position);
+    let retained_session = retained_workspace
+        .sessions
+        .iter_mut()
+        .find(|candidate| candidate.id == session_id)
+        .ok_or_else(|| format!("queued session `{session_id}` left retained state"))?;
+    *retained_session = session;
+    if let Some(messages) = session_slice.session_messages.remove(&session_id) {
+        merge_submission_message_entries(
+            retained_workspace
+                .session_messages
+                .entry(session_id)
+                .or_default(),
+            messages,
+        );
     }
-    if let Some(messages) = fallback_workspace.session_messages.get(&session_id) {
-        current_workspace
-            .session_messages
-            .entry(session_id)
-            .or_insert_with(|| messages.clone());
-    }
-    if let Some(compactions) = fallback_workspace.session_compactions.get(&session_id) {
-        current_workspace
+    // Queue slices omit presentation history, so absence preserves retained compaction state.
+    // 队列切片会省略展示历史，因此缺少条目时保留已有压缩状态。
+    if let Some(compactions) = session_slice.session_compactions.remove(&session_id) {
+        retained_workspace
             .session_compactions
-            .entry(session_id)
-            .or_insert_with(|| compactions.clone());
+            .insert(session_id, compactions);
     }
-    if let Some(runtime_state) = fallback_workspace.session_runtime_state.get(&session_id) {
-        current_workspace
+    if let Some(mut runtime_state) = session_slice.session_runtime_state.remove(&session_id) {
+        // retained_conversation_state is moved directly into the incoming metadata row without allocation or cloning.
+        // retained_conversation_state 无分配、无复制地直接移入传入元数据记录。
+        let retained_conversation_state = retained_workspace
             .session_runtime_state
-            .entry(session_id)
-            .or_insert_with(|| runtime_state.clone());
+            .get_mut(&session_id)
+            .map(|retained_runtime_state| {
+                std::mem::take(&mut retained_runtime_state.conversation_state)
+            })
+            .ok_or_else(|| format!("queued session `{session_id}` lost retained runtime state"))?;
+        runtime_state.conversation_state = retained_conversation_state;
+        retained_workspace
+            .session_runtime_state
+            .insert(session_id, runtime_state);
     }
-    if let Some(run_phase) = fallback_workspace.session_run_phases.get(&session_id) {
-        current_workspace
-            .session_run_phases
-            .entry(session_id)
-            .or_insert(*run_phase);
-    }
-    if fallback_workspace
-        .hydrated_session_ids
-        .contains(&session_id)
-    {
-        current_workspace.hydrated_session_ids.insert(session_id);
+    replace_exact_session_map_entry(
+        &mut retained_workspace.session_run_phases,
+        &mut session_slice.session_run_phases,
+        session_id,
+    );
+    if session_slice.hydrated_session_ids.contains(&session_id) {
+        retained_workspace.hydrated_session_ids.insert(session_id);
+    } else {
+        retained_workspace.hydrated_session_ids.remove(&session_id);
     }
     Ok(())
+}
+
+/// Replaces or removes one exact session-keyed entry by moving it from a detached slice.
+/// 通过从分离切片移动条目来替换或移除一个精确会话键条目。
+///
+/// # Parameters
+/// 参数
+/// `retained` is the authoritative full-workspace map.
+/// `retained` 是权威完整工作区映射。
+/// `session_slice` is the detached one-session map.
+/// `session_slice` 是分离的单会话映射。
+/// `session_id` is the only key allowed to change.
+/// `session_id` 是唯一允许变化的键。
+///
+/// # Returns
+/// 返回值
+/// This function returns no value.
+/// 此函数无返回值。
+fn replace_exact_session_map_entry<T>(
+    retained: &mut std::collections::BTreeMap<Uuid, T>,
+    session_slice: &mut std::collections::BTreeMap<Uuid, T>,
+    session_id: Uuid,
+) {
+    if let Some(value) = session_slice.remove(&session_id) {
+        retained.insert(session_id, value);
+    } else {
+        retained.remove(&session_id);
+    }
 }
 
 /// Evaluates whether an existing-session submission must enter the visible pending queue.
@@ -330,10 +387,13 @@ pub(crate) fn queue_existing_submission(
         prompt,
         hidden_model_guidance,
         attachments,
+        attachment_draft_scope,
         reasoning_effort,
         model_selection,
         submit_total_started_at,
     } = input;
+    let attachments_for_draft_release = attachments.clone();
+    let attachment_draft_scope_for_release = attachment_draft_scope.clone();
     webui_submit_trace(
         "submit_prompt_queued",
         format!("session={session_id} reason=blocking_system_prompt_work"),
@@ -342,7 +402,7 @@ pub(crate) fn queue_existing_submission(
     // queue_commit 修改最新共享快照，避免过期预检副本擦除流式输出。
     let queued_hook_event = mutate_latest_workspace_for_existing_session(
         state,
-        workspace_snapshot,
+        Some(workspace_snapshot),
         session_id,
         |latest_workspace| {
             // workspace_path is resolved from the lock-consistent latest workspace revision.
@@ -364,6 +424,23 @@ pub(crate) fn queue_existing_submission(
             Ok(queued_hook_event)
         },
     )?;
+    if let Some(draft_scope) = attachment_draft_scope_for_release
+        .as_deref()
+        .filter(|scope| !scope.trim().is_empty())
+    {
+        // queueScope was acquired before the workspace row became authoritative, so releasing the composer owner cannot orphan assets.
+        // queueScope 在工作区行成为权威状态前已经获取，因此释放输入区所有者不会使资产变成孤儿。
+        if let Err(error) = release_staged_attachment_ref(
+            queued_hook_event.workspace_path(),
+            draft_scope,
+            &attachments_for_draft_release,
+        ) {
+            webui_trace(
+                "queued_composer_attachment_draft_release_failed",
+                format!("session={session_id} error={error}"),
+            );
+        }
+    }
     if let Err(error) = dispatch_queued_pending_prompt_hook(agent_runtime, queued_hook_event) {
         webui_trace(
             "queued_submission_hook_failed_after_commit",
@@ -376,31 +453,14 @@ pub(crate) fn queue_existing_submission(
     // revision is the final ordered workbench revision returned to the submit caller.
     // revision 是返回提交调用方的最终有序工作台版本。
     let (revision, run_phase) = emit_queued_prompt_run_phase_delta(app, state, session_id)?;
-    // state_for_persist owns the latest shared snapshot lookup performed after both deltas.
-    // state_for_persist 持有两个增量之后执行的最新共享快照查询。
-    let state_for_persist = state.clone();
-    // controller_runtime_for_persist owns the background workspace persistence handle.
-    // controller_runtime_for_persist 持有后台工作区持久化句柄。
-    let controller_runtime_for_persist = controller_runtime.clone();
-    spawn_service_task(async move {
-        // snapshot reads the newest shared workspace only after both queue deltas have committed.
-        // snapshot 仅在两个队列增量提交后读取最新共享工作区。
-        let snapshot = match current_workspace_snapshot_from_shared_state(&state_for_persist) {
-            Ok(Some(snapshot)) => snapshot,
-            Ok(None) => return,
-            Err(error) => {
-                eprintln!("[webui-service] queued submit persist snapshot failed: {error}");
-                return;
-            }
-        };
-        spawn_workspace_session_persist_task(
-            state_for_persist,
-            controller_runtime_for_persist,
-            snapshot,
-            session_id,
-            Some(String::from("queued_submit")),
-        );
-    });
+    // Persistence captures the latest exact session after both queue deltas without cloning the workspace here.
+    // 持久化会在两个队列增量之后捕获最新精确会话，此处不克隆工作区。
+    spawn_workspace_session_persist_task(
+        state.clone(),
+        controller_runtime.clone(),
+        session_id,
+        Some(String::from("queued_submit")),
+    );
     webui_submit_trace(
         "submit_prompt_queued_returning",
         format!(

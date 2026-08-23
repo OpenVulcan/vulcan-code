@@ -267,7 +267,7 @@ pub(super) fn resolve_asset_root_from_attachment(
     }
     if matches!(
         parent_name.as_str(),
-        "images" | "audio" | "video" | "pdf" | "index"
+        "images" | "audio" | "video" | "pdf" | "files" | "index"
     ) {
         return parent.parent().map(Path::to_path_buf);
     }

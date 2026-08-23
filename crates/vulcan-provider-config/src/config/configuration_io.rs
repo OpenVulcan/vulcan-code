@@ -53,8 +53,8 @@ impl Default for WorkbenchThinkingDisplayMode {
 /// 保存到 Vulcan 家目录中的根级供应商配置文件。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderConfigurationFile {
-    /// Whether complete provider request traces are written to each owning session temp directory.
-    /// 是否将完整 Provider 请求追踪写入各自所属会话的临时目录。
+    /// Whether bounded Provider wire-request traces are written to each owning session temp directory.
+    /// 是否将有界 Provider 线上请求追踪写入各自所属会话的临时目录。
     #[serde(
         default,
         rename = "providerRequestTraceEnabled",
@@ -984,8 +984,8 @@ mod public_ai_connections_tests {
         assert!(restored.workbench_reasoning_effort_explicit);
     }
 
-    /// Verifies complete Provider request tracing defaults off and persists only after explicit enablement.
-    /// 验证完整 Provider 请求追踪默认关闭，并且仅在显式启用后持久化。
+    /// Verifies bounded Provider wire tracing defaults off and persists only after explicit enablement.
+    /// 验证有界 Provider 线上追踪默认关闭，并且仅在显式启用后持久化。
     #[test]
     fn provider_request_trace_switch_defaults_off_and_round_trips_when_enabled() {
         let default_configuration: ProviderConfigurationFile =

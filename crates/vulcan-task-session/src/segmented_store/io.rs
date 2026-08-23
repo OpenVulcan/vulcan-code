@@ -143,6 +143,93 @@ pub(super) fn append_segment_event(
     Ok(line)
 }
 
+/// Validates one exact segmented append boundary without replaying any JSONL history.
+/// 在不重放任何 JSONL 历史的情况下校验一个精确分段追加边界。
+///
+/// # Parameters
+/// 参数
+/// `dir` is the exact session directory, `active_segment` and `segments` are the retained
+/// metadata locator, and `next_seq` is the next sequence declared by that metadata.
+/// `dir` 是精确会话目录，`active_segment` 与 `segments` 是保留的元数据定位信息，
+/// `next_seq` 是该元数据声明的下一序号。
+///
+/// # Returns
+/// 返回值
+/// Success when the active file length, newline boundary, and constant-time sequence arithmetic agree.
+/// 当活动文件长度、换行边界与常数时间序号计算一致时返回成功。
+pub(super) fn validate_segmented_append_boundary_locked(
+    dir: &Path,
+    active_segment: &str,
+    segments: &[SegmentMetadata],
+    next_seq: u64,
+) -> Result<(), SessionStoreError> {
+    // activeMetadata is the only physical segment that an append may touch.
+    // activeMetadata 是一次追加可能接触的唯一物理分段。
+    let active_metadata = segments.last().ok_or_else(|| {
+        SessionStoreError::new(
+            "Segmented append metadata has no active segment; load-time repair is required.",
+        )
+    })?;
+    if active_segment != active_metadata.file {
+        return Err(SessionStoreError::new(format!(
+            "Segmented append metadata points to `{active_segment}` but the exact final segment is `{}`; load-time repair is required.",
+            active_metadata.file
+        )));
+    }
+    // activePath is resolved directly from retained metadata; no directory enumeration is allowed.
+    // activePath 直接由保留元数据解析；不允许目录枚举。
+    let active_path = dir.join(&active_metadata.file);
+    // actualByteLen is authoritative for the exact append target.
+    // actualByteLen 是精确追加目标的权威长度。
+    let actual_byte_len = fs::metadata(&active_path).map_err(to_store_error)?.len();
+    if actual_byte_len != active_metadata.byte_len {
+        return Err(SessionStoreError::new(format!(
+            "Exact active segment `{}` has byte length {actual_byte_len}, expected {}; load-time repair is required.",
+            active_path.display(),
+            active_metadata.byte_len
+        )));
+    }
+    // minimumNextSeq proves the declared sequence cannot overlap any retained row without replaying history.
+    // minimumNextSeq 在不重放历史的情况下证明声明序号不会与任何保留行重叠。
+    let minimum_next_seq = active_metadata
+        .start_seq
+        .saturating_add(active_metadata.line_count);
+    if next_seq < minimum_next_seq {
+        return Err(SessionStoreError::new(format!(
+            "Segmented append metadata declares next sequence {next_seq}, below the safe minimum {minimum_next_seq}; load-time repair is required."
+        )));
+    }
+    if actual_byte_len == 0 {
+        if active_metadata.line_count != 0 {
+            return Err(SessionStoreError::new(format!(
+                "Exact active segment `{}` is empty but metadata retains {} lines; load-time repair is required.",
+                active_path.display(),
+                active_metadata.line_count
+            )));
+        }
+        return Ok(());
+    }
+    // activeFile reads only the final byte needed to prove a complete JSONL boundary.
+    // activeFile 只读取证明 JSONL 边界完整所需的最后一个字节。
+    let mut active_file = File::open(&active_path).map_err(to_store_error)?;
+    active_file
+        .seek(SeekFrom::End(-1))
+        .map_err(to_store_error)?;
+    // finalByte holds the exact append-boundary byte and never scales with transcript size.
+    // finalByte 保存精确追加边界字节，其开销不随转录大小增长。
+    let mut final_byte = [0_u8; 1];
+    active_file
+        .read_exact(&mut final_byte)
+        .map_err(to_store_error)?;
+    if final_byte[0] != b'\n' {
+        return Err(SessionStoreError::new(format!(
+            "Exact active segment `{}` has an incomplete JSONL tail; load-time repair is required.",
+            active_path.display()
+        )));
+    }
+    Ok(())
+}
+
 /// Returns whether a segment should roll before appending a new line.
 /// 返回追加新行前是否应滚动分段。
 pub(super) fn should_roll_segment(
@@ -532,7 +619,14 @@ pub(super) fn repair_task_segment_jsonl_files_if_needed_locked(
 
     let mut retained_segments = Vec::new();
     for (file, lines) in &retained_segment_lines {
-        retained_segments.push(rebuild_task_segment_metadata(file, lines)?);
+        // durableByteLen comes from the exact retained file after any repair rewrite.
+        // durableByteLen 来自任何修复重写之后的精确保留文件。
+        let durable_byte_len = fs::metadata(dir.join(file)).map_err(to_store_error)?.len();
+        retained_segments.push(rebuild_task_segment_metadata(
+            file,
+            lines,
+            durable_byte_len,
+        )?);
     }
     if retained_segments.is_empty() {
         let empty_segment = SegmentMetadata::empty(segment_file_name(1), 0);
@@ -685,6 +779,8 @@ fn read_segment_event_lines_for_repair(
 /// `file` 是元数据中保存的分段文件名。
 /// `lines` are the retained valid lines for this segment.
 /// `lines` 是该分段保留的有效行。
+/// `durable_byte_len` is the exact file length observed after optional repair publication.
+/// `durable_byte_len` 是可选修复发布后观察到的精确文件长度。
 ///
 /// # Returns
 /// 返回值
@@ -693,13 +789,14 @@ fn read_segment_event_lines_for_repair(
 fn rebuild_task_segment_metadata(
     file: &str,
     lines: &[SegmentedEventLine],
+    durable_byte_len: u64,
 ) -> Result<SegmentMetadata, SessionStoreError> {
     let mut metadata = SegmentMetadata::empty(
         file.to_string(),
         lines.first().map(|line| line.seq).unwrap_or(0),
     );
     metadata.line_count = lines.len() as u64;
-    metadata.byte_len = task_segment_lines_byte_len(lines)?;
+    metadata.byte_len = durable_byte_len;
     metadata.first_timestamp = lines.first().map(|line| line.timestamp.clone());
     metadata.last_timestamp = lines.last().map(|line| line.timestamp.clone());
     metadata.first_turn_index = lines.iter().find_map(|line| line.turn_index);
@@ -710,27 +807,6 @@ fn rebuild_task_segment_metadata(
         .find(|line| line.kind == "compacted")
         .map(|line| line.seq);
     Ok(metadata)
-}
-
-/// Calculates the byte length of retained TaskSession JSONL lines.
-/// 计算保留的 TaskSession JSONL 行字节长度。
-///
-/// # Parameters
-/// 参数
-/// `lines` are the retained valid segment lines.
-/// `lines` 是保留的有效分段行。
-///
-/// # Returns
-/// 返回值
-/// The serialized JSONL byte length including newline bytes.
-/// 返回包含换行字节的序列化 JSONL 字节长度。
-fn task_segment_lines_byte_len(lines: &[SegmentedEventLine]) -> Result<u64, SessionStoreError> {
-    let mut byte_len = 0_u64;
-    for line in lines {
-        byte_len = byte_len
-            .saturating_add(serde_json::to_string(line).map_err(to_store_error)?.len() as u64 + 1);
-    }
-    Ok(byte_len)
 }
 
 /// Returns whether two TaskSession segment metadata records differ.

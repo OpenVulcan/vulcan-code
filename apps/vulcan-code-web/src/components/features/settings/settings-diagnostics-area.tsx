@@ -19,8 +19,8 @@ export function LogsArea(props: {
   // Service-backed settings actions.
   // 服务端支持的设置动作。
   actions: SettingsActionProps;
-  // Whether complete request tracing is currently enabled.
-  // 当前是否启用完整请求追踪。
+  // Whether bounded wire-request tracing is currently enabled.
+  // 当前是否启用有界线上请求追踪。
   providerRequestTraceEnabled: boolean;
   // Startup snapshot shown in diagnostics.
   // 诊断中展示的启动快照。

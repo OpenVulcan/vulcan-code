@@ -6,9 +6,9 @@ use super::{
     current_attachment_timestamp_parts, discard_unreferenced_staged_attachment,
     execute_attachment_cleanup, load_attachment_asset_index_document,
     load_attachment_asset_record_for_attachment, parse_attachment_cleanup_cutoff_date,
-    preview_attachment_cleanup, promote_staged_attachment_to_message_ref, record_staged_attachment,
-    release_staged_attachment_ref, resolve_attachment_replay_status,
-    save_attachment_asset_index_document,
+    preview_attachment_cleanup, promote_staged_attachment_to_message_ref,
+    reconcile_staged_attachment_ref_scope, record_staged_attachment, release_staged_attachment_ref,
+    resolve_attachment_replay_status, save_attachment_asset_index_document,
 };
 use crate::attachment_assets::{
     attachment_descriptor_from_mime_type, resolve_attachment_replay_path,
@@ -351,6 +351,67 @@ fn staging_refs_protect_assets_until_release() {
     assert!(load_attachment_asset_record_for_attachment(&attachment).is_none());
     assert!(!std::path::Path::new(&attachment.local_path).exists());
     let _ = std::fs::remove_dir_all(&workspace_directory);
+}
+
+/// Verifies one draft-scope reconciliation replaces its complete set and deletes only newly orphaned assets.
+/// 验证单个草稿作用域协调会替换完整集合，并且只删除新产生的孤儿资产。
+#[test]
+fn reconcile_staged_attachment_ref_scope_replaces_exact_draft_set() {
+    let workspace = unique_workspace_directory();
+    let workspace_path = workspace.to_string_lossy();
+    let first = build_test_attachment(
+        &workspace,
+        "first.png",
+        ConversationAttachmentKind::Image,
+        "image/png",
+    );
+    let second = build_test_attachment(
+        &workspace,
+        "second.png",
+        ConversationAttachmentKind::Image,
+        "image/png",
+    );
+    let unrelated = build_test_attachment(
+        &workspace,
+        "unrelated.png",
+        ConversationAttachmentKind::Image,
+        "image/png",
+    );
+    reconcile_staged_attachment_ref_scope(
+        workspace_path.as_ref(),
+        "composer-draft:test",
+        &[first.clone(), second.clone()],
+    )
+    .expect("initial draft set should acquire its lease");
+
+    reconcile_staged_attachment_ref_scope(
+        workspace_path.as_ref(),
+        "composer-draft:test",
+        std::slice::from_ref(&second),
+    )
+    .expect("replacement draft set should release the removed attachment");
+
+    let asset_root = resolve_managed_attachment_root(workspace_path.as_ref());
+    let document = load_attachment_asset_index_document(&asset_root)
+        .expect("asset index should remain readable");
+    assert!(
+        document
+            .assets
+            .iter()
+            .all(|record| record.asset_id != first.asset_id.as_deref().unwrap())
+    );
+    let second_record = document
+        .assets
+        .iter()
+        .find(|record| record.asset_id == second.asset_id.as_deref().unwrap())
+        .expect("retained attachment should remain indexed");
+    assert_eq!(
+        second_record.staging_refs,
+        vec![String::from("composer-draft:test")]
+    );
+    assert!(document.assets.iter().any(|record| {
+        record.asset_id == unrelated.asset_id.as_deref().unwrap() && record.staging_refs.is_empty()
+    }));
 }
 
 /// Verifies promoting staged assets releases only the dispatch lease while preserving unrelated transient owners.
@@ -702,4 +763,42 @@ fn purged_marker_prevents_replay_when_managed_file_still_exists() {
     assert!(resolve_attachment_replay_path(&attachment).is_none());
 
     let _ = std::fs::remove_dir_all(&workspace_directory);
+}
+
+/// Verifies replay-path selection rejects an existing managed copy whose bytes no longer match the immutable digest.
+/// 验证回放路径选择会拒绝仍然存在但字节不再匹配不可变摘要的托管副本。
+#[test]
+fn replay_path_rejects_same_length_mutated_managed_copy() {
+    // workspace_directory owns the staged asset index used for integrity verification.
+    // workspace_directory 持有用于完整性校验的暂存资产索引。
+    let workspace_directory = unique_workspace_directory();
+    // attachment records the original byte length and SHA-256 digest before mutation.
+    // attachment 在篡改前记录原始字节长度与 SHA-256 摘要。
+    let attachment = build_test_attachment(
+        &workspace_directory,
+        "integrity.png",
+        ConversationAttachmentKind::Image,
+        "image/png",
+    );
+    // original_bytes preserves the indexed length so the mutation only changes content identity.
+    // original_bytes 保留索引长度，使篡改只改变内容身份。
+    let original_bytes = std::fs::read(&attachment.local_path)
+        .expect("managed attachment bytes should remain readable");
+    // mutated_bytes changes every byte while retaining the exact original length.
+    // mutated_bytes 在保持原始长度完全一致的同时修改每个字节。
+    let mutated_bytes = original_bytes
+        .iter()
+        .map(|value| value.wrapping_add(1))
+        .collect::<Vec<_>>();
+    std::fs::write(&attachment.local_path, mutated_bytes)
+        .expect("same-length managed attachment mutation should write");
+
+    assert_eq!(
+        resolve_attachment_replay_status(&attachment),
+        AttachmentReplayStatus::Missing
+    );
+    assert!(resolve_attachment_replay_path(&attachment).is_none());
+
+    std::fs::remove_dir_all(&workspace_directory)
+        .expect("integrity replay workspace should be removed");
 }
