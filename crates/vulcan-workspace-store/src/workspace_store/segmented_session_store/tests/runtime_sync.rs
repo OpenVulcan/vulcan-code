@@ -606,12 +606,14 @@ fn runtime_log_sync_appends_parallel_tool_results_from_bounded_anchor() {
                     tool_call_id: Some(String::from("call-a")),
                     tool_name: String::from("demo_a"),
                     arguments: json!({ "value": 1 }),
+                    argument_parse_error: None,
                 },
                 vulcan_context::protocol::SessionConversationToolCall {
                     id: String::from("call-b"),
                     tool_call_id: Some(String::from("call-b")),
                     tool_name: String::from("demo_b"),
                     arguments: json!({ "value": 2 }),
+                    argument_parse_error: None,
                 },
             ],
         },
@@ -747,6 +749,7 @@ fn runtime_log_sync_rejects_projection_failure_without_writes() {
         tool_call_id: Some(String::from("call-a")),
         tool_name: String::from("demo"),
         arguments: json!({}),
+        argument_parse_error: None,
     };
     // invalid_state contains the identity conflict that must stop projection before persistence.
     // invalid_state 包含必须在持久化前停止投影的身份冲突。

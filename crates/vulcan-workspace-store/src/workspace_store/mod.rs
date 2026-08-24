@@ -516,13 +516,13 @@ pub fn persist_configured_inference_provider_request_trace(
     Ok(trace_path)
 }
 
-/// Encodes one compact trace once and replaces oversized bodies with a bounded diagnostic summary.
-/// 对单份紧凑追踪只编码一次，并将超大正文替换为有界诊断摘要。
+/// Encodes one compact trace and omits only the oversized request body before response evidence.
+/// 编码单份紧凑追踪，并在响应证据之前仅省略超大的请求正文。
 ///
 /// # Parameters
 /// 参数
-/// `trace` is the already redacted request document captured at the transport boundary.
-/// `trace` 是已经在传输边界捕获并脱敏的请求文档。
+/// `trace` is the transport-boundary document whose credential-shaped request headers are redacted.
+/// `trace` 是在传输边界捕获的文档，其中凭据形态的请求头已经脱敏。
 ///
 /// # Returns
 /// 返回值
@@ -536,6 +536,9 @@ fn encode_bounded_provider_request_trace(trace: &Value) -> Result<Vec<u8>, Strin
         return Ok(encoded);
     }
     let api_request = trace.get("api_request");
+    // apiResponse remains intact because failed raw Provider bytes are the primary diagnostic evidence.
+    // apiResponse 保持完整，因为失败时的 Provider 原始字节是首要诊断证据。
+    let api_response = trace.get("api_response");
     let summary = serde_json::json!({
         "schema_version": trace.get("schema_version"),
         "captured_at_unix_ms": trace.get("captured_at_unix_ms"),
@@ -560,6 +563,7 @@ fn encode_bounded_provider_request_trace(trace: &Value) -> Result<Vec<u8>, Strin
             "credential_values_redacted": true,
             "body_omitted": true,
         },
+        "api_response": api_response,
     });
     let summary_bytes = serde_json::to_vec(&summary).map_err(|error| {
         format!("Bounded Provider request trace summary serialization failed: {error}")

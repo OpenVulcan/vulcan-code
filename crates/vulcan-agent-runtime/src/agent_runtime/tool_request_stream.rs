@@ -61,6 +61,16 @@ pub(crate) enum ToolRequestFragment {
         /// 由带有完成快照的协议提供的可选权威完整参数 JSON。
         final_arguments: Option<String>,
     },
+    /// Rejects one identified request whose final Provider arguments are not executable JSON.
+    /// 拒绝一条最终 Provider 参数不是可执行 JSON 的已识别请求。
+    Invalid {
+        /// Stable request-stream identifier selected by the provider adapter.
+        /// Provider 适配器选择的稳定请求流标识。
+        request_stream_id: String,
+        /// Controlled parse diagnostic that never contains the raw argument payload.
+        /// 绝不包含原始参数载荷的受控解析诊断。
+        reason: String,
+    },
     /// Stops one request before host execution begins.
     /// 在宿主执行开始前停止一条请求。
     Aborted {
@@ -127,6 +137,14 @@ impl std::fmt::Debug for ToolRequestFragment {
                     &final_arguments.as_ref().map(String::len),
                 )
                 .finish(),
+            Self::Invalid {
+                request_stream_id,
+                reason,
+            } => formatter
+                .debug_struct("Invalid")
+                .field("request_stream_id", request_stream_id)
+                .field("reason", reason)
+                .finish(),
             Self::Aborted {
                 request_stream_id,
                 reason,
@@ -172,6 +190,9 @@ struct ToolRequestDraft {
     /// Whether the strict lexer already proved one closed JSON root for immediate card finalization.
     /// 严格词法器是否已经证明存在一个已封闭 JSON 根值，以便立即结束卡片接收态。
     arguments_assembled: bool,
+    /// First content-free lexer failure that disabled only the speculative incremental preview.
+    /// 首个不含正文且只禁用推测性增量预览的词法失败。
+    incremental_preview_diagnostic: Option<String>,
     /// Optional isolated tool-owned parser session.
     /// 可选的隔离工具自有解析器会话。
     parser: Option<Box<dyn ToolRequestParserSession>>,
@@ -330,6 +351,10 @@ impl ToolRequestStreamCoordinator {
                 canonical_tool_call_id,
                 final_arguments,
             } => self.complete_request(&request_stream_id, canonical_tool_call_id, final_arguments),
+            ToolRequestFragment::Invalid {
+                request_stream_id,
+                reason,
+            } => self.invalidate_request(&request_stream_id, &reason),
             ToolRequestFragment::Aborted {
                 request_stream_id,
                 reason,
@@ -424,6 +449,7 @@ impl ToolRequestStreamCoordinator {
             last_emitted_at: Instant::now(),
             json_lexer: IncrementalJsonLexer::default(),
             arguments_assembled: false,
+            incremental_preview_diagnostic: None,
             parser,
             last_preview_revision: 0,
             progress_policy,
@@ -484,21 +510,21 @@ impl ToolRequestStreamCoordinator {
                     draft.arguments_assembled = true;
                 }
             }
-            Err(()) => {
-                // Lexer failure can happen before the parser boundary takes ownership, so abort it explicitly.
-                // 词法失败可能发生在解析器边界接管之前，因此必须显式中止解析器。
+            Err(diagnostic) => {
+                // Incremental input is speculative until a Provider-final snapshot arrives.
+                // 在 Provider 最终快照到达前，增量输入都只是推测性数据。
                 abort_draft_parser(&mut draft);
+                draft.incremental_preview_diagnostic = Some(diagnostic);
                 draft.revision = draft.revision.saturating_add(1);
                 events.push(self.runtime_event_for_draft(
-                    RuntimeEventKind::ToolRequestInvalid,
+                    RuntimeEventKind::ToolRequestProgress,
                     &request_stream_id,
                     &draft,
-                    "invalid",
-                    Some("invalid_json"),
+                    "receiving",
                     None,
                     None,
+                    draft.incremental_preview_diagnostic.as_deref(),
                 ));
-                return events;
             }
         }
         if draft.arguments_assembled {
@@ -523,64 +549,83 @@ impl ToolRequestStreamCoordinator {
         // now anchors the throttling decision for the current fragment.
         // now 为当前碎片的节流判断提供时间锚点。
         let now = Instant::now();
-        // mutationResult records lexical validity, parser preview changes, and progress cadence.
-        // mutationResult 记录词法有效性、解析器预览变化与进度节奏。
-        let mutation_result = {
+        // mutation records parser preview changes, safe degradation, and progress cadence.
+        // mutation 记录解析器预览变化、安全降级与进度节奏。
+        let mutation = {
             // draft is the uniquely correlated active request state.
             // draft 是唯一关联的活动请求状态。
             let Some(draft) = self.drafts.get_mut(request_stream_id) else {
                 return Vec::new();
             };
             draft.append_provider_delta(delta);
-            // preview is derived only from complete semantic JSON events.
-            // preview 仅从完整语义 JSON 事件派生。
-            let preview = push_argument_fragment_into_draft(draft, delta);
-            if preview.is_err() {
-                None
-            } else {
-                // receivedBytes is the authoritative UTF-8 byte count after the append.
-                // receivedBytes 是追加后的权威 UTF-8 字节数。
-                let received_bytes = draft.arguments_len();
-                // byteGrowth is the unprojected byte growth since the latest visible event.
-                // byteGrowth 是自最近一次可见事件以来尚未投影的字节增量。
-                let byte_growth = received_bytes.saturating_sub(draft.last_emitted_bytes);
-                // minimumByteGrowth increases for large inputs to bound token and persistence work.
-                // minimumByteGrowth 会针对大输入提高，以限制 Token 与持久化工作。
-                let minimum_byte_growth =
-                    if received_bytes >= draft.progress_policy.large_input_threshold_bytes {
-                        draft.progress_policy.large_input_minimum_byte_growth
-                    } else {
-                        draft.progress_policy.minimum_byte_growth
-                    };
-                let should_emit_progress = byte_growth >= minimum_byte_growth
-                    || now.duration_since(draft.last_emitted_at)
-                        >= Duration::from_millis(draft.progress_policy.maximum_interval_ms);
-                if should_emit_progress {
-                    draft.last_emitted_bytes = received_bytes;
-                    draft.last_emitted_at = now;
-                }
-                // newlyAssembled bypasses cadence throttling exactly once when one JSON root closes.
-                // newlyAssembled 在一个 JSON 根值封闭时恰好一次绕过节奏节流。
-                let newly_assembled =
-                    !draft.arguments_assembled && draft.json_lexer.is_root_complete();
-                if newly_assembled {
-                    draft.arguments_assembled = true;
-                    draft.last_emitted_bytes = received_bytes;
-                    draft.last_emitted_at = now;
-                }
-                Some((
-                    should_emit_progress,
-                    preview.unwrap_or_default(),
-                    newly_assembled,
-                    draft.arguments_assembled,
-                ))
+            // preview is derived only while the speculative incremental document remains valid.
+            // preview 仅在推测性增量文档仍合法时派生。
+            let (preview, new_preview_diagnostic) =
+                if draft.incremental_preview_diagnostic.is_some() {
+                    (None, None)
+                } else {
+                    match push_argument_fragment_into_draft(draft, delta) {
+                        Ok(preview) => (preview, None),
+                        Err(diagnostic) => {
+                            // Parser state cannot survive a rejected speculative prefix, but the draft can.
+                            // 解析器状态无法跨越被拒绝的推测性前缀，但草稿本身可以继续保留。
+                            abort_draft_parser(draft);
+                            draft.incremental_preview_diagnostic = Some(diagnostic.clone());
+                            draft.arguments_assembled = false;
+                            (None, Some(diagnostic))
+                        }
+                    }
+                };
+            // receivedBytes is the authoritative UTF-8 byte count after the append.
+            // receivedBytes 是追加后的权威 UTF-8 字节数。
+            let received_bytes = draft.arguments_len();
+            // byteGrowth is the unprojected byte growth since the latest visible event.
+            // byteGrowth 是自最近一次可见事件以来尚未投影的字节增量。
+            let byte_growth = received_bytes.saturating_sub(draft.last_emitted_bytes);
+            // minimumByteGrowth increases for large inputs to bound token and persistence work.
+            // minimumByteGrowth 会针对大输入提高，以限制 Token 与持久化工作。
+            let minimum_byte_growth =
+                if received_bytes >= draft.progress_policy.large_input_threshold_bytes {
+                    draft.progress_policy.large_input_minimum_byte_growth
+                } else {
+                    draft.progress_policy.minimum_byte_growth
+                };
+            let should_emit_progress = new_preview_diagnostic.is_some()
+                || byte_growth >= minimum_byte_growth
+                || now.duration_since(draft.last_emitted_at)
+                    >= Duration::from_millis(draft.progress_policy.maximum_interval_ms);
+            if should_emit_progress {
+                draft.last_emitted_bytes = received_bytes;
+                draft.last_emitted_at = now;
             }
+            // newlyAssembled bypasses cadence throttling exactly once when one valid JSON root closes.
+            // newlyAssembled 在一个合法 JSON 根值封闭时恰好一次绕过节奏节流。
+            let preview_degraded = draft.incremental_preview_diagnostic.is_some();
+            let newly_assembled = !preview_degraded
+                && !draft.arguments_assembled
+                && draft.json_lexer.is_root_complete();
+            if newly_assembled {
+                draft.arguments_assembled = true;
+                draft.last_emitted_bytes = received_bytes;
+                draft.last_emitted_at = now;
+            }
+            (
+                should_emit_progress,
+                preview,
+                newly_assembled,
+                draft.arguments_assembled,
+                new_preview_diagnostic,
+                preview_degraded,
+            )
         };
-        let Some((should_emit_progress, preview, newly_assembled, arguments_assembled)) =
-            mutation_result
-        else {
-            return self.invalidate_request(request_stream_id, "invalid_json");
-        };
+        let (
+            should_emit_progress,
+            preview,
+            newly_assembled,
+            arguments_assembled,
+            preview_diagnostic,
+            preview_degraded,
+        ) = mutation;
         // events contains at most one throttled progress and one semantic preview update.
         // events 最多包含一条节流进度与一条语义预览更新。
         let mut events = Vec::new();
@@ -600,11 +645,11 @@ impl ToolRequestStreamCoordinator {
                     },
                     None,
                     None,
-                    None,
+                    preview_diagnostic.as_deref(),
                 ));
             }
         }
-        if let Some(preview) = preview {
+        if !preview_degraded && let Some(preview) = preview {
             if let Some(draft) = self.drafts.get_mut(request_stream_id) {
                 draft.revision = draft.revision.saturating_add(1);
             }
@@ -646,25 +691,54 @@ impl ToolRequestStreamCoordinator {
         // previewDiagnostic records safe degradation without exposing argument content.
         // previewDiagnostic 记录安全降级，但不暴露参数内容。
         let mut preview_diagnostic = None;
-        if let Some(final_arguments) = final_arguments
-            && !draft.read_arguments(|arguments| arguments == final_arguments)
+        // incrementalDiagnostic belongs only to the speculative stream and is reconsidered below.
+        // incrementalDiagnostic 仅属于推测性参数流，并会在下方根据权威快照重新判断。
+        let incremental_diagnostic = draft.incremental_preview_diagnostic.take();
+        let authoritative_final_present = final_arguments.is_some();
+        if let Some(final_arguments) = final_arguments {
+            // finalArgumentsDiffer compares exact bytes before replacing the active cumulative storage.
+            // finalArgumentsDiffer 在替换当前累计存储前比较精确字节。
+            let final_arguments_differ =
+                !draft.read_arguments(|arguments| arguments == final_arguments);
+            if final_arguments_differ {
+                draft.replace_arguments(final_arguments);
+            }
+            if final_arguments_differ || incremental_diagnostic.is_some() {
+                abort_draft_parser(&mut draft);
+                draft.json_lexer = IncrementalJsonLexer::default();
+                preview_diagnostic = Some(if final_arguments_differ {
+                    "provider_final_arguments_replaced"
+                } else {
+                    "provider_final_arguments_revalidated"
+                });
+            }
+        }
+        if !authoritative_final_present && let Some(diagnostic) = incremental_diagnostic.as_deref()
         {
             abort_draft_parser(&mut draft);
-            draft.replace_arguments(final_arguments);
-            draft.json_lexer = IncrementalJsonLexer::default();
-            preview_diagnostic = Some("provider_final_arguments_replaced");
+            draft.revision = draft.revision.saturating_add(1);
+            return vec![self.runtime_event_for_draft(
+                RuntimeEventKind::ToolRequestInvalid,
+                request_stream_id,
+                &draft,
+                "failed",
+                Some("invalid_json"),
+                None,
+                Some(diagnostic),
+            )];
+        }
+        if preview_diagnostic.is_some() {
             let final_arguments_snapshot = draft.arguments_snapshot();
-            let final_arguments_valid = draft.json_lexer.push(&final_arguments_snapshot).is_ok();
-            if !final_arguments_valid {
+            if let Err(diagnostic) = draft.json_lexer.push(&final_arguments_snapshot) {
                 draft.revision = draft.revision.saturating_add(1);
                 return vec![self.runtime_event_for_draft(
                     RuntimeEventKind::ToolRequestInvalid,
                     request_stream_id,
                     &draft,
-                    "invalid",
+                    "failed",
                     Some("invalid_json"),
                     None,
-                    preview_diagnostic,
+                    Some(diagnostic.as_str()),
                 )];
             }
         }
@@ -676,16 +750,16 @@ impl ToolRequestStreamCoordinator {
             let received_characters = draft.received_characters;
             draft.replace_arguments(String::from("{}"));
             draft.received_characters = received_characters;
-            if draft.json_lexer.push("{}").is_err() {
+            if let Err(diagnostic) = draft.json_lexer.push("{}") {
                 draft.revision = draft.revision.saturating_add(1);
                 return vec![self.runtime_event_for_draft(
                     RuntimeEventKind::ToolRequestInvalid,
                     request_stream_id,
                     &draft,
-                    "invalid",
+                    "failed",
                     Some("invalid_json"),
                     None,
-                    preview_diagnostic,
+                    Some(diagnostic.as_str()),
                 )];
             }
         }
@@ -693,17 +767,17 @@ impl ToolRequestStreamCoordinator {
         // lexicalEvents 会闭合以物理流结尾为分隔符的标量 Token。
         let lexical_events = match draft.json_lexer.finish() {
             Ok(events) => events,
-            Err(_) => {
+            Err(diagnostic) => {
                 abort_draft_parser(&mut draft);
                 draft.revision = draft.revision.saturating_add(1);
                 return vec![self.runtime_event_for_draft(
                     RuntimeEventKind::ToolRequestInvalid,
                     request_stream_id,
                     &draft,
-                    "invalid",
+                    "failed",
                     Some("invalid_json"),
                     None,
-                    None,
+                    Some(diagnostic.as_str()),
                 )];
             }
         };
@@ -714,17 +788,20 @@ impl ToolRequestStreamCoordinator {
             .read_arguments(|arguments| serde_json::from_str::<serde_json::Value>(arguments))
         {
             Ok(arguments) => arguments,
-            Err(_) => {
+            Err(error) => {
                 abort_draft_parser(&mut draft);
                 draft.revision = draft.revision.saturating_add(1);
+                // diagnostic retains only serde's structural location and never copies argument content.
+                // diagnostic 仅保留 serde 的结构位置，绝不复制参数原文。
+                let diagnostic = error.to_string();
                 return vec![self.runtime_event_for_draft(
                     RuntimeEventKind::ToolRequestInvalid,
                     request_stream_id,
                     &draft,
-                    "invalid",
+                    "failed",
                     Some("invalid_json"),
                     None,
-                    None,
+                    Some(diagnostic.as_str()),
                 )];
             }
         };
@@ -760,6 +837,38 @@ impl ToolRequestStreamCoordinator {
         events
     }
 
+    /// Rejects one identified request as a terminal pre-execution argument failure.
+    /// 将一条已识别请求拒绝为执行前参数失败终态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `request_stream_id` selects the exact active draft and `reason` is a controlled diagnostic
+    /// without raw argument content.
+    /// `request_stream_id` 选择精确活动草稿，`reason` 是不含原始参数内容的受控诊断。
+    ///
+    /// # Returns
+    /// 返回值
+    /// One failed terminal request event, or no event when the draft was already closed.
+    /// 返回一条失败终态请求事件；草稿已经关闭时不返回事件。
+    fn invalidate_request(&mut self, request_stream_id: &str, reason: &str) -> Vec<RuntimeEvent> {
+        // draft is removed before projection so delayed fragments cannot revive rejected input.
+        // draft 在投影前移除，确保延迟碎片不能复活已拒绝输入。
+        let Some(mut draft) = self.drafts.remove(request_stream_id) else {
+            return Vec::new();
+        };
+        abort_draft_parser(&mut draft);
+        draft.revision = draft.revision.saturating_add(1);
+        vec![self.runtime_event_for_draft(
+            RuntimeEventKind::ToolRequestInvalid,
+            request_stream_id,
+            &draft,
+            "failed",
+            Some(reason),
+            None,
+            None,
+        )]
+    }
+
     /// Aborts one active request without exposing its accumulated argument content.
     /// 在不暴露累计参数内容的前提下中止一条活动请求。
     fn abort_request(&mut self, request_stream_id: &str, reason: &str) -> Vec<RuntimeEvent> {
@@ -782,27 +891,6 @@ impl ToolRequestStreamCoordinator {
             request_stream_id,
             &draft,
             display_state,
-            Some(reason),
-            None,
-            None,
-        )]
-    }
-
-    /// Marks one active request invalid and releases parser-owned resources immediately.
-    /// 将一条活动请求标记为无效并立即释放解析器持有的资源。
-    fn invalidate_request(&mut self, request_stream_id: &str, reason: &str) -> Vec<RuntimeEvent> {
-        // draft is removed before projection so no later fragment can revive invalid state.
-        // draft 在投影前被移除，确保后续碎片不能复活无效状态。
-        let Some(mut draft) = self.drafts.remove(request_stream_id) else {
-            return Vec::new();
-        };
-        abort_draft_parser(&mut draft);
-        draft.revision = draft.revision.saturating_add(1);
-        vec![self.runtime_event_for_draft(
-            RuntimeEventKind::ToolRequestInvalid,
-            request_stream_id,
-            &draft,
-            "invalid",
             Some(reason),
             None,
             None,
@@ -858,10 +946,10 @@ impl ToolRequestStreamCoordinator {
 fn push_argument_fragment_into_draft(
     draft: &mut ToolRequestDraft,
     fragment: &str,
-) -> Result<Option<ToolRequestPreview>, ()> {
+) -> Result<Option<ToolRequestPreview>, String> {
     // lexicalEvents contain decoded semantics but never execute or mutate target resources.
     // lexicalEvents 包含已解码语义，但绝不会执行或修改目标资源。
-    let lexical_events = draft.json_lexer.push(fragment).map_err(|_| ())?;
+    let lexical_events = draft.json_lexer.push(fragment)?;
     Ok(deliver_json_events_to_parser(draft, &lexical_events))
 }
 
@@ -1553,10 +1641,10 @@ mod tests {
         assert!(coordinator.drafts.contains_key("stream-assembler-prefix"));
     }
 
-    /// Verifies an invalid initial fragment aborts the parser before the draft is discarded.
-    /// 验证无效初始碎片会在丢弃草稿前中止解析器。
+    /// Verifies an invalid initial fragment aborts only its speculative parser session.
+    /// 验证无效初始碎片只会中止其推测性解析器会话。
     #[test]
-    fn invalid_initial_fragment_aborts_parser_session() {
+    fn invalid_initial_fragment_degrades_preview_without_discarding_draft() {
         let abort_count = Arc::new(AtomicUsize::new(0));
         let mut coordinator = ToolRequestStreamCoordinator::default();
         coordinator.tool_capabilities.insert(
@@ -1582,9 +1670,76 @@ mod tests {
         assert!(
             events
                 .iter()
-                .any(|event| event.kind == RuntimeEventKind::ToolRequestInvalid)
+                .all(|event| event.kind != RuntimeEventKind::ToolRequestInvalid)
         );
         assert_eq!(abort_count.load(Ordering::SeqCst), 1);
+        assert!(coordinator.drafts.contains_key("stream-invalid-initial"));
+    }
+
+    /// Verifies an invalid delta degrades preview until authoritative final arguments repair it.
+    /// 验证非法增量只会降级预览，直至权威最终参数将其修正。
+    #[test]
+    fn invalid_delta_is_repaired_by_authoritative_final_arguments() {
+        // coordinator starts one string value whose next fragment must provide valid JSON escaping.
+        // coordinator 启动一个字符串值，其后续碎片必须提供合法 JSON 转义。
+        let mut coordinator = test_coordinator();
+        coordinator.apply(ToolRequestFragment::Detected {
+            request_stream_id: String::from("stream-invalid-delta"),
+            tool_call_id: String::from("call-invalid-delta"),
+            tool_name: String::from("test_tool"),
+            initial_arguments: String::from(r#"{"path":""#),
+            argument_assembler: None,
+        });
+
+        // degradedEvents must retain only the lexer explanation after an unsupported escape.
+        // degradedEvents 必须在遇到不受支持的转义后仅保留词法说明。
+        let degraded_events = coordinator.apply(ToolRequestFragment::ArgumentsDelta {
+            request_stream_id: String::from("stream-invalid-delta"),
+            delta: String::from(r#"\q"#),
+        });
+        // degradedEvent is non-terminal so a later Provider-final snapshot can repair the draft.
+        // degradedEvent 是非终态事件，使后续 Provider 最终快照可以修正草稿。
+        let degraded_event = degraded_events
+            .iter()
+            .find(|event| event.kind == RuntimeEventKind::ToolRequestProgress)
+            .expect("invalid delta should emit one degraded progress event");
+        assert_eq!(
+            degraded_event
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("preview_diagnostic"))
+                .and_then(serde_json::Value::as_str),
+            Some("Invalid JSON escape `\\q` in tool request arguments.")
+        );
+        // metadataText proves the diagnostic does not copy the surrounding argument field.
+        // metadataText 证明诊断没有复制周边参数字段。
+        let metadata_text = serde_json::to_string(&degraded_event.metadata)
+            .expect("invalid event metadata should serialize");
+        assert!(!metadata_text.contains("path"));
+        assert!(
+            degraded_events
+                .iter()
+                .all(|event| event.kind != RuntimeEventKind::ToolRequestInvalid)
+        );
+        assert!(coordinator.drafts.contains_key("stream-invalid-delta"));
+
+        // completedEvents prove valid Provider-final arguments replace the rejected incremental form.
+        // completedEvents 证明合法 Provider 最终参数会替换被拒绝的增量形态。
+        let completed_events = coordinator.apply(ToolRequestFragment::Completed {
+            request_stream_id: String::from("stream-invalid-delta"),
+            canonical_tool_call_id: Some(String::from("call-invalid-delta")),
+            final_arguments: Some(String::from(r#"{"path":"fixed"}"#)),
+        });
+        assert!(
+            completed_events
+                .iter()
+                .any(|event| event.kind == RuntimeEventKind::ToolRequestReady)
+        );
+        assert!(
+            completed_events
+                .iter()
+                .all(|event| event.kind != RuntimeEventKind::ToolRequestInvalid)
+        );
         assert!(coordinator.drafts.is_empty());
     }
 
@@ -1604,6 +1759,7 @@ mod tests {
             last_emitted_at: Instant::now(),
             json_lexer: IncrementalJsonLexer::default(),
             arguments_assembled: false,
+            incremental_preview_diagnostic: None,
             parser: None,
             last_preview_revision: 0,
             progress_policy: ToolRequestProgressPolicy::default(),
@@ -1717,6 +1873,42 @@ mod tests {
             argument_assembler: None,
         });
         assert!(events.is_empty());
+        assert!(coordinator.drafts.is_empty());
+    }
+
+    /// Verifies Provider-final invalid JSON closes the request as failed instead of stopped or running.
+    /// 验证 Provider 最终非法 JSON 会将请求关闭为失败，而不是停止或运行中。
+    #[test]
+    fn provider_invalid_arguments_use_failed_terminal_request_state() {
+        // coordinator owns one identified request whose raw payload remains private.
+        // coordinator 持有一条已识别请求，其原始载荷保持私有。
+        let mut coordinator = test_coordinator();
+        coordinator.apply(ToolRequestFragment::Detected {
+            request_stream_id: String::from("stream-provider-invalid"),
+            tool_call_id: String::from("call-provider-invalid"),
+            tool_name: String::from("test_tool"),
+            initial_arguments: String::from("{\"value\":"),
+            argument_assembler: None,
+        });
+
+        // invalidEvent is the visible pre-execution failure produced from the controlled decoder reason.
+        // invalidEvent 是根据受控 decoder 原因生成的可见执行前失败。
+        let events = coordinator.apply(ToolRequestFragment::Invalid {
+            request_stream_id: String::from("stream-provider-invalid"),
+            reason: String::from("tool arguments did not contain complete JSON"),
+        });
+        let invalid_event = events
+            .iter()
+            .find(|event| event.kind == RuntimeEventKind::ToolRequestInvalid)
+            .expect("invalid Provider arguments should emit one terminal failure");
+        assert_eq!(
+            invalid_event
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("tool_display_state"))
+                .and_then(serde_json::Value::as_str),
+            Some("failed")
+        );
         assert!(coordinator.drafts.is_empty());
     }
 

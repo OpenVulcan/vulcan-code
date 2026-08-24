@@ -59,14 +59,6 @@ pub(super) fn append_tool_request_started_projection_to_state(
         })
         .cloned();
     if let Some(record_id) = existing_record_id {
-        // Older physical-request aliases are removed before the new stream correlation is installed.
-        // 安装新请求流关联前会移除较旧的物理请求别名。
-        runtime_state
-            .tool_request_record_ids
-            .retain(|_, mapped_record_id| mapped_record_id != &record_id);
-        runtime_state
-            .tool_request_record_ids
-            .insert(identity.request_stream_id, record_id.clone());
         let advanced = merge_tool_request_event_into_record(
             &mut runtime_state.conversation_state,
             &record_id,
@@ -74,6 +66,14 @@ pub(super) fn append_tool_request_started_projection_to_state(
             identity.revision,
         );
         if advanced {
+            // Older physical-request aliases are replaced only after the incoming revision wins.
+            // 仅当传入修订胜出后才替换较旧的物理请求别名。
+            runtime_state
+                .tool_request_record_ids
+                .retain(|_, mapped_record_id| mapped_record_id != &record_id);
+            runtime_state
+                .tool_request_record_ids
+                .insert(identity.request_stream_id, record_id.clone());
             runtime_state.updated_at = now.to_string();
         }
         return Ok(advanced.then_some(record_id).into_iter().collect());
@@ -188,8 +188,8 @@ pub(super) fn update_tool_request_projection_to_state(
     Ok(vec![record_id])
 }
 
-/// Marks one exact pre-execution request card as stopped and releases its correlations.
-/// 将一张精确的执行前请求卡片标记为已停止并释放其关联。
+/// Applies one exact pre-execution terminal state and releases its request correlations.
+/// 应用一项精确的执行前终态，并释放其请求关联。
 ///
 /// # Parameters
 /// 参数
@@ -197,8 +197,8 @@ pub(super) fn update_tool_request_projection_to_state(
 /// `runtime_state` 持有卡片及其开放关联映射。
 /// `now` is the persistence timestamp for the terminal request state.
 /// `now` 是请求终态的持久化时间戳。
-/// `event` is the coordinator-normalized abort event.
-/// `event` 是协调器规范化后的中止事件。
+/// `event` is the coordinator-normalized invalid or abort event.
+/// `event` 是协调器规范化后的无效或中止事件。
 ///
 /// # Returns
 /// 返回值
@@ -214,11 +214,12 @@ pub(super) fn abort_tool_request_projection_to_state(
     let Some(identity) = parse_tool_request_event_identity(event) else {
         return Ok(Vec::new());
     };
-    // recordId is removed from the request map first so the stopped request cannot revive.
-    // recordId 会先从请求映射移除，确保已停止请求不能复活。
+    // recordId remains correlated until the terminal revision is proven newer than the visible card.
+    // recordId 会持续保持关联，直到终态修订被证明比可见卡片更新。
     let Some(record_id) = runtime_state
         .tool_request_record_ids
-        .remove(&identity.request_stream_id)
+        .get(&identity.request_stream_id)
+        .cloned()
     else {
         return Ok(Vec::new());
     };
@@ -228,6 +229,18 @@ pub(super) fn abort_tool_request_projection_to_state(
         event,
         identity.revision,
     );
+    if !advanced {
+        return Ok(Vec::new());
+    }
+    if runtime_state
+        .tool_request_record_ids
+        .get(&identity.request_stream_id)
+        == Some(&record_id)
+    {
+        runtime_state
+            .tool_request_record_ids
+            .remove(&identity.request_stream_id);
+    }
     if runtime_state
         .tool_call_record_ids
         .get(&identity.tool_call_id)
@@ -237,10 +250,8 @@ pub(super) fn abort_tool_request_projection_to_state(
             .tool_call_record_ids
             .remove(&identity.tool_call_id);
     }
-    if advanced {
-        runtime_state.updated_at = now.to_string();
-    }
-    Ok(advanced.then_some(record_id).into_iter().collect())
+    runtime_state.updated_at = now.to_string();
+    Ok(vec![record_id])
 }
 
 pub(super) fn append_tool_started_projection_to_state(

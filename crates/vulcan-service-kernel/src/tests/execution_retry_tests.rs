@@ -1594,6 +1594,7 @@ fn retained_assistant_tool_tail_selects_unprepared_tool_batch_recovery() {
         tool_call_id: String::from("tool-item-crash-gap-1"),
         tool_name: String::from("read_file"),
         arguments: serde_json::json!({"path": "README.md"}),
+        argument_parse_error: None,
     };
     // snapshot still carries the pre-completion dispatch action from the last durable checkpoint.
     // snapshot 仍携带上一可靠检查点留下的 Provider 完成前分派动作。
@@ -1616,6 +1617,7 @@ fn retained_assistant_tool_tail_selects_unprepared_tool_batch_recovery() {
                 tool_call_id: Some(String::from("   ")),
                 tool_name: request.tool_name.clone(),
                 arguments: request.arguments.clone(),
+                argument_parse_error: request.argument_parse_error.clone(),
             }],
         },
     }];
@@ -1661,6 +1663,7 @@ fn execution_retry_tool_boundaries_retain_live_batch_start_and_result() {
         tool_call_id: String::from("tool-item-1"),
         tool_name: String::from("read_file"),
         arguments: serde_json::json!({"path": "README.md"}),
+        argument_parse_error: None,
     };
     // bindingFingerprint identifies the resolved descriptor, schema, and execution policy.
     // bindingFingerprint 标识已解析的描述、Schema 与执行策略。
@@ -1683,6 +1686,7 @@ fn execution_retry_tool_boundaries_retain_live_batch_start_and_result() {
                 tool_call_id: Some(String::from("   ")),
                 tool_name: request.tool_name.clone(),
                 arguments: request.arguments.clone(),
+                argument_parse_error: request.argument_parse_error.clone(),
             }],
         },
     }];
@@ -1741,6 +1745,7 @@ fn execution_retry_tool_boundaries_retain_live_batch_start_and_result() {
                 tool_call_id: Some(String::from("   ")),
                 tool_name: request.tool_name.clone(),
                 arguments: request.arguments.clone(),
+                argument_parse_error: request.argument_parse_error.clone(),
             }],
         },
     }];
@@ -2022,6 +2027,7 @@ fn execution_retry_tool_boundary_preserves_concurrent_replacement() {
         tool_call_id: String::from("stale-tool-call"),
         tool_name: String::from("read_file"),
         arguments: serde_json::json!({"path": "README.md"}),
+        argument_parse_error: None,
     };
     // boundary is the late prepared event still bound to staleReference.
     // boundary 是仍绑定到 staleReference 的较晚已准备事件。
@@ -2089,6 +2095,7 @@ fn execution_retry_stop_refreeze_reconciles_running_tool_without_reexecution() {
         tool_call_id: String::from("tool-call-stop-1"),
         tool_name: String::from("write_file"),
         arguments: serde_json::json!({"path": "result.txt", "content": "value"}),
+        argument_parse_error: None,
     };
     // bindingFingerprint freezes the exact resolved tool implementation used by the interrupted attempt.
     // bindingFingerprint 冻结被中断尝试使用的精确已解析工具实现。
@@ -2111,6 +2118,7 @@ fn execution_retry_stop_refreeze_reconciles_running_tool_without_reexecution() {
                 tool_call_id: Some(request.tool_call_id.clone()),
                 tool_name: request.tool_name.clone(),
                 arguments: request.arguments.clone(),
+                argument_parse_error: request.argument_parse_error.clone(),
             }],
         },
     }];
@@ -2141,6 +2149,7 @@ fn execution_retry_stop_refreeze_reconciles_running_tool_without_reexecution() {
                 tool_call_id: Some(request.tool_call_id.clone()),
                 tool_name: request.tool_name.clone(),
                 arguments: request.arguments.clone(),
+                argument_parse_error: request.argument_parse_error.clone(),
             }],
         },
     }];

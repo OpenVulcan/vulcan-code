@@ -110,6 +110,53 @@ fn transcript_replay_groups_parallel_tool_rows_into_one_batch() {
     ));
 }
 
+/// Verifies transcript-only recovery preserves the diagnostic that forbids executing malformed tool arguments.
+/// 验证仅依赖转录的恢复会保留禁止执行异常工具参数的诊断。
+#[test]
+fn transcript_replay_preserves_tool_argument_parse_error() {
+    // decoderMessage mirrors the controlled protocol failure stored on the visible tool-call row.
+    // decoderMessage 镜像保存在可见工具调用行上的受控协议失败。
+    let decoder_message = "OpenAI Responses tool input ended before valid JSON was complete";
+    // callMetadata extends the ordinary tool identity with the durable pre-execution rejection fact.
+    // callMetadata 在普通工具身份上扩展可靠的执行前拒绝事实。
+    let mut call_metadata = tool_call_metadata("file_edit", "call-invalid");
+    call_metadata["arguments"] = Value::Null;
+    call_metadata["argument_parse_error"] = Value::String(decoder_message.to_string());
+    let messages = vec![
+        transcript_entry(
+            "call-row-invalid",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::ToolCallOutput,
+            "null",
+            Some(call_metadata),
+        ),
+        transcript_entry(
+            "result-row-invalid",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::ToolResultOutput,
+            "Tool was not executed.",
+            Some(json!({
+                "tool_name": "file_edit",
+                "tool_call_id": "call-invalid",
+                "is_error": true,
+            })),
+        ),
+    ];
+
+    let state = conversation_state_from_session_messages(&messages)
+        .expect("malformed tool diagnostic should reconstruct");
+    let SessionConversationPayload::Assistant { tool_calls, .. } = &state.messages[0].payload
+    else {
+        panic!("first reconstructed message should be the assistant tool call");
+    };
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].arguments, Value::Null);
+    assert_eq!(
+        tool_calls[0].argument_parse_error.as_deref(),
+        Some(decoder_message)
+    );
+}
+
 /// Verifies legacy local result aliases are rewritten to one stable model-visible call id.
 /// 验证旧本地结果别名会被改写为一个稳定的模型可见调用标识。
 #[test]
@@ -128,6 +175,7 @@ fn replay_normalization_canonicalizes_legacy_tool_result_alias() {
                     tool_call_id: Some(String::from("provider-call-1")),
                     tool_name: String::from("demo"),
                     arguments: json!({}),
+                    argument_parse_error: None,
                 }],
             },
         },

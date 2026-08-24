@@ -393,6 +393,7 @@ fn assistant_message(
                     tool_call_id: Some(String::from("tool-call-1")),
                     tool_name: String::from("vulcan_file_list"),
                     arguments: json!({}),
+                    argument_parse_error: None,
                 })
                 .into_iter()
                 .collect(),

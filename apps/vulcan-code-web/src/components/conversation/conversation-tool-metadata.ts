@@ -311,7 +311,7 @@ export function normalizeToolDisplayState(status?: string | null): string | unde
     return undefined;
   }
   const normalized = status.trim().toLowerCase();
-  if (normalized === "failed" || normalized === "error" || normalized === "errored" || normalized === "failure") {
+  if (normalized === "failed" || normalized === "error" || normalized === "errored" || normalized === "failure" || normalized === "invalid" || normalized === "rejected") {
     return "failed";
   }
   if (normalized === "completed" || normalized === "complete" || normalized === "success" || normalized === "succeeded") {

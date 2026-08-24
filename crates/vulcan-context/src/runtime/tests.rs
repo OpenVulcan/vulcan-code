@@ -16,6 +16,7 @@ fn tool_call(id: &str) -> SessionConversationToolCall {
         tool_call_id: Some(id.to_string()),
         tool_name: String::from("demo"),
         arguments: json!({ "value": 1 }),
+        argument_parse_error: None,
     }
 }
 
@@ -188,6 +189,7 @@ fn runtime_tool_call_line(
             provider_tool_call_id: provider_tool_call_id.map(str::to_string),
             tool_name: String::from("demo"),
             arguments: json!({}),
+            argument_parse_error: None,
         }),
     )
 }
@@ -413,6 +415,7 @@ fn runtime_log_projection_rejects_missing_tool_call_identifier() {
         tool_call_id: None,
         tool_name: String::from("demo"),
         arguments: json!({}),
+        argument_parse_error: None,
     };
     // state places the malformed call on the only assistant message.
     // state 将异常调用放在唯一助手消息中。
@@ -466,6 +469,7 @@ fn runtime_log_projection_normalizes_tool_call_identity() {
                         tool_call_id: Some(String::from("   ")),
                         tool_name: String::from("demo"),
                         arguments: json!({}),
+                        argument_parse_error: None,
                     }],
                 },
             },
@@ -673,6 +677,82 @@ fn runtime_log_round_trip_uses_single_tool_result_message_identifier() {
         SessionConversationPayload::ToolResult { tool_call_id, .. }
             if tool_call_id.as_deref() == Some("call-1")
     ));
+}
+
+/// Verifies runtime-log projection and replay preserve the non-executable argument diagnostic.
+/// 验证运行时日志投影与回放会保留禁止执行的参数诊断。
+#[test]
+fn runtime_log_round_trip_preserves_argument_parse_error() {
+    // malformed_call models the normalized Provider failure retained for model-visible feedback.
+    // malformed_call 模拟为模型可见反馈保留的规范化 Provider 失败。
+    let malformed_call = SessionConversationToolCall {
+        id: String::from("call-malformed"),
+        tool_call_id: Some(String::from("provider-call-malformed")),
+        tool_name: String::from("file_edit"),
+        arguments: Value::Null,
+        argument_parse_error: Some(String::from("tool arguments are not valid JSON")),
+    };
+    let state = SessionConversationState {
+        messages: vec![
+            SessionConversationMessage {
+                id: String::from("assistant-malformed"),
+                payload: SessionConversationPayload::Assistant {
+                    text: String::new(),
+                    reasoning: String::new(),
+                    provider_message_id: None,
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: vec![malformed_call.clone()],
+                },
+            },
+            SessionConversationMessage {
+                id: String::from("result-malformed"),
+                payload: SessionConversationPayload::ToolResult {
+                    tool_call_id: Some(String::from("provider-call-malformed")),
+                    is_error: true,
+                    text: String::from("tool arguments are not valid JSON"),
+                },
+            },
+        ],
+        records: Vec::new(),
+        continuation: Default::default(),
+    };
+
+    let lines = runtime_log_lines_from_conversation_state(&state, "1", 1)
+        .expect("project malformed tool call");
+    let projected_call = lines
+        .iter()
+        .find_map(|line| match &line.event {
+            RuntimeLogEvent::ToolCall(event) => Some(event),
+            _ => None,
+        })
+        .expect("projected malformed tool call event");
+    let replayed =
+        conversation_state_from_runtime_log_lines(&lines).expect("replay malformed tool call");
+
+    assert_eq!(projected_call.arguments, Value::Null);
+    assert_eq!(
+        projected_call.argument_parse_error.as_deref(),
+        malformed_call.argument_parse_error.as_deref()
+    );
+    let replayed_assistant = replayed
+        .messages
+        .iter()
+        .find(|message| message.id == "assistant-malformed")
+        .expect("replayed malformed assistant message");
+    let SessionConversationPayload::Assistant { tool_calls, .. } = &replayed_assistant.payload
+    else {
+        panic!("replayed malformed call must remain an assistant tool call");
+    };
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].id, "provider-call-malformed");
+    assert_eq!(tool_calls[0].tool_call_id, malformed_call.tool_call_id);
+    assert_eq!(tool_calls[0].tool_name, malformed_call.tool_name);
+    assert_eq!(tool_calls[0].arguments, malformed_call.arguments);
+    assert_eq!(
+        tool_calls[0].argument_parse_error,
+        malformed_call.argument_parse_error
+    );
 }
 
 /// Verifies each tool call consumes at most one completed result inside its batch.
@@ -1584,6 +1664,7 @@ fn runtime_log_replay_groups_adjacent_tool_call_messages() {
                 provider_tool_call_id: Some(String::from("call-a")),
                 tool_name: String::from("first_tool"),
                 arguments: json!({ "value": "a" }),
+                argument_parse_error: None,
             }),
         ),
         RuntimeLogEventLine::new(
@@ -1613,6 +1694,7 @@ fn runtime_log_replay_groups_adjacent_tool_call_messages() {
                 provider_tool_call_id: Some(String::from("call-b")),
                 tool_name: String::from("second_tool"),
                 arguments: json!({ "value": "b" }),
+                argument_parse_error: None,
             }),
         ),
         RuntimeLogEventLine::new(

@@ -20,12 +20,14 @@ fn run_user_turn_streaming_executes_tool_batch_concurrently() {
                             tool_call_id: Some(String::from("call-a")),
                             tool_name: String::from("slow_a"),
                             arguments: json!({"step": "a"}),
+                            argument_parse_error: None,
                         },
                         ConversationToolCall {
                             id: String::from("tool-item-b"),
                             tool_call_id: Some(String::from("call-b")),
                             tool_name: String::from("fast_b"),
                             arguments: json!({"step": "b"}),
+                            argument_parse_error: None,
                         },
                     ],
                     continuation: None,
@@ -83,6 +85,235 @@ fn run_user_turn_streaming_executes_tool_batch_concurrently() {
     });
 }
 
+/// Verifies Provider-invalid JSON arguments return one tool error without dispatching the host tool body.
+/// 验证 Provider 无效 JSON 参数会返回一条工具错误，且不会分派宿主工具主体。
+#[test]
+fn malformed_provider_arguments_return_tool_error_without_executor_dispatch() {
+    let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        // decoderMessage is the exact controlled protocol diagnostic attached before Core execution.
+        // decoderMessage 是 Core 执行前附加的精确受控协议诊断。
+        let decoder_message = "OpenAI Responses tool input ended before valid JSON was complete";
+        let adapter = MockStreamingProviderAdapter::new(vec![
+            (
+                Vec::new(),
+                ProviderTurnResponse {
+                    assistant_text: String::new(),
+                    assistant_reasoning: String::new(),
+                    provider_message_id: Some(String::from("resp-invalid-tool")),
+                    provider_message_state: None,
+                    tool_calls: vec![ConversationToolCall {
+                        id: String::from("tool-item-invalid"),
+                        tool_call_id: Some(String::from("call-invalid")),
+                        tool_name: String::from("file_edit"),
+                        arguments: Value::Null,
+                        argument_parse_error: Some(decoder_message.to_string()),
+                    }],
+                    continuation: None,
+                    usage: None,
+                },
+            ),
+            (
+                Vec::new(),
+                ProviderTurnResponse {
+                    assistant_text: String::from("I will correct the edit arguments."),
+                    assistant_reasoning: String::new(),
+                    provider_message_id: Some(String::from("resp-after-invalid-tool")),
+                    provider_message_state: None,
+                    tool_calls: Vec::new(),
+                    continuation: None,
+                    usage: None,
+                },
+            ),
+        ]);
+        let executor = MockToolExecutor::new();
+        let mut controller =
+            VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default())
+                .expect("valid core conversation snapshot");
+
+        let result = controller
+            .run_user_turn_streaming(
+                &adapter,
+                &executor,
+                &AllowAllToolPolicy,
+                "Apply the requested edit.",
+            )
+            .await
+            .expect("invalid Provider arguments should remain inside the tool loop");
+
+        assert_eq!(result.provider_turns_executed, 2);
+        assert_eq!(result.tool_calls_processed, 1);
+        assert!(executor.executed_requests().is_empty());
+        // builtRequests proves the next Provider turn receives the tool error instead of a transparent replay of the original request.
+        // builtRequests 证明下一次 Provider 回合收到的是工具错误，而不是对原始请求进行透明重放。
+        let built_requests = adapter.built_requests();
+        assert_eq!(built_requests.len(), 2);
+        assert!(built_requests[1].history.iter().any(|message| {
+            matches!(
+                &message.payload,
+                ConversationPayload::ToolResult {
+                    tool_call_id,
+                    is_error: true,
+                    text,
+                } if tool_call_id.as_deref() == Some("call-invalid")
+                    && text.contains("was not executed")
+                    && text.contains(decoder_message)
+            )
+        }));
+        let prepared_batches = executor.prepared_batches();
+        assert_eq!(prepared_batches.len(), 1);
+        assert_eq!(prepared_batches[0].len(), 1);
+        assert_eq!(
+            prepared_batches[0][0].argument_parse_error.as_deref(),
+            Some(decoder_message)
+        );
+        let rejected_result = controller
+            .snapshot()
+            .messages
+            .iter()
+            .find_map(|message| match &message.payload {
+                ConversationPayload::ToolResult {
+                    tool_call_id,
+                    is_error,
+                    text,
+                } if tool_call_id.as_deref() == Some("call-invalid") => {
+                    Some((*is_error, text.as_str()))
+                }
+                _ => None,
+            })
+            .expect("rejected tool call should have one model-visible result");
+        assert!(rejected_result.0);
+        assert!(rejected_result.1.contains("was not executed"));
+        assert!(rejected_result.1.contains(decoder_message));
+        assert!(controller.events().iter().all(|event| {
+            !matches!(event.kind, CoreEventKind::ToolStarted)
+                || event
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("tool_call_id"))
+                    .and_then(Value::as_str)
+                    != Some("call-invalid")
+        }));
+        assert!(controller.events().iter().any(|event| {
+            matches!(event.kind, CoreEventKind::ToolFinished)
+                && event
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("tool_call_id"))
+                    .and_then(Value::as_str)
+                    == Some("call-invalid")
+        }));
+    });
+}
+
+/// Verifies restored invalid Provider arguments remain non-executable and produce one model-visible tool error.
+/// 验证恢复后的无效 Provider 参数仍不可执行，并生成一条模型可见工具错误。
+#[test]
+fn restored_malformed_provider_arguments_never_dispatch_executor() {
+    // runtime drives the recovered batch and one following Provider turn.
+    // runtime 驱动恢复后的批次及其下一次 Provider 回合。
+    let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        // decoderMessage is the retained terminal diagnostic that forbids host execution.
+        // decoderMessage 是禁止宿主执行的已保留终态诊断。
+        let decoder_message = "Provider tool arguments are incomplete JSON";
+        // request is the exact restored placeholder plus its non-execution proof.
+        // request 是精确恢复的占位参数及其未执行证明。
+        let request = ToolInvocationRequest {
+            tool_call_id: String::from("call-restored-invalid"),
+            tool_name: String::from("file_edit"),
+            arguments: Value::Null,
+            argument_parse_error: Some(decoder_message.to_string()),
+        };
+        // snapshot retains the authoritative assistant call at the recovery boundary.
+        // snapshot 在恢复边界保留权威助手工具调用。
+        let snapshot = ConversationSnapshot {
+            messages: vec![ConversationMessage {
+                id: String::from("assistant-restored-invalid"),
+                payload: ConversationPayload::Assistant {
+                    text: String::new(),
+                    reasoning: String::new(),
+                    provider_message_id: Some(String::from("provider-restored-invalid")),
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: vec![ConversationToolCall {
+                        id: String::from("tool-item-restored-invalid"),
+                        tool_call_id: Some(request.tool_call_id.clone()),
+                        tool_name: request.tool_name.clone(),
+                        arguments: request.arguments.clone(),
+                        argument_parse_error: request.argument_parse_error.clone(),
+                    }],
+                },
+            }],
+            ..ConversationSnapshot::default()
+        };
+        // adapter supplies the correction response after receiving the synthetic tool error.
+        // adapter 在收到合成工具错误后提供纠正响应。
+        let adapter = MockStreamingProviderAdapter::new(vec![(
+            Vec::new(),
+            ProviderTurnResponse {
+                assistant_text: String::from("I will submit corrected arguments."),
+                assistant_reasoning: String::new(),
+                provider_message_id: Some(String::from("provider-after-restored-invalid")),
+                provider_message_state: None,
+                tool_calls: Vec::new(),
+                continuation: None,
+                usage: None,
+            },
+        )]);
+        // executor records any accidental dispatch across the restored boundary.
+        // executor 记录任何意外跨越恢复边界的分派。
+        let executor = MockToolExecutor::new();
+        // controller owns the exact retained assistant tail.
+        // controller 持有精确保留的助手尾部。
+        let mut controller = VulcanCoreController::new(build_test_config(2), snapshot)
+            .expect("valid restored conversation snapshot");
+
+        controller
+            .run_restored_tool_batch_streaming_with_checkpoints_and_interventions(
+                &adapter,
+                &executor,
+                &AllowAllToolPolicy,
+                crate::types::RestoredToolBatchRecovery {
+                    tools: vec![crate::types::RestoredToolInvocation {
+                        request,
+                        disposition: crate::types::RestoredToolInvocationDisposition::Execute,
+                    }],
+                    user_followup: None,
+                },
+                |_, _| {},
+                |_| Ok(false),
+            )
+            .await
+            .expect("restore malformed tool call as a tool error");
+
+        assert!(executor.executed_requests().is_empty());
+        assert_eq!(executor.prepared_batches().len(), 1);
+        let built_requests = adapter.built_requests();
+        assert_eq!(built_requests.len(), 1);
+        assert!(built_requests[0].history.iter().any(|message| {
+            matches!(
+                &message.payload,
+                ConversationPayload::ToolResult {
+                    tool_call_id,
+                    is_error: true,
+                    text,
+                } if tool_call_id.as_deref() == Some("call-restored-invalid")
+                    && text.contains(decoder_message)
+            )
+        }));
+        assert!(controller.events().iter().all(|event| {
+            !matches!(event.kind, CoreEventKind::ToolStarted)
+                || event
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("tool_call_id"))
+                    .and_then(Value::as_str)
+                    != Some("call-restored-invalid")
+        }));
+    });
+}
+
 /// Verifies restored batches execute only not-started calls and bind one ordered result to every original call.
 /// 验证恢复批次仅执行未启动调用，并为每个原始调用按顺序绑定一个结果。
 #[test]
@@ -99,18 +330,21 @@ fn restored_tool_batch_reuses_results_and_synthesizes_unknown_outcomes_in_order(
                 tool_call_id: Some(String::from("call-execute")),
                 tool_name: String::from("fresh_tool"),
                 arguments: json!({"index": 1}),
+                argument_parse_error: None,
             },
             ConversationToolCall {
                 id: String::from("item-reuse"),
                 tool_call_id: Some(String::from("call-reuse")),
                 tool_name: String::from("retained_tool"),
                 arguments: json!({"index": 2}),
+                argument_parse_error: None,
             },
             ConversationToolCall {
                 id: String::from("item-unknown"),
                 tool_call_id: Some(String::from("call-unknown")),
                 tool_name: String::from("uncertain_tool"),
                 arguments: json!({"index": 3}),
+                argument_parse_error: None,
             },
         ];
         // snapshot ends at the exact assistant tool batch that recovery must reconcile.
@@ -137,6 +371,7 @@ fn restored_tool_batch_reuses_results_and_synthesizes_unknown_outcomes_in_order(
                     tool_call_id: String::from("call-execute"),
                     tool_name: String::from("fresh_tool"),
                     arguments: json!({"index": 1}),
+                    argument_parse_error: None,
                 },
                 disposition: crate::types::RestoredToolInvocationDisposition::Execute,
             },
@@ -145,6 +380,7 @@ fn restored_tool_batch_reuses_results_and_synthesizes_unknown_outcomes_in_order(
                     tool_call_id: String::from("call-reuse"),
                     tool_name: String::from("retained_tool"),
                     arguments: json!({"index": 2}),
+                    argument_parse_error: None,
                 },
                 disposition: crate::types::RestoredToolInvocationDisposition::ReuseResult {
                     result: ToolInvocationResult {
@@ -161,6 +397,7 @@ fn restored_tool_batch_reuses_results_and_synthesizes_unknown_outcomes_in_order(
                     tool_call_id: String::from("call-unknown"),
                     tool_name: String::from("uncertain_tool"),
                     arguments: json!({"index": 3}),
+                    argument_parse_error: None,
                 },
                 disposition: crate::types::RestoredToolInvocationDisposition::OutcomeUnknown,
             },
@@ -254,6 +491,7 @@ fn restored_tool_batch_without_executable_calls_skips_empty_execution_boundary()
             tool_call_id: String::from("call-unknown-only"),
             tool_name: String::from("uncertain_tool"),
             arguments: json!({"index": 1}),
+            argument_parse_error: None,
         };
         // snapshot ends at the assistant call that must receive one synthetic result without re-execution.
         // snapshot 结束于必须在不重新执行的情况下接收一条合成结果的助手调用。
@@ -271,6 +509,7 @@ fn restored_tool_batch_without_executable_calls_skips_empty_execution_boundary()
                         tool_call_id: Some(request.tool_call_id.clone()),
                         tool_name: request.tool_name.clone(),
                         arguments: request.arguments.clone(),
+                        argument_parse_error: request.argument_parse_error.clone(),
                     }],
                 },
             }],
@@ -380,6 +619,7 @@ fn restored_user_followup_pairs_not_started_tool_before_real_user_text() {
             tool_call_id: String::from("call-not-started"),
             tool_name: String::from("write_file"),
             arguments: json!({"path": "safe.txt"}),
+            argument_parse_error: None,
         };
         // snapshot ends at the unmatched assistant tool call.
         // snapshot 结束于尚未配对的助手工具调用。
@@ -397,6 +637,7 @@ fn restored_user_followup_pairs_not_started_tool_before_real_user_text() {
                         tool_call_id: Some(request.tool_call_id.clone()),
                         tool_name: request.tool_name.clone(),
                         arguments: request.arguments.clone(),
+                        argument_parse_error: request.argument_parse_error.clone(),
                     }],
                 },
             }],
@@ -580,6 +821,7 @@ fn run_user_turn_synthesizes_skipped_tool_result_when_policy_blocks_tool() {
                     tool_call_id: Some(String::from("call-skip-1")),
                     tool_name: String::from("blocked_tool"),
                     arguments: json!({"id":"42"}),
+                    argument_parse_error: None,
                 }],
                 continuation: None,
                 usage: None,
@@ -629,6 +871,7 @@ fn resolved_tool_call_id_falls_back_when_provider_visible_id_is_empty() {
         tool_call_id: Some(String::from("   ")),
         tool_name: String::from("read_file"),
         arguments: json!({ "path": "src/main.rs" }),
+        argument_parse_error: None,
     };
 
     assert_eq!(resolved_tool_call_id(&tool_call), "local-call-1");

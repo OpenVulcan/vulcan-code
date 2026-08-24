@@ -1480,6 +1480,69 @@ fn tool_request_projection_preserves_one_card_through_execution() {
         )
         .expect("final ready-state byte/character progress should update the same card")
     );
+    // staleStart proves an older physical retry cannot replace the live stream correlation.
+    // staleStart 证明较旧物理重试不能替换当前有效流关联。
+    let stale_start = RuntimeEvent::new(
+        RuntimeEventKind::ToolRequestStarted,
+        "工具请求 · call-canonical-1 · submit_plan",
+        String::new(),
+    )
+    .with_metadata(Some(json!({
+        "request_stream_id": "stream-stale",
+        "tool_call_id": "call-canonical-1",
+        "tool_name": "submit_plan",
+        "tool_display_state": "receiving",
+        "request_revision": 2,
+    })));
+    assert!(
+        !append_runtime_event_projection_to_state(
+            &mut runtime_state,
+            session_id,
+            "3054-stale-start",
+            &stale_start,
+        )
+        .expect("stale request start should be ignored")
+    );
+    assert_eq!(
+        runtime_state.tool_request_record_ids.get("stream-1"),
+        Some(&request_record_id)
+    );
+    assert!(
+        !runtime_state
+            .tool_request_record_ids
+            .contains_key("stream-stale")
+    );
+    // staleInvalid proves an older terminal event cannot release correlations or revive as a second card.
+    // staleInvalid 证明较旧终态事件不能释放关联，也不能随后复活为第二张卡片。
+    let stale_invalid = RuntimeEvent::new(
+        RuntimeEventKind::ToolRequestInvalid,
+        "工具请求 · call-canonical-1 · submit_plan",
+        String::new(),
+    )
+    .with_metadata(Some(json!({
+        "request_stream_id": "stream-1",
+        "tool_call_id": "call-canonical-1",
+        "tool_name": "submit_plan",
+        "tool_display_state": "failed",
+        "request_revision": 3,
+    })));
+    assert!(
+        !append_runtime_event_projection_to_state(
+            &mut runtime_state,
+            session_id,
+            "3054-stale",
+            &stale_invalid,
+        )
+        .expect("stale invalid request state should be ignored")
+    );
+    assert_eq!(
+        runtime_state.tool_request_record_ids.get("stream-1"),
+        Some(&request_record_id)
+    );
+    assert_eq!(
+        runtime_state.tool_call_record_ids.get("call-canonical-1"),
+        Some(&request_record_id)
+    );
 
     let started = RuntimeEvent::new(
         RuntimeEventKind::ToolStarted,

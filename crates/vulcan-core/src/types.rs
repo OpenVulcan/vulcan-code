@@ -535,9 +535,15 @@ pub struct ConversationToolCall {
     /// Tool function name selected by the assistant.
     /// 助手选择的工具函数名称。
     pub tool_name: String,
-    /// Structured JSON arguments selected by the assistant.
-    /// 助手选择的结构化 JSON 参数。
+    /// Structured JSON arguments selected by the assistant, or `null` only when
+    /// `argument_parse_error` proves the Provider payload could not be parsed.
+    /// 助手选择的结构化 JSON 参数；仅当 `argument_parse_error` 证明 Provider 载荷无法解析时才为
+    /// `null`。
     pub arguments: Value,
+    /// Optional controlled diagnostic proving the Provider-emitted arguments were not executable JSON.
+    /// 可选的受控诊断，用于证明 Provider 发出的参数不是可执行 JSON。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_parse_error: Option<String>,
 }
 
 /// Represents one canonical user attachment retained for future request replays.
@@ -838,9 +844,14 @@ pub struct ToolInvocationRequest {
     /// Tool name requested by the assistant.
     /// 助手请求的工具名称。
     pub tool_name: String,
-    /// Structured JSON arguments passed to the tool.
-    /// 传递给工具的结构化 JSON 参数。
+    /// Structured JSON arguments passed to the tool, or a non-executable `null` placeholder when
+    /// `argument_parse_error` is present.
+    /// 传递给工具的结构化 JSON 参数；当存在 `argument_parse_error` 时为不可执行的 `null` 占位值。
     pub arguments: Value,
+    /// Optional pre-execution parse failure that forbids dispatching the tool body.
+    /// 可选的执行前参数解析失败；存在时禁止分派工具主体。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_parse_error: Option<String>,
 }
 
 /// Represents one tool execution result returned by the host runtime.

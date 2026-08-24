@@ -114,15 +114,28 @@ fn provider_request_trace_slot_is_bounded_and_exactly_replaceable() {
     )
     .expect("create bounded provider trace session");
     let oversized = serde_json::json!({
-        "schema_version": "vulcan.provider-request-trace.v3",
+        "schema_version": "vulcan.provider-request-trace.v4",
         "execution_id": "oversized",
         "api_request": {
             "capture_point": "transport_dispatch",
             "body": "x".repeat(
                 usize::try_from(PROVIDER_REQUEST_TRACE_MAX_BYTES)
                     .expect("trace byte bound should fit usize")
-                    + 1
+                + 1
             ),
+        },
+        "api_response": {
+            "capture_point": "before_sse_framing_and_protocol_decode",
+            "capture_state": "captured",
+            "transport": "http_sse",
+            "http_status": 200,
+            "body_encoding": "utf8",
+            "body": "data: {not-json}\n\n",
+            "received_bytes": 18,
+            "retained_bytes": 18,
+            "body_truncated": false,
+            "chunk_index_truncated": false,
+            "outcome": "stream_failed_or_cancelled",
         },
     });
     let trace_path = persist_provider_request_trace(&session_dir, session_id, 0, &oversized)
@@ -144,6 +157,18 @@ fn provider_request_trace_slot_is_bounded_and_exactly_replaceable() {
             .pointer("/api_request/body_omitted")
             .and_then(serde_json::Value::as_bool),
         Some(true)
+    );
+    assert_eq!(
+        summary
+            .pointer("/api_response/body")
+            .and_then(serde_json::Value::as_str),
+        Some("data: {not-json}\n\n")
+    );
+    assert_eq!(
+        summary
+            .pointer("/api_response/outcome")
+            .and_then(serde_json::Value::as_str),
+        Some("stream_failed_or_cancelled")
     );
 
     let replacement = serde_json::json!({

@@ -17,6 +17,7 @@ fn run_user_turn_executes_multi_turn_loop_and_refreshes_continuation() {
                     tool_call_id: Some(String::from("call-1")),
                     tool_name: String::from("read_file"),
                     arguments: json!({"path":"src/main.rs"}),
+                    argument_parse_error: None,
                 }],
                 continuation: Some(ProviderContinuation {
                     provider_id: Some(String::from("mock-openai")),
@@ -315,6 +316,7 @@ fn run_seeded_turn_streaming_resumes_from_tool_result() {
                 tool_call_id: Some(String::from("call-before-retry")),
                 tool_name: String::from("read_file"),
                 arguments: json!({"path":"src/lib.rs"}),
+                argument_parse_error: None,
             }],
             continuation: None,
             usage: None,
@@ -400,6 +402,7 @@ fn run_user_turn_fails_when_provider_turn_budget_is_exhausted() {
                 tool_call_id: Some(String::from("call-limit-1")),
                 tool_name: String::from("read_file"),
                 arguments: json!({"path":"src/lib.rs"}),
+                argument_parse_error: None,
             }],
             continuation: None,
             usage: None,

@@ -21,6 +21,7 @@ fn run_user_turn_streaming_intervention_reaches_next_provider_request() {
                         tool_call_id: Some(String::from("call-image")),
                         tool_name: String::from("image_generation"),
                         arguments: json!({"prompt": "wanderer cover"}),
+                        argument_parse_error: None,
                     }],
                     continuation: Some(ProviderContinuation {
                         provider_id: Some(String::from("mock-openai-streaming")),
@@ -161,6 +162,7 @@ fn streaming_intervention_error_discards_callback_draft() {
                     tool_call_id: Some(String::from("call-error")),
                     tool_name: String::from("read_file"),
                     arguments: json!({"path": "README.md"}),
+                    argument_parse_error: None,
                 }],
                 continuation: None,
                 usage: None,
@@ -286,12 +288,14 @@ fn run_user_turn_streaming_intervention_waits_for_full_tool_batch() {
                             tool_call_id: Some(String::from("call-1")),
                             tool_name: String::from("first_tool"),
                             arguments: json!({"step": 1}),
+                            argument_parse_error: None,
                         },
                         ConversationToolCall {
                             id: String::from("tool-item-2"),
                             tool_call_id: Some(String::from("call-2")),
                             tool_name: String::from("second_tool"),
                             arguments: json!({"step": 2}),
+                            argument_parse_error: None,
                         },
                     ],
                     continuation: Some(ProviderContinuation {
@@ -435,6 +439,7 @@ fn provider_route_switch_stops_before_next_request_without_marking_controller_fa
                         tool_call_id: Some(String::from("route-switch-call")),
                         tool_name: String::from("read_state"),
                         arguments: json!({"scope": "current"}),
+                        argument_parse_error: None,
                     }],
                     continuation: None,
                     usage: None,

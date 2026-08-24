@@ -415,6 +415,7 @@ impl VulcanCoreController {
                     "tool_call_id": resolved_tool_call_id(tool_call),
                     "tool_name": tool_call.tool_name,
                     "arguments": tool_call.arguments,
+                    "argument_parse_error": tool_call.argument_parse_error,
                 })),
                 created_at: timestamp.clone(),
             });

@@ -13,9 +13,9 @@ use vulcan_core::types::CoreError as VulcanCoreError;
 /// Hard safety ceiling for every backend-configured rate-limit retry wait.
 /// 每次后台配置限流重试等待使用的硬安全上限。
 const MAX_RATE_LIMIT_RETRY_DELAY: Duration = Duration::from_secs(1_800);
-/// Stable subtype for a dispatched Provider response whose streamed tool arguments never became valid JSON.
-/// 已分派 Provider 响应的流式工具参数始终未形成有效 JSON 时使用的稳定子类型。
-pub(crate) const REPLAYABLE_TOOL_CALL_STREAM_FAILURE_SUBCATEGORY: &str = "tool_call_stream_failure";
+/// Legacy terminal subtype for a Provider response whose streamed tool arguments never became valid JSON.
+/// Provider 响应的流式工具参数始终未形成有效 JSON 时使用的旧版终态子类型。
+const TERMINAL_TOOL_CALL_STREAM_FAILURE_SUBCATEGORY: &str = "tool_call_stream_failure";
 
 /// Runtime provider retry policy derived from persisted user configuration.
 /// 从用户持久化配置派生出的运行时 Provider 重试策略。
@@ -403,10 +403,6 @@ fn classify_structured_retry_reason(
     // The exact Responses stream error code is authoritative for transient stream recovery.
     // 精确的 Responses 流错误代码是瞬态流恢复的权威依据。
     let known_stream_error = structured_error_is_known_stream_error(error);
-    // replayableToolCallStreamFailure identifies an unexecuted tool draft that may be regenerated from the current checkpoint.
-    // replayableToolCallStreamFailure 标识可从当前检查点重新生成、尚未执行的工具草稿。
-    let replayable_tool_call_stream_failure =
-        structured_error_is_replayable_tool_call_stream_failure(error);
     // replayableStreamIdleTimeout keeps the existing timeout-specific retry classification.
     // replayableStreamIdleTimeout 保留现有的流空闲超时专用重试分类。
     let replayable_stream_idle_timeout = structured_error_is_replayable_stream_idle_timeout(error);
@@ -430,12 +426,6 @@ fn classify_structured_retry_reason(
         return Some(ProviderRetryClassification {
             category: ProviderRetryCategory::Transient,
             reason: String::from("Provider stream error"),
-        });
-    }
-    if replayable_tool_call_stream_failure {
-        return Some(ProviderRetryClassification {
-            category: ProviderRetryCategory::Transient,
-            reason: String::from("Provider tool call stream failure"),
         });
     }
     match error.category {
@@ -521,34 +511,11 @@ fn structured_error_is_known_stream_error(error: &AiExecutionError) -> bool {
         && !error.side_effect_observed
 }
 
-/// Returns whether a failed Provider response contains only an unexecuted streamed tool draft.
-/// 判断失败的 Provider 响应是否仅包含尚未执行的流式工具草稿。
-///
-/// # Parameters
-/// 参数
-/// `error` is the normalized failure emitted when tool argument construction is aborted.
-/// `error` 是工具参数构造被中止时发出的规范化失败。
-///
-/// # Returns
-/// 返回值
-/// `true` only when the exact dispatched response may be discarded and regenerated safely.
-/// 仅当精确的已分派响应可安全丢弃并重新生成时返回 `true`。
-fn structured_error_is_replayable_tool_call_stream_failure(error: &AiExecutionError) -> bool {
-    error.category == AiErrorCategory::Unclassified
-        && error.subcategory.as_deref() == Some(REPLAYABLE_TOOL_CALL_STREAM_FAILURE_SUBCATEGORY)
-        && error.stage == "response_stream"
-        && error.dispatch_outcome == DispatchOutcome::Dispatched
-        && error.terminal
-        && error.retryable
-        && !error.side_effect_observed
-}
-
 /// Returns whether one structured failure is an explicitly replayable stream failure.
 /// 判断一项结构化失败是否属于明确可重放的流失败。
 fn structured_error_is_replayable_stream_failure(error: &AiExecutionError) -> bool {
     structured_error_is_replayable_stream_idle_timeout(error)
         || structured_error_is_known_stream_error(error)
-        || structured_error_is_replayable_tool_call_stream_failure(error)
 }
 
 /// Reports whether typed category/subcategory facts prove a deterministic terminal failure.
@@ -585,6 +552,7 @@ fn structured_error_is_deterministic_terminal(error: &AiExecutionError) -> bool 
                 | "schema"
                 | "unsupported_feature"
                 | "decoder"
+                | TERMINAL_TOOL_CALL_STREAM_FAILURE_SUBCATEGORY
         )
     })
 }
@@ -779,7 +747,7 @@ mod tests {
     //! 面向 Provider 传输失败分类的定向重试策略测试。
 
     use super::{
-        ProviderRetryPolicy, REPLAYABLE_TOOL_CALL_STREAM_FAILURE_SUBCATEGORY,
+        ProviderRetryPolicy, TERMINAL_TOOL_CALL_STREAM_FAILURE_SUBCATEGORY,
         provider_delta_makes_retry_unsafe,
     };
     use crate::agent_runtime::provider_stream::ProviderStreamDelta;
@@ -1109,12 +1077,12 @@ mod tests {
         assert!(policy().next_retry(&stream_error, 0, true).is_none());
     }
 
-    /// Verifies an aborted, unexecuted tool draft retries from the current checkpoint but never across side effects.
-    /// 验证已中止且尚未执行的工具草稿会从当前检查点重试，但绝不跨越副作用重放。
+    /// Verifies the legacy malformed-tool subtype remains terminal even when an adapter marks it retryable.
+    /// 验证即使适配器将旧版畸形工具子类型标记为可重试，它仍保持终态。
     #[test]
-    fn tool_call_stream_failure_retries_partial_arguments_but_not_side_effects() {
-        // toolStreamFailure starts from the common structured-error fixture and then selects the exact registered subtype.
-        // toolStreamFailure 从通用强类型错误夹具开始，再选择精确注册的子类型。
+    fn tool_call_stream_failure_never_retries_malformed_arguments() {
+        // toolStreamFailure mirrors the legacy error that previously replayed identical malformed arguments.
+        // toolStreamFailure 对应旧版错误；该错误此前会重复重放相同的畸形参数。
         let mut tool_stream_failure =
             structured_provider_error(AiErrorCategory::Unclassified, true);
         {
@@ -1125,30 +1093,13 @@ mod tests {
             else {
                 panic!("structured error expected");
             };
-            details.subcategory = Some(String::from(
-                REPLAYABLE_TOOL_CALL_STREAM_FAILURE_SUBCATEGORY,
-            ));
+            details.subcategory = Some(String::from(TERMINAL_TOOL_CALL_STREAM_FAILURE_SUBCATEGORY));
             details.stage = String::from("response_stream");
             details.semantic_output_observed = true;
         }
 
-        // decision proves streamed argument fragments may be discarded even after visible partial output.
-        // decision 证明即使已经出现可见局部输出，也可以丢弃流式参数分片。
-        let decision = policy()
-            .next_retry(&tool_stream_failure, 0, true)
-            .expect("the unexecuted tool draft should retry");
-        assert_eq!(decision.reason, "Provider tool call stream failure");
-
-        {
-            let VulcanCoreError::ProviderFailure {
-                details: Some(details),
-                ..
-            } = &mut tool_stream_failure
-            else {
-                panic!("structured error expected");
-            };
-            details.side_effect_observed = true;
-        }
+        // A malformed completed argument payload is deterministic model output, not a transient transport failure.
+        // 已完成但畸形的参数载荷属于确定性的模型输出，而不是瞬态传输失败。
         assert!(policy().next_retry(&tool_stream_failure, 0, true).is_none());
     }
 

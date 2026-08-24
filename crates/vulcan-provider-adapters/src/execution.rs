@@ -390,6 +390,204 @@ pub struct ProviderWireRequestCapture {
     pub body: Value,
 }
 
+/// Carries the raw HTTP response bytes observed before SSE framing and protocol decoding.
+/// 承载在 SSE 分帧与协议解码之前观察到的原始 HTTP 响应字节。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderWireResponseCapture {
+    /// Exact transport selected for this physical request.
+    /// 当前真实请求选中的精确传输类型。
+    pub transport: String,
+    /// Upstream HTTP status when response headers were received.
+    /// 收到响应头时的上游 HTTP 状态码。
+    pub http_status: Option<u16>,
+    /// Upstream content type when it was valid visible header text.
+    /// 上游内容类型；仅在响应头是合法可见文本时存在。
+    pub content_type: Option<String>,
+    /// Upstream content encoding when it was valid visible header text.
+    /// 上游内容编码；仅在响应头是合法可见文本时存在。
+    pub content_encoding: Option<String>,
+    /// Raw response prefix retained before any local parser consumes it.
+    /// 在任何本地解析器消费之前保留的原始响应前缀。
+    pub body: Vec<u8>,
+    /// Exact byte lengths of observed transport chunks in receive order.
+    /// 按接收顺序记录的已观察传输 chunk 精确字节长度。
+    pub chunk_lengths: Vec<u64>,
+    /// Total bytes received even when the retained body is bounded.
+    /// 实际收到的总字节数，即使保留正文受到容量限制也会继续累计。
+    pub received_bytes: u64,
+    /// Whether the raw body exceeded the bounded diagnostic capacity.
+    /// 原始正文是否超过有界诊断容量。
+    pub body_truncated: bool,
+    /// Whether the chunk boundary index exceeded its bounded capacity.
+    /// chunk 边界索引是否超过其有界容量。
+    pub chunk_index_truncated: bool,
+    /// Capture-side terminal classification independent from Provider retry semantics.
+    /// 独立于 Provider 重试语义的捕获侧终态分类。
+    pub outcome: String,
+    /// First normalized tool-call abort diagnostic observed before the host rejected the turn.
+    /// 宿主拒绝回合前观察到的首个规范化工具调用中止诊断。
+    pub normalized_tool_call_abort: Option<String>,
+}
+
+/// Maximum raw response bytes retained for one opted-in physical API call.
+/// 单次显式启用追踪的真实 API 调用允许保留的最大原始响应字节数。
+const PROVIDER_WIRE_RESPONSE_CAPTURE_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+/// Maximum transport chunk boundaries retained for one physical API call.
+/// 单次真实 API 调用允许保留的最大传输 chunk 边界数量。
+const PROVIDER_WIRE_RESPONSE_CAPTURE_MAX_CHUNKS: usize = 65_536;
+
+/// Publishes one partial or complete HTTP response capture when its stream scope ends.
+/// 在 HTTP 响应流作用域结束时发布一份部分或完整响应捕获。
+struct ProviderWireResponseCaptureGuard {
+    /// One-shot destination owned by the opted-in host trace writer.
+    /// 由显式启用的宿主追踪写入器持有的一次性目标。
+    sender: Option<oneshot::Sender<ProviderWireResponseCapture>>,
+    /// Mutable bounded capture sent unchanged when the guard is dropped.
+    /// 守卫析构时原样发送的可变有界捕获。
+    capture: Option<ProviderWireResponseCapture>,
+}
+
+impl ProviderWireResponseCaptureGuard {
+    /// Creates one response guard whose default outcome denotes an interrupted or failed stream.
+    /// 创建响应守卫；其默认终态表示流被中断或失败。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `transport` is the exact physical transport and `sender` exists only when tracing is enabled.
+    /// `transport` 是精确真实传输；`sender` 仅在启用追踪时存在。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A no-op guard when no sender exists, otherwise a bounded capture owner.
+    /// 未提供发送器时返回空操作守卫，否则返回有界捕获所有者。
+    fn new(transport: &str, sender: Option<oneshot::Sender<ProviderWireResponseCapture>>) -> Self {
+        let capture = sender.as_ref().map(|_| ProviderWireResponseCapture {
+            transport: transport.to_string(),
+            http_status: None,
+            content_type: None,
+            content_encoding: None,
+            body: Vec::new(),
+            chunk_lengths: Vec::new(),
+            received_bytes: 0,
+            body_truncated: false,
+            chunk_index_truncated: false,
+            outcome: String::from("stream_failed_or_cancelled"),
+            normalized_tool_call_abort: None,
+        });
+        Self { sender, capture }
+    }
+
+    /// Records response metadata before any body reader starts.
+    /// 在任何正文读取器启动前记录响应元数据。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `status` and `headers` are the untouched upstream response head.
+    /// `status` 与 `headers` 是未经修改的上游响应头。
+    fn observe_http_headers(&mut self, status: u16, headers: &HeaderMap) {
+        let Some(capture) = self.capture.as_mut() else {
+            return;
+        };
+        capture.http_status = Some(status);
+        capture.content_type = headers
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        capture.content_encoding = headers
+            .get(reqwest::header::CONTENT_ENCODING)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+    }
+
+    /// Records one raw transport chunk before framing or protocol decoding.
+    /// 在分帧或协议解码之前记录一块原始传输 chunk。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `chunk` is the exact byte slice returned by `reqwest::Response::bytes_stream`.
+    /// `chunk` 是 `reqwest::Response::bytes_stream` 返回的精确字节切片。
+    fn observe_chunk(&mut self, chunk: &[u8]) {
+        let Some(capture) = self.capture.as_mut() else {
+            return;
+        };
+        capture.received_bytes = capture
+            .received_bytes
+            .saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
+        if capture.chunk_lengths.len() < PROVIDER_WIRE_RESPONSE_CAPTURE_MAX_CHUNKS {
+            capture
+                .chunk_lengths
+                .push(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
+        } else {
+            capture.chunk_index_truncated = true;
+        }
+        let remaining = PROVIDER_WIRE_RESPONSE_CAPTURE_MAX_BYTES.saturating_sub(capture.body.len());
+        let retained = remaining.min(chunk.len());
+        capture.body.extend_from_slice(&chunk[..retained]);
+        capture.body_truncated |= retained < chunk.len();
+    }
+
+    /// Replaces the default interrupted outcome with the exact known capture terminal state.
+    /// 使用精确已知的捕获终态替换默认中断结果。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `outcome` is a stable English diagnostic code.
+    /// `outcome` 是稳定的英文诊断代码。
+    fn set_outcome(&mut self, outcome: &str) {
+        if let Some(capture) = self.capture.as_mut() {
+            capture.outcome = outcome.to_string();
+        }
+    }
+
+    /// Records normalized failure and terminal evidence before the consumer can stop polling.
+    /// 在调用方可能停止拉流之前记录规范化失败与终态证据。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `event` is the validated normalized event about to be yielded to the consumer.
+    /// `event` 是即将交付调用方且已经通过校验的规范化事件。
+    fn observe_normalized_event(&mut self, event: &AiStreamEvent) {
+        if let AiStreamEvent::ToolCallAborted { message, .. } = event
+            && let Some(capture) = self.capture.as_mut()
+            && capture.normalized_tool_call_abort.is_none()
+        {
+            capture.normalized_tool_call_abort = Some(message.clone());
+        }
+        match event {
+            AiStreamEvent::ResponseCompleted => self.set_outcome("response_completed"),
+            AiStreamEvent::ResponseFailed { .. } => self.set_outcome("response_failed"),
+            _ => {}
+        }
+    }
+
+    /// Marks transport completion only when no more specific terminal state was observed.
+    /// 仅在尚未观察到更具体终态时标记传输完成。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `outcome` is the fallback completion code for a fully drained stream.
+    /// `outcome` 是完整拉取流时使用的后备完成代码。
+    fn set_outcome_if_unresolved(&mut self, outcome: &str) {
+        if let Some(capture) = self.capture.as_mut()
+            && capture.outcome == "stream_failed_or_cancelled"
+        {
+            capture.outcome = outcome.to_string();
+        }
+    }
+}
+
+impl Drop for ProviderWireResponseCaptureGuard {
+    /// Publishes all bytes already received even when parsing, cancellation, or transport fails.
+    /// 即使解析、取消或传输失败，也会发布已经收到的全部字节。
+    fn drop(&mut self) {
+        let (Some(sender), Some(capture)) = (self.sender.take(), self.capture.take()) else {
+            return;
+        };
+        let _ = sender.send(capture);
+    }
+}
+
 /// Stream of normalized public execution events.
 /// 归一化公共执行事件流。
 pub type ProviderExecutionStream =
@@ -2585,7 +2783,7 @@ impl ProviderExecutionClient {
         secret: CredentialExecutionSecret,
         execution_id: String,
     ) -> ProviderExecutionStream {
-        self.execute_with_optional_wire_request_capture(route, request, secret, execution_id, None)
+        self.execute_with_optional_wire_captures(route, request, secret, execution_id, None, None)
     }
 
     /// Starts one immutable execution and captures the exact encoded request used by its transport.
@@ -2611,36 +2809,71 @@ impl ProviderExecutionClient {
         execution_id: String,
         wire_request_capture: oneshot::Sender<ProviderWireRequestCapture>,
     ) -> ProviderExecutionStream {
-        self.execute_with_optional_wire_request_capture(
+        self.execute_with_optional_wire_captures(
             route,
             request,
             secret,
             execution_id,
             Some(wire_request_capture),
+            None,
         )
     }
 
-    /// Starts one immutable execution with an optional exact wire-request capture channel.
-    /// 启动一次不可变执行，并可选启用精确 Wire 请求捕获通道。
+    /// Starts one immutable execution and captures both dispatched request and raw HTTP response.
+    /// 启动一次不可变执行，并同时捕获已分派请求与原始 HTTP 响应。
     ///
     /// # Parameters
     /// 参数
-    /// `route`, `request`, `secret`, and `execution_id` freeze the physical execution;
-    /// `wire_request_capture` is present only when the host enabled complete request logging.
-    /// `route`、`request`、`secret` 与 `execution_id` 冻结物理执行；仅当宿主启用完整请求日志时
-    /// `wire_request_capture` 才存在。
+    /// Request arguments freeze the physical execution; the two one-shot senders publish the
+    /// exact request object and the bounded raw response observed before local parsing.
+    /// 请求参数冻结真实执行；两个一次性发送器分别发布精确请求对象，以及本地解析前观察到的
+    /// 有界原始响应。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A normalized event stream with tracing kept outside model-visible semantics.
+    /// 返回规范化事件流，追踪数据不会进入模型可见语义。
+    pub fn execute_with_wire_api_trace_capture(
+        &self,
+        route: ProviderExecutionRoute,
+        request: AiExecutionRequest,
+        secret: CredentialExecutionSecret,
+        execution_id: String,
+        wire_request_capture: oneshot::Sender<ProviderWireRequestCapture>,
+        wire_response_capture: oneshot::Sender<ProviderWireResponseCapture>,
+    ) -> ProviderExecutionStream {
+        self.execute_with_optional_wire_captures(
+            route,
+            request,
+            secret,
+            execution_id,
+            Some(wire_request_capture),
+            Some(wire_response_capture),
+        )
+    }
+
+    /// Starts one immutable execution with optional exact wire request and response captures.
+    /// 启动一次不可变执行，并可选启用精确 Wire 请求与响应捕获。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `route`, `request`, `secret`, and `execution_id` freeze the physical execution; capture
+    /// senders exist only when the host enabled paired request-and-response tracing.
+    /// `route`、`request`、`secret` 与 `execution_id` 冻结物理执行；仅当宿主启用成对请求与响应
+    /// 追踪时，捕获发送器才存在。
     ///
     /// # Returns
     /// 返回值
     /// A normalized event stream using exactly one declared transport.
     /// 返回仅使用一个已声明传输的归一化事件流。
-    fn execute_with_optional_wire_request_capture(
+    fn execute_with_optional_wire_captures(
         &self,
         route: ProviderExecutionRoute,
         request: AiExecutionRequest,
         secret: CredentialExecutionSecret,
         execution_id: String,
         wire_request_capture: Option<oneshot::Sender<ProviderWireRequestCapture>>,
+        wire_response_capture: Option<oneshot::Sender<ProviderWireResponseCapture>>,
     ) -> ProviderExecutionStream {
         // diagnostic_secret remains available only to the final stream error boundary after the
         // transport receives its own frozen credential clone.
@@ -2662,9 +2895,17 @@ impl ProviderExecutionClient {
                 execution_id,
                 websocket_key.expect("allowed WebSocket route has a cache key"),
                 wire_request_capture,
+                wire_response_capture,
             )
         } else {
-            self.execute_http(route, request, secret, execution_id, wire_request_capture)
+            self.execute_http(
+                route,
+                request,
+                secret,
+                execution_id,
+                wire_request_capture,
+                wire_response_capture,
+            )
         };
         // Every asynchronous error crosses one common secret-safe and bounded public boundary.
         // 每个异步错误都经过同一条不含秘密且有界的公共边界。
@@ -2684,12 +2925,30 @@ impl ProviderExecutionClient {
         execution_id: String,
         websocket_key: String,
         wire_request_capture: Option<oneshot::Sender<ProviderWireRequestCapture>>,
+        wire_response_capture: Option<oneshot::Sender<ProviderWireResponseCapture>>,
     ) -> ProviderExecutionStream {
         let client = self.clone();
         Box::pin(try_stream! {
             // wireRequestCapture remains available until the active WebSocket request is encoded.
             // wireRequestCapture 保留到活动 WebSocket 请求完成编码时使用。
             let mut wire_request_capture = wire_request_capture;
+            // WebSocket raw-frame capture is intentionally reported as unsupported in this focused HTTP diagnosis.
+            // 本次聚焦 HTTP 诊断暂不捕获 WebSocket 原始帧，并显式报告为不支持。
+            if let Some(capture) = wire_response_capture {
+                let _ = capture.send(ProviderWireResponseCapture {
+                    transport: String::from("responses_websocket"),
+                    http_status: None,
+                    content_type: None,
+                    content_encoding: None,
+                    body: Vec::new(),
+                    chunk_lengths: Vec::new(),
+                    received_bytes: 0,
+                    body_truncated: false,
+                    chunk_index_truncated: false,
+                    outcome: String::from("raw_response_capture_not_supported"),
+                    normalized_tool_call_abort: None,
+                });
+            }
             let transport_started_at = Instant::now();
             let dispatched_at_ms = provider_transport_unix_millis()?;
             emit_provider_transport_trace(
@@ -3148,12 +3407,19 @@ impl ProviderExecutionClient {
         secret: CredentialExecutionSecret,
         execution_id: String,
         wire_request_capture: Option<oneshot::Sender<ProviderWireRequestCapture>>,
+        wire_response_capture: Option<oneshot::Sender<ProviderWireResponseCapture>>,
     ) -> ProviderExecutionStream {
         let client = self.clone();
         Box::pin(try_stream! {
             // wireRequestCapture remains available until the HTTP request is ready for dispatch.
             // wireRequestCapture 保留到 HTTP 请求准备分派时使用。
             let mut wire_request_capture = wire_request_capture;
+            // wireResponseCaptureGuard publishes partial bytes on every early-return or cancellation path.
+            // wireResponseCaptureGuard 会在任意提前返回或取消路径上发布部分字节。
+            let mut wire_response_capture = ProviderWireResponseCaptureGuard::new(
+                "http_sse",
+                wire_response_capture,
+            );
             let transport_started_at = Instant::now();
             emit_provider_transport_trace(
                 execution_id.as_str(),
@@ -3217,6 +3483,7 @@ impl ProviderExecutionClient {
                 &transport_started_at,
             );
             let status = response.status();
+            wire_response_capture.observe_http_headers(status.as_u16(), response.headers());
             let headers_at_ms = provider_transport_unix_millis()?;
             let rate_limit_headers = allowlisted_rate_limit_headers(response.headers());
             let provider_request_id = provider_request_id_from_headers(
@@ -3241,13 +3508,14 @@ impl ProviderExecutionClient {
             } else {
                 let retry_after =
                     parse_retry_after_headers(response.headers(), SystemTime::now());
-                let body = read_bounded_response_text(
+                let body = read_bounded_response_text_with_capture(
                     response,
                     transport.max_error_body_bytes,
                     url.as_str(),
                     status.as_u16(),
                     retry_after.clone(),
                     Duration::from_millis(transport.stream_idle_timeout_ms),
+                    Some(&mut wire_response_capture),
                 )
                 .await?;
                 for usage_event in extract_profiled_usage_events(
@@ -3262,6 +3530,7 @@ impl ProviderExecutionClient {
                 }
                 let body = project_response_record_text(&response_profiles, body.as_str())
                     .map_err(protocol_failure)?;
+                wire_response_capture.set_outcome("http_error_response");
                 Err(http_failure(
                     status.as_u16(),
                     retry_after,
@@ -3311,6 +3580,7 @@ impl ProviderExecutionClient {
                         semantic_output_observed,
                     )
                 })?;
+                wire_response_capture.observe_chunk(chunk.as_ref());
                 if !first_chunk_observed {
                     first_chunk_observed = true;
                     emit_provider_transport_trace(
@@ -3391,6 +3661,9 @@ impl ProviderExecutionClient {
                             );
                         }
                         validate_stream_event(&mut stream_state, &event, semantic_output_observed)?;
+                        // terminalCapture must be fixed before yielding because the runtime stops polling at terminal events.
+                        // terminalCapture 必须在交付前固定，因为运行时会在终态事件处停止拉流。
+                        wire_response_capture.observe_normalized_event(&event);
                         let released_usage = profiled_usage_gate.observe(&event);
                         yield event;
                         for mut usage_event in released_usage {
@@ -3453,6 +3726,9 @@ impl ProviderExecutionClient {
                         &mut event,
                     );
                     validate_stream_event(&mut stream_state, &event, semantic_output_observed)?;
+                    // terminalCapture must be fixed before yielding because the runtime stops polling at terminal events.
+                    // terminalCapture 必须在交付前固定，因为运行时会在终态事件处停止拉流。
+                    wire_response_capture.observe_normalized_event(&event);
                     let released_usage = profiled_usage_gate.observe(&event);
                     yield event;
                     for mut usage_event in released_usage {
@@ -3501,6 +3777,9 @@ impl ProviderExecutionClient {
                     );
                 }
                 validate_stream_event(&mut stream_state, &event, semantic_output_observed)?;
+                // terminalCapture must be fixed before yielding because the runtime stops polling at terminal events.
+                // terminalCapture 必须在交付前固定，因为运行时会在终态事件处停止拉流。
+                wire_response_capture.observe_normalized_event(&event);
                 let released_usage = profiled_usage_gate.observe(&event);
                 yield event;
                 for mut usage_event in released_usage {
@@ -3525,6 +3804,7 @@ impl ProviderExecutionClient {
                 "execution_finished",
                 &transport_started_at,
             );
+            wire_response_capture.set_outcome_if_unresolved("completed");
         })
     }
 }
@@ -8253,6 +8533,40 @@ pub(crate) async fn read_bounded_response_text(
     retry_after: Option<RetryAfterHint>,
     idle_timeout: Duration,
 ) -> Result<String, ProviderExecutionFailure> {
+    read_bounded_response_text_with_capture(
+        response,
+        max_bytes,
+        url,
+        status,
+        retry_after,
+        idle_timeout,
+        None,
+    )
+    .await
+}
+
+/// Reads one bounded non-success body while optionally retaining every pre-parser response chunk.
+/// 读取一份有界非成功正文，并可选保留每个进入解析器前的响应 chunk。
+///
+/// # Parameters
+/// 参数
+/// Ordinary response parameters retain the public error-body contract; `capture` receives raw
+/// bytes before the smaller public error limit is enforced.
+/// 常规响应参数保留公开错误正文契约；`capture` 会在执行更小的公开错误上限前接收原始字节。
+///
+/// # Returns
+/// 返回值
+/// The bounded UTF-8-lossy public body, while diagnostic capture remains independent.
+/// 返回有界 UTF-8 宽容解码的公开正文，同时诊断捕获保持独立。
+async fn read_bounded_response_text_with_capture(
+    response: reqwest::Response,
+    max_bytes: usize,
+    url: &str,
+    status: u16,
+    retry_after: Option<RetryAfterHint>,
+    idle_timeout: Duration,
+    mut capture: Option<&mut ProviderWireResponseCaptureGuard>,
+) -> Result<String, ProviderExecutionFailure> {
     let mut bytes = response.bytes_stream();
     let mut body = Vec::new();
     loop {
@@ -8276,6 +8590,9 @@ pub(crate) async fn read_bounded_response_text(
                 false,
             )
         })?;
+        if let Some(capture) = capture.as_deref_mut() {
+            capture.observe_chunk(chunk.as_ref());
+        }
         if body.len().saturating_add(chunk.len()) > max_bytes {
             let mut failure = http_failure(status, retry_after, "");
             failure.error.subcategory = Some(String::from("error_body_too_large"));
@@ -10018,32 +10335,45 @@ mod tests {
         // request 显式关闭推理，以便独立断言最终 API 字段。
         let mut request = minimal_request();
         request.reasoning_effort = Some(ReasoningEffort::None);
-        // captureSender and captureReceiver transfer the exact transport-owned encoded request.
-        // captureSender 与 captureReceiver 传递传输层实际持有的精确编码请求。
-        let (capture_sender, capture_receiver) = oneshot::channel();
+        // requestCapture transfers the exact encoded request and responseCapture retains pre-parser bytes.
+        // requestCapture 传递精确编码请求；responseCapture 保留解析前字节。
+        let (request_capture_sender, request_capture_receiver) = oneshot::channel();
+        let (response_capture_sender, response_capture_receiver) = oneshot::channel();
         // response is the normalized stream produced by the real execution path.
         // response 是真实执行路径产生的规范化响应流。
-        let mut response = client.execute_with_wire_request_capture(
+        let mut response = client.execute_with_wire_api_trace_capture(
             route,
             request,
             secret,
             String::from("execution-wire-capture"),
-            capture_sender,
+            request_capture_sender,
+            response_capture_sender,
         );
         // completed proves the mock response reached the declared terminal protocol event.
         // completed 证明模拟响应到达已声明的协议终态事件。
         let mut completed = false;
         while let Some(event) = response.next().await {
-            completed |= matches!(
+            completed = matches!(
                 event.expect("captured request should succeed"),
                 AiStreamEvent::ResponseCompleted
             );
+            if completed {
+                break;
+            }
         }
+        // Dropping immediately after the terminal event mirrors the production adapter consumer.
+        // 在终态事件后立即析构，模拟生产适配器调用方的真实行为。
+        drop(response);
         // captured is the object cloned immediately before the HTTP dispatch call.
         // captured 是紧邻 HTTP 分派调用之前克隆的请求对象。
-        let captured = capture_receiver
+        let captured = request_capture_receiver
             .await
             .expect("transport should publish its exact encoded request");
+        // capturedResponse is the raw HTTP payload recorded before SSE framing.
+        // capturedResponse 是在 SSE 分帧之前记录的原始 HTTP 载荷。
+        let captured_response = response_capture_receiver
+            .await
+            .expect("transport should publish its raw response");
         // dispatched is the JSON body independently observed at the socket boundary.
         // dispatched 是在 Socket 边界独立观察到的 JSON 正文。
         let dispatched = server.await.expect("server should finish");
@@ -10070,6 +10400,247 @@ mod tests {
             Some("programming-app")
         );
         assert!(!captured.headers.values().any(|value| value == "secret"));
+        assert_eq!(captured_response.transport, "http_sse");
+        assert_eq!(captured_response.http_status, Some(200));
+        assert_eq!(captured_response.outcome, "response_completed");
+        assert!(!captured_response.body_truncated);
+        assert!(!captured_response.chunk_index_truncated);
+        assert_eq!(
+            captured_response.received_bytes,
+            u64::try_from(captured_response.body.len()).expect("response length should fit")
+        );
+        let raw_response =
+            String::from_utf8(captured_response.body).expect("SSE response should be UTF-8");
+        assert!(raw_response.contains("response.output_text.delta"));
+        assert!(raw_response.contains("response.completed"));
+    }
+
+    /// Verifies protocol decoding failures still publish the exact pre-parser HTTP response.
+    /// 验证协议解码失败时仍会发布进入解析器前的精确 HTTP 响应。
+    #[tokio::test]
+    async fn http_wire_response_capture_survives_protocol_failure() {
+        // listener accepts the one physical HTTP request emitted by the execution client.
+        // listener 接收执行客户端发出的唯一真实 HTTP 请求。
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        // address replaces the provider base URL with the bounded loopback endpoint.
+        // address 使用有界环回端点替代 Provider 基础 URL。
+        let address = listener.local_addr().expect("address should resolve");
+        // malformedResponseBody is valid SSE framing whose data payload is invalid JSON.
+        // malformedResponseBody 使用合法 SSE 分帧承载非法 JSON 数据载荷。
+        let malformed_response_body = String::from("data: {not-json}\n\n");
+        // expectedResponseBody independently retains the bytes the capture must publish.
+        // expectedResponseBody 独立保留捕获结果必须发布的字节。
+        let expected_response_body = malformed_response_body.clone();
+        // server returns the malformed payload only after consuming the dispatched request.
+        // server 在消费已分派请求后返回格式错误的载荷。
+        let server = tokio::spawn(async move {
+            // stream owns the accepted HTTP connection for this single test dispatch.
+            // stream 持有本次单一测试分派接受的 HTTP 连接。
+            let (mut stream, _) = listener.accept().await.expect("HTTP client should connect");
+            // request confirms the production HTTP client completed its outbound dispatch.
+            // request 用于确认生产 HTTP 客户端已经完成出站分派。
+            let _request = read_test_http_request(&mut stream).await;
+            // response is a complete HTTP success whose SSE payload must fail protocol decoding.
+            // response 是完整 HTTP 成功响应，但其 SSE 载荷必须在协议解码时失败。
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                malformed_response_body.len(),
+                malformed_response_body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("HTTP response should send");
+        });
+
+        // client uses the production encoder, frame parser, and Responses decoder under test.
+        // client 使用被测的生产编码器、分帧解析器与 Responses 解码器。
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        // route binds Responses directly to the loopback server and forbids protocol fallback.
+        // route 将 Responses 直接绑定到环回服务器，并禁止协议回退。
+        let mut route = pinned_openrouter_route(OPENAI_RESPONSES_PROFILE_ID);
+        route.protocol_route.base_url_override = Some(format!("http://{address}"));
+        // secret supplies the same credential projection used by ordinary execution.
+        // secret 提供常规执行使用的同一凭据投影。
+        let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("secret"))
+            .expect("test key should validate")
+            .execution_secret()
+            .expect("test key should resolve");
+        // requestCapture confirms the request existed before the response failed decoding.
+        // requestCapture 用于确认响应解码失败前请求已经存在。
+        let (request_capture_sender, request_capture_receiver) = oneshot::channel();
+        // responseCapture must survive every error return after raw bytes are observed.
+        // responseCapture 必须在观察到原始字节后的所有错误返回路径中存活。
+        let (response_capture_sender, response_capture_receiver) = oneshot::channel();
+        // response is the normalized stream expected to terminate with a protocol failure.
+        // response 是预期以协议失败终止的规范化流。
+        let mut response = client.execute_with_wire_api_trace_capture(
+            route,
+            minimal_request(),
+            secret,
+            String::from("execution-wire-response-failure"),
+            request_capture_sender,
+            response_capture_sender,
+        );
+        // failureObserved proves malformed Provider JSON crossed the public stream error boundary.
+        // failureObserved 证明格式错误的 Provider JSON 已经过公开流错误边界。
+        let mut failure_observed = false;
+        while let Some(event) = response.next().await {
+            failure_observed |= event.is_err();
+        }
+        // capturedRequest proves this was a post-dispatch response failure, not an encode failure.
+        // capturedRequest 证明这是分派后的响应失败，而不是编码失败。
+        let _captured_request = request_capture_receiver
+            .await
+            .expect("transport should publish its exact encoded request");
+        // capturedResponse is delivered by the guard even though the decoder returned an error.
+        // capturedResponse 即使解码器返回错误，也会由守卫发布。
+        let captured_response = response_capture_receiver
+            .await
+            .expect("transport should preserve the failed raw response");
+        server.await.expect("server should finish");
+
+        assert!(failure_observed);
+        assert_eq!(captured_response.transport, "http_sse");
+        assert_eq!(captured_response.http_status, Some(200));
+        assert_eq!(
+            captured_response.content_type.as_deref(),
+            Some("text/event-stream")
+        );
+        assert_eq!(captured_response.body, expected_response_body.into_bytes());
+        assert_eq!(
+            captured_response.received_bytes,
+            u64::try_from(captured_response.body.len()).expect("response length should fit")
+        );
+        assert_eq!(captured_response.outcome, "stream_failed_or_cancelled");
+        assert!(!captured_response.body_truncated);
+        assert!(!captured_response.chunk_index_truncated);
+    }
+
+    /// Verifies a decoded tool-argument abort remains captured when its consumer stops immediately.
+    /// 验证调用方在工具参数中止后立即停止消费时，原始响应仍会被捕获。
+    #[tokio::test]
+    async fn http_wire_response_capture_survives_tool_argument_abort() {
+        // listener accepts the one physical HTTP request emitted by the execution client.
+        // listener 接收执行客户端发出的唯一真实 HTTP 请求。
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        // address replaces the provider base URL with the bounded loopback endpoint.
+        // address 使用有界环回端点替代 Provider 基础 URL。
+        let address = listener.local_addr().expect("address should resolve");
+        // abortedResponseBody uses a complete Responses lifecycle whose authoritative file_edit
+        // output item contains incomplete arguments.
+        // abortedResponseBody 使用完整 Responses 生命周期，但其权威 file_edit 输出项包含不完整参数。
+        let aborted_response_body = [
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"response-tool-abort\"}}\n\n",
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"item-tool-abort\",\"call_id\":\"call-tool-abort\",\"name\":\"file_edit\",\"arguments\":\"\"}}\n\n",
+            "data: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"item-tool-abort\",\"output_index\":0,\"call_id\":\"call-tool-abort\",\"delta\":\"{\\\"operations\\\":[\"}\n\n",
+            "data: {\"type\":\"response.function_call_arguments.done\",\"item_id\":\"item-tool-abort\",\"output_index\":0,\"call_id\":\"call-tool-abort\",\"arguments\":\"{\\\"operations\\\":[\"}\n\n",
+            "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"item-tool-abort\",\"call_id\":\"call-tool-abort\",\"name\":\"file_edit\",\"arguments\":\"{\\\"operations\\\":[\"}}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"response-tool-abort\",\"usage\":{}}}\n\n",
+        ]
+        .concat();
+        // expectedResponseBody independently retains the bytes the capture must publish.
+        // expectedResponseBody 独立保留捕获结果必须发布的字节。
+        let expected_response_body = aborted_response_body.clone();
+        // server returns the argument-abort stream only after consuming the dispatched request.
+        // server 在消费已分派请求后返回工具参数中止流。
+        let server = tokio::spawn(async move {
+            // stream owns the accepted HTTP connection for this single test dispatch.
+            // stream 持有本次单一测试分派接受的 HTTP 连接。
+            let (mut stream, _) = listener.accept().await.expect("HTTP client should connect");
+            // request confirms the production HTTP client completed its outbound dispatch.
+            // request 用于确认生产 HTTP 客户端已经完成出站分派。
+            let _request = read_test_http_request(&mut stream).await;
+            // response is a complete HTTP and Responses success whose tool arguments remain invalid.
+            // response 是完整 HTTP 与 Responses 成功响应，但其中的工具参数保持非法。
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                aborted_response_body.len(),
+                aborted_response_body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("HTTP response should send");
+        });
+
+        // client uses the production Responses decoder under the same HTTP transport as the failure.
+        // client 在与故障相同的 HTTP 传输下使用生产 Responses 解码器。
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        // route binds Responses directly to the loopback server and forbids protocol fallback.
+        // route 将 Responses 直接绑定到环回服务器，并禁止协议回退。
+        let mut route = pinned_openrouter_route(OPENAI_RESPONSES_PROFILE_ID);
+        route.protocol_route.base_url_override = Some(format!("http://{address}"));
+        // secret supplies the same credential projection used by ordinary execution.
+        // secret 提供常规执行使用的同一凭据投影。
+        let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("secret"))
+            .expect("test key should validate")
+            .execution_secret()
+            .expect("test key should resolve");
+        // requestCapture confirms the request existed before the tool arguments were aborted.
+        // requestCapture 用于确认工具参数中止前请求已经存在。
+        let (request_capture_sender, request_capture_receiver) = oneshot::channel();
+        // responseCapture must publish when the higher layer stops at ToolCallAborted.
+        // responseCapture 必须在上层遇到 ToolCallAborted 停止时发布。
+        let (response_capture_sender, response_capture_receiver) = oneshot::channel();
+        // response is consumed only through the same semantic abort boundary used by the adapter.
+        // response 仅消费到适配器使用的同一语义中止边界。
+        let mut response = client.execute_with_wire_api_trace_capture(
+            route,
+            minimal_request(),
+            secret,
+            String::from("execution-wire-tool-abort"),
+            request_capture_sender,
+            response_capture_sender,
+        );
+        // abortObserved proves the valid outer stream decoded into an invalid inner tool call.
+        // abortObserved 证明合法外层流被解码为无效的内层工具调用。
+        let mut abort_observed = false;
+        while let Some(event) = response.next().await {
+            let event = event.expect("outer SSE protocol should remain valid");
+            if matches!(event, AiStreamEvent::ToolCallAborted { .. }) {
+                abort_observed = true;
+                break;
+            }
+        }
+        // Dropping the suspended stream models the adapter returning on the tool-call abort.
+        // 丢弃暂停的流用于模拟适配器在工具调用中止时直接返回。
+        drop(response);
+        // capturedRequest proves this was a post-dispatch semantic failure.
+        // capturedRequest 证明这是分派后的语义失败。
+        let _captured_request = request_capture_receiver
+            .await
+            .expect("transport should publish its exact encoded request");
+        // capturedResponse must arrive from the guard after the suspended stream is dropped.
+        // capturedResponse 必须在暂停流被丢弃后由守卫发布。
+        let captured_response = response_capture_receiver
+            .await
+            .expect("transport should preserve the tool-abort response");
+        server.await.expect("server should finish");
+
+        assert!(abort_observed);
+        assert_eq!(captured_response.http_status, Some(200));
+        assert_eq!(captured_response.body, expected_response_body.into_bytes());
+        assert_eq!(captured_response.outcome, "stream_failed_or_cancelled");
+        // abortDiagnostic must survive even though no response-level terminal event was consumed.
+        // abortDiagnostic 即使未消费响应级终态事件也必须保留。
+        let abort_diagnostic = captured_response
+            .normalized_tool_call_abort
+            .as_deref()
+            .expect("tool-abort diagnostic should be captured");
+        assert!(abort_diagnostic.contains("before valid JSON was complete"));
+        assert!(abort_diagnostic.contains("line 1 column"));
+        assert!(!captured_response.body_truncated);
     }
 
     /// Verifies store=false HTTP never emits a cursor and WS requires exact socket ownership.

@@ -1,5 +1,41 @@
 use super::*;
 
+/// Builds one non-executed tool result for Provider arguments that could not be parsed as complete JSON.
+/// 为无法解析为完整 JSON 的 Provider 参数构建一条未执行工具结果。
+///
+/// # Parameters
+/// 参数
+/// `request` retains the exact tool identity and `message` is the controlled protocol diagnostic.
+/// `request` 保留精确工具身份，`message` 是受控协议诊断。
+///
+/// # Returns
+/// 返回值
+/// A model-visible error result that explicitly proves no tool body or external side effect ran.
+/// 返回一条模型可见错误结果，并明确证明工具主体及外部副作用均未执行。
+fn build_tool_argument_parse_failure_result(
+    request: &ToolInvocationRequest,
+    message: &str,
+) -> ToolInvocationResult {
+    ToolInvocationResult {
+        tool_call_id: request.tool_call_id.clone(),
+        tool_name: request.tool_name.clone(),
+        model_output: format!(
+            "Tool `{}` was not executed because the Provider emitted incomplete or invalid JSON arguments.\nReason: {}\nCreate a new tool call with complete JSON that conforms to the tool schema.",
+            request.tool_name, message
+        ),
+        host_result: Some(json!({
+            "kind": "tool_argument_parse_error",
+            "status": "failed",
+            "executed": false,
+            "side_effect_observed": false,
+            "tool_call_id": request.tool_call_id,
+            "tool_name": request.tool_name,
+            "error": message,
+        })),
+        is_error: true,
+    }
+}
+
 impl VulcanCoreController {
     /// Reconciles one retained Provider tool batch without replaying completed or uncertain invocations.
     /// 协调一批已保留的 Provider 工具调用，且不重放已完成或结果不确定的调用。
@@ -46,6 +82,7 @@ impl VulcanCoreController {
             if restored.request.tool_call_id != expected_tool_call_id
                 || restored.request.tool_name != assistant_call.tool_name
                 || restored.request.arguments != assistant_call.arguments
+                || restored.request.argument_parse_error != assistant_call.argument_parse_error
             {
                 return Err(CoreError::InvalidState {
                     message: format!(
@@ -173,6 +210,11 @@ impl VulcanCoreController {
         E: VulcanToolExecutor,
         P: VulcanToolPolicy,
     {
+        if let Some(message) = request.argument_parse_error.as_deref() {
+            let rejected_result = build_tool_argument_parse_failure_result(request, message);
+            self.record_tool_finished(&rejected_result);
+            return Ok(rejected_result);
+        }
         if !policy.should_execute(request, &self.snapshot) {
             let skipped_result = ToolInvocationResult {
                 tool_call_id: request.tool_call_id.clone(),
@@ -223,6 +265,14 @@ impl VulcanCoreController {
         let mut pending_executions = FuturesUnordered::new();
         let policy_snapshot = self.snapshot.clone();
         for (request_index, request) in requests.into_iter().enumerate() {
+            if let Some(message) = request.argument_parse_error.as_deref() {
+                let rejected_result = build_tool_argument_parse_failure_result(&request, message);
+                // Provider-invalid arguments are terminal before dispatch and therefore cannot enter the host executor.
+                // Provider 无效参数在分派前即为终态，因此不得进入宿主执行器。
+                self.record_tool_finished(&rejected_result);
+                result_slots[request_index] = Some(Ok(rejected_result));
+                continue;
+            }
             self.record_tool_started(&request);
             if policy.should_execute(&request, &policy_snapshot) {
                 pending_executions.push(async move {

@@ -1094,6 +1094,9 @@ fn observe_active_tool_request_streams(
         ToolRequestFragment::Completed {
             request_stream_id, ..
         }
+        | ToolRequestFragment::Invalid {
+            request_stream_id, ..
+        }
         | ToolRequestFragment::Aborted {
             request_stream_id, ..
         } => {
@@ -1223,6 +1226,7 @@ mod tests {
             tool_call_id: String::from("call-a"),
             tool_name: String::from("write_file"),
             arguments: serde_json::json!({"path": "a.txt"}),
+            argument_parse_error: None,
         };
         // action binds the not-started slot and durable follow-up in one recovery decision.
         // action 在同一个恢复决策中绑定未启动槽位与可靠补充消息。

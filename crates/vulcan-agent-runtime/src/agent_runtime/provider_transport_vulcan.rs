@@ -17,7 +17,6 @@ use crate::agent_runtime::provider_transport_entry_inputs::{
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_request::ProviderTransportExecutionRequest;
-use crate::agent_runtime::provider_transport_retry::REPLAYABLE_TOOL_CALL_STREAM_FAILURE_SUBCATEGORY;
 use crate::agent_runtime::provider_transport_stream_runtime::execute_host_controlled_stream_with_prepared_inputs;
 use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
 use crate::attachment_assets::{
@@ -33,13 +32,12 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use vulcan_ai_contract::{
-    AiContinuation, AiErrorCategory, AiExecutionError, AiExecutionRequest, AiMessage, AiOperation,
-    AiStreamEvent, ContentItem, DispatchOutcome, MessageRole, ModelParameterValue, NativeToolKind,
-    ParallelToolCallPolicy, PromptCachePolicy, ProviderReplayEnvelope, ReasoningEffort,
-    ReasoningOutputPolicy, RequestUsage, ResourceKind, ResourceReference, ResourceSourceKind,
-    StructuredOutputPolicy, ToolCall as PublicToolCall, ToolChoicePolicy, ToolDefinition,
-    ToolResult, UsageValue, canonicalize_codex_responses_replay_items,
-    is_replayable_codex_responses_item,
+    AiContinuation, AiExecutionError, AiExecutionRequest, AiMessage, AiOperation, AiStreamEvent,
+    ContentItem, MessageRole, ModelParameterValue, NativeToolKind, ParallelToolCallPolicy,
+    PromptCachePolicy, ProviderReplayEnvelope, ReasoningEffort, ReasoningOutputPolicy,
+    RequestUsage, ResourceKind, ResourceReference, ResourceSourceKind, StructuredOutputPolicy,
+    ToolCall as PublicToolCall, ToolChoicePolicy, ToolDefinition, ToolResult, UsageValue,
+    canonicalize_codex_responses_replay_items, is_replayable_codex_responses_item,
 };
 use vulcan_context::{SessionConversationState, SessionMessageEntry};
 use vulcan_core::provider::{
@@ -56,9 +54,10 @@ use vulcan_core::types::{
 };
 use vulcan_provider_adapters::{
     InputResourceConstraint, ProviderExecutionClient, ProviderExecutionCredentialLease,
-    ProviderExecutionRoute, ProviderWireRequestCapture, ResolvedPublicAiExecution,
-    ResourceReferencePolicy, ResponseProjectionProfile, ToolSchemaProjectionMode,
-    TransientReasoningStatusMode, UploadReferenceEncoding,
+    ProviderExecutionRoute, ProviderExecutionStream, ProviderWireRequestCapture,
+    ProviderWireResponseCapture, ResolvedPublicAiExecution, ResourceReferencePolicy,
+    ResponseProjectionProfile, ToolSchemaProjectionMode, TransientReasoningStatusMode,
+    UploadReferenceEncoding,
 };
 use vulcan_tools_manager::{VulcanToolSchemaProjectionProfile, project_tool_parameters_schema};
 
@@ -70,7 +69,7 @@ const DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT: u64 = 32_000;
 const HOST_INLINE_RESOURCE_BASE64_BUDGET_BYTES: u64 = 2 * 1024 * 1024;
 /// Versioned on-disk contract for bounded Provider wire-request traces.
 /// 有界 Provider 线上请求追踪使用的版本化磁盘契约。
-const PROVIDER_REQUEST_TRACE_SCHEMA_VERSION: &str = "vulcan.provider-request-trace.v3";
+const PROVIDER_REQUEST_TRACE_SCHEMA_VERSION: &str = "vulcan.provider-request-trace.v4";
 /// Structured subcategory emitted only after the exact OAuth account secret was refreshed.
 /// 仅在精确 OAuth 账号秘密已经刷新后发出的结构化子类别。
 pub(crate) const OAUTH_CREDENTIAL_REFRESHED_SUBCATEGORY: &str = "oauth_credential_refreshed";
@@ -257,6 +256,44 @@ fn provider_request_trace_headers(headers: &BTreeMap<String, String>) -> BTreeMa
             )
         })
         .collect()
+}
+
+/// Encodes retained Provider response bytes with the smaller exact JSON-safe representation.
+/// 使用较小且可精确还原的 JSON 安全表示编码已保留的 Provider 响应字节。
+///
+/// # Parameters
+/// 参数
+/// `body` is the bounded response prefix captured before protocol parsing.
+/// `body` 是在协议解析前捕获的有界响应前缀。
+///
+/// # Returns
+/// 返回值
+/// The declared body encoding and its exact persisted payload.
+/// 返回声明的正文编码及其可精确还原的持久化载荷。
+fn encode_provider_response_trace_body(body: Vec<u8>) -> (&'static str, String) {
+    match String::from_utf8(body) {
+        Ok(utf8_body) => {
+            // escapedUtf8Bytes measures the actual JSON string cost, including its surrounding quotes.
+            // escapedUtf8Bytes 测量实际 JSON 字符串开销，包括外围引号。
+            let escaped_utf8_bytes = serde_json::to_vec(&utf8_body)
+                .expect("serializing one UTF-8 response string should be infallible")
+                .len();
+            // base64Body is retained only when it prevents JSON escaping from exceeding that exact form.
+            // base64Body 仅在能避免 JSON 转义超过该精确表示时才会被保留。
+            let base64_body =
+                base64::engine::general_purpose::STANDARD.encode(utf8_body.as_bytes());
+            let base64_json_bytes = base64_body.len().saturating_add(2);
+            if escaped_utf8_bytes <= base64_json_bytes {
+                ("utf8", utf8_body)
+            } else {
+                ("base64", base64_body)
+            }
+        }
+        Err(error) => (
+            "base64",
+            base64::engine::general_purpose::STANDARD.encode(error.into_bytes()),
+        ),
+    }
 }
 
 /// Resolves the requested output budget while treating catalog output limits as upper bounds.
@@ -579,24 +616,27 @@ impl VulcanPublicContractAdapter {
         }
     }
 
-    /// Persists one bounded actually dispatched API request for one execution.
-    /// 为一次执行持久化一份有界的实际分派 API 请求。
+    /// Persists one bounded dispatched API request paired with its pre-parser response evidence.
+    /// 为一次执行持久化一份有界的实际分派 API 请求及其解析前响应证据。
     ///
     /// # Parameters
     /// 参数
     /// `execution_id` is the physical call identity shared with the real execution client.
     /// `execution_id` 是与真实执行客户端共享的物理调用标识。
-    /// `captured` is the exact secret-safe request projected immediately before HTTP or WebSocket dispatch.
-    /// `captured` 是在 HTTP 或 WebSocket 分派前立即投影的精确无秘密请求。
+    /// `captured_request` is the exact secret-safe request projected immediately before dispatch;
+    /// `captured_response` retains bounded transport bytes before local protocol parsing.
+    /// `captured_request` 是分派前立即投影的精确无秘密请求；`captured_response` 保留本地协议
+    /// 解析前的有界传输字节。
     ///
     /// # Returns
     /// 返回值
     /// Success only after the trace has been atomically published in the owning session directory.
     /// 仅在追踪已原子发布到所属会话目录后返回成功。
-    async fn persist_complete_provider_request_trace(
+    async fn persist_complete_provider_api_trace(
         &self,
         execution_id: &str,
-        captured: ProviderWireRequestCapture,
+        captured_request: ProviderWireRequestCapture,
+        captured_response: Option<ProviderWireResponseCapture>,
     ) -> Result<(), VulcanCoreError> {
         let captured_at_unix_ms = provider_request_trace_timestamp_ms()
             .map_err(|error| provider_failure(self.provider_id(), &error))?;
@@ -614,7 +654,38 @@ impl VulcanPublicContractAdapter {
                 ),
             )
         })?;
-        let headers = provider_request_trace_headers(&captured.headers);
+        let headers = provider_request_trace_headers(&captured_request.headers);
+        // apiResponse retains exact UTF-8 SSE text or Base64 for non-UTF-8 bytes without duplication.
+        // apiResponse 精确保留 UTF-8 SSE 文本；非 UTF-8 字节使用 Base64，避免重复保存。
+        let api_response = captured_response.map_or_else(
+            || {
+                json!({
+                    "capture_point": "before_sse_framing_and_protocol_decode",
+                    "capture_state": "response_capture_channel_closed",
+                })
+            },
+            |captured| {
+                let retained_bytes = captured.body.len();
+                let (body_encoding, body) = encode_provider_response_trace_body(captured.body);
+                json!({
+                    "capture_point": "before_sse_framing_and_protocol_decode",
+                    "capture_state": "captured",
+                    "transport": captured.transport,
+                    "http_status": captured.http_status,
+                    "content_type": captured.content_type,
+                    "content_encoding": captured.content_encoding,
+                    "body_encoding": body_encoding,
+                    "body": body,
+                    "chunk_lengths": captured.chunk_lengths,
+                    "received_bytes": captured.received_bytes,
+                    "retained_bytes": retained_bytes,
+                    "body_truncated": captured.body_truncated,
+                    "chunk_index_truncated": captured.chunk_index_truncated,
+                    "outcome": captured.outcome,
+                    "normalized_tool_call_abort": captured.normalized_tool_call_abort,
+                })
+            },
+        );
         let trace = json!({
             "schema_version": PROVIDER_REQUEST_TRACE_SCHEMA_VERSION,
             "captured_at_unix_ms": captured_at_unix_ms,
@@ -638,14 +709,15 @@ impl VulcanPublicContractAdapter {
             },
             "api_request": {
                 "capture_point": "transport_dispatch",
-                "transport": captured.transport,
-                "method": captured.method,
-                "path": captured.path,
-                "resolved_url": captured.resolved_url,
+                "transport": captured_request.transport,
+                "method": captured_request.method,
+                "path": captured_request.path,
+                "resolved_url": captured_request.resolved_url,
                 "headers": headers,
                 "credential_values_redacted": true,
-                "body": captured.body,
+                "body": captured_request.body,
             },
+            "api_response": api_response,
         });
         let session_directory = self.session_storage_directory.clone().ok_or_else(|| {
             provider_failure(
@@ -1019,6 +1091,19 @@ fn public_stream_event_is_terminal(event: &AiStreamEvent) -> bool {
     )
 }
 
+/// Drains a failed physical Provider stream only to complete opted-in response diagnostics.
+/// 仅为完成显式启用的响应诊断而排空失败的真实 Provider 流。
+///
+/// # Parameters
+/// 参数
+/// `stream` is the remaining normalized stream whose underlying transport still owns uncaptured bytes.
+/// `stream` 是剩余的规范化流，其底层传输仍可能持有尚未捕获的字节。
+fn drain_provider_stream_for_trace(mut stream: ProviderExecutionStream) {
+    // traceDrain deliberately discards semantic events: failed turns must never resume projection or tools.
+    // traceDrain 会刻意丢弃语义事件：失败回合绝不能恢复事件投影或工具执行。
+    tokio::spawn(async move { while stream.next().await.is_some() {} });
+}
+
 /// Refreshes one exact renewable credential after a replay-safe upstream 401 response.
 /// 在收到可安全重放的上游 401 响应后刷新一份精确可续期凭据。
 ///
@@ -1136,21 +1221,28 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
         // rejectedSecretRevision 将后续任何 401 恢复绑定到线上实际使用的精确 Token 修订版。
         let rejected_secret_revision = secret.revision();
         let execution_id = uuid::Uuid::new_v4().to_string();
-        // wireRequestCapture transfers only the exact dispatched request; tracing never clones the
-        // controller or canonical request and never delays Provider completion.
-        // wireRequestCapture 只传递实际分派请求；追踪不会克隆控制器请求或规范请求，也不会延迟 Provider 完成。
-        let wire_request_capture = if self.provider_request_trace_enabled {
-            let (capture_sender, capture_receiver) = tokio::sync::oneshot::channel();
+        // wireCaptures pair the exact dispatched request with bytes observed before local response parsing.
+        // wireCaptures 将实际分派请求与本地响应解析前观察到的字节成对关联。
+        let wire_captures = if self.provider_request_trace_enabled {
+            let (request_sender, request_receiver) = tokio::sync::oneshot::channel();
+            let (response_sender, response_receiver) = tokio::sync::oneshot::channel();
             let trace_adapter = self.clone();
             let trace_execution_id = execution_id.clone();
             tokio::spawn(async move {
-                let Ok(captured) = capture_receiver.await else {
+                let Ok(captured_request) = request_receiver.await else {
                     // A closed capture channel means encoding failed before an API request existed.
                     // 捕获通道关闭表示编码在 API 请求形成前失败，因此没有请求可保存。
                     return;
                 };
+                // A closed response channel remains explicit in the trace instead of discarding the request.
+                // 响应通道关闭会在追踪中显式记录，而不是丢弃请求。
+                let captured_response = response_receiver.await.ok();
                 if let Err(error) = trace_adapter
-                    .persist_complete_provider_request_trace(trace_execution_id.as_str(), captured)
+                    .persist_complete_provider_api_trace(
+                        trace_execution_id.as_str(),
+                        captured_request,
+                        captured_response,
+                    )
                     .await
                 {
                     eprintln!(
@@ -1159,17 +1251,18 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                     );
                 }
             });
-            Some(capture_sender)
+            Some((request_sender, response_sender))
         } else {
             None
         };
-        let mut stream = if let Some(capture_sender) = wire_request_capture {
-            self.client.execute_with_wire_request_capture(
+        let mut stream = if let Some((request_sender, response_sender)) = wire_captures {
+            self.client.execute_with_wire_api_trace_capture(
                 self.route.clone(),
                 public.clone(),
                 secret.clone(),
                 execution_id,
-                capture_sender,
+                request_sender,
+                response_sender,
             )
         } else {
             self.client
@@ -1282,13 +1375,29 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
             // terminalEvent 在显式协议终态边界关闭规范化响应，而不是继续等待传输 EOF。
             let terminal_event = public_stream_event_is_terminal(&event);
             let usage_updated = matches!(&event, AiStreamEvent::UsageUpdated { .. });
-            response.apply_event(self.provider_id(), &self.live_sender, sink, event)?;
+            // applyResult is separated from `?` so trace mode can retain the rest of a failed API body.
+            // applyResult 与 `?` 分离，使追踪模式可以保留失败 API 正文的剩余部分。
+            let apply_result =
+                response.apply_event(self.provider_id(), &self.live_sender, sink, event);
+            if let Err(error) = apply_result {
+                if self.provider_request_trace_enabled {
+                    drain_provider_stream_for_trace(stream);
+                }
+                return Err(error);
+            }
             if usage_updated && let Some(usage) = response.usage.as_ref() {
                 let _ = self.live_sender.send(Ok(ProviderStreamDelta::UsageUpdated(
                     public_usage_to_core(usage),
                 )));
             }
             if terminal_event {
+                if self.provider_request_trace_enabled {
+                    // terminalTraceDrain preserves transport bytes that follow the semantic terminal event
+                    // without delaying tool execution or projecting any later semantic event.
+                    // terminalTraceDrain 会保留语义终态事件之后的传输字节，且不会延迟工具执行或投影任何
+                    // 后续语义事件。
+                    drain_provider_stream_for_trace(stream);
+                }
                 break;
             }
         }
@@ -1464,7 +1573,14 @@ enum ReplayAccumulatorItemState {
     Complete(ContentItem),
     /// Tool identity is known but its arguments are still incomplete.
     /// 工具身份已知但参数仍不完整。
-    PendingTool,
+    PendingTool {
+        /// Provider-visible call identifier required to pair a controlled rejection result.
+        /// 用于配对受控拒绝结果的 Provider 可见调用标识。
+        call_id: String,
+        /// Exact tool name selected by the model before argument parsing completed.
+        /// 参数解析完成前模型选定的精确工具名称。
+        tool_name: String,
+    },
 }
 
 /// Returns whether captured Responses items fully cover the provider-neutral assistant replay.
@@ -1708,7 +1824,7 @@ impl PublicTurnAccumulator {
                     })
                 }
                 ReplayAccumulatorItemState::Complete(content) => Ok(content.clone()),
-                ReplayAccumulatorItemState::PendingTool => Err(provider_failure(
+                ReplayAccumulatorItemState::PendingTool { .. } => Err(provider_failure(
                     self.provider_id.as_str(),
                     format!(
                         "Public tool stream item `{}` remained incomplete at response completion.",
@@ -1895,7 +2011,10 @@ impl PublicTurnAccumulator {
             } => {
                 self.register_replay_item(
                     item_id.clone(),
-                    ReplayAccumulatorItemState::PendingTool,
+                    ReplayAccumulatorItemState::PendingTool {
+                        call_id: call_id.clone(),
+                        tool_name: tool_name.clone(),
+                    },
                 )?;
                 let _ = live_sender.send(Ok(ProviderStreamDelta::ToolRequestFragment(
                     ToolRequestFragment::Detected {
@@ -1917,7 +2036,7 @@ impl PublicTurnAccumulator {
             }
             AiStreamEvent::ToolCallCompleted { item_id, call } => {
                 let replay_state = self.replay_item_state_mut(item_id.as_str())?;
-                if !matches!(replay_state, ReplayAccumulatorItemState::PendingTool) {
+                if !matches!(replay_state, ReplayAccumulatorItemState::PendingTool { .. }) {
                     return Err(provider_failure(
                         provider_id,
                         "Public tool completion targeted a non-tool item.",
@@ -1944,19 +2063,49 @@ impl PublicTurnAccumulator {
                     tool_call_id: Some(call.id),
                     tool_name: call.name,
                     arguments: call.arguments,
+                    argument_parse_error: None,
                 });
             }
             AiStreamEvent::ToolCallAborted { item_id, message } => {
+                // rejectedIdentity is retained from ToolCallStarted because a model-visible tool result requires the original call id and name.
+                // rejectedIdentity 来自 ToolCallStarted，因为模型可见工具结果必须使用原始调用标识与名称。
+                let (call_id, tool_name) = {
+                    let replay_state = self.replay_item_state_mut(item_id.as_str())?;
+                    let ReplayAccumulatorItemState::PendingTool { call_id, tool_name } =
+                        replay_state
+                    else {
+                        return Err(provider_failure(
+                            provider_id,
+                            "Public tool abort targeted a non-pending tool item.",
+                        ));
+                    };
+                    (call_id.clone(), tool_name.clone())
+                };
+                // rejectedCall closes canonical replay with valid JSON while the separate parse diagnostic forbids host execution.
+                // rejectedCall 使用有效 JSON 封闭规范重放，同时由独立解析诊断禁止宿主执行。
+                let rejected_call = PublicToolCall {
+                    id: call_id.clone(),
+                    name: tool_name.clone(),
+                    arguments: Value::Null,
+                    signature: None,
+                };
+                *self.replay_item_state_mut(item_id.as_str())? =
+                    ReplayAccumulatorItemState::Complete(ContentItem::ToolCall {
+                        call: rejected_call,
+                    });
                 let _ = live_sender.send(Ok(ProviderStreamDelta::ToolRequestFragment(
-                    ToolRequestFragment::Aborted {
+                    ToolRequestFragment::Invalid {
                         request_stream_id: item_id,
                         reason: message.clone(),
                     },
                 )));
-                return Err(replayable_tool_call_stream_failure(
-                    provider_id,
-                    message.as_str(),
-                ));
+                self.tool_calls.push(ConversationToolCall {
+                    id: call_id.clone(),
+                    tool_call_id: Some(call_id),
+                    tool_name,
+                    arguments: Value::Null,
+                    argument_parse_error: Some(message),
+                });
             }
             AiStreamEvent::UsageUpdated { usage } => {
                 if let Some(current) = self.usage.as_mut() {
@@ -3311,48 +3460,6 @@ fn provider_failure(provider_id: &str, message: &str) -> VulcanCoreError {
     }
 }
 
-/// Creates a typed retryable failure for streamed tool arguments that never became executable JSON.
-/// 为始终未形成可执行 JSON 的流式工具参数创建强类型可重试失败。
-///
-/// # Parameters
-/// 参数
-/// `provider_id` identifies the frozen route and `message` retains the controlled decoder diagnostic.
-/// `provider_id` 标识冻结路由，`message` 保留受控解码诊断。
-///
-/// # Returns
-/// 返回值
-/// A dispatched response-stream failure whose partial semantic output may be replaced because no tool ran.
-/// 返回一项已分派的响应流失败；由于工具尚未运行，其局部语义输出可以被替换。
-fn replayable_tool_call_stream_failure(provider_id: &str, message: &str) -> VulcanCoreError {
-    VulcanCoreError::ProviderFailure {
-        provider_id: provider_id.to_string(),
-        message: message.to_string(),
-        details: Some(Box::new(AiExecutionError {
-            category: AiErrorCategory::Unclassified,
-            subcategory: Some(REPLAYABLE_TOOL_CALL_STREAM_FAILURE_SUBCATEGORY.to_string()),
-            stage: String::from("response_stream"),
-            http_status: None,
-            transport: None,
-            websocket_close_code: None,
-            upstream_code: None,
-            upstream_type: None,
-            upstream_parameter: None,
-            upstream_message: None,
-            request_id: None,
-            provider_id: Some(provider_id.to_string()),
-            entry_id: None,
-            model_id: None,
-            message: message.to_string(),
-            dispatch_outcome: DispatchOutcome::Dispatched,
-            semantic_output_observed: true,
-            side_effect_observed: false,
-            terminal: true,
-            retryable: true,
-            retry_after: None,
-        })),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3454,6 +3561,32 @@ mod tests {
         );
     }
 
+    /// Verifies response trace encoding stays readable unless JSON escaping would be larger.
+    /// 验证响应追踪编码默认保持可读，仅在 JSON 转义体积更大时切换编码。
+    #[test]
+    fn provider_response_trace_body_uses_the_smaller_exact_encoding() {
+        // readableBody represents ordinary SSE text that should remain directly inspectable.
+        // readableBody 表示应保持可直接检查的普通 SSE 文本。
+        let readable_body = b"data: {\"type\":\"response.completed\"}\n\n".to_vec();
+        let (readable_encoding, readable_payload) =
+            encode_provider_response_trace_body(readable_body.clone());
+        assert_eq!(readable_encoding, "utf8");
+        assert_eq!(readable_payload.as_bytes(), readable_body);
+
+        // escapedBody forces six-byte JSON escapes whose Base64 form is smaller and fully reversible.
+        // escapedBody 强制使用六字节 JSON 转义，其 Base64 表示更小且可完整还原。
+        let escaped_body = vec![0_u8; 4_096];
+        let (escaped_encoding, escaped_payload) =
+            encode_provider_response_trace_body(escaped_body.clone());
+        assert_eq!(escaped_encoding, "base64");
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(escaped_payload)
+                .expect("Base64 trace response should decode"),
+            escaped_body
+        );
+    }
+
     /// Verifies the closed configuration enum maps directly onto the three shared projection profiles.
     /// 验证封闭配置枚举直接映射到三项共享投影配置。
     #[test]
@@ -3513,6 +3646,33 @@ mod tests {
                 execution_id: String::from("response-1"),
             }
         ));
+    }
+
+    /// Verifies diagnostic draining consumes events after the host has already rejected a turn.
+    /// 验证诊断排空会在宿主已拒绝回合后继续消费剩余事件。
+    #[tokio::test]
+    async fn provider_trace_drain_consumes_the_remaining_stream() {
+        // tailObserved reports that the detached diagnostic consumer reached the simulated body tail.
+        // tailObserved 用于报告分离式诊断消费者已经到达模拟正文尾部。
+        let (tail_observed_sender, tail_observed_receiver) = tokio::sync::oneshot::channel();
+        // remainingStream models normalized events still backed by unread Provider response bytes.
+        // remainingStream 模拟仍由未读取 Provider 响应字节支撑的规范化事件。
+        let remaining_stream: ProviderExecutionStream = Box::pin(async_stream::stream! {
+            yield Ok(AiStreamEvent::ResponseStarted {
+                execution_id: String::from("trace-drain-response"),
+            });
+            let _ = tail_observed_sender.send(());
+            yield Ok(AiStreamEvent::ResponseCompleted);
+        });
+
+        drain_provider_stream_for_trace(remaining_stream);
+
+        // observedTail fails if the detached drain stops after the first remaining event.
+        // observedTail 在分离式排空于首个剩余事件后停止时失败。
+        tokio::time::timeout(std::time::Duration::from_secs(1), tail_observed_receiver)
+            .await
+            .expect("trace drain should reach the response tail")
+            .expect("trace drain should keep the tail observer alive");
     }
 
     /// Verifies split Anthropic usage events retain start-event cache fields and terminal output fields.
@@ -3875,10 +4035,10 @@ mod tests {
         assert_eq!(replay.provider_context_items, vec![provider_item]);
     }
 
-    /// Verifies malformed streamed tool arguments remain typed as retryable before any tool execution.
-    /// 验证格式错误的流式工具参数在任何工具执行前保持为强类型可重试失败。
+    /// Verifies malformed streamed tool arguments become one non-executable tool call instead of a retryable Provider failure.
+    /// 验证格式错误的流式工具参数会成为一条不可执行工具调用，而不是可重试 Provider 失败。
     #[test]
-    fn public_tool_abort_preserves_replayable_unexecuted_failure() {
+    fn public_tool_abort_becomes_non_executable_tool_call() {
         // liveChannel and sink capture both the visible tool draft and its abort boundary.
         // liveChannel 与 sink 同时捕获可见工具草稿及其中止边界。
         let (live_sender, mut live_receiver) = tokio::sync::mpsc::unbounded_channel();
@@ -3910,9 +4070,7 @@ mod tests {
         // decoderMessage mirrors the controlled error emitted by OpenAI Responses argument parsing.
         // decoderMessage 镜像 OpenAI Responses 参数解析发出的受控错误。
         let decoder_message = "OpenAI Responses tool input ended before valid JSON was complete";
-        // failure must carry typed replay facts instead of becoming a legacy terminal Provider failure.
-        // failure 必须携带强类型重放事实，而不能退化为旧式终态 Provider 失败。
-        let failure = accumulator
+        accumulator
             .apply_event(
                 "opencode-go",
                 &live_sender,
@@ -3922,39 +4080,26 @@ mod tests {
                     message: decoder_message.to_string(),
                 },
             )
-            .expect_err("aborted tool draft should fail the physical response");
-
-        // retryDecision proves the actual adapter error crosses the generic same-route retry boundary.
-        // retryDecision 证明实际适配器错误能够通过通用同路由重试边界。
-        let retry_decision =
-            crate::agent_runtime::provider_transport_retry::ProviderRetryPolicy::from_config(
-                &crate::provider_config::PersistedProviderRetryConfiguration::default(),
+            .expect("identified malformed tool call should remain inside the successful turn");
+        accumulator
+            .apply_event(
+                "opencode-go",
+                &live_sender,
+                &mut sink,
+                AiStreamEvent::ResponseCompleted,
             )
-            .next_retry(&failure, 0, true)
-            .expect("typed aborted tool draft should enter automatic retry");
-        assert_eq!(retry_decision.reason, "Provider tool call stream failure");
+            .expect("response completion should remain valid after the controlled rejection");
 
-        let VulcanCoreError::ProviderFailure {
-            message,
-            details: Some(details),
-            ..
-        } = failure
-        else {
-            panic!("typed Provider failure expected");
-        };
-        assert_eq!(message, decoder_message);
-        assert_eq!(details.category, AiErrorCategory::Unclassified);
+        let response = accumulator
+            .finish()
+            .expect("controlled malformed tool call should finish the Provider turn");
+        assert_eq!(response.tool_calls.len(), 1);
+        assert_eq!(response.tool_calls[0].tool_name, "vulcan_file_edit");
+        assert_eq!(response.tool_calls[0].arguments, Value::Null);
         assert_eq!(
-            details.subcategory.as_deref(),
-            Some(REPLAYABLE_TOOL_CALL_STREAM_FAILURE_SUBCATEGORY)
+            response.tool_calls[0].argument_parse_error.as_deref(),
+            Some(decoder_message)
         );
-        assert_eq!(details.stage, "response_stream");
-        assert_eq!(details.dispatch_outcome, DispatchOutcome::Dispatched);
-        assert!(details.semantic_output_observed);
-        assert!(!details.side_effect_observed);
-        assert!(details.terminal);
-        assert!(details.retryable);
-        assert!(accumulator.tool_calls.is_empty());
 
         assert!(matches!(
             live_receiver.try_recv(),
@@ -3965,9 +4110,10 @@ mod tests {
         assert!(matches!(
             live_receiver.try_recv(),
             Ok(Ok(ProviderStreamDelta::ToolRequestFragment(
-                ToolRequestFragment::Aborted { .. }
+                ToolRequestFragment::Invalid { .. }
             )))
         ));
+        assert!(live_receiver.try_recv().is_err());
     }
 
     /// Verifies partial provider captures cannot replace complete normalized assistant history.

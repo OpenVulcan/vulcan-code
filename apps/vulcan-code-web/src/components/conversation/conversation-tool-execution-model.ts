@@ -7,6 +7,7 @@ import {
   isSubagentFeedbackMetadata,
   isSubagentHostKind,
   isSubagentToolName,
+  normalizeToolDisplayState,
   subagentToolDisplayName,
 } from "./conversation-tool-metadata";
 
@@ -1081,28 +1082,6 @@ function fencedText(value: string): string {
 // text 解析可选国际化键并提供英文兜底。
 function text(t: ((key: TranslationKey) => string) | undefined, key: TranslationKey, fallback: string): string {
   return t ? t(key) : fallback;
-}
-
-// normalizeToolDisplayState maps provider and host state words into WebUI display states.
-// normalizeToolDisplayState 将 Provider 与宿主状态词映射为 WebUI 展示状态。
-function normalizeToolDisplayState(status?: string | null): string | undefined {
-  if (!status?.trim()) {
-    return undefined;
-  }
-  const normalized = status.trim().toLowerCase();
-  if (normalized === "failed" || normalized === "error" || normalized === "errored" || normalized === "failure") {
-    return "failed";
-  }
-  if (normalized === "completed" || normalized === "complete" || normalized === "success" || normalized === "succeeded") {
-    return "completed";
-  }
-  if (normalized === "stopped" || normalized === "cancelled" || normalized === "canceled" || normalized === "aborted" || normalized === "superseded") {
-    return "stopped";
-  }
-  if (normalized === "running" || normalized === "pending" || normalized === "in_progress") {
-    return "running";
-  }
-  return status.trim();
 }
 
 // compactTextPreview returns one short single-line preview for cards and modal headers.

@@ -2,14 +2,35 @@ import { describe, expect, it } from "vitest";
 import {
   liveToolRequestProgress,
   toolExecutionDetailLoadEnabled,
+  toolExecutionDisplayState,
   toolExecutionSummary,
   toolRequestProgress,
   toolRequestProgressForDisplay,
   toolRequestProgressLabel,
 } from "./conversation-tool-execution-model";
 import type { ToolExecutionConversationBlock } from "./conversation-tool-execution-types";
+import { normalizeToolDisplayState } from "./conversation-tool-metadata";
 
 describe("conversation tool request progress", () => {
+  it("keeps invalid and rejected pre-execution requests in the failed terminal state", () => {
+    expect(normalizeToolDisplayState("invalid")).toBe("failed");
+    expect(normalizeToolDisplayState("rejected")).toBe("failed");
+    for (const status of ["invalid", "rejected"]) {
+      const blocks = [{
+        body: "Provider emitted invalid tool arguments.",
+        id: `tool-${status}`,
+        kind: "tool-call",
+        rawMetadata: { tool_display_state: status },
+        status,
+        summary: "file_edit",
+        title: "file_edit",
+        toolName: "file_edit",
+      }] as ToolExecutionConversationBlock[];
+
+      expect(toolExecutionDisplayState(blocks, true)).toBe("failed");
+    }
+  });
+
   it("uses the newest request revision and reports characters plus UTF-8 bytes", () => {
     const blocks = [
       {

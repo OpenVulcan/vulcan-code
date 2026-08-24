@@ -148,6 +148,7 @@ fn ensure_webui_session_runtime_state_preserves_goal_bound_canonical_tool_histor
                     tool_call_id: Some(String::from("provider-tool-call-1")),
                     tool_name: String::from("shell_command"),
                     arguments: json!({"command": "sleep 10"}),
+                    argument_parse_error: None,
                 }],
             },
         },

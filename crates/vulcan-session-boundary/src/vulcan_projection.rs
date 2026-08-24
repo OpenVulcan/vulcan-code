@@ -247,6 +247,11 @@ fn session_boundary_event_tool_calls(
                     .map(ToOwned::to_owned),
                 tool_name: tool_name.to_string(),
                 arguments: call.get("arguments").cloned().unwrap_or(Value::Null),
+                argument_parse_error: call
+                    .get("argument_parse_error")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .map(ToOwned::to_owned),
             })
         })
         .collect()
@@ -440,7 +445,7 @@ mod tests {
             SessionEventVisibility::Visible,
             json!({
                 "tool_calls": [
-                    { "id": "call-1", "tool_call_id": "provider-call-1", "tool_name": "read_file", "arguments": { "path": "Cargo.toml" } },
+                    { "id": "call-1", "tool_call_id": "provider-call-1", "tool_name": "read_file", "arguments": null, "argument_parse_error": "invalid JSON" },
                     { "tool_call_id": "provider-call-2", "tool_name": "write_file", "arguments": {} },
                     { "id": "call-3", "tool_call_id": "provider-call-3", "arguments": {} }
                 ]
@@ -458,6 +463,11 @@ mod tests {
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].id, "call-1");
         assert_eq!(tool_calls[0].tool_name, "read_file");
+        assert_eq!(tool_calls[0].arguments, Value::Null);
+        assert_eq!(
+            tool_calls[0].argument_parse_error.as_deref(),
+            Some("invalid JSON")
+        );
     }
 
     /// Verifies duplicate event ownership is rejected instead of producing an ambiguous boundary projection.

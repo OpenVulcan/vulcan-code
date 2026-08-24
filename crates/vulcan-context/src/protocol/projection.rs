@@ -1077,6 +1077,12 @@ fn tool_call_session_message_to_protocol_message(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
+    let argument_parse_error = metadata
+        .get("argument_parse_error")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
 
     Some(SessionConversationMessage {
         id: message.id.clone(),
@@ -1091,6 +1097,7 @@ fn tool_call_session_message_to_protocol_message(
                 tool_call_id,
                 tool_name: tool_name.to_string(),
                 arguments,
+                argument_parse_error,
             }],
         },
     })

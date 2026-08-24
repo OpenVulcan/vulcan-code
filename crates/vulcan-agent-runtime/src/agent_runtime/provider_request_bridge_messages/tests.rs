@@ -1,9 +1,12 @@
 use super::{
-    core_messages_to_provider_visible_history_for_model,
+    core_message_to_session_message, core_messages_to_provider_visible_history_for_model,
     core_messages_to_provider_visible_history_for_model_with_system_updates,
-    validate_provider_visible_tool_topology,
+    session_message_to_core_message, validate_provider_visible_tool_topology,
 };
 use crate::agent_runtime::provider_system_update_lowering::ProviderSystemUpdateLoweringPolicy;
+use crate::conversation_protocol::{
+    SessionConversationMessage, SessionConversationPayload, SessionConversationToolCall,
+};
 use vulcan_ai_contract::{ModelCapabilities, ResourceKind};
 use vulcan_context::{
     RuntimeSystemUpdateEvent, RuntimeSystemUpdateLoweringHint, RuntimeSystemUpdateTrust,
@@ -13,6 +16,44 @@ use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
     ConversationToolCall as CoreConversationToolCall,
 };
+
+/// Verifies session/Core conversion retains the durable rejection fact for malformed tool arguments.
+/// 验证会话/Core 转换会保留异常工具参数的可靠拒绝事实。
+#[test]
+fn session_core_conversion_preserves_tool_argument_parse_error() {
+    // decoderMessage is intentionally stored apart from the valid JSON placeholder.
+    // decoderMessage 被刻意独立于有效 JSON 占位值保存。
+    let decoder_message = "OpenAI Responses tool input ended before valid JSON was complete";
+    let session_message = SessionConversationMessage {
+        id: String::from("assistant-invalid-tool"),
+        payload: SessionConversationPayload::Assistant {
+            text: String::new(),
+            reasoning: String::new(),
+            provider_message_id: Some(String::from("response-invalid-tool")),
+            provider_message_state: None,
+            usage: None,
+            tool_calls: vec![SessionConversationToolCall {
+                id: String::from("call-invalid"),
+                tool_call_id: Some(String::from("call-invalid")),
+                tool_name: String::from("file_edit"),
+                arguments: serde_json::Value::Null,
+                argument_parse_error: Some(decoder_message.to_string()),
+            }],
+        },
+    };
+
+    let core_message = session_message_to_core_message(&session_message);
+    let restored_message = core_message_to_session_message(&core_message);
+    let SessionConversationPayload::Assistant { tool_calls, .. } = restored_message.payload else {
+        panic!("round trip should retain the assistant tool-call payload");
+    };
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].arguments, serde_json::Value::Null);
+    assert_eq!(
+        tool_calls[0].argument_parse_error.as_deref(),
+        Some(decoder_message)
+    );
+}
 
 /// Builds one replayable attachment payload used by provider-history projection tests.
 /// 构建供 Provider 历史投影测试使用的可回放附件载荷。
@@ -114,6 +155,7 @@ fn provider_visible_history_moves_system_update_after_tool_result_gap() {
                     tool_call_id: Some(String::from("provider-call-1")),
                     tool_name: String::from("read_file"),
                     arguments: serde_json::json!({ "path": "Cargo.toml" }),
+                    argument_parse_error: None,
                 }],
             },
         },
@@ -167,12 +209,14 @@ fn provider_visible_history_moves_system_update_after_parallel_tool_results() {
                         tool_call_id: Some(String::from("provider-call-1")),
                         tool_name: String::from("read_file"),
                         arguments: serde_json::json!({ "path": "Cargo.toml" }),
+                        argument_parse_error: None,
                     },
                     CoreConversationToolCall {
                         id: String::from("local-call-2"),
                         tool_call_id: Some(String::from("provider-call-2")),
                         tool_name: String::from("list_files"),
                         arguments: serde_json::json!({}),
+                        argument_parse_error: None,
                     },
                 ],
             },
@@ -329,6 +373,7 @@ fn provider_visible_history_preserves_matched_tool_result() {
                     tool_call_id: Some(String::from("provider-call")),
                     tool_name: String::from("read_file"),
                     arguments: serde_json::json!({"path": "Cargo.toml"}),
+                    argument_parse_error: None,
                 }],
             },
         },
@@ -373,12 +418,14 @@ fn provider_visible_history_passes_canonical_tool_topology_validator() {
                         tool_call_id: Some(String::from("provider-call-1")),
                         tool_name: String::from("first_tool"),
                         arguments: serde_json::json!({}),
+                        argument_parse_error: None,
                     },
                     CoreConversationToolCall {
                         id: String::from("local-call-2"),
                         tool_call_id: Some(String::from("provider-call-2")),
                         tool_name: String::from("second_tool"),
                         arguments: serde_json::json!({}),
+                        argument_parse_error: None,
                     },
                 ],
             },
@@ -439,6 +486,7 @@ fn provider_visible_tool_topology_validator_rejects_interrupted_batch() {
                     tool_call_id: Some(String::from("provider-call-1")),
                     tool_name: String::from("ask"),
                     arguments: serde_json::json!({}),
+                    argument_parse_error: None,
                 }],
             },
         },
@@ -520,12 +568,14 @@ fn provider_visible_history_downgrades_partial_tool_batch() {
                         tool_call_id: Some(String::from("provider-call-1")),
                         tool_name: String::from("first_tool"),
                         arguments: serde_json::json!({"step": 1}),
+                        argument_parse_error: None,
                     },
                     CoreConversationToolCall {
                         id: String::from("local-call-2"),
                         tool_call_id: Some(String::from("provider-call-2")),
                         tool_name: String::from("second_tool"),
                         arguments: serde_json::json!({"step": 2}),
+                        argument_parse_error: None,
                     },
                 ],
             },
@@ -580,6 +630,7 @@ fn provider_visible_history_downgrades_unanswered_tool_batch() {
                         "options": []
                     }]
                 }),
+                argument_parse_error: None,
             }],
         },
     }];
@@ -674,6 +725,7 @@ fn canonical_fixture_tool_call_and_result_projects_as_protocol_pair() {
                     tool_call_id: Some(String::from("provider-call-1")),
                     tool_name: String::from("read_file"),
                     arguments: serde_json::json!({ "path": "Cargo.toml" }),
+                    argument_parse_error: None,
                 }],
             },
         },
@@ -734,6 +786,7 @@ fn canonical_fixture_provider_switch_downgrades_stale_tool_state() {
                     tool_call_id: Some(String::from("old-provider-call")),
                     tool_name: String::from("image_generation"),
                     arguments: serde_json::json!({ "prompt": "demo" }),
+                    argument_parse_error: None,
                 }],
             },
         },

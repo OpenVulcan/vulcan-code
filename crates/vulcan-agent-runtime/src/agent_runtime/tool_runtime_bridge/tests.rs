@@ -529,6 +529,7 @@ fn managed_tool_runtime_bridge_executes_core_tool_request() {
         tool_call_id: String::from("call-1"),
         tool_name: String::from("demo_tool"),
         arguments: json!({ "path": "src/main.rs" }),
+        argument_parse_error: None,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -562,16 +563,19 @@ fn managed_tool_runtime_bridge_preserves_unregistered_tool_error_path() {
         tool_call_id: String::from("call-unknown-1"),
         tool_name: String::from("invented_tool"),
         arguments: json!({ "query": "README" }),
+        argument_parse_error: None,
     };
     let same_binding_request = ToolInvocationRequest {
         tool_call_id: String::from("call-unknown-2"),
         tool_name: request.tool_name.clone(),
         arguments: json!({ "query": "Cargo.toml" }),
+        argument_parse_error: None,
     };
     let other_binding_request = ToolInvocationRequest {
         tool_call_id: String::from("call-unknown-3"),
         tool_name: String::from("other_invented_tool"),
         arguments: json!({}),
+        argument_parse_error: None,
     };
 
     let fingerprint = runtime_bridge
@@ -613,6 +617,7 @@ fn managed_tool_runtime_bridge_converts_tool_failures_into_error_results() {
         tool_call_id: String::from("call-error-1"),
         tool_name: String::from("failing_tool"),
         arguments: json!({ "query": "README" }),
+        argument_parse_error: None,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -658,6 +663,7 @@ fn managed_tool_runtime_bridge_preserves_structured_tool_error_results() {
         tool_call_id: String::from("call-structured-error-1"),
         tool_name: String::from("structured_failure_tool"),
         arguments: json!({}),
+        argument_parse_error: None,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -699,6 +705,7 @@ fn managed_tool_runtime_bridge_rejects_structured_error_without_error_text() {
         tool_call_id: String::from("call-invalid-structured-error-1"),
         tool_name: String::from("invalid_structured_failure_tool"),
         arguments: json!({}),
+        argument_parse_error: None,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -745,6 +752,7 @@ fn managed_tool_runtime_bridge_blocks_disallowed_plan_tool_invocation() {
         tool_call_id: String::from("call-plan-blocked-1"),
         tool_name: String::from("failing_tool"),
         arguments: json!({ "query": "README" }),
+        argument_parse_error: None,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -781,6 +789,7 @@ fn managed_tool_runtime_bridge_integrates_with_core_controller_loop() {
                 tool_call_id: Some(String::from("tool-call-1")),
                 tool_name: String::from("demo_tool"),
                 arguments: json!({ "path": "src/main.rs" }),
+                argument_parse_error: None,
             }],
             continuation: None,
             usage: None,
@@ -861,6 +870,7 @@ fn managed_tool_runtime_bridge_keeps_controller_loop_alive_after_tool_failure() 
                 tool_call_id: Some(String::from("tool-call-1")),
                 tool_name: String::from("failing_tool"),
                 arguments: json!({ "query": "README" }),
+                argument_parse_error: None,
             }],
             continuation: None,
             usage: None,
@@ -945,6 +955,7 @@ fn streaming_tool_executor_converts_tool_panics_into_error_results() {
         tool_call_id: String::from("panic-call-1"),
         tool_name: String::from("panic_tool"),
         arguments: json!({ "query": "山姆零食" }),
+        argument_parse_error: None,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1007,6 +1018,7 @@ fn streaming_tool_executor_marks_controller_error_results_failed() {
         tool_call_id: String::from("failing-call-1"),
         tool_name: String::from("failing_tool"),
         arguments: json!({ "query": "演示错误" }),
+        argument_parse_error: None,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1065,6 +1077,7 @@ fn streaming_tool_executor_rejects_tool_requests_before_host_execution() {
         tool_call_id: String::from("rejected-call-1"),
         tool_name: String::from("gated_tool"),
         arguments: json!({ "query": "must not run" }),
+        argument_parse_error: None,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1152,6 +1165,7 @@ fn streaming_tool_executor_does_not_reject_when_scope_is_empty() {
         tool_call_id: String::from("empty-scope-call-1"),
         tool_name: String::from("failing_tool"),
         arguments: json!({ "query": "scope empty should still run" }),
+        argument_parse_error: None,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1199,11 +1213,13 @@ fn streaming_tool_executor_rejects_only_scoped_tool_ids() {
         tool_call_id: String::from("scoped-rejected-call-1"),
         tool_name: String::from("failing_tool"),
         arguments: json!({ "query": "must be rejected before the failing body runs" }),
+        argument_parse_error: None,
     };
     let allowed_request = ToolInvocationRequest {
         tool_call_id: String::from("scoped-allowed-call-1"),
         tool_name: String::from("demo_tool"),
         arguments: json!({ "path": "src/main.rs" }),
+        argument_parse_error: None,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1281,6 +1297,7 @@ fn streaming_tool_executor_yields_tool_started_before_tool_body_runs() {
         tool_call_id: String::from("gated-call-1"),
         tool_name: String::from("gated_tool"),
         arguments: json!({ "query": "先显示工具调用" }),
+        argument_parse_error: None,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1377,6 +1394,7 @@ fn streaming_tool_executor_rejects_tool_body_when_safety_barrier_fails() {
         tool_call_id: String::from("gated-rejected-call-1"),
         tool_name: String::from("gated_tool"),
         arguments: json!({ "query": "拒绝不安全工具边界" }),
+        argument_parse_error: None,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1443,6 +1461,7 @@ fn streaming_tool_executor_waits_for_tool_finished_projection_before_returning()
         tool_call_id: String::from("barrier-call-1"),
         tool_name: String::from("demo_tool"),
         arguments: json!({ "path": "src/main.rs" }),
+        argument_parse_error: None,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

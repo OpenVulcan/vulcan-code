@@ -317,6 +317,7 @@ impl VulcanCoreController {
                     tool_call_id: resolved_tool_call_id(tool_call),
                     tool_name: tool_call.tool_name.clone(),
                     arguments: tool_call.arguments.clone(),
+                    argument_parse_error: tool_call.argument_parse_error.clone(),
                 })
                 .collect::<Vec<_>>();
             let results = match self.execute_tool_batch(executor, policy, requests).await {
@@ -536,6 +537,7 @@ impl VulcanCoreController {
                     tool_call_id: resolved_tool_call_id(tool_call),
                     tool_name: tool_call.tool_name.clone(),
                     arguments: tool_call.arguments.clone(),
+                    argument_parse_error: tool_call.argument_parse_error.clone(),
                 })
                 .collect::<Vec<_>>();
             let results = match self.execute_tool_batch(executor, policy, requests).await {

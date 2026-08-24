@@ -1298,6 +1298,7 @@ fn build_unprepared_tool_recovery_slots(
                 tool_call_id: vulcan_core::controller::resolved_tool_call_id(assistant_call),
                 tool_name: assistant_call.tool_name.clone(),
                 arguments: assistant_call.arguments.clone(),
+                argument_parse_error: assistant_call.argument_parse_error.clone(),
             },
             result: None,
             binding_fingerprint: None,
@@ -2096,7 +2097,8 @@ mod tests {
     use super::*;
     use vulcan_ai_contract::{AiErrorCategory, AiExecutionError, DispatchOutcome};
     use vulcan_core::types::{
-        ConversationMessage, ConversationPayload, ConversationRecord, ToolInvocationRequest,
+        ConversationMessage, ConversationPayload, ConversationRecord, ConversationToolCall,
+        ToolInvocationRequest,
     };
 
     /// Verifies a retained prepared boundary rejects duplicate identities and retained-batch subsets.
@@ -2109,6 +2111,7 @@ mod tests {
             tool_call_id: String::from("tool-call-a"),
             tool_name: String::from("read_file"),
             arguments: serde_json::json!({"path": "a.txt"}),
+            argument_parse_error: None,
         };
         // recoveryRequest freezes the request and its resolved binding fingerprint.
         // recoveryRequest 冻结请求及其已解析绑定指纹。
@@ -2131,6 +2134,37 @@ mod tests {
         let incomplete_error = validate_prepared_tool_batch_shape(&[recovery_request], Some(2))
             .expect_err("prepared subset must be rejected");
         assert!(incomplete_error.starts_with(TOOL_RECOVERY_BOUNDARY_MISSING_REASON));
+    }
+
+    /// Verifies crash-gap recovery retains the terminal parse diagnostic attached to invalid Provider arguments.
+    /// 验证崩溃间隙恢复会保留附着在无效 Provider 参数上的终态解析诊断。
+    #[test]
+    fn unprepared_tool_recovery_preserves_argument_parse_error() {
+        // decoderMessage is the exact non-execution proof emitted by the protocol decoder.
+        // decoderMessage 是协议解码器发出的精确未执行证明。
+        let decoder_message = "Provider tool arguments are incomplete JSON";
+        // assistantCall models a completed Provider tool item whose arguments cannot be executed.
+        // assistantCall 模拟一个已经完成但参数不可执行的 Provider 工具项。
+        let assistant_call = ConversationToolCall {
+            id: String::from("tool-item-invalid"),
+            tool_call_id: Some(String::from("call-invalid")),
+            tool_name: String::from("file_edit"),
+            arguments: serde_json::Value::Null,
+            argument_parse_error: Some(decoder_message.to_string()),
+        };
+
+        // slots must retain the diagnostic so a resumed batch cannot dispatch the null placeholder.
+        // slots 必须保留该诊断，避免恢复后的批次分派 null 占位参数。
+        let slots = build_unprepared_tool_recovery_slots(&[assistant_call]);
+
+        assert_eq!(slots.len(), 1);
+        assert_eq!(slots[0].request.tool_call_id, "call-invalid");
+        assert_eq!(slots[0].request.arguments, serde_json::Value::Null);
+        assert_eq!(
+            slots[0].request.argument_parse_error.as_deref(),
+            Some(decoder_message)
+        );
+        assert_eq!(slots[0].state, ExecutionRetryToolState::NotStarted);
     }
 
     /// Verifies live retry identities advance even when the wall clock has not reached the prior boundary.

@@ -199,9 +199,15 @@ pub struct RuntimeToolCallEvent {
     /// Host tool name selected by the assistant.
     /// 助手选择的宿主工具名称。
     pub tool_name: String,
-    /// Structured JSON arguments selected by the assistant.
-    /// 助手选择的结构化 JSON 参数。
+    /// Structured JSON arguments selected by the assistant, or `null` only when
+    /// `argument_parse_error` proves the Provider payload could not be parsed.
+    /// 助手选择的结构化 JSON 参数；仅当 `argument_parse_error` 证明 Provider 载荷无法解析时才为
+    /// `null`。
     pub arguments: Value,
+    /// Optional controlled diagnostic proving the Provider-emitted arguments were not executable JSON.
+    /// 可选的受控诊断，用于证明 Provider 发出的参数不是可执行 JSON。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_parse_error: Option<String>,
 }
 
 /// Runtime record for one host tool result.

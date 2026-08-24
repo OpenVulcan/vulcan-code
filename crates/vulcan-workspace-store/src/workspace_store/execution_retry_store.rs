@@ -1032,6 +1032,7 @@ mod tests {
             tool_call_id: String::from("tool-item-1"),
             tool_name: String::from("read_file"),
             arguments: serde_json::json!({"path": "README.md"}),
+            argument_parse_error: None,
         };
         snapshot.controller_snapshot.messages = vec![vulcan_core::types::ConversationMessage {
             id: String::from("assistant-tool-batch-1"),
@@ -1048,6 +1049,7 @@ mod tests {
                     tool_call_id: Some(String::from("   ")),
                     tool_name: request.tool_name.clone(),
                     arguments: request.arguments.clone(),
+                    argument_parse_error: None,
                 }],
             },
         }];

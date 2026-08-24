@@ -426,6 +426,7 @@ impl RuntimeConversationProjection {
             tool_call_id: Some(provider_visible_tool_call_id.clone()),
             tool_name: event.tool_name.clone(),
             arguments: event.arguments.clone(),
+            argument_parse_error: event.argument_parse_error.clone(),
         });
         if let Some(provider_tool_call_id) = provider_tool_call_id {
             self.provider_tool_call_ids

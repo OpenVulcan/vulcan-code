@@ -130,6 +130,7 @@ impl VulcanCoreController {
                 "tool_call_id": request.tool_call_id,
                 "tool_name": request.tool_name,
                 "arguments": request.arguments,
+                "argument_parse_error": request.argument_parse_error,
             })),
         });
     }

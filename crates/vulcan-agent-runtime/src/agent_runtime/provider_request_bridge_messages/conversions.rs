@@ -135,6 +135,7 @@ fn session_tool_call_to_core_tool_call(
         tool_call_id: tool_call.tool_call_id.clone(),
         tool_name: tool_call.tool_name.clone(),
         arguments: tool_call.arguments.clone(),
+        argument_parse_error: tool_call.argument_parse_error.clone(),
     }
 }
 
@@ -148,5 +149,6 @@ fn core_tool_call_to_session_tool_call(
         tool_call_id: tool_call.tool_call_id.clone(),
         tool_name: tool_call.tool_name.clone(),
         arguments: tool_call.arguments.clone(),
+        argument_parse_error: tool_call.argument_parse_error.clone(),
     }
 }

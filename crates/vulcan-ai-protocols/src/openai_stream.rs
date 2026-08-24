@@ -39,6 +39,9 @@ struct OpenAiToolState {
     /// Whether the public terminal tool event was emitted.
     /// 是否已经发送公共工具终态事件。
     terminal: bool,
+    /// Whether `response.function_call_arguments.done` supplied a complete candidate snapshot.
+    /// `response.function_call_arguments.done` 是否已提供完整候选快照。
+    arguments_done_seen: bool,
 }
 
 /// Carries the three semantically distinct projections decoded from one reasoning-details chunk.
@@ -748,6 +751,7 @@ impl OpenAiResponsesStreamDecoder {
                     .to_string(),
                 started: true,
                 terminal: false,
+                arguments_done_seen: false,
             },
         );
         Ok(vec![AiStreamEvent::ToolCallStarted {
@@ -774,12 +778,12 @@ impl OpenAiResponsesStreamDecoder {
         state: &mut OpenAiToolState,
         value: &Value,
     ) -> Result<(), ProtocolConversionError> {
-        // reportedItemId supports both incremental top-level and completed nested item shapes.
-        // reportedItemId 同时支持增量顶层结构与完成事件嵌套项目结构。
+        // reportedItemId gives an authoritative completed nested item precedence over compatibility-only top-level fields.
+        // reportedItemId 让权威的已完成嵌套项目优先于仅用于兼容的顶层字段。
         let reported_item_id = value
-            .get("item_id")
+            .pointer("/item/id")
             .and_then(Value::as_str)
-            .or_else(|| value.pointer("/item/id").and_then(Value::as_str))
+            .or_else(|| value.get("item_id").and_then(Value::as_str))
             .filter(|item_id| !item_id.is_empty());
         if let Some(reported_item_id) = reported_item_id {
             if let Some(existing) = state.provider_item_id.as_deref() {
@@ -795,9 +799,9 @@ impl OpenAiResponsesStreamDecoder {
         // reportedCallId prevents one output slot from being rebound to another tool invocation.
         // reportedCallId 防止一个输出槽位被重新绑定到另一项工具调用。
         let reported_call_id = value
-            .get("call_id")
+            .pointer("/item/call_id")
             .and_then(Value::as_str)
-            .or_else(|| value.pointer("/item/call_id").and_then(Value::as_str));
+            .or_else(|| value.get("call_id").and_then(Value::as_str));
         if reported_call_id.is_some_and(|reported| reported != state.call_id) {
             return Err(ProtocolConversionError::new(
                 "OpenAI Responses changed tool call identity.",
@@ -806,9 +810,9 @@ impl OpenAiResponsesStreamDecoder {
         // reportedToolName prevents completion from changing the registered tool target.
         // reportedToolName 防止完成事件修改已注册工具目标。
         let reported_tool_name = value
-            .get("name")
+            .pointer("/item/name")
             .and_then(Value::as_str)
-            .or_else(|| value.pointer("/item/name").and_then(Value::as_str));
+            .or_else(|| value.get("name").and_then(Value::as_str));
         if reported_tool_name.is_some_and(|reported| reported != state.tool_name) {
             return Err(ProtocolConversionError::new(
                 "OpenAI Responses changed tool name during one output item.",
@@ -832,7 +836,7 @@ impl OpenAiResponsesStreamDecoder {
                 "OpenAI Responses argument delta references unopened index `{index}`."
             ))
         })?;
-        if state.terminal {
+        if state.terminal || state.arguments_done_seen {
             return Err(ProtocolConversionError::new(format!(
                 "OpenAI Responses tool output index `{index}` emitted arguments after completion."
             )));
@@ -842,8 +846,77 @@ impl OpenAiResponsesStreamDecoder {
         Ok(vec![tool_argument_delta(state, delta)?])
     }
 
-    /// Completes one response function call.
-    /// 完成一个响应函数调用。
+    /// Records one non-authoritative function-argument completion candidate.
+    /// 记录一个非权威函数参数完成候选值。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `value` is `response.function_call_arguments.done`; its arguments may still be corrected by
+    /// the later authoritative `response.output_item.done` item.
+    /// `value` 是 `response.function_call_arguments.done`；其参数仍可能被后续权威
+    /// `response.output_item.done` 项修正。
+    ///
+    /// # Returns
+    /// 返回值
+    /// No semantic terminal event after the candidate is validated and retained.
+    /// 候选值通过校验并保留后不返回语义终态事件。
+    fn record_tool_arguments_done(
+        &mut self,
+        value: &Value,
+    ) -> Result<Vec<AiStreamEvent>, ProtocolConversionError> {
+        let index = Self::output_index(value)?;
+        let state = self.tools.get_mut(&index).ok_or_else(|| {
+            ProtocolConversionError::new(format!(
+                "OpenAI Responses tool completion references unopened index `{index}`."
+            ))
+        })?;
+        Self::validate_tool_identity(state, value)?;
+        if state.terminal || state.arguments_done_seen {
+            return Ok(Vec::new());
+        }
+        if let Some(arguments) = value.get("arguments").and_then(Value::as_str) {
+            state.arguments.clear();
+            append_bounded_tool_arguments(&mut state.arguments, arguments, "OpenAI Responses")?;
+        }
+        state.arguments_done_seen = true;
+        Ok(Vec::new())
+    }
+
+    /// Builds the one public terminal event for an authoritative tool-argument snapshot.
+    /// 为权威工具参数快照构建唯一公共终态事件。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `state` owns the immutable tool identity and exact final argument text.
+    /// `state` 持有不可变工具身份与精确最终参数文本。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A completed tool call for valid JSON, otherwise a content-free abort diagnostic.
+    /// JSON 合法时返回已完成工具调用，否则返回不含正文的中止诊断。
+    fn finalize_tool_state(state: &mut OpenAiToolState) -> AiStreamEvent {
+        state.terminal = true;
+        match serde_json::from_str::<Value>(state.arguments.as_str()) {
+            Ok(arguments) => AiStreamEvent::ToolCallCompleted {
+                item_id: state.item_id.clone(),
+                call: ToolCall {
+                    id: state.call_id.clone(),
+                    name: state.tool_name.clone(),
+                    arguments,
+                    signature: None,
+                },
+            },
+            Err(error) => AiStreamEvent::ToolCallAborted {
+                item_id: state.item_id.clone(),
+                message: format!(
+                    "OpenAI Responses tool input ended before valid JSON was complete: {error}"
+                ),
+            },
+        }
+    }
+
+    /// Completes one response function call from an authoritative output item.
+    /// 根据权威输出项完成一个响应函数调用。
     fn complete_tool(
         &mut self,
         value: &Value,
@@ -859,31 +932,14 @@ impl OpenAiResponsesStreamDecoder {
             return Ok(Vec::new());
         }
         if let Some(arguments) = value
-            .get("arguments")
-            .or_else(|| value.pointer("/item/arguments"))
+            .pointer("/item/arguments")
+            .or_else(|| value.get("arguments"))
             .and_then(Value::as_str)
         {
             state.arguments.clear();
             append_bounded_tool_arguments(&mut state.arguments, arguments, "OpenAI Responses")?;
         }
-        state.terminal = true;
-        match serde_json::from_str::<Value>(state.arguments.as_str()) {
-            Ok(arguments) => Ok(vec![AiStreamEvent::ToolCallCompleted {
-                item_id: state.item_id.clone(),
-                call: ToolCall {
-                    id: state.call_id.clone(),
-                    name: state.tool_name.clone(),
-                    arguments,
-                    signature: None,
-                },
-            }]),
-            Err(error) => Ok(vec![AiStreamEvent::ToolCallAborted {
-                item_id: state.item_id.clone(),
-                message: format!(
-                    "OpenAI Responses tool input ended before valid JSON was complete: {error}"
-                ),
-            }]),
-        }
+        Ok(vec![Self::finalize_tool_state(state)])
     }
 
     /// Registers one stable public text identity and validates immutable upstream identity.
@@ -1346,6 +1402,40 @@ impl OpenAiResponsesStreamDecoder {
         events
     }
 
+    /// Finalizes done-candidate tools when a successful response omits output-item completion.
+    /// 在成功响应省略输出项完成事件时收口已收到 done 候选值的工具。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `terminal_event` identifies the successful provider boundary closing the response.
+    /// `terminal_event` 标识关闭响应的成功 Provider 边界。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Completed or malformed-argument events for candidates, plus deterministic aborts for tools
+    /// that never supplied any completion candidate.
+    /// 为候选值返回完成或参数非法事件，并为从未提供完成候选值的工具返回确定性中止事件。
+    fn finalize_tools_at_response_completion(
+        &mut self,
+        terminal_event: &str,
+    ) -> Vec<AiStreamEvent> {
+        let mut events = Vec::new();
+        for state in self.tools.values_mut().filter(|state| !state.terminal) {
+            if state.arguments_done_seen {
+                events.push(Self::finalize_tool_state(state));
+            } else {
+                state.terminal = true;
+                events.push(AiStreamEvent::ToolCallAborted {
+                    item_id: state.item_id.clone(),
+                    message: format!(
+                        "OpenAI Responses emitted `{terminal_event}` before the tool input completion event."
+                    ),
+                });
+            }
+        }
+        events
+    }
+
     /// Aborts every tool call that did not receive its dedicated completion event.
     /// 中止所有未收到专用完成事件的工具调用。
     ///
@@ -1640,12 +1730,12 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
                 events.extend(self.tool_argument_delta(&value)?);
             }
             "response.function_call_arguments.done" => {
-                events.extend(self.complete_tool(&value)?);
+                events.extend(self.record_tool_arguments_done(&value)?);
             }
             "response.completed" => {
                 events.extend(self.capture_response_id(&value)?);
                 events.extend(self.close_semantic_items());
-                events.extend(self.abort_incomplete_tools("response.completed"));
+                events.extend(self.finalize_tools_at_response_completion("response.completed"));
                 events.extend(self.fail_incomplete_images("response.completed"));
                 if let Some(usage) = value
                     .pointer("/response/usage")
@@ -2377,10 +2467,10 @@ mod tests {
         )));
     }
 
-    /// Verifies Responses incomplete tool JSON becomes an aborted tool event.
-    /// 验证 Responses 不完整工具 JSON 转换为工具中止事件。
+    /// Verifies malformed arguments.done waits for an authoritative valid output item.
+    /// 验证非法 arguments.done 会等待权威且合法的输出项。
     #[test]
-    fn responses_incomplete_tool_is_aborted_at_done() {
+    fn responses_malformed_arguments_done_is_repaired_by_output_item_done() {
         let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
         decoder
             .push_sse(
@@ -2388,17 +2478,122 @@ mod tests {
                 r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"item","call_id":"call","name":"edit"}}"#,
             )
             .expect("tool should start");
-        let events = decoder
+        // candidateEvents must not abort the turn before output_item.done can repair the snapshot.
+        // candidateEvents 不得在 output_item.done 能够修正快照前中止回合。
+        let candidate_events = decoder
             .push_sse(
                 Some("response.function_call_arguments.done"),
                 r#"{"type":"response.function_call_arguments.done","output_index":0,"arguments":"{\"text\":\""}"#,
             )
             .expect("done should normalize");
+        assert!(candidate_events.iter().all(|event| !matches!(
+            event,
+            AiStreamEvent::ToolCallAborted { .. } | AiStreamEvent::ToolCallCompleted { .. }
+        )));
+
+        // completedEvents proves the later output item is authoritative over the malformed candidate.
+        // completedEvents 证明后续输出项相对于非法候选值具有权威性。
+        let completed_events = decoder
+            .push_sse(
+                Some("response.output_item.done"),
+                r#"{"type":"response.output_item.done","output_index":0,"arguments":"{\"text\":\"stale\"}","item":{"type":"function_call","id":"item","call_id":"call","name":"edit","arguments":"{\"text\":\"fixed\"}"}}"#,
+            )
+            .expect("authoritative output item should repair the candidate");
+        assert!(completed_events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ToolCallCompleted { call, .. }
+                if call.arguments == json!({"text": "fixed"})
+        )));
         assert!(
-            events
+            completed_events
                 .iter()
-                .any(|event| matches!(event, AiStreamEvent::ToolCallAborted { .. }))
+                .all(|event| !matches!(event, AiStreamEvent::ToolCallAborted { .. }))
         );
+    }
+
+    /// Verifies a valid arguments.done candidate completes at response completion when no item follows.
+    /// 验证未跟随输出项时，合法 arguments.done 候选值会在响应完成时收口。
+    #[test]
+    fn responses_arguments_done_candidate_completes_at_response_terminal() {
+        // decoder opens one tool whose compatible provider emits no output_item.done event.
+        // decoder 打开一个兼容 Provider 不发送 output_item.done 事件的工具。
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        decoder
+            .push_sse(
+                Some("response.output_item.added"),
+                r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"item","call_id":"call","name":"edit"}}"#,
+            )
+            .expect("tool should start");
+        // candidateEvents remain non-terminal until either the authoritative item or response boundary.
+        // candidateEvents 在权威输出项或响应边界到来前保持非终态。
+        let candidate_events = decoder
+            .push_sse(
+                Some("response.function_call_arguments.done"),
+                r#"{"type":"response.function_call_arguments.done","output_index":0,"arguments":"{\"text\":\"candidate\"}"}"#,
+            )
+            .expect("valid candidate should be retained");
+        assert!(candidate_events.is_empty());
+
+        // terminalEvents use the retained candidate only because no authoritative output item arrived.
+        // terminalEvents 仅因未收到权威输出项而使用已保留候选值。
+        let terminal_events = decoder
+            .push_sse(
+                Some("response.completed"),
+                r#"{"type":"response.completed","response":{"usage":{}}}"#,
+            )
+            .expect("response completion should finalize the candidate");
+        assert!(terminal_events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ToolCallCompleted { call, .. }
+                if call.arguments == json!({"text": "candidate"})
+        )));
+        assert!(
+            terminal_events
+                .iter()
+                .any(|event| matches!(event, AiStreamEvent::ResponseCompleted))
+        );
+    }
+
+    /// Verifies malformed authoritative output-item arguments still abort exactly once.
+    /// 验证权威输出项参数非法时仍会恰好中止一次。
+    #[test]
+    fn responses_malformed_output_item_done_aborts_tool_once() {
+        // decoder first receives one malformed non-authoritative candidate.
+        // decoder 首先收到一个非法的非权威候选值。
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        decoder
+            .push_sse(
+                Some("response.output_item.added"),
+                r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"item","call_id":"call","name":"edit"}}"#,
+            )
+            .expect("tool should start");
+        decoder
+            .push_sse(
+                Some("response.function_call_arguments.done"),
+                r#"{"type":"response.function_call_arguments.done","output_index":0,"arguments":"{\"text\":\""}"#,
+            )
+            .expect("malformed candidate should remain recoverable");
+
+        // abortedEvents prove only the authoritative malformed item closes the tool as invalid.
+        // abortedEvents 证明只有权威非法输出项才会将工具关闭为无效。
+        let aborted_events = decoder
+            .push_sse(
+                Some("response.output_item.done"),
+                r#"{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"item","call_id":"call","name":"edit","arguments":"{\"text\":\""}}"#,
+            )
+            .expect("malformed authoritative item should normalize to an abort");
+        assert_eq!(
+            aborted_events
+                .iter()
+                .filter(|event| matches!(event, AiStreamEvent::ToolCallAborted { .. }))
+                .count(),
+            1
+        );
+        assert!(aborted_events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ToolCallAborted { message, .. }
+                if message.contains("line 1 column")
+        )));
     }
 
     /// Verifies Responses publishes the immutable upstream response identifier exactly once.
