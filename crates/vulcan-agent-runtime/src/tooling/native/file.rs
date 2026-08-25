@@ -1,5 +1,5 @@
-//! Native read-only file tool definition and execution adapter.
-//! 原生只读文件工具定义与执行适配器。
+//! Native single-path file maintenance tool definition and execution adapter.
+//! 原生单路径文件维护工具定义与执行适配器。
 
 use super::{
     NativeToolDefinition, NativeToolDescriptor, NativeToolError, NativeToolExecutionRequest,
@@ -7,27 +7,24 @@ use super::{
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
-use vulcan_host_tools::file_runtime::{
-    MAX_FILE_TARGETS, MAX_LIST_ENTRIES, MAX_READ_LINES, MAX_READ_SEGMENTS, MAX_SEARCH_QUERY_BYTES,
-    MAX_SEARCH_RESULTS, execute_file,
-};
-use vulcan_tools_manager::VulcanToolInvocationResult;
+use vulcan_host_tools::file_runtime::{MAX_LIST_ENTRIES, MAX_READ_LINES, execute_file};
+use vulcan_tools_manager::{VulcanToolHostResult, VulcanToolInvocationResult};
 
-/// Stable public identifier for the read-only file tool.
-/// 只读文件工具的稳定公开标识。
+/// Stable public identifier for the native file maintenance tool.
+/// 原生文件维护工具的稳定公开标识。
 pub const FILE_TOOL_ID: &str = "file";
 
-/// Builds the native read-only file tool definition.
-/// 构建原生只读文件工具定义。
+/// Builds the native single-path file maintenance tool definition.
+/// 构建原生单路径文件维护工具定义。
 pub(crate) fn build_file_tool() -> Arc<NativeToolDefinition> {
     let descriptor = NativeToolDescriptor {
         id: String::from(FILE_TOOL_ID),
         name: String::from("File"),
         description: String::from(
-            "Read UTF-8 files, list workspace files, search text, or inspect file metadata. This tool never writes files.",
+            "Read files and perform whole-file lifecycle operations on one filesystem path. Use file_edit for a localized exact replacement and apply_patch for multiple hunks or multiple files. This tool does not search file contents and does not recursively delete directories. It preserves an existing text file's encoding and BOM unless you explicitly override them.",
         ),
         help_text: Some(String::from(
-            "Use action=read for file contents, list for bounded directory discovery, search for literal or regular-expression text matches, and stat for metadata and an opaque version token. Provide one or more targets with paths. This tool is read-only.",
+            "Provide exactly one path. read returns code content plus an actual one-based range without embedding Lxx prefixes; list performs bounded directory discovery; stat returns metadata; write replaces a complete file; delete removes one regular file; move renames one path to a destination that must not exist. Action-specific fields are rejected when used with another action.",
         )),
         ai_visible: true,
         available_in_plan: true,
@@ -57,13 +54,27 @@ async fn execute_file_tool(
             ));
         }
     };
-    Ok(VulcanToolInvocationResult::from_model_output(
-        response.model_output,
-    ))
+    if let Some(payload) = response.change_set {
+        return Ok(VulcanToolInvocationResult {
+            model_output: response.model_output,
+            host_result: Some(VulcanToolHostResult {
+                kind: String::from("change_set"),
+                payload,
+            }),
+        });
+    }
+    let payload = response.model_output.clone();
+    Ok(VulcanToolInvocationResult {
+        model_output: response.model_output,
+        host_result: Some(VulcanToolHostResult {
+            kind: String::from("file_access"),
+            payload,
+        }),
+    })
 }
 
-/// Returns the provider-facing JSON Schema for the read-only file tool.
-/// 返回只读文件工具面向 Provider 的 JSON Schema。
+/// Returns the provider-facing JSON Schema for single-path file maintenance.
+/// 返回单路径文件维护面向 Provider 的 JSON Schema。
 fn file_args_schema() -> Value {
     json!({
         "type": "object",
@@ -71,85 +82,68 @@ fn file_args_schema() -> Value {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["read", "list", "search", "stat"],
-                "description": "Required. Choose exactly one action: read returns UTF-8 logical lines, list discovers bounded paths, search returns text matches, and stat returns metadata. The selected action determines which optional fields are meaningful; the runtime rejects fields that belong to another action."
+                "enum": ["read", "list", "stat", "write", "delete", "move"],
+                "description": "Required. read returns decoded code content, list discovers bounded directory entries, stat returns metadata, write replaces a complete file, delete removes one regular file, and move renames one path."
             },
-            "targets": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": MAX_FILE_TARGETS,
-                "description": "Required. One or more file or directory targets. Each target must contain a path. The segments and numbered fields are meaningful only for read.",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "minLength": 1,
-                            "description": "Workspace-relative or absolute file-system path. You may use the established `${env:NAME}` placeholder syntax; the host expands it once before resolving the path."
-                        },
-                        "segments": {
-                            "type": "array",
-                            "maxItems": MAX_READ_SEGMENTS,
-                            "description": "Read only. Bounded one-based line ranges. Each item has start_line and line_count; omit this field to read the bounded file prefix.",
-                            "items": {
-                                "type": "object",
-                                "additionalProperties": false,
-                                "properties": {
-                                    "start_line": {"type": "integer", "minimum": 1},
-                                    "line_count": {"type": "integer", "minimum": 1, "maximum": MAX_READ_LINES}
-                                },
-                                "required": ["start_line", "line_count"]
-                            }
-                        },
-                        "numbered": {
-                            "type": "boolean",
-                            "description": "Read only. Include one-based line numbers. Defaults to true."
-                        }
-                    },
-                    "required": ["path"]
-                }
-            },
-            "query": {
+            "path": {
                 "type": "string",
-                "maxLength": MAX_SEARCH_QUERY_BYTES,
-                "description": "Search only. Literal text by default, or a regular-expression pattern when query_type=regex."
+                "minLength": 1,
+                "description": "Required. Relative paths resolve against the current workspace. Absolute paths and parent-relative paths may target any local filesystem location. `${env:NAME}` placeholders are expanded once by the host."
             },
-            "query_type": {
-                "type": "string",
-                "enum": ["literal", "regex"],
-                "description": "Search only. Use literal by default; use regex for a regular expression."
+            "start_line": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "read only. First one-based logical line to return. Defaults to 1."
             },
-            "pattern": {
-                "type": "string",
-                "maxLength": MAX_SEARCH_QUERY_BYTES,
-                "description": "List only. Optional filename glob using * and ?."
+            "end_line": {
+                "type": "integer",
+                "minimum": 1,
+                "description": format!("read only. Inclusive one-based final logical line. At most {MAX_READ_LINES} lines are returned.")
             },
             "recursive": {
                 "type": "boolean",
-                "description": "List/search only. Recurse into directories. Defaults to true."
+                "default": false,
+                "description": "list only. Recurse into child directories. Defaults to false."
             },
-            "include_ignored": {
-                "type": "boolean",
-                "description": "List/search only. Include conventional generated and dependency directories. Defaults to false."
-            },
-            "case_sensitive": {
-                "type": "boolean",
-                "description": "Search only. Use case-sensitive matching. Defaults to true."
-            },
-            "context_lines": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 20,
-                "description": "Search only. Number of context lines before and after each match."
+            "glob": {
+                "type": "string",
+                "maxLength": 4096,
+                "description": "list only. Optional filename glob using * and ?."
             },
             "limit": {
                 "type": "integer",
                 "minimum": 1,
                 "maximum": MAX_LIST_ENTRIES,
-                "description": format!("List/search only. Bound the number of returned entries or matches. List accepts up to {MAX_LIST_ENTRIES} entries; search accepts up to {MAX_SEARCH_RESULTS} matches, and values above the selected action limit are rejected.")
+                "default": 200,
+                "description": "list only. Maximum returned entries."
+            },
+            "content": {
+                "type": "string",
+                "description": "Required for write. Complete replacement text. Use file_edit for exact substring replacement."
+            },
+            "destination": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Required for move. Destination path, which must not already exist."
+            },
+            "encoding": {
+                "type": "string",
+                "minLength": 1,
+                "description": "read/write only. Explicit encoding label such as utf-8, utf-16le, gbk, big5, shift_jis, euc-jp, euc-kr, or windows-1252. Omit to detect reads and preserve existing files."
+            },
+            "bom": {
+                "type": "string",
+                "enum": ["preserve", "present", "absent"],
+                "default": "preserve",
+                "description": "write only. Preserve an existing BOM by default, require an encoding-compatible BOM, or remove it."
+            },
+            "line_ending": {
+                "type": "string",
+                "enum": ["preserve", "lf", "crlf", "cr", "lfcr"],
+                "default": "preserve",
+                "description": "write only. Preserve the existing file's preferred line ending by default; new files default to LF. Select an explicit value to normalize the complete content."
             }
         },
-        "required": ["action", "targets"]
+        "required": ["action", "path"]
     })
 }

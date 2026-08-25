@@ -1,4 +1,22 @@
+use super::tool_execution::TOOL_ARGUMENT_PARSE_FAILURE_PREFIX;
 use super::*;
+
+/// Returns whether the active user turn already consumed its one malformed-tool correction attempt.
+/// 返回当前用户回合是否已经消耗唯一一次工具参数纠错机会。
+fn malformed_tool_correction_already_used(snapshot: &ConversationSnapshot) -> bool {
+    for message in snapshot.messages.iter().rev() {
+        match &message.payload {
+            ConversationPayload::UserText { .. } => return false,
+            ConversationPayload::ToolResult {
+                is_error: true,
+                text,
+                ..
+            } if text.starts_with(TOOL_ARGUMENT_PARSE_FAILURE_PREFIX) => return true,
+            _ => {}
+        }
+    }
+    false
+}
 
 impl VulcanCoreController {
     /// Reconciles a retained tool batch, appends exactly one result per original call, and resumes the Provider loop.
@@ -267,6 +285,10 @@ impl VulcanCoreController {
         }
         let mut provider_turns_executed = 0usize;
         let mut tool_calls_processed = 0usize;
+        // malformedToolCorrectionUsed limits malformed Provider arguments to one model correction round.
+        // malformedToolCorrectionUsed 将格式错误的 Provider 参数限制为一次模型纠错轮。
+        let mut malformed_tool_correction_used =
+            malformed_tool_correction_already_used(&self.snapshot);
 
         loop {
             if provider_turns_executed >= self.config.max_turns {
@@ -320,6 +342,11 @@ impl VulcanCoreController {
                     argument_parse_error: tool_call.argument_parse_error.clone(),
                 })
                 .collect::<Vec<_>>();
+            // malformedArgumentsObserved is decided from the authoritative completed Provider response.
+            // malformedArgumentsObserved 由权威的完整 Provider 响应判定。
+            let malformed_arguments_observed = requests
+                .iter()
+                .any(|request| request.argument_parse_error.is_some());
             let results = match self.execute_tool_batch(executor, policy, requests).await {
                 Ok(results) => results,
                 Err(error) => {
@@ -330,6 +357,22 @@ impl VulcanCoreController {
             for result in results {
                 tool_calls_processed += 1;
                 self.append_tool_result_message(&result);
+            }
+            if malformed_arguments_observed {
+                if malformed_tool_correction_used {
+                    self.phase = ControllerPhase::Completed;
+                    self.push_final_event(
+                        provider_turns_executed,
+                        tool_calls_processed,
+                        Some(assistant_message_id.as_str()),
+                    );
+                    return Ok(ControllerRunResult {
+                        provider_turns_executed,
+                        tool_calls_processed,
+                        final_assistant_message_id: Some(assistant_message_id),
+                    });
+                }
+                malformed_tool_correction_used = true;
             }
         }
     }
@@ -489,6 +532,10 @@ impl VulcanCoreController {
     {
         let mut provider_turns_executed = 0usize;
         let mut tool_calls_processed = 0usize;
+        // malformedToolCorrectionUsed survives recovered checkpoints through the exact generated error marker.
+        // malformedToolCorrectionUsed 通过精确的生成错误标记跨恢复检查点保留。
+        let mut malformed_tool_correction_used =
+            malformed_tool_correction_already_used(&self.snapshot);
 
         loop {
             if provider_turns_executed >= self.config.max_turns {
@@ -540,6 +587,11 @@ impl VulcanCoreController {
                     argument_parse_error: tool_call.argument_parse_error.clone(),
                 })
                 .collect::<Vec<_>>();
+            // malformedArgumentsObserved is true when any call in this authoritative batch is non-executable JSON.
+            // malformedArgumentsObserved 在该权威批次中任一调用为不可执行 JSON 时为 true。
+            let malformed_arguments_observed = requests
+                .iter()
+                .any(|request| request.argument_parse_error.is_some());
             let results = match self.execute_tool_batch(executor, policy, requests).await {
                 Ok(results) => results,
                 Err(error) => {
@@ -554,6 +606,22 @@ impl VulcanCoreController {
             // checkpoint_after_tool_batch publishes only the stable batch where every tool call has its result.
             // checkpoint_after_tool_batch 仅发布每个工具调用均已有结果的稳定批次。
             on_safe_checkpoint(&self.snapshot, self.last_successful_provider_usage.as_ref());
+            if malformed_arguments_observed {
+                if malformed_tool_correction_used {
+                    self.phase = ControllerPhase::Completed;
+                    self.push_final_event(
+                        provider_turns_executed,
+                        tool_calls_processed,
+                        Some(assistant_message_id.as_str()),
+                    );
+                    return Ok(ControllerRunResult {
+                        provider_turns_executed,
+                        tool_calls_processed,
+                        final_assistant_message_id: Some(assistant_message_id),
+                    });
+                }
+                malformed_tool_correction_used = true;
+            }
             // intervention_draft prevents a failed or falsely reported host callback from partially mutating Core state.
             // intervention_draft 防止失败或错误报告未变化的宿主回调局部修改 Core 状态。
             let mut intervention_draft = self.clone();

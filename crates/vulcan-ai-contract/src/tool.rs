@@ -4,6 +4,18 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Stable name of the neutral Apply Patch tool.
+/// 中立 Apply Patch 工具的稳定名称。
+pub const APPLY_PATCH_TOOL_NAME: &str = "apply_patch";
+
+/// Complete neutral name of the Apply Patch input language.
+/// Apply Patch 输入语言的完整中立名称。
+pub const APPLY_PATCH_LANGUAGE_NAME: &str = "Apply Patch text format";
+
+/// Canonical Lark grammar for the Apply Patch custom-text projection.
+/// Apply Patch 自定义文本投影使用的规范 Lark grammar。
+pub use vulcan_apply_patch::APPLY_PATCH_LARK_GRAMMAR;
+
 /// Identifies one provider-native tool requested through provider-neutral semantics.
 /// 标识一项通过供应商无关语义请求的供应商原生工具。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

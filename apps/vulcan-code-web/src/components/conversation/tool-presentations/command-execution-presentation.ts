@@ -374,7 +374,7 @@ export function resolveCommandExecutionPresentation(
     exitCode: display?.exitCode ?? null,
     id: commandPresentationId(blocks, command),
     kind: "command_execution",
-    state: displayState,
+    state: commandExecutionDisplayState(displayState, display?.exitCode ?? null),
     stderr: display?.stderr ?? "",
     stdout: display?.stdout ?? "",
   };
@@ -453,15 +453,29 @@ function mergeCommandExecutionDisplay(
   const pluginContributions = display.pluginContributions.length > 0
     ? display.pluginContributions
     : presentation.pluginContributions;
+  const exitCode = display.exitCode ?? presentation.exitCode;
   return {
     ...presentation,
     command: display.command || presentation.command,
     effectiveCommand,
     pluginContributions,
-    exitCode: display.exitCode ?? presentation.exitCode,
+    exitCode,
+    state: commandExecutionDisplayState(presentation.state, exitCode),
     stderr: display.stderr || presentation.stderr,
     stdout: display.stdout || presentation.stdout,
   };
+}
+
+// commandExecutionDisplayState reconciles generic tool completion with the authoritative process exit code.
+// commandExecutionDisplayState 使用权威进程退出码校正通用工具完成状态。
+function commandExecutionDisplayState(
+  displayState: ToolPresentationDisplayState,
+  exitCode: number | null,
+): ToolPresentationDisplayState {
+  if (displayState === "failed" || displayState === "stopped" || exitCode === null) {
+    return displayState;
+  }
+  return exitCode === 0 ? "completed" : "failed";
 }
 
 // mergeTerminalSessionDisplay applies terminal_session detail fields without falling back to legacy shell parsing.

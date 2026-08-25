@@ -1,5 +1,6 @@
 use crate::tooling::native::{
-    FILE_EDIT_TOOL_ID, FILE_TOOL_ID, build_file_edit_tool, build_file_tool,
+    APPLY_PATCH_LANGUAGE_NAME, APPLY_PATCH_TOOL_ID, FILE_EDIT_TOOL_ID, FILE_TOOL_ID,
+    build_apply_patch_tool, build_file_edit_tool, build_file_tool,
 };
 use serde_json::json;
 use vulcan_tools_manager::{
@@ -9,8 +10,8 @@ use vulcan_tools_manager::{
 
 use super::test_native_request_with_workspace;
 
-/// Verifies the native file tools expose exactly the intended visibility and schema boundaries.
-/// 验证原生文件工具暴露出预期的可见性与 Schema 边界。
+/// Verifies the three public native file tools expose the frozen minimal contracts.
+/// 验证三个公开原生文件工具暴露冻结的最小契约。
 #[test]
 fn native_file_tools_expose_contracts() {
     let file = build_file_tool();
@@ -20,14 +21,44 @@ fn native_file_tools_expose_contracts() {
     assert_eq!(file.args_schema["additionalProperties"], json!(false));
     assert_eq!(
         file.args_schema["properties"]["action"]["enum"],
-        json!(["read", "list", "search", "stat"])
+        json!(["read", "list", "stat", "write", "delete", "move"])
+    );
+    assert_eq!(file.args_schema["required"], json!(["action", "path"]));
+    assert!(file.args_schema["properties"].get("targets").is_none());
+    assert!(file.args_schema["properties"].get("query").is_none());
+    assert_eq!(
+        file.args_schema["properties"]["recursive"]["default"],
+        json!(false)
     );
     assert_eq!(
-        file.args_schema["properties"]["targets"]["maxItems"],
-        json!(10)
+        file.args_schema["properties"]["limit"]["default"],
+        json!(200)
     );
-    assert!(file.args_schema.get("oneOf").is_none());
-    assert!(file.args_schema.get("allOf").is_none());
+    assert_eq!(
+        file.args_schema["properties"]["bom"]["default"],
+        json!("preserve")
+    );
+    assert_eq!(
+        file.args_schema["properties"]["line_ending"]["default"],
+        json!("preserve")
+    );
+    assert!(
+        file.args_schema["properties"]["content"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Required for write")
+    );
+    assert!(
+        file.args_schema["properties"]["destination"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Required for move")
+    );
+    assert!(
+        file.descriptor
+            .description
+            .contains("does not recursively delete directories")
+    );
 
     let edit = build_file_edit_tool();
     assert_eq!(edit.descriptor.id, FILE_EDIT_TOOL_ID);
@@ -35,27 +66,98 @@ fn native_file_tools_expose_contracts() {
     assert!(!edit.descriptor.available_in_plan);
     assert_eq!(edit.args_schema["additionalProperties"], json!(false));
     assert_eq!(
-        edit.args_schema["properties"]["operations"]["items"]["additionalProperties"],
+        edit.args_schema["required"],
+        json!(["path", "old_string", "new_string"])
+    );
+    assert!(edit.args_schema["properties"].get("operations").is_none());
+    assert!(edit.args_schema["properties"].get("old_lines").is_none());
+    assert!(edit.args_schema["properties"].get("anchors").is_none());
+    assert!(
+        edit.args_schema["properties"]
+            .get("expected_version")
+            .is_none()
+    );
+    assert!(edit.args_schema["properties"].get("dry_run").is_none());
+    assert!(
+        edit.args_schema["properties"]
+            .get("final_newline")
+            .is_none()
+    );
+    assert!(
+        edit.descriptor
+            .description
+            .contains("CRLF, LFCR, CR, and LF")
+    );
+    assert!(edit.request_streaming.is_some());
+    assert_eq!(
+        edit.args_schema["properties"]["replace_all"]["default"],
         json!(false)
     );
+
+    let patch = build_apply_patch_tool();
+    assert_eq!(patch.descriptor.id, APPLY_PATCH_TOOL_ID);
+    assert!(patch.descriptor.ai_visible);
+    assert!(!patch.descriptor.available_in_plan);
+    assert_eq!(patch.args_schema["required"], json!(["patch"]));
     assert!(
-        edit.args_schema["properties"]["operations"]["items"]
-            .get("oneOf")
-            .is_none()
-    );
-    assert!(
-        edit.args_schema["properties"]["operations"]["items"]
-            .get("allOf")
-            .is_none()
-    );
-    assert!(
-        edit.args_schema["properties"]["operations"]["description"]
+        patch.args_schema["properties"]["patch"]["description"]
             .as_str()
             .unwrap_or_default()
-            .contains("delete_file")
+            .contains(APPLY_PATCH_LANGUAGE_NAME)
     );
-    assert!(edit.args_schema.get("allOf").is_none());
-    assert!(edit.request_streaming.is_some());
+    assert!(patch.request_streaming.is_some());
+    assert!(patch.descriptor.description.contains("*** Begin Patch"));
+    assert!(
+        patch
+            .descriptor
+            .description
+            .contains("*** Update File: src/example.rs")
+    );
+    assert!(
+        patch
+            .descriptor
+            .description
+            .contains("Do not use Markdown fences")
+    );
+    assert!(
+        patch
+            .descriptor
+            .description
+            .contains("*** Move to: destination")
+    );
+    assert!(
+        patch
+            .descriptor
+            .description
+            .contains("@@ exact anchor line")
+    );
+}
+
+/// Verifies malformed Apply Patch argument shapes remain tool results instead of aborting the run loop.
+/// 验证畸形 Apply Patch 参数结构会保留为工具结果，而不会中断运行循环。
+#[tokio::test]
+async fn native_apply_patch_argument_errors_are_structured() {
+    let patch = build_apply_patch_tool();
+    let workspace = std::env::current_dir().expect("current workspace");
+    for arguments in [json!(null), json!({"patch": 7})] {
+        let result = patch
+            .invoke(test_native_request_with_workspace(
+                arguments,
+                workspace.clone(),
+            ))
+            .await
+            .expect("apply_patch should return a structured failure result");
+        assert_eq!(result.model_output["status"], json!("failed"));
+        assert_eq!(
+            result.model_output["details"]["code"],
+            json!("invalid_arguments")
+        );
+        assert_eq!(result.model_output["details"]["retryable"], json!(false));
+        assert_eq!(
+            result.host_result.as_ref().map(|value| value.kind.as_str()),
+            Some(VULCAN_TOOL_ERROR_DETAIL_KIND)
+        );
+    }
 }
 
 /// Verifies native file-edit failures retain machine-readable host error details.
@@ -65,7 +167,7 @@ async fn native_file_edit_errors_are_structured() {
     let edit = build_file_edit_tool();
     let result = edit
         .invoke(test_native_request_with_workspace(
-            json!({"operations": []}),
+            json!({"path": "missing.txt", "old_string": "old"}),
             std::env::current_dir().expect("current workspace"),
         ))
         .await
@@ -81,10 +183,60 @@ async fn native_file_edit_errors_are_structured() {
     );
 }
 
-/// Verifies streamed previews contain complete array-line changes and reject final drift.
-/// 验证流式预览包含完整数组行变更，并拒绝最终参数漂移。
+/// Verifies an incomplete simplified edit never falls through to the hidden operation-array contract.
+/// 验证不完整的简化编辑请求绝不会落入隐藏的 operations 数组契约。
+#[tokio::test]
+async fn native_file_edit_path_only_uses_the_public_contract() {
+    let edit = build_file_edit_tool();
+    let result = edit
+        .invoke(test_native_request_with_workspace(
+            json!({"path": "missing.txt"}),
+            std::env::current_dir().expect("current workspace"),
+        ))
+        .await
+        .expect("file_edit should return a structured failure result");
+    assert_eq!(
+        result.model_output["details"]["code"],
+        json!("invalid_arguments")
+    );
+    assert!(
+        result.model_output["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("old_string")
+    );
+    assert!(!result.model_output.to_string().contains("operations array"));
+}
+
+/// Verifies a missing public file path reports the current contract instead of the hidden targets array.
+/// 验证公开 file 缺少路径时会报告当前契约，而不是隐藏的 targets 数组。
+#[tokio::test]
+async fn native_file_missing_path_uses_the_public_contract() {
+    let file = build_file_tool();
+    let result = file
+        .invoke(test_native_request_with_workspace(
+            json!({"action": "read"}),
+            std::env::current_dir().expect("current workspace"),
+        ))
+        .await
+        .expect("file should return a structured failure result");
+    assert_eq!(
+        result.model_output["details"]["code"],
+        json!("invalid_arguments")
+    );
+    assert!(
+        result.model_output["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("path")
+    );
+    assert!(!result.model_output.to_string().contains("targets array"));
+}
+
+/// Verifies streamed exact-text previews expose dynamic old/new lines and normalized endings.
+/// 验证流式精确文本预览暴露动态旧新行并归一化换行。
 #[test]
-fn file_edit_stream_preview_requires_final_consistency() {
+fn file_edit_stream_preview_tracks_exact_strings() {
     let edit_tool = build_file_edit_tool();
     let capability = edit_tool
         .request_streaming
@@ -94,78 +246,56 @@ fn file_edit_stream_preview_requires_final_consistency() {
         .parser_factory
         .as_ref()
         .expect("file_edit parser factory");
-    let context = ToolRequestParserContext {
+    let mut parser = factory.create(ToolRequestParserContext {
         request_stream_id: String::from("request-1"),
         tool_name: String::from(FILE_EDIT_TOOL_ID),
-    };
-    let mut parser = factory.create(context);
-    push_string(&mut *parser, "id", "change-a");
-    push_string(&mut *parser, "operation", "replace");
+    });
     push_string(&mut *parser, "path", "src/example.rs");
-    push_string_at(&mut *parser, "old_lines", 0, "return 1;");
-    push_string_at(&mut *parser, "new_lines", 0, "return 2;");
+    push_string(&mut *parser, "old_string", "fn old() {\r\n}\n\r");
+    push_string(&mut *parser, "new_string", "fn new() {\n}\r");
+    push_bool(&mut *parser, "replace_all", true);
 
     let preview = parser.snapshot().expect("completed fields should preview");
     assert_eq!(preview.kind, "file_edit");
     assert_eq!(preview.affected_resources, vec!["src/example.rs"]);
-    assert!(
-        preview
-            .body_preview
-            .as_deref()
-            .unwrap_or_default()
-            .contains("- return 1;")
-    );
-    assert!(
-        preview
-            .body_preview
-            .as_deref()
-            .unwrap_or_default()
-            .contains("+ return 2;")
-    );
-    assert_eq!(preview.structured_lines.len(), 2);
+    assert_eq!(preview.progress_fields["old_line_count"], json!(2));
+    assert_eq!(preview.progress_fields["new_line_count"], json!(2));
+    assert_eq!(preview.progress_fields["replace_all"], json!(true));
+    assert_eq!(preview.structured_lines.len(), 4);
     assert_eq!(preview.structured_lines[0].side, "old");
-    assert_eq!(preview.structured_lines[0].operation_index, 0);
-    assert_eq!(preview.structured_lines[0].resource_index, 0);
-    assert_eq!(preview.structured_lines[1].side, "new");
-    let first_revision = preview.revision;
-    push_string_at(&mut *parser, "new_lines", 1, "return 3;");
-    let next_preview = parser
+    assert_eq!(preview.structured_lines[2].side, "new");
+}
+
+/// Verifies character-fragmented CRLF and LFCR pairs count as one logical boundary.
+/// 验证按字符分片的 CRLF 与 LFCR 配对只计为一个逻辑边界。
+#[test]
+fn file_edit_stream_preview_counts_split_paired_endings_once() {
+    let edit_tool = build_file_edit_tool();
+    let factory = edit_tool
+        .request_streaming
+        .as_ref()
+        .and_then(|capability| capability.parser_factory.as_ref())
+        .expect("file_edit parser factory");
+    let mut parser = factory.create(ToolRequestParserContext {
+        request_stream_id: String::from("request-split-endings"),
+        tool_name: String::from(FILE_EDIT_TOOL_ID),
+    });
+    push_string_fragments(&mut *parser, "path", "src/example.rs");
+    push_string_fragments(&mut *parser, "old_string", "a\r\nb\n\rc");
+    push_string_fragments(&mut *parser, "new_string", "x\n\ry\r\nz");
+
+    let preview = parser
         .snapshot()
-        .expect("a later completed line should preview");
-    assert!(next_preview.revision > first_revision);
-
-    let arguments = json!({
-        "operations": [{
-            "id": "change-a",
-            "operation": "replace",
-            "path": "src/example.rs",
-            "old_lines": ["return 1;"],
-            "new_lines": ["return 2;", "return 3;"]
-        }]
-    });
-    assert!(
-        parser
-            .finish(&arguments)
-            .expect("final consistency check")
-            .is_some()
-    );
-
-    let drifted = json!({
-        "operations": [{
-            "id": "change-a",
-            "operation": "replace",
-            "path": "src/example.rs",
-            "old_lines": ["return 1;"],
-            "new_lines": ["return 2;", "return 4;"]
-        }]
-    });
-    assert!(parser.finish(&drifted).is_err());
+        .expect("fragmented strings should preview");
+    assert_eq!(preview.progress_fields["old_line_count"], json!(3));
+    assert_eq!(preview.progress_fields["new_line_count"], json!(3));
+    assert_eq!(preview.structured_lines.len(), 6);
 }
 
-/// Verifies a streamed move preview rejects destination drift before execution.
-/// 验证流式移动预览会在执行前拒绝目标路径漂移。
+/// Verifies preview bodies and structured rows enforce their independent hard bounds.
+/// 验证预览正文与结构化行会分别执行自身硬上限。
 #[test]
-fn file_edit_stream_preview_checks_move_destination() {
+fn file_edit_stream_preview_is_bounded_and_marks_truncation() {
     let edit_tool = build_file_edit_tool();
     let capability = edit_tool
         .request_streaming
@@ -176,161 +306,259 @@ fn file_edit_stream_preview_checks_move_destination() {
         .as_ref()
         .expect("file_edit parser factory");
     let mut parser = factory.create(ToolRequestParserContext {
-        request_stream_id: String::from("request-move"),
+        request_stream_id: String::from("request-preview-limit"),
         tool_name: String::from(FILE_EDIT_TOOL_ID),
     });
-    push_string(&mut *parser, "id", "move-a");
-    push_string(&mut *parser, "operation", "move_file");
-    push_string(&mut *parser, "path", "src/a.rs");
-    push_string(&mut *parser, "destination", "src/b.rs");
-    push_string(&mut *parser, "expected_version", "opaque");
-
-    let arguments = json!({
-        "operations": [{
-            "id": "move-a",
-            "operation": "move_file",
-            "path": "src/a.rs",
-            "destination": "src/b.rs",
-            "expected_version": "opaque"
-        }]
-    });
-    assert!(
-        parser
-            .finish(&arguments)
-            .expect("final consistency check")
-            .is_some()
-    );
-
-    let drifted = json!({
-        "operations": [{
-            "id": "move-a",
-            "operation": "move_file",
-            "path": "src/a.rs",
-            "destination": "src/c.rs",
-            "expected_version": "opaque"
-        }]
-    });
-    assert!(parser.finish(&drifted).is_err());
-}
-
-/// Verifies streamed edit previews reject changes to matching and commit semantics.
-/// 验证流式编辑预览会拒绝定位和提交语义发生变化的最终参数。
-#[test]
-fn file_edit_stream_preview_checks_semantic_options() {
-    let edit_tool = build_file_edit_tool();
-    let capability = edit_tool
-        .request_streaming
-        .as_ref()
-        .expect("file_edit streaming capability");
-    let factory = capability
-        .parser_factory
-        .as_ref()
-        .expect("file_edit parser factory");
-    let mut parser = factory.create(ToolRequestParserContext {
-        request_stream_id: String::from("request-options"),
-        tool_name: String::from(FILE_EDIT_TOOL_ID),
-    });
-    push_bool(&mut *parser, "dry_run", true);
-    push_string(&mut *parser, "id", "change-a");
-    push_string(&mut *parser, "operation", "replace");
+    let long_text = (0..3_000)
+        .map(|index| format!("line-{index:04}-{}\n", "x".repeat(32)))
+        .collect::<String>();
     push_string(&mut *parser, "path", "src/example.rs");
-    push_string(&mut *parser, "match_mode", "ignore_trailing_whitespace");
-    push_string(&mut *parser, "expected_version", "version-a");
-    push_string(&mut *parser, "final_newline", "absent");
-    push_string_at(&mut *parser, "old_lines", 0, "return 1;");
-    push_string_at(&mut *parser, "new_lines", 0, "return 2;");
+    push_string(&mut *parser, "old_string", &long_text);
 
-    let arguments = json!({
-        "dry_run": true,
-        "operations": [{
-            "id": "change-a",
-            "operation": "replace",
-            "path": "src/example.rs",
-            "match_mode": "ignore_trailing_whitespace",
-            "expected_version": "version-a",
-            "final_newline": "absent",
-            "old_lines": ["return 1;"],
-            "new_lines": ["return 2;"]
-        }]
-    });
+    let preview = parser.snapshot().expect("long string should preview");
     assert!(
-        parser
-            .finish(&arguments)
-            .expect("matching options")
-            .is_some()
+        preview.body_preview.as_deref().unwrap_or_default().len()
+            <= capability.sensitivity_policy.maximum_body_preview_bytes
     );
-
-    let mut mode_drift = arguments.clone();
-    mode_drift["operations"][0]["match_mode"] = json!("exact");
-    assert!(parser.finish(&mode_drift).is_err());
-
-    let mut version_drift = arguments.clone();
-    version_drift["operations"][0]["expected_version"] = json!("version-b");
-    assert!(parser.finish(&version_drift).is_err());
-
-    let mut newline_drift = arguments.clone();
-    newline_drift["operations"][0]["final_newline"] = json!("present");
-    assert!(parser.finish(&newline_drift).is_err());
-
-    let mut drifted = arguments.clone();
-    drifted["dry_run"] = json!(false);
-    assert!(parser.finish(&drifted).is_err());
+    assert!(
+        preview.structured_lines.len()
+            <= capability
+                .sensitivity_policy
+                .maximum_structured_preview_lines
+    );
+    assert!(
+        preview
+            .structured_lines
+            .iter()
+            .map(|line| line.content.len())
+            .sum::<usize>()
+            <= capability
+                .sensitivity_policy
+                .maximum_structured_preview_bytes
+    );
+    assert!(
+        preview
+            .redaction_flags
+            .iter()
+            .any(|flag| flag == "body_preview_truncated")
+    );
+    assert!(
+        preview
+            .redaction_flags
+            .iter()
+            .any(|flag| flag == "structured_preview_truncated")
+    );
 }
 
-/// Verifies incomplete paths cannot map structured lines to an unrelated file.
-/// 验证路径尚未完成时结构化行不会映射到无关文件。
+/// Verifies authoritative final arguments replace preview state instead of causing execution failure.
+/// 验证权威最终参数替换预览状态而不是导致执行失败。
 #[test]
-fn file_edit_stream_preview_waits_for_path_before_structured_mapping() {
+fn file_edit_stream_finish_is_non_authoritative() {
     let edit_tool = build_file_edit_tool();
-    let capability = edit_tool
+    let factory = edit_tool
         .request_streaming
         .as_ref()
-        .expect("file_edit streaming capability");
-    let factory = capability
-        .parser_factory
+        .and_then(|capability| capability.parser_factory.as_ref())
+        .expect("file_edit parser factory");
+    let mut parser = factory.create(ToolRequestParserContext {
+        request_stream_id: String::from("request-final"),
+        tool_name: String::from(FILE_EDIT_TOOL_ID),
+    });
+    push_string(&mut *parser, "path", "src/a.rs");
+    push_string(&mut *parser, "old_string", "old");
+    push_string(&mut *parser, "new_string", "preview");
+    let final_preview = parser
+        .finish(&json!({
+            "path": "src/a.rs",
+            "old_string": "old",
+            "new_string": "authoritative"
+        }))
+        .expect("preview consumer must not reject final arguments")
+        .expect("final preview");
+    assert!(
+        final_preview
+            .body_preview
+            .as_deref()
+            .unwrap_or_default()
+            .contains("+ authoritative")
+    );
+}
+
+/// Verifies exact-text preview lines remain unmapped until the path is known.
+/// 验证精确文本预览行在路径已知前保持未映射。
+#[test]
+fn file_edit_stream_preview_waits_for_path_mapping() {
+    let edit_tool = build_file_edit_tool();
+    let factory = edit_tool
+        .request_streaming
         .as_ref()
+        .and_then(|capability| capability.parser_factory.as_ref())
         .expect("file_edit parser factory");
     let mut parser = factory.create(ToolRequestParserContext {
         request_stream_id: String::from("request-path-order"),
         tool_name: String::from(FILE_EDIT_TOOL_ID),
     });
-    push_string(&mut *parser, "id", "change-a");
-    push_string(&mut *parser, "operation", "replace");
-    push_string_at(&mut *parser, "old_lines", 0, "return 1;");
-
-    let incomplete = parser.snapshot().expect("line completion should preview");
+    push_string(&mut *parser, "old_string", "return 1;");
+    let incomplete = parser.snapshot().expect("text should preview");
     assert!(incomplete.affected_resources.is_empty());
-    assert!(incomplete.structured_lines.is_empty());
 
     push_string(&mut *parser, "path", "src/example.rs");
-    let complete = parser
-        .snapshot()
-        .expect("path completion should refresh preview");
+    let complete = parser.snapshot().expect("path should refresh preview");
     assert_eq!(complete.affected_resources, vec!["src/example.rs"]);
     assert_eq!(complete.structured_lines.len(), 1);
-    assert_eq!(complete.structured_lines[0].resource_index, 0);
 }
 
-/// Emits one completed scalar JSON string event for an operation field.
-/// 为操作字段发出一个已完成的 JSON 字符串事件。
+/// Verifies streamed Apply Patch previews map multiple files and diff sides.
+/// 验证流式 Apply Patch 预览映射多文件与 Diff 两侧。
+#[test]
+fn apply_patch_stream_preview_maps_multiple_files() {
+    let patch_tool = build_apply_patch_tool();
+    let factory = patch_tool
+        .request_streaming
+        .as_ref()
+        .and_then(|capability| capability.parser_factory.as_ref())
+        .expect("apply_patch parser factory");
+    let mut parser = factory.create(ToolRequestParserContext {
+        request_stream_id: String::from("request-patch"),
+        tool_name: String::from(APPLY_PATCH_TOOL_ID),
+    });
+    push_string(
+        &mut *parser,
+        "patch",
+        "*** Begin Patch\n*** Update File: a.rs\n-old\n+new\n*** Add File: b.rs\n+created\n*** End Patch\n",
+    );
+    let preview = parser.snapshot().expect("patch should preview");
+    assert_eq!(preview.affected_resources, vec!["a.rs", "b.rs"]);
+    assert_eq!(preview.progress_fields["old_line_count"], json!(1));
+    assert_eq!(preview.progress_fields["new_line_count"], json!(2));
+    assert_eq!(preview.structured_lines.len(), 3);
+    assert_eq!(preview.structured_lines[0].operation_index, 0);
+    assert_eq!(preview.structured_lines[0].resource_index, 0);
+    assert_eq!(preview.structured_lines[2].operation_index, 1);
+    assert_eq!(preview.structured_lines[2].resource_index, 1);
+    assert_eq!(preview.structured_lines[2].line_index, 0);
+}
+
+/// Verifies repeated paths keep distinct operation identities while sharing one resource.
+/// 验证重复路径保留独立操作标识，同时共享同一资源映射。
+#[test]
+fn apply_patch_stream_preview_separates_operation_and_resource_indexes() {
+    let patch_tool = build_apply_patch_tool();
+    let factory = patch_tool
+        .request_streaming
+        .as_ref()
+        .and_then(|capability| capability.parser_factory.as_ref())
+        .expect("apply_patch parser factory");
+    let mut parser = factory.create(ToolRequestParserContext {
+        request_stream_id: String::from("request-repeated-path"),
+        tool_name: String::from(APPLY_PATCH_TOOL_ID),
+    });
+    push_string(
+        &mut *parser,
+        "patch",
+        "*** Begin Patch\n*** Update File: a.rs\n-old\n+new\n*** Update File: a.rs\n-new\n+newer\n*** End Patch\n",
+    );
+    let preview = parser.snapshot().expect("patch should preview");
+
+    assert_eq!(preview.affected_resources, vec!["a.rs"]);
+    assert_eq!(preview.title_fields["operation_count"], json!(2));
+    assert_eq!(preview.structured_lines[0].operation_index, 0);
+    assert_eq!(preview.structured_lines[0].resource_index, 0);
+    assert_eq!(preview.structured_lines[2].operation_index, 1);
+    assert_eq!(preview.structured_lines[2].resource_index, 0);
+    assert_eq!(preview.structured_lines[2].line_index, 0);
+}
+
+/// Verifies Apply Patch context rows advance both sides without zero-index underflow.
+/// 验证 Apply Patch 上下文行同时推进新旧两侧，并且不会发生零索引下溢。
+#[test]
+fn apply_patch_stream_preview_indexes_leading_context_rows() {
+    let patch_tool = build_apply_patch_tool();
+    let factory = patch_tool
+        .request_streaming
+        .as_ref()
+        .and_then(|capability| capability.parser_factory.as_ref())
+        .expect("apply_patch parser factory");
+    let mut parser = factory.create(ToolRequestParserContext {
+        request_stream_id: String::from("request-leading-context"),
+        tool_name: String::from(APPLY_PATCH_TOOL_ID),
+    });
+    push_string(
+        &mut *parser,
+        "patch",
+        "*** Begin Patch\n*** Update File: a.rs\n context\n-old\n+new\n trailing\n*** End Patch\n",
+    );
+    let preview = parser.snapshot().expect("patch should preview");
+
+    assert_eq!(preview.structured_lines.len(), 4);
+    assert_eq!(preview.structured_lines[0].side, "context");
+    assert_eq!(preview.structured_lines[0].line_index, 0);
+    assert_eq!(preview.structured_lines[1].side, "old");
+    assert_eq!(preview.structured_lines[1].line_index, 1);
+    assert_eq!(preview.structured_lines[2].side, "new");
+    assert_eq!(preview.structured_lines[2].line_index, 1);
+    assert_eq!(preview.structured_lines[3].side, "context");
+    assert_eq!(preview.structured_lines[3].line_index, 2);
+    assert_eq!(preview.progress_fields["old_line_count"], json!(1));
+    assert_eq!(preview.progress_fields["new_line_count"], json!(1));
+}
+
+/// Verifies Apply Patch preview retention is bounded independently from final assembly.
+/// 验证 Apply Patch 预览保留独立于最终参数累计并受到硬上限约束。
+#[test]
+fn apply_patch_stream_preview_is_bounded_and_marks_truncation() {
+    let patch_tool = build_apply_patch_tool();
+    let capability = patch_tool
+        .request_streaming
+        .as_ref()
+        .expect("apply_patch streaming capability");
+    let factory = capability
+        .parser_factory
+        .as_ref()
+        .expect("apply_patch parser factory");
+    let mut parser = factory.create(ToolRequestParserContext {
+        request_stream_id: String::from("request-patch-limit"),
+        tool_name: String::from(APPLY_PATCH_TOOL_ID),
+    });
+    let patch = format!(
+        "*** Begin Patch\n*** Add File: large.txt\n+{}\n*** End Patch\n",
+        "x".repeat(96 * 1024)
+    );
+    push_string(&mut *parser, "patch", &patch);
+
+    let preview = parser.snapshot().expect("large patch should preview");
+    assert!(
+        preview.body_preview.as_deref().unwrap_or_default().len()
+            <= capability.sensitivity_policy.maximum_body_preview_bytes
+    );
+    assert!(
+        preview
+            .structured_lines
+            .iter()
+            .map(|line| line.content.len())
+            .sum::<usize>()
+            <= capability
+                .sensitivity_policy
+                .maximum_structured_preview_bytes
+    );
+    assert!(
+        preview
+            .redaction_flags
+            .iter()
+            .any(|flag| flag == "body_preview_truncated")
+    );
+    assert!(
+        preview
+            .redaction_flags
+            .iter()
+            .any(|flag| flag == "structured_preview_truncated")
+    );
+}
+
+/// Emits one completed top-level JSON string event.
+/// 发出一个已完成的顶层 JSON 字符串事件。
 fn push_string(parser: &mut dyn ToolRequestParserSession, field: &str, value: &str) {
-    push_string_at(parser, field, 0, value);
-}
-
-/// Emits one completed JSON string event at an operation line-array index.
-/// 在操作行数组索引处发出一个已完成的 JSON 字符串事件。
-fn push_string_at(
-    parser: &mut dyn ToolRequestParserSession,
-    field: &str,
-    line_index: usize,
-    value: &str,
-) {
-    let mut path = vec![IncrementalJsonPathSegment::Key(String::from("operations"))];
-    path.push(IncrementalJsonPathSegment::Index(0));
-    path.push(IncrementalJsonPathSegment::Key(String::from(field)));
-    if field == "old_lines" || field == "new_lines" || field == "anchors" {
-        path.push(IncrementalJsonPathSegment::Index(line_index));
-    }
+    let path = vec![IncrementalJsonPathSegment::Key(String::from(field))];
     parser
         .push_json_event(&IncrementalJsonEvent::StringStarted { path: path.clone() })
         .expect("string start");
@@ -345,8 +573,28 @@ fn push_string_at(
         .expect("string end");
 }
 
-/// Emits one completed JSON boolean event at the top-level request path.
-/// 在顶层请求路径发出一个已完成的 JSON 布尔值事件。
+/// Emits one top-level JSON string as character-sized decoded fragments.
+/// 将一个顶层 JSON 字符串按字符大小的已解码分片发出。
+fn push_string_fragments(parser: &mut dyn ToolRequestParserSession, field: &str, value: &str) {
+    let path = vec![IncrementalJsonPathSegment::Key(String::from(field))];
+    parser
+        .push_json_event(&IncrementalJsonEvent::StringStarted { path: path.clone() })
+        .expect("string start");
+    for character in value.chars() {
+        parser
+            .push_json_event(&IncrementalJsonEvent::StringContent {
+                path: path.clone(),
+                content: character.to_string(),
+            })
+            .expect("string fragment");
+    }
+    parser
+        .push_json_event(&IncrementalJsonEvent::StringEnded { path })
+        .expect("string end");
+}
+
+/// Emits one completed top-level JSON boolean event.
+/// 发出一个已完成的顶层 JSON 布尔事件。
 fn push_bool(parser: &mut dyn ToolRequestParserSession, field: &str, value: bool) {
     parser
         .push_json_event(&IncrementalJsonEvent::ScalarCompleted {

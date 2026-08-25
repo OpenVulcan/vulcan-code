@@ -34,11 +34,11 @@ use vulcan_agent_runtime::conversation_protocol::SessionConversationState;
 #[cfg(test)]
 use vulcan_agent_runtime::conversation_protocol::conversation_state_from_session_messages;
 #[cfg(test)]
-use vulcan_agent_runtime::session_event_runtime::append_runtime_event_projection_to_state;
+use vulcan_agent_runtime::session_event_runtime::STREAMING_RECORD_STATE_ACTIVE;
 #[cfg(test)]
+use vulcan_agent_runtime::session_event_runtime::append_runtime_event_projection_to_state;
 use vulcan_agent_runtime::session_event_runtime::{
-    STREAMING_RECORD_STATE_ACTIVE, STREAMING_RECORD_STATE_METADATA_KEY,
-    STREAMING_RECORD_STATE_SEALED,
+    STREAMING_RECORD_STATE_METADATA_KEY, STREAMING_RECORD_STATE_SEALED,
 };
 use vulcan_agent_runtime::{
     ExecutionKnowledgeAccessContext, ExecutionPreparation, ExecutionPreparationRequest,
@@ -145,9 +145,12 @@ use vulcan_service_host::{
     bind_webui_service_http_listener, serve_webui_service_http_listener,
     write_webui_service_discovery_snapshot,
 };
+#[cfg(test)]
+use vulcan_session_boundary::SessionThreadStatus;
 use vulcan_session_boundary::{
-    SessionBoundaryEvent, SessionLifecycleBeginRequest, SessionLifecycleFinishRequest,
-    SessionLifecycleHook, SessionLifecycleRunner, SessionTurnTerminalStatus,
+    SessionBoundaryEvent, SessionBoundaryStateStore, SessionLifecycleBeginRequest,
+    SessionLifecycleFinishRequest, SessionLifecycleHook, SessionLifecycleRunner,
+    SessionThreadState, SessionTurnTerminalStatus,
 };
 use vulcan_session_core::{
     ActiveTurnKind, MailboxDeliveryPhase, SessionNodeId, SessionRuntimeKernel, TurnInput,
@@ -362,8 +365,9 @@ pub use project_directories::service_add_project_from_path;
 use project_directories::service_browse_project_directories;
 use project_terminals::*;
 use provider_settings::{
-    provider_retry_settings, service_save_provider_request_trace_settings,
-    service_save_provider_retry_settings,
+    provider_retry_settings, service_clear_selected_provider_api_trace_directory,
+    service_open_selected_provider_api_trace_directory,
+    service_save_provider_request_trace_settings, service_save_provider_retry_settings,
 };
 use provider_usage_runtime::*;
 use public_ai_settings::*;

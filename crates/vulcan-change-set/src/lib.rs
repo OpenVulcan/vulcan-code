@@ -451,25 +451,64 @@ fn parse_compact_file_summary(file: &Value) -> Option<ChangeSetFileSummary> {
 /// 仅保留共享宿主契约支持且经过大小限制的已注册原生扩展命名空间。
 fn compact_extensions(value: Option<&Value>) -> Option<Value> {
     let object = value?.as_object()?;
-    let native = object.get("vulcan.file_edit.v1")?.as_object()?;
-    let mut retained = Map::new();
-    if let Some(operation_results) = native
-        .get("operation_results")
-        .filter(|value| value.is_array())
+    let mut extensions = Map::new();
+    if let Some(native_v1) = object.get("vulcan.file_edit.v1").and_then(Value::as_object)
+        && let Some(retained) = compact_registered_extension(
+            native_v1,
+            &[("operation_results", "array"), ("transaction", "object")],
+        )
     {
-        retained.insert(String::from("operation_results"), operation_results.clone());
+        extensions.insert(String::from("vulcan.file_edit.v1"), retained);
     }
-    if let Some(transaction) = native.get("transaction").filter(|value| value.is_object()) {
-        retained.insert(String::from("transaction"), transaction.clone());
+    if let Some(native_v2) = object
+        .get("vulcan.file_tools.v2")
+        .and_then(Value::as_object)
+        && let Some(retained) = compact_registered_extension(
+            native_v2,
+            &[
+                ("source_tool", "string"),
+                ("operation_results", "array"),
+                ("resources", "array"),
+                ("transaction", "object"),
+                ("encoding", "string"),
+                ("bom", "boolean"),
+                ("line_ending", "string"),
+            ],
+        )
+    {
+        extensions.insert(String::from("vulcan.file_tools.v2"), retained);
     }
-    if retained.is_empty() {
+    if extensions.is_empty() {
         return None;
     }
-    let extension = Value::Object(retained);
-    let encoded = serde_json::to_vec(&extension).ok()?;
-    (encoded.len() <= NATIVE_CHANGE_SET_EXTENSION_MAX_BYTES).then_some(json!({
-        "vulcan.file_edit.v1": extension,
-    }))
+    let extensions = Value::Object(extensions);
+    let encoded = serde_json::to_vec(&extensions).ok()?;
+    (encoded.len() <= NATIVE_CHANGE_SET_EXTENSION_MAX_BYTES).then_some(extensions)
+}
+
+/// Retains typed top-level fields from one registered native extension object.
+/// 从一个已注册原生扩展对象中保留类型正确的顶层字段。
+fn compact_registered_extension(
+    extension: &Map<String, Value>,
+    allowed_fields: &[(&str, &str)],
+) -> Option<Value> {
+    let mut retained = Map::new();
+    for (field, expected_type) in allowed_fields {
+        let Some(value) = extension.get(*field) else {
+            continue;
+        };
+        let accepted = match *expected_type {
+            "array" => value.is_array(),
+            "boolean" => value.is_boolean(),
+            "object" => value.is_object(),
+            "string" => value.is_string(),
+            _ => false,
+        };
+        if accepted {
+            retained.insert((*field).to_string(), value.clone());
+        }
+    }
+    (!retained.is_empty()).then_some(Value::Object(retained))
 }
 
 /// Compacts one optional diagnostics array into the host-owned minimal JSON shape.

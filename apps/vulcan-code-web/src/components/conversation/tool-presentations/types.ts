@@ -36,7 +36,7 @@ export interface ToolPresentationResolveOptions {
   // 可选的实时命令会话摘要预构建查找表。
   commandSessionById?: Map<string, CommandSessionSummary>;
   // Optional parser-sanitized request preview for a tool that is still receiving arguments.
-  // 鍙€夌殑瑙ｆ瀽鍣ㄥ噣鍖栬姹傞瑙堬紝鐢ㄤ簬浠嶅湪鎺ユ敹鍙傛暟鐨勫伐鍏枫€?
+  // 可选的解析器净化请求预览，用于仍在接收参数的工具。
   requestPreview?: Record<string, unknown> | null;
 }
 
@@ -113,7 +113,7 @@ export interface FileChangePresentation {
   kind: "file_change";
   // Source adapter that produced this display model.
   // 生成该展示模型的来源适配器。
-  source: "native_vulcan_file" | "native_file" | "native_file_edit" | "host_change_set";
+  source: "native_vulcan_file" | "native_file" | "native_file_mutation" | "native_file_edit" | "native_apply_patch" | "host_change_set";
   // Stable id used for the top-level expansion state.
   // 用于顶层展开状态的稳定标识。
   id: string;
@@ -157,6 +157,26 @@ export type FileChangeOperation = "create" | "modify" | "delete" | "rename" | "m
 // FileAccessAction 命名原生 file 工具展示的只读操作。
 export type FileAccessAction = "read" | "list" | "search" | "stat";
 
+// FileTextFormatPresentation describes decoded text metadata reported by the native file runtime.
+// FileTextFormatPresentation 描述原生文件运行时报告的已解码文本元数据。
+export interface FileTextFormatPresentation {
+  // Canonical encoding label, or null when the runtime could not establish text encoding.
+  // canonical 编码标签；运行时无法确认文本编码时为 null。
+  encoding: string | null;
+  // Whether the source contains an encoding byte-order mark.
+  // 源文件是否包含编码字节顺序标记。
+  bom: boolean | null;
+  // Dominant or exact line-ending label, or null when no line ending exists.
+  // 主要或精确换行标签；文件不存在换行时为 null。
+  lineEnding: string | null;
+  // Whether more than one line-ending form occurs in the source.
+  // 源文件是否存在多种换行形式。
+  mixedLineEndings: boolean | null;
+  // Whether the source ends with a line ending.
+  // 源文件是否以换行结束。
+  finalNewline: boolean | null;
+}
+
 // FileChangeFilePresentation describes one file row inside a file change presentation.
 // FileChangeFilePresentation 描述文件变更展示中的单个文件行。
 export interface FileChangeFilePresentation {
@@ -181,9 +201,6 @@ export interface FileChangeFilePresentation {
   // Display path after workspace-relative normalization.
   // 工作区相对归一后的展示路径。
   displayPath: string;
-  // Requested one-based line range for a native read target, when provided.
-  // 原生读取目标提供范围时显示的一基准行号范围。
-  readRange?: string | null;
   // Whether the display path is project-local or external.
   // 展示路径属于项目内还是项目外。
   pathKind: "project" | "external" | "unknown";
@@ -208,6 +225,9 @@ export interface FileChangeFilePresentation {
   // Whether rows are read-only result lines rather than a mutation diff.
   // 当前行是否为只读结果行，而不是文件变更 diff。
   readOnly: boolean;
+  // Decoded text metadata reported for native read and stat results.
+  // 原生读取与状态结果报告的已解码文本元数据。
+  textFormat: FileTextFormatPresentation | null;
 }
 
 // MarkdownToolPresentationIcon names the visual icon slot for Markdown-output tools.

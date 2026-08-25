@@ -135,6 +135,31 @@ const EMPTY_LISTENERS: ReadonlySet<ConversationLiveStreamListener> = new Set();
 // UTF8_ENCODER 增量计算字节阈值，避免重新扫描完整正文。
 const UTF8_ENCODER = new TextEncoder();
 
+// settledToolRequestStreamId returns the exact request identity after durable execution owns the card.
+// settledToolRequestStreamId 在持久执行状态接管卡片后返回精确请求身份。
+function settledToolRequestStreamId(message: ConversationMessage): string | null {
+  if (!message.metadata || typeof message.metadata !== "object" || Array.isArray(message.metadata)) {
+    return null;
+  }
+  // metadata is the exact root projected from the durable tool card.
+  // metadata 是从持久工具卡片投影得到的精确根对象。
+  const metadata = message.metadata as Record<string, unknown>;
+  // requestStreamId preserves the coordinator identity after ToolStarted metadata merges in place.
+  // requestStreamId 在 ToolStarted 元数据原地合并后继续保留协调器身份。
+  const requestStreamId = typeof metadata.request_stream_id === "string"
+    ? metadata.request_stream_id.trim()
+    : "";
+  // displayState decides whether request formation or actual execution owns the card.
+  // displayState 决定请求构造或真实执行中的哪一方持有卡片。
+  const displayState = typeof metadata.tool_display_state === "string"
+    ? metadata.tool_display_state
+    : "";
+  if (!requestStreamId || ["receiving", "arguments_assembled", "ready"].includes(displayState)) {
+    return null;
+  }
+  return requestStreamId;
+}
+
 // ConversationLiveStreamStore keeps every active conversation stream outside global React state.
 // ConversationLiveStreamStore 在全局 React 状态之外保留所有活跃会话流。
 export class ConversationLiveStreamStore {
@@ -250,8 +275,8 @@ export class ConversationLiveStreamStore {
   // reconcileStableCoverage 在已提交 React 工作台包含精确正文后释放封口副本。
   // Parameters: snapshot is the workbench state already committed by React.
   // 参数：snapshot 是 React 已提交的工作台状态。
-  // Returns: the number of unobserved terminal replicas collected during this pass.
-  // 返回值：当前轮次回收的无订阅终态副本数量。
+  // Returns: the number of settled request snapshots and unobserved terminal replicas collected during this pass.
+  // 返回值：当前轮次回收的已结束请求快照与无订阅终态副本数量。
   reconcileStableCoverage(snapshot: Pick<WorkbenchSnapshot, "revision" | "messages">): number {
     // snapshotGeneration proves the stable projection is not older than the terminal stream event.
     // snapshotGeneration 证明稳定投影不早于终态流事件。
@@ -265,6 +290,19 @@ export class ConversationLiveStreamStore {
       ]),
     );
     let collectedCount = 0;
+    // settledRequestKeys are cleared only after React has committed the ToolStarted or terminal card state.
+    // settledRequestKeys 仅在 React 已提交 ToolStarted 或终态卡片状态后清理。
+    for (const message of snapshot.messages) {
+      const requestStreamId = settledToolRequestStreamId(message);
+      if (!requestStreamId) {
+        continue;
+      }
+      const key = toolRequestProgressKey(message.conversationId, requestStreamId);
+      if (this.#toolRequestProgressSnapshots.delete(key)) {
+        this.#dirtyKeys.add(key);
+        collectedCount += 1;
+      }
+    }
     for (const [key, record] of this.#records) {
       if (record.revision.lifecycle !== "sealed" || snapshotGeneration < record.revision.lastGeneration) {
         continue;

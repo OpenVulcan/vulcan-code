@@ -8,6 +8,7 @@ use vulcan_agent_runtime::{
     },
     conversation_protocol::SessionConversationState,
 };
+use vulcan_context::SessionMessageEntry;
 use vulcan_service_api::{
     ConversationRunOutcome, ConversationSummaryChangedDelta, ServiceEventEmitter,
 };
@@ -36,12 +37,13 @@ use super::{
     refresh_exact_vmm_hook_session_projection, replace_conversation_messages_in_workbench_window,
     replace_task_display_messages_with_runtime_state_records,
     require_segmented_session_directory_for_retained_session,
-    session_continuation_runtime_blockers, spawn_latest_conversation_checkpoint_persist_task,
-    spawn_service_task, spawn_session_transcript_messages_persist_task,
-    sync_hydrated_session_dialogue_ready_marker, task_display_prompt_anchor_from_workspace,
-    webui_trace, webui_trace_if_slow, webui_turn_completion_gate_from_state,
-    workbench_surface_matches_conversation, workspace_session_summary_for_session,
-    workspace_snapshot_contains_regular_session, workspace_surface_allows_user_prompt_editing,
+    session_continuation_runtime_blockers, session_message_entry_from_conversation_record,
+    spawn_latest_conversation_checkpoint_persist_task, spawn_service_task,
+    spawn_session_transcript_messages_persist_task, sync_hydrated_session_dialogue_ready_marker,
+    task_display_prompt_anchor_from_workspace, webui_trace, webui_trace_if_slow,
+    webui_turn_completion_gate_from_state, workbench_surface_matches_conversation,
+    workspace_session_summary_for_session, workspace_snapshot_contains_regular_session,
+    workspace_surface_allows_user_prompt_editing,
 };
 
 /// Applies one streamed conversation checkpoint to retained workspace memory.
@@ -232,6 +234,42 @@ pub(super) struct TerminalReportMemoryApply {
     /// Body-free VMM lifecycle events produced by terminal TTL consumption.
     /// 终态 TTL 消费产生的不含正文 VMM 生命周期事件。
     pub(super) vmm_lifecycle_events: Vec<vulcan_context::RuntimeVmmLifecycleEvent>,
+    /// Exact immutable transcript rows appended while applying this terminal report.
+    /// 应用本次终态报告时追加的精确不可变转录记录。
+    pub(super) terminal_transcript_entries: Vec<SessionMessageEntry>,
+}
+
+/// Projects only the immutable transcript suffix appended after one retained prefix.
+/// 仅投影在某个保留前缀之后追加的不可变转录后缀。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` is the detached terminal candidate containing the complete canonical record list.
+/// `runtime_state` 是包含完整规范记录列表的分离终态候选。
+/// `source_record_count` is the exact record count before terminal projection began.
+/// `source_record_count` 是终态投影开始前的精确记录数量。
+///
+/// # Returns
+/// 返回值
+/// Returns the exact appended entries, or rejects a terminal projection that shortened history.
+/// 返回精确追加记录；若终态投影缩短历史则拒绝。
+fn terminal_transcript_entries_after_prefix(
+    runtime_state: &SessionRuntimeStateEntry,
+    source_record_count: usize,
+) -> Result<Vec<SessionMessageEntry>, String> {
+    runtime_state
+        .conversation_state
+        .records
+        .get(source_record_count..)
+        .ok_or_else(|| {
+            String::from("Terminal report projection shortened the retained display transcript.")
+        })
+        .map(|records| {
+            records
+                .iter()
+                .map(session_message_entry_from_conversation_record)
+                .collect()
+        })
 }
 
 /// Exact conversation-hook side effect committed for one terminal report.
@@ -463,6 +501,7 @@ pub(super) fn apply_task_session_execution_report_to_memory(
         completion_request: None,
         conversation_run_outcome: None,
         vmm_lifecycle_events: Vec::new(),
+        terminal_transcript_entries: Vec::new(),
     })
 }
 
@@ -710,6 +749,7 @@ pub(super) fn apply_execution_report_to_memory(
         terminal_run_phase,
         terminal_status_label,
         vmm_lifecycle_events,
+        terminal_transcript_entries,
     ) = {
         let mut guard = state
             .lock()
@@ -734,6 +774,9 @@ pub(super) fn apply_execution_report_to_memory(
                 .session_runtime_state
                 .get(&session_id)
                 .unwrap_or(&default_runtime_state);
+            // sourceRecordCount anchors the immutable suffix created only by terminal projection.
+            // sourceRecordCount 锚定仅由终态投影创建的不可变后缀。
+            let source_record_count = source_runtime_state.conversation_state.records.len();
             // vmm_state_before_terminal is the exact controller audit baseline before TTL consumption.
             // vmm_state_before_terminal 是 TTL 消费前精确的控制器审计基线。
             let vmm_state_before_terminal = vmm_controller.snapshot()?;
@@ -743,6 +786,10 @@ pub(super) fn apply_execution_report_to_memory(
                 &now,
                 &report,
             )?;
+            // terminalTranscriptEntries excludes every existing live row, including mutable tool cards.
+            // terminalTranscriptEntries 排除全部既有实时记录，包括可变工具卡片。
+            let terminal_transcript_entries =
+                terminal_transcript_entries_after_prefix(&runtime_state, source_record_count)?;
             // hook_action encodes the only legal logical-turn transition for this terminal report.
             // hook_action 编码此终态报告唯一合法的逻辑回合转换。
             let hook_action = TerminalConversationHookAction::from_terminal_facts(
@@ -898,6 +945,7 @@ pub(super) fn apply_execution_report_to_memory(
                 terminal_run_phase,
                 terminal_status_label,
                 vmm_lifecycle_events,
+                terminal_transcript_entries,
             )
         }
     };
@@ -956,6 +1004,7 @@ pub(super) fn apply_execution_report_to_memory(
         completion_request,
         conversation_run_outcome,
         vmm_lifecycle_events,
+        terminal_transcript_entries,
     })
 }
 
@@ -1420,6 +1469,36 @@ mod tests {
     use vulcan_workbench_model::{
         SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,
     };
+
+    /// Verifies terminal persistence receives only rows appended after the pre-terminal prefix.
+    /// 验证终态持久化仅接收终态前缀之后追加的记录。
+    #[test]
+    fn terminal_transcript_entries_preserve_exact_appended_suffix() {
+        // ready models an already-persisted mutable tool card at the terminal boundary.
+        // ready 模拟终态边界处已经持久化的可变工具卡片。
+        let mut ready = SessionMessageEntry::new(SessionMessageKind::Assistant, "", "")
+            .with_runtime_metadata("tool-card", "1000");
+        ready.record_kind = SessionMessageRecordKind::ToolCallOutput;
+        // detail models the immutable terminal evidence appended by terminal projection.
+        // detail 模拟终态投影追加的不可变终态证据。
+        let mut detail = SessionMessageEntry::new(SessionMessageKind::Assistant, "", "result")
+            .with_runtime_metadata("tool-detail", "1001");
+        detail.record_kind = SessionMessageRecordKind::ToolDetailOutput;
+        detail.visible = false;
+        // runtimeState contains the complete terminal candidate while one row belongs to the old prefix.
+        // runtimeState 包含完整终态候选，其中一条记录属于旧前缀。
+        let runtime_state = SessionRuntimeStateEntry {
+            conversation_state: conversation_state_from_session_messages(&[ready, detail.clone()])
+                .expect("terminal rows should form canonical conversation state"),
+            ..SessionRuntimeStateEntry::default()
+        };
+
+        let entries = terminal_transcript_entries_after_prefix(&runtime_state, 1)
+            .expect("terminal suffix should project");
+
+        assert_eq!(entries, vec![detail]);
+        assert!(terminal_transcript_entries_after_prefix(&runtime_state, 3).is_err());
+    }
 
     /// Verifies a successful final AssistantOutput closes the turn without granting prompt-free continuation.
     /// 验证成功的最终 AssistantOutput 会闭合回合且不会授予无提示词继续资格。

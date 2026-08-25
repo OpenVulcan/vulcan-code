@@ -615,6 +615,13 @@
   text-overflow: ellipsis;
 }
 
+.file-change-text-format {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 .file-change-path-range {
   flex: 0 0 auto;
   color: var(--muted-foreground);

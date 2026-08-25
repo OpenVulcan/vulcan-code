@@ -130,10 +130,32 @@ pub(super) async fn handle_runtime_stream_event(
             ),
         );
     }
-    if is_provider_tool_boundary_runtime_event(&event)
-        && let Err(error) = seal_stream_content_records(app, task_state, session_id, record_ids)
-    {
-        eprintln!("[webui-service] seal provider content records failed: {error}");
+    if is_provider_tool_boundary_runtime_event(&event) {
+        match seal_stream_content_records_with_entries(app, task_state, session_id, record_ids) {
+            Ok(sealed_entries) if !sealed_entries.is_empty() => {
+                if let Err(error) = spawn_exact_session_transcript_entries_persist_task(
+                    task_state.clone(),
+                    controller_runtime.clone(),
+                    session_id,
+                    sealed_entries,
+                    Some(String::from("provider_tool_boundary_stream_seal")),
+                ) {
+                    eprintln!(
+                        "[webui-service] persist sealed provider content records failed: {error}"
+                    );
+                    if let Err(rejection_error) = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::reject_runtime_event_projection_barrier_from_event(&event) {
+                        eprintln!(
+                            "[webui-service] reject failed sealed-content durability barrier failed: {rejection_error}"
+                        );
+                    }
+                    return;
+                }
+            }
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("[webui-service] seal provider content records failed: {error}");
+            }
+        }
     }
 
     // Wait-agent state must observe the tool boundary before phase and projection updates run.

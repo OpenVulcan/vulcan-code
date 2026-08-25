@@ -590,7 +590,11 @@ impl ToolRequestStreamCoordinator {
                 } else {
                     draft.progress_policy.minimum_byte_growth
                 };
-            let should_emit_progress = new_preview_diagnostic.is_some()
+            // firstNonEmptyGrowth guarantees a zero-byte start cannot remain the only visible receiving snapshot.
+            // firstNonEmptyGrowth 确保零字节启动快照不会成为唯一可见的接收进度。
+            let first_non_empty_growth = draft.last_emitted_bytes == 0 && received_bytes > 0;
+            let should_emit_progress = first_non_empty_growth
+                || new_preview_diagnostic.is_some()
                 || byte_growth >= minimum_byte_growth
                 || now.duration_since(draft.last_emitted_at)
                     >= Duration::from_millis(draft.progress_policy.maximum_interval_ms);
@@ -1399,6 +1403,49 @@ mod tests {
                 .drafts
                 .get("stream-assembled")
                 .is_some_and(|draft| draft.arguments_assembled)
+        );
+    }
+
+    /// Verifies the first non-empty delta bypasses byte and time throttles after an empty start.
+    /// 验证空启动后的首个非空增量会绕过字节与时间节流。
+    #[test]
+    fn first_non_empty_argument_delta_bypasses_progress_throttle() {
+        // coordinator starts from an empty visible snapshot under the real default throttle policy.
+        // coordinator 在真实默认节流策略下从空的可见快照开始。
+        let mut coordinator = test_coordinator();
+        coordinator.apply(ToolRequestFragment::Detected {
+            request_stream_id: String::from("stream-first-growth"),
+            tool_call_id: String::from("call-first-growth"),
+            tool_name: String::from("test_tool"),
+            initial_arguments: String::new(),
+            argument_assembler: None,
+        });
+
+        // progress receives one incomplete byte that is below every ordinary byte threshold.
+        // progress 接收一个低于所有常规字节阈值的未完成字节。
+        let progress = coordinator.apply(ToolRequestFragment::ArgumentsDelta {
+            request_stream_id: String::from("stream-first-growth"),
+            delta: String::from("{"),
+        });
+
+        // progressMetadata proves the first non-empty fragment reached visible projection immediately.
+        // progressMetadata 证明首个非空片段立即进入可见投影。
+        let progress_metadata = progress
+            .iter()
+            .find(|event| event.kind == RuntimeEventKind::ToolRequestProgress)
+            .and_then(|event| event.metadata.as_ref())
+            .expect("the first non-empty delta should emit progress immediately");
+        assert_eq!(
+            progress_metadata
+                .get("received_bytes")
+                .and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            progress_metadata
+                .get("tool_display_state")
+                .and_then(serde_json::Value::as_str),
+            Some("receiving")
         );
     }
 

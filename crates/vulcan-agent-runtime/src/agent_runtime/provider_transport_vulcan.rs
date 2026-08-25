@@ -28,7 +28,7 @@ use base64::Engine;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use vulcan_ai_contract::{
@@ -55,9 +55,9 @@ use vulcan_core::types::{
 use vulcan_provider_adapters::{
     InputResourceConstraint, ProviderExecutionClient, ProviderExecutionCredentialLease,
     ProviderExecutionRoute, ProviderExecutionStream, ProviderWireRequestCapture,
-    ProviderWireResponseCapture, ResolvedPublicAiExecution, ResourceReferencePolicy,
-    ResponseProjectionProfile, ToolSchemaProjectionMode, TransientReasoningStatusMode,
-    UploadReferenceEncoding,
+    ProviderWireRequestTraceDispatch, ProviderWireResponseCapture, ResolvedPublicAiExecution,
+    ResourceReferencePolicy, ResponseProjectionProfile, ToolSchemaProjectionMode,
+    TransientReasoningStatusMode, UploadReferenceEncoding,
 };
 use vulcan_tools_manager::{VulcanToolSchemaProjectionProfile, project_tool_parameters_schema};
 
@@ -67,15 +67,131 @@ const DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT: u64 = 32_000;
 /// Maximum aggregate Base64 payload bytes allowed for host-inline resources in one request.
 /// 单次请求中宿主内联资源允许使用的 Base64 聚合载荷最大字节数。
 const HOST_INLINE_RESOURCE_BASE64_BUDGET_BYTES: u64 = 2 * 1024 * 1024;
-/// Versioned on-disk contract for bounded Provider wire-request traces.
-/// 有界 Provider 线上请求追踪使用的版本化磁盘契约。
-const PROVIDER_REQUEST_TRACE_SCHEMA_VERSION: &str = "vulcan.provider-request-trace.v4";
+/// Versioned on-disk contract for grouped Provider API request and response traces.
+/// 分组 Provider API 请求与响应追踪使用的版本化磁盘契约。
+const PROVIDER_API_TRACE_SCHEMA_VERSION: &str = "vulcan.provider-api-trace.v1";
 /// Structured subcategory emitted only after the exact OAuth account secret was refreshed.
 /// 仅在精确 OAuth 账号秘密已经刷新后发出的结构化子类别。
 pub(crate) const OAUTH_CREDENTIAL_REFRESHED_SUBCATEGORY: &str = "oauth_credential_refreshed";
-/// Process-local monotonic tie breaker used when multiple requests start within one millisecond.
-/// 多个请求在同一毫秒启动时使用的进程本地单调消歧序号。
-static PROVIDER_REQUEST_TRACE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+/// Process-local allocator synchronized to each opened session's persisted generation floor.
+/// 会同步到每个已打开会话持久化代际下限的进程内分配器。
+static PROVIDER_API_TRACE_GROUP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Identifies one physical API attempt inside a stable logical retry group.
+/// 标识稳定逻辑重试组中的一次真实 API 尝试。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProviderApiTraceAttemptIdentity {
+    /// Process-local monotonic generation used to own one rotating slot.
+    /// 用于占有一个轮转槽位的进程内单调代际。
+    group_sequence: u64,
+    /// Stable opaque identity shared by all physical retries.
+    /// 所有真实重试共享的稳定不透明标识。
+    group_id: String,
+    /// Group creation timestamp retained unchanged across retries.
+    /// 在重试间保持不变的组创建时间戳。
+    group_created_at_unix_ms: u128,
+    /// Zero-based physical attempt index.
+    /// 从零开始的真实尝试索引。
+    attempt_index: u32,
+}
+
+/// Selects the response evidence persisted for one trace-attempt snapshot.
+/// 选择一次追踪尝试快照要持久化的响应证据。
+enum ProviderApiTraceResponseState {
+    /// The request is durable and transport dispatch has not started yet.
+    /// 请求已经可靠落盘且传输分派尚未开始。
+    AwaitingResponse,
+    /// The response capture channel closed without publishing a capture.
+    /// 响应捕获通道关闭且没有发布捕获结果。
+    CaptureChannelClosed,
+    /// A partial or complete raw response capture is available.
+    /// 已取得部分或完整的原始响应捕获。
+    Captured(ProviderWireResponseCapture),
+}
+
+/// Describes the first host-side processing failure observed after raw Provider transport capture.
+/// 描述 Provider 原始传输捕获之后观察到的首个宿主侧处理失败。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProviderApiTraceProcessingFailure {
+    /// Stable pipeline boundary used by `outcome.json` diagnostics.
+    /// `outcome.json` 诊断使用的稳定流水线边界。
+    stage: String,
+    /// Controlled error text that excludes credentials and raw request payloads.
+    /// 不包含凭据与原始请求载荷的受控错误文本。
+    message: String,
+}
+
+/// Publishes at most one post-transport processing failure to the detached trace writer.
+/// 向独立追踪写入任务至多发布一次传输后处理失败。
+struct ProviderApiTraceProcessingFailureSender {
+    /// One-shot channel retained until successful completion or the first processing failure.
+    /// 保留到成功完成或首次处理失败的一次性通道。
+    sender: Option<tokio::sync::oneshot::Sender<ProviderApiTraceProcessingFailure>>,
+}
+
+impl ProviderApiTraceProcessingFailureSender {
+    /// Creates a failure publisher for one traced physical Provider attempt.
+    /// 为一次已追踪的真实 Provider 尝试创建失败发布器。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `sender` is absent when persisted Provider tracing is disabled.
+    /// 关闭 Provider 持久化追踪时 `sender` 为空。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A publisher that silently drops diagnostics when tracing is disabled or already finalized.
+    /// 返回一个在追踪关闭或已结束时静默丢弃诊断的发布器。
+    fn new(
+        sender: Option<tokio::sync::oneshot::Sender<ProviderApiTraceProcessingFailure>>,
+    ) -> Self {
+        Self { sender }
+    }
+
+    /// Records the first exact post-transport failure without changing business error semantics.
+    /// 记录首个精确的传输后失败，且不改变业务错误语义。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `stage` is the stable processing boundary and `error` is the original controlled failure.
+    /// `stage` 是稳定处理边界，`error` 是原始受控失败。
+    fn observe_failure(&mut self, stage: &str, error: &VulcanCoreError) {
+        let Some(sender) = self.sender.take() else {
+            return;
+        };
+        let _ = sender.send(ProviderApiTraceProcessingFailure {
+            stage: stage.to_string(),
+            message: error.to_string(),
+        });
+    }
+}
+
+/// Owns the currently retryable Provider API trace group for one controller adapter.
+/// 持有一个控制器适配器当前可重试的 Provider API 追踪组。
+#[derive(Debug, Default)]
+struct ProviderApiTraceGroupState {
+    /// Active logical group, absent before dispatch and after success.
+    /// 活动逻辑组；分派前与成功后为空。
+    active: Option<ProviderApiTraceActiveGroup>,
+}
+
+/// Tracks the next physical attempt index for one active logical group.
+/// 跟踪一个活动逻辑组的下一次真实尝试索引。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProviderApiTraceActiveGroup {
+    /// Monotonic group generation.
+    /// 单调组代际。
+    group_sequence: u64,
+    /// Stable opaque group identity.
+    /// 稳定不透明组标识。
+    group_id: String,
+    /// Frozen creation timestamp.
+    /// 冻结的创建时间戳。
+    group_created_at_unix_ms: u128,
+    /// Index assigned to the next physical request.
+    /// 分配给下一次真实请求的索引。
+    next_attempt_index: u32,
+}
 
 /// Tracks request-wide encoded media consumption before Provider request serialization.
 /// 在 Provider 请求序列化前跟踪请求级编码媒体消耗。
@@ -216,6 +332,82 @@ fn provider_request_trace_timestamp_ms() -> Result<u128, String> {
         .map_err(|error| format!("Provider request trace clock failed: {error}"))
 }
 
+/// Raises one process-local trace generation allocator to an observed persisted floor.
+/// 将一个进程内追踪代际分配器提升到已观察到的持久化下限。
+///
+/// # Parameters
+/// 参数
+/// `sequence` is the allocator and `persisted_floor` is the greatest generation already on disk.
+/// `sequence` 是分配器，`persisted_floor` 是磁盘上已经存在的最大代际。
+fn synchronize_provider_api_trace_group_sequence(sequence: &AtomicU64, persisted_floor: u64) {
+    sequence.fetch_max(persisted_floor, Ordering::AcqRel);
+}
+
+/// Reserves the next unique process-local Provider API trace group generation.
+/// 预留下一个进程内唯一的 Provider API 追踪组代际。
+///
+/// # Parameters
+/// 参数
+/// `sequence` is already synchronized with the owning session's persisted generation floor.
+/// `sequence` 已经与所属会话的持久化代际下限完成同步。
+///
+/// # Returns
+/// 返回值
+/// The next generation, or an explicit error instead of wrapping at the integer boundary.
+/// 返回下一代际；达到整数边界时返回明确错误而不是回绕。
+fn reserve_provider_api_trace_group_sequence(sequence: &AtomicU64) -> Result<u64, String> {
+    // previous remains unchanged when the integer boundary prevents a safe reservation.
+    // previous 在整数边界阻止安全预留时保持不变。
+    let previous = sequence
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            current.checked_add(1)
+        })
+        .map_err(|_| String::from("Provider API trace group generation is exhausted."))?;
+    Ok(previous + 1)
+}
+
+/// Synchronizes trace generation allocation with one retained session before dispatch begins.
+/// 在分派开始前将追踪代际分配与一个保留会话同步。
+///
+/// # Parameters
+/// 参数
+/// `session_storage_directory` is the exact session owner and `cache_scope_id` is its UUID.
+/// `session_storage_directory` 是精确会话归属目录，`cache_scope_id` 是其 UUID。
+///
+/// # Returns
+/// 返回值
+/// Success after the process allocator is no lower than every persisted rotating slot.
+/// 当进程分配器不低于全部已持久化轮转槽位后返回成功。
+fn synchronize_provider_api_trace_generation_with_session(
+    session_storage_directory: Option<&Path>,
+    cache_scope_id: &str,
+) -> Result<(), String> {
+    // sessionDirectory is mandatory because the allocator must observe its durable predecessor.
+    // sessionDirectory 是必需的，因为分配器必须观察其可靠持久化的前序代际。
+    let session_directory = session_storage_directory.ok_or_else(|| {
+        String::from(
+            "Provider request tracing is enabled but the execution has no exact session storage directory.",
+        )
+    })?;
+    // sessionId proves the supplied directory belongs to this exact Provider execution scope.
+    // sessionId 证明给定目录属于这次精确 Provider 执行作用域。
+    let session_id = uuid::Uuid::parse_str(cache_scope_id).map_err(|error| {
+        format!("Provider request trace session id `{cache_scope_id}` is invalid: {error}")
+    })?;
+    // persistedFloor prevents a fresh process from reusing generations retained by an earlier run.
+    // persistedFloor 防止新进程复用更早运行已经保留的代际。
+    let persisted_floor =
+        vulcan_workspace_store::workspace_store::load_provider_api_trace_group_sequence_floor(
+            session_directory,
+            session_id,
+        )?;
+    synchronize_provider_api_trace_group_sequence(
+        &PROVIDER_API_TRACE_GROUP_SEQUENCE,
+        persisted_floor,
+    );
+    Ok(())
+}
+
 /// Redacts credential-shaped header values before a trace reaches disk.
 /// 在追踪写入磁盘前脱敏具有凭据形态的请求头值。
 ///
@@ -258,6 +450,35 @@ fn provider_request_trace_headers(headers: &BTreeMap<String, String>) -> BTreeMa
         .collect()
 }
 
+/// Selects the authoritative failure stage for one persisted Provider trace attempt.
+/// 为一次持久化 Provider 追踪尝试选择权威失败阶段。
+///
+/// # Parameters
+/// 参数
+/// `transport_stage` and `transport_message` come from pre-parser wire capture;
+/// `processing_failure` comes from the host-side public response accumulator.
+/// `transport_stage` 与 `transport_message` 来自解析前 Wire 捕获；`processing_failure`
+/// 来自宿主侧公共响应累积器。
+///
+/// # Returns
+/// 返回值
+/// The effective stage, effective message, and whether only local post-transport processing failed.
+/// 返回有效阶段、有效消息，以及是否仅本地传输后处理失败。
+fn select_provider_api_trace_failure(
+    transport_stage: Option<&str>,
+    transport_message: Option<&str>,
+    processing_failure: Option<&ProviderApiTraceProcessingFailure>,
+) -> (Option<String>, Option<String>, bool) {
+    let local_processing_failed = transport_stage.is_none() && processing_failure.is_some();
+    let stage = transport_stage
+        .map(str::to_string)
+        .or_else(|| processing_failure.map(|failure| failure.stage.clone()));
+    let message = transport_message
+        .map(str::to_string)
+        .or_else(|| processing_failure.map(|failure| failure.message.clone()));
+    (stage, message, local_processing_failed)
+}
+
 /// Encodes retained Provider response bytes with the smaller exact JSON-safe representation.
 /// 使用较小且可精确还原的 JSON 安全表示编码已保留的 Provider 响应字节。
 ///
@@ -270,6 +491,7 @@ fn provider_request_trace_headers(headers: &BTreeMap<String, String>) -> BTreeMa
 /// 返回值
 /// The declared body encoding and its exact persisted payload.
 /// 返回声明的正文编码及其可精确还原的持久化载荷。
+#[cfg(test)]
 fn encode_provider_response_trace_body(body: Vec<u8>) -> (&'static str, String) {
     match String::from_utf8(body) {
         Ok(utf8_body) => {
@@ -463,12 +685,15 @@ pub(crate) fn capture_vulcan_public_stream(
 /// 将 Vulcan 公共请求与事件桥接到宿主控制器。
 #[derive(Clone)]
 pub(crate) struct VulcanPublicContractAdapter {
-    /// Frozen system-setting decision for bounded wire-request tracing during this controller run.
-    /// 当前控制器运行期间冻结的有界线上请求追踪系统设置决策。
+    /// Frozen system-setting decision for grouped request and raw-response tracing.
+    /// 当前控制器运行期间冻结的分组请求与原始返回追踪系统设置决策。
     provider_request_trace_enabled: bool,
     /// Exact session directory for trace writes; absent when trace persistence is disabled.
     /// 追踪写入使用的精确会话目录；关闭追踪持久化时为空。
     session_storage_directory: Option<PathBuf>,
+    /// Shared logical trace group state retained across transparent physical retries.
+    /// 在透明真实重试间保留的共享逻辑追踪组状态。
+    provider_api_trace_group_state: std::sync::Arc<std::sync::Mutex<ProviderApiTraceGroupState>>,
     /// Immutable provider execution route.
     /// 不可变供应商执行路由。
     route: ProviderExecutionRoute,
@@ -591,9 +816,31 @@ impl VulcanPublicContractAdapter {
         // publicTools applies the same route-bound schema projection used by standalone remote compaction.
         // publicTools 应用与独立远端压缩相同的路由绑定 Schema 投影。
         let public_tools = project_public_tool_definitions(&route, tools);
+        // effectiveTraceEnabled disables only diagnostics when its durable generation cannot be established.
+        // effectiveTraceEnabled 仅在无法建立可靠代际时关闭诊断，不影响真实 Provider 请求。
+        let provider_request_trace_enabled = if provider_request_trace_enabled {
+            match synchronize_provider_api_trace_generation_with_session(
+                session_storage_directory.as_deref(),
+                cache_scope_id.as_str(),
+            ) {
+                Ok(()) => true,
+                Err(error) => {
+                    eprintln!(
+                        "[provider-api-trace] session={} initialization_failed={error}",
+                        cache_scope_id
+                    );
+                    false
+                }
+            }
+        } else {
+            false
+        };
         Self {
             provider_request_trace_enabled,
             session_storage_directory,
+            provider_api_trace_group_state: std::sync::Arc::new(std::sync::Mutex::new(
+                ProviderApiTraceGroupState::default(),
+            )),
             route,
             model_id,
             cache_scope_id,
@@ -616,6 +863,72 @@ impl VulcanPublicContractAdapter {
         }
     }
 
+    /// Claims one physical attempt in the active logical Provider API trace group.
+    /// 在活动逻辑 Provider API 追踪组中认领一次真实尝试。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A stable group identity and a unique attempt index when tracing is enabled, otherwise `None`.
+    /// 启用追踪时返回稳定组标识与唯一尝试索引，否则返回 `None`。
+    fn claim_provider_api_trace_attempt(
+        &self,
+    ) -> Result<Option<ProviderApiTraceAttemptIdentity>, String> {
+        if !self.provider_request_trace_enabled {
+            return Ok(None);
+        }
+        let mut state = self
+            .provider_api_trace_group_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.active.as_ref().is_some_and(|group| {
+            group.next_attempt_index
+                >= vulcan_workspace_store::workspace_store::PROVIDER_API_TRACE_MAX_ATTEMPTS_PER_GROUP
+        }) {
+            return Ok(None);
+        }
+        if state.active.is_none() {
+            state.active = Some(ProviderApiTraceActiveGroup {
+                group_sequence: reserve_provider_api_trace_group_sequence(
+                    &PROVIDER_API_TRACE_GROUP_SEQUENCE,
+                )?,
+                group_id: uuid::Uuid::new_v4().to_string(),
+                group_created_at_unix_ms: provider_request_trace_timestamp_ms().unwrap_or_default(),
+                next_attempt_index: 0,
+            });
+        }
+        let group = state
+            .active
+            .as_mut()
+            .ok_or_else(|| String::from("Provider API trace group reservation was lost."))?;
+        let identity = ProviderApiTraceAttemptIdentity {
+            group_sequence: group.group_sequence,
+            group_id: group.group_id.clone(),
+            group_created_at_unix_ms: group.group_created_at_unix_ms,
+            attempt_index: group.next_attempt_index,
+        };
+        group.next_attempt_index = group.next_attempt_index.saturating_add(1);
+        Ok(Some(identity))
+    }
+
+    /// Closes one logical Provider API trace group after the matching request succeeds durably.
+    /// 在匹配请求可靠成功后关闭一个逻辑 Provider API 追踪组。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `identity` is the exact attempt that completed the logical request successfully.
+    /// `identity` 是成功完成逻辑请求的精确尝试。
+    fn complete_provider_api_trace_group(&self, identity: &ProviderApiTraceAttemptIdentity) {
+        let mut state = self
+            .provider_api_trace_group_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.active.as_ref().is_some_and(|group| {
+            group.group_sequence == identity.group_sequence && group.group_id == identity.group_id
+        }) {
+            state.active = None;
+        }
+    }
+
     /// Persists one bounded dispatched API request paired with its pre-parser response evidence.
     /// 为一次执行持久化一份有界的实际分派 API 请求及其解析前响应证据。
     ///
@@ -623,6 +936,8 @@ impl VulcanPublicContractAdapter {
     /// 参数
     /// `execution_id` is the physical call identity shared with the real execution client.
     /// `execution_id` 是与真实执行客户端共享的物理调用标识。
+    /// `turn_anchor_message_id` is the latest canonical message that anchored this Provider turn.
+    /// `turn_anchor_message_id` 是锚定当前 Provider 回合的最新规范消息。
     /// `captured_request` is the exact secret-safe request projected immediately before dispatch;
     /// `captured_response` retains bounded transport bytes before local protocol parsing.
     /// `captured_request` 是分派前立即投影的精确无秘密请求；`captured_response` 保留本地协议
@@ -632,18 +947,18 @@ impl VulcanPublicContractAdapter {
     /// 返回值
     /// Success only after the trace has been atomically published in the owning session directory.
     /// 仅在追踪已原子发布到所属会话目录后返回成功。
-    async fn persist_complete_provider_api_trace(
+    async fn persist_provider_api_trace_snapshot(
         &self,
+        identity: ProviderApiTraceAttemptIdentity,
         execution_id: &str,
+        turn_anchor_message_id: Option<&str>,
         captured_request: ProviderWireRequestCapture,
-        captured_response: Option<ProviderWireResponseCapture>,
+        response_state: ProviderApiTraceResponseState,
+        processing_failure: Option<ProviderApiTraceProcessingFailure>,
     ) -> Result<(), VulcanCoreError> {
         let captured_at_unix_ms = provider_request_trace_timestamp_ms()
             .map_err(|error| provider_failure(self.provider_id(), &error))?;
-        let sequence = PROVIDER_REQUEST_TRACE_SEQUENCE
-            .fetch_add(1, Ordering::Relaxed)
-            .saturating_add(1);
-        let slot_index = sequence.saturating_sub(1)
+        let slot_index = identity.group_sequence.saturating_sub(1)
             % vulcan_workspace_store::workspace_store::PROVIDER_REQUEST_TRACE_SLOT_COUNT;
         let session_id = uuid::Uuid::parse_str(self.cache_scope_id.as_str()).map_err(|error| {
             provider_failure(
@@ -655,43 +970,154 @@ impl VulcanPublicContractAdapter {
             )
         })?;
         let headers = provider_request_trace_headers(&captured_request.headers);
-        // apiResponse retains exact UTF-8 SSE text or Base64 for non-UTF-8 bytes without duplication.
-        // apiResponse 精确保留 UTF-8 SSE 文本；非 UTF-8 字节使用 Base64，避免重复保存。
-        let api_response = captured_response.map_or_else(
-            || {
-                json!({
-                    "capture_point": "before_sse_framing_and_protocol_decode",
-                    "capture_state": "response_capture_channel_closed",
-                })
-            },
-            |captured| {
-                let retained_bytes = captured.body.len();
-                let (body_encoding, body) = encode_provider_response_trace_body(captured.body);
-                json!({
-                    "capture_point": "before_sse_framing_and_protocol_decode",
-                    "capture_state": "captured",
-                    "transport": captured.transport,
-                    "http_status": captured.http_status,
-                    "content_type": captured.content_type,
-                    "content_encoding": captured.content_encoding,
-                    "body_encoding": body_encoding,
-                    "body": body,
-                    "chunk_lengths": captured.chunk_lengths,
-                    "received_bytes": captured.received_bytes,
-                    "retained_bytes": retained_bytes,
-                    "body_truncated": captured.body_truncated,
-                    "chunk_index_truncated": captured.chunk_index_truncated,
-                    "outcome": captured.outcome,
-                    "normalized_tool_call_abort": captured.normalized_tool_call_abort,
-                })
-            },
-        );
-        let trace = json!({
-            "schema_version": PROVIDER_REQUEST_TRACE_SCHEMA_VERSION,
-            "captured_at_unix_ms": captured_at_unix_ms,
-            "process_sequence": sequence,
+        let (captured_response, missing_capture_state) = match response_state {
+            ProviderApiTraceResponseState::AwaitingResponse => (None, "awaiting_response"),
+            ProviderApiTraceResponseState::CaptureChannelClosed => {
+                (None, "response_capture_channel_closed")
+            }
+            ProviderApiTraceResponseState::Captured(captured) => (Some(captured), "captured"),
+        };
+        // processingFailure remains a separate field while filling the primary stage only when transport capture succeeded.
+        // processingFailure 保持为独立字段，并且仅在传输捕获成功时补充主失败阶段。
+        let processing_failure_stage = processing_failure
+            .as_ref()
+            .map(|failure| failure.stage.clone());
+        let processing_failure_message = processing_failure
+            .as_ref()
+            .map(|failure| failure.message.clone());
+        // responseArtifacts keep raw bytes separate from JSON metadata so failed partial payloads remain exact.
+        // responseArtifacts 将原始字节与 JSON 元数据分离，使失败时的部分载荷保持精确。
+        let (response_meta, response_body, chunks, frames, outcome) = captured_response
+            .map_or_else(
+                || {
+                    (
+                        json!({
+                            "capture_point": "before_local_response_framing_and_protocol_decode",
+                            "capture_state": missing_capture_state,
+                            "retained_bytes": 0,
+                            "received_bytes": 0,
+                        }),
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        json!({
+                            "classification": missing_capture_state,
+                            "stage": if missing_capture_state == "awaiting_response" {
+                                "request_persisted_before_dispatch"
+                            } else {
+                                "response_capture"
+                            },
+                            "complete": false,
+                            "body_truncated": false,
+                            "chunk_index_truncated": false,
+                            "frame_index_truncated": false,
+                            "normalized_tool_call_abort": Value::Null,
+                            "failure_stage": Value::Null,
+                            "failure_message": Value::Null,
+                            "transport_failure_stage": Value::Null,
+                            "transport_failure_message": Value::Null,
+                            "processing_failure_stage": processing_failure_stage.clone(),
+                            "processing_failure_message": processing_failure_message.clone(),
+                        }),
+                    )
+                },
+                |captured| {
+                    let retained_bytes = captured.body.len();
+                    let transport_failure_stage = captured.failure_stage.clone();
+                    let transport_failure_message = captured.failure_message.clone();
+                    let (
+                        effective_failure_stage,
+                        effective_failure_message,
+                        local_processing_failed,
+                    ) = select_provider_api_trace_failure(
+                        transport_failure_stage.as_deref(),
+                        transport_failure_message.as_deref(),
+                        processing_failure.as_ref(),
+                    );
+                    let capture_complete = captured.outcome != "stream_failed_or_cancelled"
+                        && !captured.body_truncated
+                        && !captured.chunk_index_truncated
+                        && !captured.frame_index_truncated
+                        && !local_processing_failed;
+                    let outcome_stage = effective_failure_stage
+                        .as_deref()
+                        .unwrap_or("response_capture_complete")
+                        .to_string();
+                    let chunks = captured
+                        .chunks
+                        .iter()
+                        .enumerate()
+                        .map(|(index, chunk)| {
+                            json!({
+                                "index": index,
+                                "offset": chunk.offset,
+                                "length": chunk.length,
+                                "observed_at_unix_ms": chunk.observed_at_unix_ms,
+                                "sha256": chunk.sha256,
+                            })
+                        })
+                        .collect();
+                    let frames = captured
+                        .frames
+                        .iter()
+                        .enumerate()
+                        .map(|(index, frame)| {
+                            json!({
+                                "index": index,
+                                "kind": frame.kind,
+                                "offset": frame.offset,
+                                "length": frame.length,
+                                "observed_at_unix_ms": frame.observed_at_unix_ms,
+                                "sha256": frame.sha256,
+                            })
+                        })
+                        .collect();
+                    let outcome = json!({
+                        "classification": if local_processing_failed {
+                            "local_processing_failed"
+                        } else {
+                            captured.outcome.as_str()
+                        },
+                        "stage": outcome_stage,
+                        "complete": capture_complete,
+                        "body_truncated": captured.body_truncated,
+                        "chunk_index_truncated": captured.chunk_index_truncated,
+                        "frame_index_truncated": captured.frame_index_truncated,
+                        "normalized_tool_call_abort": captured.normalized_tool_call_abort,
+                        "failure_stage": effective_failure_stage,
+                        "failure_message": effective_failure_message,
+                        "transport_failure_stage": transport_failure_stage,
+                        "transport_failure_message": transport_failure_message,
+                        "processing_failure_stage": processing_failure_stage.clone(),
+                        "processing_failure_message": processing_failure_message.clone(),
+                        "received_bytes": captured.received_bytes,
+                        "retained_bytes": retained_bytes,
+                        "chunk_count": captured.chunks.len(),
+                        "frame_count": captured.frames.len(),
+                        "body_sha256": captured.body_sha256,
+                    });
+                    (
+                        json!({
+                            "capture_point": "before_local_response_framing_and_protocol_decode",
+                            "capture_state": "captured",
+                            "transport": captured.transport,
+                            "http_status": captured.http_status,
+                            "content_type": captured.content_type,
+                            "content_encoding": captured.content_encoding,
+                            "received_bytes": captured.received_bytes,
+                            "retained_bytes": retained_bytes,
+                        }),
+                        captured.body,
+                        chunks,
+                        frames,
+                        outcome,
+                    )
+                },
+            );
+        let group = json!({
+            "schema_version": PROVIDER_API_TRACE_SCHEMA_VERSION,
+            "created_at_unix_ms": identity.group_created_at_unix_ms,
             "session_id": self.cache_scope_id,
-            "execution_id": execution_id,
             "model_id": self.model_id,
             "route": {
                 "provider": &self.route.provider,
@@ -707,17 +1133,22 @@ impl VulcanPublicContractAdapter {
                 "manifest_generation": self.route.manifest_generation,
                 "route_revision": self.route.route_revision,
             },
-            "api_request": {
-                "capture_point": "transport_dispatch",
-                "transport": captured_request.transport,
-                "method": captured_request.method,
-                "path": captured_request.path,
-                "resolved_url": captured_request.resolved_url,
-                "headers": headers,
-                "credential_values_redacted": true,
-                "body": captured_request.body,
-            },
-            "api_response": api_response,
+        });
+        let request = json!({
+            "schema_version": PROVIDER_API_TRACE_SCHEMA_VERSION,
+            "captured_at_unix_ms": captured_at_unix_ms,
+            "execution_id": execution_id,
+            "logical_request_id": identity.group_id.as_str(),
+            "retry_index": identity.attempt_index,
+            "turn_anchor_message_id": turn_anchor_message_id,
+            "capture_point": "transport_dispatch",
+            "transport": captured_request.transport,
+            "method": captured_request.method,
+            "path": captured_request.path,
+            "resolved_url": captured_request.resolved_url,
+            "headers": headers,
+            "credential_values_redacted": true,
+            "body": captured_request.body,
         });
         let session_directory = self.session_storage_directory.clone().ok_or_else(|| {
             provider_failure(
@@ -725,12 +1156,25 @@ impl VulcanPublicContractAdapter {
                 "Provider request tracing is enabled but the execution has no exact session storage directory.",
             )
         })?;
+        let trace_group_id = identity.group_id.clone();
+        let trace_attempt_index = identity.attempt_index;
         let trace_path = tokio::task::spawn_blocking(move || {
-            vulcan_workspace_store::workspace_store::persist_provider_request_trace(
+            vulcan_workspace_store::workspace_store::persist_provider_api_trace_attempt(
                 &session_directory,
                 session_id,
                 slot_index,
-                &trace,
+                vulcan_workspace_store::workspace_store::ProviderApiTraceAttemptArtifacts {
+                    group_sequence: identity.group_sequence,
+                    group_id: identity.group_id.as_str(),
+                    attempt_index: identity.attempt_index,
+                    group: &group,
+                    request: &request,
+                    response_meta: &response_meta,
+                    response_body: response_body.as_slice(),
+                    chunks: chunks.as_slice(),
+                    frames: frames.as_slice(),
+                    outcome: &outcome,
+                },
             )
         })
         .await
@@ -742,8 +1186,10 @@ impl VulcanPublicContractAdapter {
         })?
         .map_err(|error| provider_failure(self.provider_id(), &error))?;
         eprintln!(
-            "[provider-request-trace] session={} execution={} path={}",
+            "[provider-api-trace] session={} group={} attempt={} execution={} path={}",
             self.cache_scope_id,
+            trace_group_id,
+            trace_attempt_index,
             execution_id,
             trace_path.display()
         );
@@ -1091,6 +1537,32 @@ fn public_stream_event_is_terminal(event: &AiStreamEvent) -> bool {
     )
 }
 
+/// Classifies the host-side accumulator boundary responsible for one normalized Provider event.
+/// 对一项规范化 Provider 事件负责的宿主侧累积边界进行分类。
+///
+/// # Parameters
+/// 参数
+/// `event` is inspected before ownership moves into the public turn accumulator.
+/// `event` 在所有权移入公共回合累积器之前接受检查。
+///
+/// # Returns
+/// 返回值
+/// The stable trace stage used when applying this event fails.
+/// 返回应用该事件失败时使用的稳定追踪阶段。
+fn provider_trace_processing_stage_for_event(event: &AiStreamEvent) -> &'static str {
+    if matches!(
+        event,
+        AiStreamEvent::ToolCallStarted { .. }
+            | AiStreamEvent::ToolCallArgumentsDelta { .. }
+            | AiStreamEvent::ToolCallCompleted { .. }
+            | AiStreamEvent::ToolCallAborted { .. }
+    ) {
+        "tool_request_coordinator"
+    } else {
+        "response_projection"
+    }
+}
+
 /// Drains a failed physical Provider stream only to complete opted-in response diagnostics.
 /// 仅为完成显式启用的响应诊断而排空失败的真实 Provider 流。
 ///
@@ -1161,6 +1633,10 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
             budget,
             context_budget,
         } = request;
+        let trace_turn_anchor_message_id = controller_snapshot
+            .messages
+            .last()
+            .map(|message| message.id.clone());
         let (prepared_completion, prepared_receiver) = provider_request_durability_barrier();
         self.live_sender
             .send(Ok(ProviderStreamDelta::RequestPrepared {
@@ -1221,53 +1697,113 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
         // rejectedSecretRevision 将后续任何 401 恢复绑定到线上实际使用的精确 Token 修订版。
         let rejected_secret_revision = secret.revision();
         let execution_id = uuid::Uuid::new_v4().to_string();
+        let trace_attempt_identity = match self.claim_provider_api_trace_attempt() {
+            Ok(identity) => identity,
+            Err(error) => {
+                eprintln!(
+                    "[provider-api-trace] session={} group_claim_failed={error}",
+                    self.cache_scope_id
+                );
+                None
+            }
+        };
         // wireCaptures pair the exact dispatched request with bytes observed before local response parsing.
         // wireCaptures 将实际分派请求与本地响应解析前观察到的字节成对关联。
-        let wire_captures = if self.provider_request_trace_enabled {
+        let wire_captures = if let Some(trace_identity) = trace_attempt_identity.as_ref() {
             let (request_sender, request_receiver) = tokio::sync::oneshot::channel();
             let (response_sender, response_receiver) = tokio::sync::oneshot::channel();
+            let (processing_failure_sender, processing_failure_receiver) =
+                tokio::sync::oneshot::channel();
             let trace_adapter = self.clone();
             let trace_execution_id = execution_id.clone();
+            let trace_identity = trace_identity.clone();
+            let trace_turn_anchor_message_id = trace_turn_anchor_message_id.clone();
             tokio::spawn(async move {
-                let Ok(captured_request) = request_receiver.await else {
+                let Ok(ProviderWireRequestTraceDispatch {
+                    request: captured_request,
+                    persistence_result,
+                }) = request_receiver.await
+                else {
                     // A closed capture channel means encoding failed before an API request existed.
                     // 捕获通道关闭表示编码在 API 请求形成前失败，因此没有请求可保存。
                     return;
                 };
+                if let Err(error) = trace_adapter
+                    .persist_provider_api_trace_snapshot(
+                        trace_identity.clone(),
+                        trace_execution_id.as_str(),
+                        trace_turn_anchor_message_id.as_deref(),
+                        captured_request.clone(),
+                        ProviderApiTraceResponseState::AwaitingResponse,
+                        None,
+                    )
+                    .await
+                {
+                    let message = error.to_string();
+                    let _ = persistence_result.send(Err(message.clone()));
+                    eprintln!(
+                        "[provider-api-trace] session={} execution={} request_persist_failed={message}",
+                        trace_adapter.cache_scope_id, trace_execution_id
+                    );
+                    return;
+                }
+                if persistence_result.send(Ok(())).is_err() {
+                    return;
+                }
                 // A closed response channel remains explicit in the trace instead of discarding the request.
                 // 响应通道关闭会在追踪中显式记录，而不是丢弃请求。
-                let captured_response = response_receiver.await.ok();
+                let response_state = response_receiver.await.map_or(
+                    ProviderApiTraceResponseState::CaptureChannelClosed,
+                    ProviderApiTraceResponseState::Captured,
+                );
+                // processingFailure closes only after the public accumulator has accepted or rejected the captured response.
+                // processingFailure 仅在公共累积器接受或拒绝已捕获响应后关闭。
+                let processing_failure = processing_failure_receiver.await.ok();
                 if let Err(error) = trace_adapter
-                    .persist_complete_provider_api_trace(
+                    .persist_provider_api_trace_snapshot(
+                        trace_identity,
                         trace_execution_id.as_str(),
+                        trace_turn_anchor_message_id.as_deref(),
                         captured_request,
-                        captured_response,
+                        response_state,
+                        processing_failure,
                     )
                     .await
                 {
                     eprintln!(
-                        "[provider-request-trace] session={} execution={} failed={error}",
+                        "[provider-api-trace] session={} execution={} failed={error}",
                         trace_adapter.cache_scope_id, trace_execution_id
                     );
                 }
             });
-            Some((request_sender, response_sender))
+            Some((request_sender, response_sender, processing_failure_sender))
         } else {
             None
         };
-        let mut stream = if let Some((request_sender, response_sender)) = wire_captures {
-            self.client.execute_with_wire_api_trace_capture(
-                self.route.clone(),
-                public.clone(),
-                secret.clone(),
-                execution_id,
-                request_sender,
-                response_sender,
-            )
-        } else {
-            self.client
-                .execute(self.route.clone(), public.clone(), secret, execution_id)
-        };
+        let (mut stream, processing_failure_sender) =
+            if let Some((request_sender, response_sender, processing_failure_sender)) =
+                wire_captures
+            {
+                (
+                    self.client.execute_with_wire_api_trace_capture(
+                        self.route.clone(),
+                        public.clone(),
+                        secret.clone(),
+                        execution_id,
+                        request_sender,
+                        response_sender,
+                    ),
+                    Some(processing_failure_sender),
+                )
+            } else {
+                (
+                    self.client
+                        .execute(self.route.clone(), public.clone(), secret, execution_id),
+                    None,
+                )
+            };
+        let mut trace_processing_failure =
+            ProviderApiTraceProcessingFailureSender::new(processing_failure_sender);
         // routeFingerprint binds replay signatures to the exact resolved endpoint used by this request.
         // routeFingerprint 将重放签名绑定到本次请求使用的精确已解析端点。
         let route_fingerprint = self.route.request_url("/responses");
@@ -1304,12 +1840,19 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                     return Err(public_execution_failure(self.provider_id(), *failure.error));
                 }
             };
-            let mut event = materialize_provider_resource_event(
+            let mut event = match materialize_provider_resource_event(
                 self.provider_id(),
                 self.workspace_path.as_str(),
                 event,
             )
-            .await?;
+            .await
+            {
+                Ok(event) => event,
+                Err(error) => {
+                    trace_processing_failure.observe_failure("response_projection", &error);
+                    return Err(error);
+                }
+            };
             if let AiStreamEvent::ResponseFailed { error } = &mut event {
                 attach_execution_route_context(
                     error,
@@ -1375,11 +1918,13 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
             // terminalEvent 在显式协议终态边界关闭规范化响应，而不是继续等待传输 EOF。
             let terminal_event = public_stream_event_is_terminal(&event);
             let usage_updated = matches!(&event, AiStreamEvent::UsageUpdated { .. });
+            let processing_stage = provider_trace_processing_stage_for_event(&event);
             // applyResult is separated from `?` so trace mode can retain the rest of a failed API body.
             // applyResult 与 `?` 分离，使追踪模式可以保留失败 API 正文的剩余部分。
             let apply_result =
                 response.apply_event(self.provider_id(), &self.live_sender, sink, event);
             if let Err(error) = apply_result {
+                trace_processing_failure.observe_failure(processing_stage, &error);
                 if self.provider_request_trace_enabled {
                     drain_provider_stream_for_trace(stream);
                 }
@@ -1402,7 +1947,18 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
             }
         }
         let final_usage = response.usage.as_ref().map(public_usage_to_core);
-        let final_response = response.finish()?;
+        let finish_stage = if response.has_pending_tool_request() {
+            "tool_request_coordinator"
+        } else {
+            "response_projection"
+        };
+        let final_response = match response.finish() {
+            Ok(response) => response,
+            Err(error) => {
+                trace_processing_failure.observe_failure(finish_stage, &error);
+                return Err(error);
+            }
+        };
         let (completed_completion, completed_receiver) = provider_request_durability_barrier();
         self.live_sender
             .send(Ok(ProviderStreamDelta::RequestSucceeded {
@@ -1431,6 +1987,9 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                     ),
                 )
             })?;
+        if let Some(identity) = trace_attempt_identity.as_ref() {
+            self.complete_provider_api_trace_group(identity);
+        }
         self.credential.mark_request_succeeded();
         Ok(final_response)
     }
@@ -2158,6 +2717,19 @@ impl PublicTurnAccumulator {
             | AiStreamEvent::ResponseItemCompleted { .. } => {}
         }
         Ok(())
+    }
+
+    /// Reports whether response completion still owns an unfinished tool request.
+    /// 报告响应完成时是否仍持有未完成的工具请求。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when final response projection would fail at the tool request coordinator boundary.
+    /// 当最终响应投影会在工具请求协调边界失败时返回 `true`。
+    fn has_pending_tool_request(&self) -> bool {
+        self.replay_items
+            .iter()
+            .any(|item| matches!(item.state, ReplayAccumulatorItemState::PendingTool { .. }))
     }
 
     /// Finishes the controller response after a public terminal event.
@@ -3559,6 +4131,104 @@ mod tests {
             traced.get("x-session-token").map(String::as_str),
             Some("<redacted>")
         );
+    }
+
+    /// Verifies a fresh process allocator advances beyond generations retained by an earlier run.
+    /// 验证新进程分配器会越过更早运行已经保留的代际。
+    #[test]
+    fn provider_api_trace_group_sequence_advances_from_persisted_floor() {
+        // sequence simulates the zeroed allocator owned by a newly started process.
+        // sequence 模拟新启动进程拥有的归零分配器。
+        let sequence = AtomicU64::new(0);
+
+        synchronize_provider_api_trace_group_sequence(&sequence, 4);
+        assert_eq!(
+            reserve_provider_api_trace_group_sequence(&sequence)
+                .expect("reserve generation after persisted floor"),
+            5
+        );
+        assert_eq!(
+            reserve_provider_api_trace_group_sequence(&sequence)
+                .expect("reserve following process-local generation"),
+            6
+        );
+
+        synchronize_provider_api_trace_group_sequence(&sequence, 3);
+        assert_eq!(
+            reserve_provider_api_trace_group_sequence(&sequence)
+                .expect("a lower persisted floor must not move the allocator backward"),
+            7
+        );
+        synchronize_provider_api_trace_group_sequence(&sequence, 9);
+        assert_eq!(
+            reserve_provider_api_trace_group_sequence(&sequence)
+                .expect("a higher persisted floor must advance the allocator"),
+            10
+        );
+    }
+
+    /// Verifies host-side failures fill the trace stage only when no lower transport failure exists.
+    /// 验证仅当不存在更底层传输失败时，宿主侧失败才会补充追踪阶段。
+    #[test]
+    fn provider_api_trace_failure_selection_preserves_the_earliest_boundary() {
+        let processing_failure = ProviderApiTraceProcessingFailure {
+            stage: String::from("tool_request_coordinator"),
+            message: String::from("tool stream ordering failed"),
+        };
+
+        let (stage, message, local_processing_failed) =
+            select_provider_api_trace_failure(None, None, Some(&processing_failure));
+        assert_eq!(stage.as_deref(), Some("tool_request_coordinator"));
+        assert_eq!(message.as_deref(), Some("tool stream ordering failed"));
+        assert!(local_processing_failed);
+
+        let (stage, message, local_processing_failed) = select_provider_api_trace_failure(
+            Some("protocol_decoder"),
+            Some("invalid frame"),
+            Some(&processing_failure),
+        );
+        assert_eq!(stage.as_deref(), Some("protocol_decoder"));
+        assert_eq!(message.as_deref(), Some("invalid frame"));
+        assert!(!local_processing_failed);
+    }
+
+    /// Verifies tool construction events are attributed to the request coordinator trace stage.
+    /// 验证工具构造事件会归属到工具请求协调器追踪阶段。
+    #[test]
+    fn provider_api_trace_classifies_tool_request_coordinator_events() {
+        let event = AiStreamEvent::ToolCallStarted {
+            item_id: String::from("item-1"),
+            call_id: String::from("call-1"),
+            tool_name: String::from("file_edit"),
+            index: 0,
+        };
+
+        assert_eq!(
+            provider_trace_processing_stage_for_event(&event),
+            "tool_request_coordinator"
+        );
+        assert_eq!(
+            provider_trace_processing_stage_for_event(&AiStreamEvent::ResponseCompleted),
+            "response_projection"
+        );
+    }
+
+    /// Verifies the detached trace writer receives one controlled host-side processing failure.
+    /// 验证独立追踪写入器会收到一项受控的宿主侧处理失败。
+    #[tokio::test]
+    async fn provider_api_trace_processing_failure_sender_publishes_once() {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let mut publisher = ProviderApiTraceProcessingFailureSender::new(Some(sender));
+        let error = provider_failure("provider", "tool stream ordering failed");
+
+        publisher.observe_failure("tool_request_coordinator", &error);
+        publisher.observe_failure("response_projection", &error);
+
+        let failure = receiver
+            .await
+            .expect("the first processing failure should be published");
+        assert_eq!(failure.stage, "tool_request_coordinator");
+        assert!(failure.message.contains("tool stream ordering failed"));
     }
 
     /// Verifies response trace encoding stays readable unless JSON escaping would be larger.

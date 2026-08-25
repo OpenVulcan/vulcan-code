@@ -31,7 +31,7 @@ import {
 import {
   hydrateAskQuestionPresentation,
   hydrateCommandExecutionPresentation,
-  hydrateFileAccessPresentation,
+  hydrateFileChangePresentation,
   hydrateLuaExecutionPresentation,
   hydrateMarkdownToolPresentation,
   hydrateSubagentOrchestrationPresentation,
@@ -2258,7 +2258,7 @@ function FileChangePresentationCard(props: {
         if (cancelled) {
           return;
         }
-        const nextPresentation = hydrateFileAccessPresentation(presentation, payload);
+        const nextPresentation = hydrateFileChangePresentation(presentation, payload);
         fileChangePresentationDetailCache.set(detailCacheKey, nextPresentation);
         setHydratedPresentation(nextPresentation);
       })
@@ -2417,7 +2417,7 @@ function FileChangeSummaryButton(props: {
       )}
       disabled={!props.interactive}
       onClick={props.onToggle}
-      title={props.file.readRange ? `${props.file.path}\n${props.file.readRange}` : props.file.path}
+      title={props.file.path}
       type="button"
     >
       {showOperationIcon ? <FileChangeOperationIcon accessAction={props.presentation.accessAction} operation={props.file.operation} /> : null}
@@ -2425,13 +2425,39 @@ function FileChangeSummaryButton(props: {
       <span className="file-change-path">
         <span className="file-change-icon-stack"><FileTypeIcon icon={props.file.icon} /></span>
         <span className="file-change-path-text">{props.file.displayPath}</span>
-        {props.file.readRange ? <span className="file-change-path-range">{props.file.readRange}</span> : null}
+        <FileTextFormatBadge file={props.file} t={props.t} />
         <ToolRequestInlineProgress progress={props.requestProgress ?? null} />
         <FileChangeCounts added={props.file.added} failed={props.presentation.state === "failed"} removed={props.file.removed} />
       </span>
       {props.interactive ? (props.expanded ? <ChevronDown className="tool-presentation-toggle file-change-toggle" size={15} /> : <ChevronRight className="tool-presentation-toggle file-change-toggle" size={15} />) : <span />}
     </button>
   );
+}
+
+// FileTextFormatBadge renders encoding and line-ending facts without duplicating gutter ranges.
+// FileTextFormatBadge 渲染编码与换行事实，且不重复代码 gutter 的范围。
+function FileTextFormatBadge(props: {
+  // File row whose native text metadata may be available.
+  // 可能包含原生文本元数据的文件行。
+  file: FileChangeFilePresentation;
+  // Translates stable UI copy keys.
+  // 翻译稳定 UI 文案键。
+  t: (key: TranslationKey) => string;
+}) {
+  const format = props.file.textFormat;
+  if (!format) {
+    return null;
+  }
+  const tokens = [
+    format.encoding,
+    format.mixedLineEndings
+      ? props.t("toolPresentation.file.mixedLineEndings")
+      : format.lineEnding,
+    format.bom ? "BOM" : null,
+  ].filter((value): value is string => Boolean(value));
+  return tokens.length
+    ? <span className="file-change-text-format">{tokens.join(" · ")}</span>
+    : null;
 }
 
 // FileChangeOperationIcon renders the leftmost operation icon for file writes and edits.

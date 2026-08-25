@@ -55,7 +55,7 @@ impl VulcanToolsManager {
         execution_mode_label: &str,
     ) -> Result<VulcanToolInvocationResult, String> {
         let mode = VulcanToolMode::from_execution_mode_label(execution_mode_label);
-        if matches!(mode, VulcanToolMode::Plan) && !tool_is_allowed_in_plan(tool) {
+        if matches!(mode, VulcanToolMode::Plan) && !tool_is_allowed_in_plan_with_args(tool, &args) {
             return Ok(VulcanToolInvocationResult::from_model_output(
                 Value::String(String::from(
                     "Plan Mode is active. This tool call is not allowed because it may mutate workspace, repository, Git, or external state. Continue by refining the plan and wait for the user to leave Plan Mode before implementing changes.",
@@ -67,7 +67,17 @@ impl VulcanToolsManager {
 }
 /// Returns whether one resolved tool may execute while Plan mode is active.
 /// 返回单个已解析工具在计划模式激活时是否允许执行。
+#[cfg(test)]
 pub(super) fn tool_is_allowed_in_plan(tool: &ResolvedToolDefinition) -> bool {
+    tool_is_allowed_in_plan_with_args(tool, &Value::Null)
+}
+
+/// Returns whether one resolved tool and its exact arguments may execute in Plan mode.
+/// 返回单个已解析工具及其精确参数是否允许在计划模式中执行。
+pub(super) fn tool_is_allowed_in_plan_with_args(
+    tool: &ResolvedToolDefinition,
+    args: &Value,
+) -> bool {
     match &tool.plan_policy {
         VulcanPlanToolPolicy::Hidden => false,
         VulcanPlanToolPolicy::Visible => true,
@@ -77,6 +87,13 @@ pub(super) fn tool_is_allowed_in_plan(tool: &ResolvedToolDefinition) -> bool {
                 .iter()
                 .any(|keyword| text.contains(keyword))
         }
+        VulcanPlanToolPolicy::StringArgumentAllowlist {
+            field,
+            allowed_values,
+        } => args
+            .get(field)
+            .and_then(Value::as_str)
+            .is_some_and(|value| allowed_values.iter().any(|allowed| allowed == value)),
     }
 }
 

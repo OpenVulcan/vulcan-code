@@ -757,7 +757,7 @@ const handleGetUserPromptEditDraft = React.useCallback(async (
   try {
     return await getUserPromptEditDraft(conversationId, messageId);
   } catch (nextError) {
-    toast.error(translate("conversation.action.editPromptFailed"));
+    toast.error(formatUserPromptEditFailure(translate, nextError));
     return null;
   }
 }, [translate]);
@@ -772,41 +772,43 @@ const handleSubmitUserPromptEdit = React.useCallback(async (request: {
 }): Promise<boolean> => {
   try {
     const ack = await submitUserPromptEdit(request);
-    if (ack && selectedConversationIdRef.current === request.conversationId) {
+    if (!ack) {
+      toast.error(translate("conversation.action.editPromptFailed"));
+      return false;
+    }
+    if (selectedConversationIdRef.current === request.conversationId) {
       setSelectedConversationId(ack.conversationId);
     }
-    if (ack) {
-      // The first-open hydration request may still carry the pre-edit transcript and must never cross this commit boundary.
-      // 首次打开时的水合请求可能仍携带编辑前转录，绝不能跨越本次提交边界。
-      invalidateConversationHydration(request.conversationId);
-      try {
-        // authoritativeSnapshot closes the destructive-edit transaction even if an intermediate
-        // rollback patch was delayed behind the replacement prompt's live stream.
-        // authoritativeSnapshot 在中间回滚补丁晚于替代提示词实时流时，仍会闭合破坏性编辑事务。
-        const authoritativeSnapshot = await loadWorkbenchSnapshot();
-        // authoritativeConversationMessages is the exact post-edit window and must not inherit the removed streaming tail.
-        // authoritativeConversationMessages 是编辑后的精确窗口，不得继承已删除的流式尾部。
-        const authoritativeConversationMessages = authoritativeSnapshot.messages.filter(
-          (message) => message.conversationId === request.conversationId,
+    // The first-open hydration request may still carry the pre-edit transcript and must never cross this commit boundary.
+    // 首次打开时的水合请求可能仍携带编辑前转录，绝不能跨越本次提交边界。
+    invalidateConversationHydration(request.conversationId);
+    try {
+      // authoritativeSnapshot closes the destructive-edit transaction even if an intermediate
+      // rollback patch was delayed behind the replacement prompt's live stream.
+      // authoritativeSnapshot 在中间回滚补丁晚于替代提示词实时流时，仍会闭合破坏性编辑事务。
+      const authoritativeSnapshot = await loadWorkbenchSnapshot();
+      // authoritativeConversationMessages is the exact post-edit window and must not inherit the removed streaming tail.
+      // authoritativeConversationMessages 是编辑后的精确窗口，不得继承已删除的流式尾部。
+      const authoritativeConversationMessages = authoritativeSnapshot.messages.filter(
+        (message) => message.conversationId === request.conversationId,
+      );
+      setWorkbenchState((current) => {
+        const mergedWorkbench = mergeWorkbenchWithLocalCaches(current, authoritativeSnapshot);
+        return mergeConversationMessagesWithSubagentSurfaceMessageCache(
+          mergedWorkbench,
+          request.conversationId,
+          authoritativeConversationMessages,
+          subagentSurfaceMessageCacheRef.current,
         );
-        setWorkbenchState((current) => {
-          const mergedWorkbench = mergeWorkbenchWithLocalCaches(current, authoritativeSnapshot);
-          return mergeConversationMessagesWithSubagentSurfaceMessageCache(
-            mergedWorkbench,
-            request.conversationId,
-            authoritativeConversationMessages,
-            subagentSurfaceMessageCacheRef.current,
-          );
-        });
-      } catch (refreshError) {
-        // The edit already committed; live deltas and gap recovery remain authoritative fallbacks.
-        // 编辑已经提交；实时增量与缺口恢复仍是权威回退路径。
-        console.warn("Failed to refresh the workbench after a committed prompt edit.", refreshError);
-      }
+      });
+    } catch (refreshError) {
+      // The edit already committed; live deltas and gap recovery remain authoritative fallbacks.
+      // 编辑已经提交；实时增量与缺口恢复仍是权威回退路径。
+      console.warn("Failed to refresh the workbench after a committed prompt edit.", refreshError);
     }
     return true;
   } catch (nextError) {
-    toast.error(translate("conversation.action.editPromptFailed"));
+    toast.error(formatUserPromptEditFailure(translate, nextError));
     return false;
   }
 }, [
@@ -966,4 +968,15 @@ function formatConversationActionTranslation(
     (text, [name, value]) => text.replaceAll(`{${name}}`, value),
     translate(key),
   );
+}
+
+// formatUserPromptEditFailure retains the backend rejection reason after the localized action label.
+// formatUserPromptEditFailure 在本地化动作标签后保留后端拒绝原因。
+function formatUserPromptEditFailure(
+  translate: (key: TranslationKey) => string,
+  error: unknown,
+): string {
+  const actionLabel = translate("conversation.action.editPromptFailed");
+  const detail = error instanceof Error ? error.message.trim() : String(error).trim();
+  return detail ? `${actionLabel}: ${detail}` : actionLabel;
 }

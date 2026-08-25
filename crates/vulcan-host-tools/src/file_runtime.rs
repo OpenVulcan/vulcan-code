@@ -1,17 +1,25 @@
 //! Shared Rust file-reading and file-editing runtime used by native AI tools.
 //! 供原生 AI 工具使用的共享 Rust 文件读写运行时。
 
+use crate::text_document::{
+    LineEnding, TextDocument, TextReplacementRange, parse_document_lines,
+    rewrite_replacement_line_endings,
+};
+use crate::text_encoding::{
+    DecodedText, TextBom, TextEncoding, TextEncodingSource, decode_text, encode_text,
+    parse_encoding_label,
+};
 use regex::Regex;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
-use std::fs::{self, File, Metadata, OpenOptions};
+use std::fs::{self, File, Metadata};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::UNIX_EPOCH;
 use tokio::task;
-use uuid::Uuid;
 
 /// Maximum number of read/list/search targets accepted in one request.
 /// 单次请求允许处理的读取、列表或搜索目标最大数量。
@@ -42,7 +50,7 @@ pub const MAX_EDIT_LINES_PER_ARRAY: usize = 16_384;
 pub const MAX_EDIT_TOTAL_LINES: usize = 65_536;
 
 /// Maximum ordered anchors accepted by one replacement operation.
-/// 鍗曚釜 replace 鎿嶄綔鍏佽鎺ュ彈鐨勬湁搴忛敋鐐规渶澶ф暟閲忋€?
+/// 单个 replace 操作允许接受的有序锚点最大数量。
 pub const MAX_EDIT_ANCHORS: usize = 8;
 
 /// Maximum UTF-8 file size processed by the first native text runtime.
@@ -63,22 +71,22 @@ pub const MAX_SEARCH_FILES: usize = 50_000;
 
 /// Maximum list entries returned by one list target.
 /// 单个 list 目标最多返回的条目数量。
-pub const MAX_LIST_ENTRIES: usize = 5_000;
+pub const MAX_LIST_ENTRIES: usize = 1_000;
 
 /// Maximum UTF-8 bytes accepted in one search query or pattern.
 /// 单个搜索查询或文件名模式允许的最大 UTF-8 字节数。
 pub const MAX_SEARCH_QUERY_BYTES: usize = 4_096;
 
 /// Maximum serialized line payload returned by one read target.
-/// 鍗曚釜 read 鐩爣杩斿洖鐨勮姝ｆ枃搴忓垪鍖栧瓧鑺傛渶澶уぇ灏忋€?
+/// 单个 read 目标返回的行正文序列化字节最大大小。
 const MAX_READ_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 
 /// Maximum serialized entry payload returned by one list target.
-/// 鍗曚釜 list 鐩爣杩斿洖鐨勬枃浠舵潯鐩簭鍒楀寲瀛楄妭鏈€澶уぇ灏忋€?
-const MAX_LIST_RESPONSE_BYTES: usize = 1 * 1024 * 1024;
+/// 单个 list 目标返回的文件条目序列化字节最大大小。
+const MAX_LIST_RESPONSE_BYTES: usize = 1024 * 1024;
 
 /// Maximum serialized match payload returned by one search target.
-/// 鍗曚釜 search 鐩爣杩斿洖鐨勬悳绱㈠懡涓簭鍒楀寲瀛楄妭鏈€澶уぇ灏忋€?
+/// 单个 search 目标返回的搜索命中序列化字节最大大小。
 const MAX_SEARCH_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 
 /// Maximum inline lifecycle content retained in a change-set row.
@@ -92,6 +100,10 @@ const MAX_ERROR_CANDIDATE_RANGES: usize = 32;
 /// Maximum operation contexts retained in one structured edit error.
 /// 单条结构化编辑错误最多保留的操作上下文数量。
 const MAX_ERROR_OPERATION_CONTEXTS: usize = MAX_EDIT_OPERATIONS;
+
+/// Process-wide weak registry for deterministic per-path mutation locks.
+/// 用于确定性逐路径变更锁的进程级弱引用注册表。
+static FILE_RESOURCE_LOCKS: OnceLock<Mutex<HashMap<String, Weak<Mutex<()>>>>> = OnceLock::new();
 
 /// One structured error returned by the shared file runtime.
 /// 共享文件运行时返回的一条结构化错误。
@@ -132,6 +144,32 @@ impl FileToolError {
         let mut object = Map::new();
         object.insert(String::from("code"), Value::String(self.code.clone()));
         object.insert(String::from("message"), Value::String(self.message.clone()));
+        let detail_object = self.details.as_object();
+        let requires_read = detail_object
+            .and_then(|details| {
+                details
+                    .get("requires_read")
+                    .or_else(|| details.get("requires_reread"))
+            })
+            .and_then(Value::as_bool)
+            .unwrap_or_else(|| edit_error_requires_reread(self.code.as_str()));
+        let retryable = detail_object
+            .and_then(|details| details.get("retryable"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let hint = detail_object
+            .and_then(|details| details.get("hint").or_else(|| details.get("recovery_hint")))
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| edit_error_recovery_hint(self.code.as_str()));
+        object.insert(String::from("requires_read"), Value::Bool(requires_read));
+        object.insert(String::from("retryable"), Value::Bool(retryable));
+        object.insert(String::from("hint"), Value::String(hint.to_string()));
+        if let Some(path) = detail_object
+            .and_then(|details| details.get("path"))
+            .filter(|path| !path.is_null())
+        {
+            object.insert(String::from("path"), path.clone());
+        }
         if !self.details.is_null() {
             object.insert(String::from("details"), self.details.clone());
         }
@@ -183,9 +221,35 @@ pub async fn execute_file_edit(
         .map_err(|error| FileToolError::new("execution_failed", error.to_string()))?
 }
 
+/// Executes one Apply Patch text request on a blocking worker.
+/// 在受控阻塞任务中执行一次 Apply Patch 文本请求。
+pub async fn execute_apply_patch(
+    workspace_root: PathBuf,
+    patch: String,
+) -> Result<FileToolResponse, FileToolError> {
+    task::spawn_blocking(move || execute_apply_patch_sync(&workspace_root, &patch))
+        .await
+        .map_err(|error| FileToolError::new("execution_failed", error.to_string()))?
+}
+
 /// Executes the read-only action synchronously after arguments have crossed the async boundary.
 /// 参数跨过异步边界后，同步执行只读动作。
 fn execute_file_sync(
+    workspace_root: &Path,
+    arguments: &Value,
+) -> Result<FileToolResponse, FileToolError> {
+    if arguments
+        .as_object()
+        .is_some_and(|object| object.contains_key("targets"))
+    {
+        return execute_legacy_file_sync(workspace_root, arguments);
+    }
+    execute_native_file_sync(workspace_root, arguments)
+}
+
+/// Executes the hidden historical multi-target contract for persisted calls.
+/// 为持久化调用执行隐藏的历史多目标契约。
+fn execute_legacy_file_sync(
     workspace_root: &Path,
     arguments: &Value,
 ) -> Result<FileToolResponse, FileToolError> {
@@ -234,6 +298,713 @@ fn execute_file_sync(
         }),
         change_set: None,
     })
+}
+
+/// Executes one public single-path file action with strict action-specific fields.
+/// 使用严格的动作专属字段执行一个公开单路径文件动作。
+fn execute_native_file_sync(
+    workspace_root: &Path,
+    arguments: &Value,
+) -> Result<FileToolResponse, FileToolError> {
+    let object = arguments.as_object().ok_or_else(|| {
+        FileToolError::new("invalid_arguments", "The file arguments must be an object.")
+    })?;
+    let action = required_string(object, "action")?;
+    validate_native_file_fields(object, &action)?;
+    let raw_path = required_string(object, "path")?;
+    let path = resolve_path(workspace_root, &raw_path)?;
+    let mut mutation_paths = Vec::new();
+    if matches!(action.as_str(), "write" | "delete" | "move") {
+        mutation_paths.push(path.clone());
+        if action == "move" {
+            mutation_paths.push(resolve_path(
+                workspace_root,
+                &required_string(object, "destination")?,
+            )?);
+        }
+    }
+    let resource_locks = acquire_resource_locks(&mutation_paths)?;
+    let _resource_guards = lock_resource_set(&resource_locks)?;
+    match action.as_str() {
+        "read" => native_read_file(&path, &raw_path, object),
+        "list" => native_list_files(&path, &raw_path, object),
+        "stat" => {
+            let mut model_output = stat_target(&path, &display_path(&path))?;
+            if let Some(result) = model_output.as_object_mut() {
+                result.insert(String::from("schema"), json!("vulcan.file_access.v2"));
+                result.insert(String::from("action"), json!("stat"));
+                result.insert(String::from("request_path"), json!(raw_path));
+                result.insert(String::from("resolved_path"), json!(display_path(&path)));
+                result.insert(String::from("resource_id"), json!("resource-1"));
+                result.insert(String::from("language"), json!(language_for_path(&path)));
+            }
+            Ok(FileToolResponse {
+                model_output,
+                change_set: None,
+            })
+        }
+        "write" => native_write_file(&path, &raw_path, object),
+        "delete" => native_delete_file(&path, &raw_path),
+        "move" => native_move_file(workspace_root, &path, &raw_path, object),
+        _ => Err(FileToolError::new(
+            "invalid_arguments",
+            "The action must be one of read, list, stat, write, delete, or move.",
+        )),
+    }
+}
+
+/// Rejects every public file field that does not belong to the selected action.
+/// 拒绝每个不属于所选动作的公开 file 字段。
+fn validate_native_file_fields(
+    object: &Map<String, Value>,
+    action: &str,
+) -> Result<(), FileToolError> {
+    let allowed = match action {
+        "read" => ["action", "path", "start_line", "end_line", "encoding"].as_slice(),
+        "list" => ["action", "path", "recursive", "glob", "limit"].as_slice(),
+        "stat" | "delete" => ["action", "path"].as_slice(),
+        "write" => [
+            "action",
+            "path",
+            "content",
+            "encoding",
+            "bom",
+            "line_ending",
+        ]
+        .as_slice(),
+        "move" => ["action", "path", "destination"].as_slice(),
+        _ => {
+            return Err(FileToolError::new(
+                "invalid_arguments",
+                "The action must be one of read, list, stat, write, delete, or move.",
+            ));
+        }
+    };
+    validate_allowed_fields(object, allowed, "file request")
+}
+
+/// Reads one decoded range without embedding textual line-number prefixes.
+/// 读取一段已解码范围且不嵌入文本行号前缀。
+fn native_read_file(
+    path: &Path,
+    request_path: &str,
+    object: &Map<String, Value>,
+) -> Result<FileToolResponse, FileToolError> {
+    let encoding = optional_string(object, "encoding")?;
+    let snapshot = read_snapshot_with_encoding(path, encoding.as_deref())?;
+    let start_line = object
+        .get("start_line")
+        .map(|_| required_positive_usize(object, "start_line"))
+        .transpose()?
+        .unwrap_or(1);
+    let requested_end = object
+        .get("end_line")
+        .map(|_| required_positive_usize(object, "end_line"))
+        .transpose()?;
+    if requested_end.is_some_and(|end_line| end_line < start_line) {
+        return Err(FileToolError::new(
+            "invalid_arguments",
+            "end_line must be greater than or equal to start_line.",
+        ));
+    }
+    let maximum_end = start_line.saturating_add(MAX_READ_LINES.saturating_sub(1));
+    if requested_end.is_some_and(|end_line| end_line > maximum_end) {
+        return Err(FileToolError::new(
+            "invalid_arguments",
+            format!("A read call may return at most {MAX_READ_LINES} logical lines."),
+        ));
+    }
+    let start_index = start_line
+        .saturating_sub(1)
+        .min(snapshot.document.lines.len());
+    let desired_end_index = requested_end
+        .unwrap_or(maximum_end)
+        .min(snapshot.document.lines.len());
+    let full_output = native_read_model_output(
+        path,
+        request_path,
+        &snapshot,
+        NativeReadRange {
+            requested_start_line: start_line,
+            requested_end_line: requested_end,
+            start_index,
+            end_index: desired_end_index,
+            size_truncated: false,
+        },
+    );
+    let model_output = if serialized_value_bytes(&full_output) <= MAX_READ_RESPONSE_BYTES {
+        full_output
+    } else {
+        let metadata_only = native_read_model_output(
+            path,
+            request_path,
+            &snapshot,
+            NativeReadRange {
+                requested_start_line: start_line,
+                requested_end_line: requested_end,
+                start_index,
+                end_index: start_index,
+                size_truncated: true,
+            },
+        );
+        if serialized_value_bytes(&metadata_only) > MAX_READ_RESPONSE_BYTES {
+            return Err(FileToolError::new(
+                "output_limit_exceeded",
+                "The file read metadata exceeds the native response size limit.",
+            ));
+        }
+
+        // Serialized payload size grows monotonically as complete lines are appended, so a binary
+        // search finds the largest safe contiguous range without repeatedly rebuilding megabytes.
+        // 完整行持续追加时序列化载荷大小单调增长，因此使用二分搜索即可找到最大安全连续范围，
+        // 避免反复重建数 MB 数据。
+        let mut fitting_end = start_index;
+        let mut overflowing_end = desired_end_index;
+        while fitting_end.saturating_add(1) < overflowing_end {
+            let candidate_end = fitting_end + (overflowing_end - fitting_end) / 2;
+            let candidate = native_read_model_output(
+                path,
+                request_path,
+                &snapshot,
+                NativeReadRange {
+                    requested_start_line: start_line,
+                    requested_end_line: requested_end,
+                    start_index,
+                    end_index: candidate_end,
+                    size_truncated: true,
+                },
+            );
+            if serialized_value_bytes(&candidate) <= MAX_READ_RESPONSE_BYTES {
+                fitting_end = candidate_end;
+            } else {
+                overflowing_end = candidate_end;
+            }
+        }
+        if fitting_end == start_index && desired_end_index > start_index {
+            return Err(FileToolError::new(
+                "output_limit_exceeded",
+                format!(
+                    "Logical line {start_line} cannot fit inside the native read response size limit."
+                ),
+            ));
+        }
+        native_read_model_output(
+            path,
+            request_path,
+            &snapshot,
+            NativeReadRange {
+                requested_start_line: start_line,
+                requested_end_line: requested_end,
+                start_index,
+                end_index: fitting_end,
+                size_truncated: true,
+            },
+        )
+    };
+    Ok(FileToolResponse {
+        model_output,
+        change_set: None,
+    })
+}
+
+/// Groups one requested and returned native read range with its size-limit state.
+/// 将原生读取的请求范围、返回范围与大小限制状态组合在一起。
+#[derive(Debug, Clone, Copy)]
+struct NativeReadRange {
+    /// One-based first line requested by the model.
+    /// 模型请求的一基起始行。
+    requested_start_line: usize,
+    /// Optional one-based inclusive final line requested by the model.
+    /// 模型请求的可选一基闭区间结束行。
+    requested_end_line: Option<usize>,
+    /// Zero-based inclusive first selected line index.
+    /// 零基闭区间起始选中行索引。
+    start_index: usize,
+    /// Zero-based exclusive final selected line index.
+    /// 零基开区间结束选中行索引。
+    end_index: usize,
+    /// Whether response-size limiting shortened the returned range.
+    /// 响应大小限制是否缩短了返回范围。
+    size_truncated: bool,
+}
+
+/// Builds one native read payload for an already bounded contiguous line range.
+/// 为一个已经有界的连续行范围构建原生读取载荷。
+fn native_read_model_output(
+    path: &Path,
+    request_path: &str,
+    snapshot: &TextSnapshot,
+    range: NativeReadRange,
+) -> Value {
+    let selected = &snapshot.document.lines[range.start_index..range.end_index];
+    let content = selected
+        .iter()
+        .map(|line| {
+            let mut rendered = line.content.clone();
+            if let Some(ending) = line.ending {
+                rendered.push_str(ending.as_str());
+            }
+            rendered
+        })
+        .collect::<String>();
+    let returned_start_line = range.start_index.saturating_add(1);
+    let returned_end_line = range.start_index.saturating_add(selected.len());
+    let range_truncated = returned_end_line < snapshot.document.lines.len()
+        && range
+            .requested_end_line
+            .is_none_or(|end_line| returned_end_line < end_line);
+    let truncated = range.size_truncated || range_truncated;
+    let lines = selected
+        .iter()
+        .enumerate()
+        .map(|(index, line)| {
+            json!({
+                "line_number": range.start_index + index + 1,
+                "content": line.content,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "ok": true,
+        "schema": "vulcan.file_access.v2",
+        "action": "read",
+        "path": display_path(path),
+        "request_path": request_path,
+        "resolved_path": display_path(path),
+        "resource_id": "resource-1",
+        "language": language_for_path(path),
+        "version": snapshot.version,
+        "encoding": snapshot.document.encoding.label(),
+        "encoding_source": snapshot.document.encoding_source.as_str(),
+        "encoding_certain": snapshot.document.encoding_certain,
+        "bom": snapshot.document.bom.is_present(),
+        "line_ending": snapshot.document.line_ending_label(),
+        "preferred_line_ending": snapshot.document.preferred_line_ending.label(),
+        "mixed_line_endings": snapshot.document.mixed_line_endings,
+        "final_newline": snapshot.document.final_newline(),
+        "line_count": snapshot.document.lines.len(),
+        "start_line": returned_start_line,
+        "end_line": returned_end_line,
+        "requested_range": {
+            "start_line": range.requested_start_line,
+            "end_line": range.requested_end_line,
+        },
+        "actual_range": {
+            "start_line": returned_start_line,
+            "end_line": returned_end_line,
+        },
+        "returned_line_count": selected.len(),
+        "truncated": truncated,
+        "next_start_line": truncated.then_some(returned_end_line.saturating_add(1)),
+        "content": content,
+        "lines": lines,
+        "segments": [{
+            "start_line": returned_start_line,
+            "end_line": returned_end_line,
+            "content": content,
+        }],
+    })
+}
+
+/// Lists one directory through the existing bounded traversal implementation.
+/// 通过现有有界遍历实现列出一个目录。
+fn native_list_files(
+    path: &Path,
+    request_path: &str,
+    object: &Map<String, Value>,
+) -> Result<FileToolResponse, FileToolError> {
+    let recursive = optional_bool(object, "recursive", false)?;
+    let limit = optional_limit(object, "limit", 200, 1, MAX_LIST_ENTRIES)?;
+    let mut request = Map::new();
+    request.insert(String::from("recursive"), Value::Bool(recursive));
+    request.insert(String::from("include_ignored"), Value::Bool(false));
+    request.insert(String::from("limit"), json!(limit));
+    if let Some(glob) = optional_string(object, "glob")? {
+        request.insert(String::from("pattern"), Value::String(glob));
+    }
+    let mut model_output = list_target(path, &display_path(path), &request)?;
+    if let Some(result) = model_output.as_object_mut() {
+        result.insert(String::from("schema"), json!("vulcan.file_access.v2"));
+        result.insert(String::from("action"), json!("list"));
+        result.insert(String::from("request_path"), json!(request_path));
+        result.insert(String::from("resolved_path"), json!(display_path(path)));
+        result.insert(String::from("resource_id"), json!("resource-1"));
+    }
+    Ok(FileToolResponse {
+        model_output,
+        change_set: None,
+    })
+}
+
+/// Replaces or creates one complete text file through the shared transaction engine.
+/// 通过共享事务引擎替换或创建一份完整文本文件。
+fn native_write_file(
+    path: &Path,
+    request_path: &str,
+    object: &Map<String, Value>,
+) -> Result<FileToolResponse, FileToolError> {
+    let content = required_text(object, "content")?;
+    let requested_encoding = optional_string(object, "encoding")?;
+    let bom_policy = optional_string(object, "bom")?.unwrap_or_else(|| String::from("preserve"));
+    let line_ending_policy =
+        optional_string(object, "line_ending")?.unwrap_or_else(|| String::from("preserve"));
+    if !matches!(bom_policy.as_str(), "preserve" | "present" | "absent") {
+        return Err(FileToolError::new(
+            "invalid_arguments",
+            "bom must be preserve, present, or absent.",
+        ));
+    }
+    if line_ending_policy != "preserve" && LineEnding::parse(&line_ending_policy).is_none() {
+        return Err(FileToolError::new(
+            "invalid_arguments",
+            "line_ending must be preserve, lf, crlf, cr, or lfcr.",
+        ));
+    }
+    validate_parent_directory(path)?;
+    let existing = if path_exists_including_symlink(path) {
+        // An explicit write encoding confirms an ambiguous source only after automatic detection
+        // fails; otherwise the detected source remains authoritative so true conversion is possible.
+        // 仅在自动检测失败后，显式写入编码才确认歧义源格式；否则继续以检测到的源格式为准，
+        // 从而支持真正的编码转换。
+        let snapshot = match read_snapshot(path) {
+            Ok(snapshot) => snapshot,
+            Err(error) if error.code == "encoding_ambiguous" && requested_encoding.is_some() => {
+                read_snapshot_with_encoding(path, requested_encoding.as_deref())?
+            }
+            Err(error) => return Err(error),
+        };
+        Some(snapshot)
+    } else {
+        None
+    };
+    let encoding = match (requested_encoding.as_deref(), existing.as_ref()) {
+        (Some(label), _) => parse_encoding_label(label).map_err(codec_error)?,
+        (None, Some(snapshot)) => snapshot.document.encoding,
+        (None, None) => TextEncoding::Utf8,
+    };
+    let existing_bom = existing
+        .as_ref()
+        .map(|snapshot| snapshot.document.bom)
+        .unwrap_or(TextBom::None);
+    let bom = match bom_policy.as_str() {
+        "preserve" if existing_bom.is_present() => default_bom_for_encoding(encoding)?,
+        "preserve" => TextBom::None,
+        "present" => default_bom_for_encoding(encoding)?,
+        "absent" => TextBom::None,
+        _ => TextBom::None,
+    };
+    let normalized_content = match LineEnding::parse(&line_ending_policy) {
+        Some(ending) => crate::text_document::rewrite_line_endings(&content, ending),
+        None if existing.is_some() => crate::text_document::rewrite_line_endings(
+            &content,
+            existing
+                .as_ref()
+                .map(|snapshot| snapshot.document.preferred_line_ending)
+                .unwrap_or(LineEnding::Lf),
+        ),
+        None => crate::text_document::rewrite_line_endings(&content, LineEnding::Lf),
+    };
+    let after_bytes = encode_text(&normalized_content, encoding, bom).map_err(codec_error)?;
+    if existing
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.bytes == after_bytes)
+    {
+        return Err(FileToolError::new(
+            "no_change",
+            "The write content is byte-identical to the existing file.",
+        ));
+    }
+    let change_kind = if existing.is_some() {
+        "modify"
+    } else {
+        "create"
+    };
+    let before_lines = existing
+        .as_ref()
+        .map(|snapshot| snapshot.lines.clone())
+        .unwrap_or_default();
+    let after_document = TextDocument::from_decoded(DecodedText {
+        text: normalized_content,
+        encoding,
+        bom,
+        source: TextEncodingSource::Explicit,
+        certain: true,
+    });
+    let after_lines = after_document.logical_lines();
+    let file_payload = whole_file_payload(path, change_kind, &before_lines, &after_lines);
+    let prepared = PreparedChange {
+        change_kind: String::from(change_kind),
+        source_path: path.to_path_buf(),
+        destination_path: None,
+        original_version: existing
+            .as_ref()
+            .map(|snapshot| snapshot.version.clone())
+            .unwrap_or_default(),
+        before_bytes: existing.as_ref().map(|snapshot| snapshot.bytes.clone()),
+        original_permissions: existing
+            .as_ref()
+            .map(|snapshot| snapshot.permissions.clone()),
+        after_bytes: Some(after_bytes),
+        file_payload,
+        operation_results: vec![json!({
+            "operation_id": "file-0",
+            "operation_index": 0,
+            "resource_id": "resource-1",
+            "request_path": request_path,
+            "status": "applied",
+            "original_range": if before_lines.is_empty() { Value::Null } else { json!({"start_line": 1, "line_count": before_lines.len()}) },
+            "final_range": {"start_line": 1, "line_count": after_lines.len()},
+        })],
+    };
+    verify_preconditions(std::slice::from_ref(&prepared))?;
+    commit_changes(std::slice::from_ref(&prepared))?;
+    Ok(native_file_change_response("write", vec![prepared]))
+}
+
+/// Deletes one regular file transactionally with rollback bytes retained.
+/// 以事务方式删除一份普通文件并保留回滚字节。
+fn native_delete_file(path: &Path, request_path: &str) -> Result<FileToolResponse, FileToolError> {
+    let snapshot = read_raw_snapshot(path)?;
+    let file_payload = raw_lifecycle_payload(path, "delete", &snapshot);
+    let prepared = PreparedChange {
+        change_kind: String::from("delete"),
+        source_path: path.to_path_buf(),
+        destination_path: None,
+        original_version: snapshot.version,
+        before_bytes: Some(snapshot.bytes),
+        original_permissions: Some(snapshot.permissions),
+        after_bytes: None,
+        file_payload,
+        operation_results: vec![json!({
+            "operation_id": "file-0",
+            "operation_index": 0,
+            "resource_id": "resource-1",
+            "request_path": request_path,
+            "status": "applied",
+            "original_range": Value::Null,
+            "final_range": Value::Null,
+        })],
+    };
+    verify_preconditions(std::slice::from_ref(&prepared))?;
+    commit_changes(std::slice::from_ref(&prepared))?;
+    Ok(native_file_change_response("delete", vec![prepared]))
+}
+
+/// Moves one regular file transactionally without decoding or changing its bytes.
+/// 以事务方式移动一份普通文件且不解码或改变其字节。
+fn native_move_file(
+    workspace_root: &Path,
+    path: &Path,
+    request_path: &str,
+    object: &Map<String, Value>,
+) -> Result<FileToolResponse, FileToolError> {
+    let destination_raw = required_string(object, "destination")?;
+    let destination = resolve_path(workspace_root, &destination_raw)?;
+    if path_exists_including_symlink(&destination) {
+        return Err(FileToolError::new(
+            "destination_exists",
+            format!(
+                "The move destination already exists: {}",
+                display_path(&destination)
+            ),
+        ));
+    }
+    validate_parent_directory(&destination)?;
+    let snapshot = read_raw_snapshot(path)?;
+    let mut file_payload = raw_lifecycle_payload(path, "rename", &snapshot);
+    if let Some(payload) = file_payload.as_object_mut() {
+        payload.insert(String::from("path"), json!(display_path(&destination)));
+        payload.insert(String::from("old_path"), json!(display_path(path)));
+        payload.insert(String::from("new_path"), json!(display_path(&destination)));
+    }
+    let prepared = PreparedChange {
+        change_kind: String::from("rename"),
+        source_path: path.to_path_buf(),
+        destination_path: Some(destination.clone()),
+        original_version: snapshot.version,
+        before_bytes: Some(snapshot.bytes.clone()),
+        original_permissions: Some(snapshot.permissions),
+        after_bytes: Some(snapshot.bytes),
+        file_payload,
+        operation_results: vec![json!({
+            "operation_id": "file-0",
+            "operation_index": 0,
+            "resource_id": "resource-1",
+            "request_path": request_path,
+            "destination_request_path": destination_raw,
+            "resolved_path": display_path(&destination),
+            "status": "applied",
+            "original_range": Value::Null,
+            "final_range": Value::Null,
+        })],
+    };
+    verify_preconditions(std::slice::from_ref(&prepared))?;
+    commit_changes(std::slice::from_ref(&prepared))?;
+    Ok(native_file_change_response("move", vec![prepared]))
+}
+
+/// Builds one common whole-file change-set row.
+/// 构建一条公共整文件 change-set 行。
+fn whole_file_payload(
+    path: &Path,
+    change_kind: &str,
+    before_lines: &[String],
+    after_lines: &[String],
+) -> Value {
+    json!({
+        "resource_id": "resource-1",
+        "change": change_kind,
+        "path": display_path(path),
+        "hunks": [{
+            "before": "",
+            "delete": before_lines.iter().enumerate().map(|(index, content)| json!({"line": index + 1, "content": content})).collect::<Vec<_>>(),
+            "insert": after_lines.iter().enumerate().map(|(index, content)| json!({"line": index + 1, "content": content})).collect::<Vec<_>>(),
+            "after": "",
+        }],
+    })
+}
+
+/// Builds the model result and common change set for native file mutations.
+/// 为原生文件变更构建模型结果与公共 change set。
+fn native_file_change_response(action: &str, changes: Vec<PreparedChange>) -> FileToolResponse {
+    let files = changes
+        .iter()
+        .map(|change| change.file_payload.clone())
+        .collect::<Vec<_>>();
+    let operation_results = changes
+        .iter()
+        .flat_map(|change| change.operation_results.iter().cloned())
+        .collect::<Vec<_>>();
+    let extension = native_file_tools_extension("file", &changes, &operation_results, "all");
+    FileToolResponse {
+        model_output: json!({
+            "ok": true,
+            "action": action,
+            "file_count": files.len(),
+            "operations": operation_results,
+        }),
+        change_set: Some(json!({
+            "mode": "applied",
+            "summary": format!("File {action} applied."),
+            "files": files,
+            "extensions": {
+                "vulcan.file_tools.v2": extension
+            },
+        })),
+    }
+}
+
+/// Builds the shared native change-set extension used by all three public file tools.
+/// 构建三个公开原生文件工具共用的 change-set 扩展。
+fn native_file_tools_extension(
+    source_tool: &str,
+    changes: &[PreparedChange],
+    operation_results: &[Value],
+    commit_scope: &str,
+) -> Value {
+    let resources = changes
+        .iter()
+        .enumerate()
+        .map(|(resource_index, change)| {
+            let operations = change
+                .operation_results
+                .iter()
+                .filter_map(Value::as_object)
+                .collect::<Vec<_>>();
+            let resource_id = change
+                .file_payload
+                .get("resource_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("resource-{}", resource_index + 1));
+            let request_path = operations
+                .iter()
+                .find_map(|operation| operation.get("request_path").and_then(Value::as_str));
+            let operation_indexes = operations
+                .iter()
+                .filter_map(|operation| operation.get("operation_index").cloned())
+                .collect::<Vec<_>>();
+            let hunk_indexes = operations
+                .iter()
+                .filter_map(|operation| operation.get("hunk_index").cloned())
+                .filter(|value| !value.is_null())
+                .collect::<Vec<_>>();
+            let ranges = operations
+                .iter()
+                .map(|operation| {
+                    json!({
+                        "operation_id": operation.get("operation_id").cloned().unwrap_or(Value::Null),
+                        "operation_index": operation.get("operation_index").cloned().unwrap_or(Value::Null),
+                        "hunk_index": operation.get("hunk_index").cloned().unwrap_or(Value::Null),
+                        "original_range": operation.get("original_range").cloned().unwrap_or(Value::Null),
+                        "final_range": operation.get("final_range").cloned().unwrap_or(Value::Null),
+                    })
+                })
+                .collect::<Vec<_>>();
+            json!({
+                "resource_id": resource_id,
+                "request_path": request_path,
+                "resolved_path": display_path(
+                    change.destination_path.as_ref().unwrap_or(&change.source_path)
+                ),
+                "operation_indexes": operation_indexes,
+                "hunk_indexes": hunk_indexes,
+                "before_text_format": strict_text_format(change.before_bytes.as_deref()),
+                "after_text_format": strict_text_format(change.after_bytes.as_deref()),
+                "actual_ranges": ranges,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "source_tool": source_tool,
+        "operation_results": operation_results,
+        "resources": resources,
+        "transaction": {"commit_scope": commit_scope, "rollback_state": "not_needed"},
+    })
+}
+
+/// Returns strict text-format metadata or null for absent, binary, or ambiguous bytes.
+/// 返回严格文本格式元数据；字节缺失、二进制或编码不明确时返回 null。
+fn strict_text_format(bytes: Option<&[u8]>) -> Value {
+    let Some(bytes) = bytes else {
+        return Value::Null;
+    };
+    let Ok(decoded) = decode_text(bytes, None) else {
+        return Value::Null;
+    };
+    let document = TextDocument::from_decoded(decoded);
+    json!({
+        "encoding": document.encoding.label(),
+        "encoding_source": document.encoding_source.as_str(),
+        "encoding_certain": document.encoding_certain,
+        "bom": document.bom.is_present(),
+        "line_ending": document.line_ending_label(),
+        "preferred_line_ending": document.preferred_line_ending.label(),
+        "mixed_line_endings": document.mixed_line_endings,
+        "final_newline": document.final_newline(),
+    })
+}
+
+/// Returns the canonical BOM for one encoding when presence is requested.
+/// 在请求存在 BOM 时返回编码对应的 canonical BOM。
+fn default_bom_for_encoding(encoding: TextEncoding) -> Result<TextBom, FileToolError> {
+    match encoding {
+        TextEncoding::Utf8 => Ok(TextBom::Utf8),
+        TextEncoding::Utf16Le => Ok(TextBom::Utf16Le),
+        TextEncoding::Utf16Be => Ok(TextBom::Utf16Be),
+        TextEncoding::Utf32Le => Ok(TextBom::Utf32Le),
+        TextEncoding::Utf32Be => Ok(TextBom::Utf32Be),
+        TextEncoding::Legacy(_) => Err(FileToolError::new(
+            "unsupported_encoding",
+            "A BOM cannot be added to the selected legacy encoding.",
+        )),
+    }
+}
+
+/// Converts one strict codec failure into the shared file-tool error type.
+/// 将一条严格编解码失败转换为共享文件工具错误类型。
+fn codec_error(error: crate::text_encoding::TextCodecError) -> FileToolError {
+    FileToolError::new(error.code, error.message)
 }
 
 /// Executes one target and returns one bounded result row.
@@ -376,7 +1147,8 @@ fn validate_operation_path_conflicts(
         let Some(destination) = operation.destination.as_ref() else {
             continue;
         };
-        if !destinations.insert(path_key(destination)) {
+        let destination_key = path_key(destination)?;
+        if !destinations.insert(destination_key.clone()) {
             return Err(FileToolError::new(
                 "overlapping_operations",
                 format!(
@@ -386,7 +1158,7 @@ fn validate_operation_path_conflicts(
             ));
         }
         for (other_index, other) in operations.iter().enumerate() {
-            if index != other_index && path_key(destination) == path_key(&other.path) {
+            if index != other_index && destination_key == path_key(&other.path)? {
                 return Err(FileToolError::new(
                     "overlapping_operations",
                     format!(
@@ -451,7 +1223,9 @@ fn read_target(
         "ok": true,
         "path": path_text,
         "version": snapshot.version,
-        "encoding": "utf-8",
+        "encoding": snapshot.document.encoding.label(),
+        "encoding_source": snapshot.document.encoding_source.as_str(),
+        "line_ending": snapshot.document.line_ending_label(),
         "bom": snapshot.bom,
         "final_newline": snapshot.final_newline,
         "line_count": snapshot.lines.len(),
@@ -480,14 +1254,23 @@ fn stat_target(path: &Path, path_text: &str) -> Result<Value, FileToolError> {
         "size": metadata.len(),
         "modified": modified_millis(&metadata),
     });
-    if metadata.is_file() && metadata.len() <= MAX_TEXT_BYTES as u64 {
-        if let Ok(snapshot) = read_snapshot(path) {
-            result["encoding"] = Value::String(String::from("utf-8"));
-            result["bom"] = Value::Bool(snapshot.bom);
-            result["line_count"] = json!(snapshot.lines.len());
-            result["final_newline"] = Value::Bool(snapshot.final_newline);
-            result["version"] = Value::String(snapshot.version);
-        }
+    if metadata.is_file()
+        && metadata.len() <= MAX_TEXT_BYTES as u64
+        && let Ok(snapshot) = read_snapshot(path)
+    {
+        result["encoding"] = Value::String(String::from(snapshot.document.encoding.label()));
+        result["encoding_source"] =
+            Value::String(String::from(snapshot.document.encoding_source.as_str()));
+        result["encoding_certain"] = Value::Bool(snapshot.document.encoding_certain);
+        result["line_ending"] = Value::String(String::from(snapshot.document.line_ending_label()));
+        result["preferred_line_ending"] = Value::String(String::from(
+            snapshot.document.preferred_line_ending.label(),
+        ));
+        result["mixed_line_endings"] = Value::Bool(snapshot.document.mixed_line_endings);
+        result["bom"] = Value::Bool(snapshot.bom);
+        result["line_count"] = json!(snapshot.lines.len());
+        result["final_newline"] = Value::Bool(snapshot.final_newline);
+        result["version"] = Value::String(snapshot.version);
     }
     Ok(result)
 }
@@ -540,6 +1323,20 @@ fn list_target(
                 let entry_metadata = fs::symlink_metadata(&entry_path)
                     .map_err(|error| io_error("read_failed", &entry_path, error))?;
                 if entry_metadata.is_dir() {
+                    if pattern_matches(&name, pattern.as_deref()) {
+                        let entry = file_entry(&entry_path)?;
+                        let entry_bytes = serialized_value_bytes(&entry);
+                        if response_bytes.saturating_add(entry_bytes) > MAX_LIST_RESPONSE_BYTES {
+                            truncated = true;
+                            break;
+                        }
+                        response_bytes = response_bytes.saturating_add(entry_bytes);
+                        entries.push(entry);
+                        if entries.len() > limit {
+                            truncated = true;
+                            break;
+                        }
+                    }
                     if recursive {
                         pending.push(entry_path);
                     }
@@ -747,6 +1544,879 @@ fn execute_file_edit_sync(
     workspace_root: &Path,
     arguments: &Value,
 ) -> Result<FileToolResponse, FileToolError> {
+    if arguments
+        .as_object()
+        .is_some_and(|object| object.contains_key("operations"))
+    {
+        return execute_legacy_file_edit_sync(workspace_root, arguments);
+    }
+    execute_exact_file_edit_sync(workspace_root, arguments)
+}
+
+/// Executes the public exact-substring file_edit contract.
+/// 执行公开的精确子串 file_edit 契约。
+fn execute_exact_file_edit_sync(
+    workspace_root: &Path,
+    arguments: &Value,
+) -> Result<FileToolResponse, FileToolError> {
+    let object = arguments.as_object().ok_or_else(|| {
+        enrich_request_edit_error(FileToolError::new(
+            "invalid_arguments",
+            "The file_edit arguments must be an object.",
+        ))
+    })?;
+    validate_allowed_fields(
+        object,
+        &["path", "old_string", "new_string", "replace_all"],
+        "file_edit request",
+    )
+    .map_err(enrich_request_edit_error)?;
+    let request_bytes = serde_json::to_vec(arguments).map_err(|error| {
+        enrich_request_edit_error(FileToolError::new(
+            "invalid_arguments",
+            format!("The file_edit request could not be serialized: {error}"),
+        ))
+    })?;
+    if request_bytes.len() > MAX_EDIT_REQUEST_BYTES {
+        return Err(enrich_request_edit_error(FileToolError::new(
+            "output_limit_exceeded",
+            format!("The file_edit request body may not exceed {MAX_EDIT_REQUEST_BYTES} bytes."),
+        )));
+    }
+    let raw_path = required_string(object, "path").map_err(enrich_request_edit_error)?;
+    let old_string = required_string(object, "old_string").map_err(enrich_request_edit_error)?;
+    let new_string = object
+        .get("new_string")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| {
+            enrich_request_edit_error(FileToolError::new(
+                "invalid_arguments",
+                "new_string is required and must be a string.",
+            ))
+        })?;
+    let replace_all =
+        optional_bool(object, "replace_all", false).map_err(enrich_request_edit_error)?;
+    let path = resolve_path(workspace_root, &raw_path).map_err(enrich_request_edit_error)?;
+    let resource_locks =
+        acquire_resource_locks(std::slice::from_ref(&path)).map_err(enrich_request_edit_error)?;
+    let _resource_guards = lock_resource_set(&resource_locks).map_err(enrich_request_edit_error)?;
+    let snapshot = read_snapshot(&path).map_err(enrich_request_edit_error)?;
+    let replacement = snapshot
+        .document
+        .replace_exact(&old_string, &new_string, replace_all)
+        .map_err(|error| {
+            let mut details = Map::new();
+            details.insert(String::from("path"), json!(display_path(&path)));
+            details.insert(String::from("requires_read"), Value::Bool(true));
+            details.insert(String::from("retryable"), Value::Bool(false));
+            if let Some(match_count) = error.match_count {
+                details.insert(String::from("match_count"), json!(match_count));
+            }
+            enrich_request_edit_error(
+                FileToolError::new(error.code, error.message).with_details(Value::Object(details)),
+            )
+        })?;
+    let after_bytes = replacement.document.encode().map_err(|error| {
+        let codec = codec_error(error).with_details(json!({
+            "path": display_path(&path),
+            "requires_read": false,
+            "retryable": false,
+            "hint": "Use text representable in the current encoding, or explicitly convert the complete file with file.write.",
+        }));
+        enrich_request_edit_error(codec)
+    })?;
+    if after_bytes == snapshot.bytes {
+        return Err(enrich_request_edit_error(FileToolError::new(
+            "no_change",
+            "The exact replacement would not change the file.",
+        )));
+    }
+    let final_lines = replacement.document.logical_lines();
+    let (operation_windows, merged_windows) =
+        exact_edit_line_windows(&snapshot.lines, &final_lines, &replacement.ranges);
+    let hunks = merged_windows
+        .iter()
+        .map(|window| exact_edit_hunk(&snapshot.lines, &final_lines, *window))
+        .collect::<Vec<_>>();
+    let mut operation_results = Vec::with_capacity(replacement.ranges.len());
+    for (operation_index, window) in operation_windows.iter().enumerate() {
+        operation_results.push(json!({
+            "operation_id": format!("file-edit-{operation_index}"),
+            "operation_index": operation_index,
+            "resource_id": "resource-1",
+            "request_path": raw_path,
+            "resolved_path": display_path(&path),
+            "status": "applied",
+            "match_mode": "exact_text",
+            "original_range": {
+                "start_line": window.original_start + 1,
+                "line_count": window.original_end.saturating_sub(window.original_start),
+            },
+            "final_range": {
+                "start_line": window.final_start + 1,
+                "line_count": window.final_end.saturating_sub(window.final_start),
+            },
+        }));
+    }
+    let file_payload = json!({
+        "resource_id": "resource-1",
+        "change": "modify",
+        "path": display_path(&path),
+        "hunks": hunks,
+    });
+    let prepared = PreparedChange {
+        change_kind: String::from("modify"),
+        source_path: path.clone(),
+        destination_path: None,
+        original_version: snapshot.version,
+        before_bytes: Some(snapshot.bytes),
+        original_permissions: Some(snapshot.permissions),
+        after_bytes: Some(after_bytes),
+        file_payload: file_payload.clone(),
+        operation_results: operation_results.clone(),
+    };
+    verify_preconditions(std::slice::from_ref(&prepared)).map_err(enrich_request_edit_error)?;
+    commit_changes(std::slice::from_ref(&prepared)).map_err(enrich_request_edit_error)?;
+    let mut extension = native_file_tools_extension(
+        "file_edit",
+        std::slice::from_ref(&prepared),
+        &operation_results,
+        "all",
+    );
+    if let Some(object) = extension.as_object_mut() {
+        object.insert(
+            String::from("encoding"),
+            json!(replacement.document.encoding.label()),
+        );
+        object.insert(
+            String::from("bom"),
+            json!(replacement.document.bom.is_present()),
+        );
+        object.insert(
+            String::from("line_ending"),
+            json!(replacement.document.line_ending_label()),
+        );
+    }
+    Ok(FileToolResponse {
+        model_output: json!({
+            "ok": true,
+            "path": display_path(&path),
+            "match_count": replacement.match_count,
+            "encoding": replacement.document.encoding.label(),
+            "bom": replacement.document.bom.is_present(),
+            "line_ending": replacement.document.line_ending_label(),
+            "operation_count": operation_results.len(),
+            "operations": operation_results,
+        }),
+        change_set: Some(json!({
+            "mode": "applied",
+            "summary": "Exact text replacement applied.",
+            "files": [file_payload],
+            "extensions": {"vulcan.file_tools.v2": extension},
+        })),
+    })
+}
+
+/// One minimal line window changed by an exact-text replacement.
+/// 一段由精确文本替换改变的最小行窗口。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ExactEditLineWindow {
+    /// Zero-based original start line.
+    /// 零基原始起始行。
+    original_start: usize,
+    /// Zero-based exclusive original end line.
+    /// 零基原始结束行，不包含该行。
+    original_end: usize,
+    /// Zero-based final start line.
+    /// 零基最终起始行。
+    final_start: usize,
+    /// Zero-based exclusive final end line.
+    /// 零基最终结束行，不包含该行。
+    final_end: usize,
+}
+
+/// Projects exact substring matches into per-operation and non-overlapping file hunks.
+/// 将精确子串命中投影为逐操作范围与互不重叠的文件 hunk。
+fn exact_edit_line_windows(
+    before_lines: &[String],
+    after_lines: &[String],
+    ranges: &[TextReplacementRange],
+) -> (Vec<ExactEditLineWindow>, Vec<ExactEditLineWindow>) {
+    let mut cumulative_delta = 0isize;
+    let mut operation_windows = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        let final_start_line =
+            (range.original_start_line as isize + cumulative_delta).max(1) as usize;
+        let mut window = ExactEditLineWindow {
+            original_start: range
+                .original_start_line
+                .saturating_sub(1)
+                .min(before_lines.len()),
+            original_end: range
+                .original_start_line
+                .saturating_sub(1)
+                .saturating_add(range.original_line_count)
+                .saturating_add(1)
+                .min(before_lines.len()),
+            final_start: final_start_line.saturating_sub(1).min(after_lines.len()),
+            final_end: final_start_line
+                .saturating_sub(1)
+                .saturating_add(range.final_line_count)
+                .saturating_add(1)
+                .min(after_lines.len()),
+        };
+        trim_exact_edit_line_window(before_lines, after_lines, &mut window);
+        operation_windows.push(window);
+        cumulative_delta += range.final_line_count as isize - range.original_line_count as isize;
+    }
+
+    let mut merged_windows = Vec::<ExactEditLineWindow>::new();
+    for window in operation_windows.iter().copied() {
+        if let Some(previous) = merged_windows.last_mut()
+            && (window.original_start <= previous.original_end
+                || window.final_start <= previous.final_end)
+        {
+            previous.original_start = previous.original_start.min(window.original_start);
+            previous.original_end = previous.original_end.max(window.original_end);
+            previous.final_start = previous.final_start.min(window.final_start);
+            previous.final_end = previous.final_end.max(window.final_end);
+            trim_exact_edit_line_window(before_lines, after_lines, previous);
+            continue;
+        }
+        merged_windows.push(window);
+    }
+    (operation_windows, merged_windows)
+}
+
+/// Removes equal complete lines from both ends of one candidate edit window.
+/// 从候选编辑窗口两端移除相等的完整行。
+fn trim_exact_edit_line_window(
+    before_lines: &[String],
+    after_lines: &[String],
+    window: &mut ExactEditLineWindow,
+) {
+    while window.original_start < window.original_end
+        && window.final_start < window.final_end
+        && before_lines[window.original_start] == after_lines[window.final_start]
+    {
+        window.original_start += 1;
+        window.final_start += 1;
+    }
+    while window.original_start < window.original_end
+        && window.final_start < window.final_end
+        && before_lines[window.original_end - 1] == after_lines[window.final_end - 1]
+    {
+        window.original_end -= 1;
+        window.final_end -= 1;
+    }
+}
+
+/// Builds one canonical change-set hunk from actual before and after logical lines.
+/// 使用实际变更前后逻辑行构建一个 canonical change-set hunk。
+fn exact_edit_hunk(
+    before_lines: &[String],
+    after_lines: &[String],
+    window: ExactEditLineWindow,
+) -> Value {
+    let before_context_start = window.original_start.saturating_sub(2);
+    let after_context_end = window
+        .original_end
+        .saturating_add(2)
+        .min(before_lines.len());
+    json!({
+        "before": before_lines[before_context_start..window.original_start].join("\n"),
+        "delete": before_lines[window.original_start..window.original_end]
+            .iter()
+            .enumerate()
+            .map(|(index, content)| json!({"line": window.original_start + index + 1, "content": content}))
+            .collect::<Vec<_>>(),
+        "insert": after_lines[window.final_start..window.final_end]
+            .iter()
+            .enumerate()
+            .map(|(index, content)| json!({"line": window.final_start + index + 1, "content": content}))
+            .collect::<Vec<_>>(),
+        "after": before_lines[window.original_end..after_context_end].join("\n"),
+    })
+}
+
+/// Parses, preflights, and atomically applies one multi-file Apply Patch document.
+/// 解析、预校验并原子应用一份多文件 Apply Patch 文档。
+fn execute_apply_patch_sync(
+    workspace_root: &Path,
+    patch: &str,
+) -> Result<FileToolResponse, FileToolError> {
+    if patch.len() > MAX_EDIT_REQUEST_BYTES {
+        return Err(FileToolError::new(
+            "output_limit_exceeded",
+            format!("The patch may not exceed {MAX_EDIT_REQUEST_BYTES} UTF-8 bytes."),
+        ));
+    }
+    let operations = parse_apply_patch(patch)?;
+    if operations.is_empty() || operations.len() > MAX_EDIT_OPERATIONS {
+        return Err(FileToolError::new(
+            "patch_syntax_error",
+            format!("A patch must contain between 1 and {MAX_EDIT_OPERATIONS} file operations."),
+        ));
+    }
+    let mut mutation_paths = Vec::with_capacity(operations.len().saturating_mul(2));
+    for operation in &operations {
+        mutation_paths.push(resolve_path(workspace_root, operation.path())?);
+        if let ParsedPatchFile::Update {
+            move_to: Some(destination),
+            ..
+        } = operation
+        {
+            mutation_paths.push(resolve_path(workspace_root, destination)?);
+        }
+    }
+    let resource_locks = acquire_resource_locks(&mutation_paths)?;
+    let _resource_guards = lock_resource_set(&resource_locks)?;
+    let mut source_paths = HashSet::new();
+    let mut final_paths = HashSet::new();
+    let mut changes = Vec::with_capacity(operations.len());
+    for (operation_index, operation) in operations.iter().enumerate() {
+        let resource_id = format!("resource-{}", operation_index + 1);
+        let source_path = resolve_path(workspace_root, operation.path())?;
+        if !source_paths.insert(path_key(&source_path)?) {
+            return Err(FileToolError::new(
+                "invalid_arguments",
+                format!(
+                    "A patch may contain only one file operation for each source path: {}",
+                    display_path(&source_path)
+                ),
+            ));
+        }
+        let prepared = match operation {
+            ParsedPatchFile::Add { path: _, lines } => {
+                if path_exists_including_symlink(&source_path) {
+                    return Err(FileToolError::new(
+                        "destination_exists",
+                        format!(
+                            "The add target already exists: {}",
+                            display_path(&source_path)
+                        ),
+                    ));
+                }
+                validate_parent_directory(&source_path)?;
+                let edit = ParsedEditOperation {
+                    id: format!("patch-{operation_index}"),
+                    kind: EditKind::Create,
+                    path: source_path,
+                    destination: None,
+                    old_lines: Vec::new(),
+                    new_lines: lines.clone(),
+                    anchors: Vec::new(),
+                    match_mode: String::from("apply_patch"),
+                    final_newline: Some(true),
+                    expected_version: None,
+                };
+                build_create_change(&edit, &resource_id, false)?
+            }
+            ParsedPatchFile::Delete { path: _ } => {
+                let snapshot = read_raw_snapshot(&source_path)?;
+                build_patch_delete_change(
+                    operation_index,
+                    operation.path(),
+                    source_path,
+                    snapshot,
+                    &resource_id,
+                )
+            }
+            ParsedPatchFile::Update {
+                path: _,
+                move_to,
+                hunks,
+            } => {
+                let destination = move_to
+                    .as_deref()
+                    .map(|path| resolve_path(workspace_root, path))
+                    .transpose()?;
+                if let Some(destination) = destination.as_ref() {
+                    if path_exists_including_symlink(destination) {
+                        return Err(FileToolError::new(
+                            "destination_exists",
+                            format!(
+                                "The move destination already exists: {}",
+                                display_path(destination)
+                            ),
+                        ));
+                    }
+                    validate_parent_directory(destination)?;
+                }
+                if hunks.is_empty() {
+                    let destination = destination.ok_or_else(|| {
+                        FileToolError::new(
+                            "patch_syntax_error",
+                            "An update without hunks requires a Move to destination.",
+                        )
+                    })?;
+                    let snapshot = read_raw_snapshot(&source_path)?;
+                    build_patch_move_change(
+                        operation_index,
+                        operation.path(),
+                        source_path,
+                        destination,
+                        snapshot,
+                        &resource_id,
+                    )
+                } else {
+                    let snapshot = read_snapshot(&source_path)?;
+                    build_patch_update_change(
+                        operation_index,
+                        operation.path(),
+                        source_path,
+                        destination,
+                        &snapshot,
+                        hunks,
+                        &resource_id,
+                    )?
+                }
+            }
+        };
+        let final_path = prepared
+            .destination_path
+            .as_ref()
+            .unwrap_or(&prepared.source_path);
+        if !final_paths.insert(path_key(final_path)?) {
+            return Err(FileToolError::new(
+                "invalid_arguments",
+                format!(
+                    "A patch may produce each final path only once: {}",
+                    display_path(final_path)
+                ),
+            ));
+        }
+        changes.push(prepared);
+    }
+    verify_preconditions(&changes)?;
+    commit_changes(&changes)?;
+    let files = changes
+        .iter()
+        .map(|change| change.file_payload.clone())
+        .collect::<Vec<_>>();
+    let operation_results = changes
+        .iter()
+        .flat_map(|change| change.operation_results.iter().cloned())
+        .collect::<Vec<_>>();
+    let extension = native_file_tools_extension("apply_patch", &changes, &operation_results, "all");
+    Ok(FileToolResponse {
+        model_output: json!({
+            "ok": true,
+            "file_count": files.len(),
+            "operation_count": operation_results.len(),
+            "operations": operation_results,
+        }),
+        change_set: Some(json!({
+            "mode": "applied",
+            "summary": "Apply Patch changes applied.",
+            "files": files,
+            "extensions": {
+                "vulcan.file_tools.v2": extension
+            },
+        })),
+    })
+}
+
+/// Builds one raw-byte delete change for an Apply Patch file operation.
+/// 为一项 Apply Patch 文件操作构建原始字节删除变更。
+fn build_patch_delete_change(
+    operation_index: usize,
+    request_path: &str,
+    source_path: PathBuf,
+    snapshot: RawFileSnapshot,
+    resource_id: &str,
+) -> PreparedChange {
+    let file_payload = raw_lifecycle_payload(&source_path, "delete", &snapshot);
+    PreparedChange {
+        change_kind: String::from("delete"),
+        source_path,
+        destination_path: None,
+        original_version: snapshot.version,
+        before_bytes: Some(snapshot.bytes),
+        original_permissions: Some(snapshot.permissions),
+        after_bytes: None,
+        file_payload,
+        operation_results: vec![json!({
+            "operation_id": format!("patch-{operation_index}"),
+            "operation_index": operation_index,
+            "resource_id": resource_id,
+            "request_path": request_path,
+            "status": "applied",
+            "original_range": Value::Null,
+            "final_range": Value::Null,
+        })],
+    }
+}
+
+/// Builds one raw-byte move change for an Apply Patch operation without text hunks.
+/// 为不含文本 hunk 的 Apply Patch 操作构建原始字节移动变更。
+fn build_patch_move_change(
+    operation_index: usize,
+    request_path: &str,
+    source_path: PathBuf,
+    destination_path: PathBuf,
+    snapshot: RawFileSnapshot,
+    resource_id: &str,
+) -> PreparedChange {
+    let mut file_payload = raw_lifecycle_payload(&source_path, "rename", &snapshot);
+    if let Some(payload) = file_payload.as_object_mut() {
+        payload.insert(String::from("path"), json!(display_path(&destination_path)));
+        payload.insert(String::from("old_path"), json!(display_path(&source_path)));
+        payload.insert(
+            String::from("new_path"),
+            json!(display_path(&destination_path)),
+        );
+    }
+    PreparedChange {
+        change_kind: String::from("rename"),
+        source_path,
+        destination_path: Some(destination_path),
+        original_version: snapshot.version,
+        before_bytes: Some(snapshot.bytes.clone()),
+        original_permissions: Some(snapshot.permissions),
+        after_bytes: Some(snapshot.bytes),
+        file_payload,
+        operation_results: vec![json!({
+            "operation_id": format!("patch-{operation_index}"),
+            "operation_index": operation_index,
+            "resource_id": resource_id,
+            "request_path": request_path,
+            "status": "applied",
+            "original_range": Value::Null,
+            "final_range": Value::Null,
+        })],
+    }
+}
+
+/// Builds one update or move change from parsed patch hunks.
+/// 从已解析 patch hunk 构建一条更新或移动变更。
+fn build_patch_update_change(
+    operation_index: usize,
+    request_path: &str,
+    source_path: PathBuf,
+    destination_path: Option<PathBuf>,
+    snapshot: &TextSnapshot,
+    hunks: &[ParsedPatchHunk],
+    resource_id: &str,
+) -> Result<PreparedChange, FileToolError> {
+    let replacements = plan_patch_replacements(operation_index, snapshot, hunks)?;
+    if replacements.is_empty() && destination_path.is_none() {
+        return Err(FileToolError::new(
+            "no_change",
+            "The update operation contains no effective hunks or move destination.",
+        ));
+    }
+    let after_bytes = if replacements.is_empty() {
+        snapshot.bytes.clone()
+    } else {
+        render_snapshot_replacements(snapshot, &replacements, snapshot.final_newline)?
+    };
+    if after_bytes == snapshot.bytes && destination_path.is_none() {
+        return Err(FileToolError::new(
+            "no_change",
+            "The patch would not change the file.",
+        ));
+    }
+    let change_kind = if destination_path.is_some() {
+        "rename"
+    } else {
+        "modify"
+    };
+    let final_path = destination_path.as_ref().unwrap_or(&source_path);
+    let mut file_payload = Map::new();
+    file_payload.insert(String::from("resource_id"), json!(resource_id));
+    file_payload.insert(String::from("change"), json!(change_kind));
+    file_payload.insert(String::from("path"), json!(display_path(final_path)));
+    if let Some(destination) = destination_path.as_ref() {
+        file_payload.insert(String::from("old_path"), json!(display_path(&source_path)));
+        file_payload.insert(String::from("new_path"), json!(display_path(destination)));
+    }
+    file_payload.insert(
+        String::from("hunks"),
+        Value::Array(
+            replacements
+                .iter()
+                .map(|replacement| replacement_hunk(snapshot, replacement, &replacements))
+                .collect(),
+        ),
+    );
+    let mut operation_results = replacements
+        .iter()
+        .enumerate()
+        .map(|(hunk_index, replacement)| {
+            let mut result = operation_result(replacement, &replacements, false, resource_id);
+            if let Some(object) = result.as_object_mut() {
+                object.insert(String::from("operation_index"), json!(operation_index));
+                object.insert(String::from("hunk_index"), json!(hunk_index));
+                object.insert(String::from("request_path"), json!(request_path));
+            }
+            result
+        })
+        .collect::<Vec<_>>();
+    if destination_path.is_some() {
+        operation_results.push(json!({
+            "operation_id": format!("patch-{operation_index}-move"),
+            "operation_index": operation_index,
+            "hunk_index": Value::Null,
+            "resource_id": resource_id,
+            "request_path": request_path,
+            "status": "applied",
+            "original_range": Value::Null,
+            "final_range": Value::Null,
+        }));
+    }
+    Ok(PreparedChange {
+        change_kind: String::from(change_kind),
+        source_path,
+        destination_path,
+        original_version: snapshot.version.clone(),
+        before_bytes: Some(snapshot.bytes.clone()),
+        original_permissions: Some(snapshot.permissions.clone()),
+        after_bytes: Some(after_bytes),
+        file_payload: Value::Object(file_payload),
+        operation_results,
+    })
+}
+
+/// Converts ordered patch hunks into immutable original-snapshot replacement plans.
+/// 将有序 patch hunk 转换为不可变原始快照上的替换计划。
+fn plan_patch_replacements(
+    operation_index: usize,
+    snapshot: &TextSnapshot,
+    hunks: &[ParsedPatchHunk],
+) -> Result<Vec<ReplacementPlan>, FileToolError> {
+    let mut working = snapshot.lines.clone();
+    let mut replacements = Vec::with_capacity(hunks.len());
+    let mut cursor = 0usize;
+    let mut cumulative_delta = 0isize;
+    for (hunk_index, hunk) in hunks.iter().enumerate() {
+        let anchor_start = match hunk.context.as_deref() {
+            Some(context) => working
+                .iter()
+                .enumerate()
+                .skip(cursor)
+                .find(|(_, line)| line.as_str() == context)
+                .map(|(index, _)| index + 1)
+                .ok_or_else(|| {
+                    FileToolError::new(
+                        "patch_context_not_found",
+                        format!(
+                            "Update operation {operation_index} hunk {hunk_index} could not find @@ {context}."
+                        ),
+                    )
+                })?,
+            None => cursor,
+        };
+        let old_lines = hunk
+            .lines
+            .iter()
+            .filter(|line| line.kind != PatchLineKind::Add)
+            .map(|line| line.content.clone())
+            .collect::<Vec<_>>();
+        let new_lines = hunk
+            .lines
+            .iter()
+            .filter(|line| line.kind != PatchLineKind::Delete)
+            .map(|line| line.content.clone())
+            .collect::<Vec<_>>();
+        let start = if old_lines.is_empty() {
+            if hunk.end_of_file && anchor_start != working.len() {
+                return Err(FileToolError::new(
+                    "patch_context_not_found",
+                    format!(
+                        "Update operation {operation_index} hunk {hunk_index} did not reach the end of the file."
+                    ),
+                ));
+            }
+            if hunk.end_of_file {
+                working.len()
+            } else {
+                anchor_start
+            }
+        } else {
+            let candidates = (anchor_start..=working.len().saturating_sub(old_lines.len()))
+                .filter(|start| {
+                    working[*start..*start + old_lines.len()] == old_lines
+                        && (!hunk.end_of_file || *start + old_lines.len() == working.len())
+                })
+                .collect::<Vec<_>>();
+            match candidates.as_slice() {
+                [start] => *start,
+                [] => {
+                    return Err(FileToolError::new(
+                        "patch_context_not_found",
+                        format!(
+                            "Update operation {operation_index} hunk {hunk_index} could not match its context and deleted lines."
+                        ),
+                    ));
+                }
+                _ if hunk.context.is_some() => candidates[0],
+                _ => {
+                    return Err(FileToolError::new(
+                        "ambiguous_match",
+                        format!(
+                            "Update operation {operation_index} hunk {hunk_index} matches more than once; add an @@ anchor."
+                        ),
+                    ));
+                }
+            }
+        };
+        let original_start_signed = start as isize - cumulative_delta;
+        if original_start_signed < 0 {
+            return Err(FileToolError::new(
+                "overlapping_operations",
+                "A patch hunk depends on text inserted by an earlier hunk.",
+            ));
+        }
+        let original_start = original_start_signed as usize;
+        let original_end = original_start.saturating_add(old_lines.len());
+        if original_end > snapshot.lines.len()
+            || snapshot.lines[original_start..original_end] != old_lines
+        {
+            return Err(FileToolError::new(
+                "overlapping_operations",
+                "Patch hunks must target non-overlapping ranges in the original file snapshot.",
+            ));
+        }
+        working.splice(start..start + old_lines.len(), new_lines.clone());
+        cumulative_delta += new_lines.len() as isize - old_lines.len() as isize;
+        cursor = start.saturating_add(new_lines.len());
+        replacements.push(ReplacementPlan {
+            operation_id: format!("patch-{operation_index}-{hunk_index}"),
+            start: original_start,
+            end: original_end,
+            old_lines,
+            new_lines,
+            match_mode: String::from("apply_patch"),
+        });
+    }
+    sorted_non_overlapping_replacements(replacements)
+}
+
+/// Converts the vendored parser output into the host's prepared-operation representation.
+/// 将 vendored 解析器输出转换为宿主的预备操作表示。
+fn parse_apply_patch(patch: &str) -> Result<Vec<ParsedPatchFile>, FileToolError> {
+    vulcan_apply_patch::parse_apply_patch(patch)
+        .map_err(|error| FileToolError::new("patch_syntax_error", error.to_string()))?
+        .into_iter()
+        .map(|operation| {
+            Ok(match operation {
+                vulcan_apply_patch::PatchFile::Add { path, lines } => {
+                    ParsedPatchFile::Add { path, lines }
+                }
+                vulcan_apply_patch::PatchFile::Delete { path } => ParsedPatchFile::Delete { path },
+                vulcan_apply_patch::PatchFile::Update {
+                    path,
+                    move_to,
+                    hunks,
+                } => ParsedPatchFile::Update {
+                    path,
+                    move_to,
+                    hunks: hunks
+                        .into_iter()
+                        .map(|hunk| {
+                            let mut lines = hunk
+                                .old_lines
+                                .into_iter()
+                                .map(|content| ParsedPatchLine {
+                                    kind: PatchLineKind::Delete,
+                                    content,
+                                })
+                                .collect::<Vec<_>>();
+                            lines.extend(hunk.new_lines.into_iter().map(|content| {
+                                ParsedPatchLine {
+                                    kind: PatchLineKind::Add,
+                                    content,
+                                }
+                            }));
+                            ParsedPatchHunk {
+                                context: hunk.context,
+                                end_of_file: hunk.end_of_file,
+                                lines,
+                            }
+                        })
+                        .collect(),
+                },
+            })
+        })
+        .collect()
+}
+
+/// One parsed file operation in the Apply Patch language.
+/// Apply Patch 语言中的一项已解析文件操作。
+#[derive(Debug, Clone)]
+enum ParsedPatchFile {
+    /// Adds a file from logical lines.
+    /// 从逻辑行新增文件。
+    Add { path: String, lines: Vec<String> },
+    /// Deletes an existing file.
+    /// 删除已有文件。
+    Delete { path: String },
+    /// Updates and optionally moves an existing file.
+    /// 更新并可选移动已有文件。
+    Update {
+        path: String,
+        move_to: Option<String>,
+        hunks: Vec<ParsedPatchHunk>,
+    },
+}
+
+impl ParsedPatchFile {
+    /// Returns the source or creation path.
+    /// 返回源路径或创建路径。
+    fn path(&self) -> &str {
+        match self {
+            Self::Add { path, .. } | Self::Delete { path } | Self::Update { path, .. } => path,
+        }
+    }
+}
+
+/// One parsed update hunk.
+/// 一个已解析更新块。
+#[derive(Debug, Clone, Default)]
+struct ParsedPatchHunk {
+    /// Optional exact logical-line anchor.
+    /// 可选的精确逻辑行锚点。
+    context: Option<String>,
+    /// Whether the hunk must reach the file end.
+    /// 更新块是否必须到达文件末尾。
+    end_of_file: bool,
+    /// Ordered semantic lines used to derive old and new sides.
+    /// 用于派生新旧两侧的有序语义行。
+    lines: Vec<ParsedPatchLine>,
+}
+
+/// One semantic line in an update hunk.
+/// 更新块中的一条语义行。
+#[derive(Debug, Clone)]
+struct ParsedPatchLine {
+    /// Semantic line kind.
+    /// 语义行类型。
+    kind: PatchLineKind,
+    /// Logical content without a prefix.
+    /// 不含前缀的逻辑内容。
+    content: String,
+}
+
+/// Semantic line kinds required by host replacement planning.
+/// 宿主替换规划需要的语义行类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PatchLineKind {
+    /// Deleted source line.
+    /// 删除的源行。
+    Delete,
+    /// Added destination line.
+    /// 新增的目标行。
+    Add,
+}
+
+/// Executes the hidden historical operation-array contract for persisted calls.
+/// 为持久化调用执行隐藏的历史 operation 数组契约。
+fn execute_legacy_file_edit_sync(
+    workspace_root: &Path,
+    arguments: &Value,
+) -> Result<FileToolResponse, FileToolError> {
     let object = arguments.as_object().ok_or_else(|| {
         enrich_request_edit_error(FileToolError::new(
             "invalid_arguments",
@@ -824,23 +2494,35 @@ fn execute_file_edit_sync(
     }
     validate_operation_path_conflicts(&parsed)
         .map_err(|error| enrich_parsed_edit_error(error, &parsed, None))?;
+    let mutation_paths = parsed
+        .iter()
+        .flat_map(|operation| {
+            std::iter::once(operation.path.clone()).chain(operation.destination.iter().cloned())
+        })
+        .collect::<Vec<_>>();
+    let resource_locks = acquire_resource_locks(&mutation_paths)
+        .map_err(|error| enrich_parsed_edit_error(error, &parsed, None))?;
+    let _resource_guards = lock_resource_set(&resource_locks)
+        .map_err(|error| enrich_parsed_edit_error(error, &parsed, None))?;
     let mut snapshots = HashMap::<String, TextSnapshot>::new();
     let mut groups = BTreeMap::<String, Vec<usize>>::new();
     for (index, operation) in parsed.iter().enumerate() {
+        let operation_path_key = path_key(&operation.path)
+            .map_err(|error| enrich_parsed_edit_error(error, &parsed, Some(&[index])))?;
         groups
-            .entry(path_key(&operation.path))
+            .entry(operation_path_key.clone())
             .or_default()
             .push(index);
         if !matches!(operation.kind, EditKind::Create)
-            && !snapshots.contains_key(&path_key(&operation.path))
+            && !snapshots.contains_key(&operation_path_key)
         {
             let snapshot = read_snapshot(&operation.path).map_err(|error| {
                 enrich_parsed_edit_error(error, &parsed, Some(std::slice::from_ref(&index)))
             })?;
-            snapshots.insert(path_key(&operation.path), snapshot);
+            snapshots.insert(operation_path_key.clone(), snapshot);
         }
         if let Some(expected_version) = operation.expected_version.as_deref()
-            && let Some(snapshot) = snapshots.get(&path_key(&operation.path))
+            && let Some(snapshot) = snapshots.get(&operation_path_key)
             && expected_version != snapshot.version
         {
             return Err(enrich_parsed_edit_error(
@@ -1006,7 +2688,7 @@ fn enrich_parsed_edit_error(
 ) -> FileToolError {
     let mut error = enrich_request_edit_error(error);
     let selected_indexes = indexes
-        .map(|values| values.iter().copied().collect::<Vec<_>>())
+        .map(<[usize]>::to_vec)
         .unwrap_or_else(|| (0..operations.len()).collect::<Vec<_>>());
     let selected_indexes = selected_indexes
         .into_iter()
@@ -1058,9 +2740,13 @@ fn enrich_parsed_edit_error(
 fn enrich_request_edit_error(mut error: FileToolError) -> FileToolError {
     let mut details = take_error_details(&mut error);
     insert_error_contract_defaults(&mut details, &error.code);
-    details.insert(String::from("operation_id"), Value::Null);
-    details.insert(String::from("operation_index"), Value::Null);
-    details.insert(String::from("path"), Value::Null);
+    details
+        .entry(String::from("operation_id"))
+        .or_insert(Value::Null);
+    details
+        .entry(String::from("operation_index"))
+        .or_insert(Value::Null);
+    details.entry(String::from("path")).or_insert(Value::Null);
     error.details = Value::Object(details);
     error
 }
@@ -1114,6 +2800,8 @@ fn take_error_details(error: &mut FileToolError) -> Map<String, Value> {
 /// Inserts the common bounded diagnostic fields required by native file_edit errors.
 /// 写入原生 file_edit 错误必须具备的通用有界诊断字段。
 fn insert_error_contract_defaults(details: &mut Map<String, Value>, code: &str) {
+    let requires_read = edit_error_requires_reread(code);
+    let recovery_hint = edit_error_recovery_hint(code);
     details
         .entry(String::from("commit_scope"))
         .or_insert_with(|| Value::String(String::from("none")));
@@ -1128,10 +2816,19 @@ fn insert_error_contract_defaults(details: &mut Map<String, Value>, code: &str) 
         .or_insert_with(|| json!(0));
     details
         .entry(String::from("requires_reread"))
-        .or_insert_with(|| Value::Bool(edit_error_requires_reread(code)));
+        .or_insert_with(|| Value::Bool(requires_read));
+    details
+        .entry(String::from("requires_read"))
+        .or_insert_with(|| Value::Bool(requires_read));
+    details
+        .entry(String::from("retryable"))
+        .or_insert_with(|| Value::Bool(false));
     details
         .entry(String::from("recovery_hint"))
-        .or_insert_with(|| Value::String(String::from(edit_error_recovery_hint(code))));
+        .or_insert_with(|| Value::String(String::from(recovery_hint)));
+    details
+        .entry(String::from("hint"))
+        .or_insert_with(|| Value::String(String::from(recovery_hint)));
 }
 
 /// Returns whether retrying this edit should begin with a fresh file read.
@@ -1145,8 +2842,13 @@ fn edit_error_requires_reread(code: &str) -> bool {
             | "target_not_unique"
             | "anchor_chain_not_found"
             | "stale_version"
-            | "concurrent_change"
+            | "stale_file"
+            | "match_not_found"
+            | "ambiguous_match"
+            | "encoding_ambiguous"
+            | "patch_context_not_found"
             | "write_failed"
+            | "transaction_failed"
             | "disk_state_uncertain"
     )
 }
@@ -1169,6 +2871,18 @@ fn edit_error_recovery_hint(code: &str) -> &'static str {
         "target_not_unique" => {
             "Expand old_lines or add stable ordered anchors until exactly one target remains."
         }
+        "match_not_found" => {
+            "Read the current file and copy one exact distinctive old_string before retrying."
+        }
+        "ambiguous_match" => {
+            "Read the current file and include more surrounding text, or set replace_all only when every occurrence must change."
+        }
+        "patch_syntax_error" => {
+            "Correct the Apply Patch text using the attached grammar and resend the complete patch."
+        }
+        "patch_context_not_found" => {
+            "Read every affected file again and regenerate the patch against the current exact text."
+        }
         "anchor_chain_not_found" => {
             "Use file read to verify that anchors occur before the target in the declared order."
         }
@@ -1176,12 +2890,21 @@ fn edit_error_recovery_hint(code: &str) -> &'static str {
             "Merge overlapping replacements into one operation against the original snapshot."
         }
         "stale_version" => "Use file stat or read to obtain a fresh version token before retrying.",
-        "concurrent_change" => "Read all affected files again and regenerate the complete request.",
+        "stale_file" => "Read all affected files again and regenerate the complete request.",
         "no_change" => {
             "Remove the operation or provide new_lines that differ from the current content."
         }
         "write_failed" => {
             "Fix the reported filesystem error, reread affected paths, and retry with a fresh request."
+        }
+        "transaction_failed" => {
+            "The transaction was rolled back; reread every affected path before retrying."
+        }
+        "encoding_ambiguous" => {
+            "Read with an explicit encoding and convert the complete file explicitly before localized editing."
+        }
+        "encoding_unrepresentable" => {
+            "Use text representable in the current encoding, or explicitly convert the complete file."
         }
         "disk_state_uncertain" => {
             "Reread every affected path listed in the error before taking any further action."
@@ -1255,9 +2978,8 @@ fn parse_edit_operation(
     } else {
         None
     };
-    if destination
-        .as_ref()
-        .is_some_and(|value| path_key(value) == path_key(&path))
+    if let Some(destination) = destination.as_ref()
+        && path_key(destination)? == path_key(&path)?
     {
         return Err(FileToolError::new(
             "invalid_arguments",
@@ -1395,7 +3117,8 @@ fn build_prepared_change(
             dry_run,
         );
     }
-    let snapshot = snapshots.get(&path_key(&first.path)).ok_or_else(|| {
+    let first_path_key = path_key(&first.path)?;
+    let snapshot = snapshots.get(&first_path_key).ok_or_else(|| {
         FileToolError::new(
             "path_not_found",
             "The source file snapshot was not available.",
@@ -1431,13 +3154,7 @@ fn build_prepared_change(
         .filter_map(|index| operations[*index].final_newline)
         .next_back()
         .unwrap_or(snapshot.final_newline);
-    let final_lines = apply_replacements(&snapshot.lines, &replacements);
-    let after_bytes = render_text(
-        &final_lines,
-        snapshot.bom,
-        &snapshot.line_ending,
-        final_newline,
-    );
+    let after_bytes = render_snapshot_replacements(snapshot, &replacements, final_newline)?;
     let move_operation = indexes
         .iter()
         .map(|index| &operations[*index])
@@ -1539,7 +3256,13 @@ fn build_create_change(
         String::from("path"),
         Value::String(display_path(&operation.path)),
     );
-    insert_lifecycle_content(&mut file_payload, &after_bytes, &operation.new_lines);
+    let content = String::from_utf8(after_bytes.clone()).map_err(|error| {
+        FileToolError::new(
+            "write_failed",
+            format!("Generated UTF-8 create content was invalid: {error}"),
+        )
+    })?;
+    insert_lifecycle_content(&mut file_payload, &content, &operation.new_lines);
     Ok(PreparedChange {
         change_kind: String::from("create"),
         source_path: operation.path.clone(),
@@ -1581,7 +3304,7 @@ fn build_delete_change(
         String::from("path"),
         Value::String(display_path(&operation.path)),
     );
-    insert_lifecycle_content(&mut file_payload, &snapshot.bytes, &snapshot.lines);
+    insert_lifecycle_content(&mut file_payload, &snapshot.document.text, &snapshot.lines);
     Ok(PreparedChange {
         change_kind: String::from("delete"),
         source_path: operation.path.clone(),
@@ -1607,7 +3330,7 @@ fn build_delete_change(
 fn verify_preconditions(changes: &[PreparedChange]) -> Result<(), FileToolError> {
     let mut checked = HashSet::new();
     for change in changes {
-        if checked.insert(path_key(&change.source_path)) {
+        if checked.insert(path_key(&change.source_path)?) {
             if change.before_bytes.is_none() {
                 if path_exists_including_symlink(&change.source_path) {
                     return Err(FileToolError::new(
@@ -1616,10 +3339,10 @@ fn verify_preconditions(changes: &[PreparedChange]) -> Result<(), FileToolError>
                     ));
                 }
             } else {
-                let current = read_snapshot(&change.source_path)?;
+                let current = read_raw_snapshot(&change.source_path)?;
                 if current.version != change.original_version {
                     return Err(FileToolError::new(
-                        "concurrent_change",
+                        "stale_file",
                         format!(
                             "The file changed before commit: {}",
                             display_path(&change.source_path)
@@ -1748,10 +3471,18 @@ fn commit_changes(changes: &[PreparedChange]) -> Result<(), FileToolError> {
                     "rollback_error": rollback_error.as_value(),
                 })));
             }
-            return Err(error.with_details(json!({
+            return Err(FileToolError::new(
+                "transaction_failed",
+                format!(
+                    "The file transaction failed and every captured path was restored: {}",
+                    error.message
+                ),
+            )
+            .with_details(json!({
                 "commit_scope": "none",
                 "rollback_state": "complete",
                 "affected_paths": backups.keys().map(|path| display_path(path)).collect::<Vec<_>>(),
+                "cause": error.as_value(),
             })));
         }
     }
@@ -1783,13 +3514,13 @@ fn rollback_paths(
 }
 
 /// Captures the bytes and permission mode needed to restore one transaction path.
-/// 淇濆瓨鍗曚釜浜嬪姟璺緞鎭㈠鎵€闇€鐨勫瓧鑺傚拰鏉冮檺妯″紡銆?
+/// 保存单个事务路径恢复所需的字节和权限模式。
 struct FileBackup {
     /// Original file bytes, or `None` when the path was absent before the transaction.
-    /// 鍘熷鏂囦欢瀛楄妭锛涘浜嬪姟鍓嶈矾寰勪笉瀛樺湪鍒欎负 `None`銆?
+    /// 原始文件字节；如事务前路径不存在则为 `None`。
     bytes: Option<Vec<u8>>,
     /// Original permission mode when the path was a regular file.
-    /// 鍘熷鏅€氭枃浠剁殑鏉冮檺妯″紡銆?
+    /// 原始普通文件的权限模式。
     permissions: Option<fs::Permissions>,
 }
 
@@ -1814,72 +3545,38 @@ fn atomic_write(
             ));
         }
     }
-    let temporary = path.with_extension(format!("vulcan-file-edit-{}", Uuid::new_v4()));
-    let result = (|| -> Result<(), FileToolError> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .map_err(|error| io_error("write_failed", &temporary, error))?;
-        file.write_all(bytes)
-            .map_err(|error| io_error("write_failed", &temporary, error))?;
-        let permissions = requested_permissions.cloned().or_else(|| {
-            fs::metadata(path)
-                .ok()
-                .map(|metadata| metadata.permissions())
-        });
-        if let Some(permissions) = permissions {
-            fs::set_permissions(&temporary, permissions)
-                .map_err(|error| io_error("write_failed", &temporary, error))?;
-        }
-        file.sync_all()
-            .map_err(|error| io_error("write_failed", &temporary, error))?;
-        drop(file);
-        let publish_result = if replace_existing {
-            publish_temporary_file(&temporary, path)
-        } else {
-            publish_temporary_file_without_replace(&temporary, path)
-        };
-        publish_result.map_err(|error| io_error("write_failed", path, error))?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".vulcan-file-edit-")
+        .tempfile_in(parent)
+        .map_err(|error| io_error("write_failed", parent, error))?;
+    let temporary_path = temporary.path().to_path_buf();
+    temporary
+        .write_all(bytes)
+        .map_err(|error| io_error("write_failed", &temporary_path, error))?;
+    let permissions = requested_permissions.cloned().or_else(|| {
+        fs::metadata(path)
+            .ok()
+            .map(|metadata| metadata.permissions())
+    });
+    if let Some(permissions) = permissions {
+        temporary
+            .as_file()
+            .set_permissions(permissions)
+            .map_err(|error| io_error("write_failed", &temporary_path, error))?;
     }
-    result
-}
-
-/// Publishes a same-directory temporary file with platform-appropriate replacement semantics.
-/// 使用平台适配的替换语义发布同目录临时文件。
-fn publish_temporary_file(temporary: &Path, path: &Path) -> std::io::Result<()> {
-    #[cfg(windows)]
-    {
-        // The host crate forbids FFI; keep the same-directory publish path recoverable on Windows.
-        // 宿主 crate 禁止 FFI；Windows 下保留同目录发布路径并由上层回滚保护。
-        match fs::rename(temporary, path) {
-            Ok(()) => Ok(()),
-            Err(_rename_error) if path_exists_including_symlink(path) => {
-                fs::remove_file(path)?;
-                fs::rename(temporary, path)
-            }
-            Err(error) => Err(error),
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        fs::rename(temporary, path)
-    }
-}
-
-/// Publishes a new temporary file without replacing an existing destination.
-/// 在不替换已有目标的前提下发布新的临时文件。
-fn publish_temporary_file_without_replace(temporary: &Path, path: &Path) -> std::io::Result<()> {
-    fs::hard_link(temporary, path)?;
-    if let Err(error) = fs::remove_file(temporary) {
-        let _ = fs::remove_file(path);
-        return Err(error);
-    }
-    Ok(())
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|error| io_error("write_failed", &temporary_path, error))?;
+    let published = if replace_existing {
+        temporary.persist(path)
+    } else {
+        temporary.persist_noclobber(path)
+    };
+    published
+        .map(|_| ())
+        .map_err(|error| io_error("write_failed", path, error.error))
 }
 
 /// Checks whether a path exists, including a dangling symbolic link.
@@ -1888,8 +3585,8 @@ fn path_exists_including_symlink(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok()
 }
 
-/// Validates that a write target has a real directory ancestor and no file or symlink blocks its parent chain.
-/// 验证写入目标的父目录已经存在，避免工具隐式创建目录。
+/// Validates that a write target has a real directory ancestor and no file or link blocks its parent chain.
+/// 验证写入目标具有真实目录祖先，且父路径链未被文件或链接阻断。
 fn validate_parent_directory(path: &Path) -> Result<(), FileToolError> {
     let Some(parent) = path.parent() else {
         return Ok(());
@@ -2099,19 +3796,6 @@ fn sorted_non_overlapping_replacements(
     Ok(replacements)
 }
 
-/// Applies sorted replacements from the end so earlier ranges keep original coordinates.
-/// 从文件尾部应用排序后的替换，使前面的范围保持原始坐标。
-fn apply_replacements(lines: &[String], replacements: &[ReplacementPlan]) -> Vec<String> {
-    let mut output = lines.to_vec();
-    for replacement in replacements.iter().rev() {
-        output.splice(
-            replacement.start..replacement.end,
-            replacement.new_lines.clone(),
-        );
-    }
-    output
-}
-
 /// Builds one host hunk from an original range and its replacement arrays.
 /// 根据原始范围和替换数组构建一条宿主 hunk。
 fn replacement_hunk(
@@ -2180,22 +3864,18 @@ fn operation_result(
 
 /// Inserts a bounded create/delete content summary into a canonical file row.
 /// 将有界的创建/删除正文摘要写入 canonical 文件行。
-fn insert_lifecycle_content(object: &mut Map<String, Value>, bytes: &[u8], lines: &[String]) {
+fn insert_lifecycle_content(object: &mut Map<String, Value>, text: &str, lines: &[String]) {
     object.insert(String::from("total_line_count"), json!(lines.len()));
-    if bytes.len() <= MAX_INLINE_LIFECYCLE_BYTES {
-        object.insert(
-            String::from("content"),
-            Value::String(String::from_utf8_lossy(bytes).to_string()),
-        );
+    if text.len() <= MAX_INLINE_LIFECYCLE_BYTES {
+        object.insert(String::from("content"), Value::String(text.to_string()));
         object.insert(
             String::from("content_mode"),
             Value::String(String::from("full")),
         );
         return;
     }
-    let content = String::from_utf8_lossy(bytes);
-    let head = content.chars().take(2000).collect::<String>();
-    let tail = content
+    let head = text.chars().take(2000).collect::<String>();
+    let tail = text
         .chars()
         .rev()
         .take(2000)
@@ -2209,6 +3889,34 @@ fn insert_lifecycle_content(object: &mut Map<String, Value>, bytes: &[u8], lines
     );
     object.insert(String::from("content_head"), Value::String(head));
     object.insert(String::from("content_tail"), Value::String(tail));
+}
+
+/// Builds a lifecycle change-set row from raw bytes without lossy text conversion.
+/// 从原始字节构建生命周期 change-set 行且不进行有损文本转换。
+fn raw_lifecycle_payload(path: &Path, change_kind: &str, snapshot: &RawFileSnapshot) -> Value {
+    let mut payload = Map::new();
+    payload.insert(String::from("resource_id"), json!("resource-1"));
+    payload.insert(String::from("change"), json!(change_kind));
+    payload.insert(String::from("path"), json!(display_path(path)));
+    payload.insert(String::from("byte_count"), json!(snapshot.bytes.len()));
+    match decode_text(&snapshot.bytes, None) {
+        Ok(decoded) => {
+            let document = TextDocument::from_decoded(decoded);
+            let lines = document.logical_lines();
+            insert_lifecycle_content(&mut payload, &document.text, &lines);
+            payload.insert(String::from("encoding"), json!(document.encoding.label()));
+            payload.insert(String::from("bom"), json!(document.bom.is_present()));
+            payload.insert(
+                String::from("line_ending"),
+                json!(document.line_ending_label()),
+            );
+        }
+        Err(_) => {
+            payload.insert(String::from("binary"), Value::Bool(true));
+            payload.insert(String::from("content_mode"), json!("omitted"));
+        }
+    }
+    Value::Object(payload)
 }
 
 /// Returns whether an actual line satisfies the selected strict matching mode.
@@ -2455,27 +4163,84 @@ fn required_string(object: &Map<String, Value>, field: &str) -> Result<String, F
     Ok(value.to_string())
 }
 
-/// Resolves a relative path against the workspace while rejecting lexical escapes.
-/// 根据工作区解析相对路径，并拒绝词法路径逃逸。
+/// Returns one required string field while allowing intentionally empty text content.
+/// 返回一个必填字符串字段，同时允许有意提供的空文本内容。
+fn required_text(object: &Map<String, Value>, field: &str) -> Result<String, FileToolError> {
+    object
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| {
+            FileToolError::new(
+                "invalid_arguments",
+                format!("{field} is required and must be a string."),
+            )
+        })
+}
+
+/// Resolves a local path and validates workspace containment only when the path belongs to it.
+/// 解析本地路径，并且仅在路径归属于工作区时校验工作区包含关系。
 fn resolve_path(workspace_root: &Path, raw_path: &str) -> Result<PathBuf, FileToolError> {
     let expanded_path = expand_environment_path(raw_path)?;
     let candidate = PathBuf::from(expanded_path);
-    if !candidate.is_absolute()
-        && candidate
-            .components()
-            .any(|component| component == Component::ParentDir)
-    {
-        return Err(FileToolError::new(
-            "invalid_arguments",
-            "Relative paths may not escape the workspace with parent-directory components.",
-        ));
-    }
+    let workspace_path = if workspace_root.is_absolute() {
+        lexical_normalize(workspace_root)
+    } else {
+        lexical_normalize(
+            &std::env::current_dir()
+                .map_err(|error| io_error("path_not_found", workspace_root, error))?
+                .join(workspace_root),
+        )
+    };
     let path = if candidate.is_absolute() {
         candidate
     } else {
-        workspace_root.join(candidate)
+        workspace_path.join(candidate)
     };
-    Ok(lexical_normalize(&path))
+    let path = lexical_normalize(&path);
+    // Workspace containment protects only paths that actually belong to the workspace. External
+    // absolute or parent-relative paths are ordinary local paths until host authorization exists.
+    // 工作区包含校验仅保护实际属于工作区的路径；外部绝对或父级相对路径在宿主授权接入前按普通本地路径处理。
+    if path.starts_with(&workspace_path) {
+        ensure_path_within_workspace(&workspace_path, &path)?;
+    }
+    Ok(path)
+}
+
+/// Verifies the nearest existing path resolves under the canonical workspace root.
+/// 验证最近的已存在路径在规范化后仍位于工作区根目录内。
+fn ensure_path_within_workspace(
+    workspace_root: &Path,
+    candidate: &Path,
+) -> Result<(), FileToolError> {
+    let canonical_workspace = fs::canonicalize(workspace_root)
+        .map_err(|error| io_error("path_not_found", workspace_root, error))?;
+    let mut existing_ancestor = candidate.to_path_buf();
+    loop {
+        match fs::symlink_metadata(&existing_ancestor) {
+            Ok(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if !existing_ancestor.pop() {
+                    return Err(FileToolError::new(
+                        "path_outside_workspace",
+                        "A path addressed through the current workspace must resolve inside that workspace.",
+                    ));
+                }
+            }
+            Err(error) => {
+                return Err(io_error("path_not_found", &existing_ancestor, error));
+            }
+        }
+    }
+    let canonical_ancestor = fs::canonicalize(&existing_ancestor)
+        .map_err(|error| io_error("path_not_found", &existing_ancestor, error))?;
+    if !canonical_ancestor.starts_with(&canonical_workspace) {
+        return Err(FileToolError::new(
+            "path_outside_workspace",
+            "A path addressed through the current workspace resolves outside that workspace.",
+        ));
+    }
+    Ok(())
 }
 
 /// Expands the established `${env:NAME}` path placeholders exactly once.
@@ -2551,22 +4316,157 @@ fn lexical_normalize(path: &Path) -> PathBuf {
     output
 }
 
-/// Returns a stable path key suitable for grouping operations in one request.
-/// 返回适合在单次请求内归并操作的稳定路径键。
-fn path_key(path: &Path) -> String {
-    let value = display_path(path);
+/// Returns a canonical resource key through the nearest existing path ancestor.
+/// 通过最近的已存在路径祖先返回规范资源键。
+///
+/// # Parameters
+/// 参数
+/// `path` is an already workspace-authorized lexical path that may not exist yet.
+/// `path` 是已经过工作区授权、但可能尚不存在的词法路径。
+///
+/// # Returns
+/// 返回值
+/// A canonical identity that collapses in-workspace symbolic-link aliases.
+/// 返回可折叠工作区内符号链接别名的规范身份。
+fn path_key(path: &Path) -> Result<String, FileToolError> {
+    let mut ancestor = path.to_path_buf();
+    let mut suffix = Vec::new();
+    let canonical_ancestor = loop {
+        match fs::canonicalize(&ancestor) {
+            Ok(canonical) => break canonical,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let component = ancestor.file_name().ok_or_else(|| {
+                    FileToolError::new(
+                        "path_not_found",
+                        format!(
+                            "No existing ancestor could identify the resource path: {}",
+                            display_path(path)
+                        ),
+                    )
+                })?;
+                suffix.push(component.to_os_string());
+                if !ancestor.pop() {
+                    return Err(io_error("path_not_found", path, error));
+                }
+            }
+            Err(error) => return Err(io_error("path_not_found", &ancestor, error)),
+        }
+    };
+    let mut identity = canonical_ancestor;
+    for component in suffix.iter().rev() {
+        identity.push(component);
+    }
+    let value = display_path(&identity);
     #[cfg(windows)]
     {
-        value.to_ascii_lowercase()
+        Ok(value.to_ascii_lowercase())
     }
     #[cfg(not(windows))]
     {
-        value
+        Ok(value)
     }
 }
 
-/// Returns a slash-normalized path string for model and host payloads.
-/// 返回供模型和宿主载荷使用的斜杠归一化路径字符串。
+/// Resolves stable per-path mutation locks in lexical order to prevent deadlocks.
+/// 按词法顺序解析稳定的逐路径变更锁以避免死锁。
+fn acquire_resource_locks(paths: &[PathBuf]) -> Result<Vec<Arc<Mutex<()>>>, FileToolError> {
+    let mut keys = paths
+        .iter()
+        .map(|path| path_key(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    keys.sort();
+    keys.dedup();
+    let registry = FILE_RESOURCE_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut registry = registry.lock().map_err(|_| {
+        FileToolError::new(
+            "execution_failed",
+            "The native file resource-lock registry is poisoned.",
+        )
+    })?;
+    registry.retain(|_, weak| weak.strong_count() > 0);
+    Ok(keys
+        .into_iter()
+        .map(|key| {
+            if let Some(lock) = registry.get(&key).and_then(Weak::upgrade) {
+                return lock;
+            }
+            let lock = Arc::new(Mutex::new(()));
+            registry.insert(key, Arc::downgrade(&lock));
+            lock
+        })
+        .collect())
+}
+
+/// Acquires an already sorted resource-lock set for one complete transaction.
+/// 为一个完整事务获取已排序的资源锁集合。
+fn lock_resource_set<'a>(
+    locks: &'a [Arc<Mutex<()>>],
+) -> Result<Vec<MutexGuard<'a, ()>>, FileToolError> {
+    locks
+        .iter()
+        .map(|lock| {
+            lock.lock().map_err(|_| {
+                FileToolError::new(
+                    "execution_failed",
+                    "A native file resource lock is poisoned.",
+                )
+            })
+        })
+        .collect()
+}
+
+/// Resolves a stable editor language hint from one file name without inspecting its contents.
+/// 仅根据文件名解析稳定的编辑器语言提示，不检查文件内容。
+fn language_for_path(path: &Path) -> &'static str {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if matches!(file_name.as_str(), "dockerfile" | "containerfile") {
+        return "dockerfile";
+    }
+    if matches!(file_name.as_str(), "makefile" | "gnumakefile") {
+        return "makefile";
+    }
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "c" | "h" => "c",
+        "cc" | "cpp" | "cxx" | "hpp" | "hh" => "cpp",
+        "cs" => "csharp",
+        "css" => "css",
+        "go" => "go",
+        "htm" | "html" => "html",
+        "java" => "java",
+        "js" | "mjs" | "cjs" => "javascript",
+        "json" | "jsonc" => "json",
+        "jsx" => "jsx",
+        "lua" => "lua",
+        "md" | "mdx" => "markdown",
+        "php" => "php",
+        "ps1" | "psm1" => "powershell",
+        "py" => "python",
+        "rb" => "ruby",
+        "rs" => "rust",
+        "sh" | "bash" | "zsh" => "shellscript",
+        "sql" => "sql",
+        "swift" => "swift",
+        "toml" => "toml",
+        "ts" | "mts" | "cts" => "typescript",
+        "tsx" => "tsx",
+        "xml" => "xml",
+        "yaml" | "yml" => "yaml",
+        _ => "text",
+    }
+}
+
+/// Converts one path into the stable slash-separated display form.
+/// 将路径转换为稳定的斜杠分隔展示形式。
 fn display_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
@@ -2709,7 +4609,7 @@ struct PreparedChange {
     /// 用于回滚和竞态检查的原始字节。
     before_bytes: Option<Vec<u8>>,
     /// Original permission bits reused when a deleted or moved file is restored or recreated.
-    /// 鍒犻櫎鎴栫Щ鍔ㄦ枃浠舵仮澶嶆垨閲嶆柊鍒涘缓鏃朵繚鐣欏師濮嬫潈闄愭ā寮忋€?
+    /// 删除或移动文件恢复或重新创建时保留的原始权限模式。
     original_permissions: Option<fs::Permissions>,
     /// Final bytes to publish, when the resource remains present.
     /// 资源最终保留时需要发布的字节。
@@ -2730,22 +4630,37 @@ struct TextSnapshot {
     /// 原始字节。
     bytes: Vec<u8>,
     /// Original filesystem permission bits.
-    /// 鍘熷鏂囦欢绯荤粺鏉冮檺妯″紡銆?
+    /// 原始文件系统权限模式。
     permissions: fs::Permissions,
+    /// Strict decoded document with encoding and per-line terminators.
+    /// 带编码与逐行终止符的严格解码文档。
+    document: TextDocument,
     /// UTF-8 BOM presence.
     /// 是否存在 UTF-8 BOM。
     bom: bool,
     /// Normalized logical lines without terminators.
     /// 去除终止符后的归一化逻辑行。
     lines: Vec<String>,
-    /// Dominant original line ending.
-    /// 原文占主导的换行符。
-    line_ending: String,
     /// Whether the original text ended with a line terminator.
     /// 原文是否以换行符结束。
     final_newline: bool,
     /// Host-generated version token.
     /// 宿主生成的版本令牌。
+    version: String,
+}
+
+/// One regular-file snapshot used by byte-preserving lifecycle operations.
+/// 供字节保持型生命周期操作使用的一份普通文件快照。
+#[derive(Debug, Clone)]
+struct RawFileSnapshot {
+    /// Original file bytes.
+    /// 原始文件字节。
+    bytes: Vec<u8>,
+    /// Original filesystem permissions.
+    /// 原始文件系统权限。
+    permissions: fs::Permissions,
+    /// Host-generated byte and metadata version token.
+    /// 宿主生成的字节与元数据版本令牌。
     version: String,
 }
 
@@ -2773,18 +4688,44 @@ struct ReplacementPlan {
     match_mode: String,
 }
 
-/// Reads one UTF-8 snapshot and computes a host version token.
-/// 读取一份 UTF-8 快照并计算宿主版本令牌。
+/// Reads one auto-detected text snapshot and computes a host version token.
+/// 读取一份自动检测编码的文本快照并计算宿主版本令牌。
 fn read_snapshot(path: &Path) -> Result<TextSnapshot, FileToolError> {
+    read_snapshot_with_encoding(path, None)
+}
+
+/// Reads one strict text snapshot with an optional explicit encoding override.
+/// 使用可选的显式编码覆盖读取一份严格文本快照。
+fn read_snapshot_with_encoding(
+    path: &Path,
+    requested_encoding: Option<&str>,
+) -> Result<TextSnapshot, FileToolError> {
+    let raw = read_raw_snapshot(path)?;
+    let decoded = decode_text(&raw.bytes, requested_encoding).map_err(codec_error)?;
+    let document = TextDocument::from_decoded(decoded);
+    let bom = document.bom.is_present();
+    let final_newline = document.final_newline();
+    let lines = document.logical_lines();
+    Ok(TextSnapshot {
+        version: raw.version,
+        bytes: raw.bytes,
+        permissions: raw.permissions,
+        document,
+        bom,
+        lines,
+        final_newline,
+    })
+}
+
+/// Reads one bounded regular file without requiring any text decoding.
+/// 在不要求任何文本解码的情况下读取一份有界普通文件。
+fn read_raw_snapshot(path: &Path) -> Result<RawFileSnapshot, FileToolError> {
     let link_metadata =
         fs::symlink_metadata(path).map_err(|error| io_error("path_not_found", path, error))?;
     if link_metadata.file_type().is_symlink() || !link_metadata.is_file() {
         return Err(FileToolError::new(
             "unsupported_file_type",
-            format!(
-                "The target is not a regular UTF-8 file: {}",
-                display_path(path)
-            ),
+            format!("The target is not a regular file: {}", display_path(path)),
         ));
     }
     if link_metadata.len() > MAX_TEXT_BYTES as u64 {
@@ -2813,63 +4754,11 @@ fn read_snapshot(path: &Path) -> Result<TextSnapshot, FileToolError> {
             "The text file exceeds the native file size limit.",
         ));
     }
-    let (bom, body) = if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
-        (true, &bytes[3..])
-    } else {
-        (false, bytes.as_slice())
-    };
-    let text = String::from_utf8(body.to_vec()).map_err(|_| {
-        FileToolError::new(
-            "unsupported_file_type",
-            "Only UTF-8 text files are supported by native file tools.",
-        )
-    })?;
-    let final_newline = text.ends_with('\n') || text.ends_with('\r');
-    let line_ending = dominant_line_ending(&text);
-    let lines = logical_lines(&text);
-    Ok(TextSnapshot {
+    Ok(RawFileSnapshot {
         version: version_token(&bytes, &metadata),
         bytes,
         permissions: metadata.permissions(),
-        bom,
-        lines,
-        line_ending,
-        final_newline,
     })
-}
-
-/// Splits text into logical lines while normalizing CRLF and CR separators.
-/// 将文本按逻辑行拆分，同时归一化 CRLF 和 CR 分隔符。
-fn logical_lines(text: &str) -> Vec<String> {
-    if text.is_empty() {
-        return Vec::new();
-    }
-    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-    let mut parts = normalized
-        .split('\n')
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if normalized.ends_with('\n') {
-        let _ = parts.pop();
-    }
-    parts
-}
-
-/// Returns the dominant original line-ending style.
-/// 返回原文占主导的换行符样式。
-fn dominant_line_ending(text: &str) -> String {
-    let crlf = text.matches("\r\n").count();
-    let lf = text.matches('\n').count().saturating_sub(crlf);
-    let cr = text.matches('\r').count().saturating_sub(crlf);
-    if crlf == 0 && lf == 0 && cr == 0 {
-        String::from("\n")
-    } else if crlf >= lf && crlf >= cr {
-        String::from("\r\n")
-    } else if cr >= lf {
-        String::from("\r")
-    } else {
-        String::from("\n")
-    }
 }
 
 /// Renders logical lines with a selected BOM, line ending, and final-newline state.
@@ -2888,6 +4777,71 @@ fn render_text(lines: &[String], bom: bool, line_ending: &str, final_newline: bo
     }
     bytes.extend_from_slice(output.as_bytes());
     bytes
+}
+
+/// Renders line-array replacements while preserving untouched per-line terminators and encoding.
+/// 渲染行数组替换，同时保留未触及的逐行终止符与编码。
+fn render_snapshot_replacements(
+    snapshot: &TextSnapshot,
+    replacements: &[ReplacementPlan],
+    final_newline: bool,
+) -> Result<Vec<u8>, FileToolError> {
+    let mut lines = snapshot.document.lines.clone();
+    for replacement in replacements.iter().rev() {
+        let local_ending = lines
+            .get(replacement.start..replacement.end)
+            .and_then(|slice| slice.iter().find_map(|line| line.ending))
+            .or_else(|| {
+                replacement
+                    .start
+                    .checked_sub(1)
+                    .and_then(|index| lines.get(index))
+                    .and_then(|line| line.ending)
+            })
+            .or_else(|| lines.get(replacement.end).and_then(|line| line.ending))
+            .unwrap_or(snapshot.document.preferred_line_ending);
+        let has_following_line = replacement.end < lines.len();
+        let original_text = lines
+            .get(replacement.start..replacement.end)
+            .unwrap_or_default()
+            .iter()
+            .map(|line| {
+                let mut text = line.content.clone();
+                if let Some(ending) = line.ending {
+                    text.push_str(ending.as_str());
+                }
+                text
+            })
+            .collect::<String>();
+        let mut normalized_replacement = replacement.new_lines.join("\n");
+        if has_following_line && !replacement.new_lines.is_empty() {
+            normalized_replacement.push('\n');
+        }
+        let inserted = parse_document_lines(&rewrite_replacement_line_endings(
+            &normalized_replacement,
+            &original_text,
+            local_ending,
+        ));
+        lines.splice(replacement.start..replacement.end, inserted);
+    }
+    if let Some(last) = lines.last_mut() {
+        last.ending = if final_newline {
+            Some(
+                last.ending
+                    .unwrap_or(snapshot.document.preferred_line_ending),
+            )
+        } else {
+            None
+        };
+    }
+    let mut text = String::new();
+    for line in lines {
+        text.push_str(&line.content);
+        if let Some(ending) = line.ending {
+            text.push_str(ending.as_str());
+        }
+    }
+    encode_text(&text, snapshot.document.encoding, snapshot.document.bom).map_err(codec_error)
 }
 
 /// Computes a content-and-metadata version token for optimistic concurrency checks.
@@ -2952,23 +4906,25 @@ fn pattern_matches(name: &str, pattern: Option<&str>) -> bool {
     let Some(pattern) = pattern.filter(|value| !value.is_empty()) else {
         return true;
     };
-    glob_matches(name.as_bytes(), pattern.as_bytes())
+    glob_matches(name, pattern)
 }
 
-/// Performs bounded wildcard matching without allocating a glob engine.
-/// 不分配 glob 引擎即可执行有界通配符匹配。
-fn glob_matches(name: &[u8], pattern: &[u8]) -> bool {
+/// Performs bounded Unicode-scalar wildcard matching without a glob engine.
+/// 不依赖 glob 引擎执行有界 Unicode 标量通配符匹配。
+fn glob_matches(name: &str, pattern: &str) -> bool {
+    let name = name.chars().collect::<Vec<_>>();
+    let pattern = pattern.chars().collect::<Vec<_>>();
     let mut name_index = 0;
     let mut pattern_index = 0;
     let mut star = None;
     let mut star_name_index = 0;
     while name_index < name.len() {
         if pattern_index < pattern.len()
-            && (pattern[pattern_index] == b'?' || pattern[pattern_index] == name[name_index])
+            && (pattern[pattern_index] == '?' || pattern[pattern_index] == name[name_index])
         {
             name_index += 1;
             pattern_index += 1;
-        } else if pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
+        } else if pattern_index < pattern.len() && pattern[pattern_index] == '*' {
             star = Some(pattern_index);
             star_name_index = name_index;
             pattern_index += 1;
@@ -2980,7 +4936,7 @@ fn glob_matches(name: &[u8], pattern: &[u8]) -> bool {
             return false;
         }
     }
-    while pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
+    while pattern_index < pattern.len() && pattern[pattern_index] == '*' {
         pattern_index += 1;
     }
     pattern_index == pattern.len()
@@ -2989,7 +4945,9 @@ fn glob_matches(name: &[u8], pattern: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_EDIT_LINES_PER_ARRAY, MAX_READ_LINES, execute_file, execute_file_edit, resolve_path,
+        MAX_EDIT_LINES_PER_ARRAY, MAX_READ_LINES, MAX_READ_RESPONSE_BYTES, PreparedChange,
+        commit_changes, display_path, execute_apply_patch, execute_file, execute_file_edit,
+        path_key, read_raw_snapshot, resolve_path, verify_preconditions, whole_file_payload,
     };
     use serde_json::{Value, json};
     use std::fs;
@@ -3000,12 +4958,152 @@ mod tests {
     /// 验证原生路径解析会展开既有的环境变量占位符语法。
     #[test]
     fn environment_path_placeholders_are_expanded_once() {
-        let workspace = Path::new("D:/workspace");
         let expected_root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let resolved = resolve_path(workspace, "${env:CARGO_MANIFEST_DIR}/src")
+        let resolved = resolve_path(expected_root, "${env:CARGO_MANIFEST_DIR}/src")
             .expect("environment placeholder should resolve");
 
         assert_eq!(resolved, expected_root.join("src"));
+    }
+
+    /// Verifies absolute and parent-relative paths outside the workspace remain accessible.
+    /// 验证工作区之外的绝对路径与父级相对路径仍可访问。
+    #[test]
+    fn paths_outside_workspace_are_not_treated_as_workspace_paths() {
+        let parent = tempdir().expect("create shared parent directory");
+        let workspace = parent.path().join("workspace");
+        let outside = parent.path().join("outside");
+        fs::create_dir(&workspace).expect("create workspace directory");
+        fs::create_dir(&outside).expect("create outside directory");
+
+        let absolute = resolve_path(&workspace, outside.to_string_lossy().as_ref())
+            .expect("outside absolute path should resolve");
+        let parent_relative = resolve_path(&workspace, "../outside/example.txt")
+            .expect("outside parent-relative path should resolve");
+
+        assert_eq!(absolute, outside);
+        assert_eq!(parent_relative, outside.join("example.txt"));
+    }
+
+    /// Verifies every native mutation path can operate outside the workspace through the shared resolver.
+    /// 验证每条原生变更路径都能通过共享解析器操作工作区外文件。
+    #[tokio::test]
+    async fn native_file_tools_operate_on_external_paths() {
+        let parent = tempdir().expect("create shared parent directory");
+        let workspace = parent.path().join("workspace");
+        let outside = parent.path().join("outside");
+        let outside_path = outside.join("sample.txt");
+        fs::create_dir(&workspace).expect("create workspace directory");
+        fs::create_dir(&outside).expect("create outside directory");
+
+        execute_file(
+            workspace.clone(),
+            json!({
+                "action": "write",
+                "path": display_path(&outside_path),
+                "content": "before\n"
+            }),
+        )
+        .await
+        .expect("external absolute write should succeed");
+
+        let read = execute_file(
+            workspace.clone(),
+            json!({"action": "read", "path": "../outside/sample.txt"}),
+        )
+        .await
+        .expect("external parent-relative read should succeed");
+        assert_eq!(read.model_output["content"], json!("before\n"));
+
+        execute_file_edit(
+            workspace.clone(),
+            json!({
+                "path": display_path(&outside_path),
+                "old_string": "before",
+                "new_string": "after edit"
+            }),
+        )
+        .await
+        .expect("external exact edit should succeed");
+        assert_eq!(
+            fs::read_to_string(&outside_path).expect("read externally edited file"),
+            "after edit\n"
+        );
+
+        execute_apply_patch(
+            workspace.clone(),
+            String::from(
+                "*** Begin Patch\n*** Update File: ../outside/sample.txt\n-after edit\n+after patch\n*** End Patch\n",
+            ),
+        )
+        .await
+        .expect("external Apply Patch update should succeed");
+        assert_eq!(
+            fs::read_to_string(&outside_path).expect("read externally patched file"),
+            "after patch\n"
+        );
+
+        execute_file(
+            workspace,
+            json!({"action": "delete", "path": display_path(&outside_path)}),
+        )
+        .await
+        .expect("external absolute delete should succeed");
+        assert!(!outside_path.exists());
+    }
+
+    /// Verifies a symbolic-link parent cannot redirect a request outside the workspace.
+    /// 验证符号链接父目录不能把请求重定向到工作区之外。
+    #[test]
+    fn symbolic_link_escape_is_rejected() {
+        let workspace = tempdir().expect("create workspace directory");
+        let outside = tempdir().expect("create outside directory");
+        let link = workspace.path().join("outside-link");
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.path(), &link).expect("create directory symlink");
+        #[cfg(windows)]
+        if let Err(error) = std::os::windows::fs::symlink_dir(outside.path(), &link) {
+            if error.kind() == std::io::ErrorKind::PermissionDenied
+                || error.raw_os_error() == Some(1314)
+            {
+                return;
+            }
+            panic!("create directory symlink: {error}");
+        }
+
+        let error = resolve_path(workspace.path(), "outside-link/new.txt")
+            .expect_err("symbolic-link escape should fail");
+        assert_eq!(error.code, "path_outside_workspace");
+    }
+
+    /// Verifies an in-workspace directory symlink shares the target resource identity.
+    /// 验证工作区内目录符号链接与目标目录共享同一资源身份。
+    #[test]
+    fn symbolic_link_aliases_share_one_resource_key() {
+        let workspace = tempdir().expect("create workspace directory");
+        let target_directory = workspace.path().join("target");
+        let alias_directory = workspace.path().join("alias");
+        fs::create_dir(&target_directory).expect("create target directory");
+        fs::write(target_directory.join("sample.txt"), "content\n").expect("write target file");
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target_directory, &alias_directory)
+            .expect("create directory symlink");
+        #[cfg(windows)]
+        if let Err(error) = std::os::windows::fs::symlink_dir(&target_directory, &alias_directory) {
+            if error.kind() == std::io::ErrorKind::PermissionDenied
+                || error.raw_os_error() == Some(1314)
+            {
+                return;
+            }
+            panic!("create directory symlink: {error}");
+        }
+
+        let direct_key = path_key(&target_directory.join("sample.txt"))
+            .expect("direct target should have an identity");
+        let alias_key = path_key(&alias_directory.join("sample.txt"))
+            .expect("alias target should have an identity");
+        assert_eq!(alias_key, direct_key);
     }
 
     /// Verifies malformed environment references fail with an explicit diagnostic.
@@ -3598,5 +5696,842 @@ mod tests {
         .await
         .expect_err("line-array limit should be rejected");
         assert_eq!(oversized_edit.code, "output_limit_exceeded");
+    }
+
+    /// Verifies the public read contract returns an actual range and code content without Lxx text.
+    /// 验证公开读取契约返回真实范围以及不含 Lxx 文本的代码正文。
+    #[tokio::test]
+    async fn native_read_returns_code_content_and_real_range() {
+        let directory = tempdir().expect("create temporary directory");
+        fs::write(
+            directory.path().join("sample.rs"),
+            "one\r\ntwo\r\nthree\r\n",
+        )
+        .expect("write fixture");
+        let response = execute_file(
+            directory.path().to_path_buf(),
+            json!({
+                "action": "read",
+                "path": "sample.rs",
+                "start_line": 2,
+                "end_line": 3
+            }),
+        )
+        .await
+        .expect("native read should succeed");
+        assert_eq!(response.model_output["start_line"], json!(2));
+        assert_eq!(response.model_output["end_line"], json!(3));
+        assert_eq!(response.model_output["content"], json!("two\r\nthree\r\n"));
+        assert_eq!(response.model_output["request_path"], json!("sample.rs"));
+        assert_eq!(response.model_output["resource_id"], json!("resource-1"));
+        assert_eq!(response.model_output["language"], json!("rust"));
+        assert_eq!(response.model_output["lines"][0]["line_number"], json!(2));
+        assert_eq!(response.model_output["lines"][0]["content"], json!("two"));
+        assert!(
+            !response.model_output["content"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("L2")
+        );
+
+        let beyond_end = execute_file(
+            directory.path().to_path_buf(),
+            json!({
+                "action": "read",
+                "path": "sample.rs",
+                "start_line": 100
+            }),
+        )
+        .await
+        .expect("read beyond the file should return a real empty range");
+        assert_eq!(
+            beyond_end.model_output["requested_range"]["start_line"],
+            json!(100)
+        );
+        assert_eq!(
+            beyond_end.model_output["actual_range"]["start_line"],
+            json!(4)
+        );
+        assert_eq!(
+            beyond_end.model_output["actual_range"]["end_line"],
+            json!(3)
+        );
+        assert_eq!(beyond_end.model_output["content"], json!(""));
+        assert_eq!(beyond_end.model_output["lines"], json!([]));
+    }
+
+    /// Verifies non-recursive directory listing returns child directories as discoverable entries.
+    /// 验证非递归目录列举会把子目录作为可发现条目返回。
+    #[tokio::test]
+    async fn native_list_returns_child_directories() {
+        let directory = tempdir().expect("create temporary directory");
+        fs::create_dir(directory.path().join("src")).expect("create child directory");
+        fs::write(directory.path().join("README.md"), "read me\n").expect("write child file");
+
+        let response = execute_file(
+            directory.path().to_path_buf(),
+            json!({"action": "list", "path": ".", "recursive": false}),
+        )
+        .await
+        .expect("native list should succeed");
+        let entries = response.model_output["entries"]
+            .as_array()
+            .expect("list entries should be an array");
+
+        assert!(entries.iter().any(|entry| {
+            entry["kind"] == "directory"
+                && entry["path"]
+                    .as_str()
+                    .is_some_and(|path| path.ends_with("/src"))
+        }));
+        assert!(entries.iter().any(|entry| entry["kind"] == "file"));
+    }
+
+    /// Verifies duplicated read presentation fields still remain inside the serialized response budget.
+    /// 验证重复展示读取内容的多个字段仍保持在序列化响应预算以内。
+    #[tokio::test]
+    async fn native_read_truncates_by_complete_serialized_payload_size() {
+        let directory = tempdir().expect("create temporary directory");
+        let line = format!("{}\n", "x".repeat(1024));
+        let source = line.repeat(3_000);
+        fs::write(directory.path().join("large.txt"), source).expect("write large fixture");
+
+        let response = execute_file(
+            directory.path().to_path_buf(),
+            json!({"action": "read", "path": "large.txt"}),
+        )
+        .await
+        .expect("bounded native read should succeed");
+        let encoded = serde_json::to_vec(&response.model_output)
+            .expect("native read result should serialize");
+
+        assert!(encoded.len() <= MAX_READ_RESPONSE_BYTES);
+        assert_eq!(response.model_output["truncated"], json!(true));
+        assert!(response.model_output["next_start_line"].is_number());
+        assert!(
+            response.model_output["returned_line_count"]
+                .as_u64()
+                .is_some_and(|count| count < 2_000)
+        );
+    }
+
+    /// Verifies one oversized logical line fails explicitly instead of returning an empty self-looping range.
+    /// 验证单条超大逻辑行会显式失败，而不是返回导致循环读取的空范围。
+    #[tokio::test]
+    async fn native_read_rejects_one_line_larger_than_response_limit() {
+        let directory = tempdir().expect("create temporary directory");
+        fs::write(
+            directory.path().join("one-line.txt"),
+            "x".repeat(MAX_READ_RESPONSE_BYTES),
+        )
+        .expect("write oversized one-line fixture");
+
+        let error = execute_file(
+            directory.path().to_path_buf(),
+            json!({"action": "read", "path": "one-line.txt"}),
+        )
+        .await
+        .expect_err("one oversized logical line should fail explicitly");
+
+        assert_eq!(error.code, "output_limit_exceeded");
+        assert!(error.message.contains("Logical line 1"));
+    }
+
+    /// Verifies exact replacement preserves a detected GBK encoding and untouched LFCR endings.
+    /// 验证精确替换保留检测到的 GBK 编码与未触及的 LFCR 换行。
+    #[tokio::test]
+    async fn exact_edit_preserves_legacy_encoding_and_lfcr() {
+        let directory = tempdir().expect("create temporary directory");
+        let path = directory.path().join("legacy.txt");
+        let source = "标题\n\r旧值\n\r尾部";
+        let (encoded, _, had_errors) = encoding_rs::GBK.encode(source);
+        assert!(!had_errors);
+        fs::write(&path, encoded.as_ref()).expect("write GBK fixture");
+        let response = execute_file_edit(
+            directory.path().to_path_buf(),
+            json!({
+                "path": "legacy.txt",
+                "old_string": "旧值",
+                "new_string": "新值"
+            }),
+        )
+        .await
+        .expect("exact edit should succeed");
+        assert_eq!(response.model_output["encoding"], json!("GBK"));
+        let bytes = fs::read(&path).expect("read edited GBK fixture");
+        let decoded = encoding_rs::GBK
+            .decode_without_bom_handling_and_without_replacement(&bytes)
+            .expect("edited GBK should decode");
+        assert_eq!(decoded, "标题\n\r新值\n\r尾部");
+    }
+
+    /// Verifies exact edit rejects zero and ambiguous matches and supports explicit replace-all.
+    /// 验证精确编辑拒绝零命中与歧义命中，并支持显式全部替换。
+    #[tokio::test]
+    async fn exact_edit_enforces_match_cardinality_and_replace_all() {
+        let directory = tempdir().expect("create temporary directory");
+        let path = directory.path().join("sample.txt");
+        fs::write(&path, "值🙂\n值🙂\n").expect("write Unicode fixture");
+
+        let missing = execute_file_edit(
+            directory.path().to_path_buf(),
+            json!({"path": "sample.txt", "old_string": "不存在", "new_string": "新"}),
+        )
+        .await
+        .expect_err("zero match should fail");
+        assert_eq!(missing.code, "match_not_found");
+
+        let ambiguous = execute_file_edit(
+            directory.path().to_path_buf(),
+            json!({"path": "sample.txt", "old_string": "值🙂", "new_string": "新"}),
+        )
+        .await
+        .expect_err("multiple matches should fail by default");
+        assert_eq!(ambiguous.code, "ambiguous_match");
+        assert_eq!(ambiguous.details["match_count"], json!(2));
+
+        let replaced = execute_file_edit(
+            directory.path().to_path_buf(),
+            json!({
+                "path": "sample.txt",
+                "old_string": "值🙂",
+                "new_string": "新值",
+                "replace_all": true
+            }),
+        )
+        .await
+        .expect("replace_all should succeed");
+        assert_eq!(replaced.model_output["match_count"], json!(2));
+        assert_eq!(
+            fs::read_to_string(path).expect("read replaced fixture"),
+            "新值\n新值\n"
+        );
+    }
+
+    /// Verifies exact-edit hunks contain actual complete lines rather than raw substring arguments.
+    /// 验证精确编辑 hunk 包含实际完整行，而不是原始子串参数。
+    #[tokio::test]
+    async fn exact_edit_change_set_uses_actual_complete_lines() {
+        let directory = tempdir().expect("create temporary directory");
+        let path = directory.path().join("sample.rs");
+        fs::write(&path, "let value = old();\nnext();\n").expect("write inline edit fixture");
+
+        let response = execute_file_edit(
+            directory.path().to_path_buf(),
+            json!({"path": "sample.rs", "old_string": "old", "new_string": "new"}),
+        )
+        .await
+        .expect("inline exact edit should succeed");
+        let change_set = response.change_set.expect("inline edit change set");
+        let hunk = &change_set["files"][0]["hunks"][0];
+        assert_eq!(
+            hunk["delete"],
+            json!([{"line": 1, "content": "let value = old();"}])
+        );
+        assert_eq!(
+            hunk["insert"],
+            json!([{"line": 1, "content": "let value = new();"}])
+        );
+        assert_eq!(hunk["after"], json!("next();"));
+    }
+
+    /// Verifies replace-all newline edits merge overlapping line projections into one true hunk.
+    /// 验证全部替换换行时会把重叠行投影合并为一个真实 hunk。
+    #[tokio::test]
+    async fn exact_edit_change_set_merges_overlapping_newline_matches() {
+        let directory = tempdir().expect("create temporary directory");
+        let path = directory.path().join("sample.txt");
+        fs::write(&path, "a\nb\nc").expect("write newline edit fixture");
+
+        let response = execute_file_edit(
+            directory.path().to_path_buf(),
+            json!({
+                "path": "sample.txt",
+                "old_string": "\n",
+                "new_string": "",
+                "replace_all": true
+            }),
+        )
+        .await
+        .expect("newline replace-all should succeed");
+        let change_set = response.change_set.expect("newline edit change set");
+        let hunks = change_set["files"][0]["hunks"]
+            .as_array()
+            .expect("hunks should be an array");
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(
+            hunks[0]["delete"],
+            json!([
+                {"line": 1, "content": "a"},
+                {"line": 2, "content": "b"},
+                {"line": 3, "content": "c"}
+            ])
+        );
+        assert_eq!(hunks[0]["insert"], json!([{"line": 1, "content": "abc"}]));
+        assert_eq!(
+            fs::read_to_string(path).expect("read newline edit result"),
+            "abc"
+        );
+    }
+
+    /// Verifies an unrepresentable legacy edit leaves the original bytes untouched.
+    /// 验证传统编码无法表示新字符时原始字节保持不变。
+    #[tokio::test]
+    async fn exact_edit_unrepresentable_legacy_text_writes_nothing() {
+        let directory = tempdir().expect("create temporary directory");
+        let path = directory.path().join("legacy.txt");
+        let (encoded, _, had_errors) = encoding_rs::GBK.encode("旧值\n");
+        assert!(!had_errors);
+        let original = encoded.into_owned();
+        fs::write(&path, &original).expect("write GBK fixture");
+
+        let error = execute_file_edit(
+            directory.path().to_path_buf(),
+            json!({"path": "legacy.txt", "old_string": "旧值", "new_string": "🙂"}),
+        )
+        .await
+        .expect_err("GBK cannot represent emoji");
+        assert_eq!(error.code, "encoding_unrepresentable");
+        assert_eq!(fs::read(path).expect("read unchanged GBK bytes"), original);
+    }
+
+    /// Verifies Apply Patch supports anchored update plus add in one atomic change set.
+    /// 验证 Apply Patch 在一个原子变更集中支持锚定更新与新增。
+    #[tokio::test]
+    async fn apply_patch_updates_and_adds_atomically() {
+        let directory = tempdir().expect("create temporary directory");
+        fs::write(
+            directory.path().join("sample.rs"),
+            "fn greet() {\r\n    println!(\"old\");\r\n}\r\n",
+        )
+        .expect("write source fixture");
+        let response = execute_apply_patch(
+            directory.path().to_path_buf(),
+            String::from(
+                "*** Begin Patch\n*** Update File: sample.rs\n@@ fn greet() {\n-    println!(\"old\");\n+    println!(\"new\");\n*** Add File: added.txt\n+created\n*** End Patch\n",
+            ),
+        )
+        .await
+        .expect("patch should succeed");
+        assert_eq!(response.model_output["file_count"], json!(2));
+        assert_eq!(
+            fs::read_to_string(directory.path().join("sample.rs")).expect("read update"),
+            "fn greet() {\r\n    println!(\"new\");\r\n}\r\n"
+        );
+        assert_eq!(
+            fs::read_to_string(directory.path().join("added.txt")).expect("read add"),
+            "created\n"
+        );
+    }
+
+    /// Verifies Apply Patch preserves mixed endings on shifted unchanged context lines.
+    /// 验证 Apply Patch 会在上下文行发生位移时保留各自的混合行尾。
+    #[tokio::test]
+    async fn apply_patch_preserves_mixed_context_endings_after_insertion() {
+        let directory = tempdir().expect("create temporary directory");
+        let path = directory.path().join("mixed.txt");
+        fs::write(&path, "a\r\nb\n\rc\rd").expect("write mixed-ending fixture");
+
+        execute_apply_patch(
+            directory.path().to_path_buf(),
+            String::from(
+                "*** Begin Patch\n*** Update File: mixed.txt\n@@\n+inserted\n a\n b\n c\n*** End Patch\n",
+            ),
+        )
+        .await
+        .expect("mixed-ending patch should succeed");
+
+        assert_eq!(
+            fs::read_to_string(path).expect("read patched mixed-ending file"),
+            "inserted\r\na\r\nb\n\rc\rd"
+        );
+    }
+
+    /// Verifies failed patch preflight leaves every file operation unapplied.
+    /// 验证 patch 预校验失败会使每项文件操作都保持未应用。
+    #[tokio::test]
+    async fn apply_patch_preflight_failure_writes_nothing() {
+        let directory = tempdir().expect("create temporary directory");
+        fs::write(directory.path().join("sample.txt"), "current\n").expect("write source fixture");
+        let error = execute_apply_patch(
+            directory.path().to_path_buf(),
+            String::from(
+                "*** Begin Patch\n*** Add File: added.txt\n+created\n*** Update File: sample.txt\n-missing\n+changed\n*** End Patch\n",
+            ),
+        )
+        .await
+        .expect_err("missing context should fail preflight");
+        assert_eq!(error.code, "patch_context_not_found");
+        assert!(!directory.path().join("added.txt").exists());
+        assert_eq!(
+            fs::read_to_string(directory.path().join("sample.txt")).expect("read source"),
+            "current\n"
+        );
+    }
+
+    /// Verifies lifecycle move preserves binary bytes without requiring text decoding.
+    /// 验证生命周期移动无需文本解码即可保持二进制字节。
+    #[tokio::test]
+    async fn native_move_preserves_binary_file_bytes() {
+        let directory = tempdir().expect("create temporary directory");
+        let bytes = vec![0_u8, 0xFF, 0x10, 0x80, 0x7F];
+        fs::write(directory.path().join("source.bin"), &bytes).expect("write binary fixture");
+        let response = execute_file(
+            directory.path().to_path_buf(),
+            json!({
+                "action": "move",
+                "path": "source.bin",
+                "destination": "moved.bin"
+            }),
+        )
+        .await
+        .expect("binary move should succeed");
+
+        assert!(!directory.path().join("source.bin").exists());
+        assert_eq!(
+            fs::read(directory.path().join("moved.bin")).expect("read moved binary"),
+            bytes
+        );
+        assert_eq!(
+            response
+                .change_set
+                .as_ref()
+                .and_then(|change_set| change_set.pointer("/files/0/binary")),
+            Some(&Value::Bool(true))
+        );
+    }
+
+    /// Verifies Apply Patch can delete an opaque binary file transactionally.
+    /// 验证 Apply Patch 可以通过事务删除不透明二进制文件。
+    #[tokio::test]
+    async fn apply_patch_deletes_binary_file_without_lossy_preview() {
+        let directory = tempdir().expect("create temporary directory");
+        fs::write(
+            directory.path().join("obsolete.bin"),
+            [0_u8, 0xFF, 0x01, 0x80],
+        )
+        .expect("write binary fixture");
+        let response = execute_apply_patch(
+            directory.path().to_path_buf(),
+            String::from("*** Begin Patch\n*** Delete File: obsolete.bin\n*** End Patch\n"),
+        )
+        .await
+        .expect("binary delete should succeed");
+
+        assert!(!directory.path().join("obsolete.bin").exists());
+        assert_eq!(response.model_output["operation_count"], json!(1));
+        assert_eq!(
+            response
+                .change_set
+                .as_ref()
+                .and_then(|change_set| change_set.pointer("/files/0/content_mode")),
+            Some(&json!("omitted"))
+        );
+    }
+
+    /// Verifies the End of File marker rejects a matching block before the real file end.
+    /// 验证 End of File 标记会拒绝真实文件末尾之前的匹配块。
+    #[tokio::test]
+    async fn apply_patch_end_of_file_marker_is_enforced() {
+        let directory = tempdir().expect("create temporary directory");
+        fs::write(directory.path().join("sample.txt"), "first\nlast\n")
+            .expect("write text fixture");
+        let error = execute_apply_patch(
+            directory.path().to_path_buf(),
+            String::from(
+                "*** Begin Patch\n*** Update File: sample.txt\n-first\n+changed\n*** End of File\n*** End Patch\n",
+            ),
+        )
+        .await
+        .expect_err("non-terminal block should fail the EOF constraint");
+
+        assert_eq!(error.code, "patch_context_not_found");
+        assert_eq!(
+            fs::read_to_string(directory.path().join("sample.txt")).expect("read unchanged file"),
+            "first\nlast\n"
+        );
+    }
+
+    /// Verifies native write converts from the detected source encoding and gives new files LF.
+    /// 验证原生整文件写入会从已检测源编码转换，并为新文件使用 LF。
+    #[tokio::test]
+    async fn native_write_converts_encoding_and_applies_new_file_defaults() {
+        let directory = tempdir().expect("create temporary directory");
+        let converted_path = directory.path().join("converted.txt");
+        fs::write(
+            &converted_path,
+            [0xEF, 0xBB, 0xBF, b'o', b'l', b'd', b'\r', b'\n'],
+        )
+        .expect("write UTF-8 BOM fixture");
+
+        execute_file(
+            directory.path().to_path_buf(),
+            json!({
+                "action": "write",
+                "path": "converted.txt",
+                "content": "first\nsecond\n",
+                "encoding": "utf-16le"
+            }),
+        )
+        .await
+        .expect("encoding conversion should succeed");
+        let converted = fs::read(&converted_path).expect("read converted fixture");
+        assert!(converted.starts_with(&[0xFF, 0xFE]));
+        let decoded = crate::text_encoding::decode_text(&converted, None)
+            .expect("converted UTF-16LE should decode");
+        assert_eq!(decoded.text, "first\r\nsecond\r\n");
+
+        let ambiguous_path = directory.path().join("ambiguous.txt");
+        fs::write(&ambiguous_path, [0xE9]).expect("write sparse windows-1252 fixture");
+        execute_file(
+            directory.path().to_path_buf(),
+            json!({
+                "action": "write",
+                "path": "ambiguous.txt",
+                "content": "café",
+                "encoding": "windows-1252"
+            }),
+        )
+        .await
+        .expect("explicit encoding should confirm an ambiguous source");
+        assert_eq!(
+            fs::read(&ambiguous_path).expect("read explicit legacy output"),
+            b"caf\xE9"
+        );
+
+        execute_file(
+            directory.path().to_path_buf(),
+            json!({
+                "action": "write",
+                "path": "new.txt",
+                "content": "a\r\nb\n\rc\rd"
+            }),
+        )
+        .await
+        .expect("new file should succeed");
+        assert_eq!(
+            fs::read(directory.path().join("new.txt")).expect("read new file"),
+            b"a\nb\nc\nd"
+        );
+    }
+
+    /// Verifies whole-file write accepts empty content for both creation and truncation.
+    /// 验证整文件写入接受空内容以创建空文件或清空已有文件。
+    #[tokio::test]
+    async fn native_write_accepts_empty_content() {
+        let directory = tempdir().expect("create temporary directory");
+        let existing_path = directory.path().join("existing.txt");
+        fs::write(&existing_path, "before\n").expect("write existing fixture");
+
+        execute_file(
+            directory.path().to_path_buf(),
+            json!({"action": "write", "path": "empty.txt", "content": ""}),
+        )
+        .await
+        .expect("empty file creation should succeed");
+        execute_file(
+            directory.path().to_path_buf(),
+            json!({"action": "write", "path": "existing.txt", "content": ""}),
+        )
+        .await
+        .expect("existing file truncation should succeed");
+
+        assert_eq!(
+            fs::read(directory.path().join("empty.txt")).expect("read created empty file"),
+            Vec::<u8>::new()
+        );
+        assert_eq!(
+            fs::read(existing_path).expect("read truncated file"),
+            Vec::<u8>::new()
+        );
+    }
+
+    /// Verifies all six public file actions and their action-specific rejection paths.
+    /// 验证六个公开 file 动作及其动作专属拒绝路径。
+    #[tokio::test]
+    async fn native_file_actions_enforce_single_path_contracts() {
+        let directory = tempdir().expect("create temporary directory");
+        fs::create_dir(directory.path().join("nested")).expect("create nested directory");
+        fs::write(directory.path().join("nested/item.txt"), "value\n")
+            .expect("write nested fixture");
+
+        let listed = execute_file(
+            directory.path().to_path_buf(),
+            json!({"action": "list", "path": ".", "recursive": true, "glob": "*.txt"}),
+        )
+        .await
+        .expect("list should succeed");
+        assert_eq!(listed.model_output["action"], json!("list"));
+        assert_eq!(
+            listed.model_output["entries"].as_array().map(Vec::len),
+            Some(1)
+        );
+        fs::write(directory.path().join("nested/文.rs"), "fn main() {}\n")
+            .expect("write Unicode fixture");
+        let unicode_glob = execute_file(
+            directory.path().to_path_buf(),
+            json!({"action": "list", "path": "nested", "glob": "?.rs"}),
+        )
+        .await
+        .expect("Unicode scalar glob should succeed");
+        assert_eq!(
+            unicode_glob.model_output["entries"]
+                .as_array()
+                .map(Vec::len),
+            Some(1)
+        );
+
+        let stat = execute_file(
+            directory.path().to_path_buf(),
+            json!({"action": "stat", "path": "nested/item.txt"}),
+        )
+        .await
+        .expect("stat should succeed");
+        assert_eq!(stat.model_output["action"], json!("stat"));
+        assert_eq!(stat.model_output["kind"], json!("file"));
+        assert_eq!(stat.model_output["preferred_line_ending"], json!("lf"));
+
+        let invalid_read = execute_file(
+            directory.path().to_path_buf(),
+            json!({"action": "read", "path": "nested/item.txt", "recursive": true}),
+        )
+        .await
+        .expect_err("read must reject list-only fields");
+        assert_eq!(invalid_read.code, "invalid_arguments");
+
+        let missing_content = execute_file(
+            directory.path().to_path_buf(),
+            json!({"action": "write", "path": "missing-content.txt"}),
+        )
+        .await
+        .expect_err("write must require content");
+        assert_eq!(missing_content.code, "invalid_arguments");
+
+        let directory_delete = execute_file(
+            directory.path().to_path_buf(),
+            json!({"action": "delete", "path": "nested"}),
+        )
+        .await
+        .expect_err("delete must reject directories");
+        assert_eq!(directory_delete.code, "unsupported_file_type");
+
+        fs::write(directory.path().join("source.txt"), "source\n").expect("write move source");
+        fs::write(directory.path().join("destination.txt"), "destination\n")
+            .expect("write move destination");
+        let destination_exists = execute_file(
+            directory.path().to_path_buf(),
+            json!({
+                "action": "move",
+                "path": "source.txt",
+                "destination": "destination.txt"
+            }),
+        )
+        .await
+        .expect_err("move must reject an existing destination");
+        assert_eq!(destination_exists.code, "destination_exists");
+
+        let deleted = execute_file(
+            directory.path().to_path_buf(),
+            json!({"action": "delete", "path": "source.txt"}),
+        )
+        .await
+        .expect("regular file delete should succeed");
+        assert_eq!(deleted.model_output["action"], json!("delete"));
+        assert!(!directory.path().join("source.txt").exists());
+    }
+
+    /// Verifies native mutation results expose stable operation and resource identities.
+    /// 验证原生变更结果暴露稳定的操作与资源标识。
+    #[tokio::test]
+    async fn native_change_set_v2_maps_operations_to_resources() {
+        let directory = tempdir().expect("create temporary directory");
+        fs::write(directory.path().join("sample.txt"), "old\n").expect("write fixture");
+
+        let response = execute_file_edit(
+            directory.path().to_path_buf(),
+            json!({
+                "path": "sample.txt",
+                "old_string": "old",
+                "new_string": "new"
+            }),
+        )
+        .await
+        .expect("exact edit should succeed");
+        let extension = response
+            .change_set
+            .as_ref()
+            .and_then(|change_set| change_set.pointer("/extensions/vulcan.file_tools.v2"))
+            .expect("native v2 extension");
+
+        assert_eq!(extension["source_tool"], json!("file_edit"));
+        assert_eq!(
+            extension["operation_results"][0]["operation_id"],
+            json!("file-edit-0")
+        );
+        assert_eq!(
+            extension["operation_results"][0]["resource_id"],
+            json!("resource-1")
+        );
+        assert_eq!(
+            extension["resources"][0]["request_path"],
+            json!("sample.txt")
+        );
+        assert!(extension["resources"][0]["before_text_format"].is_object());
+        assert!(extension["resources"][0]["after_text_format"].is_object());
+        assert_eq!(
+            extension["resources"][0]["before_text_format"]["preferred_line_ending"],
+            json!("lf")
+        );
+        assert_eq!(
+            extension["resources"][0]["after_text_format"]["preferred_line_ending"],
+            json!("lf")
+        );
+        assert_eq!(
+            extension["resources"][0]["actual_ranges"][0]["operation_id"],
+            json!("file-edit-0")
+        );
+        assert_eq!(extension["transaction"]["commit_scope"], json!("all"));
+    }
+
+    /// Verifies multiple anchored hunks and a move share one atomic Apply Patch resource.
+    /// 验证多个锚定 hunk 与移动操作共享一个原子 Apply Patch 资源。
+    #[tokio::test]
+    async fn apply_patch_supports_multiple_hunks_with_move() {
+        let directory = tempdir().expect("create temporary directory");
+        fs::write(
+            directory.path().join("source.txt"),
+            "section-a\r\nold-a\r\nsection-b\r\nold-b\r\n",
+        )
+        .expect("write fixture");
+
+        let response = execute_apply_patch(
+            directory.path().to_path_buf(),
+            String::from(
+                "*** Begin Patch\n*** Update File: source.txt\n*** Move to: moved.txt\n@@ section-a\n-old-a\n+new-a\n@@ section-b\n-old-b\n+new-b\n*** End Patch\n",
+            ),
+        )
+        .await
+        .expect("multi-hunk move should succeed");
+
+        assert!(!directory.path().join("source.txt").exists());
+        assert_eq!(
+            fs::read_to_string(directory.path().join("moved.txt")).expect("read moved result"),
+            "section-a\r\nnew-a\r\nsection-b\r\nnew-b\r\n"
+        );
+        let extension = response
+            .change_set
+            .as_ref()
+            .and_then(|change_set| change_set.pointer("/extensions/vulcan.file_tools.v2"))
+            .expect("native v2 extension");
+        assert_eq!(extension["source_tool"], json!("apply_patch"));
+        assert_eq!(
+            extension["resources"][0]["operation_indexes"],
+            json!([0, 0, 0])
+        );
+        assert_eq!(extension["resources"][0]["hunk_indexes"], json!([0, 1]));
+    }
+
+    /// Verifies byte-version changes are rejected immediately before publication.
+    /// 验证原始字节版本变化会在发布前立即被拒绝。
+    #[test]
+    fn native_precondition_detects_stale_file_bytes() {
+        let directory = tempdir().expect("create temporary directory");
+        let path = directory.path().join("sample.txt");
+        fs::write(&path, "before\n").expect("write fixture");
+        let snapshot = read_raw_snapshot(&path).expect("read raw snapshot");
+        let prepared = PreparedChange {
+            change_kind: String::from("modify"),
+            source_path: path.clone(),
+            destination_path: None,
+            original_version: snapshot.version,
+            before_bytes: Some(snapshot.bytes),
+            original_permissions: Some(snapshot.permissions),
+            after_bytes: Some(b"after\n".to_vec()),
+            file_payload: whole_file_payload(
+                &path,
+                "modify",
+                &[String::from("before")],
+                &[String::from("after")],
+            ),
+            operation_results: Vec::new(),
+        };
+        fs::write(&path, "external\n").expect("mutate fixture externally");
+
+        let error = verify_preconditions(&[prepared]).expect_err("stale bytes must fail");
+        assert_eq!(error.code, "stale_file");
+        assert_eq!(
+            fs::read_to_string(path).expect("read external content"),
+            "external\n"
+        );
+    }
+
+    /// Verifies a failed second publication restores the first file and reports a transaction error.
+    /// 验证第二次发布失败时会恢复第一个文件并报告事务错误。
+    #[test]
+    fn commit_failure_rolls_back_and_reports_transaction_failed() {
+        let directory = tempdir().expect("create temporary directory");
+        let first_path = directory.path().join("first.txt");
+        let blocked_path = directory.path().join("blocked");
+        fs::write(&first_path, "before\n").expect("write first fixture");
+        fs::create_dir(&blocked_path).expect("create blocking directory");
+        let first = read_raw_snapshot(&first_path).expect("read first snapshot");
+        let changes = vec![
+            PreparedChange {
+                change_kind: String::from("modify"),
+                source_path: first_path.clone(),
+                destination_path: None,
+                original_version: first.version,
+                before_bytes: Some(first.bytes),
+                original_permissions: Some(first.permissions),
+                after_bytes: Some(b"after\n".to_vec()),
+                file_payload: json!({}),
+                operation_results: Vec::new(),
+            },
+            PreparedChange {
+                change_kind: String::from("create"),
+                source_path: blocked_path,
+                destination_path: None,
+                original_version: String::new(),
+                before_bytes: None,
+                original_permissions: None,
+                after_bytes: Some(b"blocked\n".to_vec()),
+                file_payload: json!({}),
+                operation_results: Vec::new(),
+            },
+        ];
+
+        let error = commit_changes(&changes).expect_err("second publish should fail");
+        assert_eq!(error.code, "transaction_failed");
+        assert_eq!(error.details["rollback_state"], json!("complete"));
+        assert_eq!(
+            fs::read_to_string(first_path).expect("read rolled-back first file"),
+            "before\n"
+        );
+    }
+
+    /// Verifies rollback failure reports every path as requiring a fresh read.
+    /// 验证回滚失败会报告每个需要重新读取的路径。
+    #[test]
+    fn rollback_failure_reports_disk_state_uncertain() {
+        let directory = tempdir().expect("create temporary directory");
+        let source_directory = directory.path().join("a-source-directory");
+        let destination = directory.path().join("z-destination.txt");
+        fs::create_dir(&source_directory).expect("create invalid source directory");
+        let change = PreparedChange {
+            change_kind: String::from("rename"),
+            source_path: source_directory,
+            destination_path: Some(destination.clone()),
+            original_version: String::from("test-only"),
+            before_bytes: Some(b"original\n".to_vec()),
+            original_permissions: None,
+            after_bytes: Some(b"published\n".to_vec()),
+            file_payload: json!({}),
+            operation_results: Vec::new(),
+        };
+
+        let error = commit_changes(&[change]).expect_err("rollback should be uncertain");
+        assert_eq!(error.code, "disk_state_uncertain");
+        assert_eq!(error.details["rollback_state"], json!("failed"));
+        assert!(!destination.exists());
     }
 }

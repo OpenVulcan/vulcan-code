@@ -1275,12 +1275,30 @@ fn tool_result_projection_preserves_runtime_event_order() {
         "tool_name": "vulcan_file_list",
         "display_state": "completed",
     })));
-    assert!(append_runtime_event_projection_to_state(
-        &mut runtime_state,
-        session_id,
-        "3003",
-        &finished,
-    ).expect("valid runtime event record identities"));
+    let (projected_runtime_state, changed_record_ids) =
+        append_runtime_event_projection_to_owned_state(
+            runtime_state,
+            session_id,
+            "3003",
+            &finished,
+        )
+        .map_err(|(_, error)| error)
+        .expect("valid runtime event record identities");
+    runtime_state = projected_runtime_state;
+    assert_eq!(changed_record_ids.len(), 2);
+    assert_eq!(
+        runtime_state
+            .conversation_state
+            .records
+            .iter()
+            .filter(|record| changed_record_ids.contains(&record.id))
+            .map(|record| record.record_kind)
+            .collect::<Vec<_>>(),
+        vec![
+            SessionMessageRecordKind::ToolCallOutput,
+            SessionMessageRecordKind::ToolDetailOutput,
+        ]
+    );
 
     let visible_kinds = runtime_state
         .conversation_state
@@ -1349,6 +1367,62 @@ fn tool_result_projection_preserves_runtime_event_order() {
             .and_then(|display| display.get("kind"))
             .and_then(serde_json::Value::as_str)
             .is_some()
+    );
+}
+
+/// Verifies an empty host result still creates one immutable terminal detail boundary.
+/// 验证空宿主结果仍会创建一条不可变的终态详情边界。
+#[test]
+fn empty_tool_result_creates_terminal_detail_boundary() {
+    let session_id = test_session_id();
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    let started = RuntimeEvent::new(
+        RuntimeEventKind::ToolStarted,
+        "工具调用 · call-empty · file",
+        "## Tool Call",
+    )
+    .with_metadata(Some(json!({
+        "tool_call_id": "call-empty",
+        "tool_name": "file",
+    })));
+    append_runtime_event_projection_to_state(&mut runtime_state, session_id, "3010", &started)
+        .expect("tool start should project");
+    let finished = RuntimeEvent::new(
+        RuntimeEventKind::ToolFinished,
+        "工具返回 · call-empty",
+        String::new(),
+    )
+    .with_metadata(Some(json!({
+        "tool_call_id": "call-empty",
+        "tool_name": "file",
+        "display_state": "completed",
+    })));
+
+    let (runtime_state, changed_record_ids) = append_runtime_event_projection_to_owned_state(
+        runtime_state,
+        session_id,
+        "3011",
+        &finished,
+    )
+    .map_err(|(_, error)| error)
+    .expect("empty tool result should project");
+
+    assert_eq!(changed_record_ids.len(), 2);
+    let detail_record = runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .find(|record| record.record_kind == SessionMessageRecordKind::ToolDetailOutput)
+        .expect("empty result should retain a terminal detail record");
+    assert!(detail_record.body.is_empty());
+    assert_eq!(
+        detail_record
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("display"))
+            .and_then(|display| display.get("status"))
+            .and_then(serde_json::Value::as_str),
+        Some("completed")
     );
 }
 
@@ -1591,6 +1665,14 @@ fn tool_request_projection_preserves_one_card_through_execution() {
         tool_cards[0]
             .metadata
             .as_ref()
+            .and_then(|metadata| metadata.get("tool_display_state"))
+            .and_then(serde_json::Value::as_str),
+        Some("completed")
+    );
+    assert_eq!(
+        tool_cards[0]
+            .metadata
+            .as_ref()
             .and_then(|metadata| metadata.get("result"))
             .and_then(|result| result.get("status"))
             .and_then(serde_json::Value::as_str),
@@ -1692,12 +1774,17 @@ fn tool_result_projection_preserves_raw_change_set_host_result() {
     let mut runtime_state = SessionRuntimeStateEntry::default();
     let started = RuntimeEvent::new(
         RuntimeEventKind::ToolStarted,
-        "工具调用 · call-change · vulcan_file_create",
+        "工具调用 · call-change · file",
         "## Tool Call",
     )
     .with_metadata(Some(json!({
         "tool_call_id": "call-change",
-        "tool_name": "vulcan_file_create",
+        "tool_name": "file",
+        "arguments": {
+            "action": "write",
+            "path": "src/demo.lua",
+            "content": "return 2\nreturn 3\n"
+        },
     })));
     assert!(
         append_runtime_event_projection_to_state(&mut runtime_state, session_id, "3100", &started,)
@@ -1710,17 +1797,28 @@ fn tool_result_projection_preserves_raw_change_set_host_result() {
     )
     .with_metadata(Some(json!({
         "tool_call_id": "call-change",
-        "tool_name": "vulcan_file_create",
+        "tool_name": "file",
         "display_state": "completed",
         "host_result": {
             "kind": "change_set",
             "payload": {
                 "mode": "applied",
                 "files": [{
-                    "change": "create",
+                    "resource_id": "resource-1",
+                    "change": "modify",
                     "path": "src/demo.lua",
-                    "content_mode": "full",
-                    "content": "return 1\n"
+                    "hunks": [{
+                        "before": "",
+                        "delete": [
+                            {"line": 1, "content": "return 1"},
+                            {"line": 2, "content": "return old"}
+                        ],
+                        "insert": [
+                            {"line": 1, "content": "return 2"},
+                            {"line": 2, "content": "return 3"}
+                        ],
+                        "after": ""
+                    }]
                 }]
             }
         }
@@ -1753,9 +1851,28 @@ fn tool_result_projection_preserves_raw_change_set_host_result() {
             .and_then(|payload| payload.get("files"))
             .and_then(serde_json::Value::as_array)
             .and_then(|files| files.first())
-            .and_then(|file| file.get("content"))
+            .and_then(|file| file.pointer("/hunks/0/delete/1/content"))
             .and_then(serde_json::Value::as_str),
-        Some("return 1\n")
+        Some("return old")
+    );
+    let detail_record = runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .find(|record| record.record_kind == SessionMessageRecordKind::ToolDetailOutput)
+        .expect("immutable tool detail should be appended");
+    assert_eq!(
+        detail_record
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("host_result"))
+            .and_then(|host_result| host_result.get("payload"))
+            .and_then(|payload| payload.get("files"))
+            .and_then(serde_json::Value::as_array)
+            .and_then(|files| files.first())
+            .and_then(|file| file.pointer("/hunks/0/insert/1/content"))
+            .and_then(serde_json::Value::as_str),
+        Some("return 3")
     );
 }
 

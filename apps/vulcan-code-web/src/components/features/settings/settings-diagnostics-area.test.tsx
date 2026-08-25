@@ -14,6 +14,8 @@ const SETTINGS_ACTIONS = {
   onSaveGitCommitSettings: async () => undefined,
   onSaveProviderRetrySettings: async () => undefined,
   onSaveProviderRequestTraceSettings: async () => undefined,
+  onOpenSelectedProviderApiTraceDirectory: async () => undefined,
+  onClearSelectedProviderApiTraceDirectory: async () => false,
   onSaveMcpServer: async () => undefined,
   onRemoveMcpServer: async () => undefined,
   onRestoreArchivedConversations: async () => undefined,
@@ -44,7 +46,10 @@ describe("runtime diagnostics provider request trace setting", () => {
 
     expect(markup).toContain("Provider 请求追踪");
     expect(markup).toContain("已关闭");
-    expect(markup).toContain("temp/provider-request-trace");
+    expect(markup).toContain("temp/provider-api-trace");
+    expect(markup).toContain("解析前原始返回");
+    expect(markup).toContain("打开当前会话追踪目录");
+    expect(markup).toContain("清除当前会话追踪");
     expect(markup).toContain('data-state="unchecked"');
   });
 });

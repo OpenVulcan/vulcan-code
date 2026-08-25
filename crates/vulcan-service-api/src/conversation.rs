@@ -325,6 +325,9 @@ pub enum ToolRequestProgressState {
     /// One complete JSON root has been assembled even though the surrounding Provider response remains open.
     /// 已组装出一个完整 JSON 根值，但外围 Provider 响应仍未结束。
     ArgumentsAssembled,
+    /// The provider completed the tool argument document and execution has not started yet.
+    /// Provider 已完成工具参数文档，但工具执行尚未开始。
+    Ready,
 }
 
 /// Carries the latest safe argument-formation snapshot for one tool request.
@@ -370,8 +373,8 @@ pub struct ToolRequestProgressChangedDelta {
     /// Stable request-stream identity used for replacement and clearing.
     /// 用于替换与清除的稳定请求流标识。
     pub request_stream_id: String,
-    /// Latest safe snapshot, or null after the request leaves formation.
-    /// 最新安全快照；请求离开构造阶段后为空。
+    /// Latest safe snapshot, or null when validation fails or the request is aborted.
+    /// 最新安全快照；校验失败或请求中止后为空。
     #[serde(default)]
     pub progress: Option<ToolRequestProgressSnapshot>,
 }

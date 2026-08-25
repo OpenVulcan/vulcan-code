@@ -31,6 +31,7 @@ import {
   toolRequestProgress,
   toolRequestProgressForDisplay,
   toolRequestProgressStateLabel,
+  toolRequestStreamId,
   toolRequestStreamMetricsLabel,
   toolExecutionSubagentLabel,
   toolExecutionSummary,
@@ -119,7 +120,7 @@ export function ToolExecutionBlock(props: {
   // liveRequestProgress 在参数 Token 流期间仅改变当前工具卡子树。
   const liveRequestProgress = useConversationToolRequestProgress(
     props.conversationId,
-    retainedRequestProgress?.requestStreamId ?? null,
+    toolRequestStreamId(props.blocks),
   );
   // resolvedRequestProgress prefers the newer external snapshot while retaining durable lifecycle boundaries.
   // resolvedRequestProgress 优先使用较新的外部快照，同时保留持久生命周期边界。
@@ -128,7 +129,11 @@ export function ToolExecutionBlock(props: {
     : retainedRequestProgress;
   // requestProgressForDisplay stops the durable ready marker from overriding the actual tool execution state.
   // requestProgressForDisplay 阻止持久化的 ready 标记覆盖真实工具执行状态。
-  const requestProgress = toolRequestProgressForDisplay(resolvedRequestProgress, displayState);
+  const requestProgress = toolRequestProgressForDisplay(
+    resolvedRequestProgress,
+    displayState,
+    liveRequestProgress !== null,
+  );
   // requestCardProgress keeps request formation distinct from actual tool execution while reusing the resolved card.
   // requestCardProgress 在复用既有卡片的同时，保持请求构造与真实工具执行语义分离。
   const requestCardProgress = requestProgress ? {

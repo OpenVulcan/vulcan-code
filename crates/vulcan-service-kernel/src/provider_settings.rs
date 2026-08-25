@@ -14,7 +14,8 @@ use vulcan_service_api::{
 
 use crate::{
     SharedServiceBridgeState, emit_workbench_event, mutate_provider_configuration,
-    refresh_settings_projection_locked,
+    refresh_settings_projection_locked, require_segmented_session_directory_for_retained_session,
+    shell_host_from_state,
 };
 
 /// Hard delay ceiling shared by the retry settings page and runtime rate-limit policy.
@@ -171,6 +172,78 @@ pub(super) async fn service_save_provider_request_trace_settings(
     .await?;
     emit_workbench_event(&app, &workbench);
     Ok(workbench)
+}
+
+/// Opens the selected retained session's exact Provider API trace directory.
+/// 打开当前选中保留会话的精确 Provider API 追踪目录。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the selected conversation, retained locator, and host shell authority.
+/// `state` 持有当前会话、保留定位信息与宿主 Shell 权限。
+///
+/// # Returns
+/// 返回值
+/// The canonical directory path after the host file manager accepts the request.
+/// 宿主文件管理器接受请求后返回 canonical 目录路径。
+pub(super) fn service_open_selected_provider_api_trace_directory(
+    state: SharedServiceBridgeState,
+) -> Result<String, String> {
+    let (session_id, session_directory) = selected_provider_trace_session(&state)?;
+    let trace_directory =
+        vulcan_workspace_store::workspace_store::prepare_provider_api_trace_directory(
+            &session_directory,
+            session_id,
+        )?;
+    let trace_path = trace_directory.to_string_lossy().into_owned();
+    shell_host_from_state(&state)?.open_path(&trace_path)?;
+    Ok(trace_path)
+}
+
+/// Clears the selected retained session's exact Provider API trace directory.
+/// 清除当前选中保留会话的精确 Provider API 追踪目录。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the selected conversation and retained storage locator.
+/// `state` 持有当前会话与保留存储定位信息。
+///
+/// # Returns
+/// 返回值
+/// `true` when trace evidence existed and was removed, otherwise `false`.
+/// 存在追踪证据且已移除时返回 `true`，否则返回 `false`。
+pub(super) fn service_clear_selected_provider_api_trace_directory(
+    state: SharedServiceBridgeState,
+) -> Result<bool, String> {
+    let (session_id, session_directory) = selected_provider_trace_session(&state)?;
+    vulcan_workspace_store::workspace_store::clear_provider_api_trace_directory(
+        &session_directory,
+        session_id,
+    )
+}
+
+/// Resolves the exact selected session identity and retained directory without filesystem scans.
+/// 在不扫描文件系统的情况下解析当前会话的精确身份与保留目录。
+fn selected_provider_trace_session(
+    state: &SharedServiceBridgeState,
+) -> Result<(uuid::Uuid, std::path::PathBuf), String> {
+    let data_root = vulcan_workspace_store::data_plane::application_data_root();
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let selected_conversation_id = guard
+        .workbench
+        .selected_conversation_id
+        .as_deref()
+        .ok_or_else(|| String::from("No conversation is selected for Provider API traces."))?;
+    let session_id = uuid::Uuid::parse_str(selected_conversation_id).map_err(|error| {
+        format!(
+            "Selected conversation id `{selected_conversation_id}` is not a valid session id: {error}"
+        )
+    })?;
+    let session_directory =
+        require_segmented_session_directory_for_retained_session(&guard, &data_root, session_id)?;
+    Ok((session_id, session_directory))
 }
 
 /// Builds the browser-facing retry settings summary from shared Provider configuration.

@@ -131,7 +131,7 @@ export function splitTextLines(source: string): string[] {
   if (!source) {
     return [];
   }
-  const normalized = source.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const normalized = source.replace(/\r\n|\n\r|\r|\n/g, "\n");
   const withoutFinalNewline = normalized.endsWith("\n") ? normalized.slice(0, -1) : normalized;
   return withoutFinalNewline ? withoutFinalNewline.split("\n") : [];
 }

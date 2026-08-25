@@ -36,7 +36,7 @@ pub use contract::{
 };
 pub use runner::{
     SessionLifecycleBeginRequest, SessionLifecycleFinishRequest, SessionLifecycleRunner,
-    SessionTurnTerminalStatus,
+    SessionThreadState, SessionThreadStatus, SessionTurnTerminalStatus,
 };
 pub use storage::{SessionBoundaryStateStore, SessionBoundaryStorageWrite, SessionBoundaryStore};
 pub use subagent::{

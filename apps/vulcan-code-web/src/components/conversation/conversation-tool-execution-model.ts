@@ -131,16 +131,41 @@ export function toolRequestProgress(blocks: ToolExecutionConversationBlock[]): T
   return latest;
 }
 
+// toolRequestStreamId resolves the newest retained request identity even after execution overwrites its display state.
+// toolRequestStreamId 即使执行状态覆盖展示状态后，也会解析最新保留的请求身份。
+export function toolRequestStreamId(blocks: ToolExecutionConversationBlock[]): string | null {
+  // latest tracks the exact newest coordinator revision retained on the merged tool row.
+  // latest 跟踪合并工具行上保留的精确最新协调器修订。
+  let latest: { requestStreamId: string; revision: number } | null = null;
+  for (const block of blocks) {
+    // requestStreamId and revision form the closed identity ordering contract.
+    // requestStreamId 与 revision 构成封闭的身份排序契约。
+    const requestStreamId = metadataString(block.rawMetadata, ["request_stream_id"]);
+    const revision = numericMetadata(metadataValue(block.rawMetadata, ["request_revision"]));
+    if (!requestStreamId || revision === null) {
+      continue;
+    }
+    if (!latest || revision > latest.revision) {
+      latest = { requestStreamId, revision };
+    }
+  }
+  return latest?.requestStreamId ?? null;
+}
+
 // toolRequestProgressForDisplay keeps request formation visible only while it owns the tool card status.
 // toolRequestProgressForDisplay 仅在请求构造仍拥有工具卡状态时显示请求进度。
 export function toolRequestProgressForDisplay(
   progress: ToolRequestProgress | null,
   displayState: "failed" | "completed" | "running" | "stopped",
+  liveSnapshot = false,
 ): ToolRequestProgress | null {
-  if (displayState !== "running" || progress?.state === "ready") {
+  if (!progress) {
     return null;
   }
-  return progress;
+  if (progress.state === "ready") {
+    return liveSnapshot ? progress : null;
+  }
+  return displayState === "running" ? progress : null;
 }
 
 // liveToolRequestProgress projects one external Store snapshot into the existing card model.

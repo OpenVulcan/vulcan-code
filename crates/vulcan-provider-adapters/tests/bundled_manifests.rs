@@ -82,6 +82,7 @@ const OPENROUTER_FEATURED_MODELS: &[&str] = &[
 /// 具备完整 models.dev 契约的全部源码派生 OpenCode Go 模型。
 const OPENCODE_GO_MODELS: &[&str] = &[
     "deepseek-v4-flash",
+    "deepseek-v4-flash-vision-exp",
     "deepseek-v4-pro",
     "glm-5",
     "glm-5.1",
@@ -101,6 +102,7 @@ const OPENCODE_GO_MODELS: &[&str] = &[
     "minimax-m2.5",
     "minimax-m2.7",
     "minimax-m3",
+    "muse-spark-1.2-contributor",
     "qwen3.5-plus",
     "qwen3.6-plus",
     "qwen3.7-max",
@@ -684,6 +686,114 @@ fn opencode_go_manifest_matches_source_derived_model_contracts() {
             .provider_native_tools,
         vec![vulcan_ai_contract::NativeToolKind::WebSearch]
     );
+
+    // visionFlash must remain execution-equivalent to Flash except for exact local image input.
+    // visionFlash 除精确本地图片输入外，必须与 Flash 保持执行等价。
+    let vision_flash = compiled
+        .rule_for_model("go-api", None, "deepseek-v4-flash-vision-exp")
+        .expect("OpenCode Go DeepSeek V4 Flash Vision Exp rule must exist");
+    assert_eq!(
+        &vision_flash.supported_protocols,
+        &flash.supported_protocols
+    );
+    assert_eq!(&vision_flash.selected_protocol, &flash.selected_protocol);
+    assert_eq!(
+        &vision_flash.protocol_capabilities,
+        &flash.protocol_capabilities
+    );
+    assert_eq!(
+        &vision_flash.request_profile_refs,
+        &flash.request_profile_refs
+    );
+    assert_eq!(&vision_flash.model_parameters, &flash.model_parameters);
+    // visionFlashCapabilities normalizes only the intentional modality and provenance differences.
+    // visionFlashCapabilities 仅规范化有意存在的模态与证据来源差异。
+    let mut vision_flash_capabilities = vision_flash
+        .capabilities
+        .clone()
+        .expect("Vision Flash capabilities must exist");
+    let flash_capabilities = flash
+        .capabilities
+        .as_ref()
+        .expect("Flash capabilities must exist");
+    assert_eq!(
+        vision_flash_capabilities.input_resources,
+        vec![vulcan_ai_contract::ResourceKind::Image]
+    );
+    vision_flash_capabilities.input_resources = flash_capabilities.input_resources.clone();
+    vision_flash_capabilities.evidence_revision = flash_capabilities.evidence_revision.clone();
+    assert_eq!(&vision_flash_capabilities, flash_capabilities);
+    assert_eq!(vision_flash.input_resource_constraints.len(), 1);
+    let vision_image_constraint = &vision_flash.input_resource_constraints[0];
+    assert_eq!(
+        vision_image_constraint.resource_kind,
+        vulcan_ai_contract::ResourceKind::Image
+    );
+    assert_eq!(
+        vision_image_constraint.accepted_mime_types,
+        vec!["image/jpeg", "image/png", "image/gif", "image/webp"]
+    );
+    assert_eq!(vision_image_constraint.max_bytes, Some(32 * 1024 * 1024));
+    assert_eq!(vision_image_constraint.max_count, Some(600));
+    assert_eq!(
+        vision_image_constraint.reference_policy,
+        vulcan_provider_adapters::ResourceReferencePolicy::LocalOnly
+    );
+    assert!(vision_image_constraint.upload_channel_refs.is_empty());
+
+    // muse is a Responses-only 1 Mi-token text-and-image model with fixed-on selectable reasoning.
+    // muse 是仅走 Responses、上下文 1 Mi Token 且思考固定开启并可选档位的文本图片模型。
+    let muse = compiled
+        .rule_for_model("go-api", None, "muse-spark-1.2-contributor")
+        .expect("OpenCode Go Muse Spark 1.2 Contributor rule must exist");
+    assert_eq!(
+        muse.supported_protocols,
+        vec![String::from("openai-responses.v1")]
+    );
+    assert_eq!(
+        muse.selected_protocol.as_deref(),
+        Some("openai-responses.v1")
+    );
+    let muse_capabilities = muse
+        .capabilities
+        .as_ref()
+        .expect("Muse capabilities must exist");
+    assert_eq!(
+        muse_capabilities.input_resources,
+        vec![vulcan_ai_contract::ResourceKind::Image]
+    );
+    assert_eq!(
+        muse_capabilities.reasoning_control,
+        vulcan_ai_contract::ReasoningControlMode::EffortSelection
+    );
+    assert_eq!(
+        muse_capabilities.reasoning_efforts,
+        vec![
+            vulcan_ai_contract::ReasoningEffort::Minimal,
+            vulcan_ai_contract::ReasoningEffort::Low,
+            vulcan_ai_contract::ReasoningEffort::Medium,
+            vulcan_ai_contract::ReasoningEffort::High,
+            vulcan_ai_contract::ReasoningEffort::XHigh,
+        ]
+    );
+    assert_eq!(muse_capabilities.context_limit, Some(1_048_576));
+    assert_eq!(muse_capabilities.output_limit, Some(131_072));
+    assert_eq!(muse.input_resource_constraints.len(), 1);
+    let muse_image_constraint = &muse.input_resource_constraints[0];
+    assert_eq!(
+        muse_image_constraint.resource_kind,
+        vulcan_ai_contract::ResourceKind::Image
+    );
+    assert_eq!(
+        muse_image_constraint.accepted_mime_types,
+        vec!["image/png", "image/jpeg", "image/gif", "image/webp"]
+    );
+    assert_eq!(muse_image_constraint.max_bytes, Some(20 * 1024 * 1024));
+    assert_eq!(
+        muse_image_constraint.reference_policy,
+        vulcan_provider_adapters::ResourceReferencePolicy::LocalOnly
+    );
+    assert!(muse_image_constraint.upload_channel_refs.is_empty());
 
     // Pro supports Responses, Anthropic, and Chat, and binds to the highest-priority Responses route.
     // Pro 支持 Responses、Anthropic 与 Chat，并绑定到优先级最高的 Responses 路由。

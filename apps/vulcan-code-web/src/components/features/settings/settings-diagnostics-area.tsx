@@ -6,6 +6,7 @@ import {
 import * as React from "react";
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types";
 import { PanelTitle, StatusIcon, StatusPill } from "@/components/shared/status";
+import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useI18n } from "@/i18n";
 import type {
@@ -32,6 +33,8 @@ export function LogsArea(props: {
   const { t } = useI18n();
   const [savingTraceSetting, setSavingTraceSetting] = React.useState(false);
   const [traceSettingError, setTraceSettingError] = React.useState<string | null>(null);
+  const [traceDirectoryBusy, setTraceDirectoryBusy] = React.useState(false);
+  const [traceDirectoryNotice, setTraceDirectoryNotice] = React.useState<string | null>(null);
 
   // handleTraceSettingChange persists one explicit diagnostic switch selection.
   // handleTraceSettingChange 持久化一次显式诊断开关选择。
@@ -44,6 +47,41 @@ export function LogsArea(props: {
       setTraceSettingError(error instanceof Error ? error.message : String(error));
     } finally {
       setSavingTraceSetting(false);
+    }
+  }
+
+  // handleOpenTraceDirectory opens the selected session's exact bounded trace folder.
+  // handleOpenTraceDirectory 打开当前会话的精确有界追踪目录。
+  async function handleOpenTraceDirectory(): Promise<void> {
+    setTraceDirectoryBusy(true);
+    setTraceDirectoryNotice(null);
+    try {
+      await props.actions.onOpenSelectedProviderApiTraceDirectory();
+    } catch (error) {
+      setTraceDirectoryNotice(`${t("settings.diagnostics.providerRequestTrace.actionFailed")}: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setTraceDirectoryBusy(false);
+    }
+  }
+
+  // handleClearTraceDirectory confirms and clears only the selected session's exact trace folder.
+  // handleClearTraceDirectory 确认后仅清除当前会话的精确追踪目录。
+  async function handleClearTraceDirectory(): Promise<void> {
+    if (typeof window !== "undefined"
+      && !window.confirm(t("settings.diagnostics.providerRequestTrace.clearConfirm"))) {
+      return;
+    }
+    setTraceDirectoryBusy(true);
+    setTraceDirectoryNotice(null);
+    try {
+      const removed = await props.actions.onClearSelectedProviderApiTraceDirectory();
+      setTraceDirectoryNotice(removed
+        ? t("settings.diagnostics.providerRequestTrace.clearSucceeded")
+        : t("settings.diagnostics.providerRequestTrace.clearEmpty"));
+    } catch (error) {
+      setTraceDirectoryNotice(`${t("settings.diagnostics.providerRequestTrace.actionFailed")}: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setTraceDirectoryBusy(false);
     }
   }
 
@@ -82,6 +120,29 @@ export function LogsArea(props: {
                 onCheckedChange={(enabled) => void handleTraceSettingChange(enabled)}
               />
             </label>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                disabled={traceDirectoryBusy}
+                onClick={() => void handleOpenTraceDirectory()}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                {t("settings.diagnostics.providerRequestTrace.openDirectory")}
+              </Button>
+              <Button
+                disabled={traceDirectoryBusy}
+                onClick={() => void handleClearTraceDirectory()}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                {t("settings.diagnostics.providerRequestTrace.clearDirectory")}
+              </Button>
+            </div>
+            {traceDirectoryNotice ? (
+              <p className="settings-muted-line">{traceDirectoryNotice}</p>
+            ) : null}
             {traceSettingError ? (
               <p className="settings-inline-error">
                 {t("settings.diagnostics.providerRequestTrace.saveFailed")}: {traceSettingError}

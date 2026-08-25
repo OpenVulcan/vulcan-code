@@ -967,9 +967,10 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     }
                 }
                 ExecutionStreamEvent::ThinkingCompleted { session_id } => {
-                    if let Err(error) = complete_streaming_thinking_phase(
+                    if let Err(error) = complete_and_persist_streaming_thinking_phase(
                         &app,
                         &task_state,
+                        &controller_runtime,
                         session_id,
                         &mut record_ids,
                     ) {

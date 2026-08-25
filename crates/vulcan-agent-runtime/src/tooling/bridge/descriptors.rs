@@ -102,7 +102,16 @@ pub(super) fn managed_codebase_memory_tool_descriptor(
 /// Converts one native-tool Plan execution flag into the standalone manager Plan policy.
 /// 将单条原生工具的 Plan 执行许可标记转换为独立管理器的 Plan 策略。
 pub(super) fn native_plan_policy(descriptor: &NativeToolDescriptor) -> VulcanPlanToolPolicy {
-    if descriptor.available_in_plan {
+    if descriptor.id == crate::tooling::native::FILE_TOOL_ID {
+        VulcanPlanToolPolicy::StringArgumentAllowlist {
+            field: String::from("action"),
+            allowed_values: vec![
+                String::from("read"),
+                String::from("list"),
+                String::from("stat"),
+            ],
+        }
+    } else if descriptor.available_in_plan {
         VulcanPlanToolPolicy::Visible
     } else {
         VulcanPlanToolPolicy::Hidden
@@ -152,5 +161,29 @@ mod tests {
         assert_eq!(descriptor.name, "vulcan_codebase_memory_search_graph");
         assert_eq!(descriptor.description, "Search indexed graph.");
         assert_eq!(descriptor.source, VulcanToolSourceKind::VulcanManaged);
+    }
+
+    /// Verifies the mixed native file tool keeps only its read-only actions executable in Plan mode.
+    /// 验证混合型原生文件工具在计划模式中只允许执行只读 action。
+    #[test]
+    fn native_file_plan_policy_is_action_scoped() {
+        let descriptor = NativeToolDescriptor {
+            id: String::from(crate::tooling::native::FILE_TOOL_ID),
+            name: String::from("File"),
+            description: String::from("File operations."),
+            help_text: None,
+            ai_visible: true,
+            available_in_plan: true,
+        };
+
+        let VulcanPlanToolPolicy::StringArgumentAllowlist {
+            field,
+            allowed_values,
+        } = native_plan_policy(&descriptor)
+        else {
+            panic!("file should use an action-scoped Plan policy");
+        };
+        assert_eq!(field, "action");
+        assert_eq!(allowed_values, ["read", "list", "stat"]);
     }
 }

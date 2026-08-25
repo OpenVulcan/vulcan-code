@@ -486,6 +486,7 @@ pub(super) fn append_tool_finished_projection_to_state(
                 result_metadata.clone(),
             )
         });
+    let attached_to_existing_record = attached_record_id.is_some();
     let changed_record_id = if let Some(record_id) = attached_record_id {
         record_id
     } else {
@@ -513,7 +514,19 @@ pub(super) fn append_tool_finished_projection_to_state(
         record_id
     };
     runtime_state.updated_at = now.to_string();
-    Ok(vec![changed_record_id])
+    let mut changed_record_ids = Vec::with_capacity(2);
+    if attached_to_existing_record {
+        changed_record_ids.push(changed_record_id);
+        if let Some(detail_ref) = detail_ref {
+            changed_record_ids.push(detail_ref.record_id);
+        }
+    } else {
+        if let Some(detail_ref) = detail_ref {
+            changed_record_ids.push(detail_ref.record_id);
+        }
+        changed_record_ids.push(changed_record_id);
+    }
+    Ok(changed_record_ids)
 }
 
 /// Parses one tool-start runtime headline into its stable tool-call identifier and visible tool name.
@@ -699,6 +712,10 @@ pub(super) fn normalize_tool_result_metadata(
             serde_json::Value::String(tool_name.to_string()),
         );
     }
+    object.insert(
+        String::from("tool_display_state"),
+        serde_json::Value::String(display_state.to_string()),
+    );
     if let Some(host_result) = visible_host_result_metadata(event_metadata) {
         object.insert(String::from("host_result"), host_result);
     }

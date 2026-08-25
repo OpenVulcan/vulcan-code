@@ -288,10 +288,10 @@ fn execution_tool_exposure_filters_luaskills_with_family_overrides() {
     assert_eq!(filtered[0].canonical_name, "vulcan-codekit-rg");
 }
 
-/// Verifies retired LuaSkills file tools are hidden while similarly named entries remain visible.
-/// 验证旧 LuaSkills 文件工具会隐藏，而相似命名的入口仍然可见。
+/// Verifies LuaSkills file tools remain available until the real-model migration gate passes.
+/// 验证真实模型迁移门槛通过前 LuaSkills 文件工具仍保持可用。
 #[test]
-fn execution_tool_exposure_hides_retired_luaskills_file_tools() {
+fn execution_tool_exposure_keeps_luaskills_file_tools_before_migration_gate() {
     let selectors = ToolExposureSelectorState::default();
     let entries = vec![
         test_luaskills_entry("vulcan-file", "read"),
@@ -304,14 +304,15 @@ fn execution_tool_exposure_hides_retired_luaskills_file_tools() {
 
     let filtered = filter_luaskills_entries(entries, &selectors);
 
-    assert_eq!(filtered.len(), 1);
-    assert_eq!(filtered[0].canonical_name, "vulcan-file-tools-readme");
+    assert_eq!(filtered.len(), 6);
+    assert_eq!(filtered[0].canonical_name, "vulcan-file-read");
+    assert_eq!(filtered[5].canonical_name, "vulcan-file-tools-readme");
 }
 
-/// Verifies retired LuaSkills file-tool prompt entries are hidden without hiding similar names.
-/// 验证旧 LuaSkills 文件工具提示词入口会隐藏，而相似命名不会被误隐藏。
+/// Verifies LuaSkills file-tool prompts remain until real-model evaluation authorizes retirement.
+/// 验证真实模型评估授权退役前 LuaSkills 文件工具提示词仍会保留。
 #[test]
-fn execution_tool_exposure_hides_retired_luaskills_file_prompts() {
+fn execution_tool_exposure_keeps_luaskills_file_prompts_before_migration_gate() {
     let selectors = ToolExposureSelectorState::default();
     let entries = vec![
         LuaSkillPromptEntry::new("vulcan-file-read", "legacy read"),
@@ -321,8 +322,9 @@ fn execution_tool_exposure_hides_retired_luaskills_file_prompts() {
 
     let filtered = filter_luaskill_prompt_entries(entries, &selectors);
 
-    assert_eq!(filtered.len(), 1);
-    assert_eq!(filtered[0].name, "vulcan-file-tools-readme");
+    assert_eq!(filtered.len(), 3);
+    assert_eq!(filtered[0].name, "vulcan-file-read");
+    assert_eq!(filtered[2].name, "vulcan-file-tools-readme");
 }
 
 /// Verifies LuaSkills family overrides trim implicit prompt entries with the same selectors.

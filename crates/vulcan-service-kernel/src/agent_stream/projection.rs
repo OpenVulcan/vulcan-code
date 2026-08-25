@@ -275,9 +275,7 @@ fn tool_request_progress_change_from_event(
     let request_stream_id = tool_request_metadata_string(metadata, "request_stream_id")?;
     if matches!(
         event.kind,
-        RuntimeEventKind::ToolRequestReady
-            | RuntimeEventKind::ToolRequestInvalid
-            | RuntimeEventKind::ToolRequestAborted
+        RuntimeEventKind::ToolRequestInvalid | RuntimeEventKind::ToolRequestAborted
     ) {
         return Ok(Some((request_stream_id, None)));
     }
@@ -287,6 +285,7 @@ fn tool_request_progress_change_from_event(
         match tool_request_metadata_string(metadata, "tool_display_state")?.as_str() {
             "receiving" => ToolRequestProgressState::Receiving,
             "arguments_assembled" => ToolRequestProgressState::ArgumentsAssembled,
+            "ready" => ToolRequestProgressState::Ready,
             state => {
                 return Err(format!(
                     "runtime tool request progress has unsupported display state `{state}`"
@@ -423,20 +422,37 @@ pub(crate) fn seal_stream_content_records(
     session_id: SessionId,
     record_ids: &mut SessionStreamingRecordIds,
 ) -> Result<(), String> {
-    seal_stream_content_kind(
+    seal_stream_content_records_with_entries(app, state, session_id, record_ids).map(|_| ())
+}
+
+/// Seals every active provider-content record and returns the immutable rows in canonical order.
+/// 封口全部活跃 Provider 内容记录，并按规范顺序返回不可变记录。
+pub(crate) fn seal_stream_content_records_with_entries(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    record_ids: &mut SessionStreamingRecordIds,
+) -> Result<Vec<SessionMessageEntry>, String> {
+    let mut entries = Vec::with_capacity(2);
+    if let Some(entry) = seal_stream_content_kind_with_entry(
         app,
         state,
         session_id,
         record_ids,
         StreamContentKind::Thinking,
-    )?;
-    seal_stream_content_kind(
+    )? {
+        entries.push(entry);
+    }
+    if let Some(entry) = seal_stream_content_kind_with_entry(
         app,
         state,
         session_id,
         record_ids,
         StreamContentKind::Output,
-    )
+    )? {
+        entries.push(entry);
+    }
+    Ok(entries)
 }
 
 /// Discards active provider-content drafts before one interrupted physical request can be retried.
@@ -560,6 +576,7 @@ pub(crate) fn discard_active_stream_content_records(
 /// # 返回值
 /// Success after the selected slot is empty and its record is sealed, or an explicit error.
 /// 所选槽位清空且记录完成封口后返回成功，否则返回显式错误。
+#[cfg(test)]
 pub(crate) fn seal_stream_content_kind(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
@@ -567,19 +584,87 @@ pub(crate) fn seal_stream_content_kind(
     record_ids: &mut SessionStreamingRecordIds,
     kind: StreamContentKind,
 ) -> Result<(), String> {
+    seal_stream_content_kind_with_entry(app, state, session_id, record_ids, kind).map(|_| ())
+}
+
+/// Seals one provider-content record and returns its immutable transcript row.
+/// 封口一条 Provider 内容记录，并返回其不可变转录行。
+fn seal_stream_content_kind_with_entry(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    record_ids: &mut SessionStreamingRecordIds,
+    kind: StreamContentKind,
+) -> Result<Option<SessionMessageEntry>, String> {
     // record_id is taken before sealing so a successful close can never receive later deltas.
     // record_id 在封口前从槽位取出，确保成功关闭后绝不再接收后续增量。
     let record_id_slot = kind.record_id_slot(record_ids);
     let Some(record_id) = record_id_slot.take() else {
-        return Ok(());
+        return Ok(None);
     };
-    if let Err(error) = seal_stream_delta_record(app, state, session_id, &record_id) {
-        // A failed state mutation restores the exact identity so a later terminal path can retry sealing.
-        // 状态变更失败时恢复精确身份，使后续终止路径仍可重试封口。
-        *record_id_slot = Some(record_id);
-        return Err(error);
+    match seal_stream_delta_record(app, state, session_id, &record_id) {
+        Ok(Some(entry)) => Ok(Some(entry)),
+        Ok(None) => sealed_stream_delta_record_entry(state, session_id, &record_id),
+        Err(error) => {
+            // A failed state mutation restores the exact identity so a later terminal path can retry sealing.
+            // 状态变更失败时恢复精确身份，使后续终止路径仍可重试封口。
+            *record_id_slot = Some(record_id);
+            Err(error)
+        }
     }
-    Ok(())
+}
+
+/// Returns one already-sealed provider-content row retained for a failed durability-admission retry.
+/// 返回因可靠写入准入失败而保留、且已经封口的 Provider 内容记录。
+///
+/// # Parameters
+/// # 参数
+/// `state` owns the authoritative runtime conversation records.
+/// `state` 持有权威运行时会话记录。
+/// `session_id` identifies the owning session.
+/// `session_id` 标识所属会话。
+/// `record_id` identifies the exact previously sealed streaming row.
+/// `record_id` 标识先前已经封口的精确流式记录。
+///
+/// # Returns
+/// # 返回值
+/// The immutable sealed transcript row, no row when the identity is absent, or an explicit lifecycle error.
+/// 返回不可变的已封口转录记录；身份不存在时返回空；生命周期无效时返回显式错误。
+fn sealed_stream_delta_record_entry(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    record_id: &str,
+) -> Result<Option<SessionMessageEntry>, String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let Some(runtime_state) = guard
+        .workspace_snapshot
+        .as_ref()
+        .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+    else {
+        return Ok(None);
+    };
+    let Some(record) = runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .find(|record| record.id == record_id)
+    else {
+        return Ok(None);
+    };
+    let lifecycle = record
+        .metadata
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .and_then(|metadata| metadata.get(STREAMING_RECORD_STATE_METADATA_KEY))
+        .and_then(serde_json::Value::as_str);
+    if lifecycle != Some(STREAMING_RECORD_STATE_SEALED) {
+        return Err(format!(
+            "streaming record {record_id} was not sealed before durability retry"
+        ));
+    }
+    Ok(Some(session_message_entry_from_conversation_record(record)))
 }
 
 /// Correlates the first provider semantic delta with one accepted browser submission.
@@ -823,13 +908,13 @@ fn seal_stream_delta_record(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
     record_id: &str,
-) -> Result<(), String> {
+) -> Result<Option<SessionMessageEntry>, String> {
     // conversation_id is the stable WebUI owner identity for the sealed message.
     // conversation_id 是已封口消息稳定的 WebUI 所属身份。
     let conversation_id = session_id.to_string();
     // event is created under the same state lock as the authoritative lifecycle mutation.
     // event 与权威生命周期变更在同一个状态锁内创建。
-    let event = {
+    let (event, projected_entry) = {
         // guard serializes runtime sealing, retained projection, and generation allocation.
         // guard 串行化运行时封口、保留投影与 generation 分配。
         let mut guard = state
@@ -849,12 +934,12 @@ fn seal_stream_delta_record(
             // runtime_state is the exact session entry referenced by the request-local record id.
             // runtime_state 是请求局部记录标识指向的精确会话条目。
             let Some(runtime_state) = workspace.session_runtime_state.get_mut(&session_id) else {
-                return Ok(());
+                return Ok(None);
             };
             seal_streaming_record_in_state(runtime_state, &now, record_id)?
         };
         let Some(sealed_record) = sealed_record else {
-            return Ok(());
+            return Ok(None);
         };
         // projected_entry reuses the canonical runtime-to-session projection contract.
         // projected_entry 复用规范的运行时到会话投影契约。
@@ -878,7 +963,7 @@ fn seal_stream_delta_record(
         } else if workbench_surface_matches_conversation(&guard.workbench, &conversation_id) {
             guard.workbench.messages.push(projected_message.clone());
         }
-        WorkbenchDeltaEnvelope {
+        let event = WorkbenchDeltaEnvelope {
             generation,
             delta: WorkbenchDelta::AppendMessageBody(AppendMessageBodyDelta {
                 conversation_id,
@@ -889,14 +974,15 @@ fn seal_stream_delta_record(
                 run_phase: None,
                 stream_state: Some(ConversationMessageStreamState::Sealed),
             }),
-        }
+        };
+        (event, projected_entry)
     };
     emit_service_event_with_trace(
         app,
         "workbench_stream_message_sealed_emit",
         ServiceEvent::WorkbenchDelta(Box::new(event)),
     );
-    Ok(())
+    Ok(Some(projected_entry))
 }
 
 #[cfg(test)]
@@ -1896,14 +1982,14 @@ pub(crate) fn replace_conversation_messages_in_workbench_window(
 ///
 /// # Returns
 /// # 返回值
-/// Success after both retained collapse state and requesting phase are applied, or an explicit step-specific error.
-/// 在保留折叠状态与请求阶段均应用后返回成功，否则返回带明确步骤的错误。
+/// The immutable sealed thinking row when one existed, no row when the slot was empty, or an explicit step-specific error.
+/// 存在思考记录时返回不可变的已封口记录，槽位为空时返回空，否则返回带明确步骤的错误。
 pub(crate) fn complete_streaming_thinking_phase(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     session_id: SessionId,
     record_ids: &mut SessionStreamingRecordIds,
-) -> Result<(), String> {
+) -> Result<Option<SessionMessageEntry>, String> {
     // This scope releases the service-state mutex before apply_session_phase reacquires it, preventing same-thread self-deadlock.
     // 此作用域会在 apply_session_phase 再次获取服务状态互斥锁前释放锁，防止同线程自锁。
     {
@@ -1936,7 +2022,7 @@ pub(crate) fn complete_streaming_thinking_phase(
 
     // Thinking is sealed before the requesting phase becomes visible, preserving lifecycle order for every client.
     // 思考记录在请求阶段可见前完成封口，从而为所有客户端保持生命周期顺序。
-    seal_stream_content_kind(
+    let sealed_entry = seal_stream_content_kind_with_entry(
         app,
         state,
         session_id,
@@ -1947,7 +2033,57 @@ pub(crate) fn complete_streaming_thinking_phase(
     // Requesting becomes visible only after the retained thinking row is sealed, preserving event order for every consumer.
     // 仅在保留思考行完成封口后才显示请求阶段，从而为所有消费者保持事件顺序。
     apply_session_phase(app, state, session_id, SessionRunPhase::Requesting)
-        .map_err(|error| format!("failed to restore request phase after thinking: {error}"))
+        .map_err(|error| format!("failed to restore request phase after thinking: {error}"))?;
+    Ok(sealed_entry)
+}
+
+/// Completes one thinking row and admits its immutable record to durable transcript order.
+/// 完成一条思考记录，并将其不可变记录接纳到可靠转录顺序中。
+///
+/// # Parameters
+/// # 参数
+/// `app` emits the sealed-row and phase projections.
+/// `app` 发送记录封口与阶段投影。
+/// `state` owns the retained runtime and transcript writer state.
+/// `state` 持有保留运行态与转录写入器状态。
+/// `controller_runtime` resolves the exact segmented session directory.
+/// `controller_runtime` 解析精确的分段会话目录。
+/// `session_id` identifies the owning session.
+/// `session_id` 标识所属会话。
+/// `record_ids` owns the request-local streaming identities and preserves a failed admission retry.
+/// `record_ids` 持有请求局部流式身份，并保留失败准入的重试身份。
+///
+/// # Returns
+/// # 返回值
+/// Success after durable writer admission, or an explicit completion or admission error.
+/// 在可靠写入器完成准入后返回成功，否则返回显式完成或准入错误。
+pub(crate) fn complete_and_persist_streaming_thinking_phase(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    record_ids: &mut SessionStreamingRecordIds,
+) -> Result<(), String> {
+    let Some(sealed_entry) = complete_streaming_thinking_phase(app, state, session_id, record_ids)?
+    else {
+        return Ok(());
+    };
+    let sealed_record_id = sealed_entry.id.clone();
+    if let Err(error) = spawn_exact_session_transcript_entries_persist_task(
+        state.clone(),
+        controller_runtime.clone(),
+        session_id,
+        vec![sealed_entry],
+        Some(String::from("thinking_completion_stream_seal")),
+    ) {
+        // The sealed identity remains retryable at the next provider or terminal boundary.
+        // 已封口身份会保留到下一个 Provider 或终态边界继续重试。
+        record_ids.thinking_record_id = Some(sealed_record_id);
+        return Err(format!(
+            "failed to admit completed thinking row for durable persistence: {error}"
+        ));
+    }
+    Ok(())
 }
 
 /// Detached workspace fields changed by one runtime tool event.
@@ -1959,6 +2095,9 @@ struct RuntimeEventWorkspaceDraft {
     /// Exact parent transcript entries created or updated by this event.
     /// 本事件创建或更新的精确父会话转录项。
     parent_message_entries: Vec<SessionMessageEntry>,
+    /// Exact parent record identities appended by this event rather than updated in place.
+    /// 本事件新追加而非原位更新的精确父记录身份。
+    new_parent_record_ids: HashSet<String>,
     /// Visible parent rows derived only from the exact changed entries.
     /// 仅从精确变化项派生的父会话可见行。
     projected_parent_messages: Vec<ConversationMessage>,
@@ -2093,6 +2232,9 @@ fn build_runtime_event_workspace_draft(
             updated_at: now.clone(),
             ..SessionRuntimeStateEntry::default()
         });
+    // previousRecordCount separates newly appended immutable rows from in-place lifecycle updates.
+    // previousRecordCount 将新追加的不可变记录与原位生命周期更新区分开。
+    let previous_record_count = runtime_state.conversation_state.records.len();
     // changedRecordIds comes from the reducer's exact correlation path, avoiding a clone and comparison of every historical record.
     // changedRecordIds 来自归约器的精确关联路径，避免克隆并比较全部历史记录。
     let (mut runtime_state, changed_record_ids) =
@@ -2110,6 +2252,10 @@ fn build_runtime_event_workspace_draft(
         runtime_state.conversation_state.records.as_slice(),
         changed_record_ids.as_slice(),
     );
+    let new_parent_record_ids = runtime_state.conversation_state.records[previous_record_count..]
+        .iter()
+        .map(|record| record.id.clone())
+        .collect::<HashSet<_>>();
     let projected_parent_messages =
         conversation_messages_from_session(conversation_id, projection_entries.as_slice(), false);
     let changed_todolist = todolist_state_from_tool_finished_event(event, &now)
@@ -2156,6 +2302,7 @@ fn build_runtime_event_workspace_draft(
     Ok(RuntimeEventWorkspaceDraft {
         runtime_state,
         parent_message_entries: projection_entries,
+        new_parent_record_ids,
         projected_parent_messages,
         child_projection,
         changed_todolist,
@@ -2550,12 +2697,11 @@ fn append_runtime_event_projection_with_authority(
         }
         // transcriptEntriesForPersistence captures only this event's stable rows before the draft moves into UI state.
         // transcriptEntriesForPersistence 仅在草稿移入界面状态前捕获当前事件的稳定记录。
-        let transcript_entries_for_persistence =
-            if transcript_changed && runtime_event_forms_durable_transcript_boundary(event) {
-                workspace_draft.parent_message_entries.clone()
-            } else {
-                Vec::new()
-            };
+        let transcript_entries_for_persistence = runtime_event_transcript_entries_for_persistence(
+            event,
+            workspace_draft.parent_message_entries.as_slice(),
+            &workspace_draft.new_parent_record_ids,
+        );
         let child_message_projection = workspace_draft.child_projection.as_ref().map(|child| {
             (
                 child.task_id,
@@ -2805,8 +2951,8 @@ fn append_runtime_event_projection_with_authority(
             Some(String::from("submit_plan_tool")),
         );
     }
-    // Terminal request-formation events clear the external leaf cache only after their durable patch commits.
-    // 请求构造终态事件仅在持久补丁提交后清除外部叶子缓存。
+    // Terminal request events publish their final snapshot or clear only after the durable patch commits.
+    // 请求终态事件仅在持久补丁提交后发布最终快照或清理外部叶子缓存。
     emit_tool_request_progress_changed(app, state, session_id, authority, event)?;
     Ok(())
 }
@@ -2859,6 +3005,41 @@ pub(crate) fn runtime_event_forms_durable_transcript_boundary(event: &RuntimeEve
             | RuntimeEventKind::Retrying
             | RuntimeEventKind::ProviderRetryStatusChanged
     )
+}
+
+/// Selects only immutable canonical rows that one runtime event may append to segmented display storage.
+/// 仅选择单个运行时事件可追加到分段显示存储的不可变规范记录。
+///
+/// # Parameters
+/// 参数
+/// `event` identifies the exact lifecycle transition that produced the changed entries.
+/// `event` 标识产生变化记录的精确生命周期转换。
+/// `changed_entries` contains the exact runtime rows created or updated by the transition.
+/// `changed_entries` 包含该转换创建或更新的精确运行时记录。
+/// `new_record_ids` identifies records appended by this event rather than updated in place.
+/// `new_record_ids` 标识本事件新追加而非原位更新的记录。
+///
+/// # Returns
+/// 返回值
+/// Returns only stable rows that extend the canonical immutable transcript prefix.
+/// 仅返回可扩展规范不可变转录前缀的稳定记录。
+fn runtime_event_transcript_entries_for_persistence(
+    event: &RuntimeEvent,
+    changed_entries: &[SessionMessageEntry],
+    new_record_ids: &HashSet<String>,
+) -> Vec<SessionMessageEntry> {
+    match event.kind {
+        RuntimeEventKind::ToolRequestReady
+        | RuntimeEventKind::ToolRequestInvalid
+        | RuntimeEventKind::ToolRequestAborted
+        | RuntimeEventKind::ProviderRetryStatusChanged => changed_entries.to_vec(),
+        RuntimeEventKind::ToolStarted | RuntimeEventKind::ToolFinished => changed_entries
+            .iter()
+            .filter(|entry| new_record_ids.contains(entry.id.as_str()))
+            .cloned()
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// Reports whether one runtime event completed a tool that owns command-session lifecycle state.
@@ -3545,8 +3726,8 @@ mod tests {
         );
     }
 
-    /// Verifies request-progress decoding preserves exact safe metadata and terminal clearing.
-    /// 验证请求进度解码保留精确安全元数据与终态清除语义。
+    /// Verifies request-progress decoding preserves exact safe metadata and terminal lifecycle semantics.
+    /// 验证请求进度解码保留精确安全元数据与终态生命周期语义。
     ///
     /// # Returns
     /// 返回值
@@ -3614,8 +3795,8 @@ mod tests {
             ToolRequestProgressState::ArgumentsAssembled
         );
 
-        // ready reuses the same exact identity and clears the leaf Store after durable projection.
-        // ready 复用同一精确身份，并在持久投影后清除叶子 Store。
+        // ready retains the final exact counts until the committed ToolStarted card releases the leaf Store.
+        // ready 保留最终精确计数，直至已提交的 ToolStarted 卡片释放叶子 Store。
         let ready = RuntimeEvent::new(
             RuntimeEventKind::ToolRequestReady,
             "tool request ready",
@@ -3623,11 +3804,21 @@ mod tests {
         )
         .with_metadata(Some(serde_json::json!({
             "request_stream_id": "request-1",
+            "tool_call_id": "call-1",
+            "tool_name": "terminal_session",
+            "tool_display_state": "ready",
+            "received_bytes": 512,
+            "received_characters": 500,
+            "request_revision": 5,
         })));
+        let (_, ready_snapshot) = tool_request_progress_change_from_event(&ready)
+            .expect("ready metadata should satisfy the snapshot contract")
+            .expect("ready event should produce one replacement");
         assert_eq!(
-            tool_request_progress_change_from_event(&ready)
-                .expect("ready metadata should satisfy the clear contract"),
-            Some((String::from("request-1"), None)),
+            ready_snapshot
+                .expect("ready event should retain one final snapshot")
+                .state,
+            ToolRequestProgressState::Ready,
         );
     }
 
@@ -3673,6 +3864,79 @@ mod tests {
         assert!(!runtime_event_projects_conversation_transcript(
             RuntimeEventKind::ToolRequestPreviewUpdated
         ));
+    }
+
+    /// Verifies live lifecycle updates never enter the immutable segmented transcript tail.
+    /// 验证实时生命周期更新绝不会进入不可变的分段转录尾部。
+    #[test]
+    fn runtime_event_persistence_selects_only_immutable_rows() {
+        let card = SessionMessageEntry {
+            id: String::from("tool-card"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolCallOutput,
+            visible: true,
+            title: String::new(),
+            body: String::new(),
+            metadata: None,
+            created_at: String::from("1000"),
+        };
+        let detail = SessionMessageEntry {
+            id: String::from("tool-detail"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolDetailOutput,
+            visible: false,
+            title: String::new(),
+            body: String::from("result"),
+            metadata: None,
+            created_at: String::from("1001"),
+        };
+        let ready = RuntimeEvent::new(RuntimeEventKind::ToolRequestReady, "ready", String::new());
+        assert_eq!(
+            runtime_event_transcript_entries_for_persistence(
+                &ready,
+                std::slice::from_ref(&card),
+                &HashSet::new(),
+            ),
+            vec![card.clone()]
+        );
+
+        let started = RuntimeEvent::new(RuntimeEventKind::ToolStarted, "started", String::new());
+        assert!(
+            runtime_event_transcript_entries_for_persistence(
+                &started,
+                std::slice::from_ref(&card),
+                &HashSet::new(),
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            runtime_event_transcript_entries_for_persistence(
+                &started,
+                std::slice::from_ref(&card),
+                &HashSet::from([card.id.clone()]),
+            ),
+            vec![card.clone()]
+        );
+
+        let finished = RuntimeEvent::new(RuntimeEventKind::ToolFinished, "finished", String::new());
+        assert_eq!(
+            runtime_event_transcript_entries_for_persistence(
+                &finished,
+                &[card.clone(), detail.clone()],
+                &HashSet::from([detail.id.clone()]),
+            ),
+            vec![detail]
+        );
+
+        let retrying = RuntimeEvent::new(RuntimeEventKind::Retrying, "retrying", String::new());
+        assert!(
+            runtime_event_transcript_entries_for_persistence(
+                &retrying,
+                std::slice::from_ref(&card),
+                &HashSet::from([card.id.clone()]),
+            )
+            .is_empty()
+        );
     }
 
     /// Verifies each complete tool lifecycle event forms its own persistence boundary.

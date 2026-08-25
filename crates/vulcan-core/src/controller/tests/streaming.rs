@@ -80,56 +80,70 @@ fn run_user_turn_streaming_records_provider_deltas_before_finalizing() {
     });
 }
 
-/// Avoids checkpointing a partial streaming tool batch when a later tool in that batch fails.
-/// 当同一批次中的后续工具失败时，避免为部分完成的流式工具批次建立检查点。
+/// Verifies an executor failure becomes a complete error result and never aborts the Provider loop.
+/// 验证执行器失败会成为完整错误结果，且绝不会中断 Provider 循环。
 #[test]
-fn run_user_turn_streaming_skips_partial_checkpoint_when_batch_tool_fails() {
+fn run_user_turn_streaming_retains_executor_failure_as_tool_result() {
     let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
     runtime.block_on(async {
-        let adapter = MockStreamingProviderAdapter::new(vec![(
-            vec![ProviderTurnDelta::Thinking {
-                delta: String::from("先调用两个工具。"),
-            }],
-            ProviderTurnResponse {
-                assistant_text: String::new(),
-                assistant_reasoning: String::from("先调用两个工具。"),
-                provider_message_id: Some(String::from("resp-tools-1")),
-                provider_message_state: None,
-                tool_calls: vec![
-                    ConversationToolCall {
-                        id: String::from("tool-item-1"),
-                        tool_call_id: Some(String::from("call-1")),
-                        tool_name: String::from("first_tool"),
-                        arguments: json!({"step": 1}),
-                        argument_parse_error: None,
-                    },
-                    ConversationToolCall {
-                        id: String::from("tool-item-2"),
-                        tool_call_id: Some(String::from("call-2")),
-                        tool_name: String::from("second_tool"),
-                        arguments: json!({"step": 2}),
-                        argument_parse_error: None,
-                    },
-                ],
-                continuation: Some(ProviderContinuation {
-                    provider_id: Some(String::from("mock-openai-streaming")),
-                    model_id: Some(String::from("mock-model")),
-                    last_provider_message_id: Some(String::from("resp-tools-1")),
-                    updated_at: Some(String::from("3001")),
-                    ..ProviderContinuation::default()
-                }),
-                usage: Some(ProviderUsageSnapshot {
-                    input_tokens: Some(10),
-                    uncached_input_tokens: Some(10),
-                    output_tokens: Some(2),
-                    reasoning_tokens: Some(1),
-                    total_tokens: Some(13),
-                    cached_input_tokens: None,
-                    cache_creation_input_tokens: None,
-                    ..ProviderUsageSnapshot::default()
-                }),
-            },
-        )]);
+        let adapter = MockStreamingProviderAdapter::new(vec![
+            (
+                vec![ProviderTurnDelta::Thinking {
+                    delta: String::from("先调用两个工具。"),
+                }],
+                ProviderTurnResponse {
+                    assistant_text: String::new(),
+                    assistant_reasoning: String::from("先调用两个工具。"),
+                    provider_message_id: Some(String::from("resp-tools-1")),
+                    provider_message_state: None,
+                    tool_calls: vec![
+                        ConversationToolCall {
+                            id: String::from("tool-item-1"),
+                            tool_call_id: Some(String::from("call-1")),
+                            tool_name: String::from("first_tool"),
+                            arguments: json!({"step": 1}),
+                            argument_parse_error: None,
+                        },
+                        ConversationToolCall {
+                            id: String::from("tool-item-2"),
+                            tool_call_id: Some(String::from("call-2")),
+                            tool_name: String::from("second_tool"),
+                            arguments: json!({"step": 2}),
+                            argument_parse_error: None,
+                        },
+                    ],
+                    continuation: Some(ProviderContinuation {
+                        provider_id: Some(String::from("mock-openai-streaming")),
+                        model_id: Some(String::from("mock-model")),
+                        last_provider_message_id: Some(String::from("resp-tools-1")),
+                        updated_at: Some(String::from("3001")),
+                        ..ProviderContinuation::default()
+                    }),
+                    usage: Some(ProviderUsageSnapshot {
+                        input_tokens: Some(10),
+                        uncached_input_tokens: Some(10),
+                        output_tokens: Some(2),
+                        reasoning_tokens: Some(1),
+                        total_tokens: Some(13),
+                        cached_input_tokens: None,
+                        cache_creation_input_tokens: None,
+                        ..ProviderUsageSnapshot::default()
+                    }),
+                },
+            ),
+            (
+                Vec::new(),
+                ProviderTurnResponse {
+                    assistant_text: String::from("已收到工具失败，停止自动重试。"),
+                    assistant_reasoning: String::new(),
+                    provider_message_id: Some(String::from("resp-tools-2")),
+                    provider_message_state: None,
+                    tool_calls: Vec::new(),
+                    continuation: None,
+                    usage: None,
+                },
+            ),
+        ]);
         let executor = MockToolExecutor::new()
             .with_outcome(
                 "first_tool",
@@ -153,10 +167,8 @@ fn run_user_turn_streaming_skips_partial_checkpoint_when_batch_tool_fails() {
             )
             .await;
 
-        assert!(result.is_err());
-        // The Provider response is durable before the failing tool batch is attempted.
-        // 工具批次失败前，Provider 响应已经先完成可靠同步。
-        assert_eq!(checkpoints.len(), 1);
+        assert!(result.is_ok());
+        assert_eq!(checkpoints.len(), 3);
         assert_eq!(
             checkpoints[0].1,
             Some(ProviderUsageSnapshot {
@@ -171,28 +183,109 @@ fn run_user_turn_streaming_skips_partial_checkpoint_when_batch_tool_fails() {
             })
         );
         assert!(
-            !controller
+            controller
                 .snapshot()
                 .messages
                 .iter()
                 .any(|message| matches!(
                     &message.payload,
-                    ConversationPayload::ToolResult { text, tool_call_id, .. }
+                    ConversationPayload::ToolResult { text, tool_call_id, is_error: false }
                         if text == "第一个工具已完成。"
                             && tool_call_id.as_deref() == Some("call-1")
                 ))
         );
         assert!(
-            !controller
+            controller
                 .snapshot()
                 .messages
                 .iter()
                 .any(|message| matches!(
                     &message.payload,
-                    ConversationPayload::ToolResult { tool_call_id, .. }
+                    ConversationPayload::ToolResult { tool_call_id, text, is_error: true }
                         if tool_call_id.as_deref() == Some("call-2")
+                            && text.contains("No automatic Provider retry")
                 ))
         );
+        let failed_record = controller
+            .snapshot()
+            .records
+            .iter()
+            .rev()
+            .find(|record| {
+                record
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("tool_call_id").and_then(Value::as_str))
+                    == Some("call-2")
+            })
+            .and_then(|record| record.metadata.as_ref())
+            .expect("failed tool record should retain host diagnostics");
+        assert_eq!(failed_record["kind"], "tool_execution_error");
+        assert_eq!(failed_record["retryable"], false);
+        assert_eq!(failed_record["possible_external_effects"], true);
+    });
+}
+
+/// Verifies a durable batch-preparation failure rejects every call without aborting the Provider loop.
+/// 验证可靠批次准备失败会拒绝每个调用，而不会中断 Provider 循环。
+#[test]
+fn run_user_turn_streaming_retains_batch_preparation_failure_as_tool_results() {
+    let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let adapter = MockStreamingProviderAdapter::new(vec![
+            (
+                Vec::new(),
+                ProviderTurnResponse {
+                    assistant_text: String::new(),
+                    assistant_reasoning: String::new(),
+                    provider_message_id: Some(String::from("resp-prepare-1")),
+                    provider_message_state: None,
+                    tool_calls: vec![ConversationToolCall {
+                        id: String::from("tool-item-prepare"),
+                        tool_call_id: Some(String::from("call-prepare")),
+                        tool_name: String::from("prepared_tool"),
+                        arguments: json!({"step": 1}),
+                        argument_parse_error: None,
+                    }],
+                    continuation: None,
+                    usage: None,
+                },
+            ),
+            (
+                Vec::new(),
+                ProviderTurnResponse {
+                    assistant_text: String::from("已收到准备失败。"),
+                    assistant_reasoning: String::new(),
+                    provider_message_id: Some(String::from("resp-prepare-2")),
+                    provider_message_state: None,
+                    tool_calls: Vec::new(),
+                    continuation: None,
+                    usage: None,
+                },
+            ),
+        ]);
+        let executor = MockToolExecutor::new().with_preparation_failure("模拟恢复边界持久化失败");
+        let mut controller =
+            VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default())
+                .expect("valid core conversation snapshot");
+
+        let result = controller
+            .run_user_turn_streaming(&adapter, &executor, &AllowAllToolPolicy, "请调用工具")
+            .await;
+
+        assert!(result.is_ok());
+        assert!(executor.executed_requests().is_empty());
+        let failed_record = controller
+            .snapshot()
+            .records
+            .iter()
+            .rev()
+            .find_map(|record| record.metadata.as_ref())
+            .expect("batch preparation failure should retain host diagnostics");
+        assert_eq!(failed_record["kind"], "tool_batch_preparation_error");
+        assert_eq!(failed_record["executed"], false);
+        assert_eq!(failed_record["possible_external_effects"], false);
+        assert_eq!(failed_record["retryable"], false);
     });
 }
 

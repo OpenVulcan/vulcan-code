@@ -3,10 +3,11 @@
 
 use crate::{EncodedWireRequest, ProtocolConversionError, ProtocolProfile, ProtocolStreamDecoder};
 use serde_json::{Value, json};
+use std::collections::HashSet;
 use vulcan_ai_contract::{
-    AiExecutionRequest, ContentItem, MessageRole, NativeToolKind, ParallelToolCallPolicy,
-    PromptCachePolicy, ReasoningOutputPolicy, RequestUsage, StructuredOutputPolicy,
-    ToolChoicePolicy, is_replayable_codex_responses_item,
+    APPLY_PATCH_LARK_GRAMMAR, APPLY_PATCH_TOOL_NAME, AiExecutionRequest, ContentItem, MessageRole,
+    NativeToolKind, ParallelToolCallPolicy, PromptCachePolicy, ReasoningOutputPolicy, RequestUsage,
+    StructuredOutputPolicy, ToolChoicePolicy, is_replayable_codex_responses_item,
 };
 
 /// Wraps one northbound OpenAI reasoning payload with explicit replay provenance.
@@ -668,6 +669,9 @@ fn encode_responses_input(
     continuation: Option<&vulcan_ai_contract::AiContinuation>,
 ) -> Result<Vec<Value>, ProtocolConversionError> {
     let mut input = Vec::new();
+    // customToolCallIds is derived from the complete canonical window so continuation suffixes still select the matching output type.
+    // customToolCallIds 从完整规范窗口派生，使延续后缀仍能选择匹配的输出类型。
+    let custom_tool_call_ids = responses_custom_tool_call_ids(&request.messages);
     let message_start = continuation
         .map(|continuation| continuation.covered_message_count)
         .unwrap_or(0);
@@ -676,8 +680,14 @@ fn encode_responses_input(
             MessageRole::Tool => {
                 for item in &message.content {
                     if let ContentItem::ToolResult { result } = item {
+                        let output_type = if custom_tool_call_ids.contains(result.call_id.as_str())
+                        {
+                            "custom_tool_call_output"
+                        } else {
+                            "function_call_output"
+                        };
                         input.push(json!({
-                            "type": "function_call_output",
+                            "type": output_type,
                             "call_id": result.call_id,
                             "output": encode_responses_tool_output(&result.content)?,
                         }));
@@ -732,16 +742,36 @@ fn encode_responses_input(
                             // A text item before a function call is a distinct ordered Responses item.
                             // 工具调用前的文本是一个独立且有序的 Responses 项。
                             push_responses_assistant_text(&mut input, &mut text);
-                            input.push(json!({
-                                "type": "function_call",
-                                "call_id": call.id,
-                                "name": call.name,
-                                "arguments": serde_json::to_string(&call.arguments).map_err(|error| {
+                            if call.name == APPLY_PATCH_TOOL_NAME {
+                                let patch = call
+                                    .arguments
+                                    .as_object()
+                                    .filter(|object| object.len() == 1)
+                                    .and_then(|object| object.get("patch"))
+                                    .and_then(Value::as_str)
+                                    .ok_or_else(|| {
+                                        ProtocolConversionError::new(
+                                            "Apply Patch Responses history requires exactly one string patch argument.",
+                                        )
+                                    })?;
+                                input.push(json!({
+                                    "type": "custom_tool_call",
+                                    "call_id": call.id,
+                                    "name": call.name,
+                                    "input": patch,
+                                }));
+                            } else {
+                                input.push(json!({
+                                    "type": "function_call",
+                                    "call_id": call.id,
+                                    "name": call.name,
+                                    "arguments": serde_json::to_string(&call.arguments).map_err(|error| {
                                     ProtocolConversionError::new(format!(
                                         "OpenAI Responses tool arguments could not be encoded: {error}"
                                     ))
-                                })?,
-                            }));
+                                    })?,
+                                }));
+                            }
                         }
                         ContentItem::Resource { .. } | ContentItem::Citation { .. } => {
                             return Err(ProtocolConversionError::new(
@@ -795,6 +825,29 @@ fn encode_responses_input(
         }
     }
     Ok(input)
+}
+
+/// Collects custom-text call identifiers from exact Provider items and normalized Apply Patch calls.
+/// 从精确 Provider 项与规范化 Apply Patch 调用中收集自定义文本调用标识。
+fn responses_custom_tool_call_ids(messages: &[vulcan_ai_contract::AiMessage]) -> HashSet<&str> {
+    let mut call_ids = HashSet::new();
+    for message in messages {
+        for item in &message.provider_context_items {
+            if item.get("type").and_then(Value::as_str) == Some("custom_tool_call")
+                && let Some(call_id) = item.get("call_id").and_then(Value::as_str)
+            {
+                call_ids.insert(call_id);
+            }
+        }
+        for item in &message.content {
+            if let ContentItem::ToolCall { call } = item
+                && call.name == APPLY_PATCH_TOOL_NAME
+            {
+                call_ids.insert(call.id.as_str());
+            }
+        }
+    }
+    call_ids
 }
 
 /// Flushes one accumulated assistant text segment without crossing an ordered Responses item.
@@ -1235,13 +1288,26 @@ fn encode_responses_tools(request: &AiExecutionRequest) -> Vec<Value> {
         .tools
         .iter()
         .map(|tool| {
-            json!({
-                "type": "function",
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": tool.input_schema,
-                "strict": tool.strict,
-            })
+            if tool.name == APPLY_PATCH_TOOL_NAME {
+                json!({
+                    "type": "custom",
+                    "name": tool.name,
+                    "description": tool.description,
+                    "format": {
+                        "type": "grammar",
+                        "syntax": "lark",
+                        "definition": APPLY_PATCH_LARK_GRAMMAR,
+                    },
+                })
+            } else {
+                json!({
+                    "type": "function",
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.input_schema,
+                    "strict": tool.strict,
+                })
+            }
         })
         .collect::<Vec<_>>();
     for native_tool in &request.native_tools {
@@ -1686,6 +1752,138 @@ mod tests {
             tool["type"] == "code_interpreter" && tool["container"]["type"] == "auto"
         }));
         assert!(tools.iter().any(|tool| tool["type"] == "image_generation"));
+    }
+
+    /// Verifies Responses exposes Apply Patch as grammar text while Chat keeps portable JSON.
+    /// 验证 Responses 将 Apply Patch 暴露为语法文本，而 Chat 保持可移植 JSON。
+    #[test]
+    fn apply_patch_projection_follows_protocol_capability() {
+        let mut request = codex_request();
+        request.tools.push(ToolDefinition {
+            name: String::from(APPLY_PATCH_TOOL_NAME),
+            description: String::from("Applies an Apply Patch text document."),
+            input_schema: json!({
+                "type": "object",
+                "properties": {"patch": {"type": "string"}},
+                "required": ["patch"],
+            }),
+            strict: false,
+        });
+
+        let responses = OpenAiResponsesProfile
+            .encode(&request)
+            .expect("Responses apply_patch should encode");
+        let custom = responses.body["tools"]
+            .as_array()
+            .and_then(|tools| {
+                tools
+                    .iter()
+                    .find(|tool| tool["name"] == APPLY_PATCH_TOOL_NAME)
+            })
+            .expect("Responses apply_patch should be present");
+        assert_eq!(custom["type"], "custom");
+        assert_eq!(custom["format"]["syntax"], "lark");
+        assert_eq!(custom["format"]["definition"], APPLY_PATCH_LARK_GRAMMAR);
+        assert!(custom.get("parameters").is_none());
+
+        let chat = OpenAiChatProfile
+            .encode(&request)
+            .expect("Chat apply_patch should encode");
+        let function = chat.body["tools"]
+            .as_array()
+            .and_then(|tools| {
+                tools.iter().find(|tool| {
+                    tool.pointer("/function/name").and_then(Value::as_str)
+                        == Some(APPLY_PATCH_TOOL_NAME)
+                })
+            })
+            .expect("Chat apply_patch should be present");
+        assert_eq!(function["type"], "function");
+        assert_eq!(
+            function["function"]["parameters"]["required"],
+            json!(["patch"])
+        );
+    }
+
+    /// Verifies exact and normalized Apply Patch history uses Responses custom-call items end to end.
+    /// 验证精确与规范化的 Apply Patch 历史会端到端使用 Responses 自定义调用项。
+    #[test]
+    fn responses_replays_apply_patch_as_custom_tool_call_and_output() {
+        let patch = "*** Begin Patch\n*** Delete File: obsolete.txt\n*** End Patch";
+        let mut exact_request = codex_request();
+        exact_request.messages = vec![
+            AiMessage {
+                role: MessageRole::Assistant,
+                content: Vec::new(),
+                provider_context_items: vec![json!({
+                    "type": "custom_tool_call",
+                    "id": "custom-item-1",
+                    "call_id": "patch-call-1",
+                    "name": APPLY_PATCH_TOOL_NAME,
+                    "input": patch,
+                })],
+            },
+            AiMessage {
+                role: MessageRole::Tool,
+                content: vec![ContentItem::ToolResult {
+                    result: ToolResult {
+                        call_id: String::from("patch-call-1"),
+                        is_error: false,
+                        content: json!({"ok": true}),
+                    },
+                }],
+                provider_context_items: Vec::new(),
+            },
+        ];
+
+        let exact = OpenAiResponsesProfile
+            .encode(&exact_request)
+            .expect("exact custom Apply Patch history should encode");
+        let exact_input = exact.body["input"]
+            .as_array()
+            .expect("exact Responses input should be an array");
+        assert_eq!(exact_input[0]["type"], "custom_tool_call");
+        assert_eq!(exact_input[0]["input"], patch);
+        assert_eq!(exact_input[1]["type"], "custom_tool_call_output");
+        assert_eq!(exact_input[1]["call_id"], "patch-call-1");
+
+        let mut normalized_request = codex_request();
+        normalized_request.messages = vec![
+            AiMessage {
+                role: MessageRole::Assistant,
+                content: vec![ContentItem::ToolCall {
+                    call: ToolCall {
+                        id: String::from("patch-call-2"),
+                        name: String::from(APPLY_PATCH_TOOL_NAME),
+                        arguments: json!({"patch": patch}),
+                        signature: None,
+                    },
+                }],
+                provider_context_items: Vec::new(),
+            },
+            AiMessage {
+                role: MessageRole::Tool,
+                content: vec![ContentItem::ToolResult {
+                    result: ToolResult {
+                        call_id: String::from("patch-call-2"),
+                        is_error: false,
+                        content: json!({"ok": true}),
+                    },
+                }],
+                provider_context_items: Vec::new(),
+            },
+        ];
+
+        let normalized = OpenAiResponsesProfile
+            .encode(&normalized_request)
+            .expect("normalized Apply Patch history should encode as custom items");
+        let normalized_input = normalized.body["input"]
+            .as_array()
+            .expect("normalized Responses input should be an array");
+        assert_eq!(normalized_input[0]["type"], "custom_tool_call");
+        assert_eq!(normalized_input[0]["input"], patch);
+        assert_eq!(normalized_input[1]["type"], "custom_tool_call_output");
+        assert_eq!(normalized_input[1]["call_id"], "patch-call-2");
     }
 
     /// Verifies Chat Completions still rejects provider-native hosted tools.

@@ -33,6 +33,15 @@ struct OpenAiToolState {
     /// Accumulated raw argument JSON.
     /// 累积的原始参数 JSON。
     arguments: String,
+    /// Whether this Responses item carries raw custom-tool input instead of function JSON.
+    /// 当前 Responses 项是否携带原始自定义工具输入而不是函数 JSON。
+    custom_input: bool,
+    /// Accumulated raw custom-tool text before portable JSON wrapping.
+    /// 包装为可移植 JSON 前累积的原始自定义工具文本。
+    custom_text: String,
+    /// Whether the synthetic JSON patch-string prefix was emitted.
+    /// 是否已发送合成 JSON patch 字符串前缀。
+    custom_json_started: bool,
     /// Whether the public start event was emitted.
     /// 是否已经发送公共开始事件。
     started: bool,
@@ -711,7 +720,9 @@ impl OpenAiResponsesStreamDecoder {
             self.image_item_id(index, reported_item_id)?;
             return Ok(Vec::new());
         }
-        if item.get("type").and_then(Value::as_str) != Some("function_call") {
+        let item_type = item.get("type").and_then(Value::as_str);
+        let custom_input = item_type == Some("custom_tool_call");
+        if item_type != Some("function_call") && !custom_input {
             return Ok(Vec::new());
         }
         if self.tools.contains_key(&index) {
@@ -744,11 +755,25 @@ impl OpenAiResponsesStreamDecoder {
                 provider_item_id,
                 call_id: call_id.clone(),
                 tool_name: tool_name.clone(),
-                arguments: item
-                    .get("arguments")
+                arguments: if custom_input {
+                    item.get("input")
+                        .and_then(Value::as_str)
+                        .map(custom_tool_arguments)
+                        .transpose()?
+                        .unwrap_or_default()
+                } else {
+                    item.get("arguments")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string()
+                },
+                custom_input,
+                custom_text: item
+                    .get("input")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
+                custom_json_started: false,
                 started: true,
                 terminal: false,
                 arguments_done_seen: false,
@@ -846,6 +871,87 @@ impl OpenAiResponsesStreamDecoder {
         Ok(vec![tool_argument_delta(state, delta)?])
     }
 
+    /// Decodes one raw custom-tool input delta as a portable JSON patch argument stream.
+    /// 将一段原始自定义工具输入增量解码为可移植 JSON patch 参数流。
+    fn custom_tool_input_delta(
+        &mut self,
+        value: &Value,
+    ) -> Result<Vec<AiStreamEvent>, ProtocolConversionError> {
+        let index = Self::output_index(value)?;
+        let delta = value.get("delta").and_then(Value::as_str).ok_or_else(|| {
+            ProtocolConversionError::new("OpenAI Responses custom-tool delta is missing.")
+        })?;
+        let state = self.tools.get_mut(&index).ok_or_else(|| {
+            ProtocolConversionError::new(format!(
+                "OpenAI Responses custom-tool delta references unopened index `{index}`."
+            ))
+        })?;
+        if !state.custom_input {
+            return Err(ProtocolConversionError::new(
+                "OpenAI Responses emitted custom-tool input for a function tool.",
+            ));
+        }
+        if state.terminal || state.arguments_done_seen {
+            return Err(ProtocolConversionError::new(format!(
+                "OpenAI Responses custom-tool index `{index}` emitted input after completion."
+            )));
+        }
+        if !state.custom_text.is_empty() && !state.custom_json_started {
+            return Err(ProtocolConversionError::new(
+                "OpenAI Responses custom-tool input delta followed a non-empty initial input snapshot.",
+            ));
+        }
+        Self::validate_tool_identity(state, value)?;
+        append_bounded_tool_arguments(
+            &mut state.custom_text,
+            delta,
+            "OpenAI Responses custom tool",
+        )?;
+        let encoded = serde_json::to_string(delta).map_err(|error| {
+            ProtocolConversionError::new(format!(
+                "OpenAI Responses custom-tool delta could not be JSON encoded: {error}"
+            ))
+        })?;
+        let escaped = &encoded[1..encoded.len().saturating_sub(1)];
+        let fragment = if state.custom_json_started {
+            escaped.to_string()
+        } else {
+            state.custom_json_started = true;
+            format!("{{\"patch\":\"{escaped}")
+        };
+        append_bounded_tool_arguments(&mut state.arguments, &fragment, "OpenAI Responses")?;
+        Ok(vec![tool_argument_delta(state, &fragment)?])
+    }
+
+    /// Records authoritative raw custom-tool input without terminating the tool early.
+    /// 记录权威原始自定义工具输入且不提前终止工具。
+    fn record_custom_tool_input_done(
+        &mut self,
+        value: &Value,
+    ) -> Result<Vec<AiStreamEvent>, ProtocolConversionError> {
+        let index = Self::output_index(value)?;
+        let state = self.tools.get_mut(&index).ok_or_else(|| {
+            ProtocolConversionError::new(format!(
+                "OpenAI Responses custom-tool completion references unopened index `{index}`."
+            ))
+        })?;
+        Self::validate_tool_identity(state, value)?;
+        if !state.custom_input {
+            return Err(ProtocolConversionError::new(
+                "OpenAI Responses emitted custom-tool completion for a function tool.",
+            ));
+        }
+        if state.terminal || state.arguments_done_seen {
+            return Ok(Vec::new());
+        }
+        if let Some(input) = value.get("input").and_then(Value::as_str) {
+            state.custom_text = input.to_string();
+        }
+        state.arguments = custom_tool_arguments(&state.custom_text)?;
+        state.arguments_done_seen = true;
+        Ok(Vec::new())
+    }
+
     /// Records one non-authoritative function-argument completion candidate.
     /// 记录一个非权威函数参数完成候选值。
     ///
@@ -931,7 +1037,16 @@ impl OpenAiResponsesStreamDecoder {
         if state.terminal {
             return Ok(Vec::new());
         }
-        if let Some(arguments) = value
+        if state.custom_input {
+            if let Some(input) = value
+                .pointer("/item/input")
+                .or_else(|| value.get("input"))
+                .and_then(Value::as_str)
+            {
+                state.custom_text = input.to_string();
+            }
+            state.arguments = custom_tool_arguments(&state.custom_text)?;
+        } else if let Some(arguments) = value
             .pointer("/item/arguments")
             .or_else(|| value.get("arguments"))
             .and_then(Value::as_str)
@@ -1732,6 +1847,12 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
             "response.function_call_arguments.done" => {
                 events.extend(self.record_tool_arguments_done(&value)?);
             }
+            "response.custom_tool_call_input.delta" => {
+                events.extend(self.custom_tool_input_delta(&value)?);
+            }
+            "response.custom_tool_call_input.done" => {
+                events.extend(self.record_custom_tool_input_done(&value)?);
+            }
             "response.completed" => {
                 events.extend(self.capture_response_id(&value)?);
                 events.extend(self.close_semantic_items());
@@ -1794,7 +1915,7 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
                     Some("reasoning") => {
                         events.extend(self.completed_reasoning_item(&value)?);
                     }
-                    Some("function_call") => {
+                    Some("function_call" | "custom_tool_call") => {
                         // index identifies whether a preceding added event already opened the tool.
                         // index 标识前序 added 事件是否已经打开该工具。
                         let index = Self::output_index(&value)?;
@@ -1940,6 +2061,26 @@ fn tool_argument_delta(
             })?,
             complete: false,
         },
+    })
+}
+
+/// Wraps raw custom-tool input in the portable function-argument contract.
+/// 将原始自定义工具输入包装为可移植的函数参数契约。
+///
+/// # Parameters
+/// 参数
+/// `input` is the exact custom-tool text supplied by the Responses protocol.
+/// `input` 是 Responses 协议提供的精确自定义工具文本。
+///
+/// # Returns
+/// 返回值
+/// A JSON object string containing the text under the `patch` field.
+/// 返回将文本存放在 `patch` 字段中的 JSON 对象字符串。
+fn custom_tool_arguments(input: &str) -> Result<String, ProtocolConversionError> {
+    serde_json::to_string(&serde_json::json!({"patch": input})).map_err(|error| {
+        ProtocolConversionError::new(format!(
+            "OpenAI Responses custom-tool input could not be JSON encoded: {error}"
+        ))
     })
 }
 
@@ -2676,6 +2817,107 @@ mod tests {
             event,
             AiStreamEvent::ToolCallCompleted { call, .. }
                 if call.id == "call" && call.arguments == json!({"path": "src"})
+        )));
+    }
+
+    /// Verifies custom Apply Patch text streams through portable JSON and completes authoritatively.
+    /// 验证自定义 Apply Patch 文本通过可移植 JSON 流式传递并按权威值完成。
+    #[test]
+    fn responses_custom_tool_input_streams_and_completes_as_patch_argument() {
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        decoder
+            .push_sse(
+                Some("response.output_item.added"),
+                r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"custom_tool_call","id":"item","call_id":"call","name":"apply_patch","input":""}}"#,
+            )
+            .expect("custom tool should start");
+        let first = decoder
+            .push_sse(
+                Some("response.custom_tool_call_input.delta"),
+                r#"{"type":"response.custom_tool_call_input.delta","output_index":0,"item_id":"item","call_id":"call","delta":"*** Begin Patch\n"}"#,
+            )
+            .expect("custom input delta should decode");
+        assert!(first.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ToolCallArgumentsDelta { delta, progress, .. }
+                if delta.starts_with("{\"patch\":\"") && progress.characters_received > 0
+        )));
+
+        let complete_patch = "*** Begin Patch\n*** Add File: note.txt\n+done\n*** End Patch";
+        let candidate = decoder
+            .push_sse(
+                Some("response.custom_tool_call_input.done"),
+                serde_json::to_string(&json!({
+                    "type": "response.custom_tool_call_input.done",
+                    "output_index": 0,
+                    "item_id": "item",
+                    "call_id": "call",
+                    "input": complete_patch,
+                }))
+                .expect("custom completion should serialize")
+                .as_str(),
+            )
+            .expect("custom input completion should decode");
+        assert!(candidate.is_empty());
+
+        let completed = decoder
+            .push_sse(
+                Some("response.output_item.done"),
+                serde_json::to_string(&json!({
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": {
+                        "type": "custom_tool_call",
+                        "id": "item",
+                        "call_id": "call",
+                        "name": "apply_patch",
+                        "input": complete_patch,
+                    },
+                }))
+                .expect("custom output item should serialize")
+                .as_str(),
+            )
+            .expect("custom output item should complete");
+        assert!(completed.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ToolCallCompleted { call, .. }
+                if call.name == "apply_patch" && call.arguments == json!({"patch": complete_patch})
+        )));
+    }
+
+    /// Verifies a buffered custom tool can complete without input delta events.
+    /// 验证缓冲自定义工具可在没有输入增量事件时完成。
+    #[test]
+    fn responses_output_item_done_completes_buffered_custom_tool() {
+        let patch = "*** Begin Patch\n*** Delete File: old.txt\n*** End Patch";
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        let events = decoder
+            .push_sse(
+                Some("response.output_item.done"),
+                serde_json::to_string(&json!({
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": {
+                        "type": "custom_tool_call",
+                        "id": "item",
+                        "call_id": "call",
+                        "name": "apply_patch",
+                        "input": patch,
+                    },
+                }))
+                .expect("buffered custom item should serialize")
+                .as_str(),
+            )
+            .expect("buffered custom tool should decode");
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ToolCallStarted { tool_name, .. } if tool_name == "apply_patch"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ToolCallCompleted { call, .. }
+                if call.arguments == json!({"patch": patch})
         )));
     }
 

@@ -406,7 +406,13 @@ pub(crate) async fn apply_webui_context_compaction_stream_event(
             emit_transient_reasoning_status(app, state, session_id, status)
         }
         ExecutionStreamEvent::ThinkingCompleted { .. } => {
-            complete_streaming_thinking_phase(app, state, session_id, record_ids)
+            complete_and_persist_streaming_thinking_phase(
+                app,
+                state,
+                controller_runtime,
+                session_id,
+                record_ids,
+            )
         }
         ExecutionStreamEvent::OutputDelta { delta, .. } => {
             append_webui_context_compaction_output_delta(

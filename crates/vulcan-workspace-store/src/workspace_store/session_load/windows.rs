@@ -4,6 +4,7 @@
 use super::tool_detail_hydration::augment_window_tool_details_from_runtime_logs;
 use super::*;
 use crate::conversation_protocol::conversation_state_to_session_messages;
+use crate::workspace_store::segmented_session_store::restore_tool_card_terminal_projection;
 use vulcan_context::SessionMessageKind;
 use vulcan_session_boundary::boundary_events_to_vulcan_conversation_state;
 
@@ -69,6 +70,10 @@ pub(super) fn load_segmented_window_messages(
         // tool_detail_started_at 将运行时日志详情补全与转录读取分开测量。
         let tool_detail_started_at = std::time::Instant::now();
         augment_window_tool_details_from_runtime_logs(&session_dir, window)?;
+        restore_tool_card_terminal_projection(
+            &mut window.messages,
+            window.tool_detail_messages.as_slice(),
+        );
         trace_session_load_if_slow(
             "tool_detail_augmentation",
             session_id,

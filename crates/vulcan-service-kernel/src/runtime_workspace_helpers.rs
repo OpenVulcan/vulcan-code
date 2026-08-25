@@ -927,28 +927,6 @@ pub(crate) fn stop_webui_session_work(
     }
     runtime_state.active_precheck_turn_id = None;
     runtime_state.updated_at = now.clone();
-    // hadActiveExecution treats the stream registry and session kernel as equal live-run evidence.
-    // hadActiveExecution 将流注册表与会话内核同等视为实时运行证据。
-    let had_active_execution = had_active_kernel_turn || had_active_stream_task;
-    let stop_body = match (had_active_execution, stopped_running_subagents) {
-        (true, true) => {
-            "已按用户请求停止当前 AI 调用、运行中的智能体以及系统内部等待任务；尚未真正执行的排队消息已恢复到可再次插入状态。"
-        }
-        (true, false) => {
-            "已按用户请求停止当前 AI 调用以及系统内部等待任务；尚未真正执行的排队消息已恢复到可再次插入状态。"
-        }
-        (false, true) => {
-            "已按用户请求停止当前会话运行中的智能体以及系统内部等待任务；尚未真正执行的排队消息已恢复到可再次插入状态。"
-        }
-        (false, false) => {
-            "已按用户请求停止当前会话系统内部等待任务；尚未真正执行的排队消息已恢复到可再次插入状态。"
-        }
-    };
-    append_webui_session_message_entry_to_state(
-        &mut runtime_state,
-        session_id,
-        SessionMessageEntry::new(SessionMessageKind::Error, "执行已停止", stop_body),
-    )?;
     let mut terminated_entry = SessionMessageEntry::hidden(
         SessionMessageKind::Assistant,
         SessionMessageRecordKind::TurnTerminated,

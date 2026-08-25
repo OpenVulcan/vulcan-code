@@ -206,6 +206,80 @@ fn malformed_provider_arguments_return_tool_error_without_executor_dispatch() {
     });
 }
 
+/// Verifies a second malformed tool call ends the user turn instead of opening another correction round.
+/// 验证第二次格式错误的工具调用会结束用户回合，而不是再次开启纠错轮。
+#[test]
+fn malformed_provider_arguments_allow_only_one_model_correction_round() {
+    let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        // malformedResponse builds one authoritative non-executable tool call for a physical Provider turn.
+        // malformedResponse 为一次真实 Provider 回合构建一条权威且不可执行的工具调用。
+        let malformed_response = |suffix: &str| ProviderTurnResponse {
+            assistant_text: String::new(),
+            assistant_reasoning: String::new(),
+            provider_message_id: Some(format!("response-invalid-{suffix}")),
+            provider_message_state: None,
+            tool_calls: vec![ConversationToolCall {
+                id: format!("item-invalid-{suffix}"),
+                tool_call_id: Some(format!("call-invalid-{suffix}")),
+                tool_name: String::from("file_edit"),
+                arguments: Value::Null,
+                argument_parse_error: Some(format!("invalid JSON {suffix}")),
+            }],
+            continuation: None,
+            usage: None,
+        };
+        // thirdResponse would prove an unintended second correction request if it were consumed.
+        // thirdResponse 若被消费即可证明错误地发起了第二次纠错请求。
+        let third_response = ProviderTurnResponse {
+            assistant_text: String::from("unexpected third Provider turn"),
+            assistant_reasoning: String::new(),
+            provider_message_id: Some(String::from("response-unexpected-third")),
+            provider_message_state: None,
+            tool_calls: Vec::new(),
+            continuation: None,
+            usage: None,
+        };
+        let adapter = MockStreamingProviderAdapter::new(vec![
+            (Vec::new(), malformed_response("first")),
+            (Vec::new(), malformed_response("second")),
+            (Vec::new(), third_response),
+        ]);
+        let executor = MockToolExecutor::new();
+        let mut controller =
+            VulcanCoreController::new(build_test_config(8), ConversationSnapshot::default())
+                .expect("valid core conversation snapshot");
+
+        let result = controller
+            .run_user_turn_streaming(
+                &adapter,
+                &executor,
+                &AllowAllToolPolicy,
+                "Apply the requested edit.",
+            )
+            .await
+            .expect("the second malformed tool call should end cleanly");
+
+        assert_eq!(result.provider_turns_executed, 2);
+        assert_eq!(result.tool_calls_processed, 2);
+        assert_eq!(adapter.built_requests().len(), 2);
+        assert!(executor.executed_requests().is_empty());
+        let rejected_results = controller
+            .snapshot()
+            .messages
+            .iter()
+            .filter(|message| {
+                matches!(
+                    &message.payload,
+                    ConversationPayload::ToolResult { is_error: true, text, .. }
+                        if text.starts_with("[tool_argument_parse_error]")
+                )
+            })
+            .count();
+        assert_eq!(rejected_results, 2);
+    });
+}
+
 /// Verifies restored invalid Provider arguments remain non-executable and produce one model-visible tool error.
 /// 验证恢复后的无效 Provider 参数仍不可执行，并生成一条模型可见工具错误。
 #[test]

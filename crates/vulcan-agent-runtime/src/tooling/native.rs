@@ -94,6 +94,7 @@ const TERMINAL_INTERRUPT_DRAIN_MAX_MS: u64 = 1_500;
 /// Soft byte limit for coalescing adjacent model-visible terminal chunks.
 /// 合并相邻模型可见终端分片时使用的软字节限制。
 const TERMINAL_OUTPUT_CHUNK_COALESCE_SOFT_LIMIT_BYTES: usize = 2_048;
+mod apply_patch;
 mod file;
 mod file_edit;
 mod knowledge_base;
@@ -102,6 +103,7 @@ mod registry;
 mod shell_command;
 #[cfg(test)]
 mod shell_session;
+pub(crate) use apply_patch::*;
 pub(crate) use file::*;
 pub(crate) use file_edit::*;
 pub(crate) use knowledge_base::*;
@@ -370,6 +372,7 @@ pub fn build_native_tool_catalog(
         build_vmm_memory_delete_tool(snapshot),
         build_file_tool(),
         build_file_edit_tool(),
+        build_apply_patch_tool(),
     ];
     if let Some(runtime) = luaskills_runtime {
         definitions.push(build_runtime_config_tool(runtime));

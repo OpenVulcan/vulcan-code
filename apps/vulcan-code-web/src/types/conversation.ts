@@ -801,7 +801,7 @@ export interface ToolRequestProgressSnapshot {
   toolName: string;
   // Closed request-formation state; execution states remain in durable transcript records.
   // 封闭的请求构造状态；执行状态仍由持久转录记录持有。
-  state: "receiving" | "arguments_assembled";
+  state: "receiving" | "arguments_assembled" | "ready";
   // Exact UTF-8 byte and Unicode character counts received so far.
   // 当前已接收的精确 UTF-8 字节数与 Unicode 字符数。
   receivedBytes: number;
@@ -823,8 +823,8 @@ export interface ToolRequestProgressChangedDelta {
   // Stable request-stream identity used for replacement and clearing.
   // 用于替换与清除的稳定请求流标识。
   requestStreamId: string;
-  // Latest safe snapshot, or null after request formation ends.
-  // 最新安全快照；请求构造结束后为空。
+  // Latest safe snapshot, or null when validation fails or the request is aborted.
+  // 最新安全快照；校验失败或请求中止后为空。
   progress: ToolRequestProgressSnapshot | null;
 }
 

@@ -277,6 +277,9 @@ struct MockToolExecutor {
     /// Complete execution batches prepared before any tool body starts.
     /// 在任何工具主体启动前准备的完整执行批次。
     prepared_batches: Arc<Mutex<Vec<Vec<ToolInvocationRequest>>>>,
+    /// Optional batch-preparation failure emitted before any tool body starts.
+    /// 在任何工具主体启动前发出的可选批次准备失败。
+    preparation_failure: Option<String>,
 }
 
 impl MockToolExecutor {
@@ -307,6 +310,13 @@ impl MockToolExecutor {
     fn with_failure(mut self, tool_name: &str, message: &str) -> Self {
         self.outcomes_by_tool
             .insert(tool_name.to_string(), Err(message.to_string()));
+        self
+    }
+
+    /// Registers one pre-planned failure for the durable batch-preparation boundary.
+    /// 为可靠批次准备边界注册一条预设失败。
+    fn with_preparation_failure(mut self, message: &str) -> Self {
+        self.preparation_failure = Some(message.to_string());
         self
     }
 
@@ -341,6 +351,11 @@ impl VulcanToolExecutor for MockToolExecutor {
             .lock()
             .expect("lock prepared batches")
             .push(requests.to_vec());
+        if let Some(message) = &self.preparation_failure {
+            return Err(CoreError::InvalidState {
+                message: message.clone(),
+            });
+        }
         Ok(())
     }
 

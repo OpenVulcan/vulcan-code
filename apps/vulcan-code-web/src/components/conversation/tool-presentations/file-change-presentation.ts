@@ -1,8 +1,8 @@
 import { resolveFileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import type { ConversationDetailRef, ToolDetailPayload } from "@/components/conversation/conversation-detail";
 import type { ToolExecutionConversationBlock } from "@/components/conversation/conversation-tool-execution-types";
-import type { FileAccessAction, FileChangeDiffRow, FileChangeFilePresentation, FileChangeOperation, FileChangePresentation, ToolPresentationDisplayState, ToolPresentationResolveOptions } from "./types";
-import { argumentsFromMetadata, arrayValue, compactHash, fixedToolName, metadataString, metadataValue, normalizeToolName, numberValue, objectValue, stringValue, textValue } from "./presentation-value-readers";
+import type { FileAccessAction, FileChangeDiffRow, FileChangeFilePresentation, FileChangeOperation, FileChangePresentation, FileTextFormatPresentation, ToolPresentationDisplayState, ToolPresentationResolveOptions } from "./types";
+import { argumentsFromMetadata, arrayValue, booleanValue, compactHash, fixedToolName, metadataString, metadataValue, normalizeToolName, numberValue, objectValue, stringValue, textValue } from "./presentation-value-readers";
 import { deleteRows, fileChangeDiffFile, insertRows, modifyRows, splitTextLines } from "./file-change-diff-presentation";
 
 // fileChangeStatusLabel returns the compact fallback status label for a file-change card.
@@ -20,8 +20,8 @@ export function fileChangeStatusLabel(presentation: FileChangePresentation, oper
   return operationLabel(operation, "Written", "Edited", "Deleted", "Changed");
 }
 
-// resolveFileChangePresentation recognizes native vulcan-file calls and completed host change sets.
-// resolveFileChangePresentation 识别原生 vulcan-file 调用和已完成的宿主变更集。
+// resolveFileChangePresentation recognizes native file tools and compatible completed host change sets.
+// resolveFileChangePresentation 识别原生文件工具与兼容的已完成宿主变更集。
 export function resolveFileChangePresentation(
   blocks: ToolExecutionConversationBlock[],
   displayState: ToolPresentationDisplayState,
@@ -30,31 +30,112 @@ export function resolveFileChangePresentation(
 ): FileChangePresentation | null {
   const nativeToolId = exactNativeToolId(blocks);
   if (nativeToolId === "file") {
+    const hostPayload = displayState !== "running" ? lastChangeSetPayload(blocks) : null;
+    if (hostPayload) {
+      return buildHostChangeSetPresentation(
+        blocks,
+        displayState,
+        hostPayload,
+        options,
+        "native_file_mutation",
+        detailRef,
+      );
+    }
     const accessAction = nativeFileAccessAction(blocks);
-    return accessAction
-      ? buildNativeFileAccessPresentation(blocks, displayState, accessAction, options, detailRef)
+    if (accessAction) {
+      return buildNativeFileAccessPresentation(blocks, displayState, accessAction, options, detailRef);
+    }
+    const mutationOperation = nativeFileMutationOperation(blocks);
+    return mutationOperation
+      ? buildNativeVulcanFilePresentation(
+        blocks,
+        displayState,
+        mutationOperation,
+        options,
+        "native_file_mutation",
+        detailRef,
+      )
       : null;
   }
   if (nativeToolId === "file_edit") {
     const hostPayload = displayState !== "running" ? lastChangeSetPayload(blocks) : null;
     if (hostPayload) {
-      return buildHostChangeSetPresentation(blocks, displayState, hostPayload, options, "native_file_edit");
+      return buildHostChangeSetPresentation(
+        blocks,
+        displayState,
+        hostPayload,
+        options,
+        "native_file_edit",
+        detailRef,
+      );
     }
-    const streamedPreview = nativeFileEditPreview(options.requestPreview);
+    if (displayState !== "completed") {
+      const streamedPreview = nativeEditPreview(options.requestPreview, "file_edit");
+      if (streamedPreview) {
+        return buildNativeEditPreviewPresentation(blocks, displayState, streamedPreview, options, "native_file_edit", detailRef);
+      }
+      const argumentPreview = nativeFileEditArgumentsPreview(blocks);
+      if (argumentPreview) {
+        return buildNativeEditPreviewPresentation(blocks, displayState, argumentPreview, options, "native_file_edit", detailRef);
+      }
+    }
+    return buildNativeVulcanFilePresentation(blocks, displayState, "modify", options, "native_file_edit", detailRef);
+  }
+  if (nativeToolId === "apply_patch") {
+    const hostPayload = displayState !== "running" ? lastChangeSetPayload(blocks) : null;
+    if (hostPayload) {
+      return buildHostChangeSetPresentation(
+        blocks,
+        displayState,
+        hostPayload,
+        options,
+        "native_apply_patch",
+        detailRef,
+      );
+    }
+    if (displayState === "completed") {
+      return null;
+    }
+    const streamedPreview = nativeEditPreview(options.requestPreview, "apply_patch");
     if (streamedPreview) {
-      return buildNativeFileEditPreviewPresentation(blocks, displayState, streamedPreview, options);
+      return buildNativeEditPreviewPresentation(
+        blocks,
+        displayState,
+        streamedPreview,
+        options,
+        "native_apply_patch",
+        detailRef,
+      );
     }
-    return buildNativeVulcanFilePresentation(blocks, displayState, "modify", options, "native_file_edit");
+    const argumentPreview = nativeApplyPatchArgumentsPreview(blocks);
+    if (argumentPreview) {
+      return buildNativeEditPreviewPresentation(
+        blocks,
+        displayState,
+        argumentPreview,
+        options,
+        "native_apply_patch",
+        detailRef,
+      );
+    }
+    return null;
   }
   const hostPayload = displayState !== "running" ? lastChangeSetPayload(blocks) : null;
   if (hostPayload) {
-    return buildHostChangeSetPresentation(blocks, displayState, hostPayload, options, "host_change_set");
+    return buildHostChangeSetPresentation(
+      blocks,
+      displayState,
+      hostPayload,
+      options,
+      "host_change_set",
+      detailRef,
+    );
   }
   const nativeOperation = nativeVulcanFileOperation(blocks);
   if (!nativeOperation) {
     return null;
   }
-  return buildNativeVulcanFilePresentation(blocks, displayState, nativeOperation, options, "native_vulcan_file");
+  return buildNativeVulcanFilePresentation(blocks, displayState, nativeOperation, options, "native_vulcan_file", detailRef);
 }
 
 // NativeFileEditPreviewFile is the bounded per-file projection of a parser preview.
@@ -71,13 +152,15 @@ interface NativeFileEditPreviewFile {
   rows: FileChangeDiffRow[];
 }
 
-// buildNativeFileEditPreviewPresentation maps safe request-stream metadata to the shared file card.
-// buildNativeFileEditPreviewPresentation 将安全请求流元数据映射到共享文件卡片。
-function buildNativeFileEditPreviewPresentation(
+// buildNativeEditPreviewPresentation maps safe request-stream metadata to the shared file card.
+// buildNativeEditPreviewPresentation 将安全请求流元数据映射到共享文件卡片。
+function buildNativeEditPreviewPresentation(
   blocks: ToolExecutionConversationBlock[],
   displayState: ToolPresentationDisplayState,
   preview: NativeFileEditPreviewFile[],
   options: ToolPresentationResolveOptions,
+  source: "native_file_edit" | "native_apply_patch" = "native_file_edit",
+  detailRef?: ConversationDetailRef,
 ): FileChangePresentation | null {
   const files = preview.map((item, index) => {
     const added = item.rows.filter((row) => row.kind === "insert").length;
@@ -93,7 +176,7 @@ function buildNativeFileEditPreviewPresentation(
       rows: item.rows,
       resourceId: null,
       stableId: item.path,
-      idOperation: "file_edit",
+      idOperation: source === "native_apply_patch" ? "apply_patch" : "file_edit",
       operationIds: [],
       previousPath: null,
       readOnly: false,
@@ -104,14 +187,19 @@ function buildNativeFileEditPreviewPresentation(
     return null;
   }
   return {
+    detailRef,
     errorDetail: displayState === "failed" ? errorDetailFromBlocks(blocks) : null,
     files,
-    id: fileChangePresentationId(blocks, files, "native-file-edit"),
+    id: fileChangePresentationId(
+      blocks,
+      files,
+      source === "native_apply_patch" ? "native-apply-patch" : "native-file-edit",
+    ),
     interactive: files.some((file) => file.expandable),
     kind: "file_change",
     mode: "preview",
     operation: summarizeOperation(files),
-    source: "native_file_edit",
+    source,
     state: displayState,
     totalAdded: sumKnown(files.map((file) => file.added)),
     totalRemoved: sumKnown(files.map((file) => file.removed)),
@@ -125,15 +213,16 @@ function buildHostChangeSetPresentation(
   displayState: ToolPresentationDisplayState,
   payload: Record<string, unknown>,
   options: ToolPresentationResolveOptions,
-  source: "host_change_set" | "native_file_edit",
+  source: "host_change_set" | "native_file_mutation" | "native_file_edit" | "native_apply_patch",
+  detailRef?: ConversationDetailRef,
 ): FileChangePresentation | null {
   const rawFiles = arrayValue(payload.files);
   if (!rawFiles.length) {
     return null;
   }
-  const operationIds = operationIdsForResource(payload);
+  const correlation = nativeChangeSetCorrelation(payload);
   const files = rawFiles
-    .map((file, index) => buildHostChangeSetFile(file, index, blocks, options, operationIds, source))
+    .map((file, index) => buildHostChangeSetFile(file, index, blocks, options, correlation, source))
     .filter((file): file is FileChangeFilePresentation => Boolean(file));
   if (!files.length) {
     return null;
@@ -141,12 +230,19 @@ function buildHostChangeSetPresentation(
   const mode = changeSetMode(payload.mode);
   const operation = summarizeOperation(files);
   return {
+    detailRef,
     errorDetail: displayState === "failed" ? errorDetailFromBlocks(blocks) : null,
     files,
     id: fileChangePresentationId(
       blocks,
       files,
-      source === "native_file_edit" ? "native-file-edit" : "change-set",
+      source === "native_file_edit"
+        ? "native-file-edit"
+        : source === "native_apply_patch"
+          ? "native-apply-patch"
+          : source === "native_file_mutation"
+            ? "native-file-mutation"
+            : "change-set",
     ),
     interactive: displayState !== "running" && files.some((file) => file.expandable),
     kind: "file_change",
@@ -167,7 +263,8 @@ function buildNativeVulcanFilePresentation(
   displayState: ToolPresentationDisplayState,
   operation: Exclude<FileChangeOperation, "mixed">,
   options: ToolPresentationResolveOptions,
-  source: "native_vulcan_file" | "native_file_edit",
+  source: "native_vulcan_file" | "native_file_edit" | "native_file_mutation",
+  detailRef?: ConversationDetailRef,
 ): FileChangePresentation | null {
   const paths = nativeFilePaths(blocks);
   // A file card requires one real path; request formation must not fabricate a generic `File` identity.
@@ -177,9 +274,15 @@ function buildNativeVulcanFilePresentation(
   }
   const displayPaths = paths;
   const files = displayPaths.map((path, index) => {
-    const rows = displayState === "failed" ? errorRowsFromBlocks(blocks) : [];
+    const rows = displayState === "failed"
+      ? errorRowsFromBlocks(blocks)
+      : source === "native_file_mutation" && displayState === "running"
+        ? nativeFileMutationArgumentRows(blocks, path)
+        : [];
     return buildFilePresentation({
-      added: null,
+      added: rows.some((row) => row.kind === "insert")
+        ? rows.filter((row) => row.kind === "insert").length
+        : null,
       blocks,
       expandable: rows.length > 0,
       index,
@@ -188,8 +291,12 @@ function buildNativeVulcanFilePresentation(
       removed: null,
       rows,
       resourceId: null,
-      stableId: source === "native_file_edit" ? path : null,
-      idOperation: source === "native_file_edit" ? "file_edit" : null,
+      stableId: source === "native_vulcan_file" ? null : path,
+      idOperation: source === "native_file_edit"
+        ? "file_edit"
+        : source === "native_file_mutation"
+          ? "file"
+          : null,
       operationIds: [],
       previousPath: null,
       readOnly: false,
@@ -197,14 +304,21 @@ function buildNativeVulcanFilePresentation(
     });
   });
   return {
+    detailRef,
     errorDetail: displayState === "failed" ? errorDetailFromBlocks(blocks) : null,
     files,
     id: fileChangePresentationId(
       blocks,
       files,
-      source === "native_file_edit" ? "native-file-edit" : `native-${operation}`,
+      source === "native_file_edit"
+        ? "native-file-edit"
+        : source === "native_file_mutation"
+          ? "native-file-mutation"
+          : `native-${operation}`,
     ),
-    interactive: displayState === "failed",
+    interactive: displayState === "failed"
+      || files.some((file) => file.expandable)
+      || (displayState !== "running" && Boolean(detailRef)),
     kind: "file_change",
     mode: "unknown",
     operation,
@@ -224,28 +338,31 @@ function buildNativeFileAccessPresentation(
   options: ToolPresentationResolveOptions,
   detailRef?: ConversationDetailRef,
 ): FileChangePresentation | null {
-  const targets = nativeFileAccessTargets(blocks, accessAction);
+  const targets = nativeFileAccessTargets(blocks);
+  const output = nativeFileAccessOutput(blocks);
   if (!targets.length) {
     return null;
   }
   const files = targets.map((target, index) => {
     const rows = displayState === "failed"
       ? errorRowsFromBlocks(blocks)
-      : nativeFileResultRows(blocks, index, accessAction);
+      : nativeFileResultRowsFromOutput(output, index, accessAction);
+    const result = nativeFileAccessResult(output, index);
     return buildFilePresentation({
       added: null,
       blocks,
+      codePreview: accessAction === "read",
       expandable: rows.length > 0,
       index,
       operation: "mixed",
       path: target.path,
-      readRange: target.readRange,
       removed: null,
       rows,
-      resourceId: null,
+      resourceId: stringValue(result?.resource_id),
       operationIds: [],
       previousPath: null,
       readOnly: true,
+      textFormat: nativeFileTextFormat(result),
       options,
     });
   });
@@ -273,8 +390,8 @@ function buildHostChangeSetFile(
   index: number,
   blocks: ToolExecutionConversationBlock[],
   options: ToolPresentationResolveOptions,
-  operationIdsByResource: Map<string, string[]>,
-  source: "host_change_set" | "native_file_edit",
+  correlation: NativeChangeSetCorrelation,
+  source: "host_change_set" | "native_file_mutation" | "native_file_edit" | "native_apply_patch",
 ): FileChangeFilePresentation | null {
   const file = objectValue(value);
   if (!file) {
@@ -284,11 +401,28 @@ function buildHostChangeSetFile(
   const previousPath = stringValue(file.old_path ?? file.oldPath);
   const path = stringValue(file.new_path ?? file.newPath ?? file.path) ?? previousPath ?? `file-${index + 1}`;
   const resourceId = stringValue(file.resource_id ?? file.resourceId);
-  const operationIds = resourceId ? operationIdsByResource.get(resourceId) ?? [] : [];
-  const stableId = source === "native_file_edit"
-    ? nativeRequestPathForHostPath(blocks, previousPath ?? path) ?? previousPath ?? path
+  const operationIds = (resourceId ? correlation.operationIdsByResource.get(resourceId) : null)
+    ?? correlation.operationIdsByIndex.get(index)
+    ?? [];
+  const textFormat = (resourceId ? correlation.textFormatsByResource.get(resourceId) : null)
+    ?? correlation.textFormatsByIndex.get(index)
+    ?? nativeFileTextFormat(file);
+  const requestPath = (resourceId ? correlation.requestPathsByResource.get(resourceId) : null)
+    ?? correlation.requestPathsByIndex.get(index)
+    ?? null;
+  const stableId = source !== "host_change_set"
+    ? requestPath
+      ?? nativeRequestPathForHostPath(blocks, previousPath ?? path)
+      ?? previousPath
+      ?? path
     : null;
-  const idOperation = source === "native_file_edit" ? "file_edit" : null;
+  const idOperation = source === "native_file_edit"
+    ? "file_edit"
+    : source === "native_apply_patch"
+      ? "apply_patch"
+      : source === "native_file_mutation"
+        ? "file"
+        : null;
   const displayPathOverride = operation === "rename" && previousPath
     ? `${displayPathForFile(previousPath, options.workspacePath).path} → ${displayPathForFile(path, options.workspacePath).path}`
     : null;
@@ -310,6 +444,7 @@ function buildHostChangeSetFile(
       operationIds,
       previousPath,
       readOnly: false,
+      textFormat,
       displayPathOverride,
       options,
     });
@@ -333,6 +468,7 @@ function buildHostChangeSetFile(
       operationIds,
       previousPath,
       readOnly: false,
+      textFormat,
       displayPathOverride,
       options,
     });
@@ -357,6 +493,7 @@ function buildHostChangeSetFile(
       operationIds,
       previousPath,
       readOnly: false,
+      textFormat,
       displayPathOverride,
       options,
     });
@@ -376,6 +513,7 @@ function buildHostChangeSetFile(
     operationIds,
     previousPath,
     readOnly: false,
+    textFormat,
     displayPathOverride,
     options,
   });
@@ -402,9 +540,6 @@ function buildFilePresentation(args: {
   // Original path.
   // 原始路径。
   path: string;
-  // Requested read range shown beside native read paths.
-  // 原生读取路径旁显示的请求行号范围。
-  readRange?: string | null;
   // Removed line count for this file.
   // 当前文件的删除行数。
   removed: number | null;
@@ -426,6 +561,12 @@ function buildFilePresentation(args: {
   // Whether rows are read-only result lines.
   // 当前行是否为只读结果行。
   readOnly: boolean;
+  // Whether read-only rows contain source code that belongs in the line-number gutter.
+  // 只读行是否为应进入代码行号槽的源代码内容。
+  codePreview?: boolean;
+  // Optional decoded text metadata reported by the native file runtime.
+  // 原生文件运行时报告的可选已解码文本元数据。
+  textFormat?: FileTextFormatPresentation | null;
   // Resolver options.
   // 解析选项。
   options: ToolPresentationResolveOptions;
@@ -437,14 +578,16 @@ function buildFilePresentation(args: {
   idOperation?: string | null;
 }): FileChangeFilePresentation {
   const displayPath = displayPathForFile(args.path, args.options.workspacePath);
-  const diffFile = fileChangeDiffFile({
-    added: args.readOnly ? 0 : args.added,
-    index: args.index,
-    operation: args.operation,
-    path: displayPath.path,
-    removed: args.readOnly ? 0 : args.removed,
-    rows: args.rows,
-  });
+  const diffFile = !args.readOnly || args.codePreview
+    ? fileChangeDiffFile({
+      added: args.readOnly ? 0 : args.added,
+      index: args.index,
+      operation: args.operation,
+      path: displayPath.path,
+      removed: args.readOnly ? 0 : args.removed,
+      rows: args.rows,
+    })
+    : null;
   const identity = args.blocks
     .map((block) => block.toolCallId ?? block.id)
     .find(Boolean) ?? "file";
@@ -463,12 +606,12 @@ function buildFilePresentation(args: {
     operation: args.operation,
     path: args.path,
     pathKind: displayPath.kind,
-    readRange: args.readRange ?? null,
     previousPath: args.previousPath,
     readOnly: args.readOnly,
     resourceId: args.resourceId,
     removed: args.removed,
     rows: args.rows,
+    textFormat: args.textFormat ?? null,
   };
 }
 
@@ -502,6 +645,20 @@ function nativeFileAccessAction(blocks: ToolExecutionConversationBlock[]): FileA
     if (action === "read" || action === "list" || action === "search" || action === "stat") {
       return action;
     }
+  }
+  return null;
+}
+
+// nativeFileMutationOperation maps one exact file action to its pre-terminal visual operation.
+// nativeFileMutationOperation 将精确的 file 动作映射为终态前的视觉操作。
+function nativeFileMutationOperation(
+  blocks: ToolExecutionConversationBlock[],
+): Exclude<FileChangeOperation, "mixed"> | null {
+  for (const block of blocks) {
+    const action = stringValue(objectValue(argumentsFromMetadata(block.rawMetadata))?.action);
+    if (action === "write") return "modify";
+    if (action === "delete") return "delete";
+    if (action === "move") return "rename";
   }
   return null;
 }
@@ -551,33 +708,30 @@ interface NativeFileAccessTarget {
   // Original path supplied by the model.
   // 模型提供的原始路径。
   path: string;
-  // Requested one-based line range, or null when no bounded range was provided.
-  // 请求的一基准行号范围；未提供有界范围时为 null。
-  readRange: string | null;
 }
 
-// nativeFileAccessTargets preserves target order and exposes read ranges in the summary.
-// nativeFileAccessTargets 保留目标顺序，并把读取范围暴露给摘要行。
+// nativeFileAccessTargets preserves target order without converting ranges into textual labels.
+// nativeFileAccessTargets 保留目标顺序，且不把读取范围转换为文字标签。
 function nativeFileAccessTargets(
   blocks: ToolExecutionConversationBlock[],
-  action: FileAccessAction,
 ): NativeFileAccessTarget[] {
   for (let index = blocks.length - 1; index >= 0; index -= 1) {
     const args = objectValue(argumentsFromMetadata(blocks[index]?.rawMetadata));
     if (!args) {
       continue;
     }
+    const path = stringValue(args.path);
+    if (path) {
+      return [{ path }];
+    }
     const targets = arrayValue(args.targets)
       .map((value) => objectValue(value))
-      .map((target) => {
+      .map<NativeFileAccessTarget | null>((target) => {
         const path = stringValue(target?.path);
         if (!path) {
           return null;
         }
-        return {
-          path,
-          readRange: action === "read" && target ? readRangeLabel(target) : null,
-        };
+        return { path };
       })
       .filter((target): target is NativeFileAccessTarget => Boolean(target));
     if (targets.length) {
@@ -586,28 +740,10 @@ function nativeFileAccessTargets(
     const paths: string[] = [];
     collectArgumentPaths(args, paths);
     if (paths.length) {
-      return paths.map((path) => ({ path, readRange: null }));
+      return paths.map((path) => ({ path }));
     }
   }
   return [];
-}
-
-// readRangeLabel formats the native file tool's one-based bounded segments.
-// readRangeLabel 格式化原生 file 工具的一基准有界行分段。
-function readRangeLabel(target: Record<string, unknown>): string {
-  const segments = arrayValue(target.segments)
-    .map((value) => objectValue(value))
-    .map((segment) => {
-      const start = numberValue(segment?.start_line);
-      const count = numberValue(segment?.line_count);
-      if (start === null || count === null || start < 1 || count < 1) {
-        return null;
-      }
-      const end = start + count - 1;
-      return start === end ? `L${start}` : `L${start}-L${end}`;
-    })
-    .filter((range): range is string => Boolean(range));
-  return segments.length ? segments.join(", ") : "L1-…";
 }
 
 // collectArgumentPaths appends file paths from single-file and batch argument shapes.
@@ -616,6 +752,10 @@ function collectArgumentPaths(value: unknown, paths: string[]): void {
   const args = objectValue(value);
   if (!args) {
     return;
+  }
+  const path = stringValue(args.path);
+  if (path) {
+    paths.push(path);
   }
   const file = stringValue(args.file);
   if (file) {
@@ -644,10 +784,104 @@ function collectArgumentPaths(value: unknown, paths: string[]): void {
   }
 }
 
-// nativeFileEditPreview parses only the host-owned file_edit preview shape and never arbitrary tool prose.
-// nativeFileEditPreview 仅解析宿主自有的 file_edit 预览结构，不解析任意工具正文。
-function nativeFileEditPreview(value: Record<string, unknown> | null | undefined): NativeFileEditPreviewFile[] | null {
-  if (stringValue(value?.kind) !== "file_edit") {
+// nativeFileEditArgumentsPreview rebuilds the bounded exact-replacement preview retained in historical arguments.
+// nativeFileEditArgumentsPreview 从历史参数中保留的有界精确替换内容重建预览。
+function nativeFileEditArgumentsPreview(
+  blocks: ToolExecutionConversationBlock[],
+): NativeFileEditPreviewFile[] | null {
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const preview = nativeFileEditArgumentsPreviewFromValue(
+      objectValue(argumentsFromMetadata(blocks[index]?.rawMetadata)),
+    );
+    if (preview) {
+      return preview;
+    }
+  }
+  return null;
+}
+
+// nativeFileEditArgumentsPreviewFromValue converts the exact public file_edit schema into diff rows.
+// nativeFileEditArgumentsPreviewFromValue 将公开 file_edit Schema 的精确参数转换为差异行。
+function nativeFileEditArgumentsPreviewFromValue(
+  argumentsValue: Record<string, unknown> | null,
+): NativeFileEditPreviewFile[] | null {
+  const path = stringValue(argumentsValue?.path);
+  const oldString = textValue(argumentsValue?.old_string);
+  const newString = textValue(argumentsValue?.new_string);
+  if (!path || oldString === null || newString === null) {
+    return null;
+  }
+  const rows = [
+    ...deleteRows({ content: oldString }),
+    ...insertRows(splitTextLines(newString)),
+  ];
+  return [{ operation: "modify", path, rows }];
+}
+
+// nativeApplyPatchArgumentsPreview rebuilds a bounded patch preview when only historical arguments survived.
+// nativeApplyPatchArgumentsPreview 在仅剩历史参数时重建有界的 patch 预览。
+function nativeApplyPatchArgumentsPreview(
+  blocks: ToolExecutionConversationBlock[],
+): NativeFileEditPreviewFile[] | null {
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const argumentsValue = objectValue(argumentsFromMetadata(blocks[index]?.rawMetadata));
+    const patch = textValue(argumentsValue?.patch);
+    if (patch === null) {
+      continue;
+    }
+    const affectedResources = applyPatchArgumentPaths(patch);
+    return nativeEditPreview({
+      affected_resources: affectedResources,
+      body_preview: patch,
+      kind: "apply_patch",
+    }, "apply_patch");
+  }
+  return null;
+}
+
+// applyPatchArgumentPaths extracts ordered operation paths from one native Apply Patch request.
+// applyPatchArgumentPaths 从一份原生 Apply Patch 请求中提取有序操作路径。
+function applyPatchArgumentPaths(patch: string): string[] {
+  const prefixes = ["*** Add File: ", "*** Delete File: ", "*** Update File: "];
+  const paths: string[] = [];
+  for (const line of splitTextLines(patch)) {
+    const prefix = prefixes.find((candidate) => line.startsWith(candidate));
+    const path = prefix ? line.slice(prefix.length).trim() : "";
+    if (path) {
+      paths.push(path);
+    }
+  }
+  return uniqueStrings(paths);
+}
+
+// nativeFileMutationArgumentRows exposes the retained new body of a historical whole-file write.
+// nativeFileMutationArgumentRows 展示历史整文件写入中仍保留的新正文。
+function nativeFileMutationArgumentRows(
+  blocks: ToolExecutionConversationBlock[],
+  targetPath: string,
+): FileChangeDiffRow[] {
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const argumentsValue = objectValue(argumentsFromMetadata(blocks[index]?.rawMetadata));
+    const path = stringValue(argumentsValue?.path);
+    const content = textValue(argumentsValue?.content);
+    if (stringValue(argumentsValue?.action) !== "write"
+      || !path
+      || normalizePath(path) !== normalizePath(targetPath)
+      || content === null) {
+      continue;
+    }
+    return insertRows(splitTextLines(content));
+  }
+  return [];
+}
+
+// nativeEditPreview parses only host-owned file_edit or Apply Patch preview shapes and never arbitrary prose.
+// nativeEditPreview 仅解析宿主自有的 file_edit 或 Apply Patch 预览结构，不解析任意正文。
+function nativeEditPreview(
+  value: Record<string, unknown> | null | undefined,
+  expectedKind: "file_edit" | "apply_patch",
+): NativeFileEditPreviewFile[] | null {
+  if (stringValue(value?.kind) !== expectedKind) {
     return null;
   }
   const paths = uniqueStrings(arrayValue(value?.affected_resources).map((item) => stringValue(item)).filter((item): item is string => Boolean(item)));
@@ -664,69 +898,91 @@ function nativeFileEditPreview(value: Record<string, unknown> | null | undefined
   );
   const structuredFileIndexes = new Set<number>();
   const structuredLines = arrayValue(value?.structured_lines);
-  if (!structuredPreviewTruncated) {
-    for (const item of structuredLines) {
-      const line = objectValue(item);
-      const resourceIndex = numberValue(line?.resource_index);
-      const path = resourceIndex === null ? null : paths[resourceIndex];
-      const fileIndex = path ? paths.indexOf(path) : -1;
-      const side = stringValue(line?.side);
-      const content = textValue(line?.content);
-      const file = fileIndex >= 0 ? files[fileIndex] : null;
-      if (!file || content === null || (side !== "old" && side !== "new")) {
-        continue;
-      }
-      structuredFileIndexes.add(fileIndex);
-      file.rows.push({
-        content,
-        kind: side === "old" ? "delete" : "insert",
-        lineNumber: null,
-      });
+  for (const item of structuredPreviewTruncated ? [] : structuredLines) {
+    const line = objectValue(item);
+    const resourceIndex = numberValue(line?.resource_index);
+    const operationIndex = numberValue(line?.operation_index);
+    const fileIndex = resourceIndex ?? operationIndex ?? -1;
+    const side = stringValue(line?.side);
+    const content = textValue(line?.content);
+    const lineIndex = numberValue(line?.line_index);
+    const file = files[fileIndex];
+    if (!file || content === null || (side !== "old" && side !== "new" && side !== "context")) {
+      continue;
     }
+    structuredFileIndexes.add(fileIndex);
+    file.rows.push({
+      content,
+      kind: side === "old" ? "delete" : side === "new" ? "insert" : "context",
+      lineNumber: lineIndex === null ? null : lineIndex + 1,
+    });
   }
   const body = textValue(value?.body_preview);
   if (!body) {
     return files;
   }
   let currentIndex: number | null = null;
-  let nextLineNumber = 1;
+  const nextFallbackLineNumbers = files.map(() => 1);
   for (const line of splitTextLines(body)) {
-    const header = nativeFileEditPreviewHeader(line, paths);
+    const header = nativeEditPreviewHeader(line, paths, expectedKind);
     if (header) {
       currentIndex = paths.indexOf(header.path);
       const file = files[currentIndex];
       if (file) {
         file.operation = header.operation;
-        nextLineNumber = 1;
       }
       continue;
     }
-    if (!structuredPreviewTruncated && currentIndex !== null && structuredFileIndexes.has(currentIndex)) {
+    if (expectedKind === "apply_patch" && line.startsWith("*** Move to: ") && currentIndex !== null) {
+      const file = files[currentIndex];
+      if (file) {
+        file.operation = "rename";
+      }
       continue;
     }
-    if (currentIndex === null || (!line.startsWith("- ") && !line.startsWith("+ "))) {
+    if (currentIndex !== null && structuredFileIndexes.has(currentIndex)) {
+      continue;
+    }
+    const side = editPreviewBodySide(line, expectedKind);
+    if (currentIndex === null || !side) {
       continue;
     }
     const file = files[currentIndex];
     if (!file) {
       continue;
     }
+    const fallbackLineNumber = nextFallbackLineNumbers[currentIndex] ?? 1;
+    nextFallbackLineNumbers[currentIndex] = fallbackLineNumber + 1;
     file.rows.push({
-      content: line.slice(2),
-      kind: line.startsWith("- ") ? "delete" : "insert",
-      lineNumber: nextLineNumber,
+      content: side.content,
+      kind: side.side === "old" ? "delete" : side.side === "new" ? "insert" : "context",
+      lineNumber: fallbackLineNumber,
     });
-    nextLineNumber += 1;
   }
   return files;
 }
 
-// nativeFileEditPreviewHeader recognizes the exact path-and-operation line emitted by the Rust parser.
-// nativeFileEditPreviewHeader 识别 Rust 解析器输出的精确路径与操作头行。
-function nativeFileEditPreviewHeader(
+// nativeEditPreviewHeader recognizes exact file_edit and Apply Patch operation headers.
+// nativeEditPreviewHeader 识别精确的 file_edit 与 Apply Patch 操作头行。
+function nativeEditPreviewHeader(
   line: string,
   paths: string[],
+  expectedKind: "file_edit" | "apply_patch",
 ): { operation: Exclude<FileChangeOperation, "mixed">; path: string } | null {
+  if (expectedKind === "apply_patch") {
+    const prefixes = [
+      ["*** Add File: ", "create"],
+      ["*** Delete File: ", "delete"],
+      ["*** Update File: ", "modify"],
+    ] as const;
+    for (const [prefix, operation] of prefixes) {
+      const path = line.startsWith(prefix) ? line.slice(prefix.length) : null;
+      if (path && paths.includes(path)) {
+        return { operation, path };
+      }
+    }
+    return null;
+  }
   const match = /^(.*) \((create|replace|delete_file|move_file)\)$/.exec(line);
   if (!match) {
     return null;
@@ -745,14 +1001,23 @@ function nativeFileEditPreviewHeader(
   return { operation, path };
 }
 
-// nativeFileResultRows turns the bounded JSON result of one file target into display rows.
-// nativeFileResultRows 将一个 file 目标的有界 JSON 结果转换为展示行。
-function nativeFileResultRows(
-  blocks: ToolExecutionConversationBlock[],
-  targetIndex: number,
-  action: FileAccessAction,
-): FileChangeDiffRow[] {
-  return nativeFileResultRowsFromOutput(visibleJsonOutput(blocks), targetIndex, action);
+// editPreviewBodySide converts one exact preview text line into a normalized diff side.
+// editPreviewBodySide 将一条精确预览文本行转换为规范化 Diff 侧。
+function editPreviewBodySide(
+  line: string,
+  expectedKind: "file_edit" | "apply_patch",
+): { content: string; side: "old" | "new" | "context" } | null {
+  if (expectedKind === "file_edit") {
+    if (line.startsWith("- ")) return { content: line.slice(2), side: "old" };
+    if (line.startsWith("+ ")) return { content: line.slice(2), side: "new" };
+    return null;
+  }
+  if (line.startsWith("-") && !line.startsWith("*** ")) {
+    return { content: line.slice(1), side: "old" };
+  }
+  if (line.startsWith("+")) return { content: line.slice(1), side: "new" };
+  if (line.startsWith(" ")) return { content: line.slice(1), side: "context" };
+  return null;
 }
 
 // nativeFileResultRowsFromOutput maps one structured native result to bounded display rows.
@@ -762,7 +1027,7 @@ function nativeFileResultRowsFromOutput(
   targetIndex: number,
   action: FileAccessAction,
 ): FileChangeDiffRow[] {
-  const result = objectValue(arrayValue(output?.results)[targetIndex]);
+  const result = nativeFileAccessResult(output, targetIndex);
   if (!result) {
     return [];
   }
@@ -777,22 +1042,35 @@ function nativeFileResultRowsFromOutput(
     }];
   }
   if (action === "read") {
-    return arrayValue(result.lines).slice(0, 2000).map((value) => {
-      const line = objectValue(value);
-      return {
-        content: textValue(line?.content) ?? "",
-        kind: "context" as const,
-        lineNumber: numberValue(line?.line),
-      };
-    });
+    const legacyLines = arrayValue(result.lines);
+    if (legacyLines.length) {
+      return legacyLines.slice(0, 2000).map((value) => {
+        const line = objectValue(value);
+        return {
+          content: textValue(line?.content) ?? "",
+          kind: "context" as const,
+          lineNumber: numberValue(line?.line_number ?? line?.line),
+        };
+      });
+    }
+    const content = textValue(result.content);
+    const startLine = numberValue(result.start_line) ?? 1;
+    return splitTextLines(content ?? "").slice(0, 2000).map((line, index) => ({
+      content: line,
+      kind: "context" as const,
+      lineNumber: startLine + index,
+    }));
   }
   if (action === "list") {
-    return arrayValue(result.entries).slice(0, 2000).map((value, index) => {
+    return arrayValue(result.entries).slice(0, 2000).map((value) => {
       const entry = objectValue(value);
+      const path = textValue(entry?.path) ?? "";
+      const kind = textValue(entry?.kind) ?? "entry";
+      const size = numberValue(entry?.size);
       return {
-        content: textValue(entry?.path) ?? "",
+        content: `[${kind}] ${path}${size === null ? "" : ` (${size} B)`}`,
         kind: "context" as const,
-        lineNumber: index + 1,
+        lineNumber: null,
       };
     });
   }
@@ -819,15 +1097,74 @@ function nativeFileResultRowsFromOutput(
     }));
 }
 
-// visibleJsonOutput finds the bounded native file result body without parsing arbitrary prose.
-// visibleJsonOutput 仅解析有界的原生 file 结果正文，不尝试解析任意自然语言。
-// hydrateFileAccessPresentation fills native file rows from the authoritative hidden result body.
-// hydrateFileAccessPresentation 使用权威隐藏结果正文补全原生 file 展示行。
-export function hydrateFileAccessPresentation(
+// nativeFileAccessResult selects one authoritative result from native v2 or legacy batch output.
+// nativeFileAccessResult 从原生 v2 或旧批量输出中选择一个权威结果。
+function nativeFileAccessResult(
+  output: Record<string, unknown> | null,
+  targetIndex: number,
+): Record<string, unknown> | null {
+  const legacyResults = arrayValue(output?.results);
+  if (legacyResults.length) {
+    return objectValue(legacyResults[targetIndex]);
+  }
+  return targetIndex === 0 ? output : null;
+}
+
+// nativeFileTextFormat maps strict runtime text facts without inferring missing values.
+// nativeFileTextFormat 映射严格运行时文本事实，不推断缺失值。
+function nativeFileTextFormat(
+  result: Record<string, unknown> | null,
+): FileTextFormatPresentation | null {
+  if (!result) {
+    return null;
+  }
+  const encoding = stringValue(result.encoding);
+  const lineEnding = stringValue(result.line_ending)
+    ?? stringValue(result.preferred_line_ending);
+  const bom = booleanValue(result.bom);
+  const mixedLineEndings = booleanValue(result.mixed_line_endings);
+  const finalNewline = booleanValue(result.final_newline);
+  if (encoding === null && lineEnding === null && bom === null
+    && mixedLineEndings === null && finalNewline === null) {
+    return null;
+  }
+  return {
+    bom,
+    encoding,
+    finalNewline,
+    lineEnding,
+    mixedLineEndings,
+  };
+}
+
+// nativeFileAccessOutput prefers the authoritative built-in file_access payload over visible text.
+// nativeFileAccessOutput 优先使用权威内置 file_access 载荷，而不是可见文本。
+function nativeFileAccessOutput(
+  blocks: ToolExecutionConversationBlock[],
+): Record<string, unknown> | null {
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index];
+    const hostResult = objectValue(metadataValue(block?.rawMetadata, ["host_result", "hostResult"]));
+    if (stringValue(hostResult?.kind) === "file_access") {
+      const payload = objectValue(hostResult?.payload);
+      if (payload) {
+        return payload;
+      }
+    }
+  }
+  return visibleJsonOutput(blocks);
+}
+
+// hydrateFileChangePresentation restores lazy read bodies from one hidden detail.
+// hydrateFileChangePresentation 从单条隐藏详情中恢复懒加载读取正文。
+export function hydrateFileChangePresentation(
   presentation: FileChangePresentation,
   payload: ToolDetailPayload | null,
 ): FileChangePresentation {
-  if (presentation.source !== "native_file" || !presentation.accessAction || !payload) {
+  if (!payload) {
+    return presentation;
+  }
+  if (presentation.source !== "native_file" || !presentation.accessAction) {
     return presentation;
   }
   const output = parseFileToolOutput(payload.body);
@@ -839,14 +1176,16 @@ export function hydrateFileAccessPresentation(
     if (!rows.length) {
       return file;
     }
-    const diffFile = fileChangeDiffFile({
-      added: 0,
-      index,
-      operation: file.operation,
-      path: file.displayPath,
-      removed: 0,
-      rows,
-    });
+    const diffFile = presentation.accessAction === "read"
+      ? fileChangeDiffFile({
+        added: 0,
+        index,
+        operation: file.operation,
+        path: file.displayPath,
+        removed: 0,
+        rows,
+      })
+      : null;
     return {
       ...file,
       diffFile,
@@ -861,6 +1200,8 @@ export function hydrateFileAccessPresentation(
   };
 }
 
+// visibleJsonOutput finds the bounded native file result body without parsing arbitrary prose.
+// visibleJsonOutput 仅解析有界的原生 file 结果正文，不尝试解析任意自然语言。
 function visibleJsonOutput(blocks: ToolExecutionConversationBlock[]): Record<string, unknown> | null {
   for (let index = blocks.length - 1; index >= 0; index -= 1) {
     const output = parseFileToolOutput(blocks[index]?.body);
@@ -880,36 +1221,124 @@ function parseFileToolOutput(body: string | null | undefined): Record<string, un
   }
   try {
     const object = objectValue(JSON.parse(trimmed) as unknown);
-    return object && Array.isArray(object.results) ? object : null;
+    if (!object) {
+      return null;
+    }
+    if (Array.isArray(object.results)) {
+      return object;
+    }
+    if (booleanValue(object.ok) !== null && Array.isArray(object.operations)) {
+      return object;
+    }
+    return stringValue(object.schema) === "vulcan.file_access.v2"
+      && ["read", "list", "stat"].includes(stringValue(object.action) ?? "")
+      ? object
+      : null;
   } catch {
     return null;
   }
 }
 
-// operationIdsForResource maps native extension operation ids to canonical resources.
-// operationIdsForResource 将原生扩展中的操作标识映射到 canonical 资源。
-function operationIdsForResource(payload: Record<string, unknown>): Map<string, string[]> {
-  const result = new Map<string, string[]>();
+// NativeChangeSetCorrelation maps native operation identity and request paths onto canonical files.
+// NativeChangeSetCorrelation 将原生操作身份与请求路径映射到 canonical 文件。
+interface NativeChangeSetCorrelation {
+  // Ordered operation ids keyed by zero-based operation index.
+  // 按零基准操作索引分组的有序操作标识。
+  operationIdsByIndex: Map<number, string[]>;
+  // Ordered operation ids keyed by canonical resource identity.
+  // 按 canonical 资源身份分组的有序操作标识。
+  operationIdsByResource: Map<string, string[]>;
+  // Original request paths keyed by zero-based operation index.
+  // 按零基准操作索引分组的原始请求路径。
+  requestPathsByIndex: Map<number, string>;
+  // Original request paths keyed by canonical resource identity.
+  // 按 canonical 资源身份分组的原始请求路径。
+  requestPathsByResource: Map<string, string>;
+  // Final text format keyed by zero-based resource index.
+  // 按零基准资源索引分组的最终文本格式。
+  textFormatsByIndex: Map<number, FileTextFormatPresentation>;
+  // Final text format keyed by canonical resource identity.
+  // 按 canonical 资源身份分组的最终文本格式。
+  textFormatsByResource: Map<string, FileTextFormatPresentation>;
+}
+
+// nativeChangeSetCorrelation reads both the native v2 extension and legacy LuaSkills v1 extension.
+// nativeChangeSetCorrelation 同时读取原生 v2 扩展与旧版 LuaSkills v1 扩展。
+function nativeChangeSetCorrelation(payload: Record<string, unknown>): NativeChangeSetCorrelation {
+  const operationIdsByIndex = new Map<number, string[]>();
+  const operationIdsByResource = new Map<string, string[]>();
+  const requestPathsByIndex = new Map<number, string>();
+  const requestPathsByResource = new Map<string, string>();
+  const textFormatsByIndex = new Map<number, FileTextFormatPresentation>();
+  const textFormatsByResource = new Map<string, FileTextFormatPresentation>();
   const extensions = objectValue(payload.extensions);
-  const extension = objectValue(extensions?.["vulcan.file_edit.v1"]);
+  const extension = objectValue(extensions?.["vulcan.file_tools.v2"])
+    ?? objectValue(extensions?.["vulcan.file_edit.v1"]);
   for (const value of arrayValue(extension?.operation_results)) {
     const operation = objectValue(value);
-    const operationId = stringValue(operation?.operation_id);
+    const operationIndex = numberValue(operation?.operation_index);
+    const operationId = stringValue(operation?.operation_id)
+      ?? (operationIndex === null ? null : `operation-index:${operationIndex}`);
     const resourceId = stringValue(operation?.resource_id);
-    if (!operationId || !resourceId) {
+    const requestPath = stringValue(operation?.request_path);
+    if (!operationId) {
       continue;
     }
-    const ids = result.get(resourceId) ?? [];
-    if (!ids.includes(operationId)) {
-      ids.push(operationId);
-      result.set(resourceId, ids);
+    if (resourceId) {
+      appendUniqueMapValue(operationIdsByResource, resourceId, operationId);
+      if (requestPath && !requestPathsByResource.has(resourceId)) {
+        requestPathsByResource.set(resourceId, requestPath);
+      }
+    }
+    if (operationIndex !== null) {
+      appendUniqueMapValue(operationIdsByIndex, operationIndex, operationId);
+      if (requestPath && !requestPathsByIndex.has(operationIndex)) {
+        requestPathsByIndex.set(operationIndex, requestPath);
+      }
     }
   }
-  return result;
+  for (const [resourceIndex, value] of arrayValue(extension?.resources).entries()) {
+    const resource = objectValue(value);
+    const resourceId = stringValue(resource?.resource_id);
+    const textFormat = nativeFileTextFormat(objectValue(resource?.after_text_format));
+    if (!textFormat) {
+      continue;
+    }
+    textFormatsByIndex.set(resourceIndex, textFormat);
+    if (resourceId) {
+      textFormatsByResource.set(resourceId, textFormat);
+    }
+  }
+  const singleFileTextFormat = nativeFileTextFormat(extension);
+  if (singleFileTextFormat && !textFormatsByIndex.size) {
+    textFormatsByIndex.set(0, singleFileTextFormat);
+  }
+  return {
+    operationIdsByIndex,
+    operationIdsByResource,
+    requestPathsByIndex,
+    requestPathsByResource,
+    textFormatsByIndex,
+    textFormatsByResource,
+  };
+}
+
+// appendUniqueMapValue appends one string exactly once to an ordered map bucket.
+// appendUniqueMapValue 将一个字符串仅追加一次到有序映射桶。
+function appendUniqueMapValue<TKey>(
+  target: Map<TKey, string[]>,
+  key: TKey,
+  value: string,
+): void {
+  const values = target.get(key) ?? [];
+  if (!values.includes(value)) {
+    values.push(value);
+    target.set(key, values);
+  }
 }
 
 // lastChangeSetPayload returns the newest valid host_result change_set payload.
-// firstChangeSetPayload 返回首个有效的 host_result change_set 载荷。
+// lastChangeSetPayload 返回最新的有效 host_result change_set 载荷。
 function lastChangeSetPayload(blocks: ToolExecutionConversationBlock[]): Record<string, unknown> | null {
   for (let index = blocks.length - 1; index >= 0; index -= 1) {
     const block = blocks[index];
@@ -952,6 +1381,10 @@ function errorDetailFromBlocks(blocks: ToolExecutionConversationBlock[]): string
       "payload.error",
       "host_result.error",
       "hostResult.error",
+      "host_result.payload.error",
+      "hostResult.payload.error",
+      "host_result.payload.details.message",
+      "hostResult.payload.details.message",
       "stderr",
       "payload.stderr",
       "host_result.payload.stderr",

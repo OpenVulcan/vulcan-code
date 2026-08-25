@@ -337,12 +337,11 @@ fn webui_stop_session_work_appends_stopped_turn_projection_once() {
         .session_messages
         .get(&session_id)
         .expect("stopped projection should be materialized");
-    assert!(messages.iter().any(|message| {
-        message.visible && message.title == "执行已停止" && message.body.contains("当前 AI 调用")
-    }));
-    assert!(messages.iter().any(|message| {
-        message.visible && message.title == "执行已停止" && message.body.contains("运行中的智能体")
-    }));
+    assert!(
+        messages
+            .iter()
+            .all(|message| !(message.visible && message.title == "执行已停止"))
+    );
     let runtime_records = &workspace_snapshot
         .session_runtime_state
         .get(&session_id)
@@ -502,14 +501,56 @@ fn webui_stop_session_work_uses_kernel_active_state_without_stream_handle() {
         .session_messages
         .get(&session_id)
         .expect("kernel-active stop should be projected");
-    assert!(messages.iter().any(|message| {
-        message.visible && message.title == "执行已停止" && message.body.contains("当前 AI 调用")
-    }));
-    assert!(messages.iter().all(|message| {
-        !(message.visible
-            && message.title == "执行已停止"
-            && message.body.contains("运行中的智能体"))
-    }));
+    assert!(
+        messages
+            .iter()
+            .all(|message| !(message.visible && message.title == "执行已停止"))
+    );
+}
+
+/// Verifies manual Stop closes the persisted external lifecycle owner and remains idempotent.
+/// 验证手动停止会关闭持久化的外部生命周期所有者，并保持幂等。
+#[test]
+fn manual_stop_interrupts_persisted_external_turn_lifecycle() {
+    let session_id = SessionId::new_v4();
+    let fixture = TestControllerRuntimeRoot::new(session_id);
+    let thread_id = SessionNodeId::from(session_id);
+    // The production creator materializes the active segment before a Provider turn begins.
+    // 生产创建器会在 Provider 回合开始前物化活动分段。
+    std::fs::write(fixture.session_directory().join("s001.jsonl"), b"")
+        .expect("materialize active segment");
+    let store =
+        WorkspaceSegmentedSessionBoundaryStore::new(fixture.session_directory(), session_id);
+    let runner = SessionLifecycleRunner::new(store.clone(), WebuiSessionLifecycleHook);
+    runner
+        .begin_turn(SessionLifecycleBeginRequest {
+            thread_id,
+            turn_id: String::from("turn-manual-stop"),
+            accepted_events: Vec::new(),
+        })
+        .expect("begin persisted external turn");
+
+    let interrupted =
+        interrupt_session_external_turn_lifecycle(fixture.session_directory(), session_id)
+            .expect("interrupt persisted external turn");
+    let interrupted_again =
+        interrupt_session_external_turn_lifecycle(fixture.session_directory(), session_id)
+            .expect("repeat interruption should be idempotent");
+
+    assert!(interrupted);
+    assert!(!interrupted_again);
+    let boundary_state = store
+        .load_state(thread_id)
+        .expect("load persisted boundary state")
+        .expect("persisted boundary state should exist");
+    let boundary_state = serde_json::from_value::<SessionThreadState>(boundary_state)
+        .expect("decode persisted boundary state");
+    assert_eq!(boundary_state.status, SessionThreadStatus::Interrupted);
+    assert_eq!(boundary_state.active_turn_id, None);
+    assert_eq!(
+        boundary_state.last_turn_id.as_deref(),
+        Some("turn-manual-stop")
+    );
 }
 
 /// Verifies persisted completed task mirrors repair stale spawn-agent display metadata.

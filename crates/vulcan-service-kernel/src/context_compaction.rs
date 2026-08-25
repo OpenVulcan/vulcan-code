@@ -63,7 +63,7 @@ use super::{
     append_webui_session_message_entry_to_state, append_webui_session_turn_stats_to_state,
     apply_observed_usage_to_context_budget, apply_session_phase, apply_session_phase_to_state,
     build_conversation_messages_patched_delta, commit_stream_task_registration_failure,
-    complete_streaming_thinking_phase, conversation_messages_from_session,
+    complete_and_persist_streaming_thinking_phase, conversation_messages_from_session,
     current_unix_millis_text, emit_service_event_with_trace, finish_webui_session_kernel_turn,
     historical_context_budget_snapshot_from_runtime_state,
     merge_runtime_state_records_into_display_messages, next_webui_session_runtime_persist_version,

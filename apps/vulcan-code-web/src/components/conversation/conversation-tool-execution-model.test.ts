@@ -7,6 +7,7 @@ import {
   toolRequestProgress,
   toolRequestProgressForDisplay,
   toolRequestProgressLabel,
+  toolRequestStreamId,
 } from "./conversation-tool-execution-model";
 import type { ToolExecutionConversationBlock } from "./conversation-tool-execution-types";
 import { normalizeToolDisplayState } from "./conversation-tool-metadata";
@@ -138,7 +139,7 @@ describe("conversation tool request progress", () => {
     });
   });
 
-  it("does not let the durable data-received marker override an executing tool", () => {
+  it("shows a live data-received marker but hides the durable fallback", () => {
     const ready = {
       requestStreamId: "request-ready",
       state: "ready" as const,
@@ -148,11 +149,27 @@ describe("conversation tool request progress", () => {
       preview: { kind: "file_edit" },
     };
 
+    expect(toolRequestProgressForDisplay(ready, "running", true)).toBe(ready);
     expect(toolRequestProgressForDisplay(ready, "running")).toBeNull();
     expect(toolRequestProgressForDisplay(ready, "completed")).toBeNull();
     expect(toolRequestProgressForDisplay({ ...ready, state: "receiving" }, "running")).toMatchObject({
       state: "receiving",
     });
+  });
+
+  it("retains the request identity after ToolStarted replaces the durable display state", () => {
+    // blocks models the in-place metadata merge performed by the durable ToolStarted projection.
+    // blocks 模拟持久 ToolStarted 投影执行的原地元数据合并。
+    const blocks = [{
+      rawMetadata: {
+        request_stream_id: "request-running",
+        request_revision: 9,
+        tool_display_state: "running",
+      },
+    }] as ToolExecutionConversationBlock[];
+
+    expect(toolRequestProgress(blocks)).toBeNull();
+    expect(toolRequestStreamId(blocks)).toBe("request-running");
   });
 
   it("uses the terminal execution state in the compact summary after data is received", () => {

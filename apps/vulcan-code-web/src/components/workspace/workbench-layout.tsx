@@ -136,6 +136,8 @@ import {
   toggleProjectPinned,
 } from "@/service/project-actions-service";
 import {
+  clearSelectedProviderApiTraceDirectory,
+  openSelectedProviderApiTraceDirectory,
   removeMcpServerConfiguration,
   saveGitCommitSettings,
   saveProviderRequestTraceSettings,
@@ -251,6 +253,9 @@ export function WorkbenchLayout(props: {
   // Latest partial workbench update signal from the backend.
   // 后端返回的最近局部工作台更新信号。
   workbenchDelta: WorkbenchDeltaSignal | null;
+  // Acknowledges one exact partial signal after every envelope has been considered.
+  // 在每条增量都完成处理后确认一个精确的局部信号。
+  onWorkbenchDeltaConsumed: (sequence: number) => void;
 }) {
   React.useEffect(() => {
     // handleWorkspacePointerOwner routes input ownership from explicit pointer targets before bubble handlers run.
@@ -538,6 +543,9 @@ export function WorkbenchLayout(props: {
     // Stable coverage reconciliation runs after React commits the message projection.
     // 稳定覆盖对账在 React 提交消息投影后运行。
     liveStreamStore.reconcileStableCoverage(workbenchState);
+    // Settled tool-request subscribers observe cleanup only after the committed execution card renders once.
+    // 已结束的工具请求订阅者仅在已提交执行卡片完成一次渲染后收到清理通知。
+    liveStreamStore.flushNotifications();
   }, [liveStreamStore, workbenchState]);
   // conversationArchivePendingIdsRef blocks duplicate archive RPCs until failure or visible lifecycle convergence.
   // conversationArchivePendingIdsRef 在失败或可见生命周期收敛前阻止重复归档 RPC。
@@ -1683,6 +1691,9 @@ export function WorkbenchLayout(props: {
     if (!props.workbenchDelta) {
       return;
     }
+    // signalSequence binds acknowledgement to the exact batch observed by this effect.
+    // signalSequence 将确认操作绑定到当前 effect 观察到的精确批次。
+    const signalSequence = props.workbenchDelta.seq;
     const acceptedEnvelopes: WorkbenchDeltaEnvelope[] = [];
     // acceptedProjectSettingsRevisions collects target-and-domain invalidations committed by this event batch.
     // acceptedProjectSettingsRevisions 收集当前事件批次提交的目标与领域失效版本。
@@ -1885,6 +1896,7 @@ export function WorkbenchLayout(props: {
       });
     }
     if (acceptedEnvelopes.length === 0) {
+      props.onWorkbenchDeltaConsumed(signalSequence);
       return;
     }
     acceptedWorkbenchRevisionRef.current = nextAcceptedRevision;
@@ -1898,7 +1910,13 @@ export function WorkbenchLayout(props: {
         current,
       )
     ));
-  }, [acceptConversationArchiveTransitions, acceptProjectRemovalTransition, props.workbenchDelta]);
+    props.onWorkbenchDeltaConsumed(signalSequence);
+  }, [
+    acceptConversationArchiveTransitions,
+    acceptProjectRemovalTransition,
+    props.onWorkbenchDeltaConsumed,
+    props.workbenchDelta,
+  ]);
 
   // Complete draft materialization only after the authoritative sidebar row becomes visible.
   // 仅在权威侧栏行可见后完成草稿转正状态。
@@ -2128,6 +2146,10 @@ export function WorkbenchLayout(props: {
               }),
               onSaveGitCommitSettings: (request) => applySkillWorkbenchAction(async () => (await saveGitCommitSettings(request)) ?? workbenchStateRef.current),
               onSaveProviderRequestTraceSettings: (enabled) => applySkillWorkbenchAction(async () => (await saveProviderRequestTraceSettings(enabled)) ?? workbenchStateRef.current),
+              onOpenSelectedProviderApiTraceDirectory: async () => {
+                await openSelectedProviderApiTraceDirectory();
+              },
+              onClearSelectedProviderApiTraceDirectory: clearSelectedProviderApiTraceDirectory,
               onSaveProviderRetrySettings: (request) => applySkillWorkbenchAction(async () => (await saveProviderRetrySettings(request)) ?? workbenchStateRef.current),
               onSaveMcpServer: (request) => applySkillWorkbenchAction(async () => (await saveMcpServerConfiguration(request as unknown as Record<string, unknown>)) ?? workbenchStateRef.current),
               onRemoveMcpServer: (serverId) => applySkillWorkbenchAction(async () => (await removeMcpServerConfiguration(serverId)) ?? workbenchStateRef.current),

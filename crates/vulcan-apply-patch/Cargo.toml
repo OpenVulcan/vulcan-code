@@ -1,0 +1,11 @@
+[package]
+name = "vulcan-apply-patch"
+description = "Provider-neutral Apply Patch grammar and streaming parser for Vulcan Code."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license = "MIT AND Apache-2.0"
+
+[lints]
+workspace = true

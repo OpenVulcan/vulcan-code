@@ -7,7 +7,7 @@ import {
 } from "./tool-presentations/ask-question-presentation";
 import {
   fileChangeStatusLabel,
-  hydrateFileAccessPresentation,
+  hydrateFileChangePresentation,
   resolveFileChangePresentation,
 } from "./tool-presentations/file-change-presentation";
 import {
@@ -68,7 +68,7 @@ export {
   askQuestionStatusLabel,
   commandPresentationStatusLabel,
   fileChangeStatusLabel,
-  hydrateFileAccessPresentation,
+  hydrateFileChangePresentation,
   hydrateMarkdownToolPresentation,
   hydrateLuaExecutionPresentation,
   hydrateSubagentOrchestrationPresentation,

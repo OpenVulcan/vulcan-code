@@ -331,6 +331,53 @@ pub(crate) fn finish_session_external_turn_lifecycle(
     })
 }
 
+/// Interrupts the exact persisted external turn that still owns one manually stopped session.
+/// 中断仍然拥有某个手动停止会话的精确持久化外部回合。
+///
+/// # Parameters
+/// 参数
+/// `session_directory` is the deterministic segmented storage directory for the stopped session.
+/// `session_directory` 是被停止会话的确定性分段存储目录。
+/// `session_id` identifies the external lifecycle thread whose active turn must be closed.
+/// `session_id` 标识必须关闭活动回合的外部生命周期线程。
+///
+/// # Returns
+/// 返回值
+/// `true` when an active persisted turn was interrupted; `false` when no active turn remained.
+/// 中断了活动持久化回合时返回 `true`；已经没有活动回合时返回 `false`。
+pub(crate) fn interrupt_session_external_turn_lifecycle(
+    session_directory: &Path,
+    session_id: SessionId,
+) -> Result<bool, String> {
+    let thread_id = SessionNodeId::from(session_id);
+    let store = WorkspaceSegmentedSessionBoundaryStore::new(session_directory, session_id);
+    let Some(state_value) = store.load_state(thread_id)? else {
+        return Ok(false);
+    };
+    // boundaryState is the exact overwrite-only lifecycle document owned by the external runner.
+    // boundaryState 是外部运行器拥有的精确覆盖式生命周期文档。
+    let boundary_state = serde_json::from_value::<SessionThreadState>(state_value)
+        .map_err(|error| format!("invalid session boundary state: {error}"))?;
+    if boundary_state.thread_id != thread_id {
+        return Err(format!(
+            "session boundary state thread mismatch: expected={thread_id} actual={}",
+            boundary_state.thread_id
+        ));
+    }
+    let Some(turn_id) = boundary_state.active_turn_id else {
+        return Ok(false);
+    };
+    let runner = SessionLifecycleRunner::new(store, WebuiSessionLifecycleHook);
+    runner.finish_turn(SessionLifecycleFinishRequest {
+        thread_id,
+        turn_id,
+        terminal_status: SessionTurnTerminalStatus::Interrupted,
+        final_events: Vec::new(),
+        terminal_event: None,
+    })?;
+    Ok(true)
+}
+
 /// Parses the explicit terminal status carried by a session-boundary terminal event.
 /// 解析会话边界终态事件携带的显式终态状态。
 ///

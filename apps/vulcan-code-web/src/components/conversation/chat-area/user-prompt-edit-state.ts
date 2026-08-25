@@ -54,36 +54,22 @@ export function useUserPromptEditState(options: UseUserPromptEditStateOptions): 
     setDraft(null);
   }, []);
 
-  const open = React.useCallback(async (message: ConversationMessage, visiblePrompt: string) => {
+  const open = React.useCallback(async (message: ConversationMessage, _visiblePrompt: string) => {
     const requestVersion = validationVersion.current + 1;
     validationVersion.current = requestVersion;
-    // optimisticDraft opens the dialog synchronously from the already-rendered authoritative row.
-    // optimisticDraft 直接从已经渲染的权威消息行同步打开弹窗。
-    const optimisticDraft: UserPromptEditDraftSummary = {
-      conversationId: message.conversationId,
-      messageId: message.id,
-      prompt: visiblePrompt,
-      attachments: message.attachments ?? [],
-      running: false,
-    };
-    setDraft(optimisticDraft);
-    setText(visiblePrompt);
+    setDraft(null);
+    // Backend validation must complete before the dialog becomes submittable; otherwise a stale
+    // edit affordance can race the validation request and submit a prompt that is no longer editable.
+    // 后端校验必须先于可提交弹窗完成；否则陈旧编辑入口可能与校验请求竞态并提交已不可编辑的提示词。
     const nextDraft = await options.onGetUserPromptEditDraft(message.conversationId, message.id);
     if (validationVersion.current !== requestVersion) {
       return;
     }
     if (!nextDraft) {
-      setDraft(null);
       return;
     }
-    setDraft((currentDraft) => (
-      currentDraft?.conversationId === message.conversationId && currentDraft.messageId === message.id
-        ? nextDraft
-        : currentDraft
-    ));
-    // Preserve text already changed by the user while the backend validation request was in flight.
-    // 后端校验请求进行期间保留用户已经修改的文本。
-    setText((currentText) => currentText === visiblePrompt ? nextDraft.prompt : currentText);
+    setDraft(nextDraft);
+    setText(nextDraft.prompt);
   }, [options]);
 
   const submit = React.useCallback(async () => {

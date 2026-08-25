@@ -1,5 +1,23 @@
 import type { WorkbenchDeltaEnvelope } from "@/types";
 
+// mergePendingWorkbenchDeltaSignal preserves every unacknowledged structural delta across React batched updates.
+// mergePendingWorkbenchDeltaSignal 在 React 批处理更新期间保留每条尚未确认的结构增量。
+//
+// Parameters: current is the unacknowledged signal, sequence is the next monotonic frontend id, and envelopes are newly flushed deltas.
+// 参数：current 是尚未确认的信号，sequence 是下一个单调前端标识，envelopes 是新刷新的增量。
+// Returns: one signal containing the complete unacknowledged envelope sequence.
+// 返回值：返回包含完整未确认增量序列的单个信号。
+export function mergePendingWorkbenchDeltaSignal(
+  current: { seq: number; envelopes: WorkbenchDeltaEnvelope[] } | null,
+  sequence: number,
+  envelopes: WorkbenchDeltaEnvelope[],
+): { seq: number; envelopes: WorkbenchDeltaEnvelope[] } {
+  return {
+    seq: sequence,
+    envelopes: current ? [...current.envelopes, ...envelopes] : [...envelopes],
+  };
+}
+
 // workbenchEnvelopeRequiresReactProjection returns whether one event changes structure beyond live body text.
 // workbenchEnvelopeRequiresReactProjection 返回单条事件是否改变实时正文之外的结构。
 //
@@ -39,8 +57,10 @@ export function workbenchEnvelopeRequiresImmediateLiveFlush(
   envelope: WorkbenchDeltaEnvelope,
 ): boolean {
   if (envelope.delta.kind === "toolRequestProgressChanged") {
-    const progress = envelope.delta.payload.progress;
-    return progress === null || progress.state === "arguments_assembled";
+    // Tool request progress is already throttled by the backend coordinator. Delaying another
+    // notification here can let the terminal clear erase every receiving snapshot in one batch.
+    // 工具请求进度已经由后端协调器节流；若此处再次延迟通知，终态清除可能在同一批次中抹掉全部接收快照。
+    return true;
   }
   if (envelope.delta.kind !== "conversationMessagesPatched") {
     return false;

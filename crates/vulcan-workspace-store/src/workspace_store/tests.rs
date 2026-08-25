@@ -189,6 +189,290 @@ fn provider_request_trace_slot_is_bounded_and_exactly_replaceable() {
     std::fs::remove_dir_all(&root).expect("remove bounded provider trace test root");
 }
 
+/// Verifies grouped API traces retain every retry and reject stale writers after slot rotation.
+/// 验证分组 API 追踪会保留每次重试，并在槽位轮转后拒绝陈旧写入者。
+#[test]
+fn provider_api_trace_groups_retries_and_preserves_raw_response_bytes() {
+    let root = std::env::temp_dir().join(format!(
+        "vulcan-provider-api-trace-group-test-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let session_id = SessionId::from_u128(7022);
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        SegmentedSessionCreateRequest {
+            session_id: session_id.to_string(),
+            project_tag: String::from("provider-api-trace-project"),
+            created_date: String::from("2026-08-24"),
+            created_at: String::from("102"),
+            project_id: Some(String::from("provider-api-trace-project")),
+            title: Some(String::from("provider api trace")),
+            title_source: Some(String::from("test")),
+            segment_policy: SegmentPolicy::default(),
+        },
+    )
+    .expect("create grouped provider trace session");
+    let group = serde_json::json!({"schema_version":"vulcan.provider-api-trace.v1"});
+    let request = serde_json::json!({"body":{"model":"test-model"}});
+    let response_meta = serde_json::json!({"transport":"http_sse","http_status":200});
+    let chunks = vec![serde_json::json!({"index":0,"offset":0,"length":4})];
+    let frames = Vec::new();
+    let failed_outcome = serde_json::json!({"classification":"stream_failed_or_cancelled"});
+    let first_body = [0xff, 0x00, b'{', b'}'];
+    let group_id = "11111111-1111-4111-8111-111111111111";
+
+    let first_attempt = persist_provider_api_trace_attempt(
+        &session_dir,
+        session_id,
+        0,
+        ProviderApiTraceAttemptArtifacts {
+            group_sequence: 1,
+            group_id,
+            attempt_index: 0,
+            group: &group,
+            request: &request,
+            response_meta: &response_meta,
+            response_body: &first_body,
+            chunks: &chunks,
+            frames: &frames,
+            outcome: &failed_outcome,
+        },
+    )
+    .expect("persist first physical attempt");
+    let succeeded_outcome = serde_json::json!({"classification":"response_completed"});
+    let second_body = b"data: completed\n\n";
+    let second_attempt = persist_provider_api_trace_attempt(
+        &session_dir,
+        session_id,
+        0,
+        ProviderApiTraceAttemptArtifacts {
+            group_sequence: 1,
+            group_id,
+            attempt_index: 1,
+            group: &group,
+            request: &request,
+            response_meta: &response_meta,
+            response_body: second_body,
+            chunks: &chunks,
+            frames: &frames,
+            outcome: &succeeded_outcome,
+        },
+    )
+    .expect("persist second physical attempt");
+    assert_eq!(
+        load_provider_api_trace_group_sequence_floor(&session_dir, session_id)
+            .expect("load persisted provider trace generation floor"),
+        1
+    );
+
+    assert_eq!(
+        std::fs::read(first_attempt.join("response.body.part"))
+            .expect("read exact failed response bytes"),
+        first_body
+    );
+    assert_eq!(
+        std::fs::read(second_attempt.join("response.body.part"))
+            .expect("read exact successful response bytes"),
+        second_body
+    );
+    assert!(first_attempt.join("outcome.json").is_file());
+    assert!(second_attempt.join("outcome.json").is_file());
+    for attempt_index in 2..6 {
+        let body = format!("retry-{attempt_index}");
+        let attempt = persist_provider_api_trace_attempt(
+            &session_dir,
+            session_id,
+            0,
+            ProviderApiTraceAttemptArtifacts {
+                group_sequence: 1,
+                group_id,
+                attempt_index,
+                group: &group,
+                request: &request,
+                response_meta: &response_meta,
+                response_body: body.as_bytes(),
+                chunks: &chunks,
+                frames: &frames,
+                outcome: &failed_outcome,
+            },
+        )
+        .expect("persist additional physical retry");
+        assert_eq!(
+            std::fs::read(attempt.join("response.body.part"))
+                .expect("read additional retry response"),
+            body.as_bytes()
+        );
+    }
+    let grouped_attempts = std::fs::read_dir(
+        first_attempt
+            .parent()
+            .expect("attempt directory should have a group slot parent"),
+    )
+    .expect("read grouped attempt directory")
+    .filter_map(Result::ok)
+    .filter(|entry| entry.file_name().to_string_lossy().starts_with("attempt-"))
+    .count();
+    assert_eq!(grouped_attempts, 6);
+
+    let replacement_group_id = "22222222-2222-4222-8222-222222222222";
+    persist_provider_api_trace_attempt(
+        &session_dir,
+        session_id,
+        0,
+        ProviderApiTraceAttemptArtifacts {
+            group_sequence: 5,
+            group_id: replacement_group_id,
+            attempt_index: 0,
+            group: &group,
+            request: &request,
+            response_meta: &response_meta,
+            response_body: b"replacement",
+            chunks: &chunks,
+            frames: &frames,
+            outcome: &succeeded_outcome,
+        },
+    )
+    .expect("rotate exact grouped trace slot");
+    assert_eq!(
+        load_provider_api_trace_group_sequence_floor(&session_dir, session_id)
+            .expect("load rotated provider trace generation floor"),
+        5
+    );
+    assert!(
+        !second_attempt.exists(),
+        "rotated groups must remove attempts absent from the replacement group"
+    );
+    assert!(
+        persist_provider_api_trace_attempt(
+            &session_dir,
+            session_id,
+            0,
+            ProviderApiTraceAttemptArtifacts {
+                group_sequence: 1,
+                group_id,
+                attempt_index: 2,
+                group: &group,
+                request: &request,
+                response_meta: &response_meta,
+                response_body: b"stale",
+                chunks: &chunks,
+                frames: &frames,
+                outcome: &failed_outcome,
+            },
+        )
+        .is_err(),
+        "an older group must not overwrite a newer rotating slot"
+    );
+
+    std::fs::remove_dir_all(&root).expect("remove grouped provider trace test root");
+}
+
+/// Verifies diagnostics can open and clear only the exact retained session trace directory.
+/// 验证诊断入口只能准备和清除精确保留会话的追踪目录。
+#[test]
+fn provider_api_trace_directory_prepare_and_clear_are_session_scoped() {
+    let root = std::env::temp_dir().join(format!(
+        "vulcan-provider-api-trace-directory-test-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let session_id = SessionId::from_u128(7023);
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        SegmentedSessionCreateRequest {
+            session_id: session_id.to_string(),
+            project_tag: String::from("provider-api-trace-directory-project"),
+            created_date: String::from("2026-08-24"),
+            created_at: String::from("103"),
+            project_id: Some(String::from("provider-api-trace-directory-project")),
+            title: Some(String::from("provider api trace directory")),
+            title_source: Some(String::from("test")),
+            segment_policy: SegmentPolicy::default(),
+        },
+    )
+    .expect("create provider trace directory session");
+
+    let trace_directory = prepare_provider_api_trace_directory(&session_dir, session_id)
+        .expect("prepare exact trace directory");
+    assert!(trace_directory.is_dir());
+    std::fs::write(trace_directory.join("evidence.txt"), b"evidence")
+        .expect("write bounded trace evidence");
+    assert!(
+        clear_provider_api_trace_directory(&session_dir, session_id)
+            .expect("clear exact trace directory")
+    );
+    assert!(!trace_directory.exists());
+    assert!(
+        !clear_provider_api_trace_directory(&session_dir, session_id)
+            .expect("clearing an absent trace directory should be idempotent")
+    );
+    assert!(
+        prepare_provider_api_trace_directory(&session_dir, SessionId::from_u128(9999)).is_err(),
+        "a mismatched session owner must be rejected"
+    );
+
+    std::fs::remove_dir_all(&root).expect("remove provider trace directory test root");
+}
+
+/// Verifies a symbolic-link temp directory cannot cause trace creation outside the session.
+/// 验证符号链接 temp 目录不能导致追踪文件在会话外创建。
+#[test]
+fn provider_api_trace_rejects_symbolic_link_directory_escape_before_creation() {
+    let root = std::env::temp_dir().join(format!(
+        "vulcan-provider-api-trace-symlink-test-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let outside = std::env::temp_dir().join(format!(
+        "vulcan-provider-api-trace-symlink-outside-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&outside).expect("create outside directory");
+    let session_id = SessionId::from_u128(7024);
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        SegmentedSessionCreateRequest {
+            session_id: session_id.to_string(),
+            project_tag: String::from("provider-api-trace-symlink-project"),
+            created_date: String::from("2026-08-24"),
+            created_at: String::from("104"),
+            project_id: Some(String::from("provider-api-trace-symlink-project")),
+            title: Some(String::from("provider api trace symlink")),
+            title_source: Some(String::from("test")),
+            segment_policy: SegmentPolicy::default(),
+        },
+    )
+    .expect("create provider trace symlink session");
+    let temp_directory = session_dir.join("temp");
+    if temp_directory.exists() {
+        std::fs::remove_dir_all(&temp_directory).expect("remove owned temp directory");
+    }
+
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&outside, &temp_directory).expect("create temp symlink");
+    #[cfg(windows)]
+    if let Err(error) = std::os::windows::fs::symlink_dir(&outside, &temp_directory) {
+        if error.kind() == std::io::ErrorKind::PermissionDenied
+            || error.raw_os_error() == Some(1314)
+        {
+            std::fs::remove_dir_all(&root).expect("remove skipped symlink test root");
+            std::fs::remove_dir_all(&outside).expect("remove skipped outside directory");
+            return;
+        }
+        panic!("create temp symlink: {error}");
+    }
+
+    let error = prepare_provider_api_trace_directory(&session_dir, session_id)
+        .expect_err("symbolic-link temp directory must be rejected");
+    assert!(error.contains("symbolic-link"));
+    assert!(!outside.join(PROVIDER_API_TRACE_DIRECTORY).exists());
+
+    std::fs::remove_dir(&temp_directory).expect("remove temp symlink");
+    std::fs::remove_dir_all(&root).expect("remove provider trace symlink test root");
+    std::fs::remove_dir_all(&outside).expect("remove outside directory");
+}
+
 /// Verifies configured-inference traces are atomically isolated by their authenticated consumer profile.
 /// 验证已配置推理追踪会按已认证消费者配置档原子隔离。
 #[test]

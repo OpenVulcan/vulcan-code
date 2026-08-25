@@ -98,6 +98,12 @@ export function textValue(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+// booleanValue returns exact JSON booleans without truthy coercion.
+// booleanValue 返回精确 JSON 布尔值，不执行 truthy 强制转换。
+export function booleanValue(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
 // numberValue normalizes numeric JSON values or numeric strings.
 // numberValue 规范化 JSON 数值或数字字符串。
 export function numberValue(value: unknown): number | null {

@@ -284,6 +284,20 @@ pub(super) async fn handle_finished_stream_event(
             final_report_apply.is_some()
         ),
     );
+    if let Some(apply) = final_report_apply.as_ref()
+        && !apply.terminal_transcript_entries.is_empty()
+        && let Err(error) = spawn_exact_session_transcript_entries_persist_task(
+            task_state.clone(),
+            controller_runtime.clone(),
+            finished_session_id,
+            apply.terminal_transcript_entries.clone(),
+            Some(String::from("terminal_report_immutable_suffix")),
+        )
+    {
+        eprintln!(
+            "[webui-service] persist terminal report immutable suffix failed: session={finished_session_id} error={error}"
+        );
+    }
     // clearedRetrySnapshotId is eligible for physical cleanup only after the cleared main reference is durably committed.
     // clearedRetrySnapshotId 仅在主引用清除状态可靠提交后才允许执行物理清理。
     let mut cleared_retry_snapshot_reference = None;

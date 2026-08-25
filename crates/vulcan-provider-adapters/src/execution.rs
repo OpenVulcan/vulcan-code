@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use vulcan_ai_contract::{
     AiErrorCategory, AiExecutionError, AiExecutionRequest, AiStreamEvent, AiStreamStateMachine,
     AiTransportKind, ContentItem, DispatchOutcome, ModelParameterValue, PromptCachePolicy,
@@ -36,9 +36,10 @@ use vulcan_ai_protocols::{
 use vulcan_llm_core::{
     AnthropicReasoningMode, DEFAULT_RESPONSES_WEBSOCKET_MAX_AGE, EncodedWireRequest, LlmCoreError,
     LlmProtocolRuntime, ProtocolTransportProfile, ProviderRouteContext,
-    RESPONSES_WEBSOCKET_CONNECTION_LIMIT_CODE, ResponsesWebsocketConfig, ResponsesWebsocketSession,
-    UpstreamProtocol, UsageAccumulator, UsageExtractionProfile, UsageRecordKind,
-    converted_protocol_headers, encode_codex_responses_request, project_responses_for_provider,
+    RESPONSES_WEBSOCKET_CONNECTION_LIMIT_CODE, ResponsesWebsocketConfig,
+    ResponsesWebsocketRawFrame, ResponsesWebsocketSession, UpstreamProtocol, UsageAccumulator,
+    UsageExtractionProfile, UsageRecordKind, converted_protocol_headers,
+    encode_codex_responses_request, project_responses_for_provider,
 };
 
 use tokio::sync::{Mutex as TokioMutex, oneshot};
@@ -390,6 +391,39 @@ pub struct ProviderWireRequestCapture {
     pub body: Value,
 }
 
+/// Couples one exact request capture with a best-effort persistence acknowledgement observed before dispatch.
+/// 将精确请求捕获与网络分派前观察的尽力持久化确认绑定。
+pub struct ProviderWireRequestTraceDispatch {
+    /// Secret-safe request waiting at the transport boundary.
+    /// 在传输边界等待的无秘密请求。
+    pub request: ProviderWireRequestCapture,
+    /// One-shot result sent by the owning trace writer after its publication attempt.
+    /// 所属追踪写入器完成发布尝试后发送的一次性结果。
+    pub persistence_result: oneshot::Sender<Result<(), String>>,
+}
+
+/// Selects fire-and-forget observation or acknowledged best-effort tracing for one wire request.
+/// 为一份 Wire 请求选择即发即忘观察或带确认的尽力追踪。
+enum ProviderWireRequestCaptureTarget {
+    /// Publishes the request without delaying transport dispatch.
+    /// 发布请求但不延迟传输分派。
+    Observe(oneshot::Sender<ProviderWireRequestCapture>),
+    /// Observes the trace writer acknowledgement before dispatch without promoting trace failures.
+    /// 在分派前观察追踪写入器确认，但不会将追踪失败提升为业务失败。
+    Trace(oneshot::Sender<ProviderWireRequestTraceDispatch>),
+}
+
+/// Owns the optional request and response capture endpoints for one physical execution.
+/// 持有一次真实执行可选的请求与响应捕获端点。
+struct ProviderWireCaptureTargets {
+    /// Optional exact request observer or acknowledged best-effort trace target.
+    /// 可选的精确请求观察器或带确认的尽力追踪目标。
+    request: Option<ProviderWireRequestCaptureTarget>,
+    /// Optional raw response receiver endpoint.
+    /// 可选的原始响应接收端点。
+    response: Option<oneshot::Sender<ProviderWireResponseCapture>>,
+}
+
 /// Carries the raw HTTP response bytes observed before SSE framing and protocol decoding.
 /// 承载在 SSE 分帧与协议解码之前观察到的原始 HTTP 响应字节。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -409,9 +443,12 @@ pub struct ProviderWireResponseCapture {
     /// Raw response prefix retained before any local parser consumes it.
     /// 在任何本地解析器消费之前保留的原始响应前缀。
     pub body: Vec<u8>,
-    /// Exact byte lengths of observed transport chunks in receive order.
-    /// 按接收顺序记录的已观察传输 chunk 精确字节长度。
-    pub chunk_lengths: Vec<u64>,
+    /// Exact transport chunk records in receive order.
+    /// 按接收顺序记录的精确传输 chunk 记录。
+    pub chunks: Vec<ProviderWireResponseChunkCapture>,
+    /// Decoded WebSocket application-frame boundaries retained in receive order.
+    /// 按接收顺序保留的已解码 WebSocket 应用帧边界。
+    pub frames: Vec<ProviderWireResponseFrameCapture>,
     /// Total bytes received even when the retained body is bounded.
     /// 实际收到的总字节数，即使保留正文受到容量限制也会继续累计。
     pub received_bytes: u64,
@@ -421,17 +458,68 @@ pub struct ProviderWireResponseCapture {
     /// Whether the chunk boundary index exceeded its bounded capacity.
     /// chunk 边界索引是否超过其有界容量。
     pub chunk_index_truncated: bool,
+    /// Whether the WebSocket frame boundary index exceeded its bounded capacity.
+    /// WebSocket 帧边界索引是否超过其有界容量。
+    pub frame_index_truncated: bool,
     /// Capture-side terminal classification independent from Provider retry semantics.
     /// 独立于 Provider 重试语义的捕获侧终态分类。
     pub outcome: String,
     /// First normalized tool-call abort diagnostic observed before the host rejected the turn.
     /// 宿主拒绝回合前观察到的首个规范化工具调用中止诊断。
     pub normalized_tool_call_abort: Option<String>,
+    /// Exact local processing stage that failed after response bytes were observed.
+    /// 观察到响应字节后发生失败的精确本地处理阶段。
+    pub failure_stage: Option<String>,
+    /// Controlled failure diagnostic paired with `failure_stage`.
+    /// 与 `failure_stage` 配对的受控失败诊断。
+    pub failure_message: Option<String>,
+    /// SHA-256 of every raw payload byte received, including bytes beyond the retained body cap.
+    /// 所有已接收原始载荷字节的 SHA-256，包括超出正文保留上限的字节。
+    pub body_sha256: String,
+}
+
+/// Describes one raw HTTP transport chunk before local framing or decoding.
+/// 描述本地分帧或解码前的一块原始 HTTP 传输 chunk。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderWireResponseChunkCapture {
+    /// Original response-stream byte offset before this chunk.
+    /// 当前 chunk 之前的原始响应流字节偏移。
+    pub offset: u64,
+    /// Exact chunk byte length.
+    /// chunk 的精确字节长度。
+    pub length: u64,
+    /// Wall-clock observation time in Unix milliseconds.
+    /// 以 Unix 毫秒表示的观察时间。
+    pub observed_at_unix_ms: u128,
+    /// SHA-256 of the exact chunk bytes.
+    /// 精确 chunk 字节的 SHA-256。
+    pub sha256: String,
+}
+
+/// Describes one decoded WebSocket application frame inside the retained response body.
+/// 描述保留响应正文中的一条已解码 WebSocket 应用帧。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderWireResponseFrameCapture {
+    /// Stable decoded frame kind supplied by the WebSocket transport.
+    /// WebSocket 传输层提供的稳定已解码帧类型。
+    pub kind: String,
+    /// Original response-stream byte offset before this frame payload.
+    /// 当前帧载荷之前的原始响应流字节偏移。
+    pub offset: u64,
+    /// Exact application payload length before any local parsing.
+    /// 任何本地解析前的精确应用载荷长度。
+    pub length: u64,
+    /// Wall-clock observation time in Unix milliseconds.
+    /// 以 Unix 毫秒表示的观察时间。
+    pub observed_at_unix_ms: u128,
+    /// SHA-256 of the exact application payload.
+    /// 精确应用载荷的 SHA-256。
+    pub sha256: String,
 }
 
 /// Maximum raw response bytes retained for one opted-in physical API call.
 /// 单次显式启用追踪的真实 API 调用允许保留的最大原始响应字节数。
-const PROVIDER_WIRE_RESPONSE_CAPTURE_MAX_BYTES: usize = 8 * 1024 * 1024;
+const PROVIDER_WIRE_RESPONSE_CAPTURE_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 /// Maximum transport chunk boundaries retained for one physical API call.
 /// 单次真实 API 调用允许保留的最大传输 chunk 边界数量。
@@ -446,6 +534,9 @@ struct ProviderWireResponseCaptureGuard {
     /// Mutable bounded capture sent unchanged when the guard is dropped.
     /// 守卫析构时原样发送的可变有界捕获。
     capture: Option<ProviderWireResponseCapture>,
+    /// Incremental digest over all received payload bytes, including unretained suffixes.
+    /// 覆盖所有已接收载荷字节（包括未保留后缀）的增量摘要。
+    body_hasher: Option<Sha256>,
 }
 
 impl ProviderWireResponseCaptureGuard {
@@ -468,14 +559,24 @@ impl ProviderWireResponseCaptureGuard {
             content_type: None,
             content_encoding: None,
             body: Vec::new(),
-            chunk_lengths: Vec::new(),
+            chunks: Vec::new(),
+            frames: Vec::new(),
             received_bytes: 0,
             body_truncated: false,
             chunk_index_truncated: false,
+            frame_index_truncated: false,
             outcome: String::from("stream_failed_or_cancelled"),
             normalized_tool_call_abort: None,
+            failure_stage: None,
+            failure_message: None,
+            body_sha256: String::new(),
         });
-        Self { sender, capture }
+        let body_hasher = capture.as_ref().map(|_| Sha256::new());
+        Self {
+            sender,
+            capture,
+            body_hasher,
+        }
     }
 
     /// Records response metadata before any body reader starts.
@@ -508,23 +609,68 @@ impl ProviderWireResponseCaptureGuard {
     /// `chunk` is the exact byte slice returned by `reqwest::Response::bytes_stream`.
     /// `chunk` 是 `reqwest::Response::bytes_stream` 返回的精确字节切片。
     fn observe_chunk(&mut self, chunk: &[u8]) {
+        if let Some(hasher) = self.body_hasher.as_mut() {
+            hasher.update(chunk);
+        }
         let Some(capture) = self.capture.as_mut() else {
             return;
         };
-        capture.received_bytes = capture
-            .received_bytes
-            .saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
-        if capture.chunk_lengths.len() < PROVIDER_WIRE_RESPONSE_CAPTURE_MAX_CHUNKS {
-            capture
-                .chunk_lengths
-                .push(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
+        if capture.chunks.len() < PROVIDER_WIRE_RESPONSE_CAPTURE_MAX_CHUNKS {
+            capture.chunks.push(ProviderWireResponseChunkCapture {
+                offset: capture.received_bytes,
+                length: u64::try_from(chunk.len()).unwrap_or(u64::MAX),
+                observed_at_unix_ms: provider_wire_capture_timestamp_ms(),
+                sha256: hex::encode(Sha256::digest(chunk)),
+            });
         } else {
             capture.chunk_index_truncated = true;
         }
+        Self::observe_body_bytes(capture, chunk);
+    }
+
+    /// Records one decoded WebSocket application frame before JSON and protocol parsing.
+    /// 在 JSON 与协议解析前记录一条已解码 WebSocket 应用帧。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `frame` contains the exact application payload and its stable decoded frame kind.
+    /// `frame` 包含精确应用载荷及其稳定的已解码帧类型。
+    fn observe_websocket_frame(&mut self, frame: ResponsesWebsocketRawFrame) {
+        if let Some(hasher) = self.body_hasher.as_mut() {
+            hasher.update(frame.payload.as_slice());
+        }
+        let Some(capture) = self.capture.as_mut() else {
+            return;
+        };
+        if capture.frames.len() < PROVIDER_WIRE_RESPONSE_CAPTURE_MAX_CHUNKS {
+            capture.frames.push(ProviderWireResponseFrameCapture {
+                kind: frame.kind,
+                offset: capture.received_bytes,
+                length: u64::try_from(frame.payload.len()).unwrap_or(u64::MAX),
+                observed_at_unix_ms: provider_wire_capture_timestamp_ms(),
+                sha256: hex::encode(Sha256::digest(frame.payload.as_slice())),
+            });
+        } else {
+            capture.frame_index_truncated = true;
+        }
+        Self::observe_body_bytes(capture, frame.payload.as_slice());
+    }
+
+    /// Appends one raw payload to the bounded body while retaining the unbounded byte count.
+    /// 将一段原始载荷追加到有界正文，同时保留不受界限影响的总字节计数。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `capture` owns the aggregate state and `payload` is untouched transport data.
+    /// `capture` 持有聚合状态，`payload` 是未经修改的传输数据。
+    fn observe_body_bytes(capture: &mut ProviderWireResponseCapture, payload: &[u8]) {
+        capture.received_bytes = capture
+            .received_bytes
+            .saturating_add(u64::try_from(payload.len()).unwrap_or(u64::MAX));
         let remaining = PROVIDER_WIRE_RESPONSE_CAPTURE_MAX_BYTES.saturating_sub(capture.body.len());
-        let retained = remaining.min(chunk.len());
-        capture.body.extend_from_slice(&chunk[..retained]);
-        capture.body_truncated |= retained < chunk.len();
+        let retained = remaining.min(payload.len());
+        capture.body.extend_from_slice(&payload[..retained]);
+        capture.body_truncated |= retained < payload.len();
     }
 
     /// Replaces the default interrupted outcome with the exact known capture terminal state.
@@ -550,14 +696,35 @@ impl ProviderWireResponseCaptureGuard {
     fn observe_normalized_event(&mut self, event: &AiStreamEvent) {
         if let AiStreamEvent::ToolCallAborted { message, .. } = event
             && let Some(capture) = self.capture.as_mut()
-            && capture.normalized_tool_call_abort.is_none()
         {
-            capture.normalized_tool_call_abort = Some(message.clone());
+            if capture.normalized_tool_call_abort.is_none() {
+                capture.normalized_tool_call_abort = Some(message.clone());
+            }
+            if capture.failure_stage.is_none() {
+                capture.failure_stage = Some(String::from("tool_arguments_json"));
+                capture.failure_message = Some(message.clone());
+            }
         }
         match event {
             AiStreamEvent::ResponseCompleted => self.set_outcome("response_completed"),
             AiStreamEvent::ResponseFailed { .. } => self.set_outcome("response_failed"),
             _ => {}
+        }
+    }
+
+    /// Records the first exact local processing failure without changing Provider retry semantics.
+    /// 记录首个精确本地处理失败，且不改变 Provider 重试语义。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `stage` is the stable processing boundary and `failure` owns the controlled diagnostic.
+    /// `stage` 是稳定处理边界，`failure` 持有受控诊断。
+    fn observe_failure(&mut self, stage: &str, failure: &ProviderExecutionFailure) {
+        if let Some(capture) = self.capture.as_mut()
+            && capture.failure_stage.is_none()
+        {
+            capture.failure_stage = Some(stage.to_string());
+            capture.failure_message = Some(failure.error.message.clone());
         }
     }
 
@@ -581,11 +748,28 @@ impl Drop for ProviderWireResponseCaptureGuard {
     /// Publishes all bytes already received even when parsing, cancellation, or transport fails.
     /// 即使解析、取消或传输失败，也会发布已经收到的全部字节。
     fn drop(&mut self) {
-        let (Some(sender), Some(capture)) = (self.sender.take(), self.capture.take()) else {
+        let (Some(sender), Some(mut capture)) = (self.sender.take(), self.capture.take()) else {
             return;
         };
+        if capture.outcome == "stream_failed_or_cancelled" && capture.failure_stage.is_none() {
+            capture.failure_stage = Some(String::from("cancelled"));
+            capture.failure_message = Some(String::from(
+                "Response capture ended before a terminal transport or protocol outcome was observed.",
+            ));
+        }
+        if let Some(hasher) = self.body_hasher.take() {
+            capture.body_sha256 = hex::encode(hasher.finalize());
+        }
         let _ = sender.send(capture);
     }
+}
+
+/// Returns a best-effort wall-clock timestamp for diagnostic receive records.
+/// 返回用于诊断接收记录的尽力墙钟时间戳。
+fn provider_wire_capture_timestamp_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis())
 }
 
 /// Stream of normalized public execution events.
@@ -2783,7 +2967,16 @@ impl ProviderExecutionClient {
         secret: CredentialExecutionSecret,
         execution_id: String,
     ) -> ProviderExecutionStream {
-        self.execute_with_optional_wire_captures(route, request, secret, execution_id, None, None)
+        self.execute_with_optional_wire_captures(
+            route,
+            request,
+            secret,
+            execution_id,
+            ProviderWireCaptureTargets {
+                request: None,
+                response: None,
+            },
+        )
     }
 
     /// Starts one immutable execution and captures the exact encoded request used by its transport.
@@ -2814,8 +3007,12 @@ impl ProviderExecutionClient {
             request,
             secret,
             execution_id,
-            Some(wire_request_capture),
-            None,
+            ProviderWireCaptureTargets {
+                request: Some(ProviderWireRequestCaptureTarget::Observe(
+                    wire_request_capture,
+                )),
+                response: None,
+            },
         )
     }
 
@@ -2839,7 +3036,7 @@ impl ProviderExecutionClient {
         request: AiExecutionRequest,
         secret: CredentialExecutionSecret,
         execution_id: String,
-        wire_request_capture: oneshot::Sender<ProviderWireRequestCapture>,
+        wire_request_capture: oneshot::Sender<ProviderWireRequestTraceDispatch>,
         wire_response_capture: oneshot::Sender<ProviderWireResponseCapture>,
     ) -> ProviderExecutionStream {
         self.execute_with_optional_wire_captures(
@@ -2847,8 +3044,12 @@ impl ProviderExecutionClient {
             request,
             secret,
             execution_id,
-            Some(wire_request_capture),
-            Some(wire_response_capture),
+            ProviderWireCaptureTargets {
+                request: Some(ProviderWireRequestCaptureTarget::Trace(
+                    wire_request_capture,
+                )),
+                response: Some(wire_response_capture),
+            },
         )
     }
 
@@ -2872,8 +3073,7 @@ impl ProviderExecutionClient {
         request: AiExecutionRequest,
         secret: CredentialExecutionSecret,
         execution_id: String,
-        wire_request_capture: Option<oneshot::Sender<ProviderWireRequestCapture>>,
-        wire_response_capture: Option<oneshot::Sender<ProviderWireResponseCapture>>,
+        wire_captures: ProviderWireCaptureTargets,
     ) -> ProviderExecutionStream {
         // diagnostic_secret remains available only to the final stream error boundary after the
         // transport receives its own frozen credential clone.
@@ -2894,18 +3094,10 @@ impl ProviderExecutionClient {
                 secret,
                 execution_id,
                 websocket_key.expect("allowed WebSocket route has a cache key"),
-                wire_request_capture,
-                wire_response_capture,
+                wire_captures,
             )
         } else {
-            self.execute_http(
-                route,
-                request,
-                secret,
-                execution_id,
-                wire_request_capture,
-                wire_response_capture,
-            )
+            self.execute_http(route, request, secret, execution_id, wire_captures)
         };
         // Every asynchronous error crosses one common secret-safe and bounded public boundary.
         // 每个异步错误都经过同一条不含秘密且有界的公共边界。
@@ -2924,33 +3116,26 @@ impl ProviderExecutionClient {
         secret: CredentialExecutionSecret,
         execution_id: String,
         websocket_key: String,
-        wire_request_capture: Option<oneshot::Sender<ProviderWireRequestCapture>>,
-        wire_response_capture: Option<oneshot::Sender<ProviderWireResponseCapture>>,
+        wire_captures: ProviderWireCaptureTargets,
     ) -> ProviderExecutionStream {
         let client = self.clone();
         Box::pin(try_stream! {
+            let ProviderWireCaptureTargets {
+                request: wire_request_capture,
+                response: wire_response_capture,
+            } = wire_captures;
             // wireRequestCapture remains available until the active WebSocket request is encoded.
             // wireRequestCapture 保留到活动 WebSocket 请求完成编码时使用。
             let mut wire_request_capture = wire_request_capture;
-            // WebSocket raw-frame capture is intentionally reported as unsupported in this focused HTTP diagnosis.
-            // 本次聚焦 HTTP 诊断暂不捕获 WebSocket 原始帧，并显式报告为不支持。
-            if let Some(capture) = wire_response_capture {
-                let _ = capture.send(ProviderWireResponseCapture {
-                    transport: String::from("responses_websocket"),
-                    http_status: None,
-                    content_type: None,
-                    content_encoding: None,
-                    body: Vec::new(),
-                    chunk_lengths: Vec::new(),
-                    received_bytes: 0,
-                    body_truncated: false,
-                    chunk_index_truncated: false,
-                    outcome: String::from("raw_response_capture_not_supported"),
-                    normalized_tool_call_abort: None,
-                });
-            }
+            // wireResponseCaptureGuard publishes every retained frame even when local decoding fails.
+            // wireResponseCaptureGuard 即使本地解码失败也会发布所有已经保留的帧。
+            let mut wire_response_capture = ProviderWireResponseCaptureGuard::new(
+                "responses_websocket",
+                wire_response_capture,
+            );
             let transport_started_at = Instant::now();
-            let dispatched_at_ms = provider_transport_unix_millis()?;
+            let dispatched_at_ms = provider_transport_unix_millis()
+                .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
             emit_provider_transport_trace(
                 execution_id.as_str(),
                 "responses_websocket",
@@ -2963,24 +3148,26 @@ impl ProviderExecutionClient {
                 &route,
                 &request,
             );
-            let handshake_encoded = client.encode_request_with_credential(
-                &route,
-                &handshake_request,
-                &secret,
-            )?;
+            let handshake_encoded = client
+                .encode_request_with_credential(&route, &handshake_request, &secret)
+                .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
             let transport = client
                 .protocols
                 .transport_profile(route.protocol_route.protocol_profile_id.as_str())
-                .map_err(llm_core_protocol_failure)?;
-            let url = responses_websocket_url(&route, handshake_encoded.path.as_str())?;
-            let mut headers = execution_headers(&route, &handshake_encoded.headers, &secret)?;
+                .map_err(llm_core_protocol_failure)
+                .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
+            let url = responses_websocket_url(&route, handshake_encoded.path.as_str())
+                .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
+            let mut headers = execution_headers(&route, &handshake_encoded.headers, &secret)
+                .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
             headers.insert(
                 HeaderName::from_static("openai-beta"),
                 HeaderValue::from_static(CODEX_RESPONSES_WEBSOCKET_BETA),
             );
             let config = ResponsesWebsocketConfig {
                 url: url.clone(),
-                headers: websocket_headers(&headers)?,
+                headers: websocket_headers(&headers)
+                    .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?,
                 connect_timeout: Duration::from_millis(transport.response_headers_timeout_ms),
                 idle_timeout: Duration::from_millis(transport.stream_idle_timeout_ms),
                 max_connection_age: DEFAULT_RESPONSES_WEBSOCKET_MAX_AGE,
@@ -2993,7 +3180,7 @@ impl ProviderExecutionClient {
                 Ok(session) => session,
                 Err(error) => {
                     client.disable_responses_websocket(websocket_key.as_str());
-                    Err(trace_provider_transport_failure(
+                    let failure = trace_provider_transport_failure(
                         execution_id.as_str(),
                         "responses_websocket",
                         stream_transport_failure_with_websocket_close_code(
@@ -3002,7 +3189,9 @@ impl ProviderExecutionClient {
                             error.websocket_close_code,
                         ),
                         &transport_started_at,
-                    ))?
+                    );
+                    wire_response_capture.observe_failure("dispatch", &failure);
+                    Err(failure)?
                 }
             };
             let mut session = session_handle.lock().await;
@@ -3012,7 +3201,7 @@ impl ProviderExecutionClient {
                     Ok(session) => session,
                     Err(error) => {
                         client.disable_responses_websocket(websocket_key.as_str());
-                        Err(trace_provider_transport_failure(
+                        let failure = trace_provider_transport_failure(
                             execution_id.as_str(),
                             "responses_websocket",
                             stream_transport_failure_with_websocket_close_code(
@@ -3021,7 +3210,9 @@ impl ProviderExecutionClient {
                                 error.websocket_close_code,
                             ),
                             &transport_started_at,
-                        ))?
+                        );
+                        wire_response_capture.observe_failure("dispatch", &failure);
+                        Err(failure)?
                     }
                 };
             }
@@ -3031,21 +3222,28 @@ impl ProviderExecutionClient {
                 &request,
                 session.previous_response_id(),
             );
-            let encoded = client.encode_request_with_credential(&route, &wire_request, &secret)?;
+            let encoded = client
+                .encode_request_with_credential(&route, &wire_request, &secret)
+                .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
             // The capture contains the exact frame payload plus the final secret-safe handshake headers.
             // 捕获内容包含精确帧载荷以及最终且不含秘密值的握手请求头。
             if let Some(capture) = wire_request_capture.take() {
-                let _ = capture.send(provider_wire_request_capture(
-                    "responses_websocket",
-                    "WEBSOCKET_FRAME",
-                    url.as_str(),
-                    &encoded,
-                    &headers,
-                ));
+                publish_wire_request_capture(
+                    capture,
+                    provider_wire_request_capture(
+                        "responses_websocket",
+                        "WEBSOCKET_FRAME",
+                        url.as_str(),
+                        &encoded,
+                        &headers,
+                    ),
+                )
+                .await
+                .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
             }
             if let Err(error) = session.begin_response(encoded.body, None).await {
                 client.disable_responses_websocket(websocket_key.as_str());
-                Err(trace_provider_transport_failure(
+                let failure = trace_provider_transport_failure(
                     execution_id.as_str(),
                     "responses_websocket",
                     stream_transport_failure_with_websocket_close_code(
@@ -3054,7 +3252,9 @@ impl ProviderExecutionClient {
                         error.websocket_close_code,
                     ),
                     &transport_started_at,
-                ))?;
+                );
+                wire_response_capture.observe_failure("dispatch", &failure);
+                Err(failure)?;
             }
             yield AiStreamEvent::TransportObserved {
                 transport: AiTransportKind::ResponsesWebsocket,
@@ -3077,7 +3277,11 @@ impl ProviderExecutionClient {
                     execution_id.clone(),
                     &request,
                 )
-                .map_err(llm_core_protocol_failure)?;
+                .map_err(|error| {
+                    let failure = llm_core_protocol_failure(error);
+                    wire_response_capture.observe_failure("protocol_decoder", &failure);
+                    failure
+                })?;
             let usage_profiles = route.protocol_route.usage_extraction_profiles.clone();
             let response_profiles = route.response_projection_profiles.clone();
             let profiled_usage_enabled = !usage_profiles.is_empty();
@@ -3088,10 +3292,13 @@ impl ProviderExecutionClient {
             let mut terminal_observed = false;
             loop {
                 let mut frame = match session.next_frame().await {
-                    Ok(Some(frame)) => frame,
+                    Ok(Some(frame)) => {
+                        wire_response_capture.observe_websocket_frame(frame.raw.clone());
+                        frame
+                    }
                     Ok(None) => {
                         client.disable_responses_websocket(websocket_key.as_str());
-                        Err(trace_provider_transport_failure(
+                        let failure = trace_provider_transport_failure(
                             execution_id.as_str(),
                             "responses_websocket",
                             stream_transport_failure_with_websocket_close_code(
@@ -3100,11 +3307,16 @@ impl ProviderExecutionClient {
                                 None,
                             ),
                             &transport_started_at,
-                        ))?
+                        );
+                        wire_response_capture.observe_failure("body_transport", &failure);
+                        Err(failure)?
                     }
                     Err(error) => {
+                        if let Some(raw_frame) = session.take_last_raw_frame() {
+                            wire_response_capture.observe_websocket_frame(raw_frame);
+                        }
                         client.disable_responses_websocket(websocket_key.as_str());
-                        Err(trace_provider_transport_failure(
+                        let failure = trace_provider_transport_failure(
                             execution_id.as_str(),
                             "responses_websocket",
                             stream_transport_failure_with_websocket_close_code(
@@ -3113,27 +3325,33 @@ impl ProviderExecutionClient {
                                 error.websocket_close_code,
                             ),
                             &transport_started_at,
-                        ))?
+                        );
+                        wire_response_capture.observe_failure("body_transport", &failure);
+                        Err(failure)?
                     }
                 };
                 apply_response_projection_profiles(&response_profiles, &mut frame.value).map_err(
                     |error| {
-                        abandon_responses_websocket_attempt(
+                        let failure = abandon_responses_websocket_attempt(
                             &mut session,
                             stream_protocol_failure_for_transport(
                                 error,
                                 semantic_output_observed,
                                 AiTransportKind::ResponsesWebsocket,
                             ),
-                        )
+                        );
+                        wire_response_capture.observe_failure("response_projection", &failure);
+                        failure
                     },
                 )?;
                 if let Some((code, message)) = responses_websocket_retry_control(&frame.value) {
-                    Err(responses_websocket_control_failure(
+                    let failure = responses_websocket_control_failure(
                         code,
                         message,
                         semantic_output_observed,
-                    ))?;
+                    );
+                    wire_response_capture.observe_failure("protocol_decoder", &failure);
+                    Err(failure)?;
                 }
                 let profiled_usage_events = extract_profiled_usage_value_events(
                     &usage_profiles,
@@ -3142,26 +3360,30 @@ impl ProviderExecutionClient {
                     &mut usage_accumulator,
                 )
                 .map_err(|error| {
-                    abandon_responses_websocket_attempt(
+                    let failure = abandon_responses_websocket_attempt(
                         &mut session,
                         stream_protocol_failure_for_transport(
                             error,
                             semantic_output_observed,
                             AiTransportKind::ResponsesWebsocket,
                         ),
-                    )
+                    );
+                    wire_response_capture.observe_failure("response_projection", &failure);
+                    failure
                 })?;
                 for mut usage_event in profiled_usage_gate
                     .stage(profiled_usage_events)
                     .map_err(|error| {
-                        abandon_responses_websocket_attempt(
+                        let failure = abandon_responses_websocket_attempt(
                             &mut session,
                             stream_protocol_failure_for_transport(
                                 error,
                                 semantic_output_observed,
                                 AiTransportKind::ResponsesWebsocket,
                             ),
-                        )
+                        );
+                        wire_response_capture.observe_failure("response_projection", &failure);
+                        failure
                     })?
                 {
                     validate_stream_event(
@@ -3170,7 +3392,9 @@ impl ProviderExecutionClient {
                         semantic_output_observed,
                     )
                     .map_err(|failure| {
-                        abandon_responses_websocket_attempt(&mut session, failure)
+                        let failure = abandon_responses_websocket_attempt(&mut session, failure);
+                        wire_response_capture.observe_failure("protocol_decoder", &failure);
+                        failure
                     })?;
                     update_semantic_output_observation(
                         &mut semantic_output_observed,
@@ -3181,14 +3405,16 @@ impl ProviderExecutionClient {
                 for mut event in decoder
                     .push_json(&frame.value)
                     .map_err(|error| {
-                        abandon_responses_websocket_attempt(
+                        let failure = abandon_responses_websocket_attempt(
                             &mut session,
                             stream_protocol_failure_for_transport(
                                 error,
                                 semantic_output_observed,
                                 AiTransportKind::ResponsesWebsocket,
                             ),
-                        )
+                        );
+                        wire_response_capture.observe_failure("protocol_decoder", &failure);
+                        failure
                     })?
                 {
                     if profiled_usage_enabled
@@ -3215,8 +3441,11 @@ impl ProviderExecutionClient {
                     );
                     validate_stream_event(&mut stream_state, &event, semantic_output_observed)
                         .map_err(|failure| {
-                            abandon_responses_websocket_attempt(&mut session, failure)
+                            let failure = abandon_responses_websocket_attempt(&mut session, failure);
+                            wire_response_capture.observe_failure("protocol_decoder", &failure);
+                            failure
                         })?;
+                    wire_response_capture.observe_normalized_event(&event);
                     let released_usage = profiled_usage_gate.observe(&event);
                     yield event;
                     for mut usage_event in released_usage {
@@ -3226,7 +3455,9 @@ impl ProviderExecutionClient {
                             semantic_output_observed,
                         )
                         .map_err(|failure| {
-                            abandon_responses_websocket_attempt(&mut session, failure)
+                            let failure = abandon_responses_websocket_attempt(&mut session, failure);
+                            wire_response_capture.observe_failure("protocol_decoder", &failure);
+                            failure
                         })?;
                         update_semantic_output_observation(
                             &mut semantic_output_observed,
@@ -3242,14 +3473,16 @@ impl ProviderExecutionClient {
             for mut event in decoder
                 .finish()
                 .map_err(|error| {
-                    abandon_responses_websocket_attempt(
+                    let failure = abandon_responses_websocket_attempt(
                         &mut session,
                         stream_completion_failure_for_transport(
                             error,
                             semantic_output_observed,
                             AiTransportKind::ResponsesWebsocket,
                         ),
-                    )
+                    );
+                    wire_response_capture.observe_failure("protocol_decoder", &failure);
+                    failure
                 })?
             {
                 if profiled_usage_enabled && matches!(event, AiStreamEvent::UsageUpdated { .. }) {
@@ -3260,9 +3493,13 @@ impl ProviderExecutionClient {
                     event,
                     AiStreamEvent::ResponseCompleted | AiStreamEvent::ResponseFailed { .. }
                 );
-                validate_stream_event(&mut stream_state, &event, semantic_output_observed).map_err(
-                    |failure| abandon_responses_websocket_attempt(&mut session, failure),
-                )?;
+                validate_stream_event(&mut stream_state, &event, semantic_output_observed)
+                    .map_err(|failure| {
+                        let failure = abandon_responses_websocket_attempt(&mut session, failure);
+                        wire_response_capture.observe_failure("protocol_decoder", &failure);
+                        failure
+                    })?;
+                wire_response_capture.observe_normalized_event(&event);
                 let released_usage = profiled_usage_gate.observe(&event);
                 yield event;
                 for mut usage_event in released_usage {
@@ -3272,7 +3509,9 @@ impl ProviderExecutionClient {
                         semantic_output_observed,
                     )
                     .map_err(|failure| {
-                        abandon_responses_websocket_attempt(&mut session, failure)
+                        let failure = abandon_responses_websocket_attempt(&mut session, failure);
+                        wire_response_capture.observe_failure("protocol_decoder", &failure);
+                        failure
                     })?;
                     update_semantic_output_observation(
                         &mut semantic_output_observed,
@@ -3284,17 +3523,19 @@ impl ProviderExecutionClient {
             profiled_usage_gate
                 .ensure_released()
                 .map_err(|error| {
-                    abandon_responses_websocket_attempt(
+                    let failure = abandon_responses_websocket_attempt(
                         &mut session,
                         stream_completion_failure_for_transport(
                             error,
                             semantic_output_observed,
                             AiTransportKind::ResponsesWebsocket,
                         ),
-                    )
+                    );
+                    wire_response_capture.observe_failure("protocol_decoder", &failure);
+                    failure
                 })?;
             if !terminal_observed || !stream_state.is_terminal() {
-                Err(abandon_responses_websocket_attempt(
+                let failure = abandon_responses_websocket_attempt(
                     &mut session,
                     stream_completion_failure_for_transport(
                         ProtocolConversionError::new(
@@ -3303,7 +3544,9 @@ impl ProviderExecutionClient {
                         semantic_output_observed,
                         AiTransportKind::ResponsesWebsocket,
                     ),
-                ))?;
+                );
+                wire_response_capture.observe_failure("protocol_decoder", &failure);
+                Err(failure)?;
             }
             emit_provider_transport_trace(
                 execution_id.as_str(),
@@ -3311,6 +3554,7 @@ impl ProviderExecutionClient {
                 "execution_completed",
                 &transport_started_at,
             );
+            wire_response_capture.set_outcome_if_unresolved("completed");
         })
     }
 
@@ -3406,11 +3650,14 @@ impl ProviderExecutionClient {
         request: AiExecutionRequest,
         secret: CredentialExecutionSecret,
         execution_id: String,
-        wire_request_capture: Option<oneshot::Sender<ProviderWireRequestCapture>>,
-        wire_response_capture: Option<oneshot::Sender<ProviderWireResponseCapture>>,
+        wire_captures: ProviderWireCaptureTargets,
     ) -> ProviderExecutionStream {
         let client = self.clone();
         Box::pin(try_stream! {
+            let ProviderWireCaptureTargets {
+                request: wire_request_capture,
+                response: wire_response_capture,
+            } = wire_captures;
             // wireRequestCapture remains available until the HTTP request is ready for dispatch.
             // wireRequestCapture 保留到 HTTP 请求准备分派时使用。
             let mut wire_request_capture = wire_request_capture;
@@ -3428,24 +3675,33 @@ impl ProviderExecutionClient {
                 &transport_started_at,
             );
             let request = request_without_nonpersistent_responses_continuation(&route, &request);
-            let encoded = client.encode_request_with_credential(&route, &request, &secret)?;
+            let encoded = client
+                .encode_request_with_credential(&route, &request, &secret)
+                .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
             let response_profiles = route.response_projection_profiles.clone();
             let transport = client
                 .protocols
                 .transport_profile(route.protocol_route.protocol_profile_id.as_str())
-                .map_err(llm_core_protocol_failure)?;
+                .map_err(llm_core_protocol_failure)
+                .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
             let url = route.request_url(encoded.path.as_str());
-            let headers = execution_headers(&route, &encoded.headers, &secret)?;
+            let headers = execution_headers(&route, &encoded.headers, &secret)
+                .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
             // The capture contains the exact body and the final headers after transport projection.
             // 捕获内容包含精确正文以及完成传输投影后的最终请求头。
             if let Some(capture) = wire_request_capture.take() {
-                let _ = capture.send(provider_wire_request_capture(
-                    "http_sse",
-                    "POST",
-                    url.as_str(),
-                    &encoded,
-                    &headers,
-                ));
+                publish_wire_request_capture(
+                    capture,
+                    provider_wire_request_capture(
+                        "http_sse",
+                        "POST",
+                        url.as_str(),
+                        &encoded,
+                        &headers,
+                    ),
+                )
+                .await
+                .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
             }
             emit_provider_transport_trace(
                 execution_id.as_str(),
@@ -3453,7 +3709,8 @@ impl ProviderExecutionClient {
                 "request_dispatched",
                 &transport_started_at,
             );
-            let dispatched_at_ms = provider_transport_unix_millis()?;
+            let dispatched_at_ms = provider_transport_unix_millis()
+                .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
             let response = tokio::time::timeout(
                 Duration::from_millis(transport.response_headers_timeout_ms),
                 client
@@ -3465,16 +3722,20 @@ impl ProviderExecutionClient {
             )
             .await
             .map_err(|_| {
-                transport_failure(format!(
+                let failure = transport_failure(format!(
                     "Provider request to `{url}` exceeded the registered {} ms response-header timeout.",
                     transport.response_headers_timeout_ms
-                ))
+                ));
+                wire_response_capture.observe_failure("dispatch", &failure);
+                failure
             })?
             .map_err(|error| {
-                http_send_transport_failure(
+                let failure = http_send_transport_failure(
                     &error,
                     format!("Provider request to `{url}` failed: {error}"),
-                )
+                );
+                wire_response_capture.observe_failure("dispatch", &failure);
+                failure
             })?;
             emit_provider_transport_trace(
                 execution_id.as_str(),
@@ -3484,12 +3745,14 @@ impl ProviderExecutionClient {
             );
             let status = response.status();
             wire_response_capture.observe_http_headers(status.as_u16(), response.headers());
-            let headers_at_ms = provider_transport_unix_millis()?;
+            let headers_at_ms = provider_transport_unix_millis()
+                .inspect_err(|failure| wire_response_capture.observe_failure("headers", failure))?;
             let rate_limit_headers = allowlisted_rate_limit_headers(response.headers());
             let provider_request_id = provider_request_id_from_headers(
                 response.headers(),
                 route.protocol_route.provider_request_id_headers.as_slice(),
-            )?;
+            )
+            .inspect_err(|failure| wire_response_capture.observe_failure("headers", failure))?;
             yield AiStreamEvent::TransportObserved {
                 transport: AiTransportKind::Http,
                 dispatched_at_ms,
@@ -3517,31 +3780,47 @@ impl ProviderExecutionClient {
                     Duration::from_millis(transport.stream_idle_timeout_ms),
                     Some(&mut wire_response_capture),
                 )
-                .await?;
+                .await
+                .inspect_err(|failure| {
+                    wire_response_capture.observe_failure("body_transport", failure);
+                })?;
                 for usage_event in extract_profiled_usage_events(
                     &usage_profiles,
                     UsageRecordKind::ErrorJsonBody,
                     body.as_str(),
                     &mut usage_accumulator,
                 )
-                .map_err(protocol_failure)?
+                .map_err(|error| {
+                    let failure = protocol_failure(error);
+                    wire_response_capture.observe_failure("response_projection", &failure);
+                    failure
+                })?
                 {
                     yield usage_event;
                 }
                 let body = project_response_record_text(&response_profiles, body.as_str())
-                    .map_err(protocol_failure)?;
+                    .map_err(|error| {
+                        let failure = protocol_failure(error);
+                        wire_response_capture.observe_failure("response_projection", &failure);
+                        failure
+                    })?;
                 wire_response_capture.set_outcome("http_error_response");
-                Err(http_failure(
+                let failure = http_failure(
                     status.as_u16(),
                     retry_after,
                     body.as_str(),
-                ))?
+                );
+                wire_response_capture.observe_failure("headers", &failure);
+                Err(failure)?
             };
             validate_response_content_type(
                 response.headers(),
                 &transport,
                 url.as_str(),
-            )?;
+            )
+            .inspect_err(|failure| {
+                wire_response_capture.observe_failure("headers", failure);
+            })?;
             let mut decoder = client
                 .protocols
                 .create_stream_decoder(
@@ -3549,7 +3828,11 @@ impl ProviderExecutionClient {
                     execution_id.clone(),
                     &request,
                 )
-                .map_err(llm_core_protocol_failure)?;
+                .map_err(|error| {
+                    let failure = llm_core_protocol_failure(error);
+                    wire_response_capture.observe_failure("protocol_decoder", &failure);
+                    failure
+                })?;
             let mut parser = IncrementalFrameParser::new(transport);
             let mut bytes = response.bytes_stream();
             let mut profiled_usage_gate = ProfiledUsageEventGate::default();
@@ -3563,22 +3846,26 @@ impl ProviderExecutionClient {
                 )
                 .await
                 .map_err(|_| {
-                    stream_idle_timeout_failure(
+                    let failure = stream_idle_timeout_failure(
                         format!(
                             "Provider stream from `{url}` exceeded the registered {} ms idle timeout.",
                             transport.stream_idle_timeout_ms
                         ),
                         semantic_output_observed,
-                    )
+                    );
+                    wire_response_capture.observe_failure("body_transport", &failure);
+                    failure
                 })?;
                 let Some(chunk) = next_chunk else {
                     break;
                 };
                 let chunk = chunk.map_err(|error| {
-                    stream_transport_failure(
+                    let failure = stream_transport_failure(
                         format!("Provider stream from `{url}` failed: {error}"),
                         semantic_output_observed,
-                    )
+                    );
+                    wire_response_capture.observe_failure("body_transport", &failure);
+                    failure
                 })?;
                 wire_response_capture.observe_chunk(chunk.as_ref());
                 if !first_chunk_observed {
@@ -3592,14 +3879,20 @@ impl ProviderExecutionClient {
                 }
                 for frame in parser
                     .push(chunk.as_ref())
-                    .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?
+                    .map_err(|error| {
+                        let failure = stream_protocol_failure(error, semantic_output_observed);
+                        wire_response_capture.observe_failure("frame_parser", &failure);
+                        failure
+                    })?
                 {
                     let projected_data = project_response_record_text(
                         &response_profiles,
                         frame.data.as_str(),
                     )
                     .map_err(|error| {
-                        stream_protocol_failure(error, semantic_output_observed)
+                        let failure = stream_protocol_failure(error, semantic_output_observed);
+                        wire_response_capture.observe_failure("response_projection", &failure);
+                        failure
                     })?;
                     let profiled_usage_events = extract_profiled_usage_events(
                         &usage_profiles,
@@ -3607,18 +3900,28 @@ impl ProviderExecutionClient {
                         projected_data.as_str(),
                         &mut usage_accumulator,
                     )
-                    .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?;
+                    .map_err(|error| {
+                        let failure = stream_protocol_failure(error, semantic_output_observed);
+                        wire_response_capture.observe_failure("response_projection", &failure);
+                        failure
+                    })?;
                     for mut usage_event in profiled_usage_gate
                         .stage(profiled_usage_events)
                         .map_err(|error| {
                             stream_protocol_failure(error, semantic_output_observed)
+                        })
+                        .inspect_err(|failure| {
+                            wire_response_capture.observe_failure("response_projection", failure);
                         })?
                     {
                         validate_stream_event(
                             &mut stream_state,
                             &usage_event,
                             semantic_output_observed,
-                        )?;
+                        )
+                        .inspect_err(|failure| {
+                            wire_response_capture.observe_failure("protocol_decoder", failure);
+                        })?;
                         update_semantic_output_observation(
                             &mut semantic_output_observed,
                             &mut usage_event,
@@ -3628,7 +3931,10 @@ impl ProviderExecutionClient {
                     for mut event in decoder
                         .push_sse(frame.event_name.as_deref(), projected_data.as_str())
                         .map_err(|error| {
-                            stream_protocol_failure(error, semantic_output_observed)
+                            let failure =
+                                stream_protocol_failure(error, semantic_output_observed);
+                            wire_response_capture.observe_failure("protocol_decoder", &failure);
+                            failure
                         })?
                     {
                         if profiled_usage_enabled
@@ -3660,7 +3966,10 @@ impl ProviderExecutionClient {
                                 &transport_started_at,
                             );
                         }
-                        validate_stream_event(&mut stream_state, &event, semantic_output_observed)?;
+                        validate_stream_event(&mut stream_state, &event, semantic_output_observed)
+                            .inspect_err(|failure| {
+                                wire_response_capture.observe_failure("protocol_decoder", failure);
+                            })?;
                         // terminalCapture must be fixed before yielding because the runtime stops polling at terminal events.
                         // terminalCapture 必须在交付前固定，因为运行时会在终态事件处停止拉流。
                         wire_response_capture.observe_normalized_event(&event);
@@ -3671,7 +3980,10 @@ impl ProviderExecutionClient {
                                 &mut stream_state,
                                 &usage_event,
                                 semantic_output_observed,
-                            )?;
+                            )
+                            .inspect_err(|failure| {
+                                wire_response_capture.observe_failure("protocol_decoder", failure);
+                            })?;
                             update_semantic_output_observation(
                                 &mut semantic_output_observed,
                                 &mut usage_event,
@@ -3683,29 +3995,46 @@ impl ProviderExecutionClient {
             }
             for frame in parser
                 .finish()
-                .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?
+                .map_err(|error| {
+                    let failure = stream_protocol_failure(error, semantic_output_observed);
+                    wire_response_capture.observe_failure("frame_parser", &failure);
+                    failure
+                })?
             {
                 let projected_data = project_response_record_text(
                     &response_profiles,
                     frame.data.as_str(),
                 )
-                .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?;
+                .map_err(|error| stream_protocol_failure(error, semantic_output_observed))
+                .inspect_err(|failure| {
+                    wire_response_capture.observe_failure("response_projection", failure);
+                })?;
                 let profiled_usage_events = extract_profiled_usage_events(
                     &usage_profiles,
                     UsageRecordKind::SseEvent,
                     projected_data.as_str(),
                     &mut usage_accumulator,
                 )
-                .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?;
+                .map_err(|error| {
+                    let failure = stream_protocol_failure(error, semantic_output_observed);
+                    wire_response_capture.observe_failure("response_projection", &failure);
+                    failure
+                })?;
                 for mut usage_event in profiled_usage_gate
                     .stage(profiled_usage_events)
-                    .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?
+                    .map_err(|error| stream_protocol_failure(error, semantic_output_observed))
+                    .inspect_err(|failure| {
+                        wire_response_capture.observe_failure("response_projection", failure);
+                    })?
                 {
                     validate_stream_event(
                         &mut stream_state,
                         &usage_event,
                         semantic_output_observed,
-                    )?;
+                    )
+                    .inspect_err(|failure| {
+                        wire_response_capture.observe_failure("protocol_decoder", failure);
+                    })?;
                     update_semantic_output_observation(
                         &mut semantic_output_observed,
                         &mut usage_event,
@@ -3714,7 +4043,11 @@ impl ProviderExecutionClient {
                 }
                 for mut event in decoder
                     .push_sse(frame.event_name.as_deref(), projected_data.as_str())
-                    .map_err(|error| stream_protocol_failure(error, semantic_output_observed))?
+                    .map_err(|error| {
+                        let failure = stream_protocol_failure(error, semantic_output_observed);
+                        wire_response_capture.observe_failure("protocol_decoder", &failure);
+                        failure
+                    })?
                 {
                     if profiled_usage_enabled
                         && matches!(event, AiStreamEvent::UsageUpdated { .. })
@@ -3725,7 +4058,10 @@ impl ProviderExecutionClient {
                         &mut semantic_output_observed,
                         &mut event,
                     );
-                    validate_stream_event(&mut stream_state, &event, semantic_output_observed)?;
+                    validate_stream_event(&mut stream_state, &event, semantic_output_observed)
+                        .inspect_err(|failure| {
+                            wire_response_capture.observe_failure("protocol_decoder", failure);
+                        })?;
                     // terminalCapture must be fixed before yielding because the runtime stops polling at terminal events.
                     // terminalCapture 必须在交付前固定，因为运行时会在终态事件处停止拉流。
                     wire_response_capture.observe_normalized_event(&event);
@@ -3736,7 +4072,10 @@ impl ProviderExecutionClient {
                             &mut stream_state,
                             &usage_event,
                             semantic_output_observed,
-                        )?;
+                        )
+                        .inspect_err(|failure| {
+                            wire_response_capture.observe_failure("protocol_decoder", failure);
+                        })?;
                         update_semantic_output_observation(
                             &mut semantic_output_observed,
                             &mut usage_event,
@@ -3747,7 +4086,11 @@ impl ProviderExecutionClient {
             }
             for mut event in decoder
                 .finish()
-                .map_err(|error| stream_completion_failure(error, semantic_output_observed))?
+                .map_err(|error| {
+                    let failure = stream_completion_failure(error, semantic_output_observed);
+                    wire_response_capture.observe_failure("protocol_decoder", &failure);
+                    failure
+                })?
             {
                 if profiled_usage_enabled && matches!(event, AiStreamEvent::UsageUpdated { .. }) {
                     continue;
@@ -3776,7 +4119,10 @@ impl ProviderExecutionClient {
                         &transport_started_at,
                     );
                 }
-                validate_stream_event(&mut stream_state, &event, semantic_output_observed)?;
+                validate_stream_event(&mut stream_state, &event, semantic_output_observed)
+                    .inspect_err(|failure| {
+                        wire_response_capture.observe_failure("protocol_decoder", failure);
+                    })?;
                 // terminalCapture must be fixed before yielding because the runtime stops polling at terminal events.
                 // terminalCapture 必须在交付前固定，因为运行时会在终态事件处停止拉流。
                 wire_response_capture.observe_normalized_event(&event);
@@ -3787,7 +4133,10 @@ impl ProviderExecutionClient {
                         &mut stream_state,
                         &usage_event,
                         semantic_output_observed,
-                    )?;
+                    )
+                    .inspect_err(|failure| {
+                        wire_response_capture.observe_failure("protocol_decoder", failure);
+                    })?;
                     update_semantic_output_observation(
                         &mut semantic_output_observed,
                         &mut usage_event,
@@ -3797,7 +4146,10 @@ impl ProviderExecutionClient {
             }
             profiled_usage_gate
                 .ensure_released()
-                .map_err(|error| stream_completion_failure(error, semantic_output_observed))?;
+                .map_err(|error| stream_completion_failure(error, semantic_output_observed))
+                .inspect_err(|failure| {
+                    wire_response_capture.observe_failure("protocol_decoder", failure);
+                })?;
             emit_provider_transport_trace(
                 execution_id.as_str(),
                 "http_sse",
@@ -6947,6 +7299,45 @@ fn project_credential_request(
     Ok(encoded)
 }
 
+/// Publishes a wire request and observes the optional durable trace barrier without blocking business dispatch on trace failures.
+/// 发布 Wire 请求并观察可选的可靠追踪屏障，但追踪失败不得阻止业务分派。
+async fn publish_wire_request_capture(
+    target: ProviderWireRequestCaptureTarget,
+    request: ProviderWireRequestCapture,
+) -> Result<(), ProviderExecutionFailure> {
+    match target {
+        ProviderWireRequestCaptureTarget::Observe(sender) => {
+            let _ = sender.send(request);
+            Ok(())
+        }
+        ProviderWireRequestCaptureTarget::Trace(sender) => {
+            let (result_sender, result_receiver) = oneshot::channel();
+            if sender
+                .send(ProviderWireRequestTraceDispatch {
+                    request,
+                    persistence_result: result_sender,
+                })
+                .is_err()
+            {
+                eprintln!(
+                    "[provider-api-trace] trace_write_failed=writer closed before request persistence acknowledgement"
+                );
+                return Ok(());
+            }
+            match result_receiver.await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => eprintln!(
+                    "[provider-api-trace] trace_write_failed=request persistence failed: {error}"
+                ),
+                Err(_) => eprintln!(
+                    "[provider-api-trace] trace_write_failed=writer closed without request persistence acknowledgement"
+                ),
+            }
+            Ok(())
+        }
+    }
+}
+
 /// Builds one complete transport request capture without retaining credential values.
 /// 构建一份完整的传输请求捕获，同时不保留任何凭据值。
 ///
@@ -8926,6 +9317,28 @@ mod tests {
         }
     }
 
+    /// Verifies dropping an unfinished capture retains bytes and marks an explicit cancellation stage.
+    /// 验证未完成捕获被释放时会保留字节并标记明确的取消阶段。
+    #[tokio::test]
+    async fn unfinished_wire_response_capture_records_cancelled_stage() {
+        let (sender, receiver) = oneshot::channel();
+        {
+            let mut capture = ProviderWireResponseCaptureGuard::new("http_sse", Some(sender));
+            capture.observe_chunk(b"partial-response");
+        }
+
+        let captured = receiver.await.expect("capture should publish on drop");
+        assert_eq!(captured.body, b"partial-response");
+        assert_eq!(captured.received_bytes, 16);
+        assert_eq!(captured.outcome, "stream_failed_or_cancelled");
+        assert_eq!(captured.failure_stage.as_deref(), Some("cancelled"));
+        assert!(captured.failure_message.is_some());
+        assert_eq!(
+            captured.body_sha256,
+            hex::encode(Sha256::digest(b"partial-response"))
+        );
+    }
+
     /// Verifies every executable built-in provider protocol is owned by the Responses conversion core.
     /// 验证每个可执行的内置供应商协议都由 Responses 转换核心负责。
     #[test]
@@ -10337,8 +10750,18 @@ mod tests {
         request.reasoning_effort = Some(ReasoningEffort::None);
         // requestCapture transfers the exact encoded request and responseCapture retains pre-parser bytes.
         // requestCapture 传递精确编码请求；responseCapture 保留解析前字节。
-        let (request_capture_sender, request_capture_receiver) = oneshot::channel();
+        let (request_capture_sender, request_capture_receiver) =
+            oneshot::channel::<ProviderWireRequestTraceDispatch>();
         let (response_capture_sender, response_capture_receiver) = oneshot::channel();
+        // requestCaptureTask acknowledges the same durable barrier used by the runtime writer.
+        // requestCaptureTask 确认与运行时写入器相同的可靠屏障。
+        let request_capture_task = tokio::spawn(async move {
+            let dispatch = request_capture_receiver
+                .await
+                .expect("transport should publish its exact encoded request");
+            let _ = dispatch.persistence_result.send(Ok(()));
+            dispatch.request
+        });
         // response is the normalized stream produced by the real execution path.
         // response 是真实执行路径产生的规范化响应流。
         let mut response = client.execute_with_wire_api_trace_capture(
@@ -10366,9 +10789,9 @@ mod tests {
         drop(response);
         // captured is the object cloned immediately before the HTTP dispatch call.
         // captured 是紧邻 HTTP 分派调用之前克隆的请求对象。
-        let captured = request_capture_receiver
+        let captured = request_capture_task
             .await
-            .expect("transport should publish its exact encoded request");
+            .expect("request capture task should finish");
         // capturedResponse is the raw HTTP payload recorded before SSE framing.
         // capturedResponse 是在 SSE 分帧之前记录的原始 HTTP 载荷。
         let captured_response = response_capture_receiver
@@ -10405,6 +10828,14 @@ mod tests {
         assert_eq!(captured_response.outcome, "response_completed");
         assert!(!captured_response.body_truncated);
         assert!(!captured_response.chunk_index_truncated);
+        assert!(!captured_response.chunks.is_empty());
+        assert!(captured_response.chunks.iter().all(|chunk| {
+            chunk.observed_at_unix_ms > 0 && chunk.sha256.len() == 64 && chunk.length > 0
+        }));
+        assert_eq!(
+            captured_response.body_sha256,
+            hex::encode(Sha256::digest(captured_response.body.as_slice()))
+        );
         assert_eq!(
             captured_response.received_bytes,
             u64::try_from(captured_response.body.len()).expect("response length should fit")
@@ -10413,6 +10844,158 @@ mod tests {
             String::from_utf8(captured_response.body).expect("SSE response should be UTF-8");
         assert!(raw_response.contains("response.output_text.delta"));
         assert!(raw_response.contains("response.completed"));
+    }
+
+    /// Verifies a failed trace writer does not replace the Provider business result.
+    /// 验证追踪写入器失败不会覆盖 Provider 业务结果。
+    #[tokio::test]
+    async fn http_trace_persistence_failure_does_not_prevent_network_dispatch() {
+        // listener observes the business request that must continue after the rejected trace write.
+        // listener 观察追踪写入被拒绝后仍必须继续的业务请求。
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("address should resolve");
+        // server returns one valid Responses stream after confirming the physical dispatch.
+        // server 在确认真实分派后返回一份合法的 Responses 流。
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("HTTP client should connect");
+            let request = read_test_http_request(&mut stream).await;
+            let response_body = [
+                "data: {\"type\":\"response.created\",\"response\":{\"id\":\"response-trace-failure\"}}\n\n",
+                "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"item_id\":\"message-trace-failure\",\"delta\":\"OK\"}\n\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"response-trace-failure\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
+            ]
+            .concat();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("HTTP response should send");
+            request
+        });
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let mut route = pinned_openrouter_route(OPENAI_RESPONSES_PROFILE_ID);
+        route.protocol_route.base_url_override = Some(format!("http://{address}"));
+        let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("secret"))
+            .expect("test key should validate")
+            .execution_secret()
+            .expect("test key should resolve");
+        let (request_capture_sender, request_capture_receiver) =
+            oneshot::channel::<ProviderWireRequestTraceDispatch>();
+        let (response_capture_sender, response_capture_receiver) = oneshot::channel();
+        // barrierTask returns the same writer failure shape produced by durable trace persistence.
+        // barrierTask 返回与可靠追踪持久化相同形态的写入器失败。
+        let barrier_task = tokio::spawn(async move {
+            let dispatch = request_capture_receiver
+                .await
+                .expect("transport should publish request before dispatch");
+            dispatch
+                .persistence_result
+                .send(Err(String::from("simulated trace writer failure")))
+                .expect("transport should await the barrier");
+        });
+        let mut response = client.execute_with_wire_api_trace_capture(
+            route,
+            minimal_request(),
+            secret,
+            String::from("execution-trace-barrier-failure"),
+            request_capture_sender,
+            response_capture_sender,
+        );
+        // events prove the Provider response remains authoritative despite the diagnostic failure.
+        // events 证明即使诊断写入失败，Provider 返回仍保持权威。
+        let mut events = Vec::new();
+        while let Some(event) = response.next().await {
+            events.push(event.expect("business response should remain successful"));
+        }
+        barrier_task.await.expect("barrier task should finish");
+        let dispatched_request = server.await.expect("server should finish");
+        assert!(dispatched_request.contains("POST "));
+        assert!(!events.is_empty());
+        let captured_response = response_capture_receiver
+            .await
+            .expect("response guard should publish the received business response");
+        assert!(captured_response.received_bytes > 0);
+        assert!(!captured_response.body.is_empty());
+        assert_eq!(captured_response.outcome, "response_completed");
+    }
+
+    /// Verifies a post-capture connection failure is classified as dispatch instead of cancellation.
+    /// 验证请求捕获后的连接失败会归类为分派失败，而不是取消。
+    #[tokio::test]
+    async fn http_wire_response_capture_classifies_dispatch_failure() {
+        // closedAddress reserves and then releases one loopback port so connection refusal is deterministic.
+        // closedAddress 先保留再释放一个环回端口，使连接拒绝具备确定性。
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let closed_address = listener.local_addr().expect("address should resolve");
+        drop(listener);
+
+        // client and route exercise the production request capture before the failed HTTP dispatch.
+        // client 与 route 在 HTTP 分派失败前走过生产请求捕获链路。
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .expect("direct test client should build"),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        let mut route = pinned_openrouter_route(OPENAI_RESPONSES_PROFILE_ID);
+        route.protocol_route.base_url_override = Some(format!("http://{closed_address}"));
+        let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("secret"))
+            .expect("test key should validate")
+            .execution_secret()
+            .expect("test key should resolve");
+        let (request_capture_sender, request_capture_receiver) =
+            oneshot::channel::<ProviderWireRequestTraceDispatch>();
+        let (response_capture_sender, response_capture_receiver) = oneshot::channel();
+        let request_capture_task = tokio::spawn(async move {
+            let dispatch = request_capture_receiver
+                .await
+                .expect("transport should publish request before dispatch");
+            let _ = dispatch.persistence_result.send(Ok(()));
+        });
+
+        // response must fail through the Provider stream while its diagnostic guard still publishes.
+        // response 必须通过 Provider 流失败，同时诊断守卫仍会发布捕获结果。
+        let mut response = client.execute_with_wire_api_trace_capture(
+            route,
+            minimal_request(),
+            secret,
+            String::from("execution-wire-dispatch-failure"),
+            request_capture_sender,
+            response_capture_sender,
+        );
+        let failure = response
+            .next()
+            .await
+            .expect("dispatch should resolve")
+            .expect_err("closed port must reject the request");
+        drop(response);
+        request_capture_task
+            .await
+            .expect("request capture task should finish");
+        let captured_response = response_capture_receiver
+            .await
+            .expect("response guard should publish dispatch failure");
+
+        assert!(failure.error.retryable);
+        assert_eq!(captured_response.failure_stage.as_deref(), Some("dispatch"));
+        assert_eq!(captured_response.received_bytes, 0);
+        assert!(captured_response.body.is_empty());
+        assert_ne!(
+            captured_response.failure_stage.as_deref(),
+            Some("cancelled")
+        );
     }
 
     /// Verifies protocol decoding failures still publish the exact pre-parser HTTP response.
@@ -10473,10 +11056,20 @@ mod tests {
             .expect("test key should resolve");
         // requestCapture confirms the request existed before the response failed decoding.
         // requestCapture 用于确认响应解码失败前请求已经存在。
-        let (request_capture_sender, request_capture_receiver) = oneshot::channel();
+        let (request_capture_sender, request_capture_receiver) =
+            oneshot::channel::<ProviderWireRequestTraceDispatch>();
         // responseCapture must survive every error return after raw bytes are observed.
         // responseCapture 必须在观察到原始字节后的所有错误返回路径中存活。
         let (response_capture_sender, response_capture_receiver) = oneshot::channel();
+        // requestCaptureTask releases dispatch after modeling successful durable persistence.
+        // requestCaptureTask 在模拟可靠持久化成功后放行分派。
+        let request_capture_task = tokio::spawn(async move {
+            let dispatch = request_capture_receiver
+                .await
+                .expect("transport should publish its exact encoded request");
+            let _ = dispatch.persistence_result.send(Ok(()));
+            dispatch.request
+        });
         // response is the normalized stream expected to terminate with a protocol failure.
         // response 是预期以协议失败终止的规范化流。
         let mut response = client.execute_with_wire_api_trace_capture(
@@ -10495,9 +11088,9 @@ mod tests {
         }
         // capturedRequest proves this was a post-dispatch response failure, not an encode failure.
         // capturedRequest 证明这是分派后的响应失败，而不是编码失败。
-        let _captured_request = request_capture_receiver
+        let _captured_request = request_capture_task
             .await
-            .expect("transport should publish its exact encoded request");
+            .expect("request capture task should finish");
         // capturedResponse is delivered by the guard even though the decoder returned an error.
         // capturedResponse 即使解码器返回错误，也会由守卫发布。
         let captured_response = response_capture_receiver
@@ -10518,6 +11111,16 @@ mod tests {
             u64::try_from(captured_response.body.len()).expect("response length should fit")
         );
         assert_eq!(captured_response.outcome, "stream_failed_or_cancelled");
+        assert_eq!(
+            captured_response.failure_stage.as_deref(),
+            Some("response_projection")
+        );
+        assert!(
+            captured_response
+                .failure_message
+                .as_deref()
+                .is_some_and(|message| message.contains("JSON"))
+        );
         assert!(!captured_response.body_truncated);
         assert!(!captured_response.chunk_index_truncated);
     }
@@ -10589,10 +11192,20 @@ mod tests {
             .expect("test key should resolve");
         // requestCapture confirms the request existed before the tool arguments were aborted.
         // requestCapture 用于确认工具参数中止前请求已经存在。
-        let (request_capture_sender, request_capture_receiver) = oneshot::channel();
+        let (request_capture_sender, request_capture_receiver) =
+            oneshot::channel::<ProviderWireRequestTraceDispatch>();
         // responseCapture must publish when the higher layer stops at ToolCallAborted.
         // responseCapture 必须在上层遇到 ToolCallAborted 停止时发布。
         let (response_capture_sender, response_capture_receiver) = oneshot::channel();
+        // requestCaptureTask releases dispatch after modeling successful durable persistence.
+        // requestCaptureTask 在模拟可靠持久化成功后放行分派。
+        let request_capture_task = tokio::spawn(async move {
+            let dispatch = request_capture_receiver
+                .await
+                .expect("transport should publish its exact encoded request");
+            let _ = dispatch.persistence_result.send(Ok(()));
+            dispatch.request
+        });
         // response is consumed only through the same semantic abort boundary used by the adapter.
         // response 仅消费到适配器使用的同一语义中止边界。
         let mut response = client.execute_with_wire_api_trace_capture(
@@ -10618,9 +11231,9 @@ mod tests {
         drop(response);
         // capturedRequest proves this was a post-dispatch semantic failure.
         // capturedRequest 证明这是分派后的语义失败。
-        let _captured_request = request_capture_receiver
+        let _captured_request = request_capture_task
             .await
-            .expect("transport should publish its exact encoded request");
+            .expect("request capture task should finish");
         // capturedResponse must arrive from the guard after the suspended stream is dropped.
         // capturedResponse 必须在暂停流被丢弃后由守卫发布。
         let captured_response = response_capture_receiver
@@ -10640,6 +11253,14 @@ mod tests {
             .expect("tool-abort diagnostic should be captured");
         assert!(abort_diagnostic.contains("before valid JSON was complete"));
         assert!(abort_diagnostic.contains("line 1 column"));
+        assert_eq!(
+            captured_response.failure_stage.as_deref(),
+            Some("tool_arguments_json")
+        );
+        assert_eq!(
+            captured_response.failure_message.as_deref(),
+            Some(abort_diagnostic)
+        );
         assert!(!captured_response.body_truncated);
     }
 

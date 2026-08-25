@@ -11,6 +11,8 @@ pub mod public_name;
 pub mod result_format;
 pub mod shell_host;
 pub mod terminal_host_client;
+pub mod text_document;
+pub mod text_encoding;
 pub use vulcan_terminal_host_protocol as terminal_host_protocol;
 
 pub(crate) use vulcan_runtime_assets as runtime_assets;

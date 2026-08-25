@@ -653,12 +653,211 @@ pub(in crate::workspace_store) fn segmented_lines_to_session_messages(
     lines: &[SegmentedSessionEventLine],
 ) -> Result<Vec<SessionMessageEntry>, String> {
     let mut messages = Vec::new();
+    let mut message_indexes = std::collections::BTreeMap::new();
     for line in lines {
         if let Some(message) = segmented_line_to_session_message(line)? {
-            messages.push(message);
+            if let Some(index) = message_indexes.get(message.id.as_str()).copied() {
+                // Later duplicate identities are historical lifecycle revisions and replace the row in place.
+                // 后出现的重复身份属于历史生命周期修订，应在原位置替换该记录。
+                messages[index] = message;
+            } else {
+                message_indexes.insert(message.id.clone(), messages.len());
+                messages.push(message);
+            }
         }
     }
+    restore_tool_card_terminal_projection(&mut messages, &[]);
     Ok(messages)
+}
+
+/// Restores mutable visible tool-card terminal metadata from immutable persisted result evidence.
+/// 根据不可变的持久化结果证据恢复可变可见工具卡片的终态元数据。
+///
+/// # Parameters
+/// 参数
+/// `messages` is one canonical replay window containing visible tool cards and hidden result details.
+/// `messages` 是包含可见工具卡片与隐藏结果详情的规范重放窗口。
+/// `additional_detail_messages` contains hidden detail rows loaded from runtime-detail side channels.
+/// `additional_detail_messages` 包含从运行时详情旁路载入的隐藏详情记录。
+///
+/// # Returns
+/// 返回值
+/// This function returns no value after applying deterministic in-memory projection updates.
+/// 本函数应用确定性的内存投影更新后不返回值。
+pub(in crate::workspace_store) fn restore_tool_card_terminal_projection(
+    messages: &mut [SessionMessageEntry],
+    additional_detail_messages: &[SessionMessageEntry],
+) {
+    // toolCardIndexes binds each stable call identity to its visible card inside this replay window.
+    // toolCardIndexes 将每个稳定调用身份绑定到当前重放窗口内的可见卡片。
+    let mut tool_card_indexes = std::collections::BTreeMap::new();
+    for (index, message) in messages.iter_mut().enumerate() {
+        if message.record_kind != SessionMessageRecordKind::ToolCallOutput {
+            continue;
+        }
+        let Some(serde_json::Value::Object(metadata)) = message.metadata.as_mut() else {
+            continue;
+        };
+        let Some(tool_call_id) = metadata
+            .get("tool_call_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        // persistedResultStatus repairs older duplicate revisions whose nested result was terminal but top-level state was stale.
+        // persistedResultStatus 修复旧重复修订中结果已终结但顶层状态仍过期的问题。
+        let persisted_result_status = metadata
+            .get("result")
+            .and_then(|result| result.get("status"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        if let Some(status) = persisted_result_status {
+            metadata.insert(
+                String::from("tool_display_state"),
+                serde_json::Value::String(status),
+            );
+        }
+        tool_card_indexes.insert(tool_call_id, index);
+    }
+
+    // terminalDetails separates immutable evidence discovery from mutable card updates.
+    // terminalDetails 将不可变证据发现与可变卡片更新分离。
+    // seenDetailRecordIds prevents side-channel copies from overwriting an exact in-window coordinate.
+    // seenDetailRecordIds 防止旁路副本覆盖窗口内的精确坐标。
+    let mut seen_detail_record_ids = std::collections::BTreeSet::new();
+    let mut terminal_details = Vec::new();
+    for (message_index, message) in messages.iter().enumerate() {
+        let terminal_detail = (|| {
+            if message.record_kind != SessionMessageRecordKind::ToolDetailOutput {
+                return None;
+            }
+            if !seen_detail_record_ids.insert(message.id.clone()) {
+                return None;
+            }
+            let metadata = message.metadata.as_ref()?;
+            let tool_call_id = metadata.get("tool_call_id")?.as_str()?;
+            let display = metadata.get("display")?.clone();
+            let status = display.get("status")?.as_str()?;
+            let card_index = *tool_card_indexes.get(tool_call_id)?;
+            Some((
+                card_index,
+                message.id.clone(),
+                Some(message_index),
+                status.to_string(),
+                metadata.get("arguments").cloned(),
+                metadata.get("host_result").cloned(),
+                Some(display),
+            ))
+        })();
+        if let Some(terminal_detail) = terminal_detail {
+            terminal_details.push(terminal_detail);
+        }
+    }
+    for message in additional_detail_messages {
+        let terminal_detail = (|| {
+            if message.record_kind != SessionMessageRecordKind::ToolDetailOutput {
+                return None;
+            }
+            if !seen_detail_record_ids.insert(message.id.clone()) {
+                return None;
+            }
+            let metadata = message.metadata.as_ref()?;
+            let tool_call_id = metadata.get("tool_call_id")?.as_str()?;
+            let display = metadata.get("display")?.clone();
+            let status = display.get("status")?.as_str()?;
+            let card_index = *tool_card_indexes.get(tool_call_id)?;
+            Some((
+                card_index,
+                message.id.clone(),
+                None,
+                status.to_string(),
+                metadata.get("arguments").cloned(),
+                metadata.get("host_result").cloned(),
+                Some(display),
+            ))
+        })();
+        if let Some(terminal_detail) = terminal_detail {
+            terminal_details.push(terminal_detail);
+        }
+    }
+    for (
+        card_index,
+        detail_record_id,
+        detail_message_index,
+        status,
+        arguments,
+        persisted_host_result,
+        display,
+    ) in terminal_details
+    {
+        let Some(serde_json::Value::Object(metadata)) = messages
+            .get_mut(card_index)
+            .and_then(|message| message.metadata.as_mut())
+        else {
+            continue;
+        };
+        metadata.insert(
+            String::from("tool_display_state"),
+            serde_json::Value::String(status.clone()),
+        );
+        // arguments and host_result rebuild the bounded presentation metadata carried by the live terminal card.
+        // arguments 与 host_result 重建实时终态卡片携带的有界展示元数据。
+        if let Some(arguments) = arguments {
+            metadata
+                .entry(String::from("arguments"))
+                .or_insert(arguments);
+        }
+        if let Some(persisted_host_result) = persisted_host_result {
+            // persistedHostResult is authoritative; the display wrapper is only a legacy fallback.
+            // persistedHostResult 是权威数据；display 包装仅用于旧记录回退。
+            metadata.insert(String::from("host_result"), persisted_host_result);
+        } else if let Some(display) = display
+            && let Some(kind) = display
+                .get("kind")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        {
+            metadata
+                .entry(String::from("host_result"))
+                .or_insert_with(|| {
+                    json!({
+                        "kind": kind,
+                        "payload": display,
+                    })
+                });
+        }
+        // result preserves any already-persisted fields while attaching the immutable detail lookup.
+        // result 保留已经持久化的字段，同时挂接不可变详情定位信息。
+        let result = metadata
+            .entry(String::from("result"))
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+        let serde_json::Value::Object(result) = result else {
+            continue;
+        };
+        result.insert(String::from("status"), serde_json::Value::String(status));
+        // detailRef always carries stable identity and includes an index only when the exact window coordinate is known.
+        // detailRef 始终携带稳定身份，仅在精确窗口坐标已知时包含索引。
+        let mut detail_ref = serde_json::Map::new();
+        detail_ref.insert(
+            String::from("kind"),
+            serde_json::Value::String(String::from("session_record")),
+        );
+        detail_ref.insert(
+            String::from("record_id"),
+            serde_json::Value::String(detail_record_id),
+        );
+        if let Some(detail_message_index) = detail_message_index {
+            detail_ref.insert(
+                String::from("message_index"),
+                serde_json::Value::Number(serde_json::Number::from(detail_message_index as u64)),
+            );
+        }
+        result.insert(
+            String::from("detail_ref"),
+            serde_json::Value::Object(detail_ref),
+        );
+    }
 }
 
 /// Rebuilds the current conversation state from segmented compaction history and suffix events.
@@ -689,6 +888,7 @@ pub(in crate::workspace_store) fn replay_segmented_session_context_without_repai
     };
     let suffix = suffix_after_latest_rollback(&scan);
     messages.extend(segmented_lines_to_session_messages(&suffix)?);
+    restore_tool_card_terminal_projection(&mut messages, &[]);
     if messages.is_empty() {
         return Ok(None);
     }
@@ -1021,6 +1221,248 @@ pub(in crate::workspace_store) fn display_maintenance_temp_dir(session_dir: &Pat
 #[cfg(test)]
 mod prepared_read_tests {
     use super::*;
+
+    /// Verifies historical duplicate message identities keep their first position and latest revision.
+    /// 验证历史重复消息身份会保留首次位置并采用最后版本。
+    #[test]
+    fn segmented_message_projection_uses_latest_duplicate_revision() {
+        let mut ready = SessionMessageEntry::new(SessionMessageKind::Assistant, "", "")
+            .with_runtime_metadata("tool-card", "1000");
+        ready.record_kind = SessionMessageRecordKind::ToolCallOutput;
+        ready.metadata = Some(json!({
+            "tool_call_id": "call-1",
+            "tool_display_state": "ready",
+        }));
+        let mut completed = ready.clone();
+        completed.metadata = Some(json!({
+            "tool_call_id": "call-1",
+            "tool_display_state": "running",
+            "result": { "status": "completed" },
+        }));
+        let ready_event =
+            segmented_event_input_from_message(0, &ready, 0).expect("ready event payload");
+        let ready_line = SegmentedSessionEventLine {
+            seq: 1,
+            timestamp: ready_event.timestamp,
+            kind: ready_event.kind,
+            payload: ready_event.payload,
+        };
+        let completed_event =
+            segmented_event_input_from_message(1, &completed, 0).expect("completed event payload");
+        let completed_line = SegmentedSessionEventLine {
+            seq: 2,
+            timestamp: completed_event.timestamp,
+            kind: completed_event.kind,
+            payload: completed_event.payload,
+        };
+
+        let projected = segmented_lines_to_session_messages(&[ready_line, completed_line])
+            .expect("project duplicate lifecycle revisions");
+
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].id, "tool-card");
+        assert_eq!(
+            projected[0]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("tool_display_state"))
+                .and_then(serde_json::Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            projected[0]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("result"))
+                .and_then(|result| result.get("status"))
+                .and_then(serde_json::Value::as_str),
+            Some("completed")
+        );
+    }
+
+    /// Verifies an immutable hidden result restores the terminal state of its persisted ready card.
+    /// 验证不可变隐藏结果会恢复其已持久化就绪卡片的终态。
+    #[test]
+    fn segmented_message_projection_restores_terminal_tool_card_from_detail() {
+        // ready is the immutable visible request card persisted before host execution starts.
+        // ready 是宿主执行开始前持久化的不可变可见请求卡片。
+        let mut ready = SessionMessageEntry::new(SessionMessageKind::Assistant, "", "")
+            .with_runtime_metadata("tool-card", "1000");
+        ready.record_kind = SessionMessageRecordKind::ToolCallOutput;
+        ready.metadata = Some(json!({
+            "tool_call_id": "call-1",
+            "tool_display_state": "ready",
+        }));
+        // detail is the immutable terminal evidence appended after execution finishes.
+        // detail 是执行完成后追加的不可变终态证据。
+        let mut detail = SessionMessageEntry::new(SessionMessageKind::Assistant, "", "result")
+            .with_runtime_metadata("tool-detail", "1001");
+        detail.record_kind = SessionMessageRecordKind::ToolDetailOutput;
+        detail.visible = false;
+        detail.metadata = Some(json!({
+            "tool_detail": true,
+            "tool_call_id": "call-1",
+            "arguments": {
+                "command": "rtk cargo check"
+            },
+            "display": {
+                "kind": "shell_command",
+                "status": "completed",
+                "command": "rtk cargo check",
+                "exit_code": 0,
+            },
+        }));
+        // readyEvent and detailEvent are the exact immutable JSONL rows projected by storage.
+        // readyEvent 与 detailEvent 是存储投影的精确不可变 JSONL 记录。
+        let ready_event =
+            segmented_event_input_from_message(0, &ready, 0).expect("ready event payload");
+        let detail_event =
+            segmented_event_input_from_message(1, &detail, 0).expect("detail event payload");
+        // projected reconstructs the live terminal card without rewriting either persisted row.
+        // projected 在不改写任何持久化记录的情况下重建实时终态卡片。
+        let projected = segmented_lines_to_session_messages(&[
+            SegmentedSessionEventLine {
+                seq: 1,
+                timestamp: ready_event.timestamp,
+                kind: ready_event.kind,
+                payload: ready_event.payload,
+            },
+            SegmentedSessionEventLine {
+                seq: 2,
+                timestamp: detail_event.timestamp,
+                kind: detail_event.kind,
+                payload: detail_event.payload,
+            },
+        ])
+        .expect("project immutable tool lifecycle rows");
+
+        assert_eq!(projected.len(), 2);
+        assert_eq!(
+            projected[0]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("tool_display_state"))
+                .and_then(serde_json::Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            projected[0]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("result"))
+                .and_then(|result| result.get("detail_ref"))
+                .and_then(|detail_ref| detail_ref.get("record_id"))
+                .and_then(serde_json::Value::as_str),
+            Some("tool-detail")
+        );
+        assert_eq!(
+            projected[0]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("arguments"))
+                .and_then(|arguments| arguments.get("command"))
+                .and_then(serde_json::Value::as_str),
+            Some("rtk cargo check")
+        );
+        assert_eq!(
+            projected[0]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("host_result"))
+                .and_then(|host_result| host_result.get("payload"))
+                .and_then(|payload| payload.get("command"))
+                .and_then(serde_json::Value::as_str),
+            Some("rtk cargo check")
+        );
+        // visibleOnly proves a separately hydrated hidden-detail collection restores the same card.
+        // visibleOnly 证明单独水合的隐藏详情集合也会恢复同一张卡片。
+        let mut visible_only = vec![ready];
+        restore_tool_card_terminal_projection(&mut visible_only, std::slice::from_ref(&detail));
+        assert_eq!(
+            visible_only[0]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("tool_display_state"))
+                .and_then(serde_json::Value::as_str),
+            Some("completed")
+        );
+        assert!(
+            visible_only[0]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("result"))
+                .and_then(|result| result.get("detail_ref"))
+                .and_then(|detail_ref| detail_ref.get("message_index"))
+                .is_none()
+        );
+        assert_eq!(
+            visible_only[0]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("host_result"))
+                .and_then(|host_result| host_result.get("payload"))
+                .and_then(|payload| payload.get("command"))
+                .and_then(serde_json::Value::as_str),
+            Some("rtk cargo check")
+        );
+    }
+
+    /// Verifies an authoritative persisted change_set wins over the legacy display fallback during replay.
+    /// 验证重放时权威持久化 change_set 优先于旧 display 回退数据。
+    #[test]
+    fn terminal_tool_card_replay_restores_persisted_change_set() {
+        let mut ready = SessionMessageEntry::new(SessionMessageKind::Assistant, "", "")
+            .with_runtime_metadata("tool-card-change", "2000");
+        ready.record_kind = SessionMessageRecordKind::ToolCallOutput;
+        ready.metadata = Some(json!({
+            "tool_call_id": "call-change",
+            "tool_display_state": "ready",
+            "host_result": {
+                "kind": "file_edit",
+                "payload": {"summary": "stale display fallback"}
+            },
+        }));
+        let mut detail = SessionMessageEntry::new(SessionMessageKind::Assistant, "", "result")
+            .with_runtime_metadata("tool-detail-change", "2001");
+        detail.record_kind = SessionMessageRecordKind::ToolDetailOutput;
+        detail.visible = false;
+        detail.metadata = Some(json!({
+            "tool_detail": true,
+            "tool_call_id": "call-change",
+            "host_result": {
+                "kind": "change_set",
+                "payload": {
+                    "mode": "applied",
+                    "files": [{
+                        "change": "modify",
+                        "path": "src/main.rs",
+                        "hunks": [{
+                            "delete": [{"line": 4, "content": "old"}],
+                            "insert": [{"line": 4, "content": "new"}]
+                        }]
+                    }]
+                }
+            },
+            "display": {
+                "kind": "file_edit",
+                "status": "completed",
+                "summary": "edited src/main.rs"
+            },
+        }));
+        let mut messages = vec![ready];
+
+        restore_tool_card_terminal_projection(&mut messages, std::slice::from_ref(&detail));
+
+        assert_eq!(
+            messages[0]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata
+                    .pointer("/host_result/payload/files/0/hunks/0/insert/0/content"))
+                .and_then(serde_json::Value::as_str),
+            Some("new")
+        );
+    }
 
     /// Builds one fully indexed segment row for suffix-selection tests.
     /// 为后缀选择测试构建一条完整索引的分段记录。

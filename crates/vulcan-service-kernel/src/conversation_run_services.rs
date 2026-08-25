@@ -395,6 +395,18 @@ async fn service_stop_conversation_run_owned(
             ),
         });
     }
+    // sessionDirectory is resolved before teardown so manual interruption can close the exact durable boundary owner.
+    // sessionDirectory 在拆除前完成解析，使手动中断能够关闭精确的可靠边界所有者。
+    let session_directory = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        require_segmented_session_directory_for_retained_session(
+            &guard,
+            &controller_runtime.data_root,
+            target_session_id,
+        )?
+    };
     // stopAdmissionGuard closes replacement-turn admission before the active stream registry is dismantled.
     // stopAdmissionGuard 在拆除活动流注册表前关闭替代回合准入。
     let stop_admission_guard = begin_session_run_stop_exclusion(&state, target_session_id)?;
@@ -458,6 +470,16 @@ async fn service_stop_conversation_run_owned(
     } else {
         None
     };
+    // The aborted stream cannot publish its normal Finished event, so Stop owns the external lifecycle terminal write.
+    // 被中止的流无法发布正常 Finished 事件，因此 Stop 负责写入外部生命周期终态。
+    let interrupted_external_turn =
+        interrupt_session_external_turn_lifecycle(&session_directory, target_session_id)?;
+    webui_trace(
+        "stop_conversation_external_boundary",
+        format!(
+            "session={target_session_id} interrupted_external_turn={interrupted_external_turn}"
+        ),
+    );
     // Active provider drafts were produced by the aborted physical request and must disappear before Continue can retry it.
     // 活跃 Provider 草稿由已中止的物理请求产生，必须在 Continue 重试前移除。
     let active_stream_drafts_discarded = match discard_active_stream_content_records(
@@ -622,6 +644,11 @@ async fn service_stop_conversation_run_owned(
             )?;
         }
     }
+    // Accepted immutable thinking and tool rows must reach disk before the stop snapshot advances the same checkpoint.
+    // 已接纳的不可变思考与工具记录必须先落盘，停止快照才能推进同一个检查点。
+    await_session_transcript_writer_durable(target_session_id)
+        .await
+        .map_err(|error| format!("停止前排空会话转录写入器失败：{error}"))?;
     // The write gate captures the exact retained settlement after the refrozen reference is published.
     // 写入闸门会在重冻引用发布后捕获精确保留结算状态。
     persist_latest_retained_workspace_session_update(

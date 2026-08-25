@@ -33,7 +33,8 @@ pub use responses_to_gemini::{
 };
 pub use responses_websocket::{
     DEFAULT_RESPONSES_WEBSOCKET_MAX_AGE, RESPONSES_WEBSOCKET_CONNECTION_LIMIT_CODE,
-    ResponsesWebsocketConfig, ResponsesWebsocketFrame, ResponsesWebsocketSession,
+    ResponsesWebsocketConfig, ResponsesWebsocketFrame, ResponsesWebsocketRawFrame,
+    ResponsesWebsocketSession,
 };
 pub use usage::{
     UsageAccumulator, UsageDerivation, UsageExtractionProfile, UsageField, UsageFieldBinding,

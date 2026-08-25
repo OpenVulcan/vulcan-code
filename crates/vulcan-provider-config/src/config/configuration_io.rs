@@ -53,8 +53,8 @@ impl Default for WorkbenchThinkingDisplayMode {
 /// 保存到 Vulcan 家目录中的根级供应商配置文件。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderConfigurationFile {
-    /// Whether bounded Provider wire-request traces are written to each owning session temp directory.
-    /// 是否将有界 Provider 线上请求追踪写入各自所属会话的临时目录。
+    /// Whether bounded grouped Provider request and raw-response traces are written per session.
+    /// 是否按会话写入有界分组 Provider 请求与原始返回追踪。
     #[serde(
         default,
         rename = "providerRequestTraceEnabled",

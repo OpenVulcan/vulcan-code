@@ -208,3 +208,65 @@ fn compact_change_set_preserves_native_resource_extension() {
     );
     assert!(payload["extensions"].get("untrusted.extension").is_none());
 }
+
+/// Verifies the native v2 operation-to-resource map survives common change-set compaction.
+/// 验证原生 v2 操作到资源映射可通过公共 change-set 压缩保留。
+#[test]
+fn compact_change_set_preserves_native_file_tools_v2_extension() {
+    let host_result = json!({
+        "kind": "change_set",
+        "payload": {
+            "mode": "applied",
+            "files": [{
+                "resource_id": "resource-1",
+                "change": "modify",
+                "path": "src/example.rs",
+                "hunks": []
+            }],
+            "extensions": {
+                "vulcan.file_tools.v2": {
+                    "source_tool": "apply_patch",
+                    "operation_results": [{
+                        "operation_id": "patch-0-0",
+                        "operation_index": 0,
+                        "hunk_index": 0,
+                        "resource_id": "resource-1",
+                        "request_path": "src/example.rs"
+                    }],
+                    "resources": [{
+                        "resource_id": "resource-1",
+                        "request_path": "src/example.rs",
+                        "operation_indexes": [0],
+                        "hunk_indexes": [0],
+                        "actual_ranges": []
+                    }],
+                    "transaction": {
+                        "commit_scope": "all",
+                        "rollback_state": "not_needed"
+                    },
+                    "ignored": "drop me"
+                },
+                "untrusted.extension": {"secret": "drop me"}
+            }
+        }
+    });
+
+    let compacted = compact_change_set_host_result(&host_result).expect("change_set host result");
+    let extension = &compacted["payload"]["extensions"]["vulcan.file_tools.v2"];
+    assert_eq!(extension["source_tool"], json!("apply_patch"));
+    assert_eq!(
+        extension["operation_results"][0]["operation_id"],
+        json!("patch-0-0")
+    );
+    assert_eq!(
+        extension["resources"][0]["resource_id"],
+        json!("resource-1")
+    );
+    assert_eq!(extension["transaction"]["commit_scope"], json!("all"));
+    assert!(extension.get("ignored").is_none());
+    assert!(
+        compacted["payload"]["extensions"]
+            .get("untrusted.extension")
+            .is_none()
+    );
+}

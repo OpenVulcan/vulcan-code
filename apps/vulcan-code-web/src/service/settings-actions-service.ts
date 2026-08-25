@@ -787,6 +787,18 @@ export async function saveProviderRequestTraceSettings(enabled: boolean): Promis
   });
 }
 
+// openSelectedProviderApiTraceDirectory opens the exact selected session trace folder.
+// openSelectedProviderApiTraceDirectory 打开当前选中会话的精确追踪目录。
+export async function openSelectedProviderApiTraceDirectory(): Promise<string> {
+  return serviceClient.request<string>("service_open_selected_provider_api_trace_directory");
+}
+
+// clearSelectedProviderApiTraceDirectory removes only the exact selected session trace folder.
+// clearSelectedProviderApiTraceDirectory 仅移除当前选中会话的精确追踪目录。
+export async function clearSelectedProviderApiTraceDirectory(): Promise<boolean> {
+  return serviceClient.request<boolean>("service_clear_selected_provider_api_trace_directory");
+}
+
 // saveMcpServerConfiguration persists one MCP server through the desktop service.
 // saveMcpServerConfiguration 通过桌面服务持久化单个 MCP 服务器。
 export async function saveMcpServerConfiguration(request: Record<string, unknown>): Promise<WorkbenchSnapshot | null> {

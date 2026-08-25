@@ -1269,6 +1269,29 @@ fn streaming_tool_executor_rejects_only_scoped_tool_ids() {
             .count(),
         2
     );
+    // allowedFinishedMetadata is the exact transient completion boundary consumed by session projection.
+    // allowedFinishedMetadata 是会话投影消费的精确瞬时完成边界。
+    let allowed_finished_metadata = events
+        .iter()
+        .find_map(|event| match event {
+            ProviderStreamDelta::RuntimeEvent(runtime_event)
+                if runtime_event.kind == RuntimeEventKind::ToolFinished
+                    && runtime_event
+                        .metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.get("tool_call_id"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some(allowed_request.tool_call_id.as_str()) =>
+            {
+                runtime_event.metadata.as_ref()
+            }
+            _ => None,
+        })
+        .expect("allowed tool completion metadata should be emitted");
+    assert_eq!(
+        allowed_finished_metadata.get("host_result"),
+        allowed_result.host_result.as_ref()
+    );
 }
 
 /// Verifies the streaming executor yields the tool-start event before the actual tool body begins.

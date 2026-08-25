@@ -1141,8 +1141,8 @@ pub(in crate::workspace_store) fn truncate_segmented_session_after_message(
 ///
 /// # Returns
 /// # 返回值
-/// Returns `true` only when count, tail identity, and tail content fingerprint all match exactly.
-/// 仅当数量、尾部身份与尾部内容指纹全部精确匹配时返回 `true`。
+/// Returns `true` for an exact boundary or for the same tool card advanced only through its projection lifecycle.
+/// 当边界完全一致，或同一工具卡仅推进其投影生命周期时返回 `true`。
 fn segmented_message_tail_matches(
     metadata: &SegmentedSessionMetadata,
     messages: &[SessionMessageEntry],
@@ -1167,7 +1167,91 @@ fn segmented_message_tail_matches(
     // previous_message_fingerprint proves the boundary row content is unchanged.
     // previous_message_fingerprint 证明边界行内容未发生变化。
     let previous_message_fingerprint = segmented_message_fingerprint(previous_message)?;
-    Ok(metadata.last_message_fingerprint.as_deref() == Some(previous_message_fingerprint.as_str()))
+    if metadata.last_message_fingerprint.as_deref() == Some(previous_message_fingerprint.as_str()) {
+        return Ok(true);
+    }
+    let Some(persisted_fingerprint) = metadata.last_message_fingerprint.as_deref() else {
+        return Ok(false);
+    };
+    // persistedMessage is restored directly from the serialized checkpoint already validated under the append lock.
+    // persistedMessage 直接从已在追加锁内校验过的序列化检查点恢复。
+    let Ok(persisted_message) = serde_json::from_str::<SessionMessageEntry>(persisted_fingerprint)
+    else {
+        return Ok(false);
+    };
+    Ok(segmented_tool_call_lifecycle_boundary_matches(
+        &persisted_message,
+        previous_message,
+    ))
+}
+
+/// Checks whether one supplied tool-call boundary only advances mutable display lifecycle metadata.
+/// 检查传入的工具调用边界是否仅推进可变展示生命周期元数据。
+///
+/// # Parameters
+/// # 参数
+/// `persisted` is the exact immutable physical tool card at the append boundary.
+/// `persisted` 是追加边界上的精确不可变物理工具卡。
+/// `supplied` is the current in-memory projection for the same stable card.
+/// `supplied` 是同一稳定工具卡的当前内存投影。
+///
+/// # Returns
+/// # 返回值
+/// Returns `true` only when immutable fields and every persisted metadata entry remain unchanged.
+/// 仅当不可变字段以及每个既有元数据项均保持不变时返回 `true`。
+fn segmented_tool_call_lifecycle_boundary_matches(
+    persisted: &SessionMessageEntry,
+    supplied: &SessionMessageEntry,
+) -> bool {
+    if persisted.id != supplied.id
+        || persisted.kind != supplied.kind
+        || persisted.record_kind != SessionMessageRecordKind::ToolCallOutput
+        || supplied.record_kind != SessionMessageRecordKind::ToolCallOutput
+        || persisted.visible != supplied.visible
+        || persisted.title != supplied.title
+        || persisted.body != supplied.body
+        || persisted.created_at != supplied.created_at
+    {
+        return false;
+    }
+    let (Some(persisted_metadata), Some(supplied_metadata)) = (
+        persisted.metadata.as_ref().and_then(Value::as_object),
+        supplied.metadata.as_ref().and_then(Value::as_object),
+    ) else {
+        return false;
+    };
+    let persisted_tool_call_id = persisted_metadata
+        .get("tool_call_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if persisted_tool_call_id.is_none()
+        || supplied_metadata
+            .get("tool_call_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            != persisted_tool_call_id
+    {
+        return false;
+    }
+    let persisted_state = persisted_metadata
+        .get("tool_display_state")
+        .and_then(Value::as_str);
+    let supplied_state = supplied_metadata
+        .get("tool_display_state")
+        .and_then(Value::as_str);
+    if !matches!(
+        (persisted_state, supplied_state),
+        (
+            Some("ready"),
+            Some("ready" | "running" | "completed" | "failed")
+        ) | (Some("running"), Some("running" | "completed" | "failed"))
+    ) {
+        return false;
+    }
+    persisted_metadata.iter().all(|(key, value)| {
+        key == "tool_display_state" || supplied_metadata.get(key) == Some(value)
+    })
 }
 
 /// Stores the current persisted transcript tail checkpoint in metadata.

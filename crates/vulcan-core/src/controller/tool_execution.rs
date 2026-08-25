@@ -1,5 +1,9 @@
 use super::*;
 
+/// Stable model-visible marker for a rejected Provider tool-argument document.
+/// Provider 工具参数文档被拒绝时使用的稳定模型可见标记。
+pub(super) const TOOL_ARGUMENT_PARSE_FAILURE_PREFIX: &str = "[tool_argument_parse_error]";
+
 /// Builds one non-executed tool result for Provider arguments that could not be parsed as complete JSON.
 /// 为无法解析为完整 JSON 的 Provider 参数构建一条未执行工具结果。
 ///
@@ -20,14 +24,70 @@ fn build_tool_argument_parse_failure_result(
         tool_call_id: request.tool_call_id.clone(),
         tool_name: request.tool_name.clone(),
         model_output: format!(
-            "Tool `{}` was not executed because the Provider emitted incomplete or invalid JSON arguments.\nReason: {}\nCreate a new tool call with complete JSON that conforms to the tool schema.",
-            request.tool_name, message
+            "{TOOL_ARGUMENT_PARSE_FAILURE_PREFIX}\nTool `{}` was not executed because the Provider emitted incomplete or invalid JSON arguments.\nReason: {}\nCreate a new tool call with complete JSON that conforms to the tool schema. This is the only automatic correction attempt for this user turn.",
+            request.tool_name, message,
         ),
         host_result: Some(json!({
             "kind": "tool_argument_parse_error",
             "status": "failed",
             "executed": false,
             "side_effect_observed": false,
+            "tool_call_id": request.tool_call_id,
+            "tool_name": request.tool_name,
+            "error": message,
+        })),
+        is_error: true,
+    }
+}
+
+/// Converts an unexpected executor failure into one terminal model-visible tool result.
+/// 将意外的执行器失败转换为一条终态且模型可见的工具结果。
+fn build_tool_execution_failure_result(
+    request: &ToolInvocationRequest,
+    error: &CoreError,
+) -> ToolInvocationResult {
+    let message = error.to_string();
+    ToolInvocationResult {
+        tool_call_id: request.tool_call_id.clone(),
+        tool_name: request.tool_name.clone(),
+        model_output: format!(
+            "Tool `{}` failed during host execution. No automatic Provider retry will run. The tool may have started, so inspect the affected state before deciding whether to invoke it again. Error: {message}",
+            request.tool_name,
+        ),
+        host_result: Some(json!({
+            "kind": "tool_execution_error",
+            "status": "failed",
+            "executed": true,
+            "possible_external_effects": true,
+            "retryable": false,
+            "tool_call_id": request.tool_call_id,
+            "tool_name": request.tool_name,
+            "error": message,
+        })),
+        is_error: true,
+    }
+}
+
+/// Converts a batch-preparation failure into one terminal non-executed result.
+/// 将批次准备失败转换为一条终态且未执行的结果。
+fn build_tool_batch_preparation_failure_result(
+    request: &ToolInvocationRequest,
+    error: &CoreError,
+) -> ToolInvocationResult {
+    let message = error.to_string();
+    ToolInvocationResult {
+        tool_call_id: request.tool_call_id.clone(),
+        tool_name: request.tool_name.clone(),
+        model_output: format!(
+            "Tool `{}` was not executed because the host could not prepare its durable execution boundary. No automatic Provider retry will run. Error: {message}",
+            request.tool_name,
+        ),
+        host_result: Some(json!({
+            "kind": "tool_batch_preparation_error",
+            "status": "failed_before_execution",
+            "executed": false,
+            "possible_external_effects": false,
+            "retryable": false,
             "tool_call_id": request.tool_call_id,
             "tool_name": request.tool_name,
             "error": message,
@@ -234,14 +294,10 @@ impl VulcanCoreController {
         }
 
         self.record_tool_started(request);
-        let result =
-            executor
-                .execute_tool(request)
-                .await
-                .map_err(|error| CoreError::ToolFailure {
-                    tool_name: request.tool_name.clone(),
-                    message: error.to_string(),
-                })?;
+        let result = match executor.execute_tool(request).await {
+            Ok(result) => result,
+            Err(error) => build_tool_execution_failure_result(request, &error),
+        };
         self.record_tool_finished(&result);
         Ok(result)
     }
@@ -258,7 +314,17 @@ impl VulcanCoreController {
         E: VulcanToolExecutor,
         P: VulcanToolPolicy,
     {
-        executor.prepare_tool_batch(&requests).await?;
+        if let Err(error) = executor.prepare_tool_batch(&requests).await {
+            let results = requests
+                .iter()
+                .map(|request| {
+                    let result = build_tool_batch_preparation_failure_result(request, &error);
+                    self.record_tool_finished(&result);
+                    result
+                })
+                .collect();
+            return Ok(results);
+        }
         let mut result_slots = std::iter::repeat_with(|| None)
             .take(requests.len())
             .collect::<Vec<Option<Result<ToolInvocationResult, CoreError>>>>();
@@ -276,13 +342,11 @@ impl VulcanCoreController {
             self.record_tool_started(&request);
             if policy.should_execute(&request, &policy_snapshot) {
                 pending_executions.push(async move {
-                    let result = executor.execute_tool(&request).await.map_err(|error| {
-                        CoreError::ToolFailure {
-                            tool_name: request.tool_name.clone(),
-                            message: error.to_string(),
-                        }
-                    });
-                    (request_index, result)
+                    let result = match executor.execute_tool(&request).await {
+                        Ok(result) => result,
+                        Err(error) => build_tool_execution_failure_result(&request, &error),
+                    };
+                    (request_index, Ok(result))
                 });
             } else {
                 let skipped_result = ToolInvocationResult {

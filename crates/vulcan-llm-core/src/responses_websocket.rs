@@ -53,6 +53,9 @@ pub struct ResponsesWebsocketConfig {
 /// 承载一条已解析服务端帧及其终态分类。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResponsesWebsocketFrame {
+    /// Exact decoded WebSocket application-frame payload observed before JSON parsing.
+    /// 在 JSON 解析前观察到的精确 WebSocket 应用帧载荷。
+    pub raw: ResponsesWebsocketRawFrame,
     /// Untouched parsed provider event.
     /// 未经修改的已解析供应商事件。
     pub value: Value,
@@ -62,6 +65,18 @@ pub struct ResponsesWebsocketFrame {
     /// Whether the event terminated the current response with failure.
     /// 当前事件是否以失败终止本次响应。
     pub failed: bool,
+}
+
+/// Carries one decoded WebSocket frame payload before local protocol interpretation.
+/// 承载一条在本地协议解释前的已解码 WebSocket 帧载荷。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResponsesWebsocketRawFrame {
+    /// Stable decoded frame kind such as `text`, `binary`, or `close`.
+    /// 稳定的已解码帧类型，例如 `text`、`binary` 或 `close`。
+    pub kind: String,
+    /// Exact application payload bytes supplied by Tungstenite.
+    /// Tungstenite 提供的精确应用载荷字节。
+    pub payload: Vec<u8>,
 }
 
 /// Owns one non-multiplexed Responses WebSocket connection.
@@ -85,6 +100,9 @@ pub struct ResponsesWebsocketSession {
     /// Whether a provider control event requires replacement before the next response.
     /// 供应商控制事件是否要求在下一次响应前换代连接。
     replace_before_next_request: bool,
+    /// Most recent application frame retained when local validation returns an error.
+    /// 当本地校验返回错误时保留的最近一条应用帧。
+    last_raw_frame: Option<ResponsesWebsocketRawFrame>,
 }
 
 impl ResponsesWebsocketSession {
@@ -131,6 +149,7 @@ impl ResponsesWebsocketSession {
             in_flight: false,
             previous_response_id: None,
             replace_before_next_request: false,
+            last_raw_frame: None,
         })
     }
 
@@ -152,6 +171,17 @@ impl ResponsesWebsocketSession {
     /// 返回当前活动 Socket 缓存的最新响应标识。
     pub fn previous_response_id(&self) -> Option<&str> {
         self.previous_response_id.as_deref()
+    }
+
+    /// Takes the exact frame payload retained by the most recent failed receive operation.
+    /// 取出最近一次失败接收操作保留的精确帧载荷。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The retained frame when the failure followed an application frame, otherwise `None`.
+    /// 当失败发生在收到应用帧之后时返回该帧，否则返回 `None`。
+    pub fn take_last_raw_frame(&mut self) -> Option<ResponsesWebsocketRawFrame> {
+        self.last_raw_frame.take()
     }
 
     /// Abandons one locally undecodable response and requires a fresh connection.
@@ -184,6 +214,7 @@ impl ResponsesWebsocketSession {
                 "Responses WebSocket does not allow multiplexed in-flight responses.",
             ));
         }
+        self.last_raw_frame = None;
         let body = responses_body.as_object_mut().ok_or_else(|| {
             LlmCoreError::new("Responses WebSocket request body must be a JSON object.")
         })?;
@@ -223,6 +254,7 @@ impl ResponsesWebsocketSession {
                 "Responses WebSocket has no in-flight response.",
             ));
         }
+        self.last_raw_frame = None;
         loop {
             let message = tokio::time::timeout(self.config.idle_timeout, self.connection.next())
                 .await
@@ -239,6 +271,11 @@ impl ResponsesWebsocketSession {
             })?;
             match message {
                 Message::Text(text) => {
+                    let raw = ResponsesWebsocketRawFrame {
+                        kind: String::from("text"),
+                        payload: text.as_bytes().to_vec(),
+                    };
+                    self.last_raw_frame = Some(raw.clone());
                     if text.len() > self.config.max_frame_bytes {
                         self.in_flight = false;
                         self.previous_response_id = None;
@@ -277,6 +314,10 @@ impl ResponsesWebsocketSession {
                             error_code == Some(RESPONSES_WEBSOCKET_CONNECTION_LIMIT_CODE);
                     }
                     return Ok(Some(ResponsesWebsocketFrame {
+                        raw: self
+                            .last_raw_frame
+                            .take()
+                            .expect("text frame capture must exist before JSON parsing"),
                         value,
                         completed,
                         failed,
@@ -292,6 +333,13 @@ impl ResponsesWebsocketSession {
                 }
                 Message::Pong(_) => {}
                 Message::Close(frame) => {
+                    self.last_raw_frame = Some(ResponsesWebsocketRawFrame {
+                        kind: String::from("close"),
+                        payload: frame
+                            .as_ref()
+                            .map(|frame| frame.reason.as_bytes().to_vec())
+                            .unwrap_or_default(),
+                    });
                     self.in_flight = false;
                     self.previous_response_id = None;
                     self.replace_before_next_request = true;
@@ -307,7 +355,23 @@ impl ResponsesWebsocketSession {
                         None => error,
                     });
                 }
-                Message::Binary(_) | Message::Frame(_) => {
+                Message::Binary(payload) => {
+                    self.last_raw_frame = Some(ResponsesWebsocketRawFrame {
+                        kind: String::from("binary"),
+                        payload: payload.to_vec(),
+                    });
+                    self.in_flight = false;
+                    self.previous_response_id = None;
+                    self.replace_before_next_request = true;
+                    return Err(LlmCoreError::new(
+                        "Responses WebSocket received an unsupported non-JSON frame.",
+                    ));
+                }
+                Message::Frame(frame) => {
+                    self.last_raw_frame = Some(ResponsesWebsocketRawFrame {
+                        kind: String::from("raw"),
+                        payload: frame.payload().to_vec(),
+                    });
                     self.in_flight = false;
                     self.previous_response_id = None;
                     self.replace_before_next_request = true;

@@ -159,6 +159,42 @@ fn manager_allows_rg_heuristic_tool_in_plan_mode() {
     assert!(super::tool_is_allowed_in_plan(tool));
 }
 
+/// Verifies a mixed read/write tool only admits explicitly read-only argument values in Plan mode.
+/// 验证混合读写工具在计划模式中只接纳明确列出的只读参数值。
+#[test]
+fn manager_checks_plan_mode_string_argument_allowlist() {
+    let manager = VulcanToolsManager::new(vec![test_candidate(
+        "file",
+        VulcanToolSourceKind::Native,
+        VulcanPlanToolPolicy::StringArgumentAllowlist {
+            field: String::from("action"),
+            allowed_values: vec![
+                String::from("read"),
+                String::from("list"),
+                String::from("stat"),
+            ],
+        },
+    )]);
+    let resolved = manager.resolve_for_execution_mode("Plan");
+    let tool = resolved
+        .definitions
+        .first()
+        .expect("resolved file tool should exist");
+
+    assert!(super::tool_is_allowed_in_plan_with_args(
+        tool,
+        &json!({"action": "read", "path": "src/lib.rs"}),
+    ));
+    assert!(!super::tool_is_allowed_in_plan_with_args(
+        tool,
+        &json!({"action": "write", "path": "src/lib.rs", "content": "changed"}),
+    ));
+    assert!(!super::tool_is_allowed_in_plan_with_args(
+        tool,
+        &json!({"path": "src/lib.rs"}),
+    ));
+}
+
 /// Verifies native command-line tools remain executable in Plan mode for exploration and validation.
 /// 验证原生命令行工具在计划模式下仍可用于探索与验证。
 #[test]

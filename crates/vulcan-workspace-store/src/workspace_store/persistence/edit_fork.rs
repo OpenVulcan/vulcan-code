@@ -1,6 +1,7 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use vulcan_context::SessionConversationRecord;
 
 /// Persisted rollback result written before replaying an edited prompt.
 /// 在重放编辑后提示词之前写入的持久化回滚结果。
@@ -983,34 +984,27 @@ fn locate_persisted_user_prompt_target(
     runtime_state
         .migrate_legacy_provider_usage_summaries()
         .map_err(|error| format!("ERR_USER_PROMPT_EDIT_RUNTIME_STATE_INVALID: {error}"))?;
-    let record_index = runtime_state
+    let replay = replay_segmented_session_context(&session_dir)?
+        .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_NOT_FOUND"))?;
+    let record_index = replay
         .conversation_state
         .records
         .iter()
         .position(|record| {
-            record.id == message_id
-                && record.visible
-                && record.kind == SessionMessageKind::User
-                && record.record_kind == SessionMessageRecordKind::Transcript
+            record.id == message_id && persisted_record_is_editable_user_prompt(record)
         })
         .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_NOT_FOUND"))?;
-    let message_index = runtime_state
-        .conversation_state
-        .messages
-        .iter()
-        .position(|message| message.id == message_id)
-        .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_PROTOCOL_MISMATCH"))?;
-    if !matches!(
-        &runtime_state.conversation_state.messages[message_index].payload,
-        SessionConversationPayload::UserText { .. }
-    ) {
-        return Err(String::from("ERR_USER_PROMPT_EDIT_PROTOCOL_MISMATCH"));
-    }
-    let edit_cutoff_at_ms = runtime_state.conversation_state.records[record_index]
+    let message_index = runtime_user_message_index_for_persisted_prompt(
+        replay.conversation_state.records.as_slice(),
+        record_index,
+        runtime_state.conversation_state.messages.as_slice(),
+        message_id,
+    )?;
+    let edit_cutoff_at_ms = replay.conversation_state.records[record_index]
         .created_at
         .parse::<i64>()
         .map_err(|_| String::from("ERR_USER_PROMPT_EDIT_TIMESTAMP_INVALID"))?;
-    let retained_record_ids = runtime_state
+    let retained_record_ids = replay
         .conversation_state
         .records
         .iter()
@@ -1019,9 +1013,15 @@ fn locate_persisted_user_prompt_target(
         .collect::<BTreeSet<_>>();
     let last_compaction_id = runtime_state.last_compaction_id.clone();
     let context_start_message_id = runtime_state.context_start_message_id.clone();
-    let mut retained_conversation_state = std::mem::take(&mut runtime_state.conversation_state);
+    let mut retained_conversation_state = replay.conversation_state;
     retained_conversation_state.records.truncate(record_index);
-    retained_conversation_state.messages.truncate(message_index);
+    retained_conversation_state.messages = runtime_state
+        .conversation_state
+        .messages
+        .iter()
+        .take(message_index)
+        .cloned()
+        .collect();
     retained_conversation_state.continuation = Default::default();
     let retained_messages = conversation_state_to_session_messages(&retained_conversation_state);
     Ok(PersistedUserPromptTarget {
@@ -1036,9 +1036,180 @@ fn locate_persisted_user_prompt_target(
     })
 }
 
+/// Locates the provider-runtime user message paired with one persisted editable display prompt.
+/// 定位与一条已持久化可编辑显示提示词配对的 Provider 运行时用户消息。
+///
+/// # Parameters
+/// 参数
+/// `display_records` contains the canonical persisted display record order.
+/// `display_records` 包含规范的已持久化显示记录顺序。
+/// `target_record_index` identifies the validated display prompt being edited.
+/// `target_record_index` 标识已验证的待编辑显示提示词。
+/// `runtime_messages` contains the exact Provider-facing runtime message order.
+/// `runtime_messages` 包含精确的面向 Provider 的运行时消息顺序。
+/// `display_message_id` is the stable persisted display identity.
+/// `display_message_id` 是稳定的已持久化显示身份。
+///
+/// # Returns
+/// 返回值
+/// Returns the exact runtime message index for legacy shared identities or current protocol-user pairing.
+/// 对旧版共享身份或当前 protocol-user 配对返回精确运行时消息索引。
+fn runtime_user_message_index_for_persisted_prompt(
+    display_records: &[SessionConversationRecord],
+    target_record_index: usize,
+    runtime_messages: &[SessionConversationMessage],
+    display_message_id: &str,
+) -> Result<usize, String> {
+    if let Some(message_index) = runtime_messages.iter().position(|message| {
+        message.id == display_message_id
+            && matches!(message.payload, SessionConversationPayload::UserText { .. })
+    }) {
+        return Ok(message_index);
+    }
+    let editable_prompt_ordinal = display_records
+        .iter()
+        .take(target_record_index + 1)
+        .filter(|record| persisted_record_is_editable_user_prompt(record))
+        .count()
+        .checked_sub(1)
+        .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_PROTOCOL_MISMATCH"))?;
+    runtime_messages
+        .iter()
+        .enumerate()
+        .filter(|(_, message)| {
+            message.id.contains("-protocol-user-")
+                && matches!(message.payload, SessionConversationPayload::UserText { .. })
+        })
+        .nth(editable_prompt_ordinal)
+        .map(|(index, _)| index)
+        .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_PROTOCOL_MISMATCH"))
+}
+
+/// Returns whether one persisted record is a user-authored prompt with destructive-edit authority.
+/// 返回一条已持久化记录是否为具备破坏性编辑权限的用户提示词。
+///
+/// # Parameters
+/// 参数
+/// `record` is the persisted display record being classified.
+/// `record` 是待分类的已持久化显示记录。
+///
+/// # Returns
+/// 返回值
+/// Returns `true` only for visible editable user transcript records.
+/// 仅对可见且可编辑的用户转录记录返回 `true`。
+fn persisted_record_is_editable_user_prompt(record: &SessionConversationRecord) -> bool {
+    record.visible
+        && record.kind == SessionMessageKind::User
+        && record.record_kind == SessionMessageRecordKind::Transcript
+        && record
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("editable"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies current display and protocol user identities pair by typed user-input order even when text repeats.
+    /// 验证当前显示与协议用户身份即使文本重复也会按强类型用户输入顺序配对。
+    #[test]
+    fn persisted_prompt_mapping_uses_protocol_user_order() {
+        let display_records = vec![
+            SessionConversationRecord {
+                id: String::from("display-user-1"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户指令"),
+                body: String::from("继续"),
+                metadata: Some(serde_json::json!({ "editable": true })),
+                created_at: String::from("1000"),
+            },
+            SessionConversationRecord {
+                id: String::from("display-user-2"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户指令"),
+                body: String::from("继续"),
+                metadata: Some(serde_json::json!({ "editable": true })),
+                created_at: String::from("2000"),
+            },
+        ];
+        let runtime_messages = vec![
+            SessionConversationMessage {
+                id: String::from("session-test-protocol-user-first"),
+                payload: SessionConversationPayload::UserText {
+                    text: String::from("继续"),
+                    attachments: Vec::new(),
+                },
+            },
+            SessionConversationMessage {
+                id: String::from("assistant-between-users"),
+                payload: SessionConversationPayload::Assistant {
+                    text: String::from("完成"),
+                    reasoning: String::new(),
+                    provider_message_id: None,
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: Vec::new(),
+                },
+            },
+            SessionConversationMessage {
+                id: String::from("session-test-protocol-user-second"),
+                payload: SessionConversationPayload::UserText {
+                    text: String::from("继续"),
+                    attachments: Vec::new(),
+                },
+            },
+        ];
+
+        let message_index = runtime_user_message_index_for_persisted_prompt(
+            &display_records,
+            1,
+            &runtime_messages,
+            "display-user-2",
+        )
+        .expect("second display prompt should map to the second protocol user");
+
+        assert_eq!(message_index, 2);
+    }
+
+    /// Verifies legacy persisted prompts keep their direct shared-identity mapping.
+    /// 验证旧版持久化提示词仍保留直接共享身份映射。
+    #[test]
+    fn persisted_prompt_mapping_accepts_legacy_shared_identity() {
+        let display_records = vec![SessionConversationRecord {
+            id: String::from("legacy-user"),
+            kind: SessionMessageKind::User,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::from("用户指令"),
+            body: String::from("旧输入"),
+            metadata: None,
+            created_at: String::from("1000"),
+        }];
+        let runtime_messages = vec![SessionConversationMessage {
+            id: String::from("legacy-user"),
+            payload: SessionConversationPayload::UserText {
+                text: String::from("旧输入"),
+                attachments: Vec::new(),
+            },
+        }];
+
+        let message_index = runtime_user_message_index_for_persisted_prompt(
+            &display_records,
+            0,
+            &runtime_messages,
+            "legacy-user",
+        )
+        .expect("legacy shared identity should map directly");
+
+        assert_eq!(message_index, 0);
+    }
 
     /// Creates an isolated persisted-session directory for edit rollback tests.
     /// 为编辑回滚测试创建隔离的持久化会话目录。

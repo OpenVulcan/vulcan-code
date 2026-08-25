@@ -9,8 +9,8 @@ pub(super) struct ToolDetailRecordRef {
     pub(super) message_index: usize,
 }
 
-/// Stores the full tool-result detail outside the visible transcript stream and returns its record id.
-/// 将完整工具返回详情存放在可见转录流之外，并返回对应记录标识。
+/// Stores one immutable terminal tool-result detail outside the visible transcript stream and returns its record id.
+/// 将一条不可变的工具终态结果详情存放在可见转录流之外，并返回对应记录标识。
 pub(super) fn append_tool_result_detail_record(
     runtime_state: &mut SessionRuntimeStateEntry,
     session_id: SessionId,
@@ -22,9 +22,6 @@ pub(super) fn append_tool_result_detail_record(
     detail: &str,
 ) -> Result<Option<ToolDetailRecordRef>, String> {
     let model_output = tool_result_model_output_from_detail(detail);
-    if model_output.trim().is_empty() {
-        return Ok(None);
-    }
     let display = tool_result_display_payload(tool_name, display_state, metadata, &model_output);
     let mut metadata_object = serde_json::Map::new();
     metadata_object.insert(String::from("tool_detail"), serde_json::Value::Bool(true));
@@ -40,6 +37,13 @@ pub(super) fn append_tool_result_detail_record(
     }
     if let Some(arguments) = metadata.and_then(|metadata| metadata.get("arguments")) {
         metadata_object.insert(String::from("arguments"), arguments.clone());
+    }
+    // changeSetHostResult preserves the authoritative applied diff on the immutable detail boundary.
+    // changeSetHostResult 在不可变详情边界保留权威的已应用差异。
+    if let Some(change_set_host_result) =
+        metadata.and_then(|metadata| host_result_metadata_by_kind(metadata, "change_set"))
+    {
+        metadata_object.insert(String::from("host_result"), change_set_host_result.clone());
     }
     metadata_object.insert(String::from("display"), display);
     metadata_object.insert(
@@ -167,9 +171,19 @@ pub(super) fn ask_question_host_display(
     })
 }
 
-/// Extracts a host-result payload by kind from nested or flattened runtime metadata.
-/// 从嵌套或扁平运行时元数据中按类型提取宿主结果载荷。
-pub(super) fn host_result_payload_by_kind<'a>(
+/// Extracts an exact host-result envelope by kind from nested or flattened runtime metadata.
+/// 从嵌套或扁平运行时元数据中按类型提取精确宿主结果封装。
+///
+/// # Parameters
+/// 参数
+/// `metadata` is the transient completion metadata and `expected_kind` is the required host-result kind.
+/// `metadata` 是瞬时完成元数据，`expected_kind` 是要求的宿主结果类型。
+///
+/// # Returns
+/// 返回值
+/// Returns the complete matching host-result envelope without transforming its payload.
+/// 返回完整匹配的宿主结果封装，不转换其载荷。
+pub(super) fn host_result_metadata_by_kind<'a>(
     metadata: &'a serde_json::Value,
     expected_kind: &str,
 ) -> Option<&'a serde_json::Value> {
@@ -178,13 +192,23 @@ pub(super) fn host_result_payload_by_kind<'a>(
         .or_else(|| metadata.get("hostResult"))
         .filter(|host_result| {
             host_result.get("kind").and_then(serde_json::Value::as_str) == Some(expected_kind)
-        })
-        .and_then(|host_result| host_result.get("payload"));
+                && host_result.get("payload").is_some()
+        });
     nested.or_else(|| {
-        (metadata.get("kind").and_then(serde_json::Value::as_str) == Some(expected_kind))
-            .then(|| metadata.get("payload"))
-            .flatten()
+        (metadata.get("kind").and_then(serde_json::Value::as_str) == Some(expected_kind)
+            && metadata.get("payload").is_some())
+        .then_some(metadata)
     })
+}
+
+/// Extracts a host-result payload by kind from nested or flattened runtime metadata.
+/// 从嵌套或扁平运行时元数据中按类型提取宿主结果载荷。
+pub(super) fn host_result_payload_by_kind<'a>(
+    metadata: &'a serde_json::Value,
+    expected_kind: &str,
+) -> Option<&'a serde_json::Value> {
+    host_result_metadata_by_kind(metadata, expected_kind)
+        .and_then(|host_result| host_result.get("payload"))
 }
 
 /// Builds a compact structured display payload for the file-list tool.

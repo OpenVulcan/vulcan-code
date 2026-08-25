@@ -703,7 +703,13 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
             emit_transient_reasoning_status(app, state, session_id, status)
         }
         ExecutionStreamEvent::ThinkingCompleted { session_id } => {
-            complete_streaming_thinking_phase(app, state, session_id, record_ids)
+            complete_and_persist_streaming_thinking_phase(
+                app,
+                state,
+                controller_runtime,
+                session_id,
+                record_ids,
+            )
         }
         ExecutionStreamEvent::OutputDelta { session_id, delta } => append_stream_content_delta(
             app,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AppendMessageBodyDelta, WorkbenchDeltaEnvelope } from "@/types";
 import {
+  mergePendingWorkbenchDeltaSignal,
   workbenchEnvelopeRequiresImmediateLiveFlush,
   workbenchEnvelopeRequiresReactProjection,
 } from "./workbench-stream-projection";
@@ -23,6 +24,39 @@ function appendEnvelope(
 }
 
 describe("workbench stream projection", () => {
+  it("preserves consecutive terminal patches until the layout acknowledges their shared signal", () => {
+    const firstEnvelope: WorkbenchDeltaEnvelope = {
+      generation: 20,
+      delta: {
+        kind: "conversationMessagesPatched",
+        payload: {
+          conversationId: "conversation",
+          upsertMessages: [],
+          removeMessageIds: [],
+          runPhase: "ToolRunning",
+        },
+      },
+    };
+    const secondEnvelope: WorkbenchDeltaEnvelope = {
+      generation: 21,
+      delta: {
+        kind: "conversationMessagesPatched",
+        payload: {
+          conversationId: "conversation",
+          upsertMessages: [],
+          removeMessageIds: [],
+          runPhase: "Requesting",
+        },
+      },
+    };
+
+    const firstSignal = mergePendingWorkbenchDeltaSignal(null, 1, [firstEnvelope]);
+    const secondSignal = mergePendingWorkbenchDeltaSignal(firstSignal, 2, [secondEnvelope]);
+
+    expect(secondSignal.seq).toBe(2);
+    expect(secondSignal.envelopes.map((envelope) => envelope.generation)).toEqual([20, 21]);
+  });
+
   it("keeps pure active body continuations out of global React state", () => {
     expect(workbenchEnvelopeRequiresReactProjection(appendEnvelope(2, {
       conversationId: "conversation",
@@ -104,7 +138,7 @@ describe("workbench stream projection", () => {
     })).toBe(false);
   });
 
-  it("flushes assembled and cleared tool request boundaries immediately", () => {
+  it("flushes every backend-throttled tool request update immediately", () => {
     const basePayload = {
       conversationId: "conversation",
       requestStreamId: "request-1",
@@ -151,7 +185,7 @@ describe("workbench stream projection", () => {
       },
     };
 
-    expect(workbenchEnvelopeRequiresImmediateLiveFlush(receivingEnvelope)).toBe(false);
+    expect(workbenchEnvelopeRequiresImmediateLiveFlush(receivingEnvelope)).toBe(true);
     expect(workbenchEnvelopeRequiresImmediateLiveFlush(assembledEnvelope)).toBe(true);
     expect(workbenchEnvelopeRequiresImmediateLiveFlush(clearedEnvelope)).toBe(true);
   });

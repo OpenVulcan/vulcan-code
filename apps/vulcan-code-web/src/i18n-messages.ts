@@ -1245,6 +1245,7 @@ export type TranslationKey =
   | "toolPresentation.file.count"
   | "toolPresentation.file.multiChange"
   | "toolPresentation.file.empty"
+  | "toolPresentation.file.mixedLineEndings"
   | "toolPresentation.file.create.running"
   | "toolPresentation.file.modify.running"
   | "toolPresentation.file.delete.running"
@@ -1963,6 +1964,12 @@ export type TranslationKey =
   | "settings.diagnostics.waitingStatus"
   | "settings.diagnostics.providerRequestTrace"
   | "settings.diagnostics.providerRequestTrace.completeRequests"
+  | "settings.diagnostics.providerRequestTrace.openDirectory"
+  | "settings.diagnostics.providerRequestTrace.clearDirectory"
+  | "settings.diagnostics.providerRequestTrace.clearConfirm"
+  | "settings.diagnostics.providerRequestTrace.clearSucceeded"
+  | "settings.diagnostics.providerRequestTrace.clearEmpty"
+  | "settings.diagnostics.providerRequestTrace.actionFailed"
   | "settings.diagnostics.providerRequestTrace.description"
   | "settings.diagnostics.providerRequestTrace.disabled"
   | "settings.diagnostics.providerRequestTrace.enabled"
@@ -4093,6 +4100,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.file.count": "{count} 个文件",
     "toolPresentation.file.multiChange": "多文件变更",
     "toolPresentation.file.empty": "无可展示内容",
+    "toolPresentation.file.mixedLineEndings": "混合换行",
     "toolPresentation.file.create.running": "正在写入",
     "toolPresentation.file.modify.running": "正在编辑",
     "toolPresentation.file.delete.running": "正在删除",
@@ -4810,12 +4818,18 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.diagnostics.startupStatus": "启动状态",
     "settings.diagnostics.waitingStatus": "等待状态更新",
     "settings.diagnostics.providerRequestTrace": "Provider 请求追踪",
-    "settings.diagnostics.providerRequestTrace.completeRequests": "有界线上请求日志",
-    "settings.diagnostics.providerRequestTrace.description": "开启后，每次真实 Provider API 调用只在后台记录最终线上请求，不复制控制器请求或统一请求。所属会话的 temp/provider-request-trace 目录固定轮转 4 个槽位；单份超过 16 MiB 时只保留不含正文的摘要。内容可能包含提示词、工具参数与工具结果，仅应在诊断期间开启。",
+    "settings.diagnostics.providerRequestTrace.completeRequests": "分组请求与原始返回日志",
+    "settings.diagnostics.providerRequestTrace.openDirectory": "打开当前会话追踪目录",
+    "settings.diagnostics.providerRequestTrace.clearDirectory": "清除当前会话追踪",
+    "settings.diagnostics.providerRequestTrace.clearConfirm": "仅删除当前会话 temp/provider-api-trace 中的诊断文件。确定继续吗？",
+    "settings.diagnostics.providerRequestTrace.clearSucceeded": "当前会话的 Provider 追踪已清除。",
+    "settings.diagnostics.providerRequestTrace.clearEmpty": "当前会话没有可清除的 Provider 追踪。",
+    "settings.diagnostics.providerRequestTrace.actionFailed": "追踪目录操作失败",
+    "settings.diagnostics.providerRequestTrace.description": "开启后，后台会把同一逻辑 Provider 请求及其每次真实重试记录到同一组中，保存最终线上请求、响应元数据、解析前原始返回、chunk 或 WebSocket 帧边界以及失败终态。所属会话的 temp/provider-api-trace 目录固定轮转 4 个逻辑请求槽位；每次尝试最多保留 64 MiB 原始返回，失败和手动终止时已收到的部分内容也不会丢弃。文件可能包含提示词、工具参数、工具结果与 Provider 原文，仅应在诊断期间开启。",
     "settings.diagnostics.providerRequestTrace.disabled": "已关闭",
     "settings.diagnostics.providerRequestTrace.enabled": "诊断中",
     "settings.diagnostics.providerRequestTrace.saveFailed": "保存失败",
-    "settings.diagnostics.providerRequestTrace.switch": "记录有界 Provider 线上请求",
+    "settings.diagnostics.providerRequestTrace.switch": "记录 Provider 请求与原始返回",
     "settings.diagnostics.runtimeModules": "运行时模块",
     "settings.gitCommit.description": "提交弹窗的新分支命名、自动总结模型与额外提示词。",
     "settings.gitCommit.active": "已生效",
@@ -6955,6 +6969,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.file.count": "{count} files",
     "toolPresentation.file.multiChange": "Multiple file changes",
     "toolPresentation.file.empty": "No displayable content",
+    "toolPresentation.file.mixedLineEndings": "Mixed EOL",
     "toolPresentation.file.create.running": "Writing",
     "toolPresentation.file.modify.running": "Editing",
     "toolPresentation.file.delete.running": "Deleting",
@@ -7672,12 +7687,18 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.diagnostics.startupStatus": "Startup status",
     "settings.diagnostics.waitingStatus": "Waiting for status update",
     "settings.diagnostics.providerRequestTrace": "Provider request tracing",
-    "settings.diagnostics.providerRequestTrace.completeRequests": "Bounded wire-request logs",
-    "settings.diagnostics.providerRequestTrace.description": "When enabled, each real Provider API call records only the final wire request in the background without cloning controller or canonical requests. The owning session's temp/provider-request-trace directory rotates through four fixed slots; requests over 16 MiB retain a body-free summary only. Files may contain prompts, tool arguments, and tool results; enable this only while diagnosing a problem.",
+    "settings.diagnostics.providerRequestTrace.completeRequests": "Grouped request and raw-response logs",
+    "settings.diagnostics.providerRequestTrace.openDirectory": "Open current session trace folder",
+    "settings.diagnostics.providerRequestTrace.clearDirectory": "Clear current session traces",
+    "settings.diagnostics.providerRequestTrace.clearConfirm": "Delete only the diagnostic files under the current session's temp/provider-api-trace directory?",
+    "settings.diagnostics.providerRequestTrace.clearSucceeded": "Provider traces for the current session were cleared.",
+    "settings.diagnostics.providerRequestTrace.clearEmpty": "The current session has no Provider traces to clear.",
+    "settings.diagnostics.providerRequestTrace.actionFailed": "Trace directory action failed",
+    "settings.diagnostics.providerRequestTrace.description": "When enabled, the final wire request and every physical retry of one logical Provider request are recorded in one group, together with response metadata, pre-parser raw response bytes, chunk or WebSocket frame boundaries, and the failed outcome. The owning session's temp/provider-api-trace directory rotates through four logical-request slots; each attempt retains up to 64 MiB of raw response data, including bytes received before failure or manual cancellation. Files may contain prompts, tool arguments, tool results, and Provider output; enable this only while diagnosing a problem.",
     "settings.diagnostics.providerRequestTrace.disabled": "Off",
     "settings.diagnostics.providerRequestTrace.enabled": "Tracing",
     "settings.diagnostics.providerRequestTrace.saveFailed": "Save failed",
-    "settings.diagnostics.providerRequestTrace.switch": "Record bounded Provider wire requests",
+    "settings.diagnostics.providerRequestTrace.switch": "Record Provider requests and raw responses",
     "settings.diagnostics.runtimeModules": "Runtime modules",
     "settings.gitCommit.description": "New-branch naming, automatic summary model, and extra prompt text for the commit dialog.",
     "settings.gitCommit.active": "Active",

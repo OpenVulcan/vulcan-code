@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "opencode-go",
-  "revision": 2,
-  "published_at": "2026-08-18T00:00:00Z",
+  "revision": 3,
+  "published_at": "2026-08-25T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -51,6 +51,7 @@
         "discovery_kind": "manifest_static",
         "models": [
           { "model_id": "deepseek-v4-flash", "display_name": "DeepSeek V4 Flash" },
+          { "model_id": "deepseek-v4-flash-vision-exp", "display_name": "DeepSeek-V4-Flash-Vision-Exp" },
           { "model_id": "deepseek-v4-pro", "display_name": "DeepSeek V4 Pro" },
           { "model_id": "glm-5", "display_name": "GLM-5" },
           { "model_id": "glm-5.1", "display_name": "GLM-5.1" },
@@ -70,6 +71,7 @@
           { "model_id": "minimax-m2.5", "display_name": "MiniMax M2.5" },
           { "model_id": "minimax-m2.7", "display_name": "MiniMax M2.7" },
           { "model_id": "minimax-m3", "display_name": "MiniMax M3" },
+          { "model_id": "muse-spark-1.2-contributor", "display_name": "Muse Spark 1.2 Contributor" },
           { "model_id": "qwen3.5-plus", "display_name": "Qwen3.5 Plus" },
           { "model_id": "qwen3.6-plus", "display_name": "Qwen3.6 Plus" },
           { "model_id": "qwen3.7-max", "display_name": "Qwen3.7 Max" },
@@ -155,6 +157,7 @@
           ],
           "model_ids": [
             "deepseek-v4-flash",
+            "deepseek-v4-flash-vision-exp",
             "deepseek-v4-pro",
             "glm-5",
             "glm-5.1",
@@ -212,6 +215,46 @@
         "openai-chat-completions.v1": { "provider_native_tools": [] },
         "openai-responses.v1": { "provider_native_tools": ["web_search"] }
       },
+      "request_profile_refs": ["opencode-go.deepseek.v1"]
+    },
+    {
+      "rule_id": "deepseek-v4-flash-vision-exp",
+      "display_name": "DeepSeek-V4-Flash-Vision-Exp",
+      "scope": { "service_entry_ids": [], "credential_profile_ids": [] },
+      "matcher": { "kind": "exact", "value": "deepseek-v4-flash-vision-exp" },
+      "supported_protocols": [
+        "openai-responses.v1",
+        "anthropic-messages.v1",
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "input_resources": ["image"],
+        "reasoning_control": "toggle",
+        "reasoning_efforts": ["none", "high", "low", "max"],
+        "context_limit": 1000000,
+        "output_limit": 384000,
+        "evidence_revision": "models.dev.opencode-go.deepseek-v4-flash-vision-exp.2026-08-21"
+      },
+      "protocol_capabilities": {
+        "anthropic-messages.v1": { "provider_native_tools": ["web_search"] },
+        "openai-chat-completions.v1": { "provider_native_tools": [] },
+        "openai-responses.v1": { "provider_native_tools": ["web_search"] }
+      },
+      "input_resource_constraints": [
+        {
+          "resource_kind": "image",
+          "accepted_mime_types": [
+            "image/jpeg",
+            "image/png",
+            "image/gif",
+            "image/webp"
+          ],
+          "max_bytes": 33554432,
+          "max_count": 600,
+          "reference_policy": "local_only"
+        }
+      ],
       "request_profile_refs": ["opencode-go.deepseek.v1"]
     },
     {
@@ -510,6 +553,36 @@
       "request_profile_refs": ["opencode-go.minimax-m3.v1"]
     },
     {
+      "rule_id": "muse-spark-1-2-contributor",
+      "display_name": "Muse Spark 1.2 Contributor",
+      "scope": { "service_entry_ids": [], "credential_profile_ids": [] },
+      "matcher": { "kind": "exact", "value": "muse-spark-1.2-contributor" },
+      "supported_protocols": ["openai-responses.v1"],
+      "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "input_resources": ["image"],
+        "reasoning": "native",
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": ["minimal", "low", "medium", "high", "xhigh"],
+        "context_limit": 1048576,
+        "output_limit": 131072,
+        "evidence_revision": "models.dev.opencode-go.muse-spark-1.2-contributor.2026-08-05"
+      },
+      "input_resource_constraints": [
+        {
+          "resource_kind": "image",
+          "accepted_mime_types": [
+            "image/png",
+            "image/jpeg",
+            "image/gif",
+            "image/webp"
+          ],
+          "max_bytes": 20971520,
+          "reference_policy": "local_only"
+        }
+      ]
+    },
+    {
       "rule_id": "qwen3-5-plus",
       "display_name": "Qwen3.5 Plus",
       "scope": { "service_entry_ids": [], "credential_profile_ids": [] },
@@ -720,14 +793,14 @@
         "note": "OpenCode Go model identities, SDK bindings, capabilities, modalities, and limits."
       },
       {
-        "url": "https://github.com/anomalyco/opencode/blob/cc4b45612974f735ddec46009ede07729511fba4/packages/opencode/src/provider/transform.ts",
+        "url": "https://github.com/anomalyco/opencode/blob/2f36ffe35d569bd0fb1ae6e22f4a859ac08177e0/packages/opencode/src/provider/transform.ts",
         "note": "OpenCode client reasoning variants and request parameter behavior."
       },
       {
-        "url": "https://github.com/anomalyco/opencode/tree/cc4b45612974f735ddec46009ede07729511fba4/packages/console/app/src/routes/zen/go/v1",
+        "url": "https://github.com/anomalyco/opencode/tree/2f36ffe35d569bd0fb1ae6e22f4a859ac08177e0/packages/console/app/src/routes/zen/go/v1",
         "note": "OpenCode Go Chat, Anthropic Messages, and Responses endpoint handlers."
       }
     ],
-    "verified_at": "2026-08-13T00:00:00Z"
+    "verified_at": "2026-08-25T00:00:00Z"
   }
 }

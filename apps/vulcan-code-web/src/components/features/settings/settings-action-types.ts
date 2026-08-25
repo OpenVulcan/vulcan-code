@@ -148,6 +148,12 @@ export interface SettingsActionProps {
   // Saves the bounded Provider wire-request trace diagnostic switch.
   // 保存有界 Provider 线上请求追踪诊断开关。
   onSaveProviderRequestTraceSettings: (enabled: boolean) => Promise<void>
+  // Opens the exact selected session Provider API trace directory.
+  // 打开当前选中会话的精确 Provider API 追踪目录。
+  onOpenSelectedProviderApiTraceDirectory: () => Promise<void>
+  // Clears only the exact selected session Provider API trace directory.
+  // 仅清除当前选中会话的精确 Provider API 追踪目录。
+  onClearSelectedProviderApiTraceDirectory: () => Promise<boolean>
   // Saves one MCP server configuration.
   // 保存单个 MCP 服务器配置。
   onSaveMcpServer: (request: McpServerSaveRequest) => Promise<void>

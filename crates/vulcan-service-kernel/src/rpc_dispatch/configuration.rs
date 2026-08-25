@@ -13,6 +13,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_select_workbench_thinking_display_mode",
     "service_select_webui_locale",
     "service_save_provider_request_trace_settings",
+    "service_open_selected_provider_api_trace_directory",
+    "service_clear_selected_provider_api_trace_directory",
     "service_save_provider_retry_settings",
     "service_output_style_catalog",
     "service_save_prompt_output_style",
@@ -356,6 +358,12 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
+        "service_open_selected_provider_api_trace_directory" => {
+            rpc_json_result(service_open_selected_provider_api_trace_directory(state))
+        }
+        "service_clear_selected_provider_api_trace_directory" => {
+            rpc_json_result(service_clear_selected_provider_api_trace_directory(state))
+        }
         "service_save_public_ai_provider_priority" => rpc_json_result(
             service_save_public_ai_provider_priority(
                 app,

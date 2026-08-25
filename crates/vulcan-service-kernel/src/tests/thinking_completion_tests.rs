@@ -77,8 +77,14 @@ fn thinking_completion_collapses_active_record_and_restores_request_phase() {
         .clone()
         .expect("thinking delta should assign one record identity");
 
-    complete_streaming_thinking_phase(&app, &state, session_id, &mut record_ids)
-        .expect("thinking completion should update retained state");
+    let sealed_entry = complete_streaming_thinking_phase(&app, &state, session_id, &mut record_ids)
+        .expect("thinking completion should update retained state")
+        .expect("thinking completion should return its immutable transcript row");
+    assert_eq!(
+        sealed_entry.record_kind,
+        SessionMessageRecordKind::ThinkingOutput
+    );
+    assert_eq!(sealed_entry.body, "正在分析");
 
     // guard exposes the retained result after the semantic operation returns.
     // guard 在语义操作返回后提供保留结果访问。
@@ -149,6 +155,159 @@ fn thinking_completion_collapses_active_record_and_restores_request_phase() {
     );
     assert_eq!(stream_deltas[1].current_body.as_deref(), Some("正在分析"));
     assert!(record_ids.thinking_record_id.is_none());
+}
+
+/// Verifies completed thinking is durably appended before any later tool boundary can advance the transcript.
+/// 验证已完成思考会在后续工具边界推进转录前可靠追加。
+///
+/// # Parameters
+/// # 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// # 返回值
+/// This test returns no value and fails when the sealed thinking row is absent from the durable checkpoint.
+/// 此测试无返回值；若可靠检查点缺少已封口思考记录则失败。
+#[tokio::test]
+async fn completed_thinking_is_durable_before_following_tool_boundary() {
+    // session_id binds the retained service state and isolated segmented directory.
+    // session_id 绑定保留服务状态与隔离分段目录。
+    let session_id = SessionId::new_v4();
+    // controller_root owns the exact production-shaped transcript fixture.
+    // controller_root 持有精确的生产形态转录夹具。
+    let controller_root = TestControllerRuntimeRoot::new(session_id);
+    std::fs::write(controller_root.session_directory().join("s001.jsonl"), b"")
+        .expect("create empty active transcript segment");
+    // controller_runtime resolves the retained session through the normal production locator.
+    // controller_runtime 通过正常生产定位器解析保留会话。
+    let controller_runtime = controller_root.controller_runtime_handle();
+    // state owns the active thinking row and transcript writer admission state.
+    // state 持有活动思考记录与转录写入器准入状态。
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(
+        test_service_state_with_parent_session(session_id),
+    ));
+    // app suppresses transport output because this test asserts durable storage order.
+    // app 抑制传输输出，因为本测试断言可靠存储顺序。
+    let app = ServiceEventEmitter::new(Vec::new());
+    // record_ids tracks the exact thinking identity until durable admission succeeds.
+    // record_ids 跟踪精确思考身份，直至可靠准入成功。
+    let mut record_ids = SessionStreamingRecordIds::default();
+
+    append_stream_content_delta(
+        &app,
+        &state,
+        session_id,
+        &mut record_ids,
+        StreamContentKind::Thinking,
+        "需要持久化的思考",
+    )
+    .expect("thinking delta should create one active row");
+    complete_and_persist_streaming_thinking_phase(
+        &app,
+        &state,
+        &controller_runtime,
+        session_id,
+        &mut record_ids,
+    )
+    .expect("thinking completion should enter durable writer order");
+    await_session_transcript_writer_durable(session_id)
+        .await
+        .expect("thinking writer should reach its durable checkpoint");
+
+    // checkpoint proves the thinking row advanced physical transcript storage exactly once.
+    // checkpoint 证明思考记录精确一次推进了物理转录存储。
+    let checkpoint = vulcan_workspace_store::workspace_store::
+        load_single_session_transcript_checkpoint_in_directory(
+            controller_root.session_directory(),
+            session_id,
+        )
+        .expect("load durable thinking checkpoint");
+    assert_eq!(checkpoint.message_count, 1);
+    let persisted_entry = checkpoint
+        .last_message_fingerprint
+        .as_deref()
+        .map(serde_json::from_str::<SessionMessageEntry>)
+        .transpose()
+        .expect("decode durable thinking fingerprint")
+        .expect("durable thinking fingerprint should exist");
+    assert_eq!(
+        persisted_entry.record_kind,
+        SessionMessageRecordKind::ThinkingOutput
+    );
+    assert_eq!(persisted_entry.body, "需要持久化的思考");
+    assert!(release_session_transcript_writer_after_terminal_persist(
+        session_id
+    ));
+}
+
+/// Verifies provider-boundary sealing returns immutable thinking and output rows in display order.
+/// 验证 Provider 边界封口会按显示顺序返回不可变思考行与输出行。
+///
+/// # Parameters
+/// # 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// # 返回值
+/// This test returns no value and fails when sealed rows are missing or reordered.
+/// 此测试无返回值；若封口记录缺失或顺序错误则失败。
+#[test]
+fn provider_boundary_seal_returns_canonical_transcript_entries() {
+    // session_id identifies the retained session that owns both active provider rows.
+    // session_id 标识同时持有两条活跃 Provider 记录的保留会话。
+    let session_id = Uuid::new_v4();
+    // state owns the minimal retained workspace mutated by stream projection.
+    // state 持有流投影修改的最小保留工作区。
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(
+        test_service_state_with_parent_session(session_id),
+    ));
+    // app suppresses transport output because this test asserts the durable row contract.
+    // app 抑制传输输出，因为本测试断言的是持久化记录契约。
+    let app = ServiceEventEmitter::new(Vec::new());
+    // record_ids tracks the two active identities until the provider boundary seals them.
+    // record_ids 跟踪两条活跃身份，直至 Provider 边界将其封口。
+    let mut record_ids = SessionStreamingRecordIds::default();
+
+    append_stream_content_delta(
+        &app,
+        &state,
+        session_id,
+        &mut record_ids,
+        StreamContentKind::Thinking,
+        "分析内容",
+    )
+    .expect("thinking delta should create one active row");
+    append_stream_content_delta(
+        &app,
+        &state,
+        session_id,
+        &mut record_ids,
+        StreamContentKind::Output,
+        "回答内容",
+    )
+    .expect("output delta should create one active row");
+
+    // entries are the exact immutable suffix that must precede later tool lifecycle rows.
+    // entries 是必须位于后续工具生命周期记录之前的精确不可变后缀。
+    let entries =
+        seal_stream_content_records_with_entries(&app, &state, session_id, &mut record_ids)
+            .expect("provider boundary should seal both active rows");
+
+    assert_eq!(entries.len(), 2);
+    assert_eq!(
+        entries[0].record_kind,
+        SessionMessageRecordKind::ThinkingOutput
+    );
+    assert_eq!(entries[0].body, "分析内容");
+    assert_eq!(
+        entries[1].record_kind,
+        SessionMessageRecordKind::AssistantOutput
+    );
+    assert_eq!(entries[1].body, "回答内容");
+    assert!(record_ids.thinking_record_id.is_none());
+    assert!(record_ids.output_record_id.is_none());
 }
 
 /// Verifies a failed seal restores the exact request-local identity for terminal retry.

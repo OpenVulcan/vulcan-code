@@ -641,6 +641,343 @@ fn append_message_update_is_idempotent_and_maps_transcript_kinds() {
     assert_eq!(metadata.message_count, 3);
 }
 
+/// Verifies a stable terminal detail lets final persistence append after an earlier tool-card lifecycle update.
+/// 验证稳定终态详情可让最终持久化在早期工具卡生命周期更新后继续追加。
+#[test]
+fn terminal_detail_preserves_append_boundary_after_tool_card_update() {
+    let root = test_root("terminal_detail_preserves_append_boundary_after_tool_card_update");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
+    let user = test_message(
+        "m-user-tool-boundary",
+        SessionMessageKind::User,
+        SessionMessageRecordKind::Transcript,
+        "run tool",
+    );
+    let thinking = test_message(
+        "m-thinking-tool-boundary",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::ThinkingOutput,
+        "select tool",
+    );
+    let mut ready_card = test_message(
+        "m-tool-card-boundary",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::ToolCallOutput,
+        "",
+    );
+    ready_card.metadata = Some(json!({
+        "tool_call_id": "call-boundary",
+        "tool_display_state": "ready",
+    }));
+    append_segmented_session_message_update(
+        &session_dir,
+        &[user.clone(), thinking.clone(), ready_card.clone()],
+    )
+    .expect("append stable request boundary");
+
+    let mut detail = test_message(
+        "m-tool-detail-boundary",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::ToolDetailOutput,
+        "done",
+    );
+    detail.visible = false;
+    detail.metadata = Some(json!({
+        "tool_call_id": "call-boundary",
+        "display": { "status": "completed" },
+    }));
+    append_segmented_session_message_update(
+        &session_dir,
+        &[
+            user.clone(),
+            thinking.clone(),
+            ready_card.clone(),
+            detail.clone(),
+        ],
+    )
+    .expect("append immutable terminal detail");
+
+    let mut completed_card = ready_card;
+    completed_card.metadata = Some(json!({
+        "tool_call_id": "call-boundary",
+        "tool_display_state": "running",
+        "result": { "status": "completed" },
+    }));
+    let assistant = test_message(
+        "m-assistant-tool-boundary",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::AssistantOutput,
+        "finished",
+    );
+    let appended = append_segmented_session_message_update(
+        &session_dir,
+        &[user, thinking, completed_card, detail, assistant],
+    )
+    .expect("terminal snapshot should append after the immutable detail boundary");
+
+    assert_eq!(appended.len(), 1);
+    assert_eq!(appended[0].kind, SegmentedSessionEventKind::AssistantOutput);
+    let metadata: SegmentedSessionMetadata =
+        read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE)).expect("read metadata");
+    assert_eq!(metadata.message_count, 5);
+}
+
+/// Verifies an immutable ready card may advance in memory while its terminal detail is appended durably.
+/// 验证不可变的就绪工具卡可在内存中推进状态，同时将其终态详情可靠追加到磁盘。
+#[test]
+fn tool_card_lifecycle_boundary_appends_terminal_detail_without_rewriting_history() {
+    let root =
+        test_root("tool_card_lifecycle_boundary_appends_terminal_detail_without_rewriting_history");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
+    // deletedLines models the complete pre-write body that must survive one large JSONL row.
+    // deletedLines 模拟必须在一条大型 JSONL 记录中完整保留的写入前正文。
+    let deleted_lines = (1..=208)
+        .map(|line| json!({ "line": line, "content": format!("old-{line}") }))
+        .collect::<Vec<_>>();
+    // insertedLines models the complete post-write body paired with the deleted side.
+    // insertedLines 模拟与删除侧配对的完整写入后正文。
+    let inserted_lines = (1..=140)
+        .map(|line| json!({ "line": line, "content": format!("new-{line}") }))
+        .collect::<Vec<_>>();
+    // insertedContent is the exact request body owned by the persisted invocation card.
+    // insertedContent 是由持久化调用卡片持有的精确请求正文。
+    let inserted_content = format!(
+        "{}\n",
+        (1..=140)
+            .map(|line| format!("new-{line}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let mut ready_card = test_message(
+        "m-tool-card-lifecycle",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::ToolCallOutput,
+        "",
+    );
+    ready_card.title.clear();
+    ready_card.metadata = Some(json!({
+        "preview": null,
+        "request_revision": 7,
+        "tool_call_id": "call-lifecycle",
+        "tool_display_state": "ready",
+        "tool_name": "file",
+        "arguments": {
+            "action": "write",
+            "path": "README.md",
+            "content": inserted_content
+        },
+    }));
+    append_segmented_session_message_update(&session_dir, std::slice::from_ref(&ready_card))
+        .expect("append ready tool card");
+
+    let mut completed_card = ready_card.clone();
+    let completed_metadata = completed_card
+        .metadata
+        .as_mut()
+        .and_then(Value::as_object_mut)
+        .expect("tool metadata object");
+    completed_metadata.insert(
+        String::from("tool_display_state"),
+        Value::String(String::from("completed")),
+    );
+    completed_metadata.insert(String::from("result"), json!({ "status": "completed" }));
+    let mut detail = test_message(
+        "m-tool-detail-lifecycle",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::ToolDetailOutput,
+        "read result",
+    );
+    detail.visible = false;
+    detail.metadata = Some(json!({
+        "display": { "status": "completed" },
+        "tool_call_id": "call-lifecycle",
+        "tool_name": "file",
+        "host_result": {
+            "kind": "change_set",
+            "payload": {
+                "mode": "applied",
+                "files": [{
+                    "resource_id": "resource-1",
+                    "change": "modify",
+                    "path": "README.md",
+                    "hunks": [{
+                        "before": "",
+                        "delete": deleted_lines,
+                        "insert": inserted_lines,
+                        "after": ""
+                    }]
+                }]
+            }
+        }
+    }));
+
+    let appended =
+        append_segmented_session_message_update(&session_dir, &[completed_card, detail.clone()])
+            .expect("append detail across a lifecycle-only boundary change");
+
+    assert_eq!(appended.len(), 1);
+    assert_eq!(appended[0].kind, SegmentedSessionEventKind::DisplayEvent);
+    let lines =
+        read_segment_event_lines(&session_dir.join("s001.jsonl")).expect("read physical segment");
+    let persisted_card_line = lines
+        .iter()
+        .find(|line| line.payload.get("message_index").and_then(Value::as_u64) == Some(0))
+        .expect("physical ready card line");
+    let persisted_card = segmented_line_to_session_message(persisted_card_line)
+        .expect("decode physical ready card")
+        .expect("physical ready card");
+    assert_eq!(
+        persisted_card
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("tool_display_state"))
+            .and_then(Value::as_str),
+        Some("ready")
+    );
+    // persistedDetail is decoded from the physical JSONL row, not from the in-memory fixture.
+    // persistedDetail 从物理 JSONL 记录解码，而不是来自内存夹具。
+    let persisted_detail = lines
+        .iter()
+        .filter_map(|line| {
+            segmented_line_to_session_message(line).expect("decode persisted session row")
+        })
+        .find(|message| message.id == detail.id)
+        .expect("physical terminal detail row");
+    assert_eq!(
+        persisted_detail
+            .metadata
+            .as_ref()
+            .and_then(|metadata| {
+                metadata.pointer("/host_result/payload/files/0/hunks/0/delete/207/content")
+            })
+            .and_then(Value::as_str),
+        Some("old-208")
+    );
+    assert_eq!(
+        persisted_detail
+            .metadata
+            .as_ref()
+            .and_then(|metadata| {
+                metadata.pointer("/host_result/payload/files/0/hunks/0/insert/139/content")
+            })
+            .and_then(Value::as_str),
+        Some("new-140")
+    );
+    assert_eq!(
+        persisted_card
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.pointer("/arguments/content"))
+            .and_then(Value::as_str),
+        Some(inserted_content.as_str())
+    );
+    assert!(
+        persisted_detail
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("arguments"))
+            .is_none()
+    );
+    // replayedMessages proves restart projection restores the exact persisted change set onto the visible card.
+    // replayedMessages 证明重启投影会把精确持久化变更集恢复到可见卡片上。
+    let replayed_messages =
+        segmented_lines_to_session_messages(&lines).expect("replay persisted lifecycle rows");
+    let replayed_card = replayed_messages
+        .iter()
+        .find(|message| message.id == "m-tool-card-lifecycle")
+        .expect("replayed visible tool card");
+    assert_eq!(
+        replayed_card
+            .metadata
+            .as_ref()
+            .and_then(|metadata| {
+                metadata.pointer("/host_result/payload/files/0/hunks/0/delete/0/content")
+            })
+            .and_then(Value::as_str),
+        Some("old-1")
+    );
+    assert_eq!(
+        replayed_card
+            .metadata
+            .as_ref()
+            .and_then(|metadata| {
+                metadata.pointer("/host_result/payload/files/0/hunks/0/insert/0/content")
+            })
+            .and_then(Value::as_str),
+        Some("new-1")
+    );
+    let metadata: SegmentedSessionMetadata =
+        read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE)).expect("read metadata");
+    assert_eq!(metadata.message_count, 2);
+    assert_eq!(
+        metadata.last_message_id.as_deref(),
+        Some(detail.id.as_str())
+    );
+}
+
+/// Verifies lifecycle boundary tolerance never accepts an immutable tool identity rewrite.
+/// 验证生命周期边界容差绝不会接受不可变工具身份改写。
+#[test]
+fn tool_card_lifecycle_boundary_rejects_tool_name_rewrite() {
+    let root = test_root("tool_card_lifecycle_boundary_rejects_tool_name_rewrite");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
+    let mut ready_card = test_message(
+        "m-tool-card-immutable",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::ToolCallOutput,
+        "",
+    );
+    ready_card.title.clear();
+    ready_card.metadata = Some(json!({
+        "tool_call_id": "call-immutable",
+        "tool_display_state": "ready",
+        "tool_name": "file",
+    }));
+    append_segmented_session_message_update(&session_dir, std::slice::from_ref(&ready_card))
+        .expect("append ready tool card");
+
+    let mut rewritten_card = ready_card;
+    let rewritten_metadata = rewritten_card
+        .metadata
+        .as_mut()
+        .and_then(Value::as_object_mut)
+        .expect("tool metadata object");
+    rewritten_metadata.insert(
+        String::from("tool_display_state"),
+        Value::String(String::from("completed")),
+    );
+    rewritten_metadata.insert(
+        String::from("tool_name"),
+        Value::String(String::from("shell_command")),
+    );
+    let detail = test_message(
+        "m-tool-detail-immutable",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::ToolDetailOutput,
+        "result",
+    );
+
+    let error = append_segmented_session_message_update(&session_dir, &[rewritten_card, detail])
+        .expect_err("immutable tool identity rewrite must be rejected");
+
+    assert!(error.contains("non-append display mutation"));
+}
+
 /// Verifies exact suffix append opens only the active segment and ignores an unreadable inactive segment.
 /// 验证精确后缀追加仅打开活动分段，并忽略不可读的非活动分段。
 #[test]

@@ -14,6 +14,7 @@ use crate::model::{
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, hash_map::DefaultHasher};
+use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -143,6 +144,9 @@ const HISTORICAL_VMM_PROFILE_CONTEXT_INJECTION_TAG: &str = "vmm_profile";
 /// Session-local directory that owns complete opt-in provider request traces.
 /// 保存显式启用的完整 Provider 请求追踪文件的会话本地目录。
 const PROVIDER_REQUEST_TRACE_DIRECTORY: &str = "provider-request-trace";
+/// Session-local grouped Provider API trace directory used by native diagnostics.
+/// 原生诊断使用的会话本地分组 Provider API 追踪目录。
+const PROVIDER_API_TRACE_DIRECTORY: &str = "provider-api-trace";
 /// Application-level directory that owns configured-inference request traces without a conversation session.
 /// 保存无对话会话归属的已配置推理请求追踪的应用级目录。
 const CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_DIRECTORY: &str =
@@ -153,9 +157,50 @@ pub const PROVIDER_REQUEST_TRACE_SLOT_COUNT: u64 = 4;
 /// Maximum encoded bytes retained in one complete Provider request-trace slot.
 /// 单个完整 Provider 请求追踪槽位保留的最大编码字节数。
 pub const PROVIDER_REQUEST_TRACE_MAX_BYTES: u64 = 16 * 1024 * 1024;
+/// Maximum retained bytes across one grouped physical Provider API attempt.
+/// 单个分组 Provider API 真实尝试允许保留的最大字节数。
+pub const PROVIDER_API_TRACE_ATTEMPT_MAX_BYTES: u64 = 64 * 1024 * 1024;
+/// Maximum physical attempts retained inside one logical Provider API trace group.
+/// 单个逻辑 Provider API 追踪组允许保留的最大真实尝试次数。
+pub const PROVIDER_API_TRACE_MAX_ATTEMPTS_PER_GROUP: u32 = 32;
 /// Serializes exact trace-slot replacement without directory discovery or cross-write races.
 /// 串行化精确追踪槽位替换，避免目录发现与并发写入竞争。
 static PROVIDER_REQUEST_TRACE_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+/// Borrowed artifacts required to persist one physical Provider API attempt.
+/// 持久化一次真实 Provider API 尝试所需的借用产物。
+pub struct ProviderApiTraceAttemptArtifacts<'a> {
+    /// Monotonic process-local group generation used for stale-writer rejection.
+    /// 用于拒绝陈旧写入者的进程内单调组代际。
+    pub group_sequence: u64,
+    /// Stable logical request group identifier shared by retries.
+    /// 由重试共享的稳定逻辑请求组标识。
+    pub group_id: &'a str,
+    /// Zero-based physical attempt index within the logical group.
+    /// 逻辑组内从零开始的真实尝试索引。
+    pub attempt_index: u32,
+    /// Group-level route and ownership metadata.
+    /// 组级路由与归属元数据。
+    pub group: &'a Value,
+    /// Secret-safe exact dispatched request.
+    /// 不含秘密的精确已分派请求。
+    pub request: &'a Value,
+    /// Response metadata captured independently from the raw body.
+    /// 与原始正文独立捕获的响应元数据。
+    pub response_meta: &'a Value,
+    /// Raw retained response bytes, including partial failed responses.
+    /// 保留的原始响应字节，包括失败时的部分响应。
+    pub response_body: &'a [u8],
+    /// Ordered transport chunk boundary records.
+    /// 有序传输 chunk 边界记录。
+    pub chunks: &'a [Value],
+    /// Ordered WebSocket frame boundary records.
+    /// 有序 WebSocket 帧边界记录。
+    pub frames: &'a [Value],
+    /// Attempt terminal classification and completeness facts.
+    /// 尝试终态分类与完整性事实。
+    pub outcome: &'a Value,
+}
 
 /// Validates that one caller-supplied segmented directory belongs to the exact requested session.
 /// 校验调用方提供的分段目录属于精确请求的会话。
@@ -461,6 +506,538 @@ pub fn persist_provider_request_trace(
         .join(format!("slot-{slot_index:02}.json"));
     replace_exact_provider_request_trace_slot(&trace_path, &encoded, "provider request trace")?;
     Ok(trace_path)
+}
+
+/// Persists one physical Provider API attempt inside a rotating logical-request group.
+/// 将一次真实 Provider API 尝试持久化到轮转逻辑请求组中。
+///
+/// # Parameters
+/// 参数
+/// `session_directory` and `session_id` identify the exact owner; `slot_index` selects one
+/// bounded group slot; `artifacts` contains the exact request, raw response, boundaries, and outcome.
+/// `session_directory` 与 `session_id` 标识精确归属；`slot_index` 选择一个有界组槽位；
+/// `artifacts` 包含精确请求、原始响应、边界和终态。
+///
+/// # Returns
+/// 返回值
+/// The final attempt directory after every artifact has been atomically replaced.
+/// 全部产物完成原子替换后返回最终尝试目录。
+pub fn persist_provider_api_trace_attempt(
+    session_directory: &Path,
+    session_id: SessionId,
+    slot_index: u64,
+    artifacts: ProviderApiTraceAttemptArtifacts<'_>,
+) -> Result<PathBuf, String> {
+    if slot_index >= PROVIDER_REQUEST_TRACE_SLOT_COUNT {
+        return Err(format!(
+            "Provider API trace slot {slot_index} is outside the 0..{} range.",
+            PROVIDER_REQUEST_TRACE_SLOT_COUNT - 1
+        ));
+    }
+    if artifacts.group_id.is_empty()
+        || !artifacts
+            .group_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err(String::from(
+            "Provider API trace group id must contain only ASCII letters, digits, or hyphens.",
+        ));
+    }
+    if artifacts.attempt_index >= PROVIDER_API_TRACE_MAX_ATTEMPTS_PER_GROUP {
+        return Err(format!(
+            "Provider API trace attempt {} is outside the 0..{} range.",
+            artifacts.attempt_index,
+            PROVIDER_API_TRACE_MAX_ATTEMPTS_PER_GROUP - 1
+        ));
+    }
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    let retained_bytes = u64::try_from(artifacts.response_body.len()).unwrap_or(u64::MAX);
+    if retained_bytes > PROVIDER_API_TRACE_ATTEMPT_MAX_BYTES {
+        return Err(format!(
+            "Provider API trace body exceeds {PROVIDER_API_TRACE_ATTEMPT_MAX_BYTES} bytes."
+        ));
+    }
+    let _write_guard = PROVIDER_REQUEST_TRACE_WRITE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| String::from("Provider request trace write lock is poisoned."))?;
+    let trace_directory = ensure_owned_provider_api_trace_directory(session_directory)?;
+    let slot_directory = trace_directory.join(format!("slot-{slot_index:02}"));
+    prepare_provider_api_trace_group_slot(
+        &slot_directory,
+        artifacts.group_sequence,
+        artifacts.group_id,
+    )?;
+    let mut group = artifacts.group.clone();
+    let group_object = group
+        .as_object_mut()
+        .ok_or_else(|| String::from("Provider API trace group metadata must be a JSON object."))?;
+    group_object.insert(
+        String::from("group_sequence"),
+        Value::from(artifacts.group_sequence),
+    );
+    group_object.insert(
+        String::from("group_id"),
+        Value::String(artifacts.group_id.to_string()),
+    );
+    write_provider_api_trace_json(
+        &slot_directory.join("group.json"),
+        &group,
+        "Provider API trace group metadata",
+    )?;
+    let attempt_directory = slot_directory.join(format!("attempt-{:02}", artifacts.attempt_index));
+    prepare_exact_trace_attempt_directory(&attempt_directory)?;
+    write_provider_api_trace_json(
+        &attempt_directory.join("request.json"),
+        artifacts.request,
+        "Provider API trace request",
+    )?;
+    write_provider_api_trace_json(
+        &attempt_directory.join("response.meta.json"),
+        artifacts.response_meta,
+        "Provider API trace response metadata",
+    )?;
+    write_file_bytes_atomic(
+        &attempt_directory.join("response.body.part"),
+        artifacts.response_body,
+        "Provider API trace response body",
+    )?;
+    write_provider_api_trace_ndjson(
+        &attempt_directory.join("response.chunks.ndjson"),
+        artifacts.chunks,
+        "Provider API trace chunk index",
+    )?;
+    write_provider_api_trace_ndjson(
+        &attempt_directory.join("response.frames.ndjson"),
+        artifacts.frames,
+        "Provider API trace frame index",
+    )?;
+    write_provider_api_trace_json(
+        &attempt_directory.join("outcome.json"),
+        artifacts.outcome,
+        "Provider API trace outcome",
+    )?;
+    Ok(attempt_directory)
+}
+
+/// Creates and returns the exact Provider API trace directory owned by one retained session.
+/// 创建并返回一个保留会话拥有的精确 Provider API 追踪目录。
+///
+/// # Parameters
+/// 参数
+/// `session_directory` and `session_id` identify the exact segmented-session owner.
+/// `session_directory` 与 `session_id` 标识精确的分段会话归属。
+///
+/// # Returns
+/// 返回值
+/// The canonical trace directory after ownership and symlink containment checks succeed.
+/// 归属与符号链接包含检查成功后返回 canonical 追踪目录。
+pub fn prepare_provider_api_trace_directory(
+    session_directory: &Path,
+    session_id: SessionId,
+) -> Result<PathBuf, String> {
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    let _write_guard = PROVIDER_REQUEST_TRACE_WRITE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| String::from("Provider request trace write lock is poisoned."))?;
+    ensure_owned_provider_api_trace_directory(session_directory)
+}
+
+/// Loads the greatest persisted Provider API trace group generation for one exact session.
+/// 加载一个精确会话已经持久化的最大 Provider API 追踪组代际。
+///
+/// # Parameters
+/// 参数
+/// `session_directory` and `session_id` identify the exact segmented-session owner.
+/// `session_directory` 与 `session_id` 标识精确的分段会话归属。
+///
+/// # Returns
+/// 返回值
+/// The greatest valid generation across all rotating slots, or zero when no group exists.
+/// 返回全部轮转槽位中的最大有效代际；尚无任何组时返回零。
+pub fn load_provider_api_trace_group_sequence_floor(
+    session_directory: &Path,
+    session_id: SessionId,
+) -> Result<u64, String> {
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    // writeGuard gives the floor scan one process-local snapshot relative to trace replacement.
+    // writeGuard 使代际下限扫描相对于追踪替换获得同一进程内的一致快照。
+    let _write_guard = PROVIDER_REQUEST_TRACE_WRITE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| String::from("Provider request trace write lock is poisoned."))?;
+    // traceDirectory is the exact bounded trace root owned by this retained session.
+    // traceDirectory 是这个保留会话精确拥有的有界追踪根目录。
+    let trace_directory = session_directory
+        .join("temp")
+        .join(PROVIDER_API_TRACE_DIRECTORY);
+    match fs::symlink_metadata(&trace_directory) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+        Ok(_) => {
+            return Err(format!(
+                "Refusing to read non-directory or symbolic-link Provider API trace root: {}",
+                trace_directory.display()
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => {
+            return Err(format!(
+                "Failed to inspect Provider API trace directory `{}`: {error}",
+                trace_directory.display()
+            ));
+        }
+    }
+    // canonicalTraceDirectory proves every subsequent fixed slot read remains under the owner.
+    // canonicalTraceDirectory 证明后续每个固定槽位读取都保持在所属会话之内。
+    let trace_directory =
+        canonical_provider_api_trace_directory(session_directory, &trace_directory)?;
+    // sequenceFloor advances monotonically across the four bounded rotating slots.
+    // sequenceFloor 在四个有界轮转槽位之间单调提升。
+    let mut sequence_floor = 0_u64;
+    for slot_index in 0..PROVIDER_REQUEST_TRACE_SLOT_COUNT {
+        // slotDirectory is derived only from the fixed validated slot index.
+        // slotDirectory 仅由经过固定边界验证的槽位索引派生。
+        let slot_directory = trace_directory.join(format!("slot-{slot_index:02}"));
+        match fs::symlink_metadata(&slot_directory) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+            Ok(_) => {
+                return Err(format!(
+                    "Refusing to read non-directory or symbolic-link Provider API trace slot: {}",
+                    slot_directory.display()
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!(
+                    "Failed to inspect Provider API trace slot `{}`: {error}",
+                    slot_directory.display()
+                ));
+            }
+        }
+        // groupPath is the authoritative identity document for this exact slot.
+        // groupPath 是这个精确槽位的权威身份文档。
+        let group_path = slot_directory.join("group.json");
+        match fs::symlink_metadata(&group_path) {
+            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {}
+            Ok(_) => {
+                return Err(format!(
+                    "Refusing to read non-file or symbolic-link Provider API trace group metadata: {}",
+                    group_path.display()
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!(
+                    "Failed to inspect Provider API trace group metadata `{}`: {error}",
+                    group_path.display()
+                ));
+            }
+        }
+        // group is decoded only after both its root and file shape pass containment checks.
+        // group 仅在根目录与文件形态都通过包含性检查后解码。
+        let group = serde_json::from_slice::<Value>(&fs::read(&group_path).map_err(|error| {
+            format!(
+                "Provider API trace group metadata `{}` could not be read: {error}",
+                group_path.display()
+            )
+        })?)
+        .map_err(|error| {
+            format!(
+                "Provider API trace group metadata `{}` is invalid: {error}",
+                group_path.display()
+            )
+        })?;
+        // sequence is the persisted ordering authority used to reject stale detached writers.
+        // sequence 是用于拒绝陈旧独立写入者的持久化顺序权威。
+        let sequence = group
+            .get("group_sequence")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                format!(
+                    "Provider API trace group metadata `{}` is missing group_sequence.",
+                    group_path.display()
+                )
+            })?;
+        sequence_floor = sequence_floor.max(sequence);
+    }
+    Ok(sequence_floor)
+}
+
+/// Removes only the exact Provider API trace directory owned by one retained session.
+/// 仅移除一个保留会话拥有的精确 Provider API 追踪目录。
+///
+/// # Parameters
+/// 参数
+/// `session_directory` and `session_id` identify the exact segmented-session owner.
+/// `session_directory` 与 `session_id` 标识精确的分段会话归属。
+///
+/// # Returns
+/// 返回值
+/// `true` when an existing trace directory was removed, otherwise `false`.
+/// 已有追踪目录被移除时返回 `true`，否则返回 `false`。
+pub fn clear_provider_api_trace_directory(
+    session_directory: &Path,
+    session_id: SessionId,
+) -> Result<bool, String> {
+    validate_exact_segmented_session_directory_owner(session_directory, session_id)?;
+    let _write_guard = PROVIDER_REQUEST_TRACE_WRITE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| String::from("Provider request trace write lock is poisoned."))?;
+    let trace_directory = session_directory
+        .join("temp")
+        .join(PROVIDER_API_TRACE_DIRECTORY);
+    match fs::symlink_metadata(&trace_directory) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(format!(
+                "Failed to inspect Provider API trace directory `{}`: {error}",
+                trace_directory.display()
+            ));
+        }
+    }
+    let trace_directory =
+        canonical_provider_api_trace_directory(session_directory, &trace_directory)?;
+    fs::remove_dir_all(&trace_directory).map_err(|error| {
+        format!(
+            "Failed to clear Provider API trace directory `{}`: {error}",
+            trace_directory.display()
+        )
+    })?;
+    Ok(true)
+}
+
+/// Creates the owned trace root one directory at a time without traversing symbolic links.
+/// 逐级创建所属追踪根目录，且不穿越符号链接。
+fn ensure_owned_provider_api_trace_directory(session_directory: &Path) -> Result<PathBuf, String> {
+    let canonical_session = fs::canonicalize(session_directory).map_err(|error| {
+        format!(
+            "Failed to canonicalize Provider API trace session directory `{}`: {error}",
+            session_directory.display()
+        )
+    })?;
+    let temp_directory = session_directory.join("temp");
+    ensure_owned_trace_directory_component(
+        &canonical_session,
+        &temp_directory,
+        "Provider API trace temp directory",
+    )?;
+    let trace_directory = temp_directory.join(PROVIDER_API_TRACE_DIRECTORY);
+    ensure_owned_trace_directory_component(
+        &canonical_session,
+        &trace_directory,
+        "Provider API trace directory",
+    )?;
+    canonical_provider_api_trace_directory(session_directory, &trace_directory)
+}
+
+/// Ensures one trace path component is a real directory contained by the canonical session.
+/// 确保一个追踪路径组件是 canonical 会话内的真实目录。
+fn ensure_owned_trace_directory_component(
+    canonical_session: &Path,
+    path: &Path,
+    artifact_kind: &str,
+) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+        Ok(_) => {
+            return Err(format!(
+                "Refusing to use non-directory or symbolic-link {artifact_kind}: {}",
+                path.display()
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir(path).map_err(|create_error| {
+                format!(
+                    "Failed to create {artifact_kind} `{}`: {create_error}",
+                    path.display()
+                )
+            })?;
+        }
+        Err(error) => {
+            return Err(format!(
+                "Failed to inspect {artifact_kind} `{}`: {error}",
+                path.display()
+            ));
+        }
+    }
+    let canonical_path = fs::canonicalize(path).map_err(|error| {
+        format!(
+            "Failed to canonicalize {artifact_kind} `{}`: {error}",
+            path.display()
+        )
+    })?;
+    if !canonical_path.starts_with(canonical_session) {
+        return Err(format!(
+            "{artifact_kind} `{}` escapes session directory `{}`.",
+            canonical_path.display(),
+            canonical_session.display()
+        ));
+    }
+    Ok(())
+}
+
+/// Canonicalizes one existing trace directory and proves it remains inside its session owner.
+/// canonical 化一个已有追踪目录，并证明它仍位于所属会话目录内。
+fn canonical_provider_api_trace_directory(
+    session_directory: &Path,
+    trace_directory: &Path,
+) -> Result<PathBuf, String> {
+    let canonical_session = fs::canonicalize(session_directory).map_err(|error| {
+        format!(
+            "Failed to canonicalize Provider API trace session directory `{}`: {error}",
+            session_directory.display()
+        )
+    })?;
+    let canonical_trace = fs::canonicalize(trace_directory).map_err(|error| {
+        format!(
+            "Failed to canonicalize Provider API trace directory `{}`: {error}",
+            trace_directory.display()
+        )
+    })?;
+    if !canonical_trace.starts_with(&canonical_session) {
+        return Err(format!(
+            "Provider API trace directory `{}` escapes session directory `{}`.",
+            canonical_trace.display(),
+            canonical_session.display()
+        ));
+    }
+    Ok(canonical_trace)
+}
+
+/// Prepares one rotating group slot while rejecting an older out-of-order writer.
+/// 准备一个轮转组槽位，同时拒绝较旧的乱序写入者。
+fn prepare_provider_api_trace_group_slot(
+    slot_directory: &Path,
+    group_sequence: u64,
+    group_id: &str,
+) -> Result<(), String> {
+    let group_path = slot_directory.join("group.json");
+    let existing_group =
+        match std::fs::read(&group_path) {
+            Ok(bytes) => Some(serde_json::from_slice::<Value>(&bytes).map_err(|error| {
+                format!("Provider API trace group metadata is invalid: {error}")
+            })?),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(format!(
+                    "Provider API trace group metadata `{}` could not be read: {error}",
+                    group_path.display()
+                ));
+            }
+        };
+    if let Some(existing_group) = existing_group {
+        let existing_sequence = existing_group
+            .get("group_sequence")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                String::from("Provider API trace group metadata is missing group_sequence.")
+            })?;
+        let existing_id = existing_group
+            .get("group_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                String::from("Provider API trace group metadata is missing group_id.")
+            })?;
+        if existing_sequence > group_sequence {
+            return Err(String::from(
+                "A newer Provider API trace group already owns this rotating slot.",
+            ));
+        }
+        if existing_sequence == group_sequence && existing_id != group_id {
+            return Err(String::from(
+                "Provider API trace group identity changed within one generation.",
+            ));
+        }
+        if existing_sequence < group_sequence {
+            remove_exact_trace_directory(slot_directory, "Provider API trace group slot")?;
+        }
+    } else if let Ok(metadata) = std::fs::symlink_metadata(slot_directory) {
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(format!(
+                "Refusing to use non-directory Provider API trace slot: {}",
+                slot_directory.display()
+            ));
+        }
+        // A slot without authoritative group metadata cannot safely retain any earlier attempts.
+        // 缺少权威组元数据的槽位不能安全保留任何更早尝试。
+        remove_exact_trace_directory(slot_directory, "unowned Provider API trace group slot")?;
+    }
+    std::fs::create_dir_all(slot_directory).map_err(|error| {
+        format!(
+            "Provider API trace slot `{}` could not be created: {error}",
+            slot_directory.display()
+        )
+    })
+}
+
+/// Replaces one exact attempt directory owned by an already validated group slot.
+/// 替换一个由已校验组槽位拥有的精确尝试目录。
+fn prepare_exact_trace_attempt_directory(path: &Path) -> Result<(), String> {
+    if std::fs::symlink_metadata(path).is_ok() {
+        remove_exact_trace_directory(path, "Provider API trace attempt")?;
+    }
+    std::fs::create_dir_all(path).map_err(|error| {
+        format!(
+            "Provider API trace attempt `{}` could not be created: {error}",
+            path.display()
+        )
+    })
+}
+
+/// Removes one exact bounded trace directory after rejecting links and non-directories.
+/// 在拒绝链接和非目录后删除一个精确有界追踪目录。
+fn remove_exact_trace_directory(path: &Path, artifact_kind: &str) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+            std::fs::remove_dir_all(path).map_err(|error| {
+                format!(
+                    "Existing {artifact_kind} `{}` could not be removed: {error}",
+                    path.display()
+                )
+            })
+        }
+        Ok(_) => Err(format!(
+            "Refusing to remove non-directory {artifact_kind}: {}",
+            path.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "Existing {artifact_kind} `{}` could not be inspected: {error}",
+            path.display()
+        )),
+    }
+}
+
+/// Atomically serializes one JSON artifact in a Provider API trace attempt.
+/// 原子序列化 Provider API 追踪尝试中的一个 JSON 产物。
+fn write_provider_api_trace_json(
+    path: &Path,
+    value: &Value,
+    artifact_kind: &str,
+) -> Result<(), String> {
+    let encoded = serde_json::to_vec(value)
+        .map_err(|error| format!("{artifact_kind} serialization failed: {error}"))?;
+    write_file_bytes_atomic(path, &encoded, artifact_kind)
+}
+
+/// Atomically serializes ordered JSON records as newline-delimited JSON.
+/// 将有序 JSON 记录原子序列化为换行分隔 JSON。
+fn write_provider_api_trace_ndjson(
+    path: &Path,
+    records: &[Value],
+    artifact_kind: &str,
+) -> Result<(), String> {
+    let mut encoded = Vec::new();
+    for record in records {
+        serde_json::to_writer(&mut encoded, record)
+            .map_err(|error| format!("{artifact_kind} serialization failed: {error}"))?;
+        encoded.push(b'\n');
+    }
+    write_file_bytes_atomic(path, &encoded, artifact_kind)
 }
 
 /// Persists one bounded configured-inference provider trace into an exact rotating slot.

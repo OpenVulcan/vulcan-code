@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ToolExecutionConversationBlock } from "@/components/conversation/conversation-tool-execution-types";
-import { hydrateFileAccessPresentation, resolveFileChangePresentation } from "./file-change-presentation";
+import { hydrateFileChangePresentation, resolveFileChangePresentation } from "./file-change-presentation";
 
 /// Builds one compact tool block fixture with the exact public tool identity and metadata bridge.
 /// 构建带有精确公开工具标识与 metadata 桥接数据的紧凑工具块 fixture。
@@ -22,23 +22,65 @@ function toolBlock(
 }
 
 describe("native file presentation mapping", () => {
-  it("labels an implicit bounded read from the first line", () => {
+  it("renders a native v2 read range as code rows with actual gutter line numbers", () => {
     const presentation = resolveFileChangePresentation(
       toolBlock("file", "", {
         arguments: {
           action: "read",
-          targets: [{ path: "src/a.ts" }],
+          path: "src/a.ts",
+          start_line: 10,
+          end_line: 12,
+        },
+        host_result: {
+          kind: "file_access",
+          payload: {
+            schema: "vulcan.file_access.v2",
+            action: "read",
+            path: "D:/repo/src/a.ts",
+            encoding: "UTF-8",
+            bom: false,
+            line_ending: "mixed",
+            mixed_line_endings: true,
+            final_newline: false,
+            start_line: 10,
+            end_line: 12,
+            content: "alpha\r\nbeta\n\romega",
+          },
         },
       }),
       "completed",
-      {},
-      { sessionId: "session-1", recordId: "detail-implicit" },
+      { workspacePath: "D:/repo" },
     );
 
-    expect(presentation?.files[0]?.readRange).toBe("L1-…");
+    expect(presentation).toMatchObject({
+      source: "native_file",
+      files: [{
+        textFormat: {
+          encoding: "UTF-8",
+          bom: false,
+          lineEnding: "mixed",
+          mixedLineEndings: true,
+          finalNewline: false,
+        },
+        rows: [
+          { content: "alpha", kind: "context", lineNumber: 10 },
+          { content: "beta", kind: "context", lineNumber: 11 },
+          { content: "omega", kind: "context", lineNumber: 12 },
+        ],
+        diffFile: {
+          hunks: [{
+            lines: [
+              { content: "alpha", kind: "context", oldLine: 10, newLine: 10 },
+              { content: "beta", kind: "context", oldLine: 11, newLine: 11 },
+              { content: "omega", kind: "context", oldLine: 12, newLine: 12 },
+            ],
+          }],
+        },
+      }],
+    });
   });
 
-  it("shows requested ranges and hydrates multi-file read results on expansion", () => {
+  it("hydrates historical multi-file read results without textual Lxx range labels", () => {
     const presentation = resolveFileChangePresentation(
       toolBlock("file", "", {
         arguments: {
@@ -64,12 +106,12 @@ describe("native file presentation mapping", () => {
       detailRef: { sessionId: "session-1", recordId: "detail-1" },
       interactive: true,
       files: [
-        { path: "src/a.ts", readRange: "L10-L12, L30", rows: [] },
-        { path: "src/b.ts", readRange: "L40-L41", rows: [] },
+        { path: "src/a.ts", rows: [] },
+        { path: "src/b.ts", rows: [] },
       ],
     });
 
-    const hydrated = hydrateFileAccessPresentation(presentation!, {
+    const hydrated = hydrateFileChangePresentation(presentation!, {
       body: JSON.stringify({
         action: "read",
         results: [{
@@ -120,6 +162,211 @@ describe("native file presentation mapping", () => {
     });
   });
 
+  it("does not let model-result detail rewrite authoritative change_set rows", () => {
+    const presentation = resolveFileChangePresentation(
+      toolBlock("file_edit", "", {
+        arguments: {
+          path: "D:/repo/src/main.ts",
+          old_string: "const oldValue = 1;",
+          new_string: "const newValue = 2;",
+        },
+        host_result: {
+          kind: "change_set",
+          payload: {
+            mode: "applied",
+            files: [{
+              change: "modify",
+              path: "D:/repo/src/main.ts",
+              hunks: [{
+                before: "",
+                delete: [{ line: 70, content: "const oldValue = 1;" }],
+                insert: [{ line: 70, content: "const newValue = 2;" }],
+                after: "",
+              }],
+            }],
+          },
+        },
+      }),
+      "completed",
+      { workspacePath: "D:/repo" },
+    );
+
+    const hydrated = hydrateFileChangePresentation(presentation!, {
+      body: JSON.stringify({
+        ok: true,
+        operations: [{
+          request_path: "D:/repo/src/main.ts",
+          original_range: { start_line: 999, line_count: 20 },
+          final_range: { start_line: 999, line_count: 30 },
+        }],
+      }),
+      metadata: {
+        arguments: {
+          path: "D:/repo/src/main.ts",
+          old_string: "fabricated old",
+          new_string: "fabricated new",
+        },
+      },
+    });
+
+    expect(hydrated).toBe(presentation);
+    expect(hydrated.files[0]?.rows).toEqual([
+      { content: "const oldValue = 1;", kind: "delete", lineNumber: 70 },
+      { content: "const newValue = 2;", kind: "insert", lineNumber: 70 },
+    ]);
+  });
+
+  it("renders every authoritative persisted whole-file delete and insert row", () => {
+    const deleted = Array.from({ length: 208 }, (_, index) => ({ line: index + 1, content: `old-${index + 1}` }));
+    const inserted = Array.from({ length: 140 }, (_, index) => ({ line: index + 1, content: `new-${index + 1}` }));
+    const presentation = resolveFileChangePresentation(
+      toolBlock("file", "", {
+        arguments: {
+          action: "write",
+          path: "D:/repo/README.md",
+          content: inserted.map((line) => line.content).join("\n"),
+        },
+        host_result: {
+          kind: "change_set",
+          payload: {
+            mode: "applied",
+            files: [{
+              resource_id: "resource-1",
+              change: "modify",
+              path: "D:/repo/README.md",
+              hunks: [{ before: "", delete: deleted, insert: inserted, after: "" }],
+            }],
+          },
+        },
+      }),
+      "completed",
+      { workspacePath: "D:/repo" },
+    );
+
+    expect(presentation).toMatchObject({
+      interactive: true,
+      source: "native_file_mutation",
+      totalAdded: 140,
+      totalRemoved: 208,
+      files: [{
+        added: 140,
+        removed: 208,
+        expandable: true,
+      }],
+    });
+    expect(presentation?.files[0]?.rows).toHaveLength(348);
+    expect(presentation?.files[0]?.rows.slice(0, 208)).toEqual(
+      deleted.map((line) => ({ content: line.content, kind: "delete", lineNumber: line.line })),
+    );
+    expect(presentation?.files[0]?.rows.slice(208)).toEqual(
+      inserted.map((line) => ({ content: line.content, kind: "insert", lineNumber: line.line })),
+    );
+  });
+
+  it("does not synthesize missing terminal change_set hunks from request arguments", () => {
+    const presentation = resolveFileChangePresentation(
+      toolBlock("file_edit", "", {
+        arguments: {
+          path: "D:/repo/src/main.ts",
+          old_string: "const oldValue = 1;",
+          new_string: "const newValue = 2;\nreturn newValue;",
+        },
+        host_result: {
+          kind: "change_set",
+          payload: {
+            mode: "applied",
+            files: [{
+              resource_id: "resource-1",
+              change: "modify",
+              path: "D:/repo/src/main.ts",
+              inserted_line_count: 7,
+              deleted_line_count: 5,
+              hunks: [],
+            }],
+            extensions: {
+              "vulcan.file_tools.v2": {
+                resources: [{
+                  resource_id: "resource-1",
+                  after_text_format: {
+                    encoding: "utf-8",
+                    bom: false,
+                    line_ending: "lf",
+                  },
+                }],
+              },
+            },
+          },
+        },
+      }),
+      "completed",
+      { workspacePath: "D:/repo" },
+    );
+
+    expect(presentation).toMatchObject({
+      interactive: false,
+      source: "native_file_edit",
+      totalAdded: 7,
+      totalRemoved: 5,
+      files: [{
+        added: 7,
+        removed: 5,
+        expandable: false,
+        textFormat: {
+          encoding: "utf-8",
+          bom: false,
+          lineEnding: "lf",
+        },
+        rows: [],
+      }],
+    });
+  });
+
+  it("does not present completed mutation requests as applied diffs when change_set is absent", () => {
+    const fileWrite = resolveFileChangePresentation(
+      toolBlock("file", "", {
+        arguments: {
+          action: "write",
+          path: "D:/repo/README.md",
+          content: "fabricated final body",
+        },
+      }),
+      "completed",
+      { workspacePath: "D:/repo" },
+    );
+    const fileEdit = resolveFileChangePresentation(
+      toolBlock("file_edit", "", {
+        arguments: {
+          path: "D:/repo/src/main.ts",
+          old_string: "fabricated old",
+          new_string: "fabricated new",
+        },
+      }),
+      "completed",
+      { workspacePath: "D:/repo" },
+    );
+    const applyPatch = resolveFileChangePresentation(
+      toolBlock("apply_patch", "", {
+        arguments: {
+          patch: "*** Begin Patch\n*** Update File: src/main.ts\n-old\n+new\n*** End Patch",
+        },
+      }),
+      "completed",
+      { workspacePath: "D:/repo" },
+    );
+
+    expect(fileWrite).toMatchObject({
+      interactive: false,
+      source: "native_file_mutation",
+      files: [{ expandable: false, rows: [] }],
+    });
+    expect(fileEdit).toMatchObject({
+      interactive: false,
+      source: "native_file_edit",
+      files: [{ expandable: false, rows: [] }],
+    });
+    expect(applyPatch).toBeNull();
+  });
+
   it("maps read results to the shared multi-file card shell", () => {
     const presentation = resolveFileChangePresentation(
       toolBlock(
@@ -155,6 +402,71 @@ describe("native file presentation mapping", () => {
       [{ content: "alpha", kind: "context", oldLine: 4, newLine: 4 }],
       [{ content: "beta", kind: "context", oldLine: 9, newLine: 9 }],
     ]);
+  });
+
+  it("keeps list results structured instead of projecting fake code gutter lines", () => {
+    const presentation = resolveFileChangePresentation(
+      toolBlock("file", "", {
+        arguments: {
+          action: "list",
+          path: "src",
+        },
+        host_result: {
+          kind: "file_access",
+          payload: {
+            schema: "vulcan.file_access.v2",
+            action: "list",
+            path: "D:/repo/src",
+            entries: [
+              { path: "D:/repo/src/components", kind: "directory", size: 0 },
+              { path: "D:/repo/src/main.ts", kind: "file", size: 42 },
+            ],
+          },
+        },
+      }),
+      "completed",
+      { workspacePath: "D:/repo" },
+    );
+
+    expect(presentation).toMatchObject({
+      accessAction: "list",
+      files: [{
+        diffFile: null,
+        rows: [
+          { content: "[directory] D:/repo/src/components (0 B)", lineNumber: null },
+          { content: "[file] D:/repo/src/main.ts (42 B)", lineNumber: null },
+        ],
+      }],
+    });
+  });
+
+  it("keeps stat metadata outside the code gutter", () => {
+    const presentation = resolveFileChangePresentation(
+      toolBlock("file", "", {
+        arguments: {
+          action: "stat",
+          path: "src/main.ts",
+        },
+        host_result: {
+          kind: "file_access",
+          payload: {
+            schema: "vulcan.file_access.v2",
+            action: "stat",
+            path: "D:/repo/src/main.ts",
+            kind: "file",
+            size: 42,
+          },
+        },
+      }),
+      "completed",
+      { workspacePath: "D:/repo" },
+    );
+
+    expect(presentation?.files[0]?.diffFile).toBeNull();
+    expect(presentation?.files[0]?.rows).toEqual(expect.arrayContaining([
+      { content: "kind: file", kind: "context", lineNumber: null },
+      { content: "size: 42", kind: "context", lineNumber: null },
+    ]));
   });
 
   it("preserves duplicate read targets so result indexes stay aligned", () => {
@@ -228,6 +540,218 @@ describe("native file presentation mapping", () => {
       }],
     });
     expect(presentation?.files[0]?.id).toBe("tool-call:t8ci0h:file_edit");
+  });
+
+  it("keeps Apply Patch multi-file preview identities through native v2 terminal mapping", () => {
+    const preview = resolveFileChangePresentation(
+      toolBlock("apply_patch", "", {
+        arguments: { patch: "*** Begin Patch\n*** Update File: src/a.ts\n-old\n+new\n*** Add File: src/b.ts\n+created\n*** End Patch" },
+      }),
+      "running",
+      {
+        requestPreview: {
+          kind: "apply_patch",
+          revision: 3,
+          affected_resources: ["src/a.ts", "src/b.ts"],
+          body_preview: "*** Begin Patch\n*** Update File: src/a.ts\n-old\n+new\n*** Add File: src/b.ts\n+created\n*** End Patch",
+          structured_lines: [
+            { operation_index: 0, resource_index: 0, side: "old", line_index: 0, content: "old" },
+            { operation_index: 0, resource_index: 0, side: "new", line_index: 0, content: "new" },
+            { operation_index: 1, resource_index: 1, side: "new", line_index: 0, content: "created" },
+          ],
+        },
+        workspacePath: "D:/repo",
+      },
+    );
+    const completed = resolveFileChangePresentation(
+      toolBlock("apply_patch", "", {
+        host_result: {
+          kind: "change_set",
+          payload: {
+            mode: "applied",
+            files: [
+              { resource_id: "resource-1", change: "modify", path: "D:/repo/src/a.ts", hunks: [] },
+              { resource_id: "resource-2", change: "create", path: "D:/repo/src/b.ts", content: "created\n" },
+            ],
+            extensions: {
+              "vulcan.file_tools.v2": {
+                operation_results: [
+                  { operation_index: 0, resource_id: "resource-1", request_path: "src/a.ts" },
+                  { operation_index: 1, resource_id: "resource-2", request_path: "src/b.ts" },
+                ],
+              },
+            },
+          },
+        },
+      }),
+      "completed",
+      { workspacePath: "D:/repo" },
+    );
+
+    expect(preview).toMatchObject({
+      source: "native_apply_patch",
+      files: [
+        { operation: "modify", path: "src/a.ts", rows: [{ kind: "delete" }, { kind: "insert" }] },
+        { operation: "create", path: "src/b.ts", rows: [{ kind: "insert" }] },
+      ],
+    });
+    expect(completed).toMatchObject({
+      source: "native_apply_patch",
+      files: [
+        { operationIds: ["operation-index:0"], resourceId: "resource-1" },
+        { operationIds: ["operation-index:1"], resourceId: "resource-2" },
+      ],
+    });
+    expect(completed?.id).toBe(preview?.id);
+    expect(completed?.files.map((file) => file.id)).toEqual(preview?.files.map((file) => file.id));
+  });
+
+  it("keeps a hunkless completed Apply Patch closed instead of rebuilding request rows", () => {
+    const presentation = resolveFileChangePresentation(
+      toolBlock("apply_patch", "", {
+        arguments: {
+          patch: "*** Begin Patch\n*** Update File: src/a.ts\n-old-a\n+new-a\n*** Update File: src/b.ts\n-old-b\n+new-b\n*** End Patch",
+        },
+        host_result: {
+          kind: "change_set",
+          payload: {
+            mode: "applied",
+            files: [
+              {
+                change: "modify",
+                path: "D:/repo/src/b.ts",
+                inserted_line_count: 1,
+                deleted_line_count: 1,
+                hunks: [],
+              },
+              {
+                change: "modify",
+                path: "D:/repo/src/a.ts",
+                inserted_line_count: 1,
+                deleted_line_count: 1,
+                hunks: [],
+              },
+            ],
+          },
+        },
+      }),
+      "completed",
+      { workspacePath: "D:/repo" },
+    );
+
+    expect(presentation).toMatchObject({
+      interactive: false,
+      source: "native_apply_patch",
+      totalAdded: 2,
+      totalRemoved: 2,
+      files: [
+        {
+          path: "D:/repo/src/b.ts",
+          expandable: false,
+          rows: [],
+        },
+        {
+          path: "D:/repo/src/a.ts",
+          expandable: false,
+          rows: [],
+        },
+      ],
+    });
+  });
+
+  it("maps native file write change sets without treating them as read-only access", () => {
+    const presentation = resolveFileChangePresentation(
+      toolBlock("file", "", {
+        arguments: { action: "write", path: "src/new.ts", content: "export {};\n" },
+        host_result: {
+          kind: "change_set",
+          payload: {
+            mode: "applied",
+            files: [{ resource_id: "resource-1", change: "create", path: "src/new.ts", content: "export {};\n" }],
+            extensions: {
+              "vulcan.file_tools.v2": {
+                operation_results: [{ operation_index: 0, resource_id: "resource-1", request_path: "src/new.ts" }],
+                resources: [{
+                  resource_id: "resource-1",
+                  after_text_format: {
+                    encoding: "utf-16le",
+                    bom: true,
+                    line_ending: "crlf",
+                    mixed_line_endings: false,
+                    final_newline: true,
+                  },
+                }],
+              },
+            },
+          },
+        },
+      }),
+      "completed",
+      {},
+    );
+
+    expect(presentation).toMatchObject({
+      source: "native_file_mutation",
+      accessAction: null,
+      files: [{
+        operation: "create",
+        readOnly: false,
+        rows: [{ content: "export {};" }],
+        textFormat: {
+          encoding: "utf-16le",
+          bom: true,
+          lineEnding: "crlf",
+          mixedLineEndings: false,
+          finalNewline: true,
+        },
+      }],
+    });
+  });
+
+  it("shows native file mutations from the public action and path before completion", () => {
+    for (const [action, operation] of [
+      ["write", "modify"],
+      ["delete", "delete"],
+      ["move", "rename"],
+    ] as const) {
+      const presentation = resolveFileChangePresentation(
+        toolBlock("file", "", {
+          arguments: {
+            action,
+            path: "src/current.ts",
+            ...(action === "move" ? { destination: "src/next.ts" } : {}),
+          },
+        }),
+        "running",
+        { workspacePath: "D:/repo" },
+      );
+
+      expect(presentation).toMatchObject({
+        source: "native_file_mutation",
+        state: "running",
+        files: [{ operation, path: "src/current.ts", readOnly: false }],
+      });
+    }
+  });
+
+  it("shows the simplified file_edit path before a streamed preview exists", () => {
+    const presentation = resolveFileChangePresentation(
+      toolBlock("file_edit", "", {
+        arguments: {
+          path: "src/simple.ts",
+          old_string: "old",
+          new_string: "new",
+        },
+      }),
+      "running",
+      { workspacePath: "D:/repo" },
+    );
+
+    expect(presentation).toMatchObject({
+      source: "native_file_edit",
+      state: "running",
+      files: [{ operation: "modify", path: "src/simple.ts" }],
+    });
   });
 
   it("shows file_edit operation paths before the host change_set arrives", () => {
@@ -324,6 +848,54 @@ describe("native file presentation mapping", () => {
       { content: "new", kind: "insert", lineNumber: 2 },
       { content: "tail", kind: "insert", lineNumber: 3 },
     ]);
+  });
+
+  it("keeps failed edit previews and extracts nested canonical host errors", () => {
+    const presentation = resolveFileChangePresentation(
+      toolBlock("file_edit", "", {
+        arguments: {
+          path: "src/failing.ts",
+          old_string: "old",
+          new_string: "new",
+        },
+        host_result: {
+          kind: "tool_error_detail",
+          payload: {
+            status: "failed",
+            error: "old_string was not found",
+            details: {
+              code: "match_not_found",
+              message: "The current file no longer contains the requested text.",
+            },
+          },
+        },
+      }),
+      "failed",
+      {
+        requestPreview: {
+          kind: "file_edit",
+          revision: 2,
+          affected_resources: ["src/failing.ts"],
+          structured_lines: [
+            { operation_index: 0, resource_index: 0, side: "old", line_index: 0, content: "old" },
+            { operation_index: 0, resource_index: 0, side: "new", line_index: 0, content: "new" },
+          ],
+        },
+        workspacePath: "D:/repo",
+      },
+    );
+
+    expect(presentation).toMatchObject({
+      state: "failed",
+      errorDetail: "old_string was not found\nThe current file no longer contains the requested text.",
+      files: [{
+        path: "src/failing.ts",
+        rows: [
+          { kind: "delete", content: "old" },
+          { kind: "insert", content: "new" },
+        ],
+      }],
+    });
   });
 
   it("keeps native file_edit presentation ids stable from preview through rename completion", () => {

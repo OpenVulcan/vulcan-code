@@ -527,4 +527,56 @@ describe("ConversationLiveStreamStore", () => {
     expect(reasoningListener).toHaveBeenCalledTimes(1);
     expect(progressListener).toHaveBeenCalledTimes(1);
   });
+
+  it("clears final request progress only after a committed execution card takes ownership", () => {
+    // store retains the final ready snapshot across transport batching.
+    // store 跨传输批处理保留最终 ready 快照。
+    const store = new ConversationLiveStreamStore();
+    // requestStreamId is shared by the leaf snapshot and committed durable card.
+    // requestStreamId 由叶子快照与已提交持久卡片共享。
+    const requestStreamId = "request-settled";
+    // key and listener prove cleanup remains observable by the mounted card.
+    // key 与 listener 证明清理对已挂载卡片保持可观察。
+    const key = toolRequestProgressKey(TEST_CONVERSATION_ID, requestStreamId);
+    const listener = vi.fn();
+    store.subscribe(key, listener);
+    store.applyEnvelope({
+      generation: 95,
+      delta: {
+        kind: "toolRequestProgressChanged",
+        payload: {
+          conversationId: TEST_CONVERSATION_ID,
+          requestStreamId,
+          progress: {
+            requestStreamId,
+            toolCallId: "call-settled",
+            toolName: "shell_command",
+            state: "ready",
+            receivedBytes: 128,
+            receivedCharacters: 128,
+            requestRevision: 4,
+          },
+        },
+      },
+    });
+
+    // runningMessage models the first React-committed ToolStarted projection.
+    // runningMessage 模拟 React 首次提交的 ToolStarted 投影。
+    const runningMessage: ConversationMessage = {
+      id: "tool-running",
+      conversationId: TEST_CONVERSATION_ID,
+      role: "assistant",
+      recordKind: "tool-call-output",
+      body: "",
+      metadata: {
+        request_stream_id: requestStreamId,
+        request_revision: 4,
+        tool_display_state: "running",
+      },
+    };
+    expect(store.reconcileStableCoverage(workbenchSnapshot(96, runningMessage))).toBe(1);
+    expect(store.getToolRequestProgress(TEST_CONVERSATION_ID, requestStreamId)).toBeNull();
+    store.flushNotifications();
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
 });

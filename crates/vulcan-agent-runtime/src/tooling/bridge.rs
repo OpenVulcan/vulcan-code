@@ -181,7 +181,7 @@ pub fn build_vulcan_tools_manager(
     }
 
     // Native public ids are reserved before provider candidates are admitted.
-    // 原生公开标识会先完成占位，再接纳 Provider 候选，确保 `file` 与 `file_edit` 保持稳定。
+    // 原生公开标识会先完成占位，再接纳 Provider 候选，确保三个原生文件工具保持稳定。
     for candidate in candidate_provider_tools {
         let tool_id = candidate.descriptor.id.clone();
         if occupied_public_tool_ids.insert(tool_id.clone()) {

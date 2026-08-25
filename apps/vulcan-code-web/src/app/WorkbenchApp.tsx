@@ -30,6 +30,7 @@ import {
 import { ConversationLiveStreamProvider } from "@/state/conversation-live-stream-context";
 import { ConversationLiveStreamStore } from "@/state/conversation-live-stream-store";
 import {
+  mergePendingWorkbenchDeltaSignal,
   workbenchEnvelopeRequiresImmediateLiveFlush,
   workbenchEnvelopeRequiresReactProjection,
 } from "@/state/workbench-stream-projection";
@@ -80,6 +81,9 @@ export function WorkbenchApp(props: {
   // workbenchDelta stores the latest partial workbench update signal.
   // workbenchDelta 保存最近一次局部工作台更新信号。
   const [workbenchDelta, setWorkbenchDelta] = React.useState<WorkbenchDeltaSignal | null>(null);
+  // workbenchDeltaSignalSequenceRef assigns monotonic identities independently from acknowledged React state.
+  // workbenchDeltaSignalSequenceRef 独立于已确认的 React 状态分配单调信号标识。
+  const workbenchDeltaSignalSequenceRef = React.useRef(0);
   // workbenchDeltaBufferRef batches hot-path deltas until the next scheduled flush.
   // workbenchDeltaBufferRef 将已连续可应用的热路径增量批处理到下一次计划刷新。
   const workbenchDeltaBufferRef = React.useRef<WorkbenchDeltaEnvelope[]>([]);
@@ -262,10 +266,13 @@ export function WorkbenchApp(props: {
         readyEnvelopes.filter(workbenchEnvelopeRequiresReactProjection),
       );
       if (envelopes.length > 0) {
-        setWorkbenchDelta((current) => ({
-          seq: (current?.seq ?? 0) + 1,
-          envelopes,
-        }));
+        workbenchDeltaSignalSequenceRef.current += 1;
+        // signalSequence remains monotonic even when a child acknowledgement clears the current signal first.
+        // signalSequence 即使子组件确认先清空当前信号也保持单调。
+        const signalSequence = workbenchDeltaSignalSequenceRef.current;
+        setWorkbenchDelta((current) => (
+          mergePendingWorkbenchDeltaSignal(current, signalSequence, envelopes)
+        ));
       }
     }
 
@@ -656,6 +663,19 @@ export function WorkbenchApp(props: {
     };
   }, []);
 
+  // handleWorkbenchDeltaConsumed clears only the exact signal already applied by WorkbenchLayout.
+  // handleWorkbenchDeltaConsumed 仅清除 WorkbenchLayout 已应用的精确信号。
+  //
+  // Parameters: sequence identifies the signal whose envelopes have been consumed.
+  // 参数：sequence 标识其增量已经被消费的信号。
+  // Returns: no value; a newer unacknowledged signal remains intact.
+  // 返回值：无返回值；更新且尚未确认的信号保持不变。
+  const handleWorkbenchDeltaConsumed = React.useCallback((sequence: number) => {
+    setWorkbenchDelta((current) => (
+      current?.seq === sequence ? null : current
+    ));
+  }, []);
+
   if (error) {
     return <ErrorScreen error={error} />;
   }
@@ -678,6 +698,7 @@ export function WorkbenchApp(props: {
             startup={startup}
             workbench={workbench}
             workbenchDelta={workbenchDelta}
+            onWorkbenchDeltaConsumed={handleWorkbenchDeltaConsumed}
           />
         </ConversationLiveStreamProvider>
         <Toaster />
