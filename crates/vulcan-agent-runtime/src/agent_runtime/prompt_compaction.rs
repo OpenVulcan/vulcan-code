@@ -582,6 +582,7 @@ fn prompt_compaction_progress_for_runtime_event(
         | ExecutionStreamEvent::RuntimeEvent { .. }
         | ExecutionStreamEvent::ConversationCheckpoint { .. }
         | ExecutionStreamEvent::ContextCompactionRequired { .. }
+        | ExecutionStreamEvent::ContextCompactionPolicyRefreshRequired { .. }
         | ExecutionStreamEvent::ProviderRouteSwitchRequired { .. }
         | ExecutionStreamEvent::ThinkingCompleted { .. }
         | ExecutionStreamEvent::TransientReasoningStatusChanged { .. }
@@ -1149,6 +1150,15 @@ pub fn stream_prompt_compaction_job(
                         ));
                         break;
                     }
+                    ExecutionStreamEvent::ContextCompactionPolicyRefreshRequired {
+                        reason,
+                        ..
+                    } => {
+                        terminal_error = Some(format!(
+                            "Prompt compaction cannot refresh its context policy mid-operation: {reason}"
+                        ));
+                        break;
+                    }
                     event => {
                         if let Some(progress) = prompt_compaction_progress_for_runtime_event(&event)
                         {
@@ -1389,6 +1399,15 @@ pub fn stream_prompt_compaction_foundation_job(
                     ExecutionStreamEvent::ProviderRouteSwitchRequired { reason, .. } => {
                         terminal_error = Some(format!(
                             "Prompt compaction cannot change Provider route mid-operation: {reason}"
+                        ));
+                        break;
+                    }
+                    ExecutionStreamEvent::ContextCompactionPolicyRefreshRequired {
+                        reason,
+                        ..
+                    } => {
+                        terminal_error = Some(format!(
+                            "Prompt compaction cannot refresh its context policy mid-operation: {reason}"
                         ));
                         break;
                     }

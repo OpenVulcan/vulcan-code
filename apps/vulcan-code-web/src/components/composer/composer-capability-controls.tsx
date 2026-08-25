@@ -86,9 +86,6 @@ export function ContextUsageOrb(props: {
   // Unchanged hard context limit declared by the active model.
   // 当前模型声明且保持不变的硬上下文窗口。
   modelContextLimit: number | null;
-  // Whether the session is currently running and therefore immutable.
-  // 会话当前是否正在运行，运行时不可修改。
-  disabled: boolean;
   // Persists or clears one session-only compression-window lock.
   // 持久化或清除一个仅限当前会话的压缩窗口锁定。
   onNodeChange: (nodeId: ContextCompactionWindowNodeId | null) => Promise<boolean>;
@@ -250,7 +247,6 @@ export function ContextUsageOrb(props: {
           <SegmentedControl
             aria-label={t("composer.contextWindow.title")}
             className="context-usage-window-switch"
-            disabled={props.disabled}
             onValueChange={(value) => {
               const nextNodeId = contextWindowNodeIdFromSwitchValue(value, props.contextCompactionWindowNodes);
               if (nextNodeId !== undefined) {

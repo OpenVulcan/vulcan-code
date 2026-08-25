@@ -423,14 +423,17 @@ where
                         let Some(intervention) = prompt_intervention.as_ref() else {
                             return Ok(false);
                         };
-                            intervention(session_id, controller).map_err(|error| match error {
-                                crate::agent_runtime::runtime_stream_intervention::RuntimePromptInterventionError::ProviderRouteSwitchRequired { message } => {
-                                    CoreError::ProviderRouteSwitchRequired { message }
-                                }
-                                other => CoreError::InvalidState {
-                                    message: other.to_string(),
-                                },
-                            })
+                        intervention(session_id, controller).map_err(|error| match error {
+                            crate::agent_runtime::runtime_stream_intervention::RuntimePromptInterventionError::ProviderRouteSwitchRequired { message } => {
+                                CoreError::ProviderRouteSwitchRequired { message }
+                            }
+                            crate::agent_runtime::runtime_stream_intervention::RuntimePromptInterventionError::ContextCompactionPolicyRefreshRequired { message } => {
+                                CoreError::ContextCompactionPolicyRefreshRequired { message }
+                            }
+                            other => CoreError::InvalidState {
+                                message: other.to_string(),
+                            },
+                        })
                     };
                     let run_future = async {
                         let effective_turn_start_mode = if retry_resumes_seeded_input {
@@ -587,6 +590,39 @@ where
                         break;
                     }
                     Err(error) => {
+                        if let CoreError::ContextCompactionPolicyRefreshRequired { message } = &error {
+                            abort_active_tool_request_streams(
+                                &task_sender,
+                                &mut active_tool_request_streams,
+                                "context_compaction_policy_refresh_required",
+                            );
+                            let last_successful_provider_usage =
+                                controller.last_successful_provider_usage().cloned();
+                            match core_snapshot_to_session_conversation_state(
+                                controller.snapshot(),
+                            ) {
+                                Ok(conversation_state) => {
+                                    let _ = task_sender.send(Ok(
+                                        ProviderStreamDelta::FinalConversationState(
+                                            conversation_state.clone(),
+                                            last_successful_provider_usage,
+                                        ),
+                                    ));
+                                    let _ = task_sender.send(Ok(
+                                        ProviderStreamDelta::ContextCompactionPolicyRefreshRequired {
+                                            conversation_state,
+                                            reason: message.clone(),
+                                        },
+                                    ));
+                                }
+                                Err(conversion_error) => {
+                                    let _ = task_sender.send(Err(format!(
+                                        "Context compaction policy refresh boundary could not be serialized: {conversion_error}"
+                                    )));
+                                }
+                            }
+                            break;
+                        }
                         if let CoreError::ProviderRouteSwitchRequired { message } = &error {
                             abort_active_tool_request_streams(
                                 &task_sender,
@@ -950,6 +986,7 @@ fn structured_provider_failure(
         CoreError::ProviderFailure { details, .. } => details.clone(),
         CoreError::InvalidState { .. }
         | CoreError::ContextCompactionRequired { .. }
+        | CoreError::ContextCompactionPolicyRefreshRequired { .. }
         | CoreError::ProviderRouteSwitchRequired { .. }
         | CoreError::ToolFailure { .. } => None,
     }

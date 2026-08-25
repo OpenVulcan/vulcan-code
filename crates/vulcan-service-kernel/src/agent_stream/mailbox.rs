@@ -14,6 +14,8 @@ use vulcan_workbench_model::take_runtime_intervention_guided_pending_prompt_entr
 /// `app` 是用于发出刷新后工作台快照的 Tauri 应用句柄。
 /// `state` is the shared service bridge state that owns the active workspace snapshot.
 /// `state` 是拥有当前工作区快照的共享服务桥接状态。
+/// `frozen_context_compaction_window_node_id` is the session node captured by this execution request.
+/// `frozen_context_compaction_window_node_id` 是当前执行请求捕获的会话压缩节点。
 ///
 /// # Returns
 /// 返回值
@@ -22,10 +24,16 @@ use vulcan_workbench_model::take_runtime_intervention_guided_pending_prompt_entr
 pub(crate) fn build_webui_prompt_intervention(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
+    frozen_context_compaction_window_node_id: Option<vulcan_context::ContextCompactionWindowNodeId>,
 ) -> RuntimePromptIntervention {
     Arc::new(move |session_id, controller: &mut VulcanCoreController| {
         let (pending_queue_changed, controller_changed) =
-            apply_webui_prompt_intervention_transaction(&state, session_id, controller)?;
+            apply_webui_prompt_intervention_transaction(
+                &state,
+                session_id,
+                frozen_context_compaction_window_node_id,
+                controller,
+            )?;
         if pending_queue_changed
             && let Err(error) = emit_pending_prompts_changed_delta(&app, &state, session_id)
         {
@@ -46,6 +54,8 @@ pub(crate) fn build_webui_prompt_intervention(
 /// `state` 持有工作区队列状态与实时会话内核。
 /// `session_id` identifies the session reaching the safe Provider boundary.
 /// `session_id` 标识到达安全 Provider 边界的会话。
+/// `frozen_context_compaction_window_node_id` is the node frozen into the active execution.
+/// `frozen_context_compaction_window_node_id` 是冻结进当前执行的压缩节点。
 /// `controller` owns the authoritative Core snapshot committed only after every draft succeeds.
 /// `controller` 持有仅在全部草稿成功后提交的权威 Core 快照。
 ///
@@ -56,6 +66,7 @@ pub(crate) fn build_webui_prompt_intervention(
 fn apply_webui_prompt_intervention_transaction(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
+    frozen_context_compaction_window_node_id: Option<vulcan_context::ContextCompactionWindowNodeId>,
     controller: &mut VulcanCoreController,
 ) -> Result<(bool, bool), RuntimePromptInterventionError> {
     let mut guard = state
@@ -84,6 +95,25 @@ fn apply_webui_prompt_intervention_transaction(
                     pending_selection.provider_id,
                     pending_selection.connection_id,
                     pending_selection.model_id
+                ),
+            },
+        );
+    }
+    let retained_context_compaction_window_node_id = workspace
+        .session_runtime_state
+        .get(&session_id)
+        .and_then(|runtime_state| runtime_state.context_compaction_window_node_id);
+    if retained_context_compaction_window_node_id != frozen_context_compaction_window_node_id {
+        let retained_node_label = retained_context_compaction_window_node_id
+            .map(|node_id| node_id.as_str().to_string())
+            .unwrap_or_else(|| String::from("default"));
+        let frozen_node_label = frozen_context_compaction_window_node_id
+            .map(|node_id| node_id.as_str().to_string())
+            .unwrap_or_else(|| String::from("default"));
+        return Err(
+            RuntimePromptInterventionError::ContextCompactionPolicyRefreshRequired {
+                message: format!(
+                    "session `{session_id}` changed context-compaction node from `{frozen_node_label}` to `{retained_node_label}`"
                 ),
             },
         );

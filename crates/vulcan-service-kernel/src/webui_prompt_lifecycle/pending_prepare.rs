@@ -359,12 +359,17 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
             &mut hook_runtime,
             prompt_turn_begin_input,
         )?;
+        let active_turn_kind = if entry.source == PendingSessionPromptSource::GoalContinuation {
+            ActiveTurnKind::GoalContinuation
+        } else {
+            ActiveTurnKind::UserPrompt
+        };
         start_webui_goal_session_kernel_turn(
             &mut guard,
             session_id,
             expected_goal_dispatch_version,
             &precheck_start.preparation_turn_id,
-            ActiveTurnKind::UserPrompt,
+            active_turn_kind,
         )?;
         precheck_start
     } else {

@@ -429,6 +429,22 @@ pub enum ExecutionStreamEvent {
         /// 为替代 Provider 流保留的精确逻辑身份与物理尝试索引。
         provider_request_continuation: ExecutionProviderRequestContinuation,
     },
+    /// Requests the host to refresh the session compaction policy and restart the active turn.
+    /// 请求宿主刷新会话压缩策略并重启当前活动回合。
+    ContextCompactionPolicyRefreshRequired {
+        /// Session identifier owning the active turn.
+        /// 拥有当前活动回合的会话标识。
+        session_id: SessionId,
+        /// Replay-safe conversation state produced after the complete tool batch.
+        /// 完整工具批次之后生成的可安全回放会话状态。
+        conversation_state: SessionConversationState,
+        /// Internal diagnostic produced at the pre-Provider intervention boundary.
+        /// 在 Provider 前干预边界生成的内部诊断。
+        reason: String,
+        /// Telemetry continuation reserved for the replacement physical Provider request.
+        /// 为替代真实 Provider 请求保留的遥测延续身份。
+        provider_request_continuation: ExecutionProviderRequestContinuation,
+    },
     /// Terminal execution report emitted exactly once at the end of the run.
     /// 在运行结束时恰好发出一次的最终执行报告。
     Finished(ExecutionRunReport),

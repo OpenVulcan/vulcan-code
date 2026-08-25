@@ -33,7 +33,10 @@ use vulcan_context::{
     RuntimeProviderRequestCheckpointEvent, RuntimeProviderResponseCheckpointEvent,
     RuntimeSystemUpdateLoweringHint, RuntimeSystemUpdateTrust,
 };
-use vulcan_session_boundary::SessionBoundaryEvent;
+use vulcan_session_boundary::{
+    SessionBoundaryEvent, SessionBoundaryEventKind, SessionEventVisibility,
+    session_boundary_event_to_vulcan_record,
+};
 
 /// Directory name used for active sessions below the Vulcan code data root.
 /// Vulcan Code 数据根目录下用于活动会话的目录名称。

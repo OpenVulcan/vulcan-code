@@ -89,7 +89,6 @@ export function ComposerPanelToolbarRight(props: ComposerPanelToolbarRightProps)
     <div className="composer-toolbar-right">
       <ContextUsageOrb
         contextCompactionWindowNodes={props.contextCompactionWindowNodes}
-        disabled={props.isConversationRunning}
         modelContextLimit={props.modelContextLimit}
         onNodeChange={props.onSetSessionContextCompactionWindow}
         selectedNodeId={props.sessionContextCompactionWindowNodeId}

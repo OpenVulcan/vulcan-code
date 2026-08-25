@@ -908,6 +908,18 @@ pub(crate) fn detached_task_event_trace_detail(event: &DetachedTaskRuntimeEvent)
             conversation_state.records.len(),
             conversation_state.messages.len()
         ),
+        DetachedTaskRuntimeEvent::ChildExecution(
+            ExecutionStreamEvent::ContextCompactionPolicyRefreshRequired {
+                session_id,
+                conversation_state,
+                reason,
+                ..
+            },
+        ) => format!(
+            "session={session_id} records={} messages={} reason={reason}",
+            conversation_state.records.len(),
+            conversation_state.messages.len()
+        ),
         DetachedTaskRuntimeEvent::ChildExecution(ExecutionStreamEvent::Finished(report)) => {
             format!(
                 "provider_requests={} output_chars={} error={}",
@@ -981,6 +993,9 @@ pub(crate) fn detached_task_event_label(event: &DetachedTaskRuntimeEvent) -> &'s
         DetachedTaskRuntimeEvent::ChildExecution(
             ExecutionStreamEvent::ContextCompactionRequired { .. },
         ) => "child.context_compaction_required",
+        DetachedTaskRuntimeEvent::ChildExecution(
+            ExecutionStreamEvent::ContextCompactionPolicyRefreshRequired { .. },
+        ) => "child.context_compaction_policy_refresh_required",
         DetachedTaskRuntimeEvent::ChildExecution(
             ExecutionStreamEvent::ProviderRouteSwitchRequired { .. },
         ) => "child.provider_route_switch_required",

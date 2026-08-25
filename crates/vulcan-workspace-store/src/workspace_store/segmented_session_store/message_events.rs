@@ -979,6 +979,312 @@ pub(in crate::workspace_store) fn truncate_segmented_session_before_message(
     if !found_cutoff {
         return Err(String::from("ERR_USER_PROMPT_EDIT_NOT_FOUND"));
     }
+    apply_segmented_session_truncate_point_locked(
+        session_dir,
+        &mut metadata,
+        target_segment_position,
+        retained_target_lines,
+        retained_messages,
+    )
+}
+
+/// Physically truncates a segmented session at a durable user-input boundary when its display append is missing.
+/// 当用户输入的展示追加缺失时，在其可靠用户输入边界处物理截断分段会话。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the exact segmented session directory selected by its owning summary.
+/// `session_dir` 是由所属摘要选定的精确分段会话目录。
+/// `target_message` is the validated boundary-projected user prompt selected for editing.
+/// `target_message` 是已校验并被选中编辑的边界投影用户提示词。
+/// `retained_messages` contains every display row that must remain before the selected turn.
+/// `retained_messages` 包含所选回合前必须保留的每条展示记录。
+///
+/// # Returns
+/// 返回值
+/// Returns success after the complete target turn and tail are removed and metadata is checkpointed.
+/// 在移除完整目标回合及其尾部并写入元数据检查点后返回成功。
+pub(in crate::workspace_store) fn truncate_segmented_session_before_boundary_user_prompt(
+    session_dir: &Path,
+    target_message: &SessionMessageEntry,
+    retained_messages: &[SessionMessageEntry],
+) -> Result<(), String> {
+    // sessionStorageLock serializes the boundary fallback with every ordinary append writer.
+    // sessionStorageLock 将边界回退路径与所有普通追加写入器串行化。
+    let session_storage_lock = segmented_append_file_io_lock(session_dir);
+    let _guard = session_storage_lock.lock().map_err(to_store_error)?;
+    // metadata is the exact segment index used to select one target file without directory traversal.
+    // metadata 是用于在不遍历目录的情况下选择单个目标文件的精确分段索引。
+    let mut metadata = read_session_metadata(session_dir)?;
+    validate_segmented_session_append_boundary_locked(session_dir, &metadata)?;
+    // targetTimestamp is shared by the prompt-turn owner, visible record, and boundary event.
+    // targetTimestamp 由提示词回合所有者、可见记录与边界事件共同使用。
+    let target_timestamp = target_message
+        .created_at
+        .parse::<u64>()
+        .map_err(|_| String::from("ERR_USER_PROMPT_EDIT_TIMESTAMP_INVALID"))?;
+    // targetMetadata is required to correlate a live transcript id with its durable boundary projection.
+    // targetMetadata 用于把实时转录身份与其可靠边界投影进行关联。
+    let target_metadata = target_message
+        .metadata
+        .as_ref()
+        .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_BOUNDARY_METADATA_MISSING"))?;
+    // projectedBoundarySequence directly addresses legacy synthetic boundary record identities when available.
+    // projectedBoundarySequence 在可用时直接定位旧版合成边界记录身份。
+    let projected_boundary_sequence = target_metadata
+        .get("sequence")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            target_message
+                .id
+                .strip_prefix(&format!("codex-{}-", metadata.session_id))
+                .and_then(|suffix| suffix.split_once('-'))
+                .and_then(|(sequence, _)| sequence.parse::<u64>().ok())
+        });
+    // targetSegmentPositions contains only metadata-indexed files that can own the exact boundary event.
+    // targetSegmentPositions 仅包含元数据索引中可能拥有精确边界事件的文件。
+    let target_segment_positions = metadata
+        .segments
+        .iter()
+        .enumerate()
+        .filter(|(_, segment)| segment.session_boundary_line_count > 0)
+        .filter(|(_, segment)| {
+            if let Some(sequence) = projected_boundary_sequence {
+                return segment.start_seq <= sequence
+                    && segment
+                        .last_seq
+                        .is_some_and(|last_seq| sequence <= last_seq);
+            }
+            segment
+                .first_timestamp
+                .as_deref()
+                .and_then(|value| value.parse::<u64>().ok())
+                .zip(
+                    segment
+                        .last_timestamp
+                        .as_deref()
+                        .and_then(|value| value.parse::<u64>().ok()),
+                )
+                .is_some_and(|(first, last)| first <= target_timestamp && target_timestamp <= last)
+        })
+        .map(|(position, _)| position)
+        .collect::<Vec<_>>();
+    if target_segment_positions.is_empty() {
+        return Err(String::from("ERR_USER_PROMPT_EDIT_BOUNDARY_NOT_FOUND"));
+    }
+    // targetPayload selects the embedded boundary payload for rehydrated rows, otherwise the live transcript metadata.
+    // targetPayload 对重新水合记录选择嵌套边界载荷，否则选择实时转录元数据。
+    let target_payload = target_metadata
+        .get("payload")
+        .filter(|value| value.is_object())
+        .unwrap_or(target_metadata);
+    // targetPrompt is the exact sanitized text shared by live and boundary records.
+    // targetPrompt 是实时记录与边界记录共享的精确净化文本。
+    let target_prompt = target_payload
+        .get("prompt")
+        .or_else(|| target_payload.get("canonical_user_text"))
+        .or_else(|| target_metadata.get("canonical_user_text"))
+        .and_then(Value::as_str)
+        .unwrap_or(target_message.body.as_str());
+    // targetSource is the protocol prompt source required for legacy identity correlation.
+    // targetSource 是旧版身份关联所需的协议提示词来源。
+    let target_source = target_payload
+        .get("source")
+        .or_else(|| target_metadata.get("source"));
+    // targetAttachments normalizes the two declared persistence shapes to one exact array value.
+    // targetAttachments 将两种已声明持久化形态规范化为一个精确数组值。
+    let target_attachments = target_payload
+        .get("attachments")
+        .or_else(|| target_metadata.get("transcript_attachments"))
+        .cloned()
+        .unwrap_or_else(|| Value::Array(Vec::new()));
+    // matchedBoundary owns the unique exact segment, UserInput line, and turn identity.
+    // matchedBoundary 持有唯一的精确分段、UserInput 行及其回合身份。
+    let mut matched_boundary: Option<(
+        usize,
+        Vec<SegmentedSessionEventLine>,
+        usize,
+        SessionBoundaryEvent,
+    )> = None;
+    for target_segment_position in target_segment_positions {
+        // targetSegmentPath is derived only from one metadata-indexed candidate row.
+        // targetSegmentPath 仅从一条元数据索引候选记录派生。
+        let target_segment_path =
+            session_dir.join(&metadata.segments[target_segment_position].file);
+        // targetLines reads only an exact candidate file; equal timestamps may legally span adjacent segments.
+        // targetLines 只读取精确候选文件；相同时间戳可能合法地跨越相邻分段。
+        let target_lines = read_segment_event_lines(&target_segment_path)?;
+        for (line_index, line) in target_lines.iter().enumerate() {
+            if line.kind != SegmentedSessionEventKind::SessionBoundary {
+                continue;
+            }
+            // boundaryEvent is decoded from the exact persisted line before any identity comparison.
+            // boundaryEvent 在任何身份比较前从精确持久化行解码。
+            let boundary_event =
+                crate::workspace_store::boundary_store::session_boundary_event_from_segment_line(
+                    line,
+                )?;
+            if boundary_event.kind != SessionBoundaryEventKind::UserInput
+                || boundary_event.visibility != SessionEventVisibility::Visible
+                || boundary_event.timestamp_ms != target_timestamp
+            {
+                continue;
+            }
+            // projectedRecord preserves explicit future ids and legacy synthetic ids through one contract function.
+            // projectedRecord 通过同一个契约函数保留未来显式身份与旧版合成身份。
+            let projected_record = session_boundary_event_to_vulcan_record(&boundary_event)
+                .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_BOUNDARY_NOT_VISIBLE"))?;
+            // legacyIdentityMatches proves the pre-id-link payload belongs to this exact visible prompt.
+            // legacyIdentityMatches 证明尚未携带身份链接的旧载荷属于当前精确可见提示词。
+            let legacy_identity_matches =
+                boundary_event.payload.get("prompt").and_then(Value::as_str) == Some(target_prompt)
+                    && boundary_event.payload.get("source") == target_source
+                    && boundary_event
+                        .payload
+                        .get("attachments")
+                        .cloned()
+                        .unwrap_or_else(|| Value::Array(Vec::new()))
+                        == target_attachments;
+            if projected_record.id != target_message.id && !legacy_identity_matches {
+                continue;
+            }
+            if matched_boundary.is_some() {
+                return Err(String::from(
+                    "ERR_USER_PROMPT_EDIT_BOUNDARY_LOCATOR_AMBIGUOUS",
+                ));
+            }
+            matched_boundary = Some((
+                target_segment_position,
+                target_lines.clone(),
+                line_index,
+                boundary_event,
+            ));
+        }
+    }
+    // The selected values identify the unique visible UserInput boundary and its exact physical owner.
+    // 选定值标识唯一的可见 UserInput 边界及其精确物理所有者。
+    let (target_segment_position, target_lines, target_line_index, target_boundary_event) =
+        matched_boundary.ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_BOUNDARY_NOT_FOUND"))?;
+    // sameSegmentTurnStartIndex locates the hidden owner when it shares the target segment.
+    // sameSegmentTurnStartIndex 在隐藏所有者与目标同段时定位该所有者。
+    let same_segment_turn_start_index =
+        target_boundary_event
+            .turn_id
+            .as_deref()
+            .and_then(|target_turn_id| {
+                target_lines[..=target_line_index]
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find_map(|(line_index, line)| {
+                        if line.kind != SegmentedSessionEventKind::SessionBoundary {
+                            return None;
+                        }
+                        let boundary_event = crate::workspace_store::boundary_store::
+                        session_boundary_event_from_segment_line(line)
+                        .ok()?;
+                        (boundary_event.kind == SessionBoundaryEventKind::TurnStarted
+                            && boundary_event.turn_id.as_deref() == Some(target_turn_id))
+                        .then_some(line_index)
+                    })
+            });
+    // truncateSegmentPosition begins at UserInput and may move to the exact adjacent TurnStarted segment.
+    // truncateSegmentPosition 初始位于 UserInput，并可移动到精确相邻的 TurnStarted 分段。
+    let mut truncate_segment_position = target_segment_position;
+    // retainedTargetLines preserves only rows strictly before the complete selected prompt turn.
+    // retainedTargetLines 仅保留严格早于完整所选提示词回合的记录。
+    let retained_target_lines =
+        if let Some(cutoff_line_index) = same_segment_turn_start_index {
+            target_lines[..cutoff_line_index].to_vec()
+        } else if let Some(target_turn_id) = target_boundary_event.turn_id.as_deref()
+            && target_segment_position > 0
+            && metadata.segments[target_segment_position - 1]
+                .last_session_boundary_turn_id
+                .as_deref()
+                == Some(target_turn_id)
+        {
+            // previousSegmentPosition is the sole metadata-declared adjacent file that may own TurnStarted.
+            // previousSegmentPosition 是唯一可能拥有 TurnStarted 的元数据声明相邻文件。
+            let previous_segment_position = target_segment_position - 1;
+            // previousSegmentPath addresses that exact file without probing any directory entry.
+            // previousSegmentPath 在不探测任何目录项的情况下定位该精确文件。
+            let previous_segment_path =
+                session_dir.join(&metadata.segments[previous_segment_position].file);
+            // previousLines is bounded to the single adjacent segment selected by turn metadata.
+            // previousLines 被限制为回合元数据选定的单个相邻分段。
+            let previous_lines = read_segment_event_lines(&previous_segment_path)?;
+            // previousTurnStartIndex locates the exact hidden owner for the target turn.
+            // previousTurnStartIndex 定位目标回合的精确隐藏所有者。
+            let mut previous_turn_start_index = None;
+            for (line_index, line) in previous_lines.iter().enumerate().rev() {
+                if line.kind != SegmentedSessionEventKind::SessionBoundary {
+                    continue;
+                }
+                // boundaryEvent validates every candidate row before the adjacent-segment rewind is authorized.
+                // boundaryEvent 在授权相邻分段回退前校验每条候选记录。
+                let boundary_event = crate::workspace_store::boundary_store::
+                session_boundary_event_from_segment_line(line)?;
+                if boundary_event.kind == SessionBoundaryEventKind::TurnStarted
+                    && boundary_event.turn_id.as_deref() == Some(target_turn_id)
+                {
+                    previous_turn_start_index = Some(line_index);
+                    break;
+                }
+            }
+            // cutoffLineIndex must exist because metadata declared the adjacent segment as the same turn owner.
+            // cutoffLineIndex 必须存在，因为元数据已声明相邻分段属于同一回合所有者。
+            let cutoff_line_index = previous_turn_start_index
+                .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_BOUNDARY_TURN_START_MISSING"))?;
+            truncate_segment_position = previous_segment_position;
+            previous_lines[..cutoff_line_index].to_vec()
+        } else {
+            target_lines[..target_line_index].to_vec()
+        };
+    apply_segmented_session_truncate_point_locked(
+        session_dir,
+        &mut metadata,
+        truncate_segment_position,
+        retained_target_lines,
+        retained_messages,
+    )
+}
+
+/// Applies one already-located transcript truncation while touching only metadata-declared files.
+/// 应用一个已定位的转录截断，并且只触碰元数据声明的文件。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` and `metadata` own the exact locked segmented session frontier.
+/// `session_dir` 与 `metadata` 持有精确且已加锁的分段会话前沿。
+/// `target_segment_position` and `retained_target_lines` define the physical truncation point.
+/// `target_segment_position` 与 `retained_target_lines` 定义物理截断点。
+/// `retained_messages` defines the display checkpoint that remains after truncation.
+/// `retained_messages` 定义截断后保留的展示检查点。
+///
+/// # Returns
+/// 返回值
+/// Returns success after exact tail deletion and atomic metadata publication.
+/// 在精确删除尾部并原子发布元数据后返回成功。
+fn apply_segmented_session_truncate_point_locked(
+    session_dir: &Path,
+    metadata: &mut SegmentedSessionMetadata,
+    target_segment_position: usize,
+    retained_target_lines: Vec<SegmentedSessionEventLine>,
+    retained_messages: &[SessionMessageEntry],
+) -> Result<(), String> {
+    // originalSegments freezes the exact deletion authority before metadata is replaced.
+    // originalSegments 在元数据被替换前冻结精确删除权限。
+    let original_segments = metadata.segments.clone();
+    // targetSegment is the metadata-owned file containing the truncation point.
+    // targetSegment 是包含截断点且由元数据持有的文件。
+    let target_segment = original_segments
+        .get(target_segment_position)
+        .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_DISPLAY_LOCATOR_MISSING"))?;
+    // targetSegmentPath is derived directly from the retained metadata entry.
+    // targetSegmentPath 直接从保留的元数据记录派生。
+    let target_segment_path = session_dir.join(&target_segment.file);
+    // retainedSegments begins with every complete segment strictly before the target file.
+    // retainedSegments 初始包含严格位于目标文件之前的每个完整分段。
     let mut retained_segments = original_segments[..target_segment_position].to_vec();
     if retained_target_lines.is_empty() {
         if target_segment_path.exists() {
@@ -994,12 +1300,16 @@ pub(in crate::workspace_store) fn truncate_segmented_session_before_message(
     // Every removed tail file comes from the exact retained metadata list; directory enumeration is forbidden.
     // 每个被移除的尾部文件都来自精确保留元数据列表；禁止枚举目录。
     for segment in original_segments.iter().skip(target_segment_position + 1) {
+        // segmentPath is an exact metadata-declared tail file, never a discovered directory entry.
+        // segmentPath 是元数据精确声明的尾部文件，绝非目录发现结果。
         let segment_path = session_dir.join(&segment.file);
         if segment_path.exists() {
             fs::remove_file(segment_path).map_err(to_store_error)?;
         }
     }
     if retained_segments.is_empty() {
+        // emptySegment restores the single exact append target required by an empty retained transcript.
+        // emptySegment 恢复空保留转录所需的唯一精确追加目标。
         let empty_segment = SegmentMetadata::empty(segment_file_name(1), 0);
         write_json_lines_file_atomic::<SegmentedSessionEventLine>(
             &session_dir.join(&empty_segment.file),
@@ -1035,8 +1345,8 @@ pub(in crate::workspace_store) fn truncate_segmented_session_before_message(
     {
         metadata.fork_source = None;
     }
-    update_segmented_message_checkpoint(&mut metadata, retained_messages)?;
-    write_metadata(session_dir, &metadata)
+    update_segmented_message_checkpoint(metadata, retained_messages)?;
+    write_metadata(session_dir, metadata)
 }
 
 /// Physically truncates a segmented session after one persisted message without adding display events.

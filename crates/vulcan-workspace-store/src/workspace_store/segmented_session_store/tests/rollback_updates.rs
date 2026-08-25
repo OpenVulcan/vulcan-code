@@ -442,6 +442,120 @@ fn truncate_before_message_removes_tail_without_rollback_marker() {
     );
 }
 
+/// Verifies prompt edit can rewind an already-durable UserInput boundary when its display row was overtaken.
+/// 验证展示记录被抢占时，提示词编辑仍可回退已经可靠落盘的 UserInput 边界。
+#[test]
+fn truncate_before_boundary_user_prompt_recovers_missing_display_append() {
+    // root isolates the missing-user-display regression fixture.
+    // root 隔离用户展示记录缺失的回归夹具。
+    let root = test_root("truncate_before_boundary_user_prompt_recovers_missing_display_append");
+    // sessionId owns both the segmented directory and boundary thread identity.
+    // sessionId 同时拥有分段目录与边界线程身份。
+    let session_id = Uuid::new_v4();
+    // sessionDir uses numeric timestamps so its metadata index can address the target file exactly.
+    // sessionDir 使用数字时间戳，使元数据索引能够精确定位目标文件。
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        SegmentedSessionCreateRequest {
+            session_id: session_id.to_string(),
+            project_tag: String::from("project-alpha"),
+            created_date: String::from("2026-08-25"),
+            created_at: String::from("100"),
+            project_id: Some(String::from("project-alpha")),
+            title: Some(String::from("boundary edit")),
+            title_source: Some(String::from("test")),
+            segment_policy: SegmentPolicy {
+                max_lines: 2,
+                max_bytes: DEFAULT_SEGMENT_MAX_BYTES,
+            },
+        },
+    )
+    .expect("create boundary edit session");
+    // threadId is the exact main-session boundary owner.
+    // threadId 是精确的主会话边界所有者。
+    let thread_id = vulcan_session_core::SessionNodeId::from(session_id);
+    // boundaryEvents persist the user turn even though the display append below intentionally omits it.
+    // boundaryEvents 会持久化用户回合，而下方展示追加会有意省略该用户记录。
+    let boundary_events = vec![
+        SessionBoundaryEvent::new(
+            "turn-edit-started",
+            thread_id,
+            0,
+            SessionBoundaryEventKind::TurnStarted,
+            vulcan_session_boundary::SessionEventScope::Turn,
+            SessionEventVisibility::Hidden,
+            101,
+        )
+        .with_turn_id("turn-edit"),
+        SessionBoundaryEvent::new(
+            "turn-edit-user-input",
+            thread_id,
+            1,
+            SessionBoundaryEventKind::UserInput,
+            vulcan_session_boundary::SessionEventScope::Turn,
+            SessionEventVisibility::Visible,
+            101,
+        )
+        .with_turn_id("turn-edit")
+        .with_payload(json!({
+            "prompt": "edited prompt",
+            "attachments": [],
+            "source": "user_followup",
+            "editable": true,
+        })),
+    ];
+    append_segmented_boundary_events(&session_dir, &boundary_events)
+        .expect("append durable user boundary");
+    // assistantOnlyMessage reproduces the overtaking write that occupied message index zero.
+    // assistantOnlyMessage 复现抢先占用展示消息索引零的助手写入。
+    let mut assistant_only_message =
+        SessionMessageEntry::new(SessionMessageKind::Assistant, "", "answer")
+            .with_runtime_metadata("assistant-only", "200");
+    assistant_only_message.record_kind = SessionMessageRecordKind::AssistantOutput;
+    append_segmented_session_message_update(&session_dir, &[assistant_only_message])
+        .expect("append overtaking assistant display row");
+    // targetMessage is the boundary-projected user row already displayed by hydration.
+    // targetMessage 是水合过程已经展示的边界投影用户记录。
+    let mut target_message =
+        SessionMessageEntry::new(SessionMessageKind::User, "", "edited prompt")
+            .with_runtime_metadata("live-visible-user", "101");
+    target_message.record_kind = SessionMessageRecordKind::Transcript;
+    target_message.metadata = Some(json!({
+        "source": "session_boundary_event",
+        "payload": {
+            "prompt": "edited prompt",
+            "attachments": [],
+            "source": "user_followup",
+            "editable": true,
+        }
+    }));
+
+    truncate_segmented_session_before_boundary_user_prompt(&session_dir, &target_message, &[])
+        .expect("truncate through durable boundary fallback");
+
+    // metadata proves the overtaking assistant row and the complete target turn were removed.
+    // metadata 证明抢占的助手记录与完整目标回合均已移除。
+    let metadata: SegmentedSessionMetadata =
+        read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE)).expect("read metadata");
+    assert_eq!(metadata.message_count, 0);
+    assert_eq!(metadata.session_id, session_id.to_string());
+    // retainedLines proves no UserInput or later display row survived the semantic rewind.
+    // retainedLines 证明语义回退后没有 UserInput 或更晚的展示记录残留。
+    let retained_lines = read_segment_event_lines(&session_dir.join(&metadata.active_segment))
+        .expect("read retained exact segment");
+    assert!(
+        retained_lines
+            .iter()
+            .all(|line| line.kind != SegmentedSessionEventKind::SessionBoundary)
+    );
+    assert!(
+        retained_lines
+            .iter()
+            .all(|line| line.payload.get("message").is_none())
+    );
+}
+
 /// Verifies prompt-edit truncation reads only the metadata-selected target segment.
 /// 验证提示词编辑截断仅读取元数据选定的目标分段。
 #[test]

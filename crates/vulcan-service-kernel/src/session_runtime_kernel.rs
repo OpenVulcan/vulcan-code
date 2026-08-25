@@ -1040,6 +1040,7 @@ pub(crate) fn execution_stream_event_session_id(event: &ExecutionStreamEvent) ->
         | ExecutionStreamEvent::RuntimeEvent { session_id, .. }
         | ExecutionStreamEvent::ConversationCheckpoint { session_id, .. }
         | ExecutionStreamEvent::ContextCompactionRequired { session_id, .. }
+        | ExecutionStreamEvent::ContextCompactionPolicyRefreshRequired { session_id, .. }
         | ExecutionStreamEvent::ProviderRouteSwitchRequired { session_id, .. } => *session_id,
         ExecutionStreamEvent::ProviderRequestTelemetry(event)
         | ExecutionStreamEvent::ProviderRequestDurabilityBoundary { event, .. } => event.session_id,

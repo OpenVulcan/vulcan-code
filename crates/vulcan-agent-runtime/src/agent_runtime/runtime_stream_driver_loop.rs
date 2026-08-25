@@ -276,6 +276,18 @@ pub(crate) fn drive_runtime_stream_provider_loop(
         }
 
         if let Some((conversation_state, reason, provider_request_continuation)) =
+            stream_state.take_context_compaction_policy_refresh_required()
+        {
+            yield ExecutionStreamEvent::ContextCompactionPolicyRefreshRequired {
+                session_id,
+                conversation_state,
+                reason,
+                provider_request_continuation,
+            };
+            return;
+        }
+
+        if let Some((conversation_state, reason, provider_request_continuation)) =
             stream_state.take_provider_route_switch_required()
         {
             yield ExecutionStreamEvent::ProviderRouteSwitchRequired {

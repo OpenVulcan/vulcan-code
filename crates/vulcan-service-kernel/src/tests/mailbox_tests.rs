@@ -119,7 +119,7 @@ fn guided_prompt_intervention_emits_consumed_pending_prompt_delta() {
     let app = ServiceEventEmitter::new(vec![Arc::new(CapturingServiceEventSink {
         events: Arc::clone(&emitted_events),
     })]);
-    let intervention = build_webui_prompt_intervention(app, Arc::clone(&state));
+    let intervention = build_webui_prompt_intervention(app, Arc::clone(&state), None);
     let mut controller = test_mailbox_controller();
 
     assert!(
@@ -178,8 +178,11 @@ fn webui_prompt_intervention_is_atomic_on_invalid_mailbox_payload() {
         .input_queue_mut()
         .enqueue_current_turn_input(invalid_input);
     let state = Arc::new(Mutex::new(service_state));
-    let intervention =
-        build_webui_prompt_intervention(ServiceEventEmitter::new(Vec::new()), Arc::clone(&state));
+    let intervention = build_webui_prompt_intervention(
+        ServiceEventEmitter::new(Vec::new()),
+        Arc::clone(&state),
+        None,
+    );
     let mut controller = test_mailbox_controller();
     // original_controller captures every Core field before the rejected intervention.
     // original_controller 捕获被拒绝干预前的全部 Core 字段。
@@ -247,8 +250,11 @@ fn pending_model_switch_preempts_prompt_intervention_without_draining_guidance()
         },
     );
     let state = Arc::new(Mutex::new(service_state));
-    let intervention =
-        build_webui_prompt_intervention(ServiceEventEmitter::new(Vec::new()), Arc::clone(&state));
+    let intervention = build_webui_prompt_intervention(
+        ServiceEventEmitter::new(Vec::new()),
+        Arc::clone(&state),
+        None,
+    );
     let mut controller = test_mailbox_controller();
 
     let error = intervention(parent_session_id, &mut controller)
@@ -267,6 +273,55 @@ fn pending_model_switch_preempts_prompt_intervention_without_draining_guidance()
         .expect("runtime state should remain present");
     assert_eq!(retained_state.ui_state.pending_prompt_queue.len(), 1);
     assert!(retained_state.pending_model_selection.is_some());
+}
+
+/// Verifies a live context-node change suspends the frozen budget before the next Provider request.
+/// 验证实时上下文节点变更会在下一次 Provider 请求前暂停冻结预算。
+#[test]
+fn live_context_node_change_requests_execution_policy_refresh() {
+    let parent_session_id = SessionId::new_v4();
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    let runtime_state = service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("workspace snapshot should exist")
+        .session_runtime_state
+        .entry(parent_session_id)
+        .or_insert_with(SessionRuntimeStateEntry::default);
+    runtime_state.context_compaction_window_node_id = Some(
+        "compression-window-4"
+            .parse()
+            .expect("known context node should parse"),
+    );
+    let state = Arc::new(Mutex::new(service_state));
+    let frozen_node_id = Some(
+        "compression-window-3"
+            .parse()
+            .expect("known context node should parse"),
+    );
+    let intervention = build_webui_prompt_intervention(
+        ServiceEventEmitter::new(Vec::new()),
+        Arc::clone(&state),
+        frozen_node_id,
+    );
+    let mut controller = test_mailbox_controller();
+
+    let error = intervention(parent_session_id, &mut controller)
+        .expect_err("changed context node must suspend the frozen execution policy");
+
+    assert!(matches!(
+        error,
+        RuntimePromptInterventionError::ContextCompactionPolicyRefreshRequired { .. }
+    ));
+    assert!(controller.snapshot().messages.is_empty());
+    let guard = state.lock().expect("state lock");
+    let retained_node_id = guard
+        .workspace_snapshot
+        .as_ref()
+        .and_then(|workspace| workspace.session_runtime_state.get(&parent_session_id))
+        .and_then(|runtime_state| runtime_state.context_compaction_window_node_id)
+        .expect("retained context node should remain present");
+    assert_eq!(retained_node_id.as_str(), "compression-window-4");
 }
 
 /// Builds one completed subagent mailbox metadata object with the required execution identity.

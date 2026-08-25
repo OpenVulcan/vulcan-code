@@ -939,15 +939,6 @@ pub(crate) async fn service_set_session_context_compaction_window(
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        if guard.active_stream_tasks.contains_key(&session_id)
-            || guard
-                .session_turn_admission_reservations
-                .contains_key(&session_id)
-        {
-            return Err(String::from(
-                "当前会话正在执行，完成或停止本次执行后才能切换上下文压缩窗口。",
-            ));
-        }
         let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
             String::from("service is still starting; controller runtime is not ready")
         })?;

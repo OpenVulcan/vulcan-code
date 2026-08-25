@@ -90,7 +90,11 @@ impl VulcanCoreController {
         let intervention_changed = match on_before_next_provider_turn(&mut intervention_draft) {
             Ok(changed) => changed,
             Err(error) => {
-                if !matches!(&error, CoreError::ProviderRouteSwitchRequired { .. }) {
+                if !matches!(
+                    &error,
+                    CoreError::ProviderRouteSwitchRequired { .. }
+                        | CoreError::ContextCompactionPolicyRefreshRequired { .. }
+                ) {
                     self.mark_failed(error.to_string());
                 }
                 return Err(error);
@@ -166,7 +170,11 @@ impl VulcanCoreController {
         let intervention_changed = match on_before_next_provider_turn(&mut intervention_draft) {
             Ok(changed) => changed,
             Err(error) => {
-                if !matches!(&error, CoreError::ProviderRouteSwitchRequired { .. }) {
+                if !matches!(
+                    &error,
+                    CoreError::ProviderRouteSwitchRequired { .. }
+                        | CoreError::ContextCompactionPolicyRefreshRequired { .. }
+                ) {
                     self.mark_failed(error.to_string());
                 }
                 return Err(error);
@@ -628,7 +636,11 @@ impl VulcanCoreController {
             let intervention_changed = match on_before_next_provider_turn(&mut intervention_draft) {
                 Ok(changed) => changed,
                 Err(error) => {
-                    if !matches!(&error, CoreError::ProviderRouteSwitchRequired { .. }) {
+                    if !matches!(
+                        &error,
+                        CoreError::ProviderRouteSwitchRequired { .. }
+                            | CoreError::ContextCompactionPolicyRefreshRequired { .. }
+                    ) {
                         self.mark_failed(error.to_string());
                     }
                     return Err(error);

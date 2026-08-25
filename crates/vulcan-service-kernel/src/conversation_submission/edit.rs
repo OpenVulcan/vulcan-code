@@ -385,6 +385,7 @@ pub(crate) async fn service_submit_user_prompt_edit(
         source_session,
         project_id,
         live_runtime_state,
+        visible_user_prompt_prefix,
         replay_model_selection,
     ) = {
         let mut guard = state
@@ -423,6 +424,18 @@ pub(crate) async fn service_submit_user_prompt_edit(
             .get(&session_id)
             .cloned()
             .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_RUNTIME_STATE_NOT_FOUND"))?;
+        // visibleUserPromptPrefix retains only the hydrated display prefix through the validated edit target.
+        // visibleUserPromptPrefix 仅保留截至已校验编辑目标的水合展示前缀。
+        let visible_user_prompt_prefix = workspace
+            .session_messages
+            .get(&session_id)
+            .and_then(|messages| {
+                messages
+                    .iter()
+                    .position(|message| message.id == request.message_id)
+                    .map(|target_index| messages[..=target_index].to_vec())
+            })
+            .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_NOT_FOUND"))?;
         let replay_model_selection = prompt_replay_model_selection(&live_runtime_state)?;
         (
             controller_runtime,
@@ -430,6 +443,7 @@ pub(crate) async fn service_submit_user_prompt_edit(
             source_session,
             project_id,
             live_runtime_state,
+            visible_user_prompt_prefix,
             replay_model_selection,
         )
     };
@@ -442,6 +456,7 @@ pub(crate) async fn service_submit_user_prompt_edit(
         &project_id,
         &request.message_id,
         live_runtime_state,
+        visible_user_prompt_prefix.as_slice(),
     )
     .await?;
     let (retained_messages, replay_runtime_state) = rollback.take_rewritten_state();

@@ -212,7 +212,28 @@ fn session_boundary_event_projection_metadata(event: &SessionBoundaryEvent) -> V
 
 /// Builds a stable record id from the owning session boundary event.
 /// 根据所属 会话边界事件构建稳定记录标识。
+///
+/// # Parameters
+/// 参数
+/// `event` is the durable boundary event being projected into the visible transcript.
+/// `event` 是正在投影为可见转录记录的可靠边界事件。
+///
+/// # Returns
+/// 返回值
+/// Returns the prompt-owned transcript id when declared, otherwise the legacy deterministic boundary id.
+/// 声明时返回提示词所有者的转录身份，否则返回旧版确定性边界身份。
 fn session_boundary_record_id(event: &SessionBoundaryEvent) -> String {
+    // visibleUserPromptRecordId preserves the authoritative transcript identity declared by the prompt owner.
+    // visibleUserPromptRecordId 保留提示词所有者声明的权威转录身份。
+    if let Some(visible_user_prompt_record_id) = event
+        .payload
+        .get("visible_user_prompt_record_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return visible_user_prompt_record_id.to_string();
+    }
     format!(
         "codex-{}-{}-{}",
         event.thread_id, event.sequence, event.event_id
@@ -340,6 +361,38 @@ mod tests {
             SessionMessageRecordKind::AssistantOutput
         );
         assert_eq!(projection.conversation_state.messages.len(), 2);
+    }
+
+    /// Verifies a prompt-owned visible record id remains stable across boundary projection.
+    /// 验证提示词所有者声明的可见记录身份在边界投影后保持稳定。
+    #[test]
+    fn user_input_projection_preserves_declared_visible_record_id() {
+        // threadId identifies the exact boundary thread that owns the user input.
+        // threadId 标识拥有该用户输入的精确边界线程。
+        let thread_id = SessionNodeId::new_v4();
+        // visibleRecordId models the transcript identity already returned to the WebUI.
+        // visibleRecordId 模拟已经返回给 WebUI 的转录身份。
+        let visible_record_id = String::from("visible-user-record-1");
+        // projection rebuilds the visible transcript from the durable boundary event only.
+        // projection 仅从可靠边界事件重建可见转录。
+        let projection = boundary_events_to_vulcan_conversation_state(&[event(
+            thread_id,
+            1,
+            SessionBoundaryEventKind::UserInput,
+            SessionEventScope::Turn,
+            SessionEventVisibility::Visible,
+            json!({
+                "prompt": "hello",
+                "visible_user_prompt_record_id": visible_record_id.clone(),
+            }),
+        )])
+        .expect("project declared visible user identity");
+
+        assert_eq!(projection.conversation_state.records.len(), 1);
+        assert_eq!(
+            projection.conversation_state.records[0].id,
+            visible_record_id
+        );
     }
 
     /// Verifies alias-only user input payloads are not projected as valid transcript records.

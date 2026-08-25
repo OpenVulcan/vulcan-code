@@ -617,7 +617,11 @@ fn classify_legacy_retry_reason(
 
     if matches!(
         error,
-        VulcanCoreError::InvalidState { .. } | VulcanCoreError::ToolFailure { .. }
+        VulcanCoreError::InvalidState { .. }
+            | VulcanCoreError::ContextCompactionRequired { .. }
+            | VulcanCoreError::ContextCompactionPolicyRefreshRequired { .. }
+            | VulcanCoreError::ProviderRouteSwitchRequired { .. }
+            | VulcanCoreError::ToolFailure { .. }
     ) {
         return None;
     }

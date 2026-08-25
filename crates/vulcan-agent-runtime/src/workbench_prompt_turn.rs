@@ -736,6 +736,7 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
         &preparation_turn_id,
         &sanitized_prompt,
         &start_attachments,
+        visible_user_prompt_record_id.as_deref(),
         &now,
     );
     Ok(SharedPromptTurnStart {
@@ -785,11 +786,30 @@ fn new_canonical_user_message_id(session_id: SessionId) -> String {
 
 /// Builds session-boundary prompt-turn boundary events from the shared reducer input.
 /// 从共享归约器输入构建 会话边界的提示词轮次边界事件。
+///
+/// # Parameters
+/// 参数
+/// `input` contains the authoritative prompt-turn owner and persistence policy.
+/// `input` 包含权威提示词回合所有者与持久化策略。
+/// `turn_id` is the stable identity shared by both boundary events.
+/// `turn_id` 是两个边界事件共享的稳定身份。
+/// `prompt` and `attachments` are the canonical user input payload.
+/// `prompt` 与 `attachments` 是规范用户输入载荷。
+/// `visible_user_prompt_record_id` links a visible boundary projection to its transcript identity.
+/// `visible_user_prompt_record_id` 将可见边界投影关联到其转录身份。
+/// `now` is the accepted Unix-millisecond timestamp text.
+/// `now` 是已接纳的 Unix 毫秒时间戳文本。
+///
+/// # Returns
+/// 返回值
+/// Returns the ordered TurnStarted and UserInput boundary events for one prompt turn.
+/// 返回单个提示词回合有序的 TurnStarted 与 UserInput 边界事件。
 fn prompt_turn_boundary_events(
     input: &SharedPromptTurnRuntimeBeginInput<'_>,
     turn_id: &str,
     prompt: &str,
     attachments: &[ConversationAttachment],
+    visible_user_prompt_record_id: Option<&str>,
     now: &str,
 ) -> Vec<SessionBoundaryEvent> {
     let thread_id = SessionNodeId::from(input.session_id);
@@ -842,6 +862,7 @@ fn prompt_turn_boundary_events(
         "turn_process": input.source.folds_into_active_turn_process(),
         "collapsed_by_default": input.source.folds_into_active_turn_process(),
         "editable": input.source.allows_user_prompt_edit(),
+        "visible_user_prompt_record_id": visible_user_prompt_record_id,
     }));
     vec![turn_started, user_input]
 }

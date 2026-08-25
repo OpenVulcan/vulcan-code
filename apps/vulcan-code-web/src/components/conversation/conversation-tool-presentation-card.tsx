@@ -2423,7 +2423,7 @@ function FileChangeSummaryButton(props: {
       {showOperationIcon ? <FileChangeOperationIcon accessAction={props.presentation.accessAction} operation={props.file.operation} /> : null}
           {showStatusLabel ? <span className={cn("tool-presentation-state", (props.requestProgress?.receiving || props.presentation.state === "running") && "shimmer")}>{props.requestProgress?.statusLabel ?? fileChangeStatusLabel(props.presentation, props.file.operation, props.t)}</span> : null}
       <span className="file-change-path">
-        <span className="file-change-icon-stack"><FileTypeIcon icon={props.file.icon} /></span>
+        {props.presentation.accessAction !== "list" ? <span className="file-change-icon-stack"><FileTypeIcon icon={props.file.icon} /></span> : null}
         <span className="file-change-path-text">{props.file.displayPath}</span>
         <FileTextFormatBadge file={props.file} t={props.t} />
         <ToolRequestInlineProgress progress={props.requestProgress ?? null} />

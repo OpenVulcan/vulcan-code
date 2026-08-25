@@ -1,37 +1,72 @@
 //! WebUI chained-turn dispatch after a parent turn reaches an idle point.
 //! WebUI 父级回合到达空闲点后的链式回合分发逻辑。
 
-use vulcan_agent_runtime::workbench_prompt_turn::{
-    SharedPromptPrecheckPlan, SharedPromptTurnBeginInput, begin_shared_prompt_turn,
-};
 use vulcan_service_api::ServiceEventEmitter;
-use vulcan_session_core::ActiveTurnKind;
-use vulcan_workbench_model::{PendingSessionPromptSource, SessionId, SessionRunPhase};
+use vulcan_workbench_model::{
+    PendingPromptRuntimeOptions, PendingSessionPromptEntry, PendingSessionPromptSource, SessionId,
+};
 use vulcan_workspace_store::{
     data_plane::ControllerRuntimeHandle,
     workspace_store::{ThreadGoalStatus, VulcanGoalStore},
 };
 
-use super::conversation_submission::existing_submission_workspace_slice;
-use super::session_hydration::{
-    capture_preserved_workspace_run_state, load_workspace_for_submission,
-    preserve_active_session_run_state, retained_submission_snapshot_has_session_context,
-};
+use super::pending_prompts::enqueue_internal_pending_prompt_entry;
 use super::webui_prompt_lifecycle::{
     maybe_prepare_next_webui_pending_prompt, maybe_start_webui_mailbox_turn_if_ready,
-    start_webui_precheck_or_continue,
 };
 use super::{
-    AgentRuntimeBridge, SharedServiceBridgeState, active_kernel_session_ids,
-    active_reasoning_selection_effort, apply_webui_prompt_begin_outer_steps,
-    cache_session_goal_summary, commit_workspace_snapshot_and_emit_session_phase_delta,
-    current_unix_millis_value, ensure_webui_goal_session_kernel_turn_start_allowed,
-    ensure_webui_session_runtime_entry, refresh_exact_vmm_hook_session_projection,
+    AgentRuntimeBridge, SharedServiceBridgeState, cache_session_goal_summary,
+    current_unix_millis_text, current_unix_millis_value,
     runtime_state_has_queued_pending_prompt_work, session_goal_dispatch_version,
-    session_has_pending_plan_artifact, start_webui_goal_session_kernel_turn,
-    webui_session_has_active_run, webui_session_kernel_has_active_turn, webui_trace,
-    webui_trace_if_slow, workspace_path_for_session,
+    spawn_workspace_session_runtime_state_persist_task, webui_session_has_active_run,
+    webui_session_kernel_has_active_turn, webui_trace, webui_trace_if_slow,
 };
+
+/// Enqueues one durable hidden continuation entry when the session queue remains idle.
+/// 当会话队列仍为空闲时，加入一条可持久化的隐藏续跑条目。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` owns the authoritative pending queue, `goal_id` identifies the active Goal
+/// stage, and `created_at` is the stable enqueue timestamp.
+/// `runtime_state` 持有权威待执行队列，`goal_id` 标识活动 Goal 阶段，`created_at` 是稳定入队时间。
+///
+/// # Returns
+/// 返回值
+/// `true` when a new entry was queued; `false` when existing queued work must retain priority.
+/// 新条目入队时返回 `true`；已有排队工作必须保持优先级时返回 `false`。
+fn enqueue_session_goal_continuation_entry_if_idle(
+    runtime_state: &mut vulcan_workbench_model::SessionRuntimeStateEntry,
+    goal_id: &str,
+    created_at: String,
+) -> Result<bool, String> {
+    if runtime_state_has_queued_pending_prompt_work(runtime_state) {
+        return Ok(false);
+    }
+    enqueue_internal_pending_prompt_entry(
+        runtime_state,
+        PendingSessionPromptEntry {
+            id: format!(
+                "webui-goal-auto-continuation-{goal_id}-{}",
+                SessionId::new_v4()
+            ),
+            prompt: String::from("Continue working toward the active thread goal."),
+            hidden_model_guidance: None,
+            preview: String::from("继续执行目标"),
+            attachments: Vec::new(),
+            model_reference: None,
+            runtime_options: PendingPromptRuntimeOptions::default(),
+            source: PendingSessionPromptSource::GoalContinuation,
+            task_id: Some(goal_id.to_string()),
+            panel_entry_id: None,
+            created_at: created_at.clone(),
+        },
+        false,
+        created_at,
+        "目标自动续跑入队失败",
+    )?;
+    Ok(true)
+}
 
 /// Starts the next WebUI chained turn after one stream finishes.
 /// 在单个执行流结束后启动下一条 WebUI 链式回合。
@@ -158,49 +193,19 @@ pub(super) async fn maybe_start_session_goal_continuation_if_idle(
     session_id: SessionId,
 ) -> Result<bool, String> {
     let continuation_prepare_started_at = current_unix_millis_value();
-    let (
-        has_active_run,
-        has_active_kernel_turn,
-        has_pending_prompt,
-        has_pending_plan_artifact,
-        preserved_workspace_run_state,
-        retained_workspace_snapshot,
-    ) = {
+    let (has_active_run, has_active_kernel_turn, has_pending_prompt) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let active_kernel_sessions = active_kernel_session_ids(&guard);
-        let preserved_workspace_run_state = capture_preserved_workspace_run_state(
-            guard.workspace_snapshot.as_ref(),
-            &active_kernel_sessions,
-            Some(session_id),
-        );
         let has_pending_prompt = guard
             .workspace_snapshot
             .as_ref()
             .and_then(|snapshot| snapshot.session_runtime_state.get(&session_id))
             .is_some_and(runtime_state_has_queued_pending_prompt_work);
-        let has_pending_plan_artifact = guard
-            .workspace_snapshot
-            .as_ref()
-            .is_some_and(|snapshot| session_has_pending_plan_artifact(snapshot, session_id));
-        // retainedWorkspaceSnapshot captures only the exact goal session and never clones unrelated workspace history.
-        // retainedWorkspaceSnapshot 只捕获精确目标会话，绝不复制无关工作区历史。
-        let retained_workspace_snapshot = match guard.workspace_snapshot.as_ref() {
-            Some(snapshot)
-                if retained_submission_snapshot_has_session_context(snapshot, session_id) =>
-            {
-                Some(existing_submission_workspace_slice(snapshot, session_id)?)
-            }
-            _ => None,
-        };
         (
             webui_session_has_active_run(&guard, session_id),
             webui_session_kernel_has_active_turn(&guard, session_id),
             has_pending_prompt,
-            has_pending_plan_artifact,
-            preserved_workspace_run_state,
-            retained_workspace_snapshot,
         )
     };
     webui_trace_if_slow(
@@ -211,19 +216,19 @@ pub(super) async fn maybe_start_session_goal_continuation_if_idle(
     webui_trace(
         "goal_continuation_prepare_check",
         format!(
-            "session={session_id} has_active_run={has_active_run} has_active_kernel_turn={has_active_kernel_turn} has_pending_prompt={has_pending_prompt} has_pending_plan_artifact={has_pending_plan_artifact}"
+            "session={session_id} has_active_run={has_active_run} has_active_kernel_turn={has_active_kernel_turn} has_pending_prompt={has_pending_prompt}"
         ),
     );
-    if has_active_run || has_active_kernel_turn || has_pending_prompt || has_pending_plan_artifact {
+    if has_active_run || has_active_kernel_turn || has_pending_prompt {
         return Ok(false);
     }
     let goal_store = VulcanGoalStore::new(controller_runtime.clone());
-    let (goal, goal_dispatch_version) = loop {
+    let goal = loop {
         let version_before_read = session_goal_dispatch_version(state, session_id)?;
         let goal = goal_store.get_thread_goal(session_id).await?;
         let version_after_read = session_goal_dispatch_version(state, session_id)?;
         if version_before_read == version_after_read {
-            break (goal, version_after_read);
+            break goal;
         }
     };
     let Some(goal) = goal else {
@@ -239,110 +244,103 @@ pub(super) async fn maybe_start_session_goal_continuation_if_idle(
         );
         return Ok(false);
     }
+    let goal_id = goal.goal_id.clone();
     cache_session_goal_summary(state, session_id, Some(goal))?;
-    let (mut workspace_snapshot, workspace_source) =
-        if let Some(workspace_snapshot) = retained_workspace_snapshot {
-            (workspace_snapshot, "retained")
-        } else {
-            (
-                load_workspace_for_submission(controller_runtime.clone(), Some(session_id)).await?,
-                "disk",
-            )
-        };
-    preserve_active_session_run_state(
-        preserved_workspace_run_state.as_ref(),
-        &mut workspace_snapshot,
-    );
-    ensure_webui_session_runtime_entry(&mut workspace_snapshot, session_id, None)?;
-    let Some(session_title) = workspace_snapshot
-        .sessions
-        .iter()
-        .find(|session| session.id == session_id)
-        .map(|session| session.title.clone())
-    else {
-        return Ok(false);
-    };
-    let workspace_path = workspace_path_for_session(&workspace_snapshot, session_id);
-    let start = {
-        // Service state always precedes the shared Hook runtime in the cross-runtime lock order.
-        // 跨运行时锁顺序中，服务状态始终先于共享 Hook 运行时。
+    let enqueued = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        ensure_webui_goal_session_kernel_turn_start_allowed(
-            &guard,
-            session_id,
-            goal_dispatch_version,
-        )?;
-        let mut hook_runtime = agent_runtime
-            .conversation_hook_runtime
-            .lock()
-            .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
-        let start = begin_shared_prompt_turn(
-            &mut workspace_snapshot,
-            &mut hook_runtime,
-            SharedPromptTurnBeginInput {
-                session_id,
-                session_title: &session_title,
-                workspace_path: &workspace_path,
-                prompt_entry_id: format!("webui-goal-continuation-{}", SessionId::new_v4()),
-                prompt: "Continue working toward the active thread goal.",
-                hidden_model_guidance: None,
-                provider_visible_agent_messages: Vec::new(),
-                attachments: Vec::new(),
-                provider_attachments: None,
-                append_canonical_user_message: false,
-                append_visible_user_prompt_record: false,
-                source: PendingSessionPromptSource::GoalContinuation,
-                execution_mode: String::from("build"),
-                reasoning_effort: active_reasoning_selection_effort(
-                    &agent_runtime.provider_configuration,
-                ),
-            },
-        )?;
-        start_webui_goal_session_kernel_turn(
-            &mut guard,
-            session_id,
-            goal_dispatch_version,
-            &start.preparation_turn_id,
-            ActiveTurnKind::GoalContinuation,
-        )?;
-        start
+        let workspace_snapshot = guard
+            .workspace_snapshot
+            .as_mut()
+            .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+        let runtime_state = workspace_snapshot
+            .session_runtime_state
+            .entry(session_id)
+            .or_default();
+        enqueue_session_goal_continuation_entry_if_idle(
+            runtime_state,
+            &goal_id,
+            current_unix_millis_text(),
+        )?
     };
-    apply_webui_prompt_begin_outer_steps(
-        controller_runtime,
-        &mut workspace_snapshot,
+    if !enqueued {
+        return Ok(false);
+    }
+    // The queue entry survives temporary blockers such as an unresolved plan decision and is retried by the existing dispatcher.
+    // 队列条目会跨越计划决策未完成等暂态阻塞，并由现有分发器继续重试。
+    spawn_workspace_session_runtime_state_persist_task(
+        state.clone(),
+        controller_runtime.clone(),
         session_id,
-        &session_title,
+        Some(String::from("goal_auto_continuation_queued")),
     );
-    refresh_exact_vmm_hook_session_projection(
-        &agent_runtime.vmm_hook_runtime,
-        &workspace_snapshot,
-        session_id,
-    )?;
-    commit_workspace_snapshot_and_emit_session_phase_delta(
-        app,
-        state,
-        workspace_snapshot,
-        session_id,
-        SessionRunPhase::Preparing,
-    )?;
-    let precheck_plan = SharedPromptPrecheckPlan {
-        has_precheck_hooks: false,
-        should_skip_precheck: true,
-        progress_labels: Vec::new(),
-    };
-    start_webui_precheck_or_continue(
+    let started = maybe_prepare_next_webui_pending_prompt(
         app,
         state,
         controller_runtime,
         agent_runtime,
-        start,
-        precheck_plan,
-    )?;
+        session_id,
+        false,
+    )
+    .await?;
     webui_trace(
-        "goal_continuation_started",
-        format!("session={session_id} source={workspace_source}"),
+        "goal_continuation_queued",
+        format!("session={session_id} started={started}"),
     );
-    Ok(true)
+    Ok(started)
+}
+
+#[cfg(test)]
+mod tests {
+    //! Goal continuation queue tests.
+    //! Goal 续跑队列测试。
+
+    use super::*;
+
+    /// Verifies autonomous Goal work becomes one hidden durable queue owner and never duplicates itself.
+    /// 验证目标自动工作会成为唯一隐藏持久队列所有者，且不会重复入队。
+    #[test]
+    fn goal_continuation_is_queued_once_for_idle_runtime_state() {
+        let mut runtime_state = vulcan_workbench_model::SessionRuntimeStateEntry::default();
+
+        assert!(
+            enqueue_session_goal_continuation_entry_if_idle(
+                &mut runtime_state,
+                "goal-stage-1",
+                String::from("1000"),
+            )
+            .expect("idle Goal continuation should enqueue")
+        );
+        assert!(
+            !enqueue_session_goal_continuation_entry_if_idle(
+                &mut runtime_state,
+                "goal-stage-1",
+                String::from("1001"),
+            )
+            .expect("existing Goal continuation should retain ownership")
+        );
+        assert_eq!(runtime_state.ui_state.pending_prompt_queue.len(), 1);
+        let entry = &runtime_state.ui_state.pending_prompt_queue[0];
+        assert_eq!(entry.source, PendingSessionPromptSource::GoalContinuation);
+        assert_eq!(entry.task_id.as_deref(), Some("goal-stage-1"));
+        assert!(entry.panel_entry_id.is_none());
+
+        // first_entry_id proves repeated autonomous turns do not reuse one queue identity.
+        // first_entry_id 证明重复自动续跑不会复用同一个队列身份。
+        let first_entry_id = entry.id.clone();
+        runtime_state.ui_state.pending_prompt_queue.clear();
+        assert!(
+            enqueue_session_goal_continuation_entry_if_idle(
+                &mut runtime_state,
+                "goal-stage-1",
+                String::from("1002"),
+            )
+            .expect("the next completed Goal turn should enqueue another continuation")
+        );
+        assert_ne!(
+            runtime_state.ui_state.pending_prompt_queue[0].id,
+            first_entry_id
+        );
+    }
 }

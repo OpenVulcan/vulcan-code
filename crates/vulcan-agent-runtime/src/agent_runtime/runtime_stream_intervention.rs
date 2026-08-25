@@ -17,6 +17,13 @@ pub enum RuntimePromptInterventionError {
         /// 供服务层重启使用的人类可读控制边界诊断。
         message: String,
     },
+    /// The session context-compaction node changed and execution preparation must be rebuilt before the next Provider request.
+    /// 会话上下文压缩节点已变化，必须在下一次 Provider 请求前重新构建执行准备。
+    ContextCompactionPolicyRefreshRequired {
+        /// Human-readable control-boundary diagnostic for the service-owned restart.
+        /// 供服务层重启使用的人类可读控制边界诊断。
+        message: String,
+    },
     /// Shared retained state could not be locked or accessed.
     /// 无法锁定或访问共享保留状态。
     StateAccess {
@@ -73,6 +80,12 @@ impl Display for RuntimePromptInterventionError {
                 write!(
                     formatter,
                     "Provider route switch is required before the next request: {message}"
+                )
+            }
+            Self::ContextCompactionPolicyRefreshRequired { message } => {
+                write!(
+                    formatter,
+                    "Context compaction policy refresh is required before the next request: {message}"
                 )
             }
             Self::StateAccess { message } => {

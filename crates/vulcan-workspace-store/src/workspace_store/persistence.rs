@@ -30,8 +30,9 @@ use super::segmented_session_store::{
     segmented_session_directory, segmented_session_directory_exists,
     stage_archived_segmented_session_deletion, state_document_from_runtime_state,
     sync_runtime_log_from_compacted_conversation_state, sync_runtime_log_from_conversation_state,
-    to_store_error, truncate_segmented_session_before_message, update_segmented_message_checkpoint,
-    write_metadata, write_segmented_session_fork_source, write_state,
+    to_store_error, truncate_segmented_session_before_boundary_user_prompt,
+    truncate_segmented_session_before_message, update_segmented_message_checkpoint, write_metadata,
+    write_segmented_session_fork_source, write_state,
 };
 use super::session_addon_store::{read_session_addon_state, write_session_addon_state};
 use super::*;

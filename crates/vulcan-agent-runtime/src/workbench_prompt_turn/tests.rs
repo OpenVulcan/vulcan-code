@@ -410,6 +410,10 @@ fn user_prompt_begin_exports_visible_boundary_events() {
         start.boundary_events[1].payload["source"],
         serde_json::json!("user_followup")
     );
+    assert_eq!(
+        start.boundary_events[1].payload["visible_user_prompt_record_id"],
+        serde_json::json!(start.visible_user_prompt_record_id)
+    );
 }
 
 /// Verifies session-mailbox turns cannot accidentally expose visible user boundary or transcript records.

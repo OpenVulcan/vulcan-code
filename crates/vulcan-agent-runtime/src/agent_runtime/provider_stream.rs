@@ -181,6 +181,16 @@ pub(crate) enum ProviderStreamDelta {
         /// 描述为何必须替换冻结传输的内部诊断。
         reason: String,
     },
+    /// Requests a host-owned restart so the latest session compaction node governs the next Provider request.
+    /// 请求宿主重启当前循环，使最新会话压缩节点管辖下一次 Provider 请求。
+    ContextCompactionPolicyRefreshRequired {
+        /// Replay-safe canonical conversation state at the completed tool boundary.
+        /// 已完成工具边界处可安全回放的规范会话状态。
+        conversation_state: SessionConversationState,
+        /// Internal diagnostic describing why the frozen budget policy must be replaced.
+        /// 描述为何必须替换冻结预算策略的内部诊断。
+        reason: String,
+    },
 }
 
 /// Boxed provider stream used by the runtime to forward thinking and output deltas incrementally.

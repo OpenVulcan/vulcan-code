@@ -86,6 +86,13 @@ pub(crate) struct RuntimeStreamDeltaState {
         String,
         ExecutionProviderRequestContinuation,
     )>,
+    /// Host-owned context-compaction policy refresh captured at a replay-safe boundary.
+    /// 在可回放安全边界捕获的宿主上下文压缩策略刷新请求。
+    context_compaction_policy_refresh_required: Option<(
+        SessionConversationState,
+        String,
+        ExecutionProviderRequestContinuation,
+    )>,
     /// Low-frequency physical Provider request telemetry state machine.
     /// 低频真实 Provider 请求遥测状态机。
     provider_request_telemetry: ProviderRequestTelemetryTracker,
@@ -134,6 +141,7 @@ impl RuntimeStreamDeltaState {
             terminal_error: None,
             context_compaction_required: None,
             provider_route_switch_required: None,
+            context_compaction_policy_refresh_required: None,
             provider_request_telemetry: ProviderRequestTelemetryTracker::default(),
             provider_retry_pending: false,
             tool_request_stream: ToolRequestStreamCoordinator::default(),
@@ -289,6 +297,18 @@ impl RuntimeStreamDeltaState {
         ExecutionProviderRequestContinuation,
     )> {
         self.provider_route_switch_required.take()
+    }
+
+    /// Drains a pending host-owned context-compaction policy refresh request.
+    /// 提取等待中的宿主上下文压缩策略刷新请求。
+    pub(crate) fn take_context_compaction_policy_refresh_required(
+        &mut self,
+    ) -> Option<(
+        SessionConversationState,
+        String,
+        ExecutionProviderRequestContinuation,
+    )> {
+        self.context_compaction_policy_refresh_required.take()
     }
 
     /// Completes the current floating thinking phase exactly once when visible reasoning content exists.
@@ -735,6 +755,31 @@ pub(crate) fn process_provider_stream_delta(
                 }
             };
             state.provider_route_switch_required = Some((
+                conversation_state.clone(),
+                reason.clone(),
+                provider_request_continuation,
+            ));
+            Vec::new()
+        }
+        Ok(ProviderStreamDelta::ContextCompactionPolicyRefreshRequired {
+            conversation_state,
+            reason,
+        }) => {
+            // providerRequestContinuation is captured after the previous physical request closed.
+            // providerRequestContinuation 在前一次真实请求收口后捕获。
+            let provider_request_continuation = match state
+                .provider_request_telemetry
+                .next_request_continuation_identity()
+            {
+                Ok(identity) => identity,
+                Err(error) => {
+                    state.terminal_error = Some(format!(
+                        "Context compaction policy refresh continuation identity was unavailable: {error}"
+                    ));
+                    return Vec::new();
+                }
+            };
+            state.context_compaction_policy_refresh_required = Some((
                 conversation_state.clone(),
                 reason.clone(),
                 provider_request_continuation,

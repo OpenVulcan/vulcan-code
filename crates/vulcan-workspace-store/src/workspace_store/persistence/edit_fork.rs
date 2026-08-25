@@ -248,12 +248,31 @@ pub struct PersistedSessionForkResult {
 
 /// Rolls one persisted session back to the point before the selected user prompt.
 /// 将一个持久化会话回滚到所选用户提示词之前。
+///
+/// # Parameters
+/// 参数
+/// `controller` locates the exact persisted session directory without enumeration.
+/// `controller` 在不枚举目录的情况下定位精确持久化会话目录。
+/// `session` and `project_id` identify the owning session summary and project.
+/// `session` 与 `project_id` 标识所属会话摘要和项目。
+/// `message_id` is the validated visible user-prompt identity selected for editing.
+/// `message_id` 是已校验并被选中编辑的可见用户提示词身份。
+/// `runtime_state` is the resident Provider-facing state that must be rewound consistently.
+/// `runtime_state` 是必须一致回退的常驻 Provider 运行态。
+/// `visible_user_prompt_prefix` is the hydrated display prefix through the selected prompt.
+/// `visible_user_prompt_prefix` 是截至所选提示词的水合展示前缀。
+///
+/// # Returns
+/// 返回值
+/// Returns the retained display/runtime state and a rollback backup for replay failure recovery.
+/// 返回保留的展示与运行态，以及供重放失败恢复使用的回滚备份。
 pub async fn rollback_persisted_session_before_user_prompt(
     controller: &ControllerRuntimeHandle,
     session: &SessionSummary,
     project_id: &str,
     message_id: &str,
     runtime_state: SessionRuntimeStateEntry,
+    visible_user_prompt_prefix: &[SessionMessageEntry],
 ) -> Result<PersistedUserPromptRollbackResult, String> {
     let target = locate_persisted_user_prompt_target(
         controller,
@@ -261,14 +280,23 @@ pub async fn rollback_persisted_session_before_user_prompt(
         project_id,
         message_id,
         runtime_state,
+        visible_user_prompt_prefix,
     )?;
     let mut rollback_backup = PersistedSessionEditRollbackBackup::create(&target.session_dir)?;
     let rollback_result = (|| {
-        truncate_segmented_session_before_message(
-            &target.session_dir,
-            message_id,
-            &target.retained_messages,
-        )?;
+        if let Some(boundary_user_prompt) = target.boundary_user_prompt.as_ref() {
+            truncate_segmented_session_before_boundary_user_prompt(
+                &target.session_dir,
+                boundary_user_prompt,
+                &target.retained_messages,
+            )?;
+        } else {
+            truncate_segmented_session_before_message(
+                &target.session_dir,
+                message_id,
+                &target.retained_messages,
+            )?;
+        }
         let runtime_state = rebuild_runtime_state_for_user_prompt_edit(
             target.runtime_state,
             target.retained_conversation_state,
@@ -964,6 +992,9 @@ struct PersistedUserPromptTarget {
     /// Target user-message timestamp used to map calls onto the retained branch prefix.
     /// 用于把调用映射到保留分支前缀的目标用户消息时间戳。
     edit_cutoff_at_ms: i64,
+    /// Boundary-projected user row used only when the append-only display copy is missing.
+    /// 仅在追加式展示副本缺失时使用的边界投影用户记录。
+    boundary_user_prompt: Option<SessionMessageEntry>,
 }
 
 /// Locates one editable user prompt from persisted segmented replay output.
@@ -974,6 +1005,7 @@ fn locate_persisted_user_prompt_target(
     project_id: &str,
     message_id: &str,
     mut runtime_state: SessionRuntimeStateEntry,
+    visible_user_prompt_prefix: &[SessionMessageEntry],
 ) -> Result<PersistedUserPromptTarget, String> {
     let session_dir = locate_segmented_session_dir_for_summary(
         controller,
@@ -986,35 +1018,148 @@ fn locate_persisted_user_prompt_target(
         .map_err(|error| format!("ERR_USER_PROMPT_EDIT_RUNTIME_STATE_INVALID: {error}"))?;
     let replay = replay_segmented_session_context(&session_dir)?
         .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_NOT_FOUND"))?;
-    let record_index = replay
-        .conversation_state
-        .records
-        .iter()
-        .position(|record| {
-            record.id == message_id && persisted_record_is_editable_user_prompt(record)
+    // persistedRecordIndex selects the ordinary append-only display row when it is durably present.
+    // persistedRecordIndex 在追加式展示记录已可靠存在时选择普通路径。
+    let persisted_record_index = replay.conversation_state.records.iter().position(|record| {
+        record.id == message_id && persisted_record_is_editable_user_prompt(record)
+    });
+    let last_compaction_id = runtime_state.last_compaction_id.clone();
+    let context_start_message_id = runtime_state.context_start_message_id.clone();
+    if let Some(record_index) = persisted_record_index {
+        // messageIndex locates the Provider-facing user message paired with the durable display row.
+        // messageIndex 定位与可靠展示记录配对的 Provider 可见用户消息。
+        let message_index = runtime_user_message_index_for_persisted_prompt(
+            replay.conversation_state.records.as_slice(),
+            record_index,
+            runtime_state.conversation_state.messages.as_slice(),
+            message_id,
+        )?;
+        // editCutoffAtMs freezes the exact target timestamp before the replay state is truncated.
+        // editCutoffAtMs 在截断重放状态前冻结精确目标时间戳。
+        let edit_cutoff_at_ms = replay.conversation_state.records[record_index]
+            .created_at
+            .parse::<i64>()
+            .map_err(|_| String::from("ERR_USER_PROMPT_EDIT_TIMESTAMP_INVALID"))?;
+        // retainedRecordIds owns the durable display identities that remain on the active branch.
+        // retainedRecordIds 持有活动分支继续保留的可靠展示身份。
+        let retained_record_ids = replay
+            .conversation_state
+            .records
+            .iter()
+            .take(record_index)
+            .map(|record| record.id.clone())
+            .collect::<BTreeSet<_>>();
+        // retainedConversationState joins the durable display prefix with the exact Provider prefix.
+        // retainedConversationState 将可靠展示前缀与精确 Provider 前缀合并。
+        let mut retained_conversation_state = replay.conversation_state;
+        retained_conversation_state.records.truncate(record_index);
+        retained_conversation_state.messages = runtime_state
+            .conversation_state
+            .messages
+            .iter()
+            .take(message_index)
+            .cloned()
+            .collect();
+        retained_conversation_state.continuation = Default::default();
+        // retainedMessages projects the exact pre-edit display prefix for metadata checkpoint repair.
+        // retainedMessages 为元数据检查点修复投影精确的编辑前展示前缀。
+        let retained_messages =
+            conversation_state_to_session_messages(&retained_conversation_state);
+        return Ok(PersistedUserPromptTarget {
+            session_dir,
+            retained_conversation_state,
+            retained_messages,
+            last_compaction_id,
+            context_start_message_id,
+            runtime_state,
+            retained_record_ids,
+            edit_cutoff_at_ms,
+            boundary_user_prompt: None,
+        });
+    }
+
+    // boundaryUserPrompt is the already-validated visible row whose raw append was overtaken by later runtime rows.
+    // boundaryUserPrompt 是原始追加被后续运行时记录抢占后仍已校验的可见记录。
+    let boundary_user_prompt = visible_user_prompt_prefix
+        .last()
+        .filter(|message| message.id == message_id)
+        .filter(|message| {
+            message.kind == SessionMessageKind::User
+                && message.record_kind == SessionMessageRecordKind::Transcript
+                && message.metadata.as_ref().is_none_or(|metadata| {
+                    // editMetadata selects the embedded boundary payload only for rehydrated rows.
+                    // editMetadata 仅对重新水合的记录选择嵌套边界载荷。
+                    let edit_metadata = metadata
+                        .get("payload")
+                        .filter(|payload| payload.is_object())
+                        .unwrap_or(metadata);
+                    edit_metadata
+                        .get("editable")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(true)
+                        && edit_metadata
+                            .get("starts_user_turn")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(true)
+                })
         })
+        .cloned()
         .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_NOT_FOUND"))?;
-    let message_index = runtime_user_message_index_for_persisted_prompt(
-        replay.conversation_state.records.as_slice(),
-        record_index,
-        runtime_state.conversation_state.messages.as_slice(),
-        message_id,
-    )?;
-    let edit_cutoff_at_ms = replay.conversation_state.records[record_index]
+    // editCutoffAtMs is shared by the visible row and its durable session-boundary UserInput event.
+    // editCutoffAtMs 由可见记录及其可靠会话边界 UserInput 事件共同使用。
+    let edit_cutoff_at_ms = boundary_user_prompt
         .created_at
         .parse::<i64>()
         .map_err(|_| String::from("ERR_USER_PROMPT_EDIT_TIMESTAMP_INVALID"))?;
-    let retained_record_ids = replay
-        .conversation_state
+    // persistedPrefixMessages keeps every raw display row that is strictly older than the missing user append.
+    // persistedPrefixMessages 保留严格早于缺失用户追加的每条原始展示记录。
+    let persisted_prefix_messages =
+        conversation_state_to_session_messages(&replay.conversation_state)
+            .into_iter()
+            .filter(|message| {
+                message
+                    .created_at
+                    .parse::<i64>()
+                    .is_ok_and(|created_at| created_at < edit_cutoff_at_ms)
+            })
+            .collect::<Vec<_>>();
+    // visiblePrefixState converts the hydrated prefix before the target into canonical display records.
+    // visiblePrefixState 将目标之前的水合前缀转换为规范展示记录。
+    let visible_prefix_state = conversation_state_from_session_messages(
+        &visible_user_prompt_prefix[..visible_user_prompt_prefix.len().saturating_sub(1)],
+    )?;
+    // retainedMessages merges durable older rows with boundary-projected rows already shown to the user.
+    // retainedMessages 合并可靠旧记录与已经展示给用户的边界投影记录。
+    let retained_messages = merge_session_messages_with_conversation_state_records(
+        persisted_prefix_messages.as_slice(),
+        &visible_prefix_state,
+    );
+    // mappingMessages appends only the target so its user ordinal can be paired with Provider history.
+    // mappingMessages 仅追加目标记录，以便把其用户序号与 Provider 历史配对。
+    let mut mapping_messages = retained_messages.clone();
+    mapping_messages.push(boundary_user_prompt.clone());
+    // mappingState supplies the exact display order used for Provider user-message correlation.
+    // mappingState 提供用于关联 Provider 用户消息的精确展示顺序。
+    let mapping_state = conversation_state_from_session_messages(&mapping_messages)?;
+    // targetRecordIndex is the last record because mappingMessages appends only one validated target.
+    // targetRecordIndex 是最后一条记录，因为 mappingMessages 仅追加一个已校验目标。
+    let target_record_index = mapping_state
         .records
-        .iter()
-        .take(record_index)
-        .map(|record| record.id.clone())
-        .collect::<BTreeSet<_>>();
-    let last_compaction_id = runtime_state.last_compaction_id.clone();
-    let context_start_message_id = runtime_state.context_start_message_id.clone();
-    let mut retained_conversation_state = replay.conversation_state;
-    retained_conversation_state.records.truncate(record_index);
+        .len()
+        .checked_sub(1)
+        .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_PROTOCOL_MISMATCH"))?;
+    // messageIndex locates the exact Provider user message even though its display append is absent.
+    // messageIndex 即使展示追加缺失，也能定位精确的 Provider 用户消息。
+    let message_index = runtime_user_message_index_for_persisted_prompt(
+        mapping_state.records.as_slice(),
+        target_record_index,
+        runtime_state.conversation_state.messages.as_slice(),
+        message_id,
+    )?;
+    // retainedConversationState owns the merged display prefix and exact Provider prefix before the target.
+    // retainedConversationState 持有合并后的展示前缀及目标之前的精确 Provider 前缀。
+    let mut retained_conversation_state =
+        conversation_state_from_session_messages(&retained_messages)?;
     retained_conversation_state.messages = runtime_state
         .conversation_state
         .messages
@@ -1023,7 +1168,13 @@ fn locate_persisted_user_prompt_target(
         .cloned()
         .collect();
     retained_conversation_state.continuation = Default::default();
-    let retained_messages = conversation_state_to_session_messages(&retained_conversation_state);
+    // retainedRecordIds identifies every merged display row that remains after the boundary rewind.
+    // retainedRecordIds 标识边界回退后继续保留的每条合并展示记录。
+    let retained_record_ids = retained_conversation_state
+        .records
+        .iter()
+        .map(|record| record.id.clone())
+        .collect::<BTreeSet<_>>();
     Ok(PersistedUserPromptTarget {
         session_dir,
         retained_conversation_state,
@@ -1033,6 +1184,7 @@ fn locate_persisted_user_prompt_target(
         runtime_state,
         retained_record_ids,
         edit_cutoff_at_ms,
+        boundary_user_prompt: Some(boundary_user_prompt),
     })
 }
 
@@ -1098,15 +1250,25 @@ fn runtime_user_message_index_for_persisted_prompt(
 /// Returns `true` only for visible editable user transcript records.
 /// 仅对可见且可编辑的用户转录记录返回 `true`。
 fn persisted_record_is_editable_user_prompt(record: &SessionConversationRecord) -> bool {
+    // editMetadata selects the embedded boundary payload only for rehydrated boundary records.
+    // editMetadata 仅对重新水合的边界记录选择嵌套边界载荷。
+    let edit_metadata = record.metadata.as_ref().map(|metadata| {
+        metadata
+            .get("payload")
+            .filter(|payload| payload.is_object())
+            .unwrap_or(metadata)
+    });
     record.visible
         && record.kind == SessionMessageKind::User
         && record.record_kind == SessionMessageRecordKind::Transcript
-        && record
-            .metadata
-            .as_ref()
+        && edit_metadata
             .and_then(|metadata| metadata.get("editable"))
             .and_then(serde_json::Value::as_bool)
-            == Some(true)
+            .unwrap_or(true)
+        && edit_metadata
+            .and_then(|metadata| metadata.get("starts_user_turn"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true)
 }
 
 #[cfg(test)]
@@ -1176,6 +1338,50 @@ mod tests {
         .expect("second display prompt should map to the second protocol user");
 
         assert_eq!(message_index, 2);
+    }
+
+    /// Verifies a rehydrated boundary prompt maps to its Provider user message through embedded edit metadata.
+    /// 验证重新水合的边界提示词会通过嵌套编辑元数据映射到对应 Provider 用户消息。
+    #[test]
+    fn boundary_prompt_mapping_uses_embedded_editability() {
+        // displayRecords models the boundary-only user row retained after a missed display append.
+        // displayRecords 模拟展示追加缺失后保留的仅边界用户记录。
+        let display_records = vec![SessionConversationRecord {
+            id: String::from("codex-session-test-3-user-input"),
+            kind: SessionMessageKind::User,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::new(),
+            body: String::from("重新输出"),
+            metadata: Some(serde_json::json!({
+                "source": "session_boundary_event",
+                "payload": {
+                    "editable": true,
+                    "starts_user_turn": true,
+                    "prompt": "重新输出",
+                }
+            })),
+            created_at: String::from("2000"),
+        }];
+        // runtimeMessages retains the independently durable Provider-facing user identity.
+        // runtimeMessages 保留独立可靠落盘的 Provider 可见用户身份。
+        let runtime_messages = vec![SessionConversationMessage {
+            id: String::from("session-test-protocol-user-replay"),
+            payload: SessionConversationPayload::UserText {
+                text: String::from("重新输出"),
+                attachments: Vec::new(),
+            },
+        }];
+
+        let message_index = runtime_user_message_index_for_persisted_prompt(
+            &display_records,
+            0,
+            &runtime_messages,
+            "codex-session-test-3-user-input",
+        )
+        .expect("boundary prompt should map to the first protocol user");
+
+        assert_eq!(message_index, 0);
     }
 
     /// Verifies legacy persisted prompts keep their direct shared-identity mapping.

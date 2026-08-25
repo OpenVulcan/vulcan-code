@@ -30,12 +30,13 @@ use super::{
     SharedServiceBridgeState, UserPromptEditSubmitRequest, active_kernel_session_ids,
     advance_session_goal_dispatch_version,
     apply_webui_prompt_begin_outer_steps_deferred_context_persist,
-    begin_existing_prompt_submission_exclusion, build_conversation_messages_patched_delta,
-    capture_preserved_workspace_run_state, capture_webui_prompt_preparation_generation,
-    capture_webui_prompt_preparation_workspace, commit_prepared_submission_media_ledger,
-    composer_attachment_draft_scope, composer_attachment_summary_to_core,
-    composer_attachment_summary_to_provider_core, composer_attachment_workspace_path_from_snapshot,
-    conversation_messages_from_session, current_unix_millis_text, current_unix_millis_value,
+    await_session_transcript_writer_durable, begin_existing_prompt_submission_exclusion,
+    build_conversation_messages_patched_delta, capture_preserved_workspace_run_state,
+    capture_webui_prompt_preparation_generation, capture_webui_prompt_preparation_workspace,
+    commit_prepared_submission_media_ledger, composer_attachment_draft_scope,
+    composer_attachment_summary_to_core, composer_attachment_summary_to_provider_core,
+    composer_attachment_workspace_path_from_snapshot, conversation_messages_from_session,
+    current_unix_millis_text, current_unix_millis_value,
     emit_conversation_continuation_summary_changed, emit_materialized_session_message_delta,
     emit_pending_prompts_changed_delta, emit_service_event_with_trace,
     enqueue_webui_pending_prompt_from_submission, hydrate_retained_submission_session_if_needed,
@@ -52,8 +53,9 @@ use super::{
     retained_submission_snapshot_is_usable, rollback_persisted_session_before_user_prompt,
     runtime_parts_from_state, session_continuation_runtime_blockers,
     session_has_blocking_system_prompt_work, session_process_public_ai_selection,
-    snapshot_webui_context_before_user_prompt, spawn_service_task,
-    spawn_workspace_session_persist_task, spawn_workspace_session_runtime_state_persist_task,
+    snapshot_webui_context_before_user_prompt, spawn_exact_session_transcript_entries_persist_task,
+    spawn_service_task, spawn_workspace_session_persist_task,
+    spawn_workspace_session_runtime_state_persist_task,
     start_reserved_webui_session_kernel_user_turn, start_webui_precheck_or_continue,
     start_webui_session_kernel_user_turn, sync_hydrated_session_dialogue_ready_marker,
     validate_composer_attachment_summary, webui_session_allows_user_prompt_editing,
@@ -5173,6 +5175,37 @@ async fn service_start_conversation_execution(
             error,
         )
         .await);
+    }
+    if materialized_session.kind == PromptSessionMaterializationKind::Existing
+        && let Some(visible_user_prompt_message) = visible_user_prompt_message.as_ref()
+    {
+        // transcriptAdmissionResult reserves the existing-session user row before any deferred runtime event can overtake it.
+        // transcriptAdmissionResult 在任何延迟运行时事件抢占前，为已有会话用户记录预留持久化顺序。
+        let transcript_admission_result = spawn_exact_session_transcript_entries_persist_task(
+            state.clone(),
+            controller_runtime.clone(),
+            session_id,
+            vec![visible_user_prompt_message.clone()],
+            Some(String::from("accepted_canonical_user_message")),
+        );
+        // transcriptDurabilityResult joins synchronous admission and physical append completion into one pre-ACK boundary.
+        // transcriptDurabilityResult 将同步准入与物理追加完成合并为一个 ACK 前边界。
+        let transcript_durability_result = match transcript_admission_result {
+            Ok(()) => await_session_transcript_writer_durable(session_id).await,
+            Err(error) => Err(error),
+        };
+        if let Err(error) = transcript_durability_result {
+            return Err(cleanup_submission_after_prompt_turn_start(
+                &app,
+                &state,
+                &controller_runtime,
+                &agent_runtime,
+                session_id,
+                &precheck_start.preparation_turn_id,
+                format!("Existing user prompt transcript durability failed: {error}"),
+            )
+            .await);
+        }
     }
     if let Some(message) = visible_user_prompt_message.as_ref() {
         let message_id = message.id.as_str();

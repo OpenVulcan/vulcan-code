@@ -757,6 +757,11 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
             session_id,
             conversation_state,
             ..
+        }
+        | ExecutionStreamEvent::ContextCompactionPolicyRefreshRequired {
+            session_id,
+            conversation_state,
+            ..
         } => apply_conversation_checkpoint(
             app,
             state,

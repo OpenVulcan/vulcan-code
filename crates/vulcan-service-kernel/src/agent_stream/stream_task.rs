@@ -4,6 +4,7 @@
 use super::*;
 
 mod content_delta;
+mod context_policy_refresh;
 pub(crate) mod conversation_checkpoint;
 mod finished;
 mod launch_failure;
@@ -14,6 +15,7 @@ mod request_trace;
 mod runtime_event;
 mod stream_exit;
 
+use context_policy_refresh::refreshed_execution_request_after_context_compaction_policy_change;
 #[cfg(test)]
 pub(crate) use conversation_checkpoint::persist_execution_retry_tool_recovery_boundary;
 use conversation_checkpoint::{
@@ -626,7 +628,11 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
         // providerDispatchProvenAbsent 从精确请求检查点起保持 true，直到可靠 Started 放行网络分派。
         let mut provider_dispatch_proven_absent = false;
         let intervention_started_at = current_unix_millis_value();
-        let prompt_intervention = build_webui_prompt_intervention(app.clone(), task_state.clone());
+        let prompt_intervention = build_webui_prompt_intervention(
+            app.clone(),
+            task_state.clone(),
+            request.context_compaction_window_node_id,
+        );
         webui_after_precheck_trace(
             "after_precheck_21_intervention_ready",
             format!(
@@ -1110,6 +1116,81 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     conversation_state,
                     last_successful_provider_usage,
                 ),
+                ExecutionStreamEvent::ContextCompactionPolicyRefreshRequired {
+                    session_id,
+                    conversation_state,
+                    reason,
+                    provider_request_continuation,
+                } => {
+                    match refreshed_execution_request_after_context_compaction_policy_change(
+                        &task_state,
+                        active_stream_task_id,
+                        &request,
+                        conversation_state,
+                        provider_request_continuation,
+                    ) {
+                        Ok(updated_request) => {
+                            webui_trace(
+                                "stream_context_compaction_policy_restarting",
+                                format!("session={session_id} reason={reason}"),
+                            );
+                            let owns_active_stream_entry = task_state
+                                .lock()
+                                .ok()
+                                .and_then(|mut guard| {
+                                    remove_active_stream_task_if_id(
+                                        &mut guard,
+                                        session_id,
+                                        active_stream_task_id,
+                                    )
+                                })
+                                .is_some();
+                            if !owns_active_stream_entry {
+                                return;
+                            }
+                            spawn_agent_stream_task_with_auto_compaction_state(
+                                app.clone(),
+                                task_state.clone(),
+                                controller_runtime.clone(),
+                                agent_runtime.clone(),
+                                updated_request,
+                                expected_kernel_generation,
+                                expected_kernel_turn_id.clone(),
+                                false,
+                            );
+                            return;
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "[webui-service] context compaction policy refresh failed: session={session_id} reason={reason} error={error}"
+                            );
+                            let failure_commit = commit_prepared_stream_failure(
+                                &app,
+                                &task_state,
+                                session_id,
+                                active_stream_task_id,
+                                "context compaction policy refresh failed",
+                            );
+                            if failure_commit == PreparedStreamFailureCommit::Committed {
+                                finalize_failed_execution_stream_retry_lifecycle(
+                                    app.clone(),
+                                    task_state.clone(),
+                                    controller_runtime.clone(),
+                                    session_id,
+                                    SessionTerminalPersistenceOwner::StreamTask(
+                                        active_stream_task_id,
+                                    ),
+                                    FailedExecutionStreamRetryEvidence::ProvenNotDispatchedBeforeProviderDispatch,
+                                    format!(
+                                        "The updated context compaction policy could not be activated before the next request: {error}"
+                                    ),
+                                )
+                                .await;
+                            }
+                            return;
+                        }
+                    }
+                }
                 ExecutionStreamEvent::ProviderRouteSwitchRequired {
                     session_id,
                     conversation_state,

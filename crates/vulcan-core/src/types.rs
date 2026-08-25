@@ -46,6 +46,13 @@ pub enum CoreError {
         /// 为宿主重启保留的人类可读控制边界诊断。
         message: String,
     },
+    /// The host changed the session context-compaction node and must refresh execution preparation before the next request.
+    /// 宿主已修改会话上下文压缩节点，必须在下一次请求前刷新执行准备。
+    ContextCompactionPolicyRefreshRequired {
+        /// Human-readable control-boundary diagnostic retained for the host restart.
+        /// 为宿主重启保留的人类可读控制边界诊断。
+        message: String,
+    },
     /// The tool executor failed while running a host-side tool invocation.
     /// 工具执行器在运行宿主侧工具调用时失败。
     ToolFailure {
@@ -72,6 +79,9 @@ impl Display for CoreError {
             }
             CoreError::ProviderRouteSwitchRequired { message } => {
                 write!(f, "provider route switch required: {message}")
+            }
+            CoreError::ContextCompactionPolicyRefreshRequired { message } => {
+                write!(f, "context compaction policy refresh required: {message}")
             }
             CoreError::ToolFailure { tool_name, message } => {
                 write!(f, "tool `{tool_name}` failure: {message}")
