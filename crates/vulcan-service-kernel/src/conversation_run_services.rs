@@ -1011,8 +1011,6 @@ pub(crate) async fn service_set_session_context_compaction_window(
         session_id,
         SessionAddonNamespace::RuntimeControls,
     )?;
-    let addon_persist_lock = webui_session_persist_lock(session_id);
-    let _addon_persist_guard = addon_persist_lock.lock().await;
     let persisted_addon_state = persist_workspace_session_addon_state_update(
         &state,
         controller_runtime,
