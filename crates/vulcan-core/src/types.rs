@@ -626,6 +626,7 @@ pub enum ConversationAttachmentDeliveryMode {
 /// Represents one structured user attachment kept beside canonical user text.
 /// 表示一条保存在规范用户文本旁边的结构化用户附件。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConversationAttachment {
     /// Stable attachment kind used by capability gates and provider mappers.
     /// 供能力门控与 Provider 映射使用的稳定附件类型。
@@ -848,6 +849,9 @@ pub enum TranscriptRecordKind {
 /// 表示可由宿主工具运行时执行的一次工具调用请求。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolInvocationRequest {
+    /// Provider stream-item identity that owned the incremental request draft.
+    /// 拥有增量请求草稿的 Provider 流 item 身份。
+    pub request_stream_id: String,
     /// Stable tool-call identifier associated with the request.
     /// 与请求关联的稳定工具调用标识。
     pub tool_call_id: String,

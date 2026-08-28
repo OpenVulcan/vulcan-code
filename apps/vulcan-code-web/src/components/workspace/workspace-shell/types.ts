@@ -1,4 +1,3 @@
-import type { ConversationDetailRef, ToolDetailPayload } from "@/components/conversation/conversation-detail";
 import type { ConversationSessionCommitBusyState } from "@/components/conversation/session-todolist-panel";
 import type { ModelPickerChoice } from "@/components/composer/model-picker-control";
 import type {
@@ -26,7 +25,6 @@ import type {
   ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
   ContextCompactionWindowNodeId,
-  ConversationHydrationProgress,
   ConversationSummary,
   MainAreaId,
   PendingPromptSummary,
@@ -35,7 +33,6 @@ import type {
   ProviderModelSecondaryRouteSummary,
   SessionGoalUserStatusUpdate,
   StartupSnapshot,
-  UserPromptEditDraftSummary,
   WorkbenchSnapshot,
   WorkspaceFileDirectoryListing,
   WorkspaceFileFilterOptions,
@@ -96,24 +93,8 @@ export interface WorkspaceShellProps {
   // Publishes the exact persisted transcript currently visible in this workspace shell.
   // 发布当前工作区壳中真实可见的持久化转录。
   onNotificationPresentationContextChange: (context: NotificationPresentationContext) => void;
-  // Conversation id currently being hydrated.
-  // 当前正在水合的会话标识。
-  loadingConversationId: string | null;
-  // Last conversation loading error.
-  // 最近一次会话加载错误。
-  conversationLoadError: string | null;
-  // Current lazy conversation body loading progress.
-  // 当前懒加载会话正文进度。
-  conversationHydration: ConversationHydrationProgress | null;
-  // Whether older history exists before the loaded selected conversation window.
-  // 当前已加载选中会话窗口之前是否存在更早历史。
-  conversationHasMoreHistory: boolean;
-  // Whether an older history page is currently being loaded.
-  // 当前是否正在加载更早历史页。
-  conversationHistoryLoading: boolean;
   // Whether a conversation fork request is currently blocking workspace interaction.
   // 当前是否有会话分叉请求正在阻塞工作台交互。
-  conversationForkInProgress: boolean;
   // Pinned conversation ids used by the project tree.
   // 项目树使用的置顶会话标识集合。
   pinnedConversationIds: Set<string>;
@@ -168,9 +149,6 @@ export interface WorkspaceShellProps {
   // Selects one project without changing the current conversation.
   // 选择一个项目且不改变当前会话。
   onSelectProject: (projectId: string) => void;
-  // Loads one older history page for a conversation.
-  // 为单个会话加载一页更早历史。
-  onLoadConversationHistory: (conversationId: string) => Promise<boolean>;
   // Selects the active model for the workbench.
   // 选择工作台当前模型。
   onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
@@ -263,10 +241,26 @@ export interface WorkspaceShellProps {
   // 从精确保留账本代际继续已终止会话。
   onContinueConversation?: (
     conversationId: string,
-    expectedGeneration: number,
-    expectedLedgerRevision: number,
     clientContinuationId: string,
+    supplement: ComposerSubmission | null,
   ) => Promise<boolean>;
+  // Replaces one exact V1 root input and physically starts the rewritten Turn.
+  // 替换一条精确 V1 根输入并物理启动重写回合。
+  onEditConversationGeneration: (
+    sessionId: string,
+    expectedWindowGeneration: number,
+    targetSeq: number,
+    replacementText: string,
+  ) => Promise<boolean>;
+  // Creates or exactly retries one immutable V1 child generation.
+  // 创建或精确重试一个不可变 V1 子 generation。
+  onForkConversationGeneration: (
+    sourceSessionId: string,
+    expectedWindowGeneration: number,
+    targetSeq: number,
+    childSessionId: string,
+    title: string,
+  ) => Promise<string | null>;
   // Opens a subagent transcript in the right context panel.
   // 在右侧上下文面板中打开子代理转录。
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
@@ -356,24 +350,10 @@ export interface WorkspaceShellProps {
   onCopyText: (text: string) => Promise<void>;
   // Loads one backend-validated user prompt edit draft.
   // 加载单条后端校验过的用户提示词编辑草稿。
-  onGetUserPromptEditDraft: (
-    conversationId: string,
-    messageId: string,
-  ) => Promise<UserPromptEditDraftSummary | null>;
   // Submits one user prompt edit and replays it.
   // 提交单条用户提示词编辑并重新执行。
-  onSubmitUserPromptEdit: (request: {
-    conversationId: string;
-    messageId: string;
-    prompt: string;
-    attachments: ComposerAttachmentSummary[];
-  }) => Promise<boolean>;
   // Creates a forked copy of one conversation.
   // 创建单个会话的分叉副本。
-  onForkConversation: (conversationId: string, anchorMessageId?: string) => Promise<boolean>;
-  // Loads hidden tool details for transcript rows.
-  // 为转录行加载隐藏工具详情。
-  onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
   // Resolves local media paths into renderable URLs.
   // 将本地媒体路径解析为可渲染 URL。
   resolveMediaSourceUrl: (path: string) => string;

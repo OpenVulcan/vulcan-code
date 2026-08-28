@@ -1,8 +1,101 @@
 use super::*;
 use crate::conversation_submission::{
-    ExistingSubmissionQueueDecision, emit_queued_prompt_run_phase_delta,
-    evaluate_existing_submission_queue, mutate_latest_workspace_for_existing_session,
+    ExistingSubmissionQueueDecision, ExistingSubmissionQueueInput,
+    commit_existing_submission_v1_queue, emit_queued_prompt_run_phase_delta,
+    evaluate_existing_submission_queue, queue_existing_submission,
 };
+use crate::session_runtime_registry_v1::{SessionHandle, SessionPersistenceBackend};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use vulcan_session_core::v1::document::FlushCandidate;
+use vulcan_session_core::v1::{
+    ClientActionId, ClientInputSubmission, QueuedInputIdentity, ResourceId, SessionDocument,
+    TurnOrigin,
+};
+use vulcan_workspace_store::workspace_store::{
+    SessionV1FlushResult, SessionV1StorageError, SessionV1StoreError,
+};
+
+/// In-memory backend that counts successful V1 queue flushes.
+/// 统计成功 V1 队列刷新的内存后端。
+#[derive(Default)]
+struct QueueRecordingBackend {
+    /// Number of complete candidates accepted as durable.
+    /// 被接纳为可靠状态的完整候选数量。
+    flush_count: AtomicUsize,
+}
+
+impl SessionPersistenceBackend for QueueRecordingBackend {
+    /// Accepts one complete candidate and publishes its exact metadata.
+    /// 接纳一份完整候选并发布其精确 metadata。
+    fn flush(
+        &self,
+        candidate: &FlushCandidate,
+    ) -> Result<SessionV1FlushResult, SessionV1StoreError> {
+        self.flush_count.fetch_add(1, Ordering::SeqCst);
+        Ok(SessionV1FlushResult {
+            written_file_count: candidate.dirty.len(),
+            published_metadata: Some(candidate.metadata.clone()),
+        })
+    }
+}
+
+/// Backend that rejects every V1 queue flush deterministically.
+/// 确定性拒绝每次 V1 队列刷新的后端。
+struct QueueFailingBackend;
+
+impl SessionPersistenceBackend for QueueFailingBackend {
+    /// Returns one injected storage failure without publishing the candidate.
+    /// 返回一条注入的存储失败且不发布候选。
+    fn flush(
+        &self,
+        _candidate: &FlushCandidate,
+    ) -> Result<SessionV1FlushResult, SessionV1StoreError> {
+        Err(SessionV1StorageError::io(
+            std::path::PathBuf::from("queue-v1-test"),
+            "injected queue flush failure",
+        )
+        .into())
+    }
+}
+
+/// Builds one isolated V1 queue handle with an explicit persistence backend.
+/// 使用显式持久化后端构建一个隔离的 V1 队列句柄。
+fn queue_v1_test_handle(
+    session_id: SessionId,
+    backend: Arc<dyn SessionPersistenceBackend>,
+) -> Arc<SessionHandle> {
+    queue_v1_test_handle_from_document(
+        session_id,
+        SessionDocument::new(
+            session_id.to_string(),
+            "project-queue-v1",
+            "queue V1 test",
+            1,
+        ),
+        backend,
+    )
+}
+
+/// Builds one isolated V1 queue handle from an explicitly prepared document.
+/// 使用一份显式准备的文档构建隔离的 V1 队列句柄。
+///
+/// # Parameters
+/// 参数
+/// `session_id` identifies the handle, `document` supplies its exact durable facts, and
+/// `backend` records or rejects complete flush candidates.
+/// `session_id` 标识句柄；`document` 提供精确可靠事实；`backend` 记录或拒绝完整刷新候选。
+///
+/// # Returns
+/// 返回值
+/// Returns the isolated session owner used by queue service tests.
+/// 返回队列服务测试使用的隔离会话 owner。
+fn queue_v1_test_handle_from_document(
+    session_id: SessionId,
+    document: SessionDocument,
+    backend: Arc<dyn SessionPersistenceBackend>,
+) -> Arc<SessionHandle> {
+    SessionHandle::with_backend(session_id, document, backend)
+}
 
 /// Verifies an idle existing session continues immediately instead of entering the visible queue.
 /// 验证空闲已有会话会立即继续，而不是进入可见队列。
@@ -156,192 +249,6 @@ async fn active_stream_owner_routes_submission_to_existing_session_queue() {
 /// # 返回值
 /// This test returns no value and fails if a stale snapshot replaces the latest retained revision.
 /// 此测试无返回值；若过期快照替换最新保留版本则失败。
-#[test]
-fn queued_workspace_commit_preserves_post_preflight_state_and_mutates_once() {
-    // session_id identifies the existing session shared by preflight and live revisions.
-    // session_id 标识预检版本与实时版本共享的已有会话。
-    let session_id = SessionId::new_v4();
-    // service_state owns the retained revision that advances after the stale clone is captured.
-    // service_state 持有在过期副本捕获后继续推进的保留版本。
-    let mut service_state = test_service_state_with_parent_session(session_id);
-    service_state
-        .workspace_snapshot
-        .as_mut()
-        .expect("live workspace snapshot")
-        .task_projects
-        .push(TaskProjectSummary::new(
-            "project-a",
-            "Project A",
-            "D:/project-a",
-            false,
-            0,
-            None,
-            None,
-            vec![session_id],
-        ));
-    // retained_message and canonical state prove the queue slice does not clone or replace historical context.
-    // retained_message 与规范状态证明队列切片不会复制或替换历史上下文。
-    let mut retained_message = SessionMessageEntry::new(
-        SessionMessageKind::Assistant,
-        "历史输出",
-        "retained canonical history",
-    );
-    retained_message.id = String::from("retained-history-message");
-    {
-        // workspace receives matching visible and canonical retained history before the stale clone is captured.
-        // workspace 在捕获过期副本前接收匹配的可见与规范保留历史。
-        let workspace = service_state
-            .workspace_snapshot
-            .as_mut()
-            .expect("live workspace snapshot");
-        workspace
-            .session_messages
-            .insert(session_id, vec![retained_message.clone()]);
-        workspace
-            .session_runtime_state
-            .insert(session_id, SessionRuntimeStateEntry::default());
-        workspace
-            .session_runtime_state
-            .get_mut(&session_id)
-            .expect("target runtime state")
-            .conversation_state =
-            conversation_state_from_session_messages(&[retained_message.clone()])
-                .expect("canonical retained history");
-    }
-    // stale_workspace simulates the hydrated snapshot captured by submission preflight.
-    // stale_workspace 模拟提交预检捕获的已水合快照。
-    let stale_workspace = service_state
-        .workspace_snapshot
-        .as_ref()
-        .expect("workspace snapshot")
-        .clone();
-    // initial_queued_steps records the queue count before the single committed mutation.
-    // initial_queued_steps 记录单次已提交变更前的排队计数。
-    let initial_queued_steps = stale_workspace
-        .sessions
-        .iter()
-        .find(|session| session.id == session_id)
-        .expect("target session")
-        .queued_steps;
-    // unrelated_session_id represents retained state that must never enter or be replaced by the queue transaction.
-    // unrelated_session_id 表示绝不能进入或被排队事务替换的保留状态。
-    let unrelated_session_id = SessionId::new_v4();
-    service_state
-        .workspace_snapshot
-        .as_mut()
-        .expect("live workspace snapshot")
-        .session_run_phases
-        .insert(session_id, SessionRunPhase::Thinking);
-    service_state
-        .workspace_snapshot
-        .as_mut()
-        .expect("live workspace snapshot")
-        .session_run_phases
-        .insert(unrelated_session_id, SessionRunPhase::ToolRunning);
-    // state exposes the newer retained revision to the atomic queue commit helper.
-    // state 向原子排队提交辅助函数提供较新的保留版本。
-    let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
-    // mutation_count proves the queue mutation closure is not replayed during reconciliation.
-    // mutation_count 证明队列变更闭包不会在协调期间被重复执行。
-    let mut mutation_count = 0_u8;
-
-    let observed_phase = mutate_latest_workspace_for_existing_session(
-        &state,
-        Some(stale_workspace),
-        session_id,
-        |latest_workspace| {
-            mutation_count = mutation_count.saturating_add(1);
-            assert!(
-                latest_workspace
-                    .session_runtime_state
-                    .get(&session_id)
-                    .expect("queue slice runtime state")
-                    .conversation_state
-                    .records
-                    .is_empty(),
-                "queue metadata mutation must not clone canonical conversation history"
-            );
-            // admitted_message is the sole transcript delta produced by the queue mutation.
-            // admitted_message 是队列变更产生的唯一转录增量。
-            let mut admitted_message =
-                SessionMessageEntry::new(SessionMessageKind::User, "补充消息", "queued increment");
-            admitted_message.id = String::from("queued-increment-message");
-            latest_workspace
-                .session_messages
-                .entry(session_id)
-                .or_default()
-                .push(admitted_message);
-            let session = latest_workspace
-                .sessions
-                .iter_mut()
-                .find(|session| session.id == session_id)
-                .expect("target session");
-            session.queued_steps = session.queued_steps.saturating_add(1);
-            Ok(latest_workspace
-                .session_run_phases
-                .get(&session_id)
-                .copied())
-        },
-    )
-    .expect("queued workspace commit");
-
-    assert_eq!(mutation_count, 1);
-    assert_eq!(observed_phase, Some(SessionRunPhase::Thinking));
-    // committed_workspace verifies both the newer phase and the single queue mutation survived together.
-    // committed_workspace 验证较新阶段与单次队列变更共同保留下来。
-    let committed_workspace = state
-        .lock()
-        .expect("service state should remain lockable")
-        .workspace_snapshot
-        .clone()
-        .expect("committed workspace snapshot");
-    assert_eq!(
-        committed_workspace.session_run_phases.get(&session_id),
-        Some(&SessionRunPhase::Thinking)
-    );
-    assert_eq!(
-        committed_workspace
-            .session_run_phases
-            .get(&unrelated_session_id),
-        Some(&SessionRunPhase::ToolRunning),
-        "queue transaction must preserve unrelated retained state"
-    );
-    assert_eq!(
-        committed_workspace
-            .sessions
-            .iter()
-            .find(|session| session.id == session_id)
-            .expect("target session")
-            .queued_steps,
-        initial_queued_steps.saturating_add(1)
-    );
-    // committed_messages must preserve original order and append the delta exactly once.
-    // committed_messages 必须保留原顺序并且只追加一次增量。
-    let committed_messages = committed_workspace
-        .session_messages
-        .get(&session_id)
-        .expect("committed target messages");
-    assert_eq!(
-        committed_messages
-            .iter()
-            .map(|message| message.id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["retained-history-message", "queued-increment-message"],
-        "queue delta must append once without replacing retained transcript history"
-    );
-    assert_eq!(
-        committed_workspace
-            .session_runtime_state
-            .get(&session_id)
-            .expect("committed target runtime state")
-            .conversation_state
-            .records
-            .len(),
-        1,
-        "queue metadata merge must restore the retained canonical conversation"
-    );
-}
-
 /// Verifies queued acknowledgement projection rereads the phase after the queue transaction releases its lock.
 /// 验证排队确认投影会在排队事务释放锁后重新读取阶段。
 ///
@@ -379,4 +286,514 @@ fn queued_projection_uses_latest_phase() {
         .expect("latest queued projection should commit");
 
     assert_eq!(run_phase, SessionRunPhase::Preparing);
+}
+
+/// Verifies V1 queue admission preserves attachment order and deduplicates one client action.
+/// 验证 V1 队列准入保留附件顺序，并对同一客户端动作执行去重。
+#[test]
+fn v1_queue_commit_preserves_resource_order_and_is_idempotent() {
+    let session_id = SessionId::new_v4();
+    let backend = Arc::new(QueueRecordingBackend::default());
+    let handle = queue_v1_test_handle(session_id, backend.clone());
+    let ordered_resource_ids = vec![
+        ResourceId::try_new(9).expect("first ordered resource"),
+        ResourceId::try_new(3).expect("second ordered resource"),
+    ];
+    let submission = ClientInputSubmission::new(
+        ClientActionId::try_new("queue-action-stable").expect("client action"),
+        "queued body",
+        ordered_resource_ids.clone(),
+    );
+
+    let committed = commit_existing_submission_v1_queue(&handle, &submission, 10)
+        .expect("first V1 queue admission");
+    let repeated = commit_existing_submission_v1_queue(&handle, &submission, 11)
+        .expect("idempotent V1 queue admission");
+
+    assert!(committed.changed);
+    assert!(!repeated.changed);
+    assert_eq!(committed.value, repeated.value);
+    assert_eq!(backend.flush_count.load(Ordering::SeqCst), 1);
+    let persisted_order = handle
+        .read(|document| {
+            document.metadata.input_state.queued_inputs[0]
+                .resource_ids
+                .clone()
+        })
+        .expect("read queued resources");
+    assert_eq!(persisted_order, ordered_resource_ids);
+}
+
+/// Verifies a repeated committed browser action cannot duplicate its process mirror or Hook dispatch.
+/// 验证重复的已提交浏览器动作无法重复创建进程镜像或 Hook 分发。
+#[test]
+fn queue_service_idempotent_retry_does_not_duplicate_process_mirror_or_hook() {
+    let session_id = SessionId::new_v4();
+    let backend = Arc::new(QueueRecordingBackend::default());
+    let handle = queue_v1_test_handle(session_id, backend.clone());
+    let submission = ClientInputSubmission::new(
+        ClientActionId::try_new("queue-service-idempotent-action")
+            .expect("client action should be valid"),
+        "queued once",
+        Vec::new(),
+    );
+    let service_state = test_service_state_with_parent_session(session_id);
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
+    let agent_runtime = test_agent_runtime_bridge();
+    let app = ServiceEventEmitter::new(Vec::new());
+    let queue_input = || ExistingSubmissionQueueInput {
+        v1_handle: Arc::clone(&handle),
+        v1_submission: submission.clone(),
+        session_id,
+        workspace_path: String::from("D:/project-a"),
+        hidden_model_guidance: None,
+        attachments: Vec::new(),
+        attachment_draft_scope: None,
+        reasoning_effort: None,
+        model_selection: None,
+        submit_total_started_at: current_unix_millis_value(),
+    };
+
+    queue_existing_submission(&app, &state, &agent_runtime, queue_input())
+        .expect("first queue submission should commit");
+    let first_hook_turn_id = agent_runtime
+        .conversation_hook_runtime
+        .lock()
+        .expect("Hook runtime should remain readable after first dispatch")
+        .active_turn_id(session_id)
+        .expect("first queue submission should create one Hook turn")
+        .to_string();
+    queue_existing_submission(&app, &state, &agent_runtime, queue_input())
+        .expect("idempotent retry should return the existing receipt");
+
+    assert_eq!(backend.flush_count.load(Ordering::SeqCst), 1);
+    let guard = state.lock().expect("service state should remain readable");
+    let mirror = guard
+        .pending_prompt_process_mirrors
+        .get(&session_id)
+        .expect("committed queue should have one process mirror");
+    assert_eq!(mirror.ui_state.pending_prompt_panel_queue.len(), 1);
+    assert_eq!(
+        mirror.ui_state.pending_prompt_panel_queue[0].id,
+        "queue-service-idempotent-action"
+    );
+    drop(guard);
+    let hook_runtime = agent_runtime
+        .conversation_hook_runtime
+        .lock()
+        .expect("Hook runtime should remain readable");
+    assert_eq!(
+        hook_runtime.active_turn_id(session_id),
+        Some(first_hook_turn_id.as_str())
+    );
+}
+
+/// Verifies retries of moved or removed admissions never recreate process-only queue state.
+/// 验证已移动或已删除准入的重试绝不会重建进程内队列状态。
+#[test]
+fn resolved_v1_admission_retry_does_not_rebuild_process_mirror_or_hook() {
+    for moved_to_draft in [true, false] {
+        // session_id isolates each terminal queue resolution.
+        // session_id 隔离每一种终态队列处置。
+        let session_id = SessionId::new_v4();
+        // submission is the exact historical browser admission retried after resolution.
+        // submission 是处置完成后重试的精确历史浏览器准入。
+        let submission = ClientInputSubmission::new(
+            ClientActionId::try_new(format!("resolved-queue-action-{moved_to_draft}"))
+                .expect("client action should be valid"),
+            "already resolved",
+            Vec::new(),
+        );
+        // document prepares the complete durable history before the service process starts.
+        // document 在服务进程启动前准备完整可靠历史。
+        let mut document = SessionDocument::new(
+            session_id.to_string(),
+            "project-queue-v1",
+            "resolved queue V1 test",
+            1,
+        );
+        let admission = document
+            .enqueue_input(submission.clone(), 2)
+            .expect("historical admission should commit")
+            .into_value();
+        let identity = QueuedInputIdentity {
+            client_action_id: admission.client_action_id,
+            input_id: admission.input_id,
+        };
+        if moved_to_draft {
+            document
+                .move_queued_input_to_draft(identity, 3)
+                .expect("historical admission should move to draft");
+        } else {
+            document
+                .remove_queued_input(identity, 3)
+                .expect("historical admission should be removed");
+        }
+        let backend = Arc::new(QueueRecordingBackend::default());
+        let handle = queue_v1_test_handle_from_document(session_id, document, backend.clone());
+        let state: SharedServiceBridgeState = Arc::new(Mutex::new(
+            test_service_state_with_parent_session(session_id),
+        ));
+        let agent_runtime = test_agent_runtime_bridge();
+        let app = ServiceEventEmitter::new(Vec::new());
+
+        let acknowledgement = queue_existing_submission(
+            &app,
+            &state,
+            &agent_runtime,
+            ExistingSubmissionQueueInput {
+                v1_handle: Arc::clone(&handle),
+                v1_submission: submission,
+                session_id,
+                workspace_path: String::from("D:/project-a"),
+                hidden_model_guidance: None,
+                attachments: Vec::new(),
+                attachment_draft_scope: None,
+                reasoning_effort: None,
+                model_selection: None,
+                submit_total_started_at: current_unix_millis_value(),
+            },
+        )
+        .expect("resolved admission retry should remain idempotent");
+
+        assert!(!acknowledgement.queued);
+        assert!(acknowledgement.turn_id.is_none());
+        assert_eq!(
+            handle
+                .read(|document| document.metadata.input_state.queued_inputs.len())
+                .expect("resolved V1 queue should remain readable"),
+            0
+        );
+        assert!(
+            state
+                .lock()
+                .expect("service state should remain readable")
+                .pending_prompt_process_mirrors
+                .get(&session_id)
+                .is_none()
+        );
+        assert!(
+            !agent_runtime
+                .conversation_hook_runtime
+                .lock()
+                .expect("Hook runtime should remain readable")
+                .has_active_turn(session_id)
+        );
+        assert_eq!(backend.flush_count.load(Ordering::SeqCst), 1);
+    }
+}
+
+/// Verifies a user admission that supersedes an undispatched Goal is not projected as queued.
+/// 验证取代尚未派发 Goal 的用户准入不会被投影为排队状态。
+#[test]
+fn superseded_goal_admission_returns_scheduled_turn_without_queue_mirror() {
+    // session_id identifies the Goal session whose unopened work is superseded.
+    // session_id 标识尚未派发工作被取代的 Goal 会话。
+    let session_id = SessionId::new_v4();
+    // document starts with one durable, undispatched GoalContinuation Turn.
+    // document 以一个可靠且尚未派发的 GoalContinuation 回合作为初始状态。
+    let mut document = SessionDocument::new(
+        session_id.to_string(),
+        "project-queue-v1",
+        "superseded Goal queue test",
+        1,
+    );
+    document
+        .create_goal("finish the goal", None, "Continue the active goal.", 2)
+        .expect("Goal continuation should open");
+    let backend = Arc::new(QueueRecordingBackend::default());
+    let handle = queue_v1_test_handle_from_document(session_id, document, backend.clone());
+    let submission = ClientInputSubmission::new(
+        ClientActionId::try_new("goal-superseding-user-action")
+            .expect("client action should be valid"),
+        "user takes priority",
+        Vec::new(),
+    );
+    let client_action_id = submission.client_action_id.clone();
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(
+        test_service_state_with_parent_session(session_id),
+    ));
+    let agent_runtime = test_agent_runtime_bridge();
+    let app = ServiceEventEmitter::new(Vec::new());
+
+    let acknowledgement = queue_existing_submission(
+        &app,
+        &state,
+        &agent_runtime,
+        ExistingSubmissionQueueInput {
+            v1_handle: Arc::clone(&handle),
+            v1_submission: submission,
+            session_id,
+            workspace_path: String::from("D:/project-a"),
+            hidden_model_guidance: None,
+            attachments: Vec::new(),
+            attachment_draft_scope: None,
+            reasoning_effort: None,
+            model_selection: None,
+            submit_total_started_at: current_unix_millis_value(),
+        },
+    )
+    .expect("Goal-superseding admission should be durably accepted");
+
+    let active_turn = handle
+        .read(|document| document.active_turn().cloned())
+        .expect("scheduled UserRoot Turn should remain readable")
+        .expect("scheduled UserRoot Turn should remain open");
+    let dispatch_authority =
+        queued_dispatch_authority_for_client_action(handle.as_ref(), &client_action_id)
+            .expect("scheduled UserRoot Turn should resolve by its durable browser action");
+    // expected_turn_id keeps the exact durable numeric identity alive for the RPC assertion.
+    // expected_turn_id 为 RPC 断言保留精确可靠数字身份的所有权。
+    let expected_turn_id = active_turn.turn_id.value().to_string();
+    assert!(!acknowledgement.queued);
+    assert_eq!(
+        acknowledgement.turn_id.as_deref(),
+        Some(expected_turn_id.as_str())
+    );
+    assert_eq!(active_turn.origin, TurnOrigin::UserRoot);
+    assert_eq!(dispatch_authority.turn_id, active_turn.turn_id);
+    assert_eq!(dispatch_authority.client_action_id, client_action_id);
+    assert_eq!(
+        handle
+            .read(|document| document.metadata.input_state.queued_inputs.len())
+            .expect("V1 queue should remain readable"),
+        0
+    );
+    assert!(
+        state
+            .lock()
+            .expect("service state should remain readable")
+            .pending_prompt_process_mirrors
+            .get(&session_id)
+            .is_none()
+    );
+    assert!(
+        !agent_runtime
+            .conversation_hook_runtime
+            .lock()
+            .expect("Hook runtime should remain readable")
+            .has_active_turn(session_id)
+    );
+    assert_eq!(backend.flush_count.load(Ordering::SeqCst), 1);
+}
+
+/// Verifies process-mirror rejection after a durable V1 commit cannot revoke the queued input.
+/// 验证可靠 V1 提交后的进程镜像拒绝无法撤销排队输入。
+#[test]
+fn queue_service_process_mirror_failure_does_not_revoke_v1_commit() {
+    let session_id = SessionId::new_v4();
+    let backend = Arc::new(QueueRecordingBackend::default());
+    let handle = queue_v1_test_handle(session_id, backend.clone());
+    let submission = ClientInputSubmission::new(
+        ClientActionId::try_new("queue-service-mirror-failure")
+            .expect("client action should be valid"),
+        "durable before mirror",
+        Vec::new(),
+    );
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    let process_mirror = service_state
+        .pending_prompt_process_mirrors
+        .entry(session_id)
+        .or_default();
+    for index in 0..vulcan_workbench_model::PENDING_PROMPT_QUEUE_LIMIT {
+        process_mirror.ui_state.pending_prompt_panel_queue.push(
+            vulcan_workbench_model::PendingPromptPanelEntry {
+                id: format!("existing-row-{index}"),
+                prompt: format!("existing prompt {index}"),
+                hidden_model_guidance: None,
+                preview: format!("existing prompt {index}"),
+                attachments: Vec::new(),
+                model_reference: None,
+                runtime_options: Default::default(),
+                state: vulcan_workbench_model::PendingPromptPanelEntryState::Ready,
+                created_at: index.to_string(),
+            },
+        );
+    }
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
+    let agent_runtime = test_agent_runtime_bridge();
+    let app = ServiceEventEmitter::new(Vec::new());
+
+    queue_existing_submission(
+        &app,
+        &state,
+        &agent_runtime,
+        ExistingSubmissionQueueInput {
+            v1_handle: Arc::clone(&handle),
+            v1_submission: submission,
+            session_id,
+            workspace_path: String::from("D:/project-a"),
+            hidden_model_guidance: None,
+            attachments: Vec::new(),
+            attachment_draft_scope: None,
+            reasoning_effort: None,
+            model_selection: None,
+            submit_total_started_at: current_unix_millis_value(),
+        },
+    )
+    .expect("mirror failure should not reject the durable queue acknowledgement");
+
+    assert_eq!(backend.flush_count.load(Ordering::SeqCst), 1);
+    let queued_count = handle
+        .read(|document| document.metadata.input_state.queued_inputs.len())
+        .expect("durable V1 queue should remain readable");
+    assert_eq!(queued_count, 1);
+    let guard = state.lock().expect("service state should remain readable");
+    assert_eq!(
+        guard
+            .pending_prompt_process_mirrors
+            .get(&session_id)
+            .expect("pre-existing process mirror should remain")
+            .ui_state
+            .pending_prompt_panel_queue
+            .len(),
+        vulcan_workbench_model::PENDING_PROMPT_QUEUE_LIMIT
+    );
+    drop(guard);
+    assert!(
+        !agent_runtime
+            .conversation_hook_runtime
+            .lock()
+            .expect("Hook runtime should remain readable")
+            .has_active_turn(session_id)
+    );
+}
+
+/// Verifies a post-commit Hook failure leaves both V1 authority and the process mirror intact.
+/// 验证提交后的 Hook 失败会完整保留 V1 权威与进程镜像。
+#[test]
+fn queue_service_hook_failure_does_not_revoke_v1_or_process_mirror() {
+    let session_id = SessionId::new_v4();
+    let backend = Arc::new(QueueRecordingBackend::default());
+    let handle = queue_v1_test_handle(session_id, backend.clone());
+    let submission = ClientInputSubmission::new(
+        ClientActionId::try_new("queue-service-hook-failure")
+            .expect("client action should be valid"),
+        "Hook failure follows V1 commit",
+        Vec::new(),
+    );
+    let state: SharedServiceBridgeState = Arc::new(Mutex::new(
+        test_service_state_with_parent_session(session_id),
+    ));
+    let agent_runtime = test_agent_runtime_bridge();
+    let poisoned_hook_runtime = Arc::clone(&agent_runtime.conversation_hook_runtime);
+    let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = poisoned_hook_runtime
+            .lock()
+            .expect("Hook runtime should lock before deliberate poison");
+        panic!("poison queue Hook runtime");
+    }));
+    assert!(poison_result.is_err());
+    let app = ServiceEventEmitter::new(Vec::new());
+
+    queue_existing_submission(
+        &app,
+        &state,
+        &agent_runtime,
+        ExistingSubmissionQueueInput {
+            v1_handle: Arc::clone(&handle),
+            v1_submission: submission,
+            session_id,
+            workspace_path: String::from("D:/project-a"),
+            hidden_model_guidance: None,
+            attachments: Vec::new(),
+            attachment_draft_scope: None,
+            reasoning_effort: None,
+            model_selection: None,
+            submit_total_started_at: current_unix_millis_value(),
+        },
+    )
+    .expect("Hook failure should not reject the durable queue acknowledgement");
+
+    assert_eq!(backend.flush_count.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        handle
+            .read(|document| document.metadata.input_state.queued_inputs.len())
+            .expect("durable V1 queue should remain readable"),
+        1
+    );
+    let guard = state.lock().expect("service state should remain readable");
+    assert_eq!(
+        guard
+            .pending_prompt_process_mirrors
+            .get(&session_id)
+            .expect("process mirror should remain after Hook failure")
+            .ui_state
+            .pending_prompt_panel_queue
+            .len(),
+        1
+    );
+}
+
+/// Verifies reusing one client action with different content fails without a second queue row.
+/// 验证同一客户端动作携带不同内容时显式失败，且不产生第二条队列记录。
+#[test]
+fn v1_queue_commit_rejects_client_action_payload_drift() {
+    let session_id = SessionId::new_v4();
+    let backend = Arc::new(QueueRecordingBackend::default());
+    let handle = queue_v1_test_handle(session_id, backend.clone());
+    let client_action_id = ClientActionId::try_new("queue-action-conflict").expect("client action");
+    let original = ClientInputSubmission::new(client_action_id.clone(), "first body", Vec::new());
+    let drifted = ClientInputSubmission::new(client_action_id, "changed body", Vec::new());
+
+    commit_existing_submission_v1_queue(&handle, &original, 20)
+        .expect("original V1 queue admission");
+    let error = commit_existing_submission_v1_queue(&handle, &drifted, 21)
+        .expect_err("payload drift must fail");
+
+    assert!(error.contains("client action"));
+    assert_eq!(backend.flush_count.load(Ordering::SeqCst), 1);
+    let queued_count = handle
+        .read(|document| document.metadata.input_state.queued_inputs.len())
+        .expect("read queued count");
+    assert_eq!(queued_count, 1);
+}
+
+/// Verifies a V1 flush failure returns before any legacy queue projection can be mutated.
+/// 验证 V1 刷新失败会在任何旧队列投影可被修改前返回。
+#[test]
+fn v1_queue_flush_failure_never_mutates_legacy_queue_projection() {
+    let session_id = SessionId::new_v4();
+    let handle = queue_v1_test_handle(session_id, Arc::new(QueueFailingBackend));
+    let submission = ClientInputSubmission::new(
+        ClientActionId::try_new("queue-action-flush-failure").expect("client action"),
+        "durability first",
+        Vec::new(),
+    );
+    let service_state = test_service_state_with_parent_session(session_id);
+    let before_panel_ids = service_state
+        .workspace_snapshot
+        .as_ref()
+        .expect("workspace snapshot")
+        .session_runtime_state
+        .get(&session_id)
+        .map(|runtime| {
+            runtime
+                .ui_state
+                .pending_prompt_panel_queue
+                .iter()
+                .map(|entry| entry.id.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let result = commit_existing_submission_v1_queue(&handle, &submission, 30);
+
+    assert!(result.is_err());
+    let after_panel_ids = service_state
+        .workspace_snapshot
+        .as_ref()
+        .expect("workspace snapshot")
+        .session_runtime_state
+        .get(&session_id)
+        .map(|runtime| {
+            runtime
+                .ui_state
+                .pending_prompt_panel_queue
+                .iter()
+                .map(|entry| entry.id.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    assert_eq!(after_panel_ids, before_panel_ids);
 }

@@ -1318,6 +1318,18 @@ pub struct PreparedMediaReferenceSnapshot {
     pub expires_at_unix_millis: u64,
 }
 
+/// Binds one conversation media reference to its session scope and provider-issued lifetime.
+/// 把一条会话媒体引用绑定到会话作用域与供应商签发生命周期。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConversationPreparedMediaRetention<'a> {
+    /// Required owner identity for session-scoped upload channels.
+    /// 会话作用域上传通道要求的所有者身份。
+    pub session_scope_id: Option<&'a str>,
+    /// Original provider wall-clock creation and expiry timestamps.
+    /// 原始供应商墙钟创建与过期时间戳。
+    pub wall_clock_lifetime: Option<(u64, u64)>,
+}
+
 /// Carries the immutable upload-contract identity required for reference reuse.
 /// 携带引用复用所需的不可变上传契约身份。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1352,6 +1364,61 @@ struct PreparedMediaSourceFingerprint {
     /// SHA-256 digest of the exact source bytes.
     /// 精确源字节的 SHA-256 摘要。
     content_sha256: [u8; 32],
+}
+
+/// Borrows the exact route, upload contract, and source identity used to build one cache key.
+/// 借用构建一条缓存键所需的精确路由、上传契约与源身份。
+struct PreparedMediaCacheKeyInput<'a> {
+    /// Stable provider identifier.
+    /// 稳定供应商标识。
+    provider_id: &'a str,
+    /// Stable service entry identifier.
+    /// 稳定服务入口标识。
+    service_entry_id: &'a str,
+    /// Stable credential connection identifier.
+    /// 稳定凭据连接标识。
+    connection_id: &'a str,
+    /// Exact upload-channel declaration.
+    /// 精确上传通道声明。
+    channel: &'a crate::UploadChannelDeclaration,
+    /// Content-addressed source revision.
+    /// 内容寻址源版本。
+    source_fingerprint: &'a PreparedMediaSourceFingerprint,
+    /// Closed resource kind.
+    /// 封闭资源类型。
+    kind: ResourceKind,
+    /// Canonical source MIME type.
+    /// 规范源 MIME 类型。
+    mime_type: &'a str,
+    /// Required owner identity for session-scoped references.
+    /// 会话作用域引用要求的所有者身份。
+    session_scope_id: Option<&'a str>,
+}
+
+/// Owns one exact cache insertion after source and lifetime validation.
+/// 在源与生命周期校验后持有一次精确缓存写入。
+struct PreparedMediaCacheWrite {
+    /// Content-addressed cache key.
+    /// 内容寻址缓存键。
+    key: String,
+    /// Provider-native prepared reference.
+    /// 供应商原生已准备引用。
+    provider_reference: String,
+    /// Exact wire encoding for the reference.
+    /// 引用使用的精确 Wire 编码。
+    reference_encoding: crate::UploadReferenceEncoding,
+    /// Verified source revision.
+    /// 已验证源版本。
+    source_fingerprint: PreparedMediaSourceFingerprint,
+    /// Declared monotonic cache lifetime.
+    /// 声明的单调缓存生命周期。
+    cache_duration_ms: u64,
+    /// Optional provider-issued wall-clock lifetime.
+    /// 可选供应商签发墙钟生命周期。
+    wall_clock_lifetime: Option<(u64, u64)>,
+    /// Whether the entry remains reusable until process exit.
+    /// 是否让条目保持可复用直到进程退出。
+    keep_until_process_exit: bool,
 }
 
 /// Carries one stable source read and the optional retained bytes used for inline projection.
@@ -1603,16 +1670,16 @@ fn prepared_media_key(
         credential_profile.credential_role.as_deref(),
     )
     .ok()?;
-    prepared_media_cache_key(
-        route.provider.id.as_str(),
-        route.entry.id.as_str(),
-        route.connection.id.as_str(),
+    prepared_media_cache_key(PreparedMediaCacheKeyInput {
+        provider_id: route.provider.id.as_str(),
+        service_entry_id: route.entry.id.as_str(),
+        connection_id: route.connection.id.as_str(),
         channel,
         source_fingerprint,
         kind,
         mime_type,
         session_scope_id,
-    )
+    })
 }
 
 /// Builds the shared cache key used by native conversation and provider-tool video uploads.
@@ -1623,24 +1690,23 @@ fn prepared_media_key(
 /// boundary: provider plus service/API entry plus upload-contract semantics.
 /// 该键按设计省略模型、聊天协议、操作、Manifest 代际及具体账号，除非上传通道显式收窄复用
 /// 作用域。这正是用户定义的边界：供应商、服务/API 入口与上传契约语义。
-fn prepared_media_cache_key(
-    provider_id: &str,
-    service_entry_id: &str,
-    connection_id: &str,
-    channel: &crate::UploadChannelDeclaration,
-    source_fingerprint: &PreparedMediaSourceFingerprint,
-    kind: ResourceKind,
-    mime_type: &str,
-    session_scope_id: Option<&str>,
-) -> Option<String> {
+fn prepared_media_cache_key(input: PreparedMediaCacheKeyInput<'_>) -> Option<String> {
+    let PreparedMediaCacheKeyInput {
+        provider_id,
+        service_entry_id,
+        connection_id,
+        channel,
+        source_fingerprint,
+        kind,
+        mime_type,
+        session_scope_id,
+    } = input;
     let contract_fingerprint = upload_channel_contract_fingerprint(channel)?;
     let scope_identity = match channel.reference_scope {
         crate::UploadReferenceScope::ProviderProtocol => None,
         crate::UploadReferenceScope::Credential => Some(connection_id),
         crate::UploadReferenceScope::Session => {
-            if session_scope_id.is_none() {
-                return None;
-            }
+            session_scope_id?;
             session_scope_id
         }
     };
@@ -1983,16 +2049,16 @@ impl ProviderExecutionClient {
         }
         let source_fingerprint =
             prepared_media_source_fingerprint(local_path, None, cancellation).await?;
-        let key = prepared_media_cache_key(
+        let key = prepared_media_cache_key(PreparedMediaCacheKeyInput {
             provider_id,
             service_entry_id,
             connection_id,
             channel,
-            &source_fingerprint,
+            source_fingerprint: &source_fingerprint,
             kind,
             mime_type,
-            None,
-        )
+            session_scope_id: None,
+        })
         .ok_or_else(|| String::from("Provider-tool media cache key could not be constructed."))?;
         let Some(reference) =
             self.cached_prepared_media_reference(key.as_str(), &source_fingerprint)
@@ -2061,16 +2127,16 @@ impl ProviderExecutionClient {
                 "Provider-tool media source changed during upload; refusing to cache the provider reference.",
             ));
         }
-        let key = prepared_media_cache_key(
+        let key = prepared_media_cache_key(PreparedMediaCacheKeyInput {
             provider_id,
             service_entry_id,
             connection_id,
             channel,
-            &source_fingerprint,
+            source_fingerprint: &source_fingerprint,
             kind,
             mime_type,
-            None,
-        )
+            session_scope_id: None,
+        })
         .ok_or_else(|| String::from("Provider-tool media cache key could not be constructed."))?;
         let now_unix_millis = current_prepared_media_unix_millis();
         if first_used_at_unix_millis > now_unix_millis {
@@ -2079,17 +2145,17 @@ impl ProviderExecutionClient {
             ));
         }
         let expires_at_unix_millis = first_used_at_unix_millis.saturating_add(cache_duration_ms);
-        self.remember_prepared_media_cache_entry(
+        self.remember_prepared_media_cache_entry(PreparedMediaCacheWrite {
             key,
             provider_reference,
-            channel
+            reference_encoding: channel
                 .reference_encoding
                 .unwrap_or(crate::UploadReferenceEncoding::ProviderFileId),
             source_fingerprint,
             cache_duration_ms,
-            Some((first_used_at_unix_millis, expires_at_unix_millis)),
-            false,
-        );
+            wall_clock_lifetime: Some((first_used_at_unix_millis, expires_at_unix_millis)),
+            keep_until_process_exit: false,
+        });
         Ok(())
     }
 
@@ -2221,8 +2287,7 @@ impl ProviderExecutionClient {
         kind: ResourceKind,
         mime_type: &str,
         prepared: PreparedConversationMedia,
-        session_scope_id: Option<&str>,
-        wall_clock_lifetime: Option<(u64, u64)>,
+        retention: ConversationPreparedMediaRetention<'_>,
     ) {
         self.remember_prepared_media_with_wall_clock_and_retention(
             route,
@@ -2230,8 +2295,8 @@ impl ProviderExecutionClient {
             kind,
             mime_type,
             prepared,
-            session_scope_id,
-            wall_clock_lifetime,
+            retention.session_scope_id,
+            retention.wall_clock_lifetime,
             true,
         );
     }
@@ -2306,17 +2371,17 @@ impl ProviderExecutionClient {
         ) else {
             return;
         };
-        self.remember_prepared_media_cache_entry(
+        self.remember_prepared_media_cache_entry(PreparedMediaCacheWrite {
             key,
-            url,
-            channel
+            provider_reference: url,
+            reference_encoding: channel
                 .and_then(|channel| channel.reference_encoding)
                 .unwrap_or(crate::UploadReferenceEncoding::ProviderFileId),
             source_fingerprint,
             cache_duration_ms,
             wall_clock_lifetime,
             keep_until_process_exit,
-        );
+        });
     }
 
     /// Inserts one provider reference while preserving the provider-issued wall-clock lifetime.
@@ -2331,16 +2396,16 @@ impl ProviderExecutionClient {
     /// `key`、`provider_reference`、`reference_encoding` 与 `source_fingerprint` 标识精确缓存源；`cache_duration_ms` 为新上传提供
     /// 声明生命周期；`wall_clock_lifetime` 在可用时保留已有持久或供应商工具生命周期；
     /// `keep_until_process_exit` 为持久会话引用关闭单调时钟过期。
-    fn remember_prepared_media_cache_entry(
-        &self,
-        key: String,
-        provider_reference: String,
-        reference_encoding: crate::UploadReferenceEncoding,
-        source_fingerprint: PreparedMediaSourceFingerprint,
-        cache_duration_ms: u64,
-        wall_clock_lifetime: Option<(u64, u64)>,
-        keep_until_process_exit: bool,
-    ) {
+    fn remember_prepared_media_cache_entry(&self, input: PreparedMediaCacheWrite) {
+        let PreparedMediaCacheWrite {
+            key,
+            provider_reference,
+            reference_encoding,
+            source_fingerprint,
+            cache_duration_ms,
+            wall_clock_lifetime,
+            keep_until_process_exit,
+        } = input;
         let now = Instant::now();
         let now_unix_millis = current_prepared_media_unix_millis();
         let (created_at_unix_millis, expires_at_unix_millis, expires_at) =

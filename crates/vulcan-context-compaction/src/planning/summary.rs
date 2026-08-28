@@ -2,9 +2,7 @@ use serde_json::Value;
 use vulcan_ai_contract::{
     canonicalize_codex_responses_replay_items, is_replayable_codex_responses_item,
 };
-use vulcan_context::{
-    SessionCompactionEntry, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,
-};
+use vulcan_context::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
 use vulcan_prompt_composer::{
     ContextCompactionRequestPromptMode, build_context_compaction_request_prompt,
     build_context_compaction_request_prompt_for_mode,
@@ -17,22 +15,6 @@ use super::{
     PREVIOUS_SUMMARY_START_TAG,
 };
 impl CompactionResult {
-    /// Materializes the final compaction checkpoint once the hidden summary message has been persisted.
-    /// 当隐藏摘要消息已经持久化后，物化最终压缩检查点。
-    pub fn materialize_checkpoint(&self, summary_message_id: String) -> SessionCompactionEntry {
-        SessionCompactionEntry {
-            id: self.compaction_id.clone(),
-            source_until_message_id: self.source_until_message_id.clone(),
-            source_until_turn_index: self.source_until_turn_index,
-            context_start_message_id: Some(summary_message_id.clone()),
-            context_budget_fingerprint: None,
-            context_assembly_fingerprint: None,
-            retained_tail_start_turn_index: self.retained_tail_start_turn_index,
-            summary_message_id: Some(summary_message_id),
-            created_at: self.created_at.clone(),
-        }
-    }
-
     /// Builds one prompt-based compaction result from a model-produced summary text.
     /// 根据模型产出的总结文本构建一份提示词式压缩结果。
     pub fn from_model_summary(plan: &CompactionPlan, summary_text: impl Into<String>) -> Self {

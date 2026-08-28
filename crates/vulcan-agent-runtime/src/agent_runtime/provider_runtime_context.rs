@@ -20,13 +20,17 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 use vulcan_core::types::ProviderPromptLayers as CoreProviderPromptLayers;
-use vulcan_hooks::SystemPromptHookBlock;
+use vulcan_hooks::{SystemPromptHookBaselineKind, SystemPromptHookBlock};
 use vulcan_prompt_composer::{
-    AgentPromptSnapshot, DEFAULT_PROJECT_RULES_FILE_NAME, EnvironmentContextSnapshot,
-    ModelDescriptor, ProjectPromptFileCache, ProjectPromptSnapshot, ProjectRulesFileCache,
-    ProjectRulesSnapshot, PromptAssemblyInput, PromptAssemblyMode, PromptAssemblyOutput,
-    ProviderPromptSnapshot, SubagentSnapshot, ToolCatalogSnapshot, ToolDescriptor,
+    AdditionalPromptSegment, AgentPromptSnapshot, DEFAULT_PROJECT_RULES_FILE_NAME,
+    EnvironmentContextSnapshot, ModelDescriptor, ProjectPromptFileCache, ProjectPromptSnapshot,
+    ProjectRulesFileCache, ProjectRulesSnapshot, PromptAssemblyInput, PromptAssemblyMode,
+    PromptAssemblyOutput, PromptBaselineKind, PromptBaselineProvenance, PromptSegment,
+    PromptTarget, ProviderPromptSnapshot, SubagentSnapshot, ToolCatalogSnapshot, ToolDescriptor,
     build_context_compaction_developer_segment,
+};
+use vulcan_session_core::v1::context::{
+    LockedBaselineProjection, LockedBaselineSegmentInput, LockedPromptTarget, LockedSourceKind,
 };
 
 /// Process-wide project-rules source cache shared by provider runtime requests.
@@ -85,6 +89,12 @@ pub(crate) struct RuntimePromptLayers {
     /// Structured provider prompt layers.
     /// 结构化 Provider 提示词层。
     pub(crate) provider_layers: CoreProviderPromptLayers,
+    /// Request-dynamic prompt layers that are not part of the locked context baseline.
+    /// 不属于锁定上下文基线的请求动态提示词层。
+    pub(crate) dynamic_prompt_layers: CoreProviderPromptLayers,
+    /// Canonical context-generation baseline projected from producer-owned typed provenance.
+    /// 根据生产者持有的强类型来源投影出的规范上下文代际基线。
+    pub(crate) locked_baseline: LockedBaselineProjection,
 }
 
 impl RuntimePromptLayers {
@@ -113,6 +123,15 @@ impl RuntimePromptLayers {
             &mut provider_layers,
             &preparation.system_prompt_hook_blocks,
         );
+        // locked_baseline is derived from the same ordered typed segments that produced provider_layers.
+        // locked_baseline 来自生成 provider_layers 的同一组有序强类型片段。
+        let locked_baseline =
+            project_locked_runtime_baseline(output, &preparation.system_prompt_hook_blocks)?;
+        // dynamic_prompt_layers is filtered by producer-owned provenance, so the permit can
+        // combine request-local instructions without duplicating the locked baseline.
+        // dynamic_prompt_layers 按生产者持有的来源信息过滤，使许可可以合并请求级指令且不重复锁定基线。
+        let dynamic_prompt_layers =
+            render_request_dynamic_prompt_layers(output, &preparation.system_prompt_hook_blocks);
         // fallback_text supports text-only transports without inventing replacement prompt content.
         // fallback_text 支持纯文本传输，同时不虚构替代提示内容。
         let fallback_text = if provider_layers.is_empty() {
@@ -123,6 +142,8 @@ impl RuntimePromptLayers {
         Ok(Self {
             fallback_text,
             provider_layers,
+            dynamic_prompt_layers,
+            locked_baseline,
         })
     }
 }
@@ -157,11 +178,13 @@ fn build_runtime_prompt_assembly_input(
     let mut custom_developer_segments =
         build_prompt_purpose_developer_segments(preparation.prompt_purpose);
     if let Some(segment) = preparation.session_plan_context.clone() {
-        custom_developer_segments.push(segment);
+        custom_developer_segments.push(AdditionalPromptSegment::dynamic(
+            "Session Plan Context",
+            segment,
+            "Runtime session plan context",
+        ));
     }
-    if let Some(segment) = preparation.prompt_skill_developer_segment.clone() {
-        custom_developer_segments.push(segment);
-    }
+    custom_developer_segments.extend(preparation.additional_developer_segments.clone());
 
     let subagent_prompt_context = preparation.subagent_prompt_context.as_ref();
     Ok(PromptAssemblyInput {
@@ -234,17 +257,23 @@ fn prompt_assembly_mode_for_preparation(preparation: &ExecutionPreparation) -> P
 
 /// Builds developer-side runtime instructions required by a special prompt purpose.
 /// 构建特殊提示词用途所需的开发者侧运行时指令。
-fn build_prompt_purpose_developer_segments(purpose: ExecutionPromptPurpose) -> Vec<String> {
+fn build_prompt_purpose_developer_segments(
+    purpose: ExecutionPromptPurpose,
+) -> Vec<AdditionalPromptSegment> {
     match purpose {
         ExecutionPromptPurpose::UserTurn
         | ExecutionPromptPurpose::ExecutionRetry
         | ExecutionPromptPurpose::ContextCompactionCachePreserving => Vec::new(),
-        ExecutionPromptPurpose::ContextCompaction => {
-            vec![build_context_compaction_developer_segment()]
-        }
-        ExecutionPromptPurpose::GitCommitSummary => {
-            vec![build_git_commit_summary_developer_segment()]
-        }
+        ExecutionPromptPurpose::ContextCompaction => vec![AdditionalPromptSegment::dynamic(
+            "Context Compaction Contract",
+            build_context_compaction_developer_segment(),
+            "Runtime context-compaction purpose",
+        )],
+        ExecutionPromptPurpose::GitCommitSummary => vec![AdditionalPromptSegment::dynamic(
+            "Git Commit Summary Contract",
+            build_git_commit_summary_developer_segment(),
+            "Runtime Git commit-summary purpose",
+        )],
     }
 }
 
@@ -293,6 +322,189 @@ fn render_runtime_prompt_layers(output: &PromptAssemblyOutput) -> CoreProviderPr
         tool_guidance: output.render_tool_metadata_text(),
         runtime_context: output.render_user_text(),
     }
+}
+
+/// Renders only request-dynamic prompt segments from one composer output.
+/// 仅渲染一份组合器输出中的请求动态提示词片段。
+///
+/// # Parameters
+/// # 参数
+/// - `output`: Successful prompt-composer output with producer-owned baseline provenance.
+/// - `output`：包含生产者持有基线来源信息的成功提示词组合器输出。
+/// - `hook_blocks`: Ordered system hook blocks from the same request assembly.
+/// - `hook_blocks`：来自同一次请求装配的有序系统 Hook 块。
+///
+/// # Returns
+/// # 返回值
+/// Returns layers containing only segments whose producers did not mark them as locked baseline sources.
+/// 返回仅包含生产者未标记为锁定基线来源的提示词层。
+fn render_request_dynamic_prompt_layers(
+    output: &PromptAssemblyOutput,
+    hook_blocks: &[SystemPromptHookBlock],
+) -> CoreProviderPromptLayers {
+    let mut layers = CoreProviderPromptLayers {
+        system: render_dynamic_prompt_segments(&output.system_segments),
+        developer: render_dynamic_prompt_segments(&output.developer_segments),
+        tool_guidance: render_dynamic_prompt_segments(&output.tool_metadata_segments),
+        runtime_context: render_dynamic_prompt_segments(&output.user_segments),
+    };
+    let hook_region = render_system_prompt_hook_region(
+        &hook_blocks
+            .iter()
+            .filter(|block| block.baseline_provenance.is_none())
+            .cloned()
+            .collect::<Vec<_>>(),
+    );
+    append_prompt_text(&mut layers.system, &hook_region);
+    layers
+}
+
+/// Joins request-dynamic composer segments without reclassifying them from names or titles.
+/// 拼接请求动态组合器片段，不根据名称或标题重新分类。
+///
+/// # Parameters
+/// # 参数
+/// - `segments`: Ordered prompt segments for one provider target.
+/// - `segments`：一个 Provider 目标的有序提示词片段。
+///
+/// # Returns
+/// # 返回值
+/// Returns non-empty bodies whose authoritative baseline provenance is absent.
+/// 返回权威基线来源为空的非空正文。
+fn render_dynamic_prompt_segments(segments: &[PromptSegment]) -> String {
+    segments
+        .iter()
+        .filter(|segment| segment.baseline_provenance.is_none())
+        .map(|segment| segment.body.as_str())
+        .filter(|body| !body.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// Appends one non-empty prompt block with the canonical two-newline separator.
+/// 使用规范的双换行分隔符追加一个非空提示词块。
+///
+/// # Parameters
+/// # 参数
+/// - `target`: Existing target prompt text.
+/// - `target`：现有目标提示词文本。
+/// - `addition`: Candidate prompt block to append.
+/// - `addition`：待追加的候选提示词块。
+fn append_prompt_text(target: &mut String, addition: &str) {
+    if addition.trim().is_empty() {
+        return;
+    }
+    if target.trim().is_empty() {
+        *target = addition.to_string();
+    } else {
+        *target = format!("{}\n\n{}", target.trim_end(), addition);
+    }
+}
+
+/// Projects producer-declared mutable baselines from the exact assembled prompt boundary.
+/// 从精确装配完成的提示词边界投影生产者声明的可变基线。
+fn project_locked_runtime_baseline(
+    output: &PromptAssemblyOutput,
+    hook_blocks: &[SystemPromptHookBlock],
+) -> Result<LockedBaselineProjection, String> {
+    let mut segments = Vec::new();
+    for segment in &output.system_segments {
+        push_locked_prompt_segment(&mut segments, segment)?;
+    }
+    for block in hook_blocks {
+        push_locked_hook_segment(&mut segments, block)?;
+    }
+    for segment in &output.developer_segments {
+        push_locked_prompt_segment(&mut segments, segment)?;
+    }
+    for segment in &output.user_segments {
+        push_locked_prompt_segment(&mut segments, segment)?;
+    }
+    for segment in &output.tool_metadata_segments {
+        if segment.baseline_provenance.is_some() {
+            return Err(format!(
+                "Prompt segment `{}` declared locked provenance for excluded tool metadata.",
+                segment.node_id
+            ));
+        }
+    }
+    LockedBaselineProjection::project(segments)
+        .map_err(|error| format!("Runtime locked-baseline projection failed: {error}"))
+}
+
+/// Appends one composer segment only when its authoritative producer marked it as a baseline.
+/// 仅当权威生产者将组合器片段标记为基线时才追加该片段。
+fn push_locked_prompt_segment(
+    output: &mut Vec<LockedBaselineSegmentInput>,
+    segment: &PromptSegment,
+) -> Result<(), String> {
+    let Some(provenance) = segment.baseline_provenance.as_ref() else {
+        return Ok(());
+    };
+    let target = match segment.target {
+        PromptTarget::System => LockedPromptTarget::System,
+        PromptTarget::Developer => LockedPromptTarget::Developer,
+        PromptTarget::User => LockedPromptTarget::User,
+        PromptTarget::ToolMetadata => {
+            return Err(format!(
+                "Prompt segment `{}` cannot lock tool metadata.",
+                segment.node_id
+            ));
+        }
+        PromptTarget::DiagnosticsOnly => {
+            return Err(format!(
+                "Prompt segment `{}` cannot lock diagnostics-only content.",
+                segment.node_id
+            ));
+        }
+    };
+    let kind = match provenance.kind {
+        PromptBaselineKind::MemoryProfile => LockedSourceKind::MemoryProfile,
+        PromptBaselineKind::AgentsMd => LockedSourceKind::AgentsMd,
+        PromptBaselineKind::VulcanMd => LockedSourceKind::VulcanMd,
+        PromptBaselineKind::AgentPersona => LockedSourceKind::AgentPersona,
+        PromptBaselineKind::OutputStyle => LockedSourceKind::OutputStyle,
+        PromptBaselineKind::PromptSkillInjection => LockedSourceKind::PromptSkillInjection,
+        PromptBaselineKind::PluginInstructions => LockedSourceKind::PluginInstructions,
+        PromptBaselineKind::BaselineHooks => LockedSourceKind::BaselineHooks,
+    };
+    output.push(LockedBaselineSegmentInput {
+        kind,
+        node_id: segment.node_id.clone(),
+        target,
+        source_label: Some(segment.source_label.clone()),
+        source_id: Some(provenance.source_id.clone()),
+        content: segment.body.clone(),
+    });
+    Ok(())
+}
+
+/// Appends one rendered hook block only when the hook producer declared stable baseline provenance.
+/// 仅当 Hook 生产者声明稳定基线来源时才追加渲染后的 Hook 块。
+fn push_locked_hook_segment(
+    output: &mut Vec<LockedBaselineSegmentInput>,
+    block: &SystemPromptHookBlock,
+) -> Result<(), String> {
+    let Some(provenance) = block.baseline_provenance.as_ref() else {
+        return Ok(());
+    };
+    let Some(content) = render_system_prompt_hook_block(block) else {
+        return Ok(());
+    };
+    let kind = match provenance.kind {
+        SystemPromptHookBaselineKind::MemoryProfile => LockedSourceKind::MemoryProfile,
+        SystemPromptHookBaselineKind::PluginInstructions => LockedSourceKind::PluginInstructions,
+        SystemPromptHookBaselineKind::BaselineHooks => LockedSourceKind::BaselineHooks,
+    };
+    output.push(LockedBaselineSegmentInput {
+        kind,
+        node_id: provenance.node_id.clone(),
+        target: LockedPromptTarget::System,
+        source_label: block.source.clone(),
+        source_id: Some(provenance.source_id.clone()),
+        content,
+    });
+    Ok(())
 }
 
 /// Appends request-scoped hook blocks into the system prompt layer.
@@ -537,7 +749,7 @@ fn workspace_project_prompt_path(
 /// 启用且非空时返回格式化项目提示词；有意缺失时返回 `None`；加载失败时返回精确错误。
 fn load_workspace_project_user_prompt(
     preparation: &ExecutionPreparation,
-) -> Result<Option<String>, String> {
+) -> Result<Option<AdditionalPromptSegment>, String> {
     // project_prompt_configuration is the validated effective project prompt selection.
     // project_prompt_configuration 是经过验证的生效项目提示词选择。
     let project_prompt_configuration = resolve_project_prompt_configuration(preparation)?;
@@ -573,10 +785,13 @@ fn load_workspace_project_user_prompt(
         })
         .map(|snapshot| {
             snapshot.map(|snapshot: ProjectPromptSnapshot| {
+                let source = snapshot.source;
                 let text = snapshot.text.trim();
-                format!(
-                    "# Project User Prompt\nSource: {}\n\n{}",
-                    snapshot.source, text
+                AdditionalPromptSegment::locked(
+                    "Project User Prompt",
+                    format!("# Project User Prompt\nSource: {source}\n\n{text}"),
+                    format!("Project prompt `{source}`"),
+                    PromptBaselineProvenance::new(PromptBaselineKind::VulcanMd, source),
                 )
             })
         })
@@ -1194,6 +1409,7 @@ mod tests {
             content: String::from("User prefers precise answers."),
             source: Some(String::from("test")),
             phase: vulcan_hooks::SystemPromptHookPhase::FirstSession,
+            baseline_provenance: None,
         }];
 
         let layers = build_runtime_prompt_layers_for_agent(&preparation, None)
@@ -1213,6 +1429,71 @@ mod tests {
                 .contains("User prefers precise answers.")
         );
         assert!(layers.fallback_text.contains("<system_prompt_hooks>"));
+    }
+
+    /// Verifies locked-baseline projection trusts only producer-owned typed provenance.
+    /// 验证锁定基线投影只信任生产者持有的强类型来源信息。
+    #[test]
+    fn runtime_locked_baseline_does_not_infer_from_titles_or_hook_tags() {
+        let mut output = PromptAssemblyOutput::default();
+        output.system_segments = vec![
+            PromptSegment::new(
+                "dynamic-lookalike",
+                "dynamic-cache",
+                vulcan_prompt_composer::PromptNodeKind::System,
+                PromptTarget::System,
+                "AGENTS.md",
+                "same-looking body",
+            )
+            .with_source_label("dynamic AGENTS.md lookalike"),
+            PromptSegment::new(
+                "authoritative-agents",
+                "locked-cache",
+                vulcan_prompt_composer::PromptNodeKind::System,
+                PromptTarget::System,
+                "AGENTS.md",
+                "same-looking body",
+            )
+            .with_source_label("D:/repo/AGENTS.md")
+            .with_baseline_provenance(PromptBaselineProvenance::new(
+                PromptBaselineKind::AgentsMd,
+                "D:/repo/AGENTS.md",
+            )),
+        ];
+        let hooks = vec![
+            SystemPromptHookBlock::new("vmm_profile", "dynamic lookalike"),
+            SystemPromptHookBlock {
+                tag: String::from("vmm_profile"),
+                description: String::from("Profile details"),
+                content: String::from("authoritative profile body"),
+                source: Some(String::from("VMM profile full")),
+                phase: vulcan_hooks::SystemPromptHookPhase::FirstSession,
+                baseline_provenance: Some(vulcan_hooks::SystemPromptHookBaselineProvenance::new(
+                    SystemPromptHookBaselineKind::MemoryProfile,
+                    "hook.vmm-memory-profile",
+                    "builtin.vmm.profile_prepare",
+                )),
+            },
+        ];
+
+        let projection = project_locked_runtime_baseline(&output, &hooks)
+            .expect("typed provenance should project");
+        let sources = projection.locked_sources();
+        let dynamic_layers = render_request_dynamic_prompt_layers(&output, &hooks);
+
+        assert_eq!(sources.len(), 2);
+        assert_eq!(sources[0].node_id, "authoritative-agents");
+        assert_eq!(sources[0].kind, LockedSourceKind::AgentsMd);
+        assert_eq!(sources[1].node_id, "hook.vmm-memory-profile");
+        assert_eq!(sources[1].kind, LockedSourceKind::MemoryProfile);
+        assert!(sources[1].content.contains("authoritative profile body"));
+        assert_eq!(
+            dynamic_layers.system.matches("same-looking body").count(),
+            1,
+            "the locked lookalike must not be duplicated into dynamic layers"
+        );
+        assert!(dynamic_layers.system.contains("dynamic lookalike"));
+        assert!(!dynamic_layers.system.contains("authoritative profile body"));
     }
 
     /// Verifies context-compaction prompts use the prompt composer instead of a post-launch system suffix.
@@ -1260,6 +1541,7 @@ mod tests {
             session_id: SessionId::nil(),
             session_storage_directory: None,
             conversation_hook_turn_id: None,
+            continuation_action_id: None,
             session_title: String::from("test"),
             agent_id: String::from("default"),
             agent_name: String::from("Default"),
@@ -1269,7 +1551,6 @@ mod tests {
             model_blueprint: sample_model_blueprint(),
             prompt_preview: String::new(),
             workspace_path,
-            task_session_store_root: None,
             conversation_attachments: Vec::new(),
             context_history_count: 0,
             execution_mode: String::from("Build"),
@@ -1280,7 +1561,7 @@ mod tests {
             prompt_skills: Vec::new(),
             prompt_skill_user_root: None,
             implicit_luaskill_prompt_entries: Vec::new(),
-            prompt_skill_developer_segment: None,
+            additional_developer_segments: Vec::new(),
             skill_names: Vec::new(),
             tool_descriptors: Vec::new(),
             tool_request_rejection_reason: None,
@@ -1295,8 +1576,6 @@ mod tests {
             context_budget: Option::<ContextBudgetSnapshot>::None,
             context_compaction_policy: None,
             context_budget_override: None,
-            provider_usage_budget_baseline: None,
-            provider_usage_context_generation_id: None,
             context_assembly: Option::<ContextAssembly>::None,
             context_baseline: Option::<ContextBaseline>::None,
             context_request_mode: None,

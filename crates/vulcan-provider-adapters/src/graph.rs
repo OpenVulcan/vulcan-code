@@ -107,7 +107,7 @@ pub enum CredentialAuthorization {
     BrowserCallback {
         /// Complete declarative browser-callback contract.
         /// 完整的声明式浏览器回调契约。
-        profile: BrowserCallbackAuthorization,
+        profile: Box<BrowserCallbackAuthorization>,
     },
 }
 

@@ -18,8 +18,8 @@ use vulcan_context_injection::{
 };
 use vulcan_hooks::{
     FnHookHandler, HookCapability, HookDispatcher, HookError, HookFailurePolicy, HookInvocation,
-    HookMode, HookRegistration, HookResult, HookScope, SystemPromptHookBlock,
-    SystemPromptHookPhase,
+    HookMode, HookRegistration, HookResult, HookScope, SystemPromptHookBaselineKind,
+    SystemPromptHookBaselineProvenance, SystemPromptHookBlock, SystemPromptHookPhase,
 };
 use vulcan_vmm::{
     GetProfileNodesRequest, ProfileNodeEntry, ProfileTarget, TonicVmmClient, VmmClient,
@@ -1238,6 +1238,11 @@ fn vmm_profile_hook_block(
         content: content.trim().to_string(),
         source: Some(format!("VMM profile {kind}")),
         phase,
+        baseline_provenance: Some(SystemPromptHookBaselineProvenance::new(
+            SystemPromptHookBaselineKind::MemoryProfile,
+            "hook.vmm-memory-profile",
+            VMM_PROFILE_PREPARE_HOOK_ID,
+        )),
     }
 }
 

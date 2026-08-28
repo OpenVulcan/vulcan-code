@@ -17,6 +17,9 @@ pub enum PendingSessionPromptSource {
     /// Host-created hidden continuation that advances an active session goal while the thread is idle.
     /// 宿主创建的隐藏续跑输入，用于在线程空闲时推进活跃会话目标。
     GoalContinuation,
+    /// Host-created hidden continuation that resumes the parent after one durable subagent return.
+    /// 宿主创建的隐藏续跑输入，用于在子代理结果可靠回流后恢复父会话。
+    SubagentReturnContinuation,
     /// Host-created attempt that restores a claimed execution checkpoint.
     /// 宿主创建的已领取执行 checkpoint 恢复尝试。
     ExecutionRetry,
@@ -85,16 +88,6 @@ impl PendingSessionPromptSource {
     }
 }
 
-/// Returns the internal queue index that should dispatch next.
-/// 返回下一条应被分发的内部队列索引。
-pub fn pending_prompt_dispatch_index(
-    queue: &[PendingSessionPromptEntry],
-    _priority_override: bool,
-) -> usize {
-    let _ = queue;
-    0
-}
-
 /// Runtime facts required by the shared pending-prompt dispatch gate.
 /// 共享待发送提示词分发门禁所需的运行态事实。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,115 +106,6 @@ pub struct PendingPromptDispatchContext {
     pub has_active_compaction: bool,
 }
 
-/// Reason why a queued prompt cannot be dispatched yet.
-/// 排队提示词暂时不能分发的原因。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PendingPromptDispatchBlockReason {
-    /// Parent dispatch must wait for running delegated subagents.
-    /// 父会话分发必须等待运行中的委派子代理。
-    RunningSubagents,
-    /// A root model stream is still active.
-    /// 根模型流仍在运行。
-    ActiveRun,
-    /// The session is still in preparation.
-    /// 会话仍处于准备阶段。
-    Preparing,
-    /// A prompt compaction job is still active.
-    /// 提示词压缩任务仍在运行。
-    ActiveCompaction,
-    /// Automatic dispatch is blocked by a manually stopped phase.
-    /// 自动分发被手动停止阶段阻塞。
-    Stopped,
-}
-
-/// Returns the shared service-compatible reason that blocks queued prompt dispatch.
-/// 返回与服务兼容的共享排队提示词分发阻塞原因。
-///
-/// # Parameters
-/// 参数
-/// `context` contains UI-specific runtime facts collected by the caller.
-/// `context` 包含调用方收集的界面专属运行态事实。
-/// `allow_from_stopped_phase` mirrors service manual insert behavior.
-/// `allow_from_stopped_phase` 对齐服务手动引导行为。
-///
-/// # Returns
-/// 返回值
-/// A block reason when dispatch must wait, otherwise `None`.
-/// 必须等待时返回阻塞原因，否则返回 `None`。
-pub fn pending_prompt_dispatch_block_reason(
-    context: PendingPromptDispatchContext,
-    allow_from_stopped_phase: bool,
-) -> Option<PendingPromptDispatchBlockReason> {
-    pending_prompt_dispatch_block_reason_for_source(context, allow_from_stopped_phase, None)
-}
-
-/// Returns the shared dispatch block reason for the next prompt source.
-/// 按下一条提示词来源返回共享分发阻塞原因。
-///
-/// # Parameters
-/// 参数
-/// `context` contains UI-specific runtime facts collected by the caller.
-/// `context` 包含调用方收集的界面专属运行态事实。
-/// `allow_from_stopped_phase` mirrors service manual insert behavior.
-/// `allow_from_stopped_phase` 对齐服务手动引导行为。
-/// `next_source` identifies the next prompt that would be dispatched, when known.
-/// `next_source` 标识即将分发的下一条提示词来源，未知时传入空值。
-///
-/// # Returns
-/// 返回值
-/// A block reason when dispatch must wait, otherwise `None`.
-/// 必须等待时返回阻塞原因，否则返回 `None`。
-pub fn pending_prompt_dispatch_block_reason_for_source(
-    context: PendingPromptDispatchContext,
-    allow_from_stopped_phase: bool,
-    _next_source: Option<PendingSessionPromptSource>,
-) -> Option<PendingPromptDispatchBlockReason> {
-    if context.has_active_run || provider_session_run_phase_is_active(context.run_phase) {
-        return Some(PendingPromptDispatchBlockReason::ActiveRun);
-    }
-    if matches!(
-        context.run_phase,
-        Some(crate::SessionRunPhase::Preparing | crate::SessionRunPhase::MemoryRecall)
-    ) {
-        return Some(PendingPromptDispatchBlockReason::Preparing);
-    }
-    if context.has_active_compaction {
-        return Some(PendingPromptDispatchBlockReason::ActiveCompaction);
-    }
-    if !allow_from_stopped_phase && context.run_phase == Some(crate::SessionRunPhase::Stopped) {
-        return Some(PendingPromptDispatchBlockReason::Stopped);
-    }
-    None
-}
-
-/// Returns the source of the next prompt that would be dispatched from the session queues.
-/// 返回会话队列中下一条将被分发的提示词来源。
-///
-/// # Parameters
-/// 参数
-/// `ui_state` is the session-scoped queue state.
-/// `ui_state` 是会话级队列状态。
-/// `_priority_override` is ignored because queued prompts use FIFO dispatch.
-/// `_priority_override` 会被忽略，因为排队提示词使用 FIFO 分发。
-///
-/// # Returns
-/// 返回值
-/// The next prompt source when any dispatchable internal or visible prompt exists.
-/// 存在可分发的内部或可见提示词时返回下一条提示词来源。
-pub fn next_pending_prompt_dispatch_source(
-    ui_state: &SessionTranscriptUiState,
-    _priority_override: bool,
-) -> Option<PendingSessionPromptSource> {
-    if !ui_state.pending_prompt_queue.is_empty() {
-        return Some(ui_state.pending_prompt_queue[0].source);
-    }
-    ui_state
-        .pending_prompt_panel_queue
-        .iter()
-        .any(|entry| entry.state == PendingPromptPanelEntryState::Ready)
-        .then_some(PendingSessionPromptSource::UserFollowup)
-}
-
 /// Runtime facts required by the shared pending-prompt busy-lane check.
 /// 共享待发送提示词繁忙通道判断所需的运行态事实。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -234,8 +118,8 @@ pub struct PendingPromptBusyLaneContext {
     pub has_precheck_progress: bool,
 }
 
-/// Returns whether the internal system lane is still busy using service semantics.
-/// 使用服务语义判断内部系统通道是否仍然繁忙。
+/// Returns whether the V1 admission lane is still busy using service semantics.
+/// 使用服务语义判断 V1 准入通道是否仍然繁忙。
 ///
 /// # Parameters
 /// 参数
@@ -258,7 +142,6 @@ pub fn pending_prompt_lane_is_busy(
             && context.has_precheck_progress)
         || context.dispatch.run_phase == Some(crate::SessionRunPhase::MemoryRecall)
         || context.dispatch.has_active_compaction
-        || !ui_state.pending_prompt_queue.is_empty()
         || !ui_state.pending_prompt_panel_queue.is_empty()
 }
 

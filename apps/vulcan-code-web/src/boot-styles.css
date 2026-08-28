@@ -773,14 +773,11 @@ textarea {
   box-shadow: 0 18px 42px color-mix(in oklch, var(--foreground) 8%, transparent);
 }
 
-.startup-error-content strong,
-.startup-recovery-error {
+.startup-error-content strong {
   color: var(--destructive);
 }
 
-.startup-error-message,
-.startup-recovery-hint,
-.startup-recovery-error {
+.startup-error-message {
   margin: 0;
   line-height: 1.6;
 }
@@ -789,34 +786,6 @@ textarea {
   overflow-wrap: anywhere;
   color: var(--foreground);
   font-size: 13px;
-}
-
-.startup-recovery-hint {
-  color: var(--muted-foreground);
-  font-size: 12px;
-}
-
-.startup-recovery-action {
-  min-height: 34px;
-  padding: 0 14px;
-  border: 1px solid color-mix(in oklch, var(--destructive) 42%, var(--border));
-  border-radius: 9px;
-  color: var(--destructive);
-  background: color-mix(in oklch, var(--destructive) 8%, var(--background));
-  cursor: pointer;
-}
-
-.startup-recovery-action:hover:not(:disabled) {
-  background: color-mix(in oklch, var(--destructive) 14%, var(--background));
-}
-
-.startup-recovery-action:disabled {
-  cursor: wait;
-  opacity: 0.62;
-}
-
-.startup-recovery-error {
-  font-size: 12px;
 }
 
 .startup-progress-panel {

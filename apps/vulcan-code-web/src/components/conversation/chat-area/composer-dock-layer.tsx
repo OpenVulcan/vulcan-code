@@ -53,6 +53,9 @@ export interface ChatAreaComposerDockLayerProps {
   // Handler for thinking display mode changes.
   // 思考展示模式变化处理器。
   onThinkingDisplayModeChange: ComposerDockProps["onThinkingDisplayModeChange"];
+  // Submission boundary selected by ChatArea for an ordinary or continued Turn.
+  // ChatArea 为普通 Turn 或继续 Turn 选择的提交边界。
+  onSubmitPrompt: ComposerDockProps["onSubmitPrompt"];
 }
 
 // ChatAreaComposerDockLayer renders the floating composer using ChatArea's derived state.
@@ -81,7 +84,7 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
       onSlashCommand={chatAreaProps.onSlashCommand}
       onOpenKnowledge={chatAreaProps.onOpenKnowledge}
       onComposerDockHeightChange={props.onComposerDockHeightChange}
-      onSubmitPrompt={chatAreaProps.onSubmitPrompt}
+      onSubmitPrompt={props.onSubmitPrompt}
       onSaveSessionGoal={chatAreaProps.onSaveSessionGoal}
       onResumeSessionGoal={chatAreaProps.onResumeSessionGoal}
       onClearSessionGoal={chatAreaProps.onClearSessionGoal}

@@ -28,37 +28,6 @@ ORDER BY pinned DESC, sort_order ASC, updated_at DESC;
     decode_query_rows::<StoredProjectRow>(&result.json_data)
 }
 
-/// Queries lightweight session locator rows ordered without scanning segmented directories.
-/// 查询轻量会话定位行，不扫描分段目录。
-pub(super) async fn query_session_index_rows(
-    controller: &ControllerRuntimeHandle,
-) -> Result<Vec<StoredSessionIndexRow>, String> {
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            r#"
-SELECT
-    id,
-    project_id,
-    project_tag,
-    title,
-    title_source,
-    archived,
-    created_at,
-    updated_at
-FROM workspace_session_index
-ORDER BY archived ASC, project_id ASC, sort_order ASC, updated_at DESC;
-"#,
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("查询工作台会话定位索引失败：{error}"))?;
-
-    decode_query_rows::<StoredSessionIndexRow>(&result.json_data)
-}
-
 /// Queries the persisted collapsed project identifiers, if a workspace UI state row exists.
 /// 查询已持久化的折叠项目标识集合；若工作台 UI 状态行不存在则返回空。
 pub(super) async fn query_collapsed_task_project_ids(
@@ -84,26 +53,6 @@ pub(super) async fn query_collapsed_task_project_ids(
     let parsed = serde_json::from_str::<Vec<String>>(&row.value)
         .map_err(|error| format!("解析工作台项目展开状态失败：{error}"))?;
     Ok(Some(parsed.into_iter().collect()))
-}
-
-/// Returns whether one persisted record kind should be part of the default transcript window.
-/// 返回某个持久化记录类型是否应进入默认转录窗口。
-#[cfg(test)]
-pub(super) fn persisted_kind_in_default_transcript_window(kind: &str) -> bool {
-    !matches!(
-        kind,
-        "tool-call-output" | "tool-result-output" | "tool-detail-output"
-    )
-}
-
-/// Returns whether one persisted record kind belongs to the on-demand tool-detail stream.
-/// 返回某个持久化记录类型是否属于按需工具明细流。
-#[cfg(test)]
-pub(super) fn persisted_kind_in_tool_detail_stream(kind: &str) -> bool {
-    matches!(
-        kind,
-        "tool-call-output" | "tool-result-output" | "tool-detail-output"
-    )
 }
 
 /// Decodes one controller JSON row-set payload into typed Rust rows.

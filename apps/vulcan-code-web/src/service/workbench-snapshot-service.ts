@@ -1,7 +1,4 @@
 import type {
-  ConversationMessage,
-  ConversationHistoryPageResponse,
-  ConversationMessagesLoadResponse,
   StartupSnapshot,
   WorkspaceFileDirectoryListing,
   WorkspaceFileFilterOptions,
@@ -22,7 +19,6 @@ import type {
 import {
   browserFallbackSnapshot,
   browserFallbackStartup,
-  loadBrowserFallbackConversationMessages,
 } from "@/service/browser-fallback-workbench";
 import {
   loadBrowserFallbackWorkspaceDiffFileDetail,
@@ -33,10 +29,6 @@ import {
   hasServiceRuntime,
   serviceClient,
 } from "@/service/webui-service-runtime";
-
-// conversationMessagesRequestBySession shares only active exact-session body loads across component lifetimes.
-// conversationMessagesRequestBySession 仅在组件生命周期之间共享仍在途的精确会话正文加载。
-const conversationMessagesRequestBySession = new Map<string, Promise<ConversationMessagesLoadResponse>>();
 
 // WorkspaceDiffFileDetailLoadOptions controls one lazy file detail request.
 // WorkspaceDiffFileDetailLoadOptions 控制单次懒加载文件详情请求。
@@ -65,12 +57,6 @@ export async function loadStartupSnapshot(): Promise<StartupSnapshot> {
     return browserFallbackStartup;
   }
   return serviceClient.request<StartupSnapshot>("startup.snapshot");
-}
-
-// rebuildStartupSessionVmm discards only the service-classified session VMM artifacts and retries startup.
-// rebuildStartupSessionVmm 仅丢弃服务端已分类的会话 VMM 工件并重试启动。
-export async function rebuildStartupSessionVmm(): Promise<StartupSnapshot> {
-  return serviceClient.request<StartupSnapshot>("startup.rebuildSessionVmm");
 }
 
 // loadWorkbenchSnapshot loads workbench state from the local service or fallback data.
@@ -246,71 +232,6 @@ export async function loadWorkspaceFilePreview(
     conversationId,
     filePath,
     filters,
-  });
-}
-
-// loadConversationMessages loads one conversation body from the local service.
-// loadConversationMessages 从本地服务加载单个会话正文。
-export async function loadConversationMessages(sessionId: string): Promise<ConversationMessagesLoadResponse> {
-  if (!hasServiceRuntime()) {
-    const progress = {
-      sessionId,
-      status: "ready" as const,
-      phase: "done",
-      message: "Conversation loaded.",
-      percent: 100,
-    };
-    const messages = loadBrowserFallbackConversationMessages(sessionId);
-    const workbench = {
-      ...browserFallbackSnapshot(),
-      messages,
-      conversationHydration: progress,
-    };
-    return {
-      workbench,
-      messages,
-      earliestOrdinal: null,
-      hasMoreHistory: false,
-      progress,
-    };
-  }
-  // retainedRequest prevents a real component remount from issuing a second physical access while the first is unresolved.
-  // retainedRequest 防止组件真实重挂载时在首个请求未完成前再次发出物理访问。
-  const retainedRequest = conversationMessagesRequestBySession.get(sessionId);
-  if (retainedRequest) {
-    return retainedRequest;
-  }
-  // request is retained only until settlement, so later explicit access still reaches the service normally.
-  // request 仅保留到完成或失败，之后的显式访问仍会正常到达服务端。
-  const request = serviceClient
-    .request<ConversationMessagesLoadResponse>("service_session_messages", { sessionId })
-    .finally(() => {
-      if (conversationMessagesRequestBySession.get(sessionId) === request) {
-        conversationMessagesRequestBySession.delete(sessionId);
-      }
-    });
-  conversationMessagesRequestBySession.set(sessionId, request);
-  return request;
-}
-
-// loadConversationHistoryPage loads older turns before the current conversation window.
-// loadConversationHistoryPage 加载当前会话窗口之前的更早轮次。
-export async function loadConversationHistoryPage(
-  sessionId: string,
-  beforeOrdinal: number,
-): Promise<ConversationHistoryPageResponse> {
-  if (!hasServiceRuntime()) {
-    return {
-      sessionId,
-      workbench: browserFallbackSnapshot(),
-      messages: [],
-      earliestOrdinal: null,
-      hasMoreHistory: false,
-    };
-  }
-  return serviceClient.request<ConversationHistoryPageResponse>("service_session_history_page", {
-    sessionId,
-    beforeOrdinal,
   });
 }
 

@@ -36,6 +36,7 @@ sha2.workspace = true
 vulcan-context.workspace = true
 vulcan-context-compaction.workspace = true
 vulcan-context-injection.workspace = true
+vulcan-change-set.workspace = true
 vulcan-file-watcher.workspace = true
 vulcan-core.workspace = true
 vulcan-host-tools.workspace = true
@@ -64,6 +65,9 @@ vulcan-process-lifecycle.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# Exposes exact V1 storage fixtures only while compiling service-kernel tests.
+# 仅在编译 service-kernel 测试时暴露精确 V1 存储夹具。
+vulcan-workspace-store = { workspace = true, features = ["test-support"] }
 # Enables deterministic task-runtime registry seeding only while compiling service-kernel tests.
 # 仅在编译 service-kernel 测试时启用确定性的任务运行时注册表播种能力。
 vulcan-agent-runtime = { workspace = true, features = ["test-support"] }

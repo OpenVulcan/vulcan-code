@@ -347,18 +347,17 @@ impl TaskRuntime {
             if let Err(error) = task_runtime
                 .resume_idle_agent_from_inbox(current_session_id, &target)
                 .await
-            {
-                if let Err(publish_error) = task_runtime.publish_inter_agent_resume_failure(
+                && let Err(publish_error) = task_runtime.publish_inter_agent_resume_failure(
                     current_session_id,
                     &target,
                     delivery_id.as_str(),
                     error.as_str(),
-                ) {
-                    eprintln!(
-                        "[task-runtime] accepted inter-agent message resume failed for task {}: {error}; parent feedback also failed: {publish_error}",
-                        target.session_id
-                    );
-                }
+                )
+            {
+                eprintln!(
+                    "[task-runtime] accepted inter-agent message resume failed for task {}: {error}; parent feedback also failed: {publish_error}",
+                    target.session_id
+                );
             }
         });
     }
@@ -676,7 +675,6 @@ impl TaskRuntime {
             task_id: target_task_id,
             public_task_id: target.agent_id.clone(),
             is_resumed: true,
-            persisted_metadata: None,
         };
         let mut invocation = match prepare_task_execution_request(
             self,

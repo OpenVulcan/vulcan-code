@@ -280,7 +280,7 @@ impl MediaUnderstandingBackendOptions {
             } => {
                 self.model_replacement = Some(MediaUnderstandingModelReplacementSelection {
                     selection: selection.clone(),
-                    reasoning_effort: reasoning_effort.clone(),
+                    reasoning_effort: *reasoning_effort,
                 });
             }
         }

@@ -6,9 +6,6 @@ use super::*;
 /// 本领域路由持有的精确公开 RPC 线协议名称。
 #[cfg(test)]
 pub(super) const RPC_METHODS: &[&str] = &[
-    "service_session_messages",
-    "service_session_history_page",
-    "service_session_tool_detail",
     "service_submit_conversation_prompt",
     "service_continue_conversation",
     "service_cancel_conversation_submission",
@@ -30,9 +27,6 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_close_project_terminal",
     "service_attach_project_terminal_display",
     "service_detach_project_terminal_display",
-    "service_get_user_prompt_edit_draft",
-    "service_submit_user_prompt_edit",
-    "service_fork_conversation",
     "service_save_session_goal",
     "service_resume_session_goal",
     "service_clear_session_goal",
@@ -80,29 +74,6 @@ pub(super) async fn dispatch(
     // result preserves service failures inside Handled so the top-level return trace still runs.
     // result 把服务失败保留在 Handled 内，使顶层返回追踪仍会执行。
     let result = match method {
-        "service_session_messages" => rpc_json_result(
-            service_session_messages(app, state, rpc_required_param(params, "sessionId")?).await,
-        ),
-        "service_session_history_page" => rpc_json_result(
-            service_session_history_page(
-                app,
-                state,
-                rpc_required_param(params, "sessionId")?,
-                rpc_required_param(params, "beforeOrdinal")?,
-            )
-            .await,
-        ),
-        "service_session_tool_detail" => rpc_json_result(
-            service_session_tool_detail(
-                state,
-                rpc_required_param(params, "sessionId")?,
-                rpc_optional_param(params, "recordId")?,
-                rpc_optional_param(params, "toolCallId")?,
-                rpc_optional_param(params, "seq")?,
-                rpc_optional_param(params, "messageIndex")?,
-            )
-            .await,
-        ),
         "service_submit_conversation_prompt" => rpc_json_result(
             service_submit_conversation_prompt_rpc(
                 app,
@@ -118,7 +89,6 @@ pub(super) async fn dispatch(
                 rpc_optional_param(params, "modelSelection")?,
                 rpc_optional_param(params, "sessionSettings")?,
                 rpc_optional_param(params, "attachments")?,
-                rpc_optional_param(params, "continuationExpectation")?,
             )
             .await,
         ),
@@ -127,9 +97,13 @@ pub(super) async fn dispatch(
                 app,
                 state,
                 rpc_required_param(params, "conversationId")?,
-                rpc_required_param(params, "expectedGeneration")?,
-                rpc_required_param(params, "expectedLedgerRevision")?,
                 rpc_required_param(params, "clientContinuationId")?,
+                rpc_optional_param(params, "prompt")?,
+                rpc_optional_param(params, "hiddenModelGuidance")?,
+                rpc_optional_param(params, "executionMode")?,
+                rpc_optional_param(params, "reasoningEffort")?,
+                rpc_optional_param(params, "modelSelection")?,
+                rpc_optional_param(params, "attachments")?,
             )
             .await,
         ),
@@ -251,21 +225,6 @@ pub(super) async fn dispatch(
         ),
         "service_detach_project_terminal_display" => rpc_json_result(
             service_detach_project_terminal_display(rpc_required_param(params, "subscriptionId")?),
-        ),
-        "service_get_user_prompt_edit_draft" => rpc_json_result(
-            service_get_user_prompt_edit_draft(
-                state,
-                rpc_required_param(params, "conversationId")?,
-                rpc_required_param(params, "messageId")?,
-            )
-            .await,
-        ),
-        "service_submit_user_prompt_edit" => rpc_json_result(
-            service_submit_user_prompt_edit(app, state, rpc_required_param(params, "request")?)
-                .await,
-        ),
-        "service_fork_conversation" => rpc_json_result(
-            service_fork_conversation(app, state, rpc_required_param(params, "request")?).await,
         ),
         "service_save_session_goal" => rpc_json_result(
             service_save_session_goal(app, state, rpc_required_param(params, "request")?).await,

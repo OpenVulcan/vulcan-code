@@ -9177,7 +9177,8 @@ fn recovered_vector_index_status(
 mod tests {
     use super::*;
     use crate::data_plane::{
-        build_application_schema_script, ensure_application_schema_migrations,
+        ControllerRuntimeMetadata, build_application_schema_script,
+        ensure_application_schema_migrations,
     };
     use tempfile::tempdir;
     use vldb_controller_client::{
@@ -9687,13 +9688,15 @@ mod tests {
             .expect("apply app schema migrations");
         let runtime = KnowledgeBaseRuntime::new(ControllerRuntimeHandle::new(
             client.clone(),
-            endpoint,
-            executable.display().to_string(),
-            data_root,
-            app_path.clone(),
-            app_binding_id.clone(),
-            app_path,
-            app_binding_id,
+            ControllerRuntimeMetadata {
+                endpoint,
+                executable: executable.display().to_string(),
+                data_root,
+                sqlite_path: app_path.clone(),
+                sqlite_binding_id: app_binding_id.clone(),
+                system_statistics_sqlite_path: app_path,
+                system_statistics_sqlite_binding_id: app_binding_id,
+            },
         ));
 
         // abandonedExtraction simulates a package TempDir left behind by process termination.

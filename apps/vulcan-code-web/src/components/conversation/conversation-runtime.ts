@@ -1,37 +1,13 @@
 import type { useI18n } from "@/i18n";
 import type { ConversationSummary } from "@/types";
 import type {
-  ConversationBlock,
-  ConversationRenderItem,
   RuntimeCue,
 } from "@/components/conversation/conversation-model";
-import { conversationMessageStreamState } from "@/state/conversation-live-stream-store";
-
-// activeStreamingThinkingBlock returns the selected session thinking block that should float while streaming.
-// activeStreamingThinkingBlock 返回当前选中会话在流式思考时应浮动展示的思考块。
-export function activeStreamingThinkingBlock(
-  conversation: ConversationSummary | undefined,
-  renderItems: ConversationRenderItem[],
-): ConversationBlock | null {
-  // The session phase closes the popup as soon as thinking completes, independently of turn completion.
-  // 会话阶段在思考完成时立即关闭弹窗，不依赖整轮结束。
-  if (normalizedSessionRunPhase(conversation?.runPhase) !== "thinking") {
-    return null;
-  }
-  // The record lifecycle rejects stale thinking rows that remain in a delayed projection.
-  // 记录生命周期会拒绝延迟投影中残留的旧思考行。
-  const activeThinkingItem = [...renderItems].reverse().find((item) => (
-    item.sourceMessage?.recordKind === "thinking-output"
-    && conversationMessageStreamState(item.sourceMessage) === "active"
-  ));
-  return activeThinkingItem?.blocks.find((block) => block.kind === "thinking") ?? null;
-}
 
 // conversationRuntimeCue resolves the compact active-state cue shown above the composer.
 // conversationRuntimeCue 解析显示在输入区上方的紧凑运行状态提示。
 export function conversationRuntimeCue(
   conversation: ConversationSummary | undefined,
-  _renderItems: ConversationRenderItem[],
   t: ReturnType<typeof useI18n>["t"],
 ): RuntimeCue | null {
   if (!conversation) {

@@ -51,7 +51,7 @@ impl VulcanToolsManager {
         &self,
         tool: &ResolvedToolDefinition,
         args: Value,
-        session_id: Option<String>,
+        context: VulcanToolInvocationContext,
         execution_mode_label: &str,
     ) -> Result<VulcanToolInvocationResult, String> {
         let mode = VulcanToolMode::from_execution_mode_label(execution_mode_label);
@@ -62,7 +62,7 @@ impl VulcanToolsManager {
                 )),
             ));
         }
-        (tool.invoke)(args, session_id).await
+        (tool.invoke)(args, context).await
     }
 }
 /// Returns whether one resolved tool may execute while Plan mode is active.

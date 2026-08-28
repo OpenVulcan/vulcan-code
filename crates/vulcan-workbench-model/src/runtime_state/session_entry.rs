@@ -137,8 +137,8 @@ impl SessionOutputStyleState {
 
     /// Captures an immutable snapshot at a new-session or compaction boundary.
     /// 在新会话或压缩边界捕获并保存不可变风格快照。
-    // Keep snapshot fields explicit because this method is the typed persistence boundary.
-    // 保持快照字段显式，因为此方法是强类型持久化边界。
+    // Keep snapshot fields explicit because this method is the typed process-local projection boundary.
+    // 保持快照字段显式，因为此方法是强类型进程内投影边界。
     #[allow(clippy::too_many_arguments)]
     pub fn set_applied_snapshot(
         &mut self,
@@ -162,9 +162,9 @@ impl SessionOutputStyleState {
     }
 }
 
-/// Session-scoped runtime state required for context reconstruction and agent tracing.
-/// 上下文重建与代理追踪所需的按会话归属运行时状态。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Process-local execution adapter state that must never become session persistence, Provider history, or transcript authority.
+/// 仅用于进程内执行适配的状态，绝不能成为会话持久化、Provider 历史或转录权威。
+#[derive(Debug, Clone, Default)]
 pub struct SessionRuntimeStateEntry {
     /// Last active agent identifier used by the session.
     /// 最近一次被该会话使用的激活代理标识。
@@ -174,255 +174,134 @@ pub struct SessionRuntimeStateEntry {
     pub active_provider_id: Option<String>,
     /// Last credential connection identifier selected by the session.
     /// 该会话最近一次选择的凭据连接标识。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_connection_id: Option<String>,
     /// Last active model identifier used by the session.
     /// 最近一次被该会话使用的激活模型标识。
     pub active_model_id: Option<String>,
     /// Exact model selection waiting for the next real Provider-request boundary.
     /// 等待下一次真实 Provider 请求边界生效的精确模型选择。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_model_selection: Option<SessionPendingModelSelection>,
-    /// Persisted non-secret identity of the session's frozen provider route.
-    /// 当前会话冻结供应商路由的持久化非秘密身份。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Process-local non-secret mirror of the session's frozen provider route.
+    /// 当前会话冻结供应商路由的进程内非秘密镜像。
     pub provider_route_lease: Option<SessionProviderRouteLeaseIdentity>,
     /// Fully resolved context-window policy frozen at the latest accepted turn boundary.
     /// 最近一次接受的回合边界所冻结的完整上下文窗口策略。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_context_window_policy: Option<ContextWindowPolicy>,
     /// Stable context-compaction window node selected only for this session.
     /// 仅为当前会话选择的稳定上下文压缩窗口节点。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_compaction_window_node_id: Option<ContextCompactionWindowNodeId>,
     /// Last reasoning-effort preset selected while this session was active.
     /// 最近一次该会话激活时选择的推理档位预设。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_reasoning_effort: Option<ReasoningEffortLevel>,
     /// Records whether the session reasoning preference was explicitly chosen by the user.
     /// 记录会话思考偏好是否由用户明确选择，用于区分旧版默认值与显式关闭。
-    #[serde(default, skip_serializing_if = "is_false")]
     pub active_reasoning_effort_explicit: bool,
     /// Last optional temperature override selected while this session was active.
     /// 最近一次该会话激活时选择的可选温度覆盖。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_temperature: Option<f32>,
     /// Session-selected provider tool targets keyed by semantic capability.
     /// 按语义能力索引的会话级供应商工具目标选择。
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub provider_tool_selections: BTreeMap<String, SessionProviderToolTargetSelection>,
     /// Session-selected media backend modes keyed by semantic capability.
     /// 按语义能力索引的会话级媒体后端模式选择。
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub media_understanding_modes: BTreeMap<String, SessionMediaUnderstandingMode>,
     /// Provider tool capabilities enabled only for this session.
     /// 仅为当前会话启用的供应商工具能力。
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub provider_tool_enabled_capabilities: BTreeSet<String>,
-    /// Durable provider media references retained only for the active uncompressed conversation window.
-    /// 仅为活动未压缩会话窗口保留的可持久化供应商媒体引用。
-    #[serde(default, skip_serializing_if = "SessionMediaReferenceLedger::is_empty")]
+    /// Process-local provider media-reference mirror for the active uncompressed conversation window.
+    /// 活动未压缩会话窗口使用的进程内供应商媒体引用镜像。
     pub media_reference_ledger: SessionMediaReferenceLedger,
     /// Session-selected native model-extension target sets keyed by extension capability.
     /// 按扩展能力索引的会话级原生模型扩展目标集合。
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub provider_extension_target_sets:
         BTreeMap<String, BTreeSet<SessionProviderToolTargetSelection>>,
     /// Whether provider tool defaults have been materialized into this session.
     /// 供应商工具默认值是否已经物化到当前会话。
-    #[serde(default, skip_serializing_if = "is_false")]
     pub provider_tool_settings_initialized: bool,
     /// Whether this session owns an explicit provider-tool selection instead of inheriting global defaults.
     /// 当前会话是否拥有显式供应商工具选择，而不是继承全局默认值。
-    #[serde(default, skip_serializing_if = "is_false")]
     pub provider_tool_selections_overridden: bool,
     /// Last user-selected work mode key for this session.
     /// 该会话最近一次选择的工作模式键。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_work_mode: Option<String>,
     /// Session-level prompt skill state overrides.
     /// 会话级提示词技能状态覆盖。
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub prompt_skill_overrides: BTreeMap<String, PersistedPromptSkillState>,
     /// Session-level context-injection runtime state kept outside the visible transcript.
     /// 保留在可见转录之外的会话级上下文注入运行态。
-    #[serde(default, skip_serializing_if = "ContextInjectionState::is_empty")]
     pub context_injection_state: ContextInjectionState,
     /// Session-level VMM memory integration overrides.
     /// 会话级 VMM 记忆集成覆盖配置。
-    #[serde(default, skip_serializing_if = "VmmConfigLayer::is_empty")]
     pub vmm: VmmConfigLayer,
-    /// Session knowledge-library selection persisted exclusively in the addon document.
-    /// 仅持久化到附属状态文档的会话知识库选择。
-    #[serde(skip)]
+    /// Process-local mirror of the session knowledge-library selection.
+    /// 会话知识库选择的进程内镜像。
     pub knowledge_library_selection: SessionKnowledgeLibrarySelection,
     /// Session-level todolist shown in the conversation tool panel.
     /// 在会话工具面板中展示的会话级 todolist。
-    #[serde(default, skip_serializing_if = "SessionTodolistState::is_empty")]
     pub todolist: SessionTodolistState,
     /// Session-level Plan mode marker and latest generated plan artifact.
     /// 会话级计划模式标记与最近生成的计划产物。
-    #[serde(default, skip_serializing_if = "SessionPlanModeState::is_empty")]
     pub plan_mode: SessionPlanModeState,
     /// Session output-style override and the last boundary-applied snapshot.
     /// 会话输出风格覆盖与最近一次边界应用的快照。
-    #[serde(default, skip_serializing_if = "SessionOutputStyleState::is_empty")]
     pub output_style: SessionOutputStyleState,
     /// Pending VMM PostAction writebacks retained for FIFO replay.
     /// 为 FIFO 重放保留的待处理 VMM PostAction 写回队列。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vmm_writeback_outbox: Vec<VmmWritebackOutboxEntry>,
     /// Session-scoped VMM profile synchronization state.
     /// 会话级 VMM 画像同步状态。
-    #[serde(default, skip_serializing_if = "VmmProfileSyncState::is_empty")]
     pub vmm_profile_sync: VmmProfileSyncState,
     /// Latest compaction identifier attached to the session.
     /// 附着在该会话上的最近一次压缩标识。
     pub last_compaction_id: Option<String>,
     /// Consecutive automatic context-compaction failures observed for this session.
     /// 该会话连续自动上下文压缩失败次数。
-    #[serde(default, skip_serializing_if = "is_zero_usize")]
     pub auto_compaction_consecutive_failures: usize,
     /// Current message identifier used as the next context reconstruction anchor.
     /// 当前用作下一轮上下文重建锚点的消息标识。
     pub context_start_message_id: Option<String>,
     /// Live budget fingerprint captured from the latest provider-facing request shape.
     /// 从最近一次面向 Provider 请求形态捕获的实时预算指纹。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_context_budget_fingerprint: Option<String>,
     /// Live layered-context fingerprint captured from the latest provider-facing request shape.
     /// 从最近一次面向 Provider 请求形态捕获的实时分层上下文指纹。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_context_assembly_fingerprint: Option<String>,
     /// Anchor budget fingerprint captured when the active compaction baseline was accepted.
     /// 在接受当前压缩基线时捕获的锚点预算指纹。
-    #[serde(
-        default,
-        alias = "last_context_budget_fingerprint",
-        skip_serializing_if = "Option::is_none"
-    )]
     pub anchor_context_budget_fingerprint: Option<String>,
     /// Anchor layered-context fingerprint captured when the active compaction baseline was accepted.
     /// 在接受当前压缩基线时捕获的锚点分层上下文指纹。
-    #[serde(
-        default,
-        alias = "last_context_assembly_fingerprint",
-        skip_serializing_if = "Option::is_none"
-    )]
     pub anchor_context_assembly_fingerprint: Option<String>,
-    /// Last persisted provider-request preview Markdown used by the dedicated API request transcript tab.
-    /// 供专用 API 请求转录页签使用的最近一次持久化 Provider 请求预览 Markdown。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Last process-local provider-request preview Markdown used by the dedicated API request transcript tab.
+    /// 供专用 API 请求转录页签使用的最近一次进程内 Provider 请求预览 Markdown。
     pub last_provider_request_preview_markdown: Option<String>,
-    /// Persisted transcript UI state restored with the session runtime metadata.
-    /// 随会话运行时元数据一起恢复的持久化转录界面状态。
+    /// Process-local transcript UI mirror projected from current V1 facts.
+    /// 从当前 V1 事实投影出的进程内转录界面镜像。
     pub ui_state: SessionTranscriptUiState,
-    /// Canonical conversation state used by the runtime instead of rebuilding history from transcript projections.
-    /// 运行时使用的规范会话状态，用于替代从转录投影重建历史。
-    #[serde(default, skip_serializing_if = "session_conversation_state_is_empty")]
+    /// Temporary conversation adapter state used only before the V1 Provider projection boundary.
+    /// 仅在 V1 Provider 投影边界前使用的临时会话适配状态。
     pub conversation_state: SessionConversationState,
     /// Open tool-call record ids keyed by tool_call_id for direct result attachment.
     /// 按 tool_call_id 索引的未闭合工具调用记录标识，用于直接挂接工具返回。
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tool_call_record_ids: BTreeMap<String, String>,
     /// Open tool-request record ids keyed by request_stream_id before canonical execution starts.
     /// 在规范执行开始前按 request_stream_id 索引的未闭合工具请求记录标识。
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tool_request_record_ids: BTreeMap<String, String>,
-    /// Latest provider usage snapshot retained for budget calibration across turns.
-    /// 为跨轮预算校准保留的最近一次 Provider 用量快照。
-    #[serde(default, skip_serializing)]
-    pub last_provider_usage: Option<ProviderUsageSnapshot>,
-    /// Latest successful provider usage snapshot captured from the final real provider turn.
-    /// 从最终真实 Provider 回合中捕获到的最近一次成功用量快照。
-    #[serde(default, skip_serializing)]
-    pub last_successful_provider_usage: Option<ProviderUsageSnapshot>,
-    /// Authoritative versioned ledger of every physical Provider call in this session.
-    /// 当前会话中每次物理 Provider 调用的权威版本化账本。
-    #[serde(
-        default,
-        alias = "provider_usage",
-        skip_serializing_if = "SessionProviderCallLedger::is_empty"
-    )]
-    pub provider_call_ledger: SessionProviderCallLedger,
-    /// Lightweight live or interrupted reference to the exact execution snapshot eligible for retry.
-    /// 指向可重试精确执行快照的轻量实时或中断引用。
-    #[serde(
-        default,
-        skip_serializing_if = "execution_retry_snapshot_is_transient_or_none"
-    )]
-    pub execution_retry_snapshot: Option<ExecutionRetrySnapshotRef>,
-    /// Complete live retry state retained only while the owning service process is running.
-    /// 仅在所属服务进程运行期间保留的完整实时重试状态。
-    #[serde(skip)]
-    pub transient_execution_retry_snapshot: Option<Arc<ExecutionRetrySnapshot>>,
     /// Latest client submission whose first semantic latency was recorded in this process.
     /// 当前进程中最近一次已经记录首语义延迟的客户端提交标识。
-    #[serde(skip)]
     pub observed_first_semantic_submission_id: Option<String>,
     /// Absolute input-token baseline for the current BodyAfterPrefix compaction window.
     /// 当前 BodyAfterPrefix 压缩窗口使用的绝对输入 Token 基线。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_compact_prefill_input_tokens: Option<usize>,
     /// Active precheck turn id that is allowed to continue into the provider request.
     /// 当前允许继续进入 Provider 请求的活跃 precheck 回合标识。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_precheck_turn_id: Option<String>,
-    /// Persisted single-source session runtime kernel used to restore mailbox delivery state.
-    /// 用于恢复 mailbox 投递状态的持久化单一事实会话运行时内核。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Process-local session runtime-kernel mirror used for active mailbox delivery.
+    /// 用于活动 mailbox 投递的进程内会话运行时内核镜像。
     pub session_runtime_kernel: Option<SessionRuntimeKernel>,
     /// Unix-millis text capturing when the runtime state was last refreshed.
     /// 捕获运行时状态最近刷新时间的 Unix 毫秒文本。
     pub updated_at: String,
-}
-
-/// Returns whether a retry reference has no durable interrupted body and must stay process-local.
-/// 返回重试引用是否没有持久化中断正文并必须停留在进程内。
-///
-/// # Parameters
-/// 参数
-/// `reference` is the optional live or interrupted retry identity attached to one session.
-/// `reference` 是附加到单个会话的可选实时或中断重试身份。
-///
-/// # Returns
-/// 返回值
-/// `true` for absence or a zero-byte live projection so serde omits it from `state.json`.
-/// 缺失或零字节实时投影时返回 `true`，使 serde 从 `state.json` 省略该字段。
-fn execution_retry_snapshot_is_transient_or_none(
-    reference: &Option<ExecutionRetrySnapshotRef>,
-) -> bool {
-    reference
-        .as_ref()
-        .is_none_or(|reference| reference.content_bytes == 0)
-}
-
-impl SessionRuntimeStateEntry {
-    /// Moves deprecated top-level Provider usage summaries into the ledger's audit-only import.
-    /// 将已废弃的顶层 Provider 用量摘要迁入账本的仅审计导入区。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns whether legacy fields were consumed, or a precise migration conflict.
-    /// 返回是否消费了旧字段，或精确的迁移冲突。
-    pub fn migrate_legacy_provider_usage_summaries(&mut self) -> Result<bool, String> {
-        let last_usage = self.last_provider_usage.take();
-        let last_successful_usage = self.last_successful_provider_usage.take();
-        let had_legacy_summary = last_usage.is_some() || last_successful_usage.is_some();
-        match self
-            .provider_call_ledger
-            .import_legacy_runtime_usage_summaries(
-                last_usage.clone(),
-                last_successful_usage.clone(),
-            ) {
-            Ok(_) => Ok(had_legacy_summary),
-            Err(error) => {
-                self.last_provider_usage = last_usage;
-                self.last_successful_provider_usage = last_successful_usage;
-                Err(error)
-            }
-        }
-    }
 }
 
 /// Identifies one exact provider tool target selected for a session.

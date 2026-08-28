@@ -8,11 +8,9 @@ use crate::agent_runtime::provider_runtime_inputs::one_shot_provider_error_strea
 use crate::agent_runtime::provider_stream::ProviderDeltaStream;
 use crate::agent_runtime::provider_transport::build_provider_transport_execution_request;
 use crate::agent_runtime::provider_transport_request::{
-    ProviderRouteIdentity, ProviderTransportRecoveryAction, ProviderTransportTurnStartMode,
+    ProviderRouteIdentity, ProviderTransportTurnStartMode,
 };
-use crate::agent_runtime::provider_transport_request_budget::{
-    ProviderRequestBudgetGuard, ProviderUsageBudgetBaselineHandle,
-};
+use crate::agent_runtime::provider_transport_request_budget::ProviderRequestBudgetGuard;
 use crate::agent_runtime::provider_transport_retry::ProviderRetryPolicy;
 use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
 use crate::agent_runtime::task_runtime::TaskRuntime;
@@ -21,8 +19,12 @@ use async_stream::stream;
 use futures_util::StreamExt;
 use std::sync::Arc;
 use vulcan_ai_contract::{ModelParameterValue, ReasoningEffort};
-use vulcan_core::types::ConversationSnapshot as CoreConversationSnapshot;
+use vulcan_core::types::{
+    ConversationSnapshot as CoreConversationSnapshot,
+    ProviderPromptLayers as CoreProviderPromptLayers,
+};
 use vulcan_provider_adapters::{ResolvedPublicAiExecution, SAMPLING_TEMPERATURE_PARAMETER_ID};
+use vulcan_session_core::v1::context::LockedBaselineProjection;
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
 /// Safe runtime default turn budget used when no explicit max-turn override is configured.
@@ -144,17 +146,15 @@ pub(crate) fn execute_provider_prompt_stream(
     preparation: &ExecutionPreparation,
     active_agent: Option<&RuntimeAgentDefinition>,
     system_preamble: &str,
+    dynamic_prompt_layers: CoreProviderPromptLayers,
+    locked_baseline: LockedBaselineProjection,
     prompt: &str,
     turn_start_mode: ProviderTransportTurnStartMode,
     core_snapshot: CoreConversationSnapshot,
-    initial_provider_request: Option<vulcan_ai_contract::AiExecutionRequest>,
-    controller_config_override: Option<vulcan_core::types::ControllerConfig>,
-    recovery_action: Option<ProviderTransportRecoveryAction>,
     task_runtime: Arc<TaskRuntime>,
     tools_manager: VulcanToolsManager,
     resolved_tools: Vec<ResolvedToolDefinition>,
     public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
-    provider_usage_budget_baseline: ProviderUsageBudgetBaselineHandle,
     prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> ProviderDeltaStream {
     execute_provider_prompt_stream_with_capture_mode(
@@ -162,17 +162,15 @@ pub(crate) fn execute_provider_prompt_stream(
         preparation,
         active_agent,
         system_preamble,
+        dynamic_prompt_layers,
+        locked_baseline,
         prompt,
         turn_start_mode,
         core_snapshot,
-        initial_provider_request,
-        controller_config_override,
-        recovery_action,
         task_runtime,
         tools_manager,
         resolved_tools,
         public_ai_runtime,
-        Some(provider_usage_budget_baseline),
         false,
         prompt_intervention,
     )
@@ -185,6 +183,8 @@ pub(crate) fn execute_provider_prompt_capture_stream(
     preparation: &ExecutionPreparation,
     active_agent: Option<&RuntimeAgentDefinition>,
     system_preamble: &str,
+    dynamic_prompt_layers: CoreProviderPromptLayers,
+    locked_baseline: LockedBaselineProjection,
     prompt: &str,
     turn_start_mode: ProviderTransportTurnStartMode,
     core_snapshot: CoreConversationSnapshot,
@@ -198,17 +198,15 @@ pub(crate) fn execute_provider_prompt_capture_stream(
         preparation,
         active_agent,
         system_preamble,
+        dynamic_prompt_layers,
+        locked_baseline,
         prompt,
         turn_start_mode,
         core_snapshot,
-        None,
-        None,
-        None,
         task_runtime,
         tools_manager,
         resolved_tools,
         public_ai_runtime,
-        None,
         true,
         None,
     )
@@ -286,17 +284,15 @@ fn execute_provider_prompt_stream_with_capture_mode(
     preparation: &ExecutionPreparation,
     active_agent: Option<&RuntimeAgentDefinition>,
     system_preamble: &str,
+    dynamic_prompt_layers: CoreProviderPromptLayers,
+    locked_baseline: LockedBaselineProjection,
     prompt: &str,
     turn_start_mode: ProviderTransportTurnStartMode,
     core_snapshot: CoreConversationSnapshot,
-    initial_provider_request: Option<vulcan_ai_contract::AiExecutionRequest>,
-    controller_config_override: Option<vulcan_core::types::ControllerConfig>,
-    recovery_action: Option<ProviderTransportRecoveryAction>,
     task_runtime: Arc<TaskRuntime>,
     tools_manager: VulcanToolsManager,
     resolved_tools: Vec<ResolvedToolDefinition>,
     public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
-    provider_usage_budget_baseline: Option<ProviderUsageBudgetBaselineHandle>,
     capture_only: bool,
     prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> ProviderDeltaStream {
@@ -320,12 +316,7 @@ fn execute_provider_prompt_stream_with_capture_mode(
     let request_budget_guard = if capture_only {
         None
     } else {
-        let Some(provider_usage_budget_baseline) = provider_usage_budget_baseline else {
-            return one_shot_provider_error_stream(
-                "The Provider Usage budget baseline handle is missing.",
-            );
-        };
-        Some(ProviderRequestBudgetGuard::with_shared_baseline(
+        Some(ProviderRequestBudgetGuard::new_v1(
             preparation.model_blueprint.provider_id.clone(),
             preparation.model_blueprint.model_id.clone(),
             preparation.model_blueprint.protocol_profile_id.clone(),
@@ -338,8 +329,6 @@ fn execute_provider_prompt_stream_with_capture_mode(
                 .context_budget
                 .as_ref()
                 .and_then(|budget| budget.auto_compact_prefill_input_tokens),
-            preparation.provider_usage_context_generation_id.clone(),
-            provider_usage_budget_baseline,
         ))
     };
     let retry_policy = if capture_only {
@@ -347,30 +336,19 @@ fn execute_provider_prompt_stream_with_capture_mode(
     } else {
         ProviderRetryPolicy::from_config(&config.retry)
     };
-    if let Some(task_session_store_root) = preparation.task_session_store_root.clone()
-        && let Err(error) = task_runtime
-            .configure_task_session_store_root(preparation.session_id, task_session_store_root)
-    {
-        eprintln!(
-            "[task-session-store] configure store root failed for session {}: {error}",
-            preparation.session_id
-        );
-    }
 
     let mut transport_request = build_provider_transport_execution_request(
         config.provider_request_trace_enabled && !capture_only,
-        preparation.session_storage_directory.clone(),
         preparation.model_blueprint.provider_id.clone(),
         model_id,
         preparation.workspace_path.as_str(),
         &preparation.execution_mode,
         system_preamble,
+        dynamic_prompt_layers,
+        locked_baseline,
         prompt,
         turn_start_mode,
         core_snapshot,
-        initial_provider_request,
-        controller_config_override,
-        recovery_action,
         temperature,
         max_turns,
         task_runtime,

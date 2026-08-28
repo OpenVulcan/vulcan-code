@@ -1,9 +1,3 @@
-import type { ConversationMessage } from "@/types";
-
-// STREAM_SIGNATURE_TAIL_MESSAGE_LIMIT limits tail-follow signatures to messages that can affect the viewport tail.
-// STREAM_SIGNATURE_TAIL_MESSAGE_LIMIT 将尾部追踪签名限制在会影响视口尾部的消息范围。
-const STREAM_SIGNATURE_TAIL_MESSAGE_LIMIT = 8;
-
 // ConversationScrollSnapshot stores one semantic transcript viewport restoration point.
 // ConversationScrollSnapshot 保存单个转录界面的语义视口恢复点。
 export interface ConversationScrollSnapshot {
@@ -128,19 +122,6 @@ export function conversationScrollTopForSnapshot(
     }
   }
   return clampConversationScrollTop(snapshot.scrollTop, maxScrollTop);
-}
-
-// buildConversationStreamSignature returns a structural signature without reading cumulative stream bodies.
-// buildConversationStreamSignature 返回不读取累计流正文的结构签名。
-// Parameters: messages is the active surface's authoritative ordered transcript window.
-// 参数：messages 是活动界面的权威有序转录窗口。
-// Returns: a tail-limited identity signature that changes only for structural message changes.
-// 返回值：仅在结构性消息变化时改变的尾部受限身份签名。
-export function buildConversationStreamSignature(messages: ConversationMessage[]): string {
-  return messages
-    .slice(-STREAM_SIGNATURE_TAIL_MESSAGE_LIMIT)
-    .map((message) => `${message.id}:${message.recordKind ?? ""}:${message.role}`)
-    .join("|");
 }
 
 // conversationViewportAllowsTailFollow returns whether the timeline is at or near the bottom.

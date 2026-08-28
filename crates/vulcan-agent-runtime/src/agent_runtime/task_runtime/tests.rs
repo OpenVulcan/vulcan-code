@@ -1,10 +1,9 @@
 use super::*;
 use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::execution_models::ExecutionPromptPurpose;
+use crate::conversation_protocol::SessionConversationState;
 use crate::provider_config::{ProjectPromptSkillsConfiguration, ReasoningEffortLevel};
 use std::collections::BTreeMap;
-use std::fs::{self, File};
-use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Reserves one test execution and attaches its provider abort handle.
@@ -69,15 +68,6 @@ fn task_session_status_from_execution_status_text_rejects_unknown_status() {
     );
 }
 
-/// Verifies failed TaskSession states are stored as terminal lifecycle events.
-/// 验证失败的 TaskSession 状态会保存为终态生命周期事件。
-#[test]
-fn failed_task_session_status_uses_terminal_event_kind() {
-    let event_kind = task_session_event_kind_for_status(TaskSessionStatus::Failed);
-
-    assert_eq!(event_kind, SessionEventKind::TaskTerminal);
-}
-
 /// Verifies failed TaskSession states are treated as cached terminal records.
 /// 验证失败的 TaskSession 状态会被视为可缓存读取的终态记录。
 #[test]
@@ -99,80 +89,6 @@ fn failed_task_session_status_is_cached_terminal_state() {
     });
 
     assert!(task_session_record_has_cached_status(&record));
-    assert!(task_session_metadata_has_cached_status(
-        TaskSessionStatus::Failed
-    ));
-}
-
-/// Verifies stale active updates cannot reopen a failed TaskSession.
-/// 验证迟到的活跃状态不能重新打开失败的 TaskSession。
-#[test]
-fn resolve_persisted_task_session_status_preserves_failed_terminal_state() {
-    let resolved = resolve_persisted_task_session_status(
-        TaskSessionStatus::Failed,
-        TaskSessionStatus::Running,
-    );
-
-    assert_eq!(resolved, TaskSessionStatus::Failed);
-}
-
-/// Writes the minimal segmented root-session metadata needed by TaskSession store tests.
-/// 写入 TaskSession 存储测试所需的最小分段根会话元数据。
-fn write_test_segmented_root_metadata(root: &std::path::Path, root_session_id: SessionId) {
-    fs::create_dir_all(root).expect("create segmented root");
-    // segmentLine is the exact initial JSONL row whose durable length the fixture metadata declares.
-    // segmentLine 是测试元数据声明其耐久长度的精确初始 JSONL 行。
-    let segment_line = json!({
-        "seq": 0,
-        "timestamp": "100",
-        "type": "session_meta",
-        "payload": { "session_id": root_session_id.to_string() },
-        "turn_index": null
-    });
-    // segmentLineText preserves the exact compact serialization written to the fixture file.
-    // segmentLineText 保留写入测试文件的精确紧凑序列化结果。
-    let segment_line_text = serde_json::to_string(&segment_line).expect("encode root segment line");
-    // segmentByteLen includes the one JSONL newline byte.
-    // segmentByteLen 包含一个 JSONL 换行字节。
-    let segment_byte_len = segment_line_text.len().saturating_add(1);
-    let metadata = json!({
-        "schema_version": 1,
-        "session_id": root_session_id.to_string(),
-        "project_tag": "test-project",
-        "created_at": "100",
-        "updated_at": "100",
-        "project_id": "test-project",
-        "title": "Test root",
-        "title_source": "manual",
-        "canonical_source": "task-runtime-test",
-        "archived_at": null,
-        "active_segment": "s001.jsonl",
-        "task_dir": "task",
-        "next_global_seq": 1,
-        "latest_rollback_seq": null,
-        "segments": [
-            {
-                "file": "s001.jsonl",
-                "start_seq": 0,
-                "line_count": 1,
-                "byte_len": segment_byte_len,
-                "first_timestamp": "100",
-                "last_timestamp": "100",
-                "first_turn_index": null,
-                "last_turn_index": null,
-                "last_compaction_seq": null
-            }
-        ],
-        "segment_policy": {
-            "max_lines": 3000,
-            "max_bytes": 8388608
-        },
-        "tasks": []
-    });
-    let file = File::create(root.join("metadata.json")).expect("create root metadata");
-    serde_json::to_writer_pretty(file, &metadata).expect("write root metadata");
-    let mut segment = File::create(root.join("s001.jsonl")).expect("create root segment");
-    writeln!(segment, "{segment_line_text}").expect("write root segment");
 }
 
 /// Builds a resolved TaskSession configuration for controller-config tests.
@@ -217,7 +133,6 @@ fn test_task_args(prompt: &str, task_id: Option<&str>) -> TaskToolInvocationArgs
     }
 }
 
-mod persistence_store;
 mod preparation_config;
 mod registry_mailbox;
 mod runtime_flow;

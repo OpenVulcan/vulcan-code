@@ -43,13 +43,7 @@ use vulcan_vmm::{
     VmmClient, VmmConfigDiagnostic, VmmConfigLayer, VmmEffectiveConfig, VmmTransportConfig,
     WriteMemoriesRequest, WriteMemoryItem,
 };
-use vulcan_workspace_store::{
-    data_plane::ControllerRuntimeHandle,
-    workspace_store::{
-        GoalUpdate, MAX_THREAD_GOAL_OBJECTIVE_CHARS, ThreadGoal, ThreadGoalStatus, VulcanGoalStore,
-        normalize_thread_goal_objective, validate_thread_goal_token_budget,
-    },
-};
+use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
 
 /// Stable identifier for the universal session todolist update tool.
 /// 通用会话 todolist 更新工具的稳定标识。
@@ -70,6 +64,132 @@ pub const CREATE_GOAL_TOOL_ID: &str = "create_goal";
 /// Stable identifier for the current-thread goal status update tool.
 /// 当前线程目标状态更新工具的稳定标识。
 pub const UPDATE_GOAL_TOOL_ID: &str = "update_goal";
+
+/// Stable lifecycle state exposed by the native Goal domain port.
+/// 原生 Goal 领域端口暴露的稳定生命周期状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeGoalStatus {
+    /// Goal is actively pursued by automatic continuation.
+    /// Goal 正由自动续跑流程推进。
+    Active,
+    /// Goal is paused and does not auto-continue.
+    /// Goal 已暂停且不会自动续跑。
+    Paused,
+    /// Goal is blocked and needs external progress.
+    /// Goal 已受阻并需要外部进展。
+    Blocked,
+    /// Goal stopped because Provider or runtime usage is limited.
+    /// Goal 因 Provider 或运行时用量受限而停止。
+    UsageLimited,
+    /// Goal exhausted its explicit token budget.
+    /// Goal 已耗尽显式 token 预算。
+    BudgetLimited,
+    /// Goal completed its objective.
+    /// Goal 已完成目标。
+    Complete,
+}
+
+impl NativeGoalStatus {
+    /// Returns the stable protocol key used in tool errors and responses.
+    /// 返回工具错误与响应使用的稳定协议键。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Paused => "paused",
+            Self::Blocked => "blocked",
+            Self::UsageLimited => "usage_limited",
+            Self::BudgetLimited => "budget_limited",
+            Self::Complete => "complete",
+        }
+    }
+}
+
+/// Terminal lifecycle transition accepted from the native update-goal tool.
+/// 原生 update-goal 工具接受的终态生命周期转换。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeGoalTerminalStatus {
+    /// Mark the active Goal as completed.
+    /// 将活动 Goal 标记为已完成。
+    Complete,
+    /// Mark the active Goal as blocked.
+    /// 将活动 Goal 标记为受阻。
+    Blocked,
+}
+
+/// Complete V1 Goal snapshot returned through the native-tool domain port.
+/// 通过原生工具领域端口返回的完整 V1 Goal 快照。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeGoalSnapshot {
+    /// Session identifier that owns the Goal.
+    /// 拥有该 Goal 的会话标识。
+    pub session_id: SessionId,
+    /// Stable Goal generation identifier.
+    /// 稳定的 Goal 代际标识。
+    pub goal_id: String,
+    /// Human-authored Goal objective.
+    /// 用户编写的 Goal 目标内容。
+    pub objective: String,
+    /// Current Goal lifecycle state.
+    /// 当前 Goal 生命周期状态。
+    pub status: NativeGoalStatus,
+    /// Optional explicit token budget.
+    /// 可选的显式 token 预算。
+    pub token_budget: Option<i64>,
+    /// Accounted uncached-input-plus-output token usage.
+    /// 已记账的非缓存输入加输出 token 用量。
+    pub tokens_used: i64,
+    /// Cumulative uncached input tokens.
+    /// 累计非缓存输入 token。
+    pub uncached_input_tokens: i64,
+    /// Cumulative cache-hit input tokens.
+    /// 累计缓存命中输入 token。
+    pub cached_input_tokens: i64,
+    /// Cumulative output tokens.
+    /// 累计输出 token。
+    pub output_tokens: i64,
+    /// Cumulative reasoning tokens.
+    /// 累计思考 token。
+    pub reasoning_tokens: i64,
+    /// Cumulative Provider total tokens.
+    /// 累计 Provider 总 token。
+    pub total_tokens: i64,
+    /// Accounted wall-clock usage in seconds.
+    /// 已记账的墙钟用量秒数。
+    pub time_used_seconds: i64,
+    /// Goal generation creation time in Unix milliseconds.
+    /// Goal 代际创建时间的 Unix 毫秒值。
+    pub created_at_ms: i64,
+    /// Goal generation last-update time in Unix milliseconds.
+    /// Goal 代际最近更新时间的 Unix 毫秒值。
+    pub updated_at_ms: i64,
+}
+
+/// Host-injected V1 Goal domain port used by native Goal tools.
+/// 原生 Goal 工具使用的宿主注入 V1 Goal 领域端口。
+#[async_trait::async_trait]
+pub trait NativeGoalRuntime: fmt::Debug + Send + Sync {
+    /// Reads the authoritative Goal snapshot for one exact session.
+    /// 读取一个精确会话的权威 Goal 快照。
+    async fn get_goal(&self, session_id: SessionId) -> Result<Option<NativeGoalSnapshot>, String>;
+
+    /// Creates a Goal or replaces a completed generation through one atomic V1 transition.
+    /// 通过单个原子 V1 转换创建 Goal 或替换已完成代际。
+    async fn create_goal(
+        &self,
+        session_id: SessionId,
+        objective: String,
+        token_budget: Option<u64>,
+    ) -> Result<NativeGoalSnapshot, String>;
+
+    /// Applies one terminal Goal transition through the authoritative V1 document.
+    /// 通过权威 V1 文档应用一个 Goal 终态转换。
+    async fn update_goal_status(
+        &self,
+        session_id: SessionId,
+        status: NativeGoalTerminalStatus,
+    ) -> Result<NativeGoalSnapshot, String>;
+}
 /// Stable identifier for project knowledge search.
 /// 项目资料检索的稳定标识。
 pub const KNOWLEDGE_SEARCH_TOOL_ID: &str = "knowledge_search";
@@ -222,6 +342,9 @@ pub struct NativeToolExecutionRequest {
     /// Optional controller runtime used by native tools that persist workspace state.
     /// 持久化工作区状态的原生工具使用的可选控制器运行时。
     pub controller_runtime: Option<ControllerRuntimeHandle>,
+    /// Optional host-injected V1 Goal domain port bound to this execution.
+    /// 绑定到本次执行的可选宿主注入 V1 Goal 领域端口。
+    pub goal_runtime: Option<Arc<dyn NativeGoalRuntime>>,
     /// Optional project-authorized and session-enabled knowledge-library snapshot.
     /// 可选的项目授权且会话已启用知识库快照。
     pub knowledge_access: Option<ExecutionKnowledgeAccessContext>,

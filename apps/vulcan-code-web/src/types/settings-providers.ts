@@ -219,26 +219,6 @@ export interface ProviderModelSecondaryRouteSelection {
   endpointName?: string;
 }
 
-// UserPromptEditDraftSummary carries one backend-validated edit draft.
-// UserPromptEditDraftSummary 承载单个后端校验后的编辑草稿。
-export interface UserPromptEditDraftSummary {
-  // Stable conversation identifier.
-  // 稳定会话标识。
-  conversationId: string;
-  // Stable user prompt message identifier.
-  // 稳定用户提示词消息标识。
-  messageId: string;
-  // Editable prompt text.
-  // 可编辑提示词文本。
-  prompt: string;
-  // Attachments that will be replayed with the edited prompt.
-  // 将随编辑后提示词重新执行的附件。
-  attachments?: ComposerAttachmentSummary[];
-  // Whether the owning conversation is currently running.
-  // 所属会话是否正在运行。
-  running?: boolean;
-}
-
 // ProviderFieldSummary describes one editable provider field.
 // ProviderFieldSummary 描述单个可编辑 Provider 字段。
 export interface ProviderFieldSummary {

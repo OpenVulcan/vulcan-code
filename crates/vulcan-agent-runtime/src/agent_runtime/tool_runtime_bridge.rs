@@ -19,9 +19,12 @@ use vulcan_core::types::{
     CoreError as VulcanCoreError, ToolInvocationRequest as CoreToolInvocationRequest,
     ToolInvocationResult as CoreToolInvocationResult,
 };
+use vulcan_session_core::v1::document::PreparedToolReceipt;
+use vulcan_session_core::v1::event::ToolPayload;
+use vulcan_session_core::v1::ids::RequestStreamId;
 use vulcan_tools_manager::{
-    ResolvedToolDefinition, VULCAN_TOOL_ERROR_DETAIL_KIND, VulcanToolInvocationResult,
-    VulcanToolsManager,
+    ResolvedToolDefinition, VULCAN_TOOL_ERROR_DETAIL_KIND, VulcanToolInvocationContext,
+    VulcanToolInvocationResult, VulcanToolsManager,
 };
 
 /// Shared host-managed tool bridge that backs the host executor and `vulcan-core` host-side tool execution.
@@ -40,6 +43,10 @@ pub struct VulcanManagedToolRuntimeBridge {
     /// Execution mode label used by invocation-time Plan-mode guards.
     /// 调用期计划模式守卫使用的执行模式标签。
     execution_mode: String,
+    /// Durable V1 identities awaiting exact tool-body execution, keyed only by request stream id.
+    /// 等待精确工具主体执行的可靠 V1 身份，仅以请求流身份为键。
+    prepared_invocation_identities:
+        Arc<Mutex<HashMap<RequestStreamId, PreparedToolInvocationIdentity>>>,
 }
 
 /// Metadata key used to connect one runtime-event projection to its tool-execution barrier.
@@ -57,9 +64,26 @@ thread_local! {
     static RUNTIME_EVENT_PROJECTION_BARRIERS_TEST_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
 }
 
+/// Exact Core receipt returned by the durable V1 tool-batch owner.
+/// 由可靠 V1 工具批次所有者返回的精确 Core 回执。
+pub type PreparedToolInvocationIdentity = PreparedToolReceipt;
+
+/// Payload released by one completed runtime-event projection barrier.
+/// 单个运行时事件投影屏障完成后释放的载荷。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RuntimeEventProjectionReceipt {
+    /// The event was projected and requires no execution identity payload.
+    /// 事件已完成投影，且不需要执行身份载荷。
+    Projected,
+    /// The durable tool batch returned the exact local identities for execution.
+    /// 可靠工具批次返回了供执行使用的精确本地身份。
+    ToolBatchPrepared(Vec<PreparedToolInvocationIdentity>),
+}
+
 /// Stores pending projection barrier acknowledgements by stable barrier id.
 /// 按稳定屏障标识保存等待中的投影确认发送端。
-type RuntimeEventProjectionBarrierRegistry = HashMap<String, oneshot::Sender<()>>;
+type RuntimeEventProjectionBarrierRegistry =
+    HashMap<String, oneshot::Sender<RuntimeEventProjectionReceipt>>;
 
 /// Process-wide pending projection barrier acknowledgements keyed by stable barrier id.
 /// 以稳定屏障标识为键的进程级待确认投影屏障集合。
@@ -81,7 +105,7 @@ pub(crate) struct RuntimeEventProjectionBarrier {
     required_for_execution: bool,
     /// Receiver resolved by the host bridge after it emits the projected workbench snapshot.
     /// 宿主桥接层完成投影快照发送后解析的接收端。
-    receiver: oneshot::Receiver<()>,
+    receiver: oneshot::Receiver<RuntimeEventProjectionReceipt>,
 }
 
 impl VulcanManagedToolRuntimeBridge {
@@ -104,7 +128,103 @@ impl VulcanManagedToolRuntimeBridge {
             definitions_by_id,
             session_id,
             execution_mode: execution_mode.into(),
+            prepared_invocation_identities: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Installs one complete durable tool-batch identity receipt before any tool body starts.
+    /// 在任何工具主体启动前安装一份完整可靠的工具批次身份回执。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `requests` are the exact Core requests admitted by the batch; `identities` are the exact
+    /// local ids returned by the authoritative V1 session document.
+    /// `requests` 是该批次接纳的精确 Core 请求；`identities` 是权威 V1 会话文档返回的精确本地身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success only when every request stream has exactly one matching identity and no older
+    /// prepared identity would be overwritten.
+    /// 仅当每个请求流都恰好拥有一个匹配身份，且不会覆盖旧的待执行身份时成功。
+    pub(crate) fn install_prepared_invocation_identities(
+        &self,
+        requests: &[CoreToolInvocationRequest],
+        identities: Vec<PreparedToolInvocationIdentity>,
+    ) -> Result<(), String> {
+        if requests.len() != identities.len() {
+            return Err(format!(
+                "Prepared V1 tool identity count mismatch: expected {}, received {}.",
+                requests.len(),
+                identities.len()
+            ));
+        }
+        let mut expected = HashMap::with_capacity(requests.len());
+        for request in requests {
+            let request_stream_id = RequestStreamId::try_new(request.request_stream_id.clone())
+                .map_err(|error| error.to_string())?;
+            if expected
+                .insert(request_stream_id, request.tool_call_id.as_str())
+                .is_some()
+            {
+                return Err(String::from(
+                    "Prepared tool batch contains a duplicate request stream identity.",
+                ));
+            }
+        }
+        let mut staged = HashMap::with_capacity(identities.len());
+        for identity in identities {
+            if !expected.contains_key(&identity.request_stream_id) {
+                return Err(format!(
+                    "Prepared V1 tool identity references unknown request stream `{}`.",
+                    identity.request_stream_id.as_str()
+                ));
+            }
+            if staged
+                .insert(identity.request_stream_id.clone(), identity)
+                .is_some()
+            {
+                return Err(String::from(
+                    "Prepared V1 tool identities contain a duplicate request stream identity.",
+                ));
+            }
+        }
+        let mut prepared = self.prepared_invocation_identities.lock().map_err(|_| {
+            String::from("Prepared V1 tool identity registry is locked and cannot install a batch.")
+        })?;
+        if let Some(conflict) = staged.keys().find(|key| prepared.contains_key(*key)) {
+            return Err(format!(
+                "Prepared V1 tool identity for request stream `{}` is already awaiting execution.",
+                conflict.as_str()
+            ));
+        }
+        prepared.extend(staged);
+        Ok(())
+    }
+
+    /// Consumes the exact durable local identity assigned to one request stream.
+    /// 消费分配给一个请求流的精确可靠本地身份。
+    fn take_prepared_invocation_identity(
+        &self,
+        request: &CoreToolInvocationRequest,
+    ) -> Result<PreparedToolInvocationIdentity, VulcanCoreError> {
+        let request_stream_id = RequestStreamId::try_new(request.request_stream_id.clone())
+            .map_err(|error| VulcanCoreError::InvalidState {
+                message: error.to_string(),
+            })?;
+        self.prepared_invocation_identities
+            .lock()
+            .map_err(|_| VulcanCoreError::InvalidState {
+                message: String::from(
+                    "Prepared V1 tool identity registry is locked and cannot dispatch a tool.",
+                ),
+            })?
+            .remove(&request_stream_id)
+            .ok_or_else(|| VulcanCoreError::InvalidState {
+                message: format!(
+                    "Tool request stream `{}` has no durable local V1 invocation identity.",
+                    request_stream_id.as_str()
+                ),
+            })
     }
 
     /// Dispatches one resolved host-managed tool definition through the shared tools manager.
@@ -113,14 +233,10 @@ impl VulcanManagedToolRuntimeBridge {
         &self,
         definition: &ResolvedToolDefinition,
         args: Value,
+        context: VulcanToolInvocationContext,
     ) -> Result<VulcanToolInvocationResult, String> {
         self.manager
-            .invoke_tool(
-                definition,
-                args,
-                Some(self.session_id.to_string()),
-                &self.execution_mode,
-            )
+            .invoke_tool(definition, args, context, &self.execution_mode)
             .await
     }
 
@@ -171,7 +287,7 @@ fn unregistered_tool_binding_fingerprint(tool_name: &str) -> Result<String, Stri
 /// Hashes one canonical tool-binding description into the recovery protocol fingerprint.
 /// 将一份规范工具绑定描述哈希为恢复协议指纹。
 fn stable_tool_binding_fingerprint(binding: &Value) -> Result<String, String> {
-    let canonical = canonicalize_tool_binding_json(&binding);
+    let canonical = canonicalize_tool_binding_json(binding);
     let encoded = serde_json::to_vec(&canonical)
         .map_err(|error| format!("Failed to serialize resolved tool binding: {error}"))?;
     Ok(Sha256::digest(encoded)
@@ -242,7 +358,7 @@ pub fn set_runtime_event_projection_barriers_enabled(enabled: bool) -> Result<()
 fn insert_runtime_event_projection_barrier(
     registry: &Mutex<RuntimeEventProjectionBarrierRegistry>,
     barrier_id: String,
-    sender: oneshot::Sender<()>,
+    sender: oneshot::Sender<RuntimeEventProjectionReceipt>,
     operation: &str,
 ) -> Result<(), String> {
     registry
@@ -276,7 +392,7 @@ fn remove_runtime_event_projection_barrier(
     registry: &Mutex<RuntimeEventProjectionBarrierRegistry>,
     barrier_id: &str,
     operation: &str,
-) -> Result<Option<oneshot::Sender<()>>, String> {
+) -> Result<Option<oneshot::Sender<RuntimeEventProjectionReceipt>>, String> {
     Ok(registry
         .lock()
         .map_err(|_| {
@@ -420,17 +536,51 @@ pub(crate) fn attach_runtime_event_projection_barrier(
 pub(crate) async fn wait_runtime_event_projection_barrier(
     barrier: Option<RuntimeEventProjectionBarrier>,
 ) -> Result<(), String> {
+    wait_runtime_event_projection_receipt(barrier)
+        .await
+        .map(|_| ())
+}
+
+/// Waits for the exact durable local identities assigned to one prepared tool batch.
+/// 等待分配给一个已准备工具批次的精确可靠本地身份。
+///
+/// # Parameters
+/// 参数
+/// `barrier` is the mandatory ToolBatchPrepared projection barrier.
+/// `barrier` 是强制的 ToolBatchPrepared 投影屏障。
+///
+/// # Returns
+/// 返回值
+/// Returns the exact ordered local identities, or fails when the host acknowledges the wrong
+/// barrier shape.
+/// 返回精确有序的本地身份；宿主确认了错误屏障形状时失败。
+pub(crate) async fn wait_tool_batch_projection_barrier(
+    barrier: Option<RuntimeEventProjectionBarrier>,
+) -> Result<Vec<PreparedToolInvocationIdentity>, String> {
+    match wait_runtime_event_projection_receipt(barrier).await? {
+        RuntimeEventProjectionReceipt::ToolBatchPrepared(identities) => Ok(identities),
+        RuntimeEventProjectionReceipt::Projected => Err(String::from(
+            "Tool batch durability barrier completed without local V1 invocation identities.",
+        )),
+    }
+}
+
+/// Waits for one internal runtime-event projection receipt.
+/// 等待一个内部运行时事件投影回执。
+async fn wait_runtime_event_projection_receipt(
+    barrier: Option<RuntimeEventProjectionBarrier>,
+) -> Result<RuntimeEventProjectionReceipt, String> {
     let Some(barrier) = barrier else {
-        return Ok(());
+        return Ok(RuntimeEventProjectionReceipt::Projected);
     };
     let barrier_id = barrier.id.clone();
     let required_for_execution = barrier.required_for_execution;
     match tokio::time::timeout(RUNTIME_EVENT_PROJECTION_BARRIER_TIMEOUT, barrier.receiver).await {
-        Ok(Ok(())) => Ok(()),
+        Ok(Ok(receipt)) => Ok(receipt),
         Ok(Err(_)) if required_for_execution => Err(String::from(
             "Tool recovery durability barrier was rejected before execution could advance.",
         )),
-        Ok(Err(_)) => Ok(()),
+        Ok(Err(_)) => Ok(RuntimeEventProjectionReceipt::Projected),
         Err(_) => {
             if let Some(registry) = RUNTIME_EVENT_PROJECTION_BARRIERS.get() {
                 remove_runtime_event_projection_barrier(
@@ -444,7 +594,7 @@ pub(crate) async fn wait_runtime_event_projection_barrier(
                     "Tool recovery durability barrier timed out before execution could advance.",
                 ));
             }
-            Ok(())
+            Ok(RuntimeEventProjectionReceipt::Projected)
         }
     }
 }
@@ -501,7 +651,52 @@ pub fn acknowledge_runtime_event_projection_barrier_from_event(
         "acknowledge a projected event",
     )?;
     if let Some(sender) = sender {
-        Ok(sender.send(()).is_ok())
+        Ok(sender
+            .send(RuntimeEventProjectionReceipt::Projected)
+            .is_ok())
+    } else {
+        Ok(false)
+    }
+}
+
+/// Acknowledges one ToolBatchPrepared barrier with its exact durable local identities.
+/// 使用精确可靠的本地身份确认一个 ToolBatchPrepared 屏障。
+///
+/// # Parameters
+/// 参数
+/// `event` carries the exact barrier identity and must be ToolBatchPrepared; `identities` are the
+/// ordered receipts returned by the authoritative session owner.
+/// `event` 携带精确屏障身份且必须是 ToolBatchPrepared；`identities` 是权威会话所有者返回的有序回执。
+///
+/// # Returns
+/// 返回值
+/// `Ok(true)` when the waiting executor received the identities, `Ok(false)` when the waiter was
+/// already abandoned, or an explicit shape/registry error.
+/// 等待执行器收到身份时返回 `Ok(true)`，等待方已放弃时返回 `Ok(false)`，否则返回明确形状或注册表错误。
+pub fn acknowledge_tool_batch_projection_barrier_from_event(
+    event: &RuntimeEvent,
+    identities: Vec<PreparedToolInvocationIdentity>,
+) -> Result<bool, String> {
+    if event.kind != RuntimeEventKind::ToolBatchPrepared {
+        return Err(String::from(
+            "Only a ToolBatchPrepared event may acknowledge local V1 tool identities.",
+        ));
+    }
+    let Some(barrier_id) = runtime_event_projection_barrier_id(event) else {
+        return Ok(false);
+    };
+    let Some(registry) = RUNTIME_EVENT_PROJECTION_BARRIERS.get() else {
+        return Ok(false);
+    };
+    let sender = remove_runtime_event_projection_barrier(
+        registry,
+        barrier_id,
+        "acknowledge a prepared tool batch",
+    )?;
+    if let Some(sender) = sender {
+        Ok(sender
+            .send(RuntimeEventProjectionReceipt::ToolBatchPrepared(identities))
+            .is_ok())
     } else {
         Ok(false)
     }
@@ -658,7 +853,7 @@ fn canonicalize_tool_error_details(
 
 /// Builds one controller-visible error result so host-managed tool failures can be returned to the model instead of aborting the whole turn.
 /// 构建一条控制器可见的错误结果，使宿主管理工具失败能够回传给模型，而不是直接中断整轮执行。
-pub(crate) fn build_tool_failure_invocation_result(
+pub fn build_tool_failure_invocation_result(
     request: &CoreToolInvocationRequest,
     message: impl Into<String>,
 ) -> CoreToolInvocationResult {
@@ -676,6 +871,86 @@ pub(crate) fn build_tool_failure_invocation_result(
         )),
         is_error: true,
     }
+}
+
+/// Converts one host-managed invocation result into the canonical controller result.
+/// 将一条宿主管理调用结果转换为规范控制器结果。
+///
+/// # Parameters
+/// 参数
+/// - `request`: Exact controller-owned tool request and invocation identity.
+/// - `request`：控制器持有的精确工具请求与调用身份。
+/// - `result`: Tool-owned model output and optional structured host result.
+/// - `result`：工具持有的模型输出与可选结构化宿主结果。
+///
+/// # Returns
+/// 返回值
+/// Canonical controller result, including trusted identity and normalized errors.
+/// 包含可信身份与规范化错误的控制器结果。
+pub fn canonicalize_tool_invocation_result(
+    request: &CoreToolInvocationRequest,
+    result: VulcanToolInvocationResult,
+) -> CoreToolInvocationResult {
+    let (host_result, is_error) = match result.host_result.as_ref() {
+        Some(host_result) if host_result.kind == VULCAN_TOOL_ERROR_DETAIL_KIND => {
+            let canonical = match canonicalize_tool_error_details(request, &host_result.payload) {
+                Ok(canonical) => canonical,
+                Err(message) => return build_tool_failure_invocation_result(request, message),
+            };
+            (Some(canonical), true)
+        }
+        Some(host_result) if host_result.kind == "tool_error" => {
+            return build_tool_failure_invocation_result(
+                request,
+                format!(
+                    "Tool `{}` returned reserved host-result kind `tool_error`; return `{VULCAN_TOOL_ERROR_DETAIL_KIND}` details instead.",
+                    request.tool_name
+                ),
+            );
+        }
+        Some(host_result) => (
+            Some(json!({
+                "kind": host_result.kind.clone(),
+                "payload": host_result.payload.clone(),
+            })),
+            false,
+        ),
+        None => (None, false),
+    };
+    CoreToolInvocationResult {
+        tool_call_id: request.tool_call_id.clone(),
+        tool_name: request.tool_name.clone(),
+        model_output: match result.model_output {
+            Value::String(text) => text,
+            other => serde_json::to_string(&other).unwrap_or_else(|_| other.to_string()),
+        },
+        host_result,
+        is_error,
+    }
+}
+
+/// Builds the exact V1 durable tool-output payload from one controller result.
+/// 根据一条控制器结果构建精确的 V1 可靠工具输出载荷。
+///
+/// # Parameters
+/// 参数
+/// - `result`: Canonical controller result emitted to the Provider runtime.
+/// - `result`：发送给 Provider 运行时的规范控制器结果。
+///
+/// # Returns
+/// 返回值
+/// Strict V1 tool payload, or an explicit payload-validation error.
+/// 严格 V1 工具载荷；校验失败时返回显式错误。
+pub fn persistent_tool_output_from_result(
+    result: &CoreToolInvocationResult,
+) -> Result<ToolPayload, vulcan_session_core::v1::errors::DomainError> {
+    ToolPayload::try_new(json!({
+        "tool_call_id": result.tool_call_id,
+        "tool_name": result.tool_name,
+        "model_output": result.model_output,
+        "host_result": result.host_result,
+        "is_error": result.is_error,
+    }))
 }
 
 /// Builds one controller-visible policy rejection result without failing the provider turn.
@@ -716,6 +991,7 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
         &self,
         request: &CoreToolInvocationRequest,
     ) -> Result<CoreToolInvocationResult, VulcanCoreError> {
+        let identity = self.take_prepared_invocation_identity(request)?;
         let Some(definition) = self.definitions_by_id.get(&request.tool_name) else {
             return Ok(build_tool_failure_invocation_result(
                 request,
@@ -725,53 +1001,27 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
                 ),
             ));
         };
+        let context = VulcanToolInvocationContext {
+            session_id: self.session_id.to_string(),
+            request_stream_id: RequestStreamId::try_new(request.request_stream_id.clone())
+                .map_err(|error| VulcanCoreError::InvalidState {
+                    message: error.to_string(),
+                })?,
+            api_call_id: identity.api_call_id,
+            tool_call_id: identity.tool_call_id,
+            tool_seq: identity.tool_seq,
+            controller_tool_call_id: request.tool_call_id.clone(),
+            provider_tool_call_id: Some(request.tool_call_id.clone()),
+        };
         let result = match self
-            .invoke_definition(definition, request.arguments.clone())
+            .invoke_definition(definition, request.arguments.clone(), context)
             .await
         {
             Ok(result) => result,
             Err(message) => return Ok(build_tool_failure_invocation_result(request, message)),
         };
 
-        let (host_result, is_error) = match result.host_result.as_ref() {
-            Some(host_result) if host_result.kind == VULCAN_TOOL_ERROR_DETAIL_KIND => {
-                let canonical = match canonicalize_tool_error_details(request, &host_result.payload)
-                {
-                    Ok(canonical) => canonical,
-                    Err(message) => {
-                        return Ok(build_tool_failure_invocation_result(request, message));
-                    }
-                };
-                (Some(canonical), true)
-            }
-            Some(host_result) if host_result.kind == "tool_error" => {
-                return Ok(build_tool_failure_invocation_result(
-                    request,
-                    format!(
-                        "Tool `{}` returned reserved host-result kind `tool_error`; return `{VULCAN_TOOL_ERROR_DETAIL_KIND}` details instead.",
-                        request.tool_name
-                    ),
-                ));
-            }
-            Some(host_result) => (
-                Some(json!({
-                    "kind": host_result.kind.clone(),
-                    "payload": host_result.payload.clone(),
-                })),
-                false,
-            ),
-            None => (None, false),
-        };
-        Ok(CoreToolInvocationResult {
-            tool_call_id: request.tool_call_id.clone(),
-            tool_name: request.tool_name.clone(),
-            model_output: match result.model_output {
-                Value::String(text) => text,
-                other => serde_json::to_string(&other).unwrap_or_else(|_| other.to_string()),
-            },
-            host_result,
-            is_error,
-        })
+        Ok(canonicalize_tool_invocation_result(request, result))
     }
 }
 

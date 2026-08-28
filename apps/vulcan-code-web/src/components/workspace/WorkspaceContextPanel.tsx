@@ -11,7 +11,6 @@ import {
   Square,
   X,
 } from "lucide-react";
-import { composerAttachmentMedia } from "@/components/composer/composer-attachment-media";
 import type { ConversationScrollSnapshot } from "@/components/conversation/chat-area-scroll";
 import { useConversationScrollController } from "@/components/conversation/chat-area/conversation-scroll-controller";
 import { Button } from "@/components/ui/button";
@@ -23,19 +22,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ConversationWorkspace } from "@/components/conversation/conversation-workspace";
-import { TransientReasoningStatusLine } from "@/components/conversation/conversation-blocks";
-import {
-  generatedMediaAttachmentsFromToolDetailPayload,
-  projectConversationRenderItems,
-} from "@/components/conversation/conversation-transcript";
+import { ConversationV1Workspace } from "@/components/conversation/conversation-v1-workspace";
+import { TransientReasoningStatusLine } from "@/components/conversation/conversation-live-reasoning";
 import type {
   ConversationSurfaceExpandedState,
 } from "@/components/conversation/conversation-layout-restore";
-import type {
-  ConversationDetailRef,
-  ToolDetailPayload,
-} from "@/components/conversation/conversation-detail";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -58,10 +49,9 @@ import type {
 import { cn } from "@/lib/utils";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { useConversationTransientReasoningStatus } from "@/state/conversation-live-stream-context";
+import { useConversationSessionEventWindowOwnerV1 } from "@/state/conversation-session-event-window-owner-v1";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
 import type {
-  ConversationMessage,
-  ConversationSummary,
   VmmMemoryActionRequest,
   VmmMemoryActionResult,
   WorkbenchSnapshot,
@@ -141,17 +131,6 @@ export interface WorkspaceDraftConversationSelection {
   projectId: string;
 }
 
-// WorkspaceConversationBlock is the minimal conversation block shape needed by diff extraction.
-// WorkspaceConversationBlock 是 diff 提取所需的最小会话块结构。
-export interface WorkspaceConversationBlock {
-  // Block kind projected from a transcript message.
-  // 从转录消息投影出的块类型。
-  kind: string;
-  // Block body text.
-  // 块正文文本。
-  body: string;
-}
-
 // WorkspaceContextPanelProps describes the right-side workspace context panel boundary.
 // WorkspaceContextPanelProps 描述右侧工作区上下文面板边界。
 export interface WorkspaceContextPanelProps {
@@ -206,9 +185,6 @@ export interface WorkspaceContextPanelProps {
   // Runs one VMM memory management action.
   // 执行单个 VMM 记忆管理动作。
   onRunVmmAction: (request: VmmMemoryActionRequest) => Promise<VmmMemoryActionResult>;
-  // Parses one conversation message into render blocks.
-  // 将单条会话消息解析为渲染块。
-  parseConversationBlocks: (message: ConversationMessage) => WorkspaceConversationBlock[];
   // Opens one subagent transcript in the right context panel.
   // 在右侧上下文面板中打开单个子代理转录。
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
@@ -218,9 +194,6 @@ export interface WorkspaceContextPanelProps {
   // Closes one open subagent lifecycle.
   // 关闭单个未关闭子智能体生命周期。
   onCloseSubagentTask: (parentConversationId: string, taskId: string) => Promise<void>;
-  // Loads one hidden tool detail record for transcript rows.
-  // 为转录行加载单条隐藏工具详情记录。
-  onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
   // Loads one live workspace Git diff snapshot.
   // 加载一次实时工作区 Git diff 快照。
   loadWorkspaceDiffSnapshot: (
@@ -717,7 +690,6 @@ function WorkspaceContextTabContent(args: {
             loadWorkspaceDiffFileDetail={args.props.loadWorkspaceDiffFileDetail}
             loadWorkspaceDiffSearch={args.props.loadWorkspaceDiffSearch}
             loadWorkspaceDiffSnapshot={args.props.loadWorkspaceDiffSnapshot}
-            parseConversationBlocks={args.props.parseConversationBlocks}
             runWorkspaceGitFileAction={args.props.runWorkspaceGitFileAction}
             onWorkspaceDiffSnapshotLoaded={args.props.onWorkspaceDiffSnapshotLoaded}
             onWorkspaceGitStateChanged={args.props.onWorkspaceGitStateChanged}
@@ -811,18 +783,12 @@ function WorkspaceSubagentPanel(args: {
   // closeSubmitting stores whether the close request is currently in flight.
   // closeSubmitting 保存关闭请求是否正在提交。
   const [closeSubmitting, setCloseSubmitting] = React.useState(false);
-  // transcriptLoading stores whether an empty child transcript is currently being restored.
-  // transcriptLoading 保存空子转录当前是否正在恢复。
-  const [transcriptLoading, setTranscriptLoading] = React.useState(false);
   // scrollRef owns the read-only transcript viewport inside this tab.
   // scrollRef 持有该页签内只读转录视口。
   const scrollRef = React.useRef<HTMLElement | null>(null);
   // tailLocked controls whether new subagent transcript content follows the viewport tail.
   // tailLocked 控制新增子代理转录内容是否持续跟随视口尾部。
   const [tailLocked, setTailLocked] = React.useState(true);
-  // hiddenThinkingBlockIds leaves subagent thinking rows in the inline transcript.
-  // hiddenThinkingBlockIds 让子代理思考行保留在内联转录中。
-  const hiddenThinkingBlockIds = React.useMemo(() => new Set<string>(), []);
   // parentConversationId stores the task owner required by the stop API.
   // parentConversationId 保存停止接口所需的任务所属父会话。
   const parentConversationId = args.tab.subagentParentConversationId ?? null;
@@ -843,35 +809,29 @@ function WorkspaceSubagentPanel(args: {
   // task stores the current backend task row when it is still present in the snapshot.
   // task 保存快照中仍存在时的当前后端任务行。
   const task = taskId ? navigation?.tasks?.find((candidate) => candidate.taskId === taskId) ?? null : null;
-  // messages stores the read-only transcript rows for the child task conversation.
-  // messages 保存子任务会话的只读转录行。
-  const messages = React.useMemo(
-    () => taskId ? args.props.workbench.messages.filter((message) => message.conversationId === taskId) : [],
-    [args.props.workbench.messages, taskId],
-  );
-  // renderItems stores parsed transcript rows for the side-panel child conversation.
-  // renderItems 保存侧栏子会话解析后的转录行。
-  const renderItems = React.useMemo(
-    () => projectConversationRenderItems(messages, t),
-    [messages, t],
-  );
-  // subagentConversation stores the minimal conversation summary consumed by ConversationWorkspace.
-  // subagentConversation 保存 ConversationWorkspace 消费的最小会话摘要。
-  const subagentConversation = React.useMemo<ConversationSummary | undefined>(() => {
-    if (!taskId) {
-      return undefined;
-    }
-    return {
-      id: taskId,
-      projectId: selectedContextProjectId(args.props),
-      runPhase: task?.isRunning ? "requesting" : task?.runState,
-      status: task?.isRunning ? "running" : task?.runState ?? "completed",
-      title: task?.label ?? (args.tab.title || workspaceContextTabDefaultTitle("subagent", t)),
-    };
-  }, [args.props, args.tab.title, task, taskId, t]);
   // workspacePath stores the parent project path used for Markdown media resolution.
   // workspacePath 保存用于 Markdown 媒体解析的父项目路径。
   const workspacePath = subagentWorkspacePath(args.props.workbench, parentConversationId);
+  // onOpenSubagentPanel is the stable backend route owner supplied by WorkbenchLayout.
+  // onOpenSubagentPanel 是 WorkbenchLayout 提供的稳定后端路由拥有者。
+  const onOpenSubagentPanel = args.props.onOpenSubagentPanel;
+  // prepareSubagentSession registers or strictly reloads the embedded child V1 handle before hydration.
+  // prepareSubagentSession 在 hydration 前注册或严格重载嵌入式子会话 V1 handle。
+  const prepareSubagentSession = React.useCallback(async (): Promise<void> => {
+    if (!parentConversationId || !taskId) {
+      throw new Error("Subagent V1 route identity is incomplete.");
+    }
+    const opened = await onOpenSubagentPanel(parentConversationId, taskId);
+    if (!opened) {
+      throw new Error(t("conversation.subagent.state.failed"));
+    }
+  }, [onOpenSubagentPanel, parentConversationId, t, taskId]);
+  // transcriptOwner owns the exact child V1 window independently from the selected root session.
+  // transcriptOwner 独立于当前选中根会话持有精确子会话 V1 窗口。
+  const transcriptOwner = useConversationSessionEventWindowOwnerV1({
+    prepare: taskId ? prepareSubagentSession : null,
+    sessionId: taskId,
+  });
   // taskRunning records whether the backend still allows stopping this task.
   // taskRunning 记录后端是否仍允许停止该任务。
   const taskRunning = Boolean(task?.isRunning && parentConversationId && taskId);
@@ -944,97 +904,38 @@ function WorkspaceSubagentPanel(args: {
   React.useLayoutEffect(() => {
     subagentScrollController.scheduleStoredRestore();
   }, [subagentScrollController, transientReasoningStatusVisible]);
-  // handleSubagentExpandedStateChange stores expansion choices for the exact child transcript only.
-  // handleSubagentExpandedStateChange 仅为精确子转录保存展开选择。
-  const handleSubagentExpandedStateChange = React.useCallback((
-    surfaceId: string,
-    state: ConversationSurfaceExpandedState,
-  ): void => {
-    if (surfaceId === taskId) {
-      args.expandedStates.current.set(surfaceId, state);
-    }
-  }, [args.expandedStates, taskId]);
-  // handleLoadMoreHistory keeps the side transcript display-only until backend exposes child pagination here.
-  // handleLoadMoreHistory 在此处暴露子会话分页前保持侧栏转录仅展示。
-  const handleLoadMoreHistory = React.useCallback(async () => false, []);
-  // autoLoadRouteRef remembers the last empty child transcript that already asked the backend for detail.
-  // autoLoadRouteRef 记录已经向后端请求过详情的空子会话转录。
-  const autoLoadRouteRef = React.useRef<string | null>(null);
-  // onOpenSubagentPanel loads a focused persisted child transcript when this tab was restored without message cache.
-  // onOpenSubagentPanel 在页签恢复但消息缓存缺失时加载聚焦的持久化子会话转录。
-  const onOpenSubagentPanel = args.props.onOpenSubagentPanel;
-
-  React.useEffect(() => {
-    if (!parentConversationId || !taskId) {
-      setTranscriptLoading(false);
-      return;
-    }
-    if (messages.length > 0) {
-      setTranscriptLoading(false);
-      return;
-    }
-    const routeKey = `${parentConversationId}:${taskId}`;
-    if (autoLoadRouteRef.current === routeKey) {
-      return;
-    }
-    autoLoadRouteRef.current = routeKey;
-    let active = true;
-    setTranscriptLoading(true);
-    void onOpenSubagentPanel(parentConversationId, taskId)
-      .catch(() => undefined)
-      .finally(() => {
-        if (active) {
-          setTranscriptLoading(false);
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, [messages.length, onOpenSubagentPanel, parentConversationId, taskId]);
-
   if (!parentConversationId || !taskId) {
     return <WorkspaceSubagentEmptyState title={workspaceContextTabDefaultTitle("subagent", t)} />;
   }
-  // commandSessions limits side-panel terminal state to the displayed child task.
-  // commandSessions 将侧栏终端状态限定在当前展示的子任务内。
-  const commandSessions = (args.props.workbench.commandSessions ?? [])
-    .filter((session) => session.ownerSessionId === taskId);
 
   return (
     <div className="workspace-subagent-panel">
-      <ConversationWorkspace
-        commandSessions={commandSessions}
-        conversation={subagentConversation}
-        error={null}
-        hasMoreHistory={false}
-        hiddenThinkingBlockIds={hiddenThinkingBlockIds}
-        historyLoading={false}
-        initialExpandedState={args.expandedStates.current.get(taskId) ?? null}
-        messages={messages}
-        parentConversationId={taskId}
-        renderItems={renderItems}
-        resolveComposerAttachmentMedia={composerAttachmentMedia}
-        resolveMediaSourceUrl={args.props.resolveMediaSourceUrl}
+      <ConversationV1Workspace
+        commands={transcriptOwner.commands}
+        reasoningDisplayMode="inline_output"
         scrollRef={scrollRef}
+        sessionId={taskId}
         sessionRunning={Boolean(task?.isRunning)}
-        suppressEmptyPlaceholder={transcriptLoading && messages.length === 0}
+        snapshot={transcriptOwner.snapshot}
+        suppressEmptyPlaceholder={transcriptOwner.loading}
         transientReasoningStatus={transientReasoningStatus ? (
           <TransientReasoningStatusLine status={transientReasoningStatus} />
         ) : null}
         workspacePath={workspacePath}
         onCopyText={args.props.onCopyText}
-        onExpandedStateChange={handleSubagentExpandedStateChange}
-        onExtractGeneratedMediaAttachments={generatedMediaAttachmentsFromToolDetailPayload}
-        onLoadMoreHistory={handleLoadMoreHistory}
         onPreserveHistoryPrepend={subagentScrollController.preserveHistoryPrepend}
-        onLoadToolDetail={args.props.onLoadToolDetail}
-        onOpenSubagentPanel={args.props.onOpenSubagentPanel}
         onScrollStateChange={subagentScrollController.handleScroll}
       />
-      {transcriptLoading && messages.length === 0 ? (
+      {transcriptOwner.loading && transcriptOwner.snapshot.events.length === 0 ? (
         <div className="workspace-subagent-loading" role="status" aria-live="polite">
           <Bot size={18} />
           <span>{t("conversation.subagent.loadingTranscript")}</span>
+        </div>
+      ) : null}
+      {transcriptOwner.error ? (
+        <div className="workspace-subagent-loading" role="alert">
+          <Bot size={18} />
+          <span>{transcriptOwner.error}</span>
         </div>
       ) : null}
       {!tailLocked ? (

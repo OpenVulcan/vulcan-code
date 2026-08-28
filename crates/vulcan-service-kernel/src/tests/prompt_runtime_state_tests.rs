@@ -23,10 +23,6 @@ fn webui_prompt_snapshot_preparing_preserves_memory_recall_phase() {
             "刚刚",
         )],
         archived_sessions: Vec::new(),
-        session_messages: BTreeMap::new(),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
         session_runtime_state: BTreeMap::from([(session_id, SessionRuntimeStateEntry::default())]),
         archived_session_runtime_state: BTreeMap::new(),
         session_run_phases: BTreeMap::from([(session_id, SessionRunPhase::MemoryRecall)]),
@@ -43,10 +39,10 @@ fn webui_prompt_snapshot_preparing_preserves_memory_recall_phase() {
     );
 }
 
-/// Verifies WebUI restores precheck metadata without fabricating dialogue context from display rows.
-/// 验证 WebUI 会恢复 precheck 元数据，但不会从显示行伪造对话层上下文。
+/// Verifies WebUI restores precheck metadata without fabricating dialogue context.
+/// 验证 WebUI 会恢复 precheck 元数据，但不会伪造对话层上下文。
 #[test]
-fn ensure_webui_session_runtime_state_keeps_display_rows_out_of_dialogue_context() {
+fn ensure_webui_session_runtime_state_does_not_fabricate_dialogue_context() {
     let session_id = SessionId::new_v4();
     let mut workspace_snapshot = WorkspaceSnapshot {
         task_projects: Vec::new(),
@@ -62,17 +58,6 @@ fn ensure_webui_session_runtime_state_keeps_display_rows_out_of_dialogue_context
             "刚刚",
         )],
         archived_sessions: Vec::new(),
-        session_messages: BTreeMap::from([(
-            session_id,
-            vec![SessionMessageEntry::new(
-                SessionMessageKind::User,
-                "用户",
-                "第一条提示词",
-            )],
-        )]),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
         session_runtime_state: BTreeMap::new(),
         archived_session_runtime_state: BTreeMap::new(),
         session_run_phases: BTreeMap::from([(session_id, SessionRunPhase::MemoryRecall)]),
@@ -99,13 +84,6 @@ fn ensure_webui_session_runtime_state_keeps_display_rows_out_of_dialogue_context
         !workspace_snapshot
             .hydrated_session_ids
             .contains(&session_id)
-    );
-    assert_eq!(
-        workspace_snapshot
-            .session_messages
-            .get(&session_id)
-            .map(Vec::len),
-        Some(1)
     );
 }
 
@@ -176,10 +154,6 @@ fn ensure_webui_session_runtime_state_preserves_goal_bound_canonical_tool_histor
         archived_task_projects: Vec::new(),
         sessions: Vec::new(),
         archived_sessions: Vec::new(),
-        session_messages: BTreeMap::new(),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
         session_runtime_state: BTreeMap::from([(session_id, runtime_state)]),
         archived_session_runtime_state: BTreeMap::new(),
         session_run_phases: BTreeMap::new(),
@@ -205,10 +179,10 @@ fn ensure_webui_session_runtime_state_preserves_goal_bound_canonical_tool_histor
     assert_eq!(refreshed_messages, expected_messages);
 }
 
-/// Verifies display transcript rows alone never satisfy prompt-submission dialogue context.
-/// 验证仅有显示层转录行时不能满足提示词提交所需的对话层上下文。
+/// Verifies a hydration marker alone never satisfies prompt-submission dialogue context.
+/// 验证仅有水合标记时不能满足提示词提交所需的对话层上下文。
 #[test]
-fn retained_submission_context_rejects_display_only_messages() {
+fn retained_submission_context_rejects_hydration_marker_without_runtime_context() {
     // session_id identifies the existing conversation being submitted.
     // session_id 标识正在提交的既有会话。
     let session_id = SessionId::new_v4();
@@ -228,17 +202,6 @@ fn retained_submission_context_rejects_display_only_messages() {
             "刚刚",
         )],
         archived_sessions: Vec::new(),
-        session_messages: BTreeMap::from([(
-            session_id,
-            vec![SessionMessageEntry::new(
-                SessionMessageKind::Assistant,
-                "助手",
-                "只存在于显示层的正文",
-            )],
-        )]),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
         session_runtime_state: BTreeMap::new(),
         archived_session_runtime_state: BTreeMap::new(),
         session_run_phases: BTreeMap::new(),
@@ -292,10 +255,6 @@ fn retained_submission_context_rejects_record_only_runtime_state() {
             "刚刚",
         )],
         archived_sessions: Vec::new(),
-        session_messages: BTreeMap::new(),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
         session_runtime_state: BTreeMap::from([(session_id, runtime_state)]),
         archived_session_runtime_state: BTreeMap::new(),
         session_run_phases: BTreeMap::new(),
@@ -344,10 +303,6 @@ fn retained_submission_context_accepts_runtime_dialogue_context() {
             "刚刚",
         )],
         archived_sessions: Vec::new(),
-        session_messages: BTreeMap::new(),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
         session_runtime_state: BTreeMap::from([(session_id, runtime_state)]),
         archived_session_runtime_state: BTreeMap::new(),
         session_run_phases: BTreeMap::new(),
@@ -364,142 +319,8 @@ fn retained_submission_context_accepts_runtime_dialogue_context() {
 
 /// Verifies WebUI display projection prefers retained display rows over dialogue context rows.
 /// 验证 WebUI 显示投影优先使用保留的显示层行而不是对话层上下文行。
-#[test]
-fn display_session_messages_prefer_display_window_over_dialogue_context() {
-    // session_id identifies the selected conversation.
-    // session_id 标识当前选中的会话。
-    let session_id = SessionId::new_v4();
-    // display_entry represents the UI transcript window loaded from segmented turn rows.
-    // display_entry 表示从分段 turn 行加载的 UI 转录窗口。
-    let display_entry =
-        SessionMessageEntry::new(SessionMessageKind::Assistant, "助手", "显示层正文");
-    // runtime_state represents the compact dialogue context used for API requests.
-    // runtime_state 表示 API 请求使用的压缩对话层上下文。
-    let runtime_state =
-        SessionRuntimeStateEntry {
-            conversation_state: conversation_state_from_session_messages(&[
-                SessionMessageEntry::new(SessionMessageKind::Assistant, "助手", "对话层正文")
-                    .with_runtime_metadata("dialogue-assistant-1", "1"),
-            ])
-            .expect("valid replayed conversation identities"),
-            ..SessionRuntimeStateEntry::default()
-        };
-    // workspace_snapshot carries both layers so the projection priority can be checked directly.
-    // workspace_snapshot 同时携带两层状态，以便直接检查投影优先级。
-    let workspace_snapshot = WorkspaceSnapshot {
-        task_projects: Vec::new(),
-        archived_task_projects: Vec::new(),
-        sessions: Vec::new(),
-        archived_sessions: Vec::new(),
-        session_messages: BTreeMap::from([(session_id, vec![display_entry])]),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
-        session_runtime_state: BTreeMap::from([(session_id, runtime_state)]),
-        archived_session_runtime_state: BTreeMap::new(),
-        session_run_phases: BTreeMap::new(),
-        expanded_task_projects: BTreeSet::new(),
-        selected_session: session_id,
-        hydrated_session_ids: BTreeSet::from([session_id]),
-    };
-
-    // display_messages should preserve the UI-visible transcript body.
-    // display_messages 应保留 UI 可见转录正文。
-    let display_messages = display_session_messages_from_workspace(&workspace_snapshot, session_id)
-        .expect("display messages should exist");
-    // compaction_messages should preserve the runtime context body.
-    // compaction_messages 应保留运行态上下文正文。
-    let runtime_state = workspace_snapshot
-        .session_runtime_state
-        .get(&session_id)
-        .expect("runtime state should exist");
-    let compaction_messages =
-        conversation_state_to_compaction_source_messages(&runtime_state.conversation_state);
-
-    assert_eq!(
-        display_messages
-            .first()
-            .map(|message| message.body.as_str()),
-        Some("显示层正文")
-    );
-    assert_eq!(
-        compaction_messages
-            .first()
-            .map(|message| message.body.as_str()),
-        Some("对话层正文")
-    );
-}
-
 /// Verifies hidden runtime records do not enter the user-facing display transcript.
 /// 验证隐藏运行时记录不会进入面向用户的显示转录。
-#[test]
-fn display_transcript_filters_hidden_runtime_records() {
-    let session_id = SessionId::new_v4();
-    let mut runtime_state = SessionRuntimeStateEntry::default();
-    runtime_state
-        .conversation_state
-        .records
-        .push(SessionConversationRecord {
-            id: String::from("hidden-agent-message"),
-            kind: SessionMessageKind::Assistant,
-            record_kind: SessionMessageRecordKind::Transcript,
-            visible: false,
-            title: String::from("子代理消息"),
-            body: String::from("<agent_message>hidden</agent_message>"),
-            metadata: None,
-            created_at: String::from("100"),
-        });
-    runtime_state
-        .conversation_state
-        .records
-        .push(SessionConversationRecord {
-            id: String::from("legacy-visible-agent-message"),
-            kind: SessionMessageKind::Assistant,
-            record_kind: SessionMessageRecordKind::Transcript,
-            visible: true,
-            title: String::from("子代理消息"),
-            body: String::from("<agent_message>legacy visible</agent_message>"),
-            metadata: None,
-            created_at: String::from("100"),
-        });
-    runtime_state
-        .conversation_state
-        .records
-        .push(SessionConversationRecord {
-            id: String::from("visible-assistant-message"),
-            kind: SessionMessageKind::Assistant,
-            record_kind: SessionMessageRecordKind::AssistantOutput,
-            visible: true,
-            title: String::from("模型输出"),
-            body: String::from("visible answer"),
-            metadata: None,
-            created_at: String::from("101"),
-        });
-    let workspace_snapshot = WorkspaceSnapshot {
-        task_projects: Vec::new(),
-        archived_task_projects: Vec::new(),
-        sessions: Vec::new(),
-        archived_sessions: Vec::new(),
-        session_messages: BTreeMap::new(),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
-        session_runtime_state: BTreeMap::from([(session_id, runtime_state)]),
-        archived_session_runtime_state: BTreeMap::new(),
-        session_run_phases: BTreeMap::new(),
-        expanded_task_projects: BTreeSet::new(),
-        selected_session: session_id,
-        hydrated_session_ids: BTreeSet::from([session_id]),
-    };
-
-    let display_messages = display_session_messages_from_workspace(&workspace_snapshot, session_id)
-        .expect("display messages should exist");
-
-    assert_eq!(display_messages.len(), 1);
-    assert_eq!(display_messages[0].id, "visible-assistant-message");
-    assert_eq!(display_messages[0].body, "visible answer");
-}
-
 /// Verifies runtime-log hydrated messages can back compaction without display records.
 /// 验证运行时日志水合消息在没有显示记录时也能支撑压缩。
 #[test]
@@ -531,10 +352,6 @@ fn compaction_source_accepts_runtime_log_messages_without_records() {
         archived_task_projects: Vec::new(),
         sessions: Vec::new(),
         archived_sessions: Vec::new(),
-        session_messages: BTreeMap::new(),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
         session_runtime_state: BTreeMap::from([(session_id, runtime_state)]),
         archived_session_runtime_state: BTreeMap::new(),
         session_run_phases: BTreeMap::new(),
@@ -650,86 +467,8 @@ fn latest_session_turn_stats_includes_embedded_compaction_usage_segments() {
     );
 }
 
-/// Verifies persisted provider counters project as cumulative goal details without double-counting reasoning.
-/// 验证持久化 Provider 计数会投影为目标累计明细，且不会重复计算思考。
-#[test]
-fn persisted_goal_provider_usage_projects_cumulative_details() {
-    // goal mirrors one request with 24 new input, 16 cached input, and 12 complete output tokens.
-    // goal 模拟一次包含 24 个新增输入、16 个缓存输入和 12 个完整输出 Token 的请求。
-    let goal = ThreadGoal {
-        thread_id: SessionId::new_v4(),
-        goal_id: String::from("goal-stage-current"),
-        objective: String::from("验证逐请求累计用量"),
-        status: ThreadGoalStatus::Active,
-        token_budget: Some(1_000),
-        tokens_used: 36,
-        uncached_input_tokens: 24,
-        cached_input_tokens: 16,
-        output_tokens: 12,
-        reasoning_tokens: 4,
-        total_tokens: 52,
-        time_used_seconds: 0,
-        created_at_ms: 1,
-        updated_at_ms: 2,
-    };
-
-    let summary = session_goal_summary_from_thread_goal(&goal);
-
-    assert_eq!(summary.usage_tokens, 36);
-    assert_eq!(summary.input_tokens, 24);
-    assert_eq!(summary.cached_input_tokens, 16);
-    assert_eq!(summary.output_tokens, 12);
-    assert_eq!(summary.reasoning_tokens, 4);
-    assert_eq!(summary.total_tokens, 52);
-}
-
 /// Verifies runtime-only compaction sources do not become display fallback rows.
 /// 验证仅运行态压缩来源不会变成显示层回退行。
-#[test]
-fn display_session_messages_do_not_project_runtime_only_context() {
-    // session_id identifies a runtime-only hydrated conversation.
-    // session_id 标识只有运行态已水合的会话。
-    let session_id = SessionId::new_v4();
-    // runtime_state carries provider-visible messages but no display records.
-    // runtime_state 携带 Provider 可见消息但不携带显示记录。
-    let mut runtime_state = SessionRuntimeStateEntry::default();
-    runtime_state.conversation_state.messages = vec![SessionConversationMessage {
-        id: String::from("runtime-user-1"),
-        payload: SessionConversationPayload::UserText {
-            text: String::from("只能用于运行态的正文"),
-            attachments: Vec::new(),
-        },
-    }];
-    // workspace_snapshot intentionally has no session_messages row for the display layer.
-    // workspace_snapshot 有意不携带显示层 session_messages 行。
-    let workspace_snapshot = WorkspaceSnapshot {
-        task_projects: Vec::new(),
-        archived_task_projects: Vec::new(),
-        sessions: Vec::new(),
-        archived_sessions: Vec::new(),
-        session_messages: BTreeMap::new(),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
-        session_runtime_state: BTreeMap::from([(session_id, runtime_state)]),
-        archived_session_runtime_state: BTreeMap::new(),
-        session_run_phases: BTreeMap::new(),
-        expanded_task_projects: BTreeSet::new(),
-        selected_session: session_id,
-        hydrated_session_ids: BTreeSet::new(),
-    };
-
-    assert!(display_session_messages_from_workspace(&workspace_snapshot, session_id).is_none());
-    let runtime_state = workspace_snapshot
-        .session_runtime_state
-        .get(&session_id)
-        .expect("runtime state should exist");
-    assert!(
-        !conversation_state_to_compaction_source_messages(&runtime_state.conversation_state)
-            .is_empty()
-    );
-}
-
 /// Verifies draft submissions can reuse the retained workspace instead of reloading every workspace session.
 /// 验证草稿提交可以复用保留工作区，而不是重载所有工作区会话。
 #[test]
@@ -749,10 +488,6 @@ fn retained_submission_snapshot_accepts_draft_submission() {
         archived_task_projects: Vec::new(),
         sessions: Vec::new(),
         archived_sessions: Vec::new(),
-        session_messages: BTreeMap::new(),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
         session_runtime_state: BTreeMap::new(),
         archived_session_runtime_state: BTreeMap::new(),
         session_run_phases: BTreeMap::new(),
@@ -798,10 +533,6 @@ fn retained_submission_snapshot_accepts_existing_session_only_when_present() {
             "刚刚",
         )],
         archived_sessions: Vec::new(),
-        session_messages: BTreeMap::new(),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
         session_runtime_state: BTreeMap::new(),
         archived_session_runtime_state: BTreeMap::new(),
         session_run_phases: BTreeMap::new(),
@@ -852,10 +583,6 @@ fn webui_regular_session_detection_excludes_task_session_ids() {
             0,
             "刚刚",
         )],
-        session_messages: BTreeMap::new(),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
         session_runtime_state: BTreeMap::new(),
         archived_session_runtime_state: BTreeMap::new(),
         session_run_phases: BTreeMap::new(),
@@ -876,74 +603,6 @@ fn webui_regular_session_detection_excludes_task_session_ids() {
         &workspace_snapshot,
         task_session_id
     ));
-}
-
-/// Verifies conversation hydration reuses retained workspace snapshots only for known sessions.
-/// 验证会话水合只会对已知会话复用保留工作区快照。
-#[test]
-fn retained_workspace_snapshot_for_hydration_requires_known_session_and_strips_payloads() {
-    let known_session_id = SessionId::new_v4();
-    let missing_session_id = SessionId::new_v4();
-    let workspace_snapshot = WorkspaceSnapshot {
-        task_projects: Vec::new(),
-        archived_task_projects: Vec::new(),
-        sessions: vec![SessionSummary::new(
-            known_session_id,
-            Some(String::from("project-a")),
-            "已知会话",
-            "",
-            SessionState::Completed,
-            0,
-            0,
-            "刚刚",
-        )],
-        archived_sessions: Vec::new(),
-        session_messages: BTreeMap::from([(
-            known_session_id,
-            vec![SessionMessageEntry::new(
-                SessionMessageKind::User,
-                "用户",
-                "保留消息",
-            )],
-        )]),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
-        session_runtime_state: BTreeMap::from([(
-            known_session_id,
-            SessionRuntimeStateEntry {
-                active_model_id: Some(String::from("retained-model")),
-                ..SessionRuntimeStateEntry::default()
-            },
-        )]),
-        archived_session_runtime_state: BTreeMap::new(),
-        session_run_phases: BTreeMap::from([(known_session_id, SessionRunPhase::MemoryRecall)]),
-        expanded_task_projects: BTreeSet::new(),
-        selected_session: known_session_id,
-        hydrated_session_ids: BTreeSet::from([known_session_id]),
-    };
-
-    let retained_snapshot = retained_workspace_snapshot_for_session_hydration(
-        Some(&workspace_snapshot),
-        known_session_id,
-    )
-    .expect("known session should reuse retained snapshot");
-    assert_eq!(retained_snapshot.sessions.len(), 1);
-    assert_eq!(retained_snapshot.selected_session, known_session_id);
-    assert_eq!(
-        retained_snapshot.session_run_phases.get(&known_session_id),
-        Some(&SessionRunPhase::MemoryRecall)
-    );
-    assert!(retained_snapshot.session_messages.is_empty());
-    assert!(retained_snapshot.session_runtime_state.is_empty());
-    assert!(retained_snapshot.hydrated_session_ids.is_empty());
-    assert!(
-        retained_workspace_snapshot_for_session_hydration(
-            Some(&workspace_snapshot),
-            missing_session_id,
-        )
-        .is_none()
-    );
 }
 
 /// Verifies targeted refresh selection prefers the requested visible session over the index default.
@@ -978,10 +637,6 @@ fn targeted_refresh_selection_prefers_visible_requested_session() {
             ),
         ],
         archived_sessions: Vec::new(),
-        session_messages: BTreeMap::new(),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
         session_runtime_state: BTreeMap::new(),
         archived_session_runtime_state: BTreeMap::new(),
         session_run_phases: BTreeMap::new(),
@@ -1025,10 +680,6 @@ fn targeted_refresh_selection_keeps_default_when_requested_session_is_not_visibl
             0,
             "刚刚",
         )],
-        session_messages: BTreeMap::new(),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
         session_runtime_state: BTreeMap::new(),
         archived_session_runtime_state: BTreeMap::new(),
         session_run_phases: BTreeMap::new(),
@@ -1063,10 +714,6 @@ fn targeted_refresh_selection_recovers_after_late_run_state_preservation() {
             "刚刚",
         )],
         archived_sessions: Vec::new(),
-        session_messages: BTreeMap::new(),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
         session_runtime_state: BTreeMap::new(),
         archived_session_runtime_state: BTreeMap::new(),
         session_run_phases: BTreeMap::new(),
@@ -1102,10 +749,6 @@ fn targeted_refresh_selection_recovers_after_late_run_state_preservation() {
             ),
         ],
         archived_sessions: Vec::new(),
-        session_messages: BTreeMap::new(),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
         session_runtime_state: BTreeMap::new(),
         archived_session_runtime_state: BTreeMap::new(),
         session_run_phases: BTreeMap::new(),
@@ -1141,10 +784,6 @@ fn hydrated_session_selection_recovers_after_late_run_state_preservation() {
             "刚刚",
         )],
         archived_sessions: Vec::new(),
-        session_messages: BTreeMap::new(),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
         session_runtime_state: BTreeMap::new(),
         archived_session_runtime_state: BTreeMap::new(),
         session_run_phases: BTreeMap::new(),
@@ -1180,10 +819,6 @@ fn hydrated_session_selection_recovers_after_late_run_state_preservation() {
             ),
         ],
         archived_sessions: Vec::new(),
-        session_messages: BTreeMap::new(),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
         session_runtime_state: BTreeMap::new(),
         archived_session_runtime_state: BTreeMap::new(),
         session_run_phases: BTreeMap::new(),
@@ -1276,10 +911,6 @@ fn materialize_prompt_session_rejects_archived_and_missing_targets_without_creat
             0,
             "刚刚",
         )],
-        session_messages: BTreeMap::new(),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
         session_runtime_state: BTreeMap::new(),
         archived_session_runtime_state: BTreeMap::new(),
         session_run_phases: BTreeMap::new(),
@@ -1349,10 +980,6 @@ fn materialize_prompt_session_ignores_blank_existing_session_project_id() {
             "刚刚",
         )],
         archived_sessions: Vec::new(),
-        session_messages: BTreeMap::new(),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
         session_runtime_state: BTreeMap::new(),
         archived_session_runtime_state: BTreeMap::new(),
         session_run_phases: BTreeMap::new(),
@@ -1424,10 +1051,6 @@ fn materialize_prompt_session_uses_first_project_when_project_id_is_missing() {
         archived_task_projects: Vec::new(),
         sessions: Vec::new(),
         archived_sessions: Vec::new(),
-        session_messages: BTreeMap::new(),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
         session_runtime_state: BTreeMap::new(),
         archived_session_runtime_state: BTreeMap::new(),
         session_run_phases: BTreeMap::new(),

@@ -23,24 +23,14 @@ pub(super) fn resolve_task_session_id(
     current_session_id: SessionId,
     args: &TaskToolInvocationArgs,
 ) -> Result<ResolvedTaskSessionIdentifier, String> {
-    let (root_session_id, direct_parent, current_depth) = {
+    let current_depth = {
         let sessions = task_runtime.sessions.read().map_err(|_| {
             String::from("The subagent task registry is locked and cannot inspect existing tasks.")
         })?;
-        let current_record = sessions.get(&current_session_id);
-        let root_session_id = current_record
-            .map(|record| record.origin_session_id)
-            .unwrap_or(current_session_id);
-        let direct_parent = current_record
-            .map(|_| ParentSessionRef::TaskSession {
-                root_session_id: SessionNodeId::from(root_session_id),
-                parent_task_session_id: SessionNodeId::from(current_session_id),
-            })
-            .unwrap_or(ParentSessionRef::MainSession {
-                root_session_id: SessionNodeId::from(root_session_id),
-            });
-        let current_depth = current_record.map(|record| record.depth).unwrap_or(0);
-        (root_session_id, direct_parent, current_depth)
+        sessions
+            .get(&current_session_id)
+            .map(|record| record.depth)
+            .unwrap_or(0)
     };
 
     if let Some(task_id_text) = args.task_id.as_ref() {
@@ -71,27 +61,11 @@ pub(super) fn resolve_task_session_id(
                 .then_with(|| right.created_at.cmp(&left.created_at))
                 .then_with(|| right.task_id.cmp(&left.task_id))
         });
-        let resumed_record = matching_records.into_iter().next();
-        if let Some(record) = resumed_record {
+        if let Some(record) = matching_records.into_iter().next() {
             return Ok(ResolvedTaskSessionIdentifier {
                 task_id: record.task_id,
                 public_task_id,
                 is_resumed: true,
-                persisted_metadata: None,
-            });
-        }
-
-        if let Some(metadata) = task_runtime.persisted_task_metadata_for_public_id(
-            root_session_id,
-            direct_parent.clone(),
-            &public_task_id,
-        )? && metadata.status != TaskSessionStatus::Archived
-        {
-            return Ok(ResolvedTaskSessionIdentifier {
-                task_id: Uuid::from(metadata.task_session_id),
-                public_task_id,
-                is_resumed: true,
-                persisted_metadata: Some(metadata),
             });
         }
 
@@ -99,7 +73,6 @@ pub(super) fn resolve_task_session_id(
             task_id: Uuid::new_v4(),
             public_task_id,
             is_resumed: false,
-            persisted_metadata: None,
         });
     }
 
@@ -115,7 +88,6 @@ pub(super) fn resolve_task_session_id(
         task_id: generated_task_id,
         public_task_id: generated_task_id.to_string(),
         is_resumed: false,
-        persisted_metadata: None,
     })
 }
 
@@ -126,25 +98,15 @@ pub(super) fn resolve_new_spawn_task_session_id(
     current_session_id: SessionId,
     args: &TaskToolInvocationArgs,
 ) -> Result<ResolvedTaskSessionIdentifier, String> {
-    let (root_session_id, direct_parent, current_depth) = {
-        let sessions = task_runtime.sessions.read().map_err(|_| {
+    let current_depth = task_runtime
+        .sessions
+        .read()
+        .map_err(|_| {
             String::from("The subagent task registry is locked and cannot inspect existing tasks.")
-        })?;
-        let current_record = sessions.get(&current_session_id);
-        let root_session_id = current_record
-            .map(|record| record.origin_session_id)
-            .unwrap_or(current_session_id);
-        let direct_parent = current_record
-            .map(|_| ParentSessionRef::TaskSession {
-                root_session_id: SessionNodeId::from(root_session_id),
-                parent_task_session_id: SessionNodeId::from(current_session_id),
-            })
-            .unwrap_or(ParentSessionRef::MainSession {
-                root_session_id: SessionNodeId::from(root_session_id),
-            });
-        let current_depth = current_record.map(|record| record.depth).unwrap_or(0);
-        (root_session_id, direct_parent, current_depth)
-    };
+        })?
+        .get(&current_session_id)
+        .map(|record| record.depth)
+        .unwrap_or(0);
 
     if current_depth + 1 > task_runtime.max_depth() {
         return Err(format!(
@@ -158,8 +120,6 @@ pub(super) fn resolve_new_spawn_task_session_id(
         let requested_public_task_id = normalize_public_task_identifier(task_id_text)?;
         reject_existing_spawn_public_task_identifier(
             task_runtime,
-            root_session_id,
-            direct_parent,
             current_session_id,
             &requested_public_task_id,
         )?
@@ -171,7 +131,6 @@ pub(super) fn resolve_new_spawn_task_session_id(
         task_id,
         public_task_id,
         is_resumed: false,
-        persisted_metadata: None,
     })
 }
 
@@ -215,15 +174,11 @@ pub(super) fn task_record_is_archived_for_public_lookup(
 /// 拒绝 spawn_agent 使用重复的公开子代理标识。
 pub(super) fn reject_existing_spawn_public_task_identifier(
     task_runtime: &Arc<TaskRuntime>,
-    root_session_id: SessionId,
-    direct_parent: ParentSessionRef,
     current_session_id: SessionId,
     requested_public_task_id: &str,
 ) -> Result<String, String> {
     if public_task_identifier_exists_for_parent(
         task_runtime,
-        root_session_id,
-        direct_parent.clone(),
         current_session_id,
         requested_public_task_id,
     )? {
@@ -239,8 +194,6 @@ pub(super) fn reject_existing_spawn_public_task_identifier(
 /// 检查公开子代理标识是否已经属于当前直接父会话。
 pub(super) fn public_task_identifier_exists_for_parent(
     task_runtime: &Arc<TaskRuntime>,
-    root_session_id: SessionId,
-    direct_parent: ParentSessionRef,
     current_session_id: SessionId,
     public_task_id: &str,
 ) -> Result<bool, String> {
@@ -257,13 +210,7 @@ pub(super) fn public_task_identifier_exists_for_parent(
                 && task_record_belongs_to_direct_parent(record, current_session_id)
                 && !task_record_is_archived_for_public_lookup(record, &archived_task_ids)
         });
-    if exists_in_memory {
-        return Ok(true);
-    }
-
-    Ok(task_runtime
-        .persisted_task_metadata_for_public_id(root_session_id, direct_parent, public_task_id)?
-        .is_some_and(|metadata| metadata.status != TaskSessionStatus::Archived))
+    Ok(exists_in_memory)
 }
 
 /// Normalizes one caller-facing task identifier while preserving the original textual identity used for future resume lookups.

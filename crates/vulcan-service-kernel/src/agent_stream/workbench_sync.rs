@@ -11,19 +11,6 @@ pub(crate) fn build_subagent_panel_route_response_locked(
 ) -> Result<SubagentPanelRouteResponse, String> {
     let subagent_navigation =
         subagent_navigation_snapshot_from_cached_state(guard, workspace_snapshot)?;
-    let active_session_id =
-        preserved_active_surface_session_id(workspace_snapshot, subagent_navigation.as_ref());
-    let mut surface_messages = surface_messages_for_session_without_subagent_navigation_refresh(
-        guard,
-        workspace_snapshot,
-        active_session_id,
-    );
-    repair_task_mirror_statuses_for_surface_messages_locked(
-        guard,
-        workspace_snapshot,
-        active_session_id,
-        surface_messages.as_mut_slice(),
-    );
     let selected_conversation_id =
         selected_workspace_session_id(workspace_snapshot).map(|session_id| session_id.to_string());
     let active_conversation_id = subagent_navigation
@@ -34,22 +21,14 @@ pub(crate) fn build_subagent_panel_route_response_locked(
         .as_ref()
         .map(|navigation| navigation.parent_conversation_id.clone())
         .or_else(|| selected_conversation_id.clone());
-    let messages = active_conversation_id
-        .as_deref()
-        .map(|conversation_id| {
-            conversation_messages_from_session(conversation_id, surface_messages.as_slice(), false)
-        })
-        .unwrap_or_default();
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     let revision = guard.workbench_generation;
     guard.workbench.revision = revision;
-    guard.workbench.messages = messages.clone();
     guard.workbench.subagent_navigation = subagent_navigation.clone();
     Ok(SubagentPanelRouteResponse {
         parent_conversation_id,
         active_conversation_id,
         subagent_navigation,
-        messages,
         revision,
     })
 }
@@ -104,24 +83,29 @@ where
 /// 参数
 /// `app` emits committed preparation deltas and `state` owns retained service state.
 /// `app` 发送已提交准备增量，`state` 持有保留服务状态。
-/// `controller_runtime` persists the external session lifecycle.
-/// `controller_runtime` 持久化外部会话生命周期。
 /// `active_stream_task_id` proves the exact stream owner and `preparation` supplies immutable runtime facts.
 /// `active_stream_task_id` 证明精确流所有者，`preparation` 提供不可变运行时事实。
 ///
 /// # Returns
 /// 返回值
-/// Returns success after lifecycle start and delta emission, or an explicit preflight/lifecycle error.
-/// 生命周期开始且增量发送后返回成功；预检或生命周期异常时返回显式错误。
+/// Returns success after the preparation mutation and delta emission, or an explicit preflight error.
+/// 执行准备变更与增量发送完成后返回成功；预检异常时返回显式错误。
 pub(crate) fn apply_execution_preparation(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
     active_stream_task_id: Uuid,
     preparation: &ExecutionPreparation,
 ) -> Result<(), String> {
     let apply_started_at = current_unix_millis_value();
-    let (events, boundary_session_directory) = commit_owned_execution_preparation_state(
+    let v1_usage_facts = {
+        let registry = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?
+            .session_runtime_registry
+            .clone();
+        session_context_usage_facts_from_v1_registry(registry.as_ref(), preparation.session_id)?
+    };
+    let events = commit_owned_execution_preparation_state(
         state,
         preparation.session_id,
         active_stream_task_id,
@@ -138,7 +122,7 @@ pub(crate) fn apply_execution_preparation(
                     .as_ref()
                     .map(|runtime| runtime.public_ai_runtime.as_ref()),
             );
-            let (boundary_session_directory, context_usage) = {
+            let context_usage = {
                 // workspace passed preflight before live budget and runtime identity mutation.
                 // workspace 在 live budget 与运行时身份变更前已通过预检。
                 let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
@@ -194,23 +178,16 @@ pub(crate) fn apply_execution_preparation(
                     .as_ref()
                     .map(|baseline| baseline.fingerprint.clone());
                 runtime_state.updated_at = current_unix_millis_text();
-                // boundarySessionDirectory is computed from the exact retained summary and never by scanning project siblings.
-                // boundarySessionDirectory 从精确保留摘要计算，绝不扫描项目兄弟目录。
-                let boundary_session_directory = segmented_session_directory_for_workspace_session(
-                    &controller_runtime.data_root,
-                    workspace,
-                    preparation.session_id,
-                );
-                let context_usage = context_usage_snapshot_from_runtime_state(
+                context_usage_snapshot_from_runtime_state(
                     preparation.session_id,
                     workspace.session_runtime_state.get(&preparation.session_id),
+                    v1_usage_facts.as_ref(),
                     &live_context_budgets,
                     public_model_capabilities.as_ref(),
                     preparation
                         .context_compaction_policy
                         .and_then(|policy| policy.compression_window_limit),
-                );
-                (boundary_session_directory, context_usage)
+                )
             };
             // phase_event reuses the shared workspace, Workbench, timestamp, and status projection.
             // phase_event 复用共享的工作区、Workbench、时间戳与状态投影。
@@ -223,18 +200,15 @@ pub(crate) fn apply_execution_preparation(
             let context_generation = guard.workbench_generation;
             guard.workbench.revision = context_generation;
             guard.workbench.context_usage = context_usage.clone();
-            Ok((
-                vec![
-                    phase_event,
-                    WorkbenchDeltaEnvelope {
-                        generation: context_generation,
-                        delta: WorkbenchDelta::ContextUsageChanged(ContextUsageChangedDelta {
-                            context_usage,
-                        }),
-                    },
-                ],
-                boundary_session_directory,
-            ))
+            Ok(vec![
+                phase_event,
+                WorkbenchDeltaEnvelope {
+                    generation: context_generation,
+                    delta: WorkbenchDelta::ContextUsageChanged(ContextUsageChangedDelta {
+                        context_usage,
+                    }),
+                },
+            ])
         },
     )?;
     webui_after_precheck_trace(
@@ -245,28 +219,6 @@ pub(crate) fn apply_execution_preparation(
             current_unix_millis_value().saturating_sub(apply_started_at)
         ),
     );
-    if let Some(session_directory) = boundary_session_directory {
-        let lifecycle_started_at = current_unix_millis_value();
-        begin_session_external_turn_lifecycle(&session_directory, preparation)?;
-        webui_after_precheck_trace(
-            "after_precheck_25b_lifecycle_begin_finished",
-            format!(
-                "session={} elapsed_ms={} elapsed_ms_since_apply={}",
-                preparation.session_id,
-                current_unix_millis_value().saturating_sub(lifecycle_started_at),
-                current_unix_millis_value().saturating_sub(apply_started_at)
-            ),
-        );
-    } else {
-        webui_after_precheck_trace(
-            "after_precheck_25b_lifecycle_begin_skipped",
-            format!(
-                "session={} elapsed_ms_since_apply={}",
-                preparation.session_id,
-                current_unix_millis_value().saturating_sub(apply_started_at)
-            ),
-        );
-    }
     for event in events {
         emit_service_event_with_trace(
             app,
@@ -283,130 +235,6 @@ pub(crate) fn apply_execution_preparation(
         ),
     );
     Ok(())
-}
-
-/// Begins the session lifecycle for one WebUI provider-stream turn.
-/// 开始单个 WebUI provider 流式轮次的 会话生命周期。
-pub(crate) fn begin_session_external_turn_lifecycle(
-    session_directory: &Path,
-    preparation: &ExecutionPreparation,
-) -> Result<(), String> {
-    let Some(turn_id) = preparation
-        .boundary_events
-        .first()
-        .and_then(|event| event.turn_id.clone())
-    else {
-        return Ok(());
-    };
-    let store =
-        WorkspaceSegmentedSessionBoundaryStore::new(session_directory, preparation.session_id);
-    let runner = SessionLifecycleRunner::new(store, WebuiSessionLifecycleHook);
-    runner.begin_turn(SessionLifecycleBeginRequest {
-        thread_id: SessionNodeId::from(preparation.session_id),
-        turn_id,
-        accepted_events: preparation.boundary_events.clone(),
-    })
-}
-
-/// Finishes the session lifecycle for one WebUI provider-stream turn.
-/// 结束单个 WebUI provider 流式轮次的 会话生命周期。
-pub(crate) fn finish_session_external_turn_lifecycle(
-    session_directory: &Path,
-    session_id: SessionId,
-    final_events: Vec<SessionBoundaryEvent>,
-    terminal_event: SessionBoundaryEvent,
-) -> Result<(), String> {
-    let Some(turn_id) = terminal_event.turn_id.clone() else {
-        return Ok(());
-    };
-    let terminal_status = session_lifecycle_terminal_status_from_event(&terminal_event)?;
-    let store = WorkspaceSegmentedSessionBoundaryStore::new(session_directory, session_id);
-    let runner = SessionLifecycleRunner::new(store, WebuiSessionLifecycleHook);
-    runner.finish_turn(SessionLifecycleFinishRequest {
-        thread_id: SessionNodeId::from(session_id),
-        turn_id,
-        terminal_status,
-        final_events,
-        terminal_event: Some(terminal_event),
-    })
-}
-
-/// Interrupts the exact persisted external turn that still owns one manually stopped session.
-/// 中断仍然拥有某个手动停止会话的精确持久化外部回合。
-///
-/// # Parameters
-/// 参数
-/// `session_directory` is the deterministic segmented storage directory for the stopped session.
-/// `session_directory` 是被停止会话的确定性分段存储目录。
-/// `session_id` identifies the external lifecycle thread whose active turn must be closed.
-/// `session_id` 标识必须关闭活动回合的外部生命周期线程。
-///
-/// # Returns
-/// 返回值
-/// `true` when an active persisted turn was interrupted; `false` when no active turn remained.
-/// 中断了活动持久化回合时返回 `true`；已经没有活动回合时返回 `false`。
-pub(crate) fn interrupt_session_external_turn_lifecycle(
-    session_directory: &Path,
-    session_id: SessionId,
-) -> Result<bool, String> {
-    let thread_id = SessionNodeId::from(session_id);
-    let store = WorkspaceSegmentedSessionBoundaryStore::new(session_directory, session_id);
-    let Some(state_value) = store.load_state(thread_id)? else {
-        return Ok(false);
-    };
-    // boundaryState is the exact overwrite-only lifecycle document owned by the external runner.
-    // boundaryState 是外部运行器拥有的精确覆盖式生命周期文档。
-    let boundary_state = serde_json::from_value::<SessionThreadState>(state_value)
-        .map_err(|error| format!("invalid session boundary state: {error}"))?;
-    if boundary_state.thread_id != thread_id {
-        return Err(format!(
-            "session boundary state thread mismatch: expected={thread_id} actual={}",
-            boundary_state.thread_id
-        ));
-    }
-    let Some(turn_id) = boundary_state.active_turn_id else {
-        return Ok(false);
-    };
-    let runner = SessionLifecycleRunner::new(store, WebuiSessionLifecycleHook);
-    runner.finish_turn(SessionLifecycleFinishRequest {
-        thread_id,
-        turn_id,
-        terminal_status: SessionTurnTerminalStatus::Interrupted,
-        final_events: Vec::new(),
-        terminal_event: None,
-    })?;
-    Ok(true)
-}
-
-/// Parses the explicit terminal status carried by a session-boundary terminal event.
-/// 解析会话边界终态事件携带的显式终态状态。
-///
-/// # Parameters
-/// 参数
-/// `terminal_event` is the hidden turn-completed boundary event emitted for one provider turn.
-/// `terminal_event` 是单个 Provider 回合发出的隐藏回合完成边界事件。
-///
-/// # Returns
-/// 返回值
-/// A lifecycle terminal status when the event carries a known status string.
-/// 当事件携带已知状态字符串时返回生命周期终态状态。
-pub(crate) fn session_lifecycle_terminal_status_from_event(
-    terminal_event: &SessionBoundaryEvent,
-) -> Result<SessionTurnTerminalStatus, String> {
-    let Some(status) = terminal_event.payload.get("status").and_then(Value::as_str) else {
-        return Err(format!(
-            "terminal boundary event `{}` is missing payload.status",
-            terminal_event.event_id
-        ));
-    };
-    match status {
-        "completed" => Ok(SessionTurnTerminalStatus::Completed),
-        "failed" => Ok(SessionTurnTerminalStatus::Failed),
-        other => Err(format!(
-            "terminal boundary event `{}` has unknown payload.status `{other}`",
-            terminal_event.event_id
-        )),
-    }
 }
 
 /// Updates one session phase in the retained workspace snapshot.

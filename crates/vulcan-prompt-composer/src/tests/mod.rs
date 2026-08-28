@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::composer::engine::PromptComposerEngine;
-use crate::composer::request::PromptAssemblyInput;
+use crate::composer::request::{AdditionalPromptSegment, PromptAssemblyInput};
 use crate::composer::resources::PromptComposerResourceConfig;
 use crate::output_style::OutputStyleCatalog;
 use crate::session::compaction::{
@@ -15,7 +15,10 @@ use crate::source::snapshot::{
     AgentPromptSnapshot, EnvironmentContextSnapshot, ProjectRulesSnapshot, ProviderPromptSnapshot,
     SubagentSnapshot, TaskGoalSnapshot, ToolCatalogSnapshot,
 };
-use crate::types::{ModelDescriptor, PersonalitySelection, PromptAssemblyMode, ToolDescriptor};
+use crate::types::{
+    ModelDescriptor, PersonalitySelection, PromptAssemblyMode, PromptBaselineKind,
+    PromptBaselineProvenance, ToolDescriptor,
+};
 
 /// Returns whether text contains CJK characters.
 /// 返回文本是否包含 CJK 字符。
@@ -465,7 +468,11 @@ fn context_compaction_minimal_mode_excludes_tool_help_nodes() {
             schema_fingerprint: Some(String::from("schema-1")),
         }]),
         subagent: None,
-        custom_developer_segments: vec![String::from("Return plain text only.")],
+        custom_developer_segments: vec![AdditionalPromptSegment::dynamic(
+            "Context Compaction Contract",
+            "Return plain text only.",
+            "Test compaction instruction",
+        )],
         custom_user_segments: Vec::new(),
     };
 
@@ -480,6 +487,54 @@ fn context_compaction_minimal_mode_excludes_tool_help_nodes() {
     );
     assert!(!output.render_developer_text().contains("Provider base"));
     assert!(!output.render_tool_metadata_text().contains("shell_command"));
+}
+
+/// Verifies identical-looking custom segments keep producer-declared provenance through cache reuse.
+/// 验证外观相同的自定义片段在缓存复用后仍保留生产者声明的来源分类。
+#[test]
+fn custom_segment_cache_preserves_typed_baseline_provenance() {
+    let engine = PromptComposerEngine::with_builtins();
+    let mut input = prompt_input_with_tool_ids(&[]);
+    input.custom_developer_segments = vec![
+        AdditionalPromptSegment::dynamic("Shared title", "Shared body", "Request-dynamic source"),
+        AdditionalPromptSegment::locked(
+            "Shared title",
+            "Shared body",
+            "Authoritative baseline source",
+            PromptBaselineProvenance::new(PromptBaselineKind::PluginInstructions, "plugin.alpha"),
+        ),
+    ];
+
+    let first = engine
+        .compose(&input)
+        .expect("first compose should succeed");
+    let second = engine
+        .compose(&input)
+        .expect("second compose should succeed");
+
+    assert_eq!(first.developer_segments.len(), 2);
+    assert_eq!(first.developer_segments[0].baseline_provenance, None);
+    assert_eq!(
+        first.developer_segments[1].baseline_provenance,
+        Some(PromptBaselineProvenance::new(
+            PromptBaselineKind::PluginInstructions,
+            "plugin.alpha",
+        ))
+    );
+    assert_ne!(
+        first.developer_segments[0].cache_key,
+        first.developer_segments[1].cache_key
+    );
+    assert!(
+        second
+            .developer_segments
+            .iter()
+            .all(|segment| segment.from_cache)
+    );
+    assert_eq!(
+        second.developer_segments[1].baseline_provenance,
+        first.developer_segments[1].baseline_provenance
+    );
 }
 
 /// Verifies clone-mode subagents inherit the base prompt and add delegation identity.

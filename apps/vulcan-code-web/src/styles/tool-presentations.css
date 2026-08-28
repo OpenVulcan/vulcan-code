@@ -740,3 +740,179 @@
     opacity: 1;
   }
 }
+
+/* V1_TOOL_CARD keeps event-native cards on the established transcript visual system. */
+/* V1_TOOL_CARD 让事件原生卡片继续使用既有会话视觉体系。 */
+.v1-tool-card {
+  width: min(100%, 860px);
+}
+
+.v1-tool-card-summary {
+  width: 100%;
+  grid-template-columns: auto auto auto minmax(0, 1fr) auto auto auto;
+}
+
+.v1-tool-card-summary.without-icon {
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto auto;
+}
+
+.v1-tool-card-icon,
+.v1-tool-card .tool-presentation-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.v1-tool-card .tool-presentation-state.state-running {
+  color: var(--muted-foreground);
+}
+
+.v1-tool-card .tool-presentation-state.state-waiting_user {
+  color: var(--warning-foreground, var(--muted-foreground));
+}
+
+.v1-tool-card .tool-presentation-state.state-completed {
+  color: var(--diff-addition-base);
+}
+
+.v1-tool-card .tool-presentation-state.state-failed {
+  color: var(--diff-deletion-base);
+}
+
+.v1-tool-card .tool-presentation-state.state-interrupted,
+.v1-tool-card .tool-presentation-state.state-cancelled,
+.v1-tool-card .tool-presentation-state.state-stopped {
+  color: var(--muted-foreground);
+}
+
+.v1-tool-card-title {
+  white-space: nowrap;
+}
+
+.v1-tool-card-target {
+  min-width: 0;
+  overflow: hidden;
+  color: color-mix(in oklch, var(--muted-foreground) 86%, transparent);
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v1-tool-card-detail {
+  max-width: 100%;
+  display: grid;
+  gap: 8px;
+}
+
+.v1-tool-card-json-sections,
+.v1-tool-card-section {
+  display: grid;
+  gap: 6px;
+}
+
+.v1-tool-card-section-title,
+.v1-tool-card-change-summary {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.v1-tool-card-change-summary {
+  padding: 2px 0 4px;
+}
+
+.v1-change-file-header {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--foreground);
+  font-family: var(--font-mono);
+}
+
+.v1-change-file-header .file-change-path-text {
+  flex: 1 1 auto;
+}
+
+.v1-change-rows {
+  min-width: max-content;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.v1-change-row {
+  min-height: 20px;
+  display: grid;
+  grid-template-columns: 48px 18px minmax(0, 1fr);
+  align-items: start;
+}
+
+.v1-change-row.row-added {
+  background: color-mix(in oklch, var(--diff-addition-base) 12%, transparent);
+}
+
+.v1-change-row.row-deleted {
+  background: color-mix(in oklch, var(--diff-deletion-base) 12%, transparent);
+}
+
+.v1-change-row.row-omitted {
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+.v1-change-line-number,
+.v1-change-prefix {
+  user-select: none;
+  color: var(--muted-foreground);
+  text-align: right;
+}
+
+.v1-change-line-number {
+  padding: 1px 8px 1px 4px;
+  border-right: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+}
+
+.v1-change-prefix {
+  padding: 1px 5px 1px 0;
+}
+
+.v1-change-content {
+  padding: 1px 12px 1px 0;
+  color: var(--foreground);
+  white-space: pre;
+}
+
+.v1-tool-card-diagnostic {
+  padding: 7px 9px;
+  border: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
+  border-radius: 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.v1-tool-card-diagnostic.level-error {
+  border-color: color-mix(in oklch, var(--destructive) 36%, transparent);
+  color: var(--destructive);
+}
+
+.v1-tool-card-navigation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.v1-tool-card-navigation-button {
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+}
+
+.v1-tool-card-navigation-button:disabled {
+  cursor: not-allowed;
+  color: var(--muted-foreground);
+  opacity: 0.55;
+}

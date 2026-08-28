@@ -5,9 +5,6 @@ import {
   ConversationSessionTodolistPanel,
   type ConversationSessionCommitBusyState,
 } from "@/components/conversation/session-todolist-panel";
-import {
-  parseConversationBlocks,
-} from "@/components/conversation/conversation-transcript";
 import { dispatchConversationLayoutWillChange } from "@/components/conversation/conversation-layout-events";
 import { terminalSessionViewModel } from "@/components/conversation/conversation-terminal-model";
 import { activeSkillHeaderSummary } from "@/components/features/skills/skill-area-header";
@@ -109,7 +106,6 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
     </SidebarProvider>
   );
 }
-
 type WorkspaceShellSubagentNavigation = NonNullable<WorkspaceShellProps["workbench"]["subagentNavigation"]>;
 type WorkspaceShellSubagentTask = NonNullable<WorkspaceShellSubagentNavigation["tasks"]>[number];
 
@@ -1336,11 +1332,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         workbench={props.workbench}
         selectedDraftConversation={props.selectedDraftConversation}
         selectedConversationId={props.selectedConversationId}
-        loadingConversationId={props.loadingConversationId}
-        conversationLoadError={props.conversationLoadError}
-        conversationHydration={props.conversationHydration}
-        conversationHasMoreHistory={props.conversationHasMoreHistory}
-        conversationHistoryLoading={props.conversationHistoryLoading}
         sessionReviewSummary={sessionReviewSummary}
         runtimeStatusHost={props.runtimeStatusHost}
         todolistStatusHost={props.todolistStatusHost}
@@ -1362,6 +1353,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onSetSessionContextCompactionWindow={props.onSetSessionContextCompactionWindow}
         onStopConversationRun={props.onStopConversationRun}
         onContinueConversation={props.onContinueConversation}
+        onEditConversationGeneration={props.onEditConversationGeneration}
+        onForkConversationGeneration={props.onForkConversationGeneration}
         onOpenSubagentPanel={handleOpenSubagentPanel}
         onStopSubagentTask={props.onStopSubagentTask}
         onEditPendingPrompt={props.onEditPendingPrompt}
@@ -1370,13 +1363,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onReorderPendingPrompts={props.onReorderPendingPrompts}
         onStageAttachmentBytes={props.onStageAttachmentBytes}
         onCopyText={props.onCopyText}
-        onGetUserPromptEditDraft={props.onGetUserPromptEditDraft}
-        onSubmitUserPromptEdit={props.onSubmitUserPromptEdit}
-        onForkConversation={props.onForkConversation}
-        onSelectConversation={props.onSelectConversation}
-        onLoadConversationHistory={props.onLoadConversationHistory}
-        onLoadToolDetail={props.onLoadToolDetail}
         resolveMediaSourceUrl={props.resolveMediaSourceUrl}
+        onSelectConversation={props.onSelectConversation}
         layoutStabilityKey={[
           props.selectedConversationId ?? "none",
           props.selectedDraftConversation?.id ?? "persisted",
@@ -1524,7 +1512,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           onStopCommandSession={props.onStopCommandSession}
           onCopyRawDiff={(rawDiff) => void props.onCopyText(rawDiff)}
           onCopyText={(text) => void props.onCopyText(text)}
-          parseConversationBlocks={parseConversationBlocks}
           resolveMediaSourceUrl={props.resolveMediaSourceUrl}
           loadWorkspaceDiffFileDetail={props.onLoadWorkspaceDiffFileDetail}
           loadWorkspaceDiffSearch={props.onLoadWorkspaceDiffSearch}
@@ -1536,7 +1523,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           onWorkspaceGitStateChanged={refreshProjectGitSummary}
           onSelectGitRepository={setSelectedGitRepositoryKey}
           onRunVmmAction={props.memoryActions.onRunVmmAction}
-          onLoadToolDetail={props.onLoadToolDetail}
           onTrace={props.onTrace}
           gitCommitActionBusy={Boolean(gitCommitBusyState)}
           gitCommitActionDisabled={!sessionGitCommitActionAvailable}
@@ -1565,42 +1551,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           onRefreshReviewSummary={refreshSelectedGitRepositorySummary}
         />
       ) : null}
-      {props.conversationForkInProgress ? (
-        <WorkspaceBlockingProgressOverlay
-          message={t("conversation.action.forkInProgressMessage")}
-          title={t("conversation.action.forkInProgressTitle")}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-// WorkspaceBlockingProgressOverlay blocks all workspace interaction while one modal backend action is pending.
-// WorkspaceBlockingProgressOverlay 在单个模态后端动作等待期间阻塞所有工作台交互。
-function WorkspaceBlockingProgressOverlay(props: {
-  // Primary progress title shown in the shared loading card.
-  // 共享加载卡片中展示的主标题。
-  title: string;
-  // Secondary progress message shown below the indeterminate bar.
-  // 不确定进度条下方展示的辅助说明。
-  message: string;
-}) {
-  return (
-    <div className="workspace-blocking-progress-overlay" role="status" aria-live="polite" aria-busy="true">
-      <section className="conversation-loading-card workspace-blocking-progress-card">
-        <div className="conversation-loading-heading">
-          <strong>{props.title}</strong>
-        </div>
-        <div
-          aria-label={props.title}
-          aria-valuetext={props.message}
-          className="conversation-loading-bar workspace-blocking-progress-bar"
-          role="progressbar"
-        >
-          <div className="conversation-loading-bar-value workspace-blocking-progress-bar-value" />
-        </div>
-        <p className="workspace-blocking-progress-message">{props.message}</p>
-      </section>
     </div>
   );
 }

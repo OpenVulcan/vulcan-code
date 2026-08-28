@@ -135,9 +135,6 @@ pub struct PromptCompactionLaunchContext {
     /// Optional child-agent prompt context captured by the source turn.
     /// 来源回合捕获的可选子代理提示词上下文。
     pub subagent_prompt_context: Option<ExecutionSubagentPromptContext>,
-    /// Optional task-session artifact root used by task-scoped tools.
-    /// 子任务范围工具使用的可选任务会话制品根目录。
-    pub task_session_store_root: Option<PathBuf>,
     /// Exact storage directory for the source session's compaction artifacts.
     /// 来源会话压缩工件使用的精确存储目录。
     pub session_storage_directory: Option<PathBuf>,
@@ -191,7 +188,6 @@ impl Default for PromptCompactionLaunchContext {
             provider_tool_enabled_capabilities_override: None,
             provider_extension_target_sets_override: None,
             subagent_prompt_context: None,
-            task_session_store_root: None,
             session_storage_directory: None,
             output_style_snapshot: None,
             tool_exposure_override: Default::default(),
@@ -236,7 +232,6 @@ impl PromptCompactionLaunchContext {
                 .provider_extension_target_sets_override
                 .clone(),
             subagent_prompt_context: request.subagent_prompt_context.clone(),
-            task_session_store_root: request.task_session_store_root.clone(),
             session_storage_directory: request.session_storage_directory.clone(),
             output_style_snapshot: request.output_style_snapshot.clone(),
             tool_exposure_override: request.tool_exposure_override.clone(),
@@ -561,6 +556,9 @@ fn prompt_compaction_progress_for_runtime_event(
         }
         ExecutionStreamEvent::ProviderRequestCheckpoint { .. } => {
             Some(prompt_compaction_progress("provider_checkpoint"))
+        }
+        ExecutionStreamEvent::ProviderRequestPreparationBoundary { .. } => {
+            Some(prompt_compaction_progress("provider_preparation"))
         }
         ExecutionStreamEvent::ProviderLoweringRepair { .. } => {
             Some(prompt_compaction_progress("provider_lowering_repair"))
@@ -1479,7 +1477,7 @@ fn build_prompt_compaction_launch_request(
         },
         runtime_policy: vulcan_session_core::ExecutionRuntimePolicy::context_compaction(),
         conversation_hook_turn_id: None,
-        execution_retry_snapshot: None,
+        continuation_action_id: None,
         provider_request_continuation: None,
         execution_agent_id: execution_agent_id.map(str::to_string),
         agent_prompt_snapshot: launch_context.agent_prompt_snapshot.clone(),
@@ -1488,8 +1486,6 @@ fn build_prompt_compaction_launch_request(
         connection_id_override: model_target.map(|target| target.connection_id.clone()),
         provider_route_lease_identity: model_target
             .map(|target| target.provider_route_lease_identity.clone()),
-        provider_usage_budget_baseline: None,
-        provider_usage_context_generation_id: None,
         provider_tool_selections_override: launch_context.provider_tool_selections_override.clone(),
         provider_tool_media_understanding_modes_override: launch_context
             .provider_tool_media_understanding_modes_override
@@ -1501,7 +1497,6 @@ fn build_prompt_compaction_launch_request(
             .provider_extension_target_sets_override
             .clone(),
         subagent_prompt_context: launch_context.subagent_prompt_context.clone(),
-        task_session_store_root: launch_context.task_session_store_root.clone(),
         session_storage_directory: launch_context.session_storage_directory.clone(),
         session_title: session_title.to_string(),
         workspace_path: workspace_path.to_string(),
@@ -1540,6 +1535,7 @@ fn build_prompt_compaction_launch_request(
         boundary_events: Vec::new(),
         runtime_system_updates: Vec::new(),
         controller_runtime: None,
+        native_goal_runtime: None,
         knowledge_access: None,
         session_goal_context: None,
         session_plan_context: launch_context.session_plan_context.clone(),

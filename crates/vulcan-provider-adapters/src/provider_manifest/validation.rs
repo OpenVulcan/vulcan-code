@@ -4953,34 +4953,32 @@ fn validate_provider_tool_execution_contract(
             "the multipart SSE execution family requires exactly one multipart request contract",
         ));
     }
-    if let Some(events) = execution.sse_events.as_ref() {
-        if !events.event_type_path.starts_with('/')
+    if let Some(events) = execution.sse_events.as_ref()
+        && (!events.event_type_path.starts_with('/')
             || events.terminal_event_types.is_empty()
             || events
                 .terminal_event_types
                 .iter()
                 .chain(events.nonterminal_event_types.iter())
-                .any(|event_type| event_type.trim().is_empty())
-        {
-            errors.push(ManifestValidationError::new(
-                "invalid_provider_tool_sse_contract",
-                format!("{execution_path}.sse_events"),
-                "SSE event contracts require a JSON Pointer and non-empty terminal event types",
-            ));
-        }
+                .any(|event_type| event_type.trim().is_empty()))
+    {
+        errors.push(ManifestValidationError::new(
+            "invalid_provider_tool_sse_contract",
+            format!("{execution_path}.sse_events"),
+            "SSE event contracts require a JSON Pointer and non-empty terminal event types",
+        ));
     }
-    if let Some(multipart) = execution.multipart_request.as_ref() {
-        if multipart.fields.is_empty()
+    if let Some(multipart) = execution.multipart_request.as_ref()
+        && (multipart.fields.is_empty()
             || multipart.fields.iter().any(|field| {
                 !field.argument_path.starts_with('/') || field.field_name.trim().is_empty()
-            })
-        {
-            errors.push(ManifestValidationError::new(
-                "invalid_provider_tool_multipart_contract",
-                format!("{execution_path}.multipart_request"),
-                "multipart contracts require non-empty root JSON Pointers and field names",
-            ));
-        }
+            }))
+    {
+        errors.push(ManifestValidationError::new(
+            "invalid_provider_tool_multipart_contract",
+            format!("{execution_path}.multipart_request"),
+            "multipart contracts require non-empty root JSON Pointers and field names",
+        ));
     }
     validate_provider_tool_fixed_headers(execution, execution_path, errors);
     validate_provider_tool_mcp_http_call(execution, execution_path, errors);
@@ -9295,7 +9293,7 @@ mod tests {
         let profile = &mut manifest.services[0].credential_profiles[0];
         profile.credential_mode = CredentialMode::Auth;
         profile.authorization = Some(CredentialAuthorization::BrowserCallback {
-            profile: crate::BrowserCallbackAuthorization {
+            profile: Box::new(crate::BrowserCallbackAuthorization {
                 authorization_url: String::from("https://commandcode.ai/studio/auth/cli"),
                 callback_query_parameter: String::from("callback"),
                 state_query_parameter: String::from("state"),
@@ -9317,7 +9315,7 @@ mod tests {
                     error_description_json_pointer: Some(String::from("/error_description")),
                     secret_projection: crate::BrowserCallbackSecretProjection::Bearer,
                 },
-            },
+            }),
         });
         validate_manifest(&manifest, ManifestOwnership::System, &registry())
             .expect("reviewed system callback should validate");

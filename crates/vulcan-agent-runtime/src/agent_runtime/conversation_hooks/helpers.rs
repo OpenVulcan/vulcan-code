@@ -288,6 +288,7 @@ pub(super) fn pending_prompt_source_event_kind(source: PendingSessionPromptSourc
         PendingSessionPromptSource::UserInterrupt => "user_interrupt",
         PendingSessionPromptSource::SessionMailbox => "session_mailbox",
         PendingSessionPromptSource::GoalContinuation => "goal_continuation",
+        PendingSessionPromptSource::SubagentReturnContinuation => "subagent_return_continuation",
         PendingSessionPromptSource::ExecutionRetry => "execution_retry",
     }
 }

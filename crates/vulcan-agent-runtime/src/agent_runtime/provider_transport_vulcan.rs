@@ -2,8 +2,9 @@
 //! 面向现有宿主工具控制器的 Vulcan 公共契约适配器。
 
 use crate::agent_runtime::events::{
-    TransientReasoningStatus, TransientReasoningStatusKind, TransientReasoningSummaryItem,
-    provider_request_durability_barrier,
+    PreparedPhysicalApi, ProviderRequestPreparationCandidate, TransientReasoningStatus,
+    TransientReasoningStatusKind, TransientReasoningSummaryItem,
+    provider_request_durability_barrier, provider_request_preparation_barrier,
 };
 use crate::agent_runtime::provider_attachment::{
     build_missing_attachment_replay_text, model_visible_attachment_field,
@@ -18,6 +19,7 @@ use crate::agent_runtime::provider_transport_entry_inputs::{
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_request::ProviderTransportExecutionRequest;
 use crate::agent_runtime::provider_transport_stream_runtime::execute_host_controlled_stream_with_prepared_inputs;
+use crate::agent_runtime::provider_v1_bridge::provider_v1_source_from_completed_response;
 use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
 use crate::attachment_assets::{
     AttachmentDescriptor, resolve_attachment_replay_path, stage_attachment_bytes,
@@ -28,8 +30,6 @@ use base64::Engine;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use vulcan_ai_contract::{
     AiContinuation, AiExecutionError, AiExecutionRequest, AiMessage, AiOperation, AiStreamEvent,
@@ -48,6 +48,7 @@ use vulcan_core::types::{
     ConversationPayload as CoreConversationPayload,
     ConversationSnapshot as CoreConversationSnapshot, ConversationToolCall,
     CoreError as VulcanCoreError, ProviderContinuation,
+    ProviderPromptLayers as CoreProviderPromptLayers,
     ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     ProviderRequestToolSchema as CoreProviderRequestToolSchema, ProviderTurnDelta,
     ProviderTurnResponse as CoreProviderTurnResponse, ProviderUsageSnapshot,
@@ -59,7 +60,13 @@ use vulcan_provider_adapters::{
     ResourceReferencePolicy, ResponseProjectionProfile, ToolSchemaProjectionMode,
     TransientReasoningStatusMode, UploadReferenceEncoding,
 };
+use vulcan_session_core::v1::ApiCallId;
+use vulcan_session_core::v1::context::LockedBaselineProjection;
 use vulcan_tools_manager::{VulcanToolSchemaProjectionProfile, project_tool_parameters_schema};
+use vulcan_workspace_store::workspace_store::{
+    ProviderApiTraceAttemptReservation, ProviderApiTracePayload,
+    ProviderApiTraceReservationOutcome, ProviderApiTraceStore, ProviderApiTraceWriteOutcome,
+};
 
 /// Vulcan-owned default output budget used when the provider reports no independent output limit.
 /// 当供应商未报告独立输出上限时使用的 Vulcan 本地默认输出预算。
@@ -67,40 +74,12 @@ const DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT: u64 = 32_000;
 /// Maximum aggregate Base64 payload bytes allowed for host-inline resources in one request.
 /// 单次请求中宿主内联资源允许使用的 Base64 聚合载荷最大字节数。
 const HOST_INLINE_RESOURCE_BASE64_BUDGET_BYTES: u64 = 2 * 1024 * 1024;
-/// Versioned on-disk contract for grouped Provider API request and response traces.
-/// 分组 Provider API 请求与响应追踪使用的版本化磁盘契约。
-const PROVIDER_API_TRACE_SCHEMA_VERSION: &str = "vulcan.provider-api-trace.v1";
 /// Structured subcategory emitted only after the exact OAuth account secret was refreshed.
 /// 仅在精确 OAuth 账号秘密已经刷新后发出的结构化子类别。
 pub(crate) const OAUTH_CREDENTIAL_REFRESHED_SUBCATEGORY: &str = "oauth_credential_refreshed";
-/// Process-local allocator synchronized to each opened session's persisted generation floor.
-/// 会同步到每个已打开会话持久化代际下限的进程内分配器。
-static PROVIDER_API_TRACE_GROUP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-/// Identifies one physical API attempt inside a stable logical retry group.
-/// 标识稳定逻辑重试组中的一次真实 API 尝试。
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ProviderApiTraceAttemptIdentity {
-    /// Process-local monotonic generation used to own one rotating slot.
-    /// 用于占有一个轮转槽位的进程内单调代际。
-    group_sequence: u64,
-    /// Stable opaque identity shared by all physical retries.
-    /// 所有真实重试共享的稳定不透明标识。
-    group_id: String,
-    /// Group creation timestamp retained unchanged across retries.
-    /// 在重试间保持不变的组创建时间戳。
-    group_created_at_unix_ms: u128,
-    /// Zero-based physical attempt index.
-    /// 从零开始的真实尝试索引。
-    attempt_index: u32,
-}
-
 /// Selects the response evidence persisted for one trace-attempt snapshot.
 /// 选择一次追踪尝试快照要持久化的响应证据。
 enum ProviderApiTraceResponseState {
-    /// The request is durable and transport dispatch has not started yet.
-    /// 请求已经可靠落盘且传输分派尚未开始。
-    AwaitingResponse,
     /// The response capture channel closed without publishing a capture.
     /// 响应捕获通道关闭且没有发布捕获结果。
     CaptureChannelClosed,
@@ -166,28 +145,13 @@ impl ProviderApiTraceProcessingFailureSender {
     }
 }
 
-/// Owns the currently retryable Provider API trace group for one controller adapter.
-/// 持有一个控制器适配器当前可重试的 Provider API 追踪组。
+/// Owns physical-attempt numbering for the current durable V1 API identity.
+/// 持有当前可靠 V1 API 身份的物理尝试编号。
 #[derive(Debug, Default)]
-struct ProviderApiTraceGroupState {
-    /// Active logical group, absent before dispatch and after success.
-    /// 活动逻辑组；分派前与成功后为空。
-    active: Option<ProviderApiTraceActiveGroup>,
-}
-
-/// Tracks the next physical attempt index for one active logical group.
-/// 跟踪一个活动逻辑组的下一次真实尝试索引。
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ProviderApiTraceActiveGroup {
-    /// Monotonic group generation.
-    /// 单调组代际。
-    group_sequence: u64,
-    /// Stable opaque group identity.
-    /// 稳定不透明组标识。
-    group_id: String,
-    /// Frozen creation timestamp.
-    /// 冻结的创建时间戳。
-    group_created_at_unix_ms: u128,
+struct ProviderApiTraceAttemptState {
+    /// Durable API identity that owns the next attempt index.
+    /// 拥有下一尝试下标的可靠 API 身份。
+    api_call_id: Option<ApiCallId>,
     /// Index assigned to the next physical request.
     /// 分配给下一次真实请求的索引。
     next_attempt_index: u32,
@@ -330,82 +294,6 @@ fn provider_request_trace_timestamp_ms() -> Result<u128, String> {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .map_err(|error| format!("Provider request trace clock failed: {error}"))
-}
-
-/// Raises one process-local trace generation allocator to an observed persisted floor.
-/// 将一个进程内追踪代际分配器提升到已观察到的持久化下限。
-///
-/// # Parameters
-/// 参数
-/// `sequence` is the allocator and `persisted_floor` is the greatest generation already on disk.
-/// `sequence` 是分配器，`persisted_floor` 是磁盘上已经存在的最大代际。
-fn synchronize_provider_api_trace_group_sequence(sequence: &AtomicU64, persisted_floor: u64) {
-    sequence.fetch_max(persisted_floor, Ordering::AcqRel);
-}
-
-/// Reserves the next unique process-local Provider API trace group generation.
-/// 预留下一个进程内唯一的 Provider API 追踪组代际。
-///
-/// # Parameters
-/// 参数
-/// `sequence` is already synchronized with the owning session's persisted generation floor.
-/// `sequence` 已经与所属会话的持久化代际下限完成同步。
-///
-/// # Returns
-/// 返回值
-/// The next generation, or an explicit error instead of wrapping at the integer boundary.
-/// 返回下一代际；达到整数边界时返回明确错误而不是回绕。
-fn reserve_provider_api_trace_group_sequence(sequence: &AtomicU64) -> Result<u64, String> {
-    // previous remains unchanged when the integer boundary prevents a safe reservation.
-    // previous 在整数边界阻止安全预留时保持不变。
-    let previous = sequence
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-            current.checked_add(1)
-        })
-        .map_err(|_| String::from("Provider API trace group generation is exhausted."))?;
-    Ok(previous + 1)
-}
-
-/// Synchronizes trace generation allocation with one retained session before dispatch begins.
-/// 在分派开始前将追踪代际分配与一个保留会话同步。
-///
-/// # Parameters
-/// 参数
-/// `session_storage_directory` is the exact session owner and `cache_scope_id` is its UUID.
-/// `session_storage_directory` 是精确会话归属目录，`cache_scope_id` 是其 UUID。
-///
-/// # Returns
-/// 返回值
-/// Success after the process allocator is no lower than every persisted rotating slot.
-/// 当进程分配器不低于全部已持久化轮转槽位后返回成功。
-fn synchronize_provider_api_trace_generation_with_session(
-    session_storage_directory: Option<&Path>,
-    cache_scope_id: &str,
-) -> Result<(), String> {
-    // sessionDirectory is mandatory because the allocator must observe its durable predecessor.
-    // sessionDirectory 是必需的，因为分配器必须观察其可靠持久化的前序代际。
-    let session_directory = session_storage_directory.ok_or_else(|| {
-        String::from(
-            "Provider request tracing is enabled but the execution has no exact session storage directory.",
-        )
-    })?;
-    // sessionId proves the supplied directory belongs to this exact Provider execution scope.
-    // sessionId 证明给定目录属于这次精确 Provider 执行作用域。
-    let session_id = uuid::Uuid::parse_str(cache_scope_id).map_err(|error| {
-        format!("Provider request trace session id `{cache_scope_id}` is invalid: {error}")
-    })?;
-    // persistedFloor prevents a fresh process from reusing generations retained by an earlier run.
-    // persistedFloor 防止新进程复用更早运行已经保留的代际。
-    let persisted_floor =
-        vulcan_workspace_store::workspace_store::load_provider_api_trace_group_sequence_floor(
-            session_directory,
-            session_id,
-        )?;
-    synchronize_provider_api_trace_group_sequence(
-        &PROVIDER_API_TRACE_GROUP_SEQUENCE,
-        persisted_floor,
-    );
-    Ok(())
 }
 
 /// Redacts credential-shaped header values before a trace reaches disk.
@@ -559,7 +447,6 @@ pub(crate) fn execute_vulcan_public_stream(
     reasoning_effort: Option<ReasoningEffort>,
 ) -> ProviderDeltaStream {
     let provider_request_trace_enabled = request.provider_request_trace_enabled;
-    let session_storage_directory = request.session_storage_directory.clone();
     let cache_scope_id = request.session_id.to_string();
     let workspace_path = request.workspace_path.clone();
     let output_token_limit = resolved_public_output_token_limit(
@@ -569,9 +456,9 @@ pub(crate) fn execute_vulcan_public_stream(
     let prompt_cache = resolved.overrides.prompt_cache.clone().unwrap_or_default();
     let PreparedProviderTransportStreamLaunch {
         runtime_inputs,
+        dynamic_prompt_layers,
+        locked_baseline,
         core_snapshot,
-        initial_provider_request,
-        recovery_action,
         prompt_intervention,
     } = prepare_provider_transport_stream_launch(request);
     execute_host_controlled_stream_with_prepared_inputs(
@@ -580,7 +467,6 @@ pub(crate) fn execute_vulcan_public_stream(
         move |live_sender, adapter_inputs| {
             VulcanPublicContractAdapter::new(
                 provider_request_trace_enabled,
-                session_storage_directory.clone(),
                 resolved.route.clone(),
                 resolved.model.id.clone(),
                 cache_scope_id.clone(),
@@ -596,12 +482,12 @@ pub(crate) fn execute_vulcan_public_stream(
                 resolved.model.capabilities.output_resources.clone(),
                 workspace_path.clone(),
                 live_sender,
-                initial_provider_request.clone(),
+                dynamic_prompt_layers.clone(),
+                locked_baseline.clone(),
             )
         },
         "Vulcan 公共契约",
         prompt_intervention,
-        recovery_action,
     )
 }
 
@@ -639,7 +525,6 @@ pub(crate) fn capture_vulcan_public_stream(
         let (live_sender, _live_receiver) = tokio::sync::mpsc::unbounded_channel();
         let adapter = VulcanPublicContractAdapter::new(
             false,
-            None,
             resolved.route.clone(),
             resolved.model.id.clone(),
             cache_scope_id,
@@ -655,7 +540,8 @@ pub(crate) fn capture_vulcan_public_stream(
             resolved.model.capabilities.output_resources,
             workspace_path,
             live_sender,
-            prepared.initial_provider_request,
+            prepared.dynamic_prompt_layers,
+            prepared.locked_baseline,
         );
         let public_request = adapter
             .build_request(&prepared.core_snapshot, &controller_config)
@@ -688,12 +574,10 @@ pub(crate) struct VulcanPublicContractAdapter {
     /// Frozen system-setting decision for grouped request and raw-response tracing.
     /// 当前控制器运行期间冻结的分组请求与原始返回追踪系统设置决策。
     provider_request_trace_enabled: bool,
-    /// Exact session directory for trace writes; absent when trace persistence is disabled.
-    /// 追踪写入使用的精确会话目录；关闭追踪持久化时为空。
-    session_storage_directory: Option<PathBuf>,
-    /// Shared logical trace group state retained across transparent physical retries.
-    /// 在透明真实重试间保留的共享逻辑追踪组状态。
-    provider_api_trace_group_state: std::sync::Arc<std::sync::Mutex<ProviderApiTraceGroupState>>,
+    /// Shared physical-attempt index state keyed by the durable V1 API identity.
+    /// 按可靠 V1 API 身份索引的共享物理尝试下标状态。
+    provider_api_trace_attempt_state:
+        std::sync::Arc<std::sync::Mutex<ProviderApiTraceAttemptState>>,
     /// Immutable provider execution route.
     /// 不可变供应商执行路由。
     route: ProviderExecutionRoute,
@@ -742,9 +626,12 @@ pub(crate) struct VulcanPublicContractAdapter {
     /// Live host sender for tool request construction.
     /// 工具请求构造使用的宿主实时发送器。
     live_sender: ProviderLiveDeltaSender,
-    /// One-shot exact public request restored from a claimed retry snapshot.
-    /// 从已认领重试快照恢复的一次性精确公共请求。
-    initial_provider_request: std::sync::Arc<std::sync::Mutex<Option<AiExecutionRequest>>>,
+    /// Request-dynamic prompt layers emitted by the unique prompt composer.
+    /// 由唯一提示词组合器生成的请求动态提示词层。
+    dynamic_prompt_layers: CoreProviderPromptLayers,
+    /// Canonical typed prompt baseline proposed for V1 request preparation.
+    /// 为 V1 请求准备提出的规范强类型提示词基线。
+    locked_baseline: LockedBaselineProjection,
 }
 
 /// Carries the public request together with the controller budget snapshot.
@@ -767,6 +654,11 @@ pub(crate) struct VulcanPublicContractRequest {
     /// 从当前精确规范请求捕获的宿主上下文预算决策。
     #[serde(skip)]
     pub(crate) context_budget: Option<crate::context_budget::ContextBudgetSnapshot>,
+    /// Frozen request-budget guard that the V1 owner must reapply to the rebuilt final request.
+    /// V1 owner 必须重新应用到最终重建请求上的冻结请求预算守卫。
+    #[serde(skip)]
+    pub(crate) request_budget_guard:
+        Option<crate::agent_runtime::provider_transport_request_budget::ProviderRequestBudgetGuard>,
 }
 
 impl VulcanPublicContractAdapter {
@@ -789,7 +681,6 @@ impl VulcanPublicContractAdapter {
     /// 返回在控制器运行期间路由保持固定的可复用适配器。
     pub(crate) fn new(
         provider_request_trace_enabled: bool,
-        session_storage_directory: Option<PathBuf>,
         route: ProviderExecutionRoute,
         model_id: String,
         cache_scope_id: String,
@@ -805,7 +696,8 @@ impl VulcanPublicContractAdapter {
         output_resources: Vec<ResourceKind>,
         workspace_path: String,
         live_sender: ProviderLiveDeltaSender,
-        initial_provider_request: Option<AiExecutionRequest>,
+        dynamic_prompt_layers: CoreProviderPromptLayers,
+        locked_baseline: LockedBaselineProjection,
     ) -> Self {
         // toolSources preserves exact source ownership before protocol projection removes host metadata.
         // toolSources 在协议投影移除宿主元数据前保留精确来源归属。
@@ -816,30 +708,10 @@ impl VulcanPublicContractAdapter {
         // publicTools applies the same route-bound schema projection used by standalone remote compaction.
         // publicTools 应用与独立远端压缩相同的路由绑定 Schema 投影。
         let public_tools = project_public_tool_definitions(&route, tools);
-        // effectiveTraceEnabled disables only diagnostics when its durable generation cannot be established.
-        // effectiveTraceEnabled 仅在无法建立可靠代际时关闭诊断，不影响真实 Provider 请求。
-        let provider_request_trace_enabled = if provider_request_trace_enabled {
-            match synchronize_provider_api_trace_generation_with_session(
-                session_storage_directory.as_deref(),
-                cache_scope_id.as_str(),
-            ) {
-                Ok(()) => true,
-                Err(error) => {
-                    eprintln!(
-                        "[provider-api-trace] session={} initialization_failed={error}",
-                        cache_scope_id
-                    );
-                    false
-                }
-            }
-        } else {
-            false
-        };
         Self {
             provider_request_trace_enabled,
-            session_storage_directory,
-            provider_api_trace_group_state: std::sync::Arc::new(std::sync::Mutex::new(
-                ProviderApiTraceGroupState::default(),
+            provider_api_trace_attempt_state: std::sync::Arc::new(std::sync::Mutex::new(
+                ProviderApiTraceAttemptState::default(),
             )),
             route,
             model_id,
@@ -857,75 +729,50 @@ impl VulcanPublicContractAdapter {
             output_resources,
             workspace_path,
             live_sender,
-            initial_provider_request: std::sync::Arc::new(std::sync::Mutex::new(
-                initial_provider_request,
-            )),
+            dynamic_prompt_layers,
+            locked_baseline,
         }
     }
 
-    /// Claims one physical attempt in the active logical Provider API trace group.
-    /// 在活动逻辑 Provider API 追踪组中认领一次真实尝试。
+    /// Reserves one physical trace identity from the session-owned V1 trace store.
+    /// 从会话所属 V1 追踪存储中预留一个物理追踪身份。
     ///
     /// # Returns
     /// 返回值
-    /// A stable group identity and a unique attempt index when tracing is enabled, otherwise `None`.
-    /// 启用追踪时返回稳定组标识与唯一尝试索引，否则返回 `None`。
+    /// A durable sequence bound to the V1 API and physical attempt when tracing is enabled.
+    /// 启用追踪时返回绑定 V1 API 与物理尝试的可靠序号。
     fn claim_provider_api_trace_attempt(
         &self,
-    ) -> Result<Option<ProviderApiTraceAttemptIdentity>, String> {
+        api_call_id: ApiCallId,
+        trace_store: &ProviderApiTraceStore,
+    ) -> Result<Option<ProviderApiTraceAttemptReservation>, String> {
         if !self.provider_request_trace_enabled {
             return Ok(None);
         }
         let mut state = self
-            .provider_api_trace_group_state
+            .provider_api_trace_attempt_state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.active.as_ref().is_some_and(|group| {
-            group.next_attempt_index
-                >= vulcan_workspace_store::workspace_store::PROVIDER_API_TRACE_MAX_ATTEMPTS_PER_GROUP
-        }) {
-            return Ok(None);
+        if state.api_call_id != Some(api_call_id) {
+            state.api_call_id = Some(api_call_id);
+            state.next_attempt_index = 0;
         }
-        if state.active.is_none() {
-            state.active = Some(ProviderApiTraceActiveGroup {
-                group_sequence: reserve_provider_api_trace_group_sequence(
-                    &PROVIDER_API_TRACE_GROUP_SEQUENCE,
-                )?,
-                group_id: uuid::Uuid::new_v4().to_string(),
-                group_created_at_unix_ms: provider_request_trace_timestamp_ms().unwrap_or_default(),
-                next_attempt_index: 0,
-            });
-        }
-        let group = state
-            .active
-            .as_mut()
-            .ok_or_else(|| String::from("Provider API trace group reservation was lost."))?;
-        let identity = ProviderApiTraceAttemptIdentity {
-            group_sequence: group.group_sequence,
-            group_id: group.group_id.clone(),
-            group_created_at_unix_ms: group.group_created_at_unix_ms,
-            attempt_index: group.next_attempt_index,
-        };
-        group.next_attempt_index = group.next_attempt_index.saturating_add(1);
-        Ok(Some(identity))
-    }
-
-    /// Closes one logical Provider API trace group after the matching request succeeds durably.
-    /// 在匹配请求可靠成功后关闭一个逻辑 Provider API 追踪组。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `identity` is the exact attempt that completed the logical request successfully.
-    /// `identity` 是成功完成逻辑请求的精确尝试。
-    fn complete_provider_api_trace_group(&self, identity: &ProviderApiTraceAttemptIdentity) {
-        let mut state = self
-            .provider_api_trace_group_state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.active.as_ref().is_some_and(|group| {
-            group.group_sequence == identity.group_sequence && group.group_id == identity.group_id
-        }) {
-            state.active = None;
+        let attempt_index = state.next_attempt_index;
+        state.next_attempt_index = state.next_attempt_index.checked_add(1).ok_or_else(|| {
+            format!(
+                "Provider API trace attempt index exhausted for V1 API {}.",
+                api_call_id.value()
+            )
+        })?;
+        drop(state);
+        match trace_store.reserve_attempt(api_call_id, attempt_index) {
+            ProviderApiTraceReservationOutcome::Reserved(reservation) => Ok(Some(reservation)),
+            ProviderApiTraceReservationOutcome::Disabled => Ok(None),
+            ProviderApiTraceReservationOutcome::Diagnostic(diagnostic) => Err(format!(
+                "{}: {}",
+                diagnostic.code.as_str(),
+                diagnostic.detail
+            )),
         }
     }
 
@@ -949,7 +796,8 @@ impl VulcanPublicContractAdapter {
     /// 仅在追踪已原子发布到所属会话目录后返回成功。
     async fn persist_provider_api_trace_snapshot(
         &self,
-        identity: ProviderApiTraceAttemptIdentity,
+        trace_store: ProviderApiTraceStore,
+        reservation: ProviderApiTraceAttemptReservation,
         execution_id: &str,
         turn_anchor_message_id: Option<&str>,
         captured_request: ProviderWireRequestCapture,
@@ -958,127 +806,103 @@ impl VulcanPublicContractAdapter {
     ) -> Result<(), VulcanCoreError> {
         let captured_at_unix_ms = provider_request_trace_timestamp_ms()
             .map_err(|error| provider_failure(self.provider_id(), &error))?;
-        let slot_index = identity.group_sequence.saturating_sub(1)
-            % vulcan_workspace_store::workspace_store::PROVIDER_REQUEST_TRACE_SLOT_COUNT;
-        let session_id = uuid::Uuid::parse_str(self.cache_scope_id.as_str()).map_err(|error| {
-            provider_failure(
-                self.provider_id(),
-                &format!(
-                    "Provider request trace session id `{}` is invalid: {error}",
-                    self.cache_scope_id
-                ),
-            )
-        })?;
         let headers = provider_request_trace_headers(&captured_request.headers);
-        let (captured_response, missing_capture_state) = match response_state {
-            ProviderApiTraceResponseState::AwaitingResponse => (None, "awaiting_response"),
-            ProviderApiTraceResponseState::CaptureChannelClosed => {
-                (None, "response_capture_channel_closed")
-            }
-            ProviderApiTraceResponseState::Captured(captured) => (Some(captured), "captured"),
-        };
-        // processingFailure remains a separate field while filling the primary stage only when transport capture succeeded.
-        // processingFailure 保持为独立字段，并且仅在传输捕获成功时补充主失败阶段。
         let processing_failure_stage = processing_failure
             .as_ref()
             .map(|failure| failure.stage.clone());
         let processing_failure_message = processing_failure
             .as_ref()
             .map(|failure| failure.message.clone());
-        // responseArtifacts keep raw bytes separate from JSON metadata so failed partial payloads remain exact.
-        // responseArtifacts 将原始字节与 JSON 元数据分离，使失败时的部分载荷保持精确。
-        let (response_meta, response_body, chunks, frames, outcome) = captured_response
-            .map_or_else(
-                || {
-                    (
-                        json!({
-                            "capture_point": "before_local_response_framing_and_protocol_decode",
-                            "capture_state": missing_capture_state,
-                            "retained_bytes": 0,
-                            "received_bytes": 0,
-                        }),
-                        Vec::new(),
-                        Vec::new(),
-                        Vec::new(),
-                        json!({
-                            "classification": missing_capture_state,
-                            "stage": if missing_capture_state == "awaiting_response" {
-                                "request_persisted_before_dispatch"
-                            } else {
-                                "response_capture"
-                            },
-                            "complete": false,
-                            "body_truncated": false,
-                            "chunk_index_truncated": false,
-                            "frame_index_truncated": false,
-                            "normalized_tool_call_abort": Value::Null,
-                            "failure_stage": Value::Null,
-                            "failure_message": Value::Null,
-                            "transport_failure_stage": Value::Null,
-                            "transport_failure_message": Value::Null,
-                            "processing_failure_stage": processing_failure_stage.clone(),
-                            "processing_failure_message": processing_failure_message.clone(),
-                        }),
-                    )
+        let output = match response_state {
+            ProviderApiTraceResponseState::CaptureChannelClosed => json!({
+                "schema_version": 1,
+                "trace_sequence": reservation.trace_sequence,
+                "api_call_id": reservation.api_call_id,
+                "attempt_index": reservation.attempt_index,
+                "capture_point": "before_local_response_framing_and_protocol_decode",
+                "capture_state": "response_capture_channel_closed",
+                "response": Value::Null,
+                "chunks": [],
+                "frames": [],
+                "outcome": {
+                    "classification": "response_capture_channel_closed",
+                    "stage": "response_capture",
+                    "complete": false,
+                    "processing_failure_stage": processing_failure_stage,
+                    "processing_failure_message": processing_failure_message,
                 },
-                |captured| {
-                    let retained_bytes = captured.body.len();
-                    let transport_failure_stage = captured.failure_stage.clone();
-                    let transport_failure_message = captured.failure_message.clone();
-                    let (
-                        effective_failure_stage,
-                        effective_failure_message,
-                        local_processing_failed,
-                    ) = select_provider_api_trace_failure(
+            }),
+            ProviderApiTraceResponseState::Captured(captured) => {
+                let transport_failure_stage = captured.failure_stage.clone();
+                let transport_failure_message = captured.failure_message.clone();
+                let (effective_failure_stage, effective_failure_message, local_processing_failed) =
+                    select_provider_api_trace_failure(
                         transport_failure_stage.as_deref(),
                         transport_failure_message.as_deref(),
                         processing_failure.as_ref(),
                     );
-                    let capture_complete = captured.outcome != "stream_failed_or_cancelled"
-                        && !captured.body_truncated
-                        && !captured.chunk_index_truncated
-                        && !captured.frame_index_truncated
-                        && !local_processing_failed;
-                    let outcome_stage = effective_failure_stage
-                        .as_deref()
-                        .unwrap_or("response_capture_complete")
-                        .to_string();
-                    let chunks = captured
-                        .chunks
-                        .iter()
-                        .enumerate()
-                        .map(|(index, chunk)| {
-                            json!({
-                                "index": index,
-                                "offset": chunk.offset,
-                                "length": chunk.length,
-                                "observed_at_unix_ms": chunk.observed_at_unix_ms,
-                                "sha256": chunk.sha256,
-                            })
+                let capture_complete = captured.outcome != "stream_failed_or_cancelled"
+                    && !captured.body_truncated
+                    && !captured.chunk_index_truncated
+                    && !captured.frame_index_truncated
+                    && !local_processing_failed;
+                let chunks = captured
+                    .chunks
+                    .iter()
+                    .enumerate()
+                    .map(|(index, chunk)| {
+                        json!({
+                            "index": index,
+                            "offset": chunk.offset,
+                            "length": chunk.length,
+                            "observed_at_unix_ms": chunk.observed_at_unix_ms,
+                            "sha256": chunk.sha256,
                         })
-                        .collect();
-                    let frames = captured
-                        .frames
-                        .iter()
-                        .enumerate()
-                        .map(|(index, frame)| {
-                            json!({
-                                "index": index,
-                                "kind": frame.kind,
-                                "offset": frame.offset,
-                                "length": frame.length,
-                                "observed_at_unix_ms": frame.observed_at_unix_ms,
-                                "sha256": frame.sha256,
-                            })
+                    })
+                    .collect::<Vec<_>>();
+                let frames = captured
+                    .frames
+                    .iter()
+                    .enumerate()
+                    .map(|(index, frame)| {
+                        json!({
+                            "index": index,
+                            "kind": frame.kind,
+                            "offset": frame.offset,
+                            "length": frame.length,
+                            "observed_at_unix_ms": frame.observed_at_unix_ms,
+                            "sha256": frame.sha256,
                         })
-                        .collect();
-                    let outcome = json!({
+                    })
+                    .collect::<Vec<_>>();
+                json!({
+                    "schema_version": 1,
+                    "trace_sequence": reservation.trace_sequence,
+                    "api_call_id": reservation.api_call_id,
+                    "attempt_index": reservation.attempt_index,
+                    "capture_point": "before_local_response_framing_and_protocol_decode",
+                    "capture_state": "captured",
+                    "response": {
+                        "transport": captured.transport,
+                        "http_status": captured.http_status,
+                        "content_type": captured.content_type,
+                        "content_encoding": captured.content_encoding,
+                        "received_bytes": captured.received_bytes,
+                        "retained_bytes": captured.body.len(),
+                        "body_base64": base64::engine::general_purpose::STANDARD.encode(captured.body),
+                        "body_sha256": captured.body_sha256,
+                    },
+                    "chunks": chunks,
+                    "frames": frames,
+                    "outcome": {
                         "classification": if local_processing_failed {
                             "local_processing_failed"
                         } else {
                             captured.outcome.as_str()
                         },
-                        "stage": outcome_stage,
+                        "stage": effective_failure_stage
+                            .as_deref()
+                            .unwrap_or("response_capture_complete"),
                         "complete": capture_complete,
                         "body_truncated": captured.body_truncated,
                         "chunk_index_truncated": captured.chunk_index_truncated,
@@ -1088,35 +912,20 @@ impl VulcanPublicContractAdapter {
                         "failure_message": effective_failure_message,
                         "transport_failure_stage": transport_failure_stage,
                         "transport_failure_message": transport_failure_message,
-                        "processing_failure_stage": processing_failure_stage.clone(),
-                        "processing_failure_message": processing_failure_message.clone(),
-                        "received_bytes": captured.received_bytes,
-                        "retained_bytes": retained_bytes,
-                        "chunk_count": captured.chunks.len(),
-                        "frame_count": captured.frames.len(),
-                        "body_sha256": captured.body_sha256,
-                    });
-                    (
-                        json!({
-                            "capture_point": "before_local_response_framing_and_protocol_decode",
-                            "capture_state": "captured",
-                            "transport": captured.transport,
-                            "http_status": captured.http_status,
-                            "content_type": captured.content_type,
-                            "content_encoding": captured.content_encoding,
-                            "received_bytes": captured.received_bytes,
-                            "retained_bytes": retained_bytes,
-                        }),
-                        captured.body,
-                        chunks,
-                        frames,
-                        outcome,
-                    )
-                },
-            );
-        let group = json!({
-            "schema_version": PROVIDER_API_TRACE_SCHEMA_VERSION,
-            "created_at_unix_ms": identity.group_created_at_unix_ms,
+                        "processing_failure_stage": processing_failure_stage,
+                        "processing_failure_message": processing_failure_message,
+                    },
+                })
+            }
+        };
+        let input = json!({
+            "schema_version": 1,
+            "trace_sequence": reservation.trace_sequence,
+            "api_call_id": reservation.api_call_id,
+            "attempt_index": reservation.attempt_index,
+            "captured_at_unix_ms": captured_at_unix_ms,
+            "execution_id": execution_id,
+            "turn_anchor_message_id": turn_anchor_message_id,
             "session_id": self.cache_scope_id,
             "model_id": self.model_id,
             "route": {
@@ -1133,47 +942,39 @@ impl VulcanPublicContractAdapter {
                 "manifest_generation": self.route.manifest_generation,
                 "route_revision": self.route.route_revision,
             },
+            "request": {
+                "capture_point": "transport_dispatch",
+                "transport": captured_request.transport,
+                "method": captured_request.method,
+                "path": captured_request.path,
+                "resolved_url": captured_request.resolved_url,
+                "headers": headers,
+                "credential_values_redacted": true,
+                "body": captured_request.body,
+            },
         });
-        let request = json!({
-            "schema_version": PROVIDER_API_TRACE_SCHEMA_VERSION,
-            "captured_at_unix_ms": captured_at_unix_ms,
-            "execution_id": execution_id,
-            "logical_request_id": identity.group_id.as_str(),
-            "retry_index": identity.attempt_index,
-            "turn_anchor_message_id": turn_anchor_message_id,
-            "capture_point": "transport_dispatch",
-            "transport": captured_request.transport,
-            "method": captured_request.method,
-            "path": captured_request.path,
-            "resolved_url": captured_request.resolved_url,
-            "headers": headers,
-            "credential_values_redacted": true,
-            "body": captured_request.body,
-        });
-        let session_directory = self.session_storage_directory.clone().ok_or_else(|| {
+        let input = serde_json::to_string_pretty(&input).map_err(|error| {
             provider_failure(
                 self.provider_id(),
-                "Provider request tracing is enabled but the execution has no exact session storage directory.",
+                &format!("Provider API trace input serialization failed: {error}"),
             )
         })?;
-        let trace_group_id = identity.group_id.clone();
-        let trace_attempt_index = identity.attempt_index;
-        let trace_path = tokio::task::spawn_blocking(move || {
-            vulcan_workspace_store::workspace_store::persist_provider_api_trace_attempt(
-                &session_directory,
-                session_id,
-                slot_index,
-                vulcan_workspace_store::workspace_store::ProviderApiTraceAttemptArtifacts {
-                    group_sequence: identity.group_sequence,
-                    group_id: identity.group_id.as_str(),
-                    attempt_index: identity.attempt_index,
-                    group: &group,
-                    request: &request,
-                    response_meta: &response_meta,
-                    response_body: response_body.as_slice(),
-                    chunks: chunks.as_slice(),
-                    frames: frames.as_slice(),
-                    outcome: &outcome,
+        let output = serde_json::to_string_pretty(&output).map_err(|error| {
+            provider_failure(
+                self.provider_id(),
+                &format!("Provider API trace output serialization failed: {error}"),
+            )
+        })?;
+        let trace_sequence = reservation.trace_sequence;
+        let api_call_id = reservation.api_call_id;
+        let attempt_index = reservation.attempt_index;
+        let write_outcome = tokio::task::spawn_blocking(move || {
+            trace_store.publish_attempt(
+                &reservation,
+                ProviderApiTracePayload {
+                    input: input.as_str(),
+                    output: output.as_str(),
+                    secrets: &[],
                 },
             )
         })
@@ -1181,19 +982,27 @@ impl VulcanPublicContractAdapter {
         .map_err(|error| {
             provider_failure(
                 self.provider_id(),
-                &format!("Provider request trace writer task failed: {error}"),
+                &format!("Provider API trace writer task failed: {error}"),
             )
-        })?
-        .map_err(|error| provider_failure(self.provider_id(), &error))?;
-        eprintln!(
-            "[provider-api-trace] session={} group={} attempt={} execution={} path={}",
-            self.cache_scope_id,
-            trace_group_id,
-            trace_attempt_index,
-            execution_id,
-            trace_path.display()
-        );
-        Ok(())
+        })?;
+        match write_outcome {
+            ProviderApiTraceWriteOutcome::Disabled => Ok(()),
+            ProviderApiTraceWriteOutcome::Written { slot } => {
+                eprintln!(
+                    "[provider-api-trace] session={} api_call_id={} attempt={} trace_sequence={} slot={}",
+                    self.cache_scope_id,
+                    api_call_id.value(),
+                    attempt_index,
+                    trace_sequence,
+                    slot
+                );
+                Ok(())
+            }
+            ProviderApiTraceWriteOutcome::Diagnostic(diagnostic) => Err(provider_failure(
+                self.provider_id(),
+                &format!("{}: {}", diagnostic.code.as_str(), diagnostic.detail),
+            )),
+        }
     }
 }
 
@@ -1412,31 +1221,13 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
             request_headers: None,
             continuation: snapshot.continuation.clone(),
         };
-        // initialPublicRequest is consumed exactly once; every later tool-result turn is rebuilt from the restored controller.
-        // initialPublicRequest 仅消费一次；后续每个工具结果回合都从已恢复控制器重新构建。
-        let initial_public = self
-            .initial_provider_request
-            .lock()
-            .map_err(|_| {
-                provider_failure(self.provider_id(), "The retry request lock is poisoned.")
-            })?
-            .take();
-        if let Some(initial_public) = initial_public.as_ref()
-            && (initial_public.tools != rebuilt_public.tools
-                || initial_public.native_tools != rebuilt_public.native_tools)
-        {
-            return Err(provider_failure(
-                self.provider_id(),
-                "The frozen retry request tool contract no longer matches the active runtime.",
-            ));
-        }
-        let public = initial_public.unwrap_or(rebuilt_public);
         Ok(VulcanPublicContractRequest {
-            public,
+            public: rebuilt_public,
             controller_config: config.clone(),
             controller_snapshot: snapshot.clone(),
             budget,
             context_budget: None,
+            request_budget_guard: None,
         })
     }
 
@@ -1632,19 +1423,21 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
             controller_snapshot,
             budget,
             context_budget,
+            request_budget_guard,
         } = request;
-        let trace_turn_anchor_message_id = controller_snapshot
-            .messages
-            .last()
-            .map(|message| message.id.clone());
-        let (prepared_completion, prepared_receiver) = provider_request_durability_barrier();
+        let (prepared_completion, prepared_receiver) = provider_request_preparation_barrier();
         self.live_sender
             .send(Ok(ProviderStreamDelta::RequestPrepared {
-                snapshot: budget,
-                exact_request: public.clone(),
-                controller_config,
-                controller_snapshot,
-                context_budget,
+                candidate: ProviderRequestPreparationCandidate {
+                    exact_request: public,
+                    controller_config,
+                    controller_snapshot,
+                    request_snapshot: budget,
+                    context_budget,
+                    request_budget_guard,
+                    locked_baseline: self.locked_baseline.clone(),
+                    dynamic_prompt_layers: self.dynamic_prompt_layers.clone(),
+                },
                 completion: prepared_completion,
             }))
             .map_err(|_| {
@@ -1653,26 +1446,72 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                     "The provider request stream closed before dispatch.",
                 )
             })?;
-        prepared_receiver
+        let (
+            public,
+            controller_snapshot,
+            request_snapshot,
+            context_budget,
+            provider_api_trace_context,
+        ) = match prepared_receiver
             .await
             .map_err(|_| {
                 provider_failure(
                     self.provider_id(),
-                    "The host dropped the Provider start persistence barrier before dispatch.",
+                    "The host dropped the typed Provider preparation permit before dispatch.",
                 )
             })?
             .map_err(|error| {
                 provider_failure(
                     self.provider_id(),
                     &format!(
-                        "The Provider request was not dispatched because its start record could not be persisted: {error}"
+                        "The Provider request was not dispatched because the unique preparation owner rejected it: {error}"
                     ),
                 )
-            })?;
+            })? {
+            PreparedPhysicalApi::SessionV1 {
+                exact_request,
+                controller_config,
+                controller_snapshot,
+                request_snapshot,
+                context_budget,
+                core_start,
+                provider_api_trace_store,
+            } => {
+                let _ = controller_config;
+                (
+                    exact_request,
+                    controller_snapshot,
+                    request_snapshot,
+                    context_budget,
+                    provider_api_trace_store.map(|store| (core_start.api_call_id, store)),
+                )
+            }
+            PreparedPhysicalApi::ExcludedNonSession {
+                exact_request,
+                controller_config,
+                controller_snapshot,
+                request_snapshot,
+                context_budget,
+            } => {
+                let _ = controller_config;
+                (
+                    exact_request,
+                    controller_snapshot,
+                    request_snapshot,
+                    context_budget,
+                    None,
+                )
+            }
+        };
+        let trace_turn_anchor_message_id = controller_snapshot
+            .messages
+            .last()
+            .map(|message| message.id.clone());
         self.live_sender
-            .send(Ok(
-                ProviderStreamDelta::RequestStartDurabilityConfirmed,
-            ))
+            .send(Ok(ProviderStreamDelta::RequestStartDurabilityConfirmed {
+                request_snapshot,
+                context_budget,
+            }))
             .map_err(|_| {
                 provider_failure(
                     self.provider_id(),
@@ -1697,26 +1536,39 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
         // rejectedSecretRevision 将后续任何 401 恢复绑定到线上实际使用的精确 Token 修订版。
         let rejected_secret_revision = secret.revision();
         let execution_id = uuid::Uuid::new_v4().to_string();
-        let trace_attempt_identity = match self.claim_provider_api_trace_attempt() {
-            Ok(identity) => identity,
-            Err(error) => {
-                eprintln!(
-                    "[provider-api-trace] session={} group_claim_failed={error}",
-                    self.cache_scope_id
-                );
+        let trace_attempt =
+            if let Some((api_call_id, trace_store)) = provider_api_trace_context.as_ref() {
+                match self.claim_provider_api_trace_attempt(*api_call_id, trace_store) {
+                    Ok(Some(reservation)) => Some((reservation, trace_store.clone())),
+                    Ok(None) => None,
+                    Err(error) => {
+                        eprintln!(
+                            "[provider-api-trace] session={} reservation_failed={error}",
+                            self.cache_scope_id
+                        );
+                        None
+                    }
+                }
+            } else {
+                if self.provider_request_trace_enabled {
+                    eprintln!(
+                        "[provider-api-trace] session={} skipped=no_session_v1_trace_owner",
+                        self.cache_scope_id
+                    );
+                }
                 None
-            }
-        };
+            };
         // wireCaptures pair the exact dispatched request with bytes observed before local response parsing.
         // wireCaptures 将实际分派请求与本地响应解析前观察到的字节成对关联。
-        let wire_captures = if let Some(trace_identity) = trace_attempt_identity.as_ref() {
+        let wire_captures = if let Some((trace_reservation, trace_store)) = trace_attempt.as_ref() {
             let (request_sender, request_receiver) = tokio::sync::oneshot::channel();
             let (response_sender, response_receiver) = tokio::sync::oneshot::channel();
             let (processing_failure_sender, processing_failure_receiver) =
                 tokio::sync::oneshot::channel();
             let trace_adapter = self.clone();
             let trace_execution_id = execution_id.clone();
-            let trace_identity = trace_identity.clone();
+            let trace_reservation = trace_reservation.clone();
+            let trace_store = trace_store.clone();
             let trace_turn_anchor_message_id = trace_turn_anchor_message_id.clone();
             tokio::spawn(async move {
                 let Ok(ProviderWireRequestTraceDispatch {
@@ -1728,25 +1580,10 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                     // 捕获通道关闭表示编码在 API 请求形成前失败，因此没有请求可保存。
                     return;
                 };
-                if let Err(error) = trace_adapter
-                    .persist_provider_api_trace_snapshot(
-                        trace_identity.clone(),
-                        trace_execution_id.as_str(),
-                        trace_turn_anchor_message_id.as_deref(),
-                        captured_request.clone(),
-                        ProviderApiTraceResponseState::AwaitingResponse,
-                        None,
-                    )
-                    .await
-                {
-                    let message = error.to_string();
-                    let _ = persistence_result.send(Err(message.clone()));
-                    eprintln!(
-                        "[provider-api-trace] session={} execution={} request_persist_failed={message}",
-                        trace_adapter.cache_scope_id, trace_execution_id
-                    );
-                    return;
-                }
+                // The session-owned store already durably reserved trace_sequence before wire
+                // dispatch; complete input/output artifacts publish only after capture finishes.
+                // 会话级存储已在线路分派前可靠预留 trace_sequence；完整 input/output 制品只在捕获
+                // 结束后发布。
                 if persistence_result.send(Ok(())).is_err() {
                     return;
                 }
@@ -1761,7 +1598,8 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                 let processing_failure = processing_failure_receiver.await.ok();
                 if let Err(error) = trace_adapter
                     .persist_provider_api_trace_snapshot(
-                        trace_identity,
+                        trace_store,
+                        trace_reservation,
                         trace_execution_id.as_str(),
                         trace_turn_anchor_message_id.as_deref(),
                         captured_request,
@@ -1959,10 +1797,24 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                 return Err(error);
             }
         };
+        // toolCallCount is frozen from the exact completed response before the terminal durability gate.
+        // toolCallCount 在终态可靠性闸门前从精确完成响应中冻结。
+        let tool_call_count = final_response.tool_calls.len();
+        // providerSource is extracted from the completed typed response before any telemetry exists.
+        // providerSource 在任何遥测产生前从已完成的强类型响应提取。
+        let provider_source =
+            provider_v1_source_from_completed_response(&final_response).map_err(|error| {
+                provider_failure(
+                    self.provider_id(),
+                    &format!("The completed Provider replay source is invalid: {error}"),
+                )
+            })?;
         let (completed_completion, completed_receiver) = provider_request_durability_barrier();
         self.live_sender
             .send(Ok(ProviderStreamDelta::RequestSucceeded {
                 usage: final_usage,
+                provider_source,
+                tool_call_count,
                 completion: completed_completion,
             }))
             .map_err(|_| {
@@ -1987,9 +1839,6 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                     ),
                 )
             })?;
-        if let Some(identity) = trace_attempt_identity.as_ref() {
-            self.complete_provider_api_trace_group(identity);
-        }
         self.credential.mark_request_succeeded();
         Ok(final_response)
     }
@@ -2742,6 +2591,12 @@ impl PublicTurnAccumulator {
             ));
         }
         let replay_content = self.replay_content()?;
+        if replay_content.is_empty() {
+            return Err(provider_failure(
+                self.provider_id.as_str(),
+                "Provider returned a successful terminal response without durable semantic output.",
+            ));
+        }
         // providerContextItems are enabled only when they can replace the entire normalized output.
         // providerContextItems 仅在能够替代全部规范输出时启用。
         let provider_context_items = if provider_context_items_cover_replay_content(
@@ -3393,11 +3248,10 @@ fn resource_projection_unavailability_reason(
             resource.kind
         ));
     }
-    if let Some(constraint) = input_resource_constraint(route, resource.kind) {
-        if let Some(reason) = frozen_resource_constraint_unavailability_reason(constraint, resource)
-        {
-            return Some(reason);
-        }
+    if let Some(constraint) = input_resource_constraint(route, resource.kind)
+        && let Some(reason) = frozen_resource_constraint_unavailability_reason(constraint, resource)
+    {
+        return Some(reason);
     }
     None
 }
@@ -4133,40 +3987,6 @@ mod tests {
         );
     }
 
-    /// Verifies a fresh process allocator advances beyond generations retained by an earlier run.
-    /// 验证新进程分配器会越过更早运行已经保留的代际。
-    #[test]
-    fn provider_api_trace_group_sequence_advances_from_persisted_floor() {
-        // sequence simulates the zeroed allocator owned by a newly started process.
-        // sequence 模拟新启动进程拥有的归零分配器。
-        let sequence = AtomicU64::new(0);
-
-        synchronize_provider_api_trace_group_sequence(&sequence, 4);
-        assert_eq!(
-            reserve_provider_api_trace_group_sequence(&sequence)
-                .expect("reserve generation after persisted floor"),
-            5
-        );
-        assert_eq!(
-            reserve_provider_api_trace_group_sequence(&sequence)
-                .expect("reserve following process-local generation"),
-            6
-        );
-
-        synchronize_provider_api_trace_group_sequence(&sequence, 3);
-        assert_eq!(
-            reserve_provider_api_trace_group_sequence(&sequence)
-                .expect("a lower persisted floor must not move the allocator backward"),
-            7
-        );
-        synchronize_provider_api_trace_group_sequence(&sequence, 9);
-        assert_eq!(
-            reserve_provider_api_trace_group_sequence(&sequence)
-                .expect("a higher persisted floor must advance the allocator"),
-            10
-        );
-    }
-
     /// Verifies host-side failures fill the trace stage only when no lower transport failure exists.
     /// 验证仅当不存在更底层传输失败时，宿主侧失败才会补充追踪阶段。
     #[test]
@@ -4299,6 +4119,122 @@ mod tests {
         fn push_delta(&mut self, delta: ProviderTurnDelta) {
             self.deltas.push(delta);
         }
+    }
+
+    /// Builds one accumulator and applies the supplied normalized events in order.
+    /// 构建一个累积器，并按顺序应用给定的规范化事件。
+    fn accumulated_public_turn(events: Vec<AiStreamEvent>) -> PublicTurnAccumulator {
+        let (live_sender, _live_receiver) = tokio::sync::mpsc::unbounded_channel();
+        let mut sink = RecordingProviderDeltaSink::default();
+        let mut accumulator = PublicTurnAccumulator::new(
+            "provider",
+            "connection",
+            "https://provider.example/responses",
+            "openai-responses.v1",
+            "model",
+            None,
+        );
+        for event in events {
+            accumulator
+                .apply_event("provider", &live_sender, &mut sink, event)
+                .expect("normalized test event should accumulate");
+        }
+        accumulator
+    }
+
+    /// Successful transport completion without normalized durable semantics is rejected.
+    /// 没有规范化可靠语义的传输成功终态会被拒绝。
+    #[test]
+    fn successful_empty_or_transient_only_response_is_rejected() {
+        let empty = accumulated_public_turn(vec![AiStreamEvent::ResponseCompleted]);
+        assert!(
+            empty
+                .finish()
+                .expect_err("empty successful response must fail")
+                .to_string()
+                .contains(
+                    "Provider returned a successful terminal response without durable semantic output."
+                )
+        );
+
+        let transient = accumulated_public_turn(vec![
+            AiStreamEvent::ReasoningSummaryUpdated {
+                item_id: String::from("summary-1"),
+                text: String::from("temporary"),
+            },
+            AiStreamEvent::ResponseCompleted,
+        ]);
+        assert!(transient.finish().is_err());
+
+        let mut context_only = accumulated_public_turn(vec![AiStreamEvent::ResponseCompleted]);
+        context_only.provider_message_id = Some(String::from("provider-message-only"));
+        context_only.provider_context_items.push(json!({
+            "type": "message",
+            "id": "context-only",
+            "status": "completed",
+            "role": "assistant",
+            "content": [],
+        }));
+        assert!(context_only.finish().is_err());
+    }
+
+    /// Reasoning, assistant text, and complete tool calls each count as durable semantics.
+    /// 思考、assistant 正文与完整工具调用均分别算作可靠语义。
+    #[test]
+    fn successful_response_requires_one_normalized_durable_semantic_item() {
+        let reasoning = accumulated_public_turn(vec![
+            AiStreamEvent::ReasoningStarted {
+                item_id: String::from("reasoning-1"),
+            },
+            AiStreamEvent::ReasoningDelta {
+                item_id: String::from("reasoning-1"),
+                delta: String::from("durable reasoning"),
+            },
+            AiStreamEvent::ReasoningCompleted {
+                item_id: String::from("reasoning-1"),
+                signature: None,
+            },
+            AiStreamEvent::ResponseCompleted,
+        ]);
+        assert!(reasoning.finish().is_ok());
+
+        let text = accumulated_public_turn(vec![
+            AiStreamEvent::ResponseItemStarted {
+                item_id: String::from("text-1"),
+                item: ContentItem::Text {
+                    text: String::new(),
+                },
+            },
+            AiStreamEvent::ResponseTextDelta {
+                item_id: String::from("text-1"),
+                delta: String::from("assistant text"),
+            },
+            AiStreamEvent::ResponseItemCompleted {
+                item_id: String::from("text-1"),
+            },
+            AiStreamEvent::ResponseCompleted,
+        ]);
+        assert!(text.finish().is_ok());
+
+        let tool = accumulated_public_turn(vec![
+            AiStreamEvent::ToolCallStarted {
+                item_id: String::from("tool-item-1"),
+                call_id: String::from("provider-tool-1"),
+                tool_name: String::from("shell_command"),
+                index: 0,
+            },
+            AiStreamEvent::ToolCallCompleted {
+                item_id: String::from("tool-item-1"),
+                call: PublicToolCall {
+                    id: String::from("provider-tool-1"),
+                    name: String::from("shell_command"),
+                    arguments: json!({"command": "pwd"}),
+                    signature: None,
+                },
+            },
+            AiStreamEvent::ResponseCompleted,
+        ]);
+        assert!(tool.finish().is_ok());
     }
 
     /// Verifies explicit response completion terminates the adapter without requiring transport EOF.
@@ -4998,19 +4934,14 @@ mod tests {
             )))
         ));
 
-        let response = accumulator
+        let error = accumulator
             .finish()
-            .expect("completed transient summary turn should finish");
-        assert!(response.assistant_reasoning.is_empty());
-        let replay_value = response
-            .provider_message_state
-            .as_ref()
-            .and_then(|state| state.pointer("/vulcan_ai/replay"))
-            .expect("replay envelope should exist without transient status");
-        let replay: ProviderReplayEnvelope = serde_json::from_value(replay_value.clone())
-            .expect("replay envelope should deserialize");
-        assert!(replay.content.is_empty());
-        assert!(replay.provider_context_items.is_empty());
+            .expect_err("transient-only completion must not create durable Provider semantics");
+        assert!(
+            error
+                .to_string()
+                .contains("without durable semantic output")
+        );
     }
 
     /// Verifies non-empty full reasoning permanently supersedes summary and encrypted fallbacks.

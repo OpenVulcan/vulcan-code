@@ -308,6 +308,23 @@ fn context_injection_exact_session_emitter_supports_background_sessions() {
     // service_state 以一个选中的常规会话为初始状态。
     let mut service_state = test_service_state_with_parent_session(selected_session_id);
     service_state.workbench.selected_conversation_id = Some(selected_session_id.to_string());
+    // The background emitter reads its exact V1 owner even when the visible surface stays selected elsewhere.
+    // 后台发送器即使不占据当前可见界面，也必须读取自身精确的 V1 owner。
+    let background_storage = TestControllerRuntimeRoot::new(background_session_id);
+    let background_handle = crate::session_runtime_registry_v1::SessionHandle::new(
+        background_session_id,
+        background_storage.v1_storage_locator(),
+        vulcan_session_core::v1::document::SessionDocument::new(
+            background_session_id.to_string(),
+            "project-a",
+            "Background projection test",
+            1,
+        ),
+    );
+    service_state
+        .session_runtime_registry
+        .register(background_handle)
+        .expect("background V1 session should register");
     // state shares the retained projections with the exact-session emitter.
     // state 与准确会话发送器共享保留投影。
     let state = Arc::new(Mutex::new(service_state));

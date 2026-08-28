@@ -53,7 +53,7 @@ struct GoalModelView {
     objective: String,
     /// Current lifecycle status.
     /// 当前生命周期状态。
-    status: ThreadGoalStatus,
+    status: NativeGoalStatus,
     /// Optional explicit token budget.
     /// 可选的显式 token 预算。
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -176,7 +176,7 @@ fn create_goal_args_schema() -> Value {
                 "type": "string",
                 "description": "Required. The concrete objective to start pursuing. This starts a new active goal when no goal exists or replaces the current goal when it is complete.",
                 "minLength": 1,
-                "maxLength": MAX_THREAD_GOAL_OBJECTIVE_CHARS
+                "maxLength": vulcan_session_core::v1::config::MAX_GOAL_OBJECTIVE_CHARS
             },
             "token_budget": {
                 "type": "integer",
@@ -227,10 +227,10 @@ async fn execute_get_goal_tool(
     request: NativeToolExecutionRequest,
 ) -> Result<VulcanToolInvocationResult, NativeToolError> {
     ensure_empty_object_arguments(&request.arguments)?;
-    let store = goal_store_from_request(&request)?;
+    let runtime = goal_runtime_from_request(&request)?;
     let session_id = goal_session_id_from_request(&request)?;
-    let goal = store
-        .get_thread_goal(session_id)
+    let goal = runtime
+        .get_goal(session_id)
         .await
         .map_err(|error| NativeToolError::new(format!("failed to read goal: {error}")))?;
     Ok(goal_tool_result(goal, false))
@@ -255,28 +255,15 @@ async fn execute_create_goal_tool(
         serde_json::from_value(request.arguments.clone()).map_err(|error| {
             NativeToolError::new(format!("failed to parse function arguments: {error}"))
         })?;
-    args.objective = normalize_thread_goal_objective(&args.objective)
-        .map_err(|error| NativeToolError::new(error.to_string()))?
-        .to_string();
-    validate_thread_goal_token_budget(args.token_budget)
-        .map_err(|error| NativeToolError::new(error.to_string()))?;
+    args.objective = normalize_native_goal_objective(&args.objective)?;
+    let token_budget = native_goal_token_budget(args.token_budget)?;
 
-    let store = goal_store_from_request(&request)?;
+    let runtime = goal_runtime_from_request(&request)?;
     let session_id = goal_session_id_from_request(&request)?;
-    let goal = store
-        .insert_thread_goal(
-            session_id,
-            args.objective.as_str(),
-            ThreadGoalStatus::Active,
-            args.token_budget,
-        )
+    let goal = runtime
+        .create_goal(session_id, args.objective, token_budget)
         .await
-        .map_err(|error| NativeToolError::new(format!("failed to create goal: {error}")))?
-        .ok_or_else(|| {
-            NativeToolError::new(
-                "cannot create a new goal because this thread has an unfinished goal; complete the existing goal first",
-            )
-        })?;
+        .map_err(|error| NativeToolError::new(format!("failed to create goal: {error}")))?;
     Ok(goal_tool_result_with_host(Some(goal), false, true))
 }
 
@@ -299,49 +286,16 @@ async fn execute_update_goal_tool(
         serde_json::from_value(request.arguments.clone()).map_err(|error| {
             NativeToolError::new(format!("failed to parse function arguments: {error}"))
         })?;
-    let store = goal_store_from_request(&request)?;
+    let runtime = goal_runtime_from_request(&request)?;
     let session_id = goal_session_id_from_request(&request)?;
     let target_status = match args.status {
-        UpdateGoalStatusArg::Complete => ThreadGoalStatus::Complete,
-        UpdateGoalStatusArg::Blocked => ThreadGoalStatus::Blocked,
+        UpdateGoalStatusArg::Complete => NativeGoalTerminalStatus::Complete,
+        UpdateGoalStatusArg::Blocked => NativeGoalTerminalStatus::Blocked,
     };
-    let existing = store
-        .get_thread_goal(session_id)
+    let goal = runtime
+        .update_goal_status(session_id, target_status)
         .await
-        .map_err(|error| NativeToolError::new(format!("failed to read goal: {error}")))?
-        .ok_or_else(|| {
-            NativeToolError::new("cannot update goal because this thread has no goal")
-        })?;
-    if !goal_status_allows_terminal_update(existing.status, target_status) {
-        return Err(NativeToolError::new(format!(
-            "cannot change goal status from {} to {}",
-            existing.status.as_str(),
-            target_status.as_str()
-        )));
-    }
-    let expected_goal_id = existing.goal_id;
-    let expected_status = existing.status;
-    let goal = store
-        .update_thread_goal(
-            session_id,
-            GoalUpdate {
-                objective: None,
-                status: Some(target_status),
-                token_budget: None,
-                expected_goal_id: Some(expected_goal_id.clone()),
-                expected_status: Some(expected_status),
-            },
-        )
-        .await
-        .map_err(|error| NativeToolError::new(format!("failed to update goal: {error}")))?
-        .ok_or_else(|| {
-            NativeToolError::new("cannot update goal because it changed concurrently")
-        })?;
-    if goal.goal_id != expected_goal_id || goal.status != target_status {
-        return Err(NativeToolError::new(
-            "goal update returned a row that does not match the requested transition",
-        ));
-    }
+        .map_err(|error| NativeToolError::new(format!("failed to update goal: {error}")))?;
     Ok(goal_tool_result_with_host(
         Some(goal),
         args.status == UpdateGoalStatusArg::Complete,
@@ -363,27 +317,24 @@ async fn execute_update_goal_tool(
 /// 返回值
 /// `true` when the transition preserves the Goal lifecycle contract.
 /// 当转换符合 Goal 生命周期契约时返回 `true`。
+#[cfg(test)]
 pub(crate) const fn goal_status_allows_terminal_update(
-    current: ThreadGoalStatus,
-    target: ThreadGoalStatus,
+    current: NativeGoalStatus,
+    target: NativeGoalTerminalStatus,
 ) -> bool {
     match target {
-        ThreadGoalStatus::Complete => matches!(
+        NativeGoalTerminalStatus::Complete => matches!(
             current,
-            ThreadGoalStatus::Active | ThreadGoalStatus::Complete
+            NativeGoalStatus::Active | NativeGoalStatus::Complete
         ),
-        ThreadGoalStatus::Blocked => matches!(
+        NativeGoalTerminalStatus::Blocked => matches!(
             current,
-            ThreadGoalStatus::Active
-                | ThreadGoalStatus::Paused
-                | ThreadGoalStatus::Blocked
-                | ThreadGoalStatus::UsageLimited
-                | ThreadGoalStatus::BudgetLimited
+            NativeGoalStatus::Active
+                | NativeGoalStatus::Paused
+                | NativeGoalStatus::Blocked
+                | NativeGoalStatus::UsageLimited
+                | NativeGoalStatus::BudgetLimited
         ),
-        ThreadGoalStatus::Active
-        | ThreadGoalStatus::Paused
-        | ThreadGoalStatus::UsageLimited
-        | ThreadGoalStatus::BudgetLimited => false,
     }
 }
 
@@ -399,14 +350,13 @@ pub(crate) const fn goal_status_allows_terminal_update(
 /// 返回值
 /// A controller-backed goal store or a model-visible error.
 /// 控制器承载目标存储或一个模型可见错误。
-fn goal_store_from_request(
+fn goal_runtime_from_request(
     request: &NativeToolExecutionRequest,
-) -> Result<VulcanGoalStore, NativeToolError> {
+) -> Result<Arc<dyn NativeGoalRuntime>, NativeToolError> {
     request
-        .controller_runtime
+        .goal_runtime
         .clone()
-        .map(VulcanGoalStore::new)
-        .ok_or_else(|| NativeToolError::new("goal tools require a controller runtime context"))
+        .ok_or_else(|| NativeToolError::new("goal tools require a V1 goal runtime context"))
 }
 
 /// Resolves the owning session id from one native-tool request.
@@ -427,6 +377,55 @@ fn goal_session_id_from_request(
     request
         .session_id
         .ok_or_else(|| NativeToolError::new("goal tools require a current session id"))
+}
+
+/// Validates and normalizes one model-authored Goal objective before the host call.
+/// 在宿主调用前校验并规范化一条模型编写的 Goal 目标。
+///
+/// # Parameters
+/// 参数
+/// `objective` is the raw model-authored objective.
+/// `objective` 是模型编写的原始目标。
+///
+/// # Returns
+/// 返回值
+/// Returns the trimmed objective or an explicit tool error.
+/// 返回去除首尾空白后的目标，或显式工具错误。
+fn normalize_native_goal_objective(objective: &str) -> Result<String, NativeToolError> {
+    let objective = objective.trim();
+    if objective.is_empty() {
+        return Err(NativeToolError::new("goal objective must not be empty"));
+    }
+    if objective.chars().count() > vulcan_session_core::v1::config::MAX_GOAL_OBJECTIVE_CHARS {
+        return Err(NativeToolError::new(format!(
+            "goal objective must not exceed {} characters",
+            vulcan_session_core::v1::config::MAX_GOAL_OBJECTIVE_CHARS
+        )));
+    }
+    Ok(objective.to_string())
+}
+
+/// Converts the optional signed tool argument into the V1 positive budget domain.
+/// 将可选有符号工具参数转换为 V1 正数预算领域。
+///
+/// # Parameters
+/// 参数
+/// `token_budget` is the optional model-authored budget.
+/// `token_budget` 是模型编写的可选预算。
+///
+/// # Returns
+/// 返回值
+/// Returns the exact unsigned V1 budget or an explicit tool error.
+/// 返回精确的无符号 V1 预算，或显式工具错误。
+fn native_goal_token_budget(token_budget: Option<i64>) -> Result<Option<u64>, NativeToolError> {
+    token_budget
+        .map(|value| {
+            u64::try_from(value)
+                .ok()
+                .filter(|value| *value > 0)
+                .ok_or_else(|| NativeToolError::new("goal token_budget must be positive"))
+        })
+        .transpose()
 }
 
 /// Validates that an argument payload is an empty object when provided.
@@ -463,9 +462,9 @@ fn ensure_empty_object_arguments(arguments: &Value) -> Result<(), NativeToolErro
 /// 返回值
 /// A model-facing goal view with second-level timestamps.
 /// 带秒级时间戳的模型可见目标视图。
-fn goal_model_view(goal: &ThreadGoal) -> GoalModelView {
+fn goal_model_view(goal: &NativeGoalSnapshot) -> GoalModelView {
     GoalModelView {
-        thread_id: goal.thread_id,
+        thread_id: goal.session_id,
         objective: goal.objective.clone(),
         status: goal.status,
         token_budget: goal.token_budget,
@@ -491,7 +490,7 @@ fn goal_model_view(goal: &ThreadGoal) -> GoalModelView {
 /// A model-only invocation result.
 /// 仅包含模型输出的调用结果。
 fn goal_tool_result(
-    goal: Option<ThreadGoal>,
+    goal: Option<NativeGoalSnapshot>,
     include_completion_report: bool,
 ) -> VulcanToolInvocationResult {
     let response = goal_response_value(goal.as_ref(), include_completion_report);
@@ -515,7 +514,7 @@ fn goal_tool_result(
 /// A model invocation result plus a host `session_goal` projection.
 /// 模型调用结果以及宿主 `session_goal` 投影。
 fn goal_tool_result_with_host(
-    goal: Option<ThreadGoal>,
+    goal: Option<NativeGoalSnapshot>,
     include_completion_report: bool,
     include_active_context: bool,
 ) -> VulcanToolInvocationResult {
@@ -547,7 +546,7 @@ fn goal_tool_result_with_host(
 /// 返回值
 /// The ordinary goal response plus guidance consumed directly after the tool call.
 /// 返回普通目标响应以及紧随工具调用后消费的目标引导。
-pub(crate) fn goal_created_response_value(goal: &ThreadGoal) -> Value {
+pub(crate) fn goal_created_response_value(goal: &NativeGoalSnapshot) -> Value {
     let mut response = goal_response_value(Some(goal), false);
     if let Some(response_object) = response.as_object_mut() {
         response_object.insert(
@@ -577,7 +576,7 @@ pub(crate) fn goal_created_response_value(goal: &ThreadGoal) -> Value {
 /// A serializable JSON value for the tool result.
 /// 工具结果使用的可序列化 JSON 值。
 pub(crate) fn goal_response_value(
-    goal: Option<&ThreadGoal>,
+    goal: Option<&NativeGoalSnapshot>,
     include_completion_report: bool,
 ) -> Value {
     let remaining_tokens = goal.and_then(|goal| {
@@ -608,7 +607,7 @@ pub(crate) fn goal_response_value(
 /// 返回值
 /// A usage-report instruction when an explicit budget or elapsed time exists.
 /// 存在显式预算或耗时时返回用量汇报指令。
-fn goal_completion_budget_report(goal: &ThreadGoal) -> Option<String> {
+fn goal_completion_budget_report(goal: &NativeGoalSnapshot) -> Option<String> {
     if goal.token_budget.is_none() && goal.time_used_seconds <= 0 {
         None
     } else {
@@ -631,9 +630,9 @@ fn goal_completion_budget_report(goal: &ThreadGoal) -> Option<String> {
 /// 返回值
 /// A JSON projection including internal goal id and millisecond timestamps.
 /// 包含内部目标标识与毫秒时间戳的 JSON 投影。
-fn goal_host_projection(goal: &ThreadGoal) -> Value {
+fn goal_host_projection(goal: &NativeGoalSnapshot) -> Value {
     json!({
-        "sessionId": goal.thread_id,
+        "sessionId": goal.session_id,
         "goalId": goal.goal_id,
         "objective": goal.objective,
         "status": goal.status,
@@ -661,11 +660,11 @@ mod goal_projection_tests {
     fn host_goal_projection_preserves_token_breakdown() {
         // goal carries distinct values so every projection field is independently observable.
         // goal 使用互不相同的数值，使每个投影字段均可独立观察。
-        let goal = ThreadGoal {
-            thread_id: SessionId::new_v4(),
+        let goal = NativeGoalSnapshot {
+            session_id: SessionId::new_v4(),
             goal_id: String::from("goal-token-projection"),
             objective: String::from("keep token details"),
-            status: ThreadGoalStatus::Active,
+            status: NativeGoalStatus::Active,
             token_budget: Some(50_000),
             tokens_used: 13_579,
             uncached_input_tokens: 12_345,

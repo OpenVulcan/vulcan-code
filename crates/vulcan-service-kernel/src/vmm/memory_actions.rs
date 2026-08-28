@@ -5,7 +5,6 @@ use super::*;
 use crate::{
     commit_and_emit_project_settings_changed_delta,
     emit_context_injection_changed_delta_for_session, emit_workbench_event,
-    segmented_session_directory_for_workspace_session,
 };
 use vulcan_service_api::{
     ProjectSettingsDomain, ServiceEventEmitter, VmmMemoryActionResponse, VmmProjectDisplaySummary,
@@ -525,13 +524,31 @@ pub(crate) async fn service_suppress_context_injection_item(
     // mutation_timestamp 由普通投影与持久控制器命令共同使用。
     let mutation_timestamp = current_unix_millis_text();
 
-    let (controller_runtime, session_id, context_changed, vmm_changed) = {
+    // storage_locator is resolved from the exact registered V1 session before ordinary-state mutation.
+    // storage_locator 在普通状态变更前从精确注册的 V1 会话解析。
+    let (resolved_session_id, storage_locator) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace = guard
+            .workspace_snapshot
+            .as_ref()
+            .ok_or_else(|| String::from("工作区尚未载入，无法隐藏动态记忆。"))?;
+        let session_id = vmm_suppression_session_id(workspace, request.conversation_id.as_deref())?;
+        let handle = guard
+            .session_runtime_registry
+            .get(session_id)
+            .map_err(|error| format!("V1 会话 `{session_id}` 尚未完成精确 hydration：{error}"))?;
+        let storage_locator = handle.storage_locator().map_err(|error| {
+            format!("Failed to resolve V1 VMM locator for `{session_id}`: {error}")
+        })?;
+        (session_id, storage_locator)
+    };
+
+    let (session_id, context_changed, vmm_changed) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
-            String::from("service is still starting; controller runtime is not ready")
-        })?;
         // vmm_controller_registry is process-owned and never exposes mutable VMM state.
         // vmm_controller_registry 由进程持有，绝不暴露可变 VMM 状态。
         let vmm_controller_registry = guard.vmm_controller_registry.clone();
@@ -541,17 +558,7 @@ pub(crate) async fn service_suppress_context_injection_item(
             .ok_or_else(|| String::from("工作区尚未载入，无法隐藏动态记忆。"))?;
         // session_id is resolved from the initiating request instead of mutable UI selection state.
         // session_id 从动作发起请求解析，而不是依赖可变的 UI 选中状态。
-        let session_id = vmm_suppression_session_id(workspace, request.conversation_id.as_deref())?;
-        let session_directory = segmented_session_directory_for_workspace_session(
-            &controller_runtime.data_root,
-            workspace,
-            session_id,
-        )
-        .ok_or_else(|| {
-            format!(
-                "Session `{session_id}` has no exact storage locator; VMM action directory scanning is disabled."
-            )
-        })?;
+        let session_id = resolved_session_id;
         // runtime_state is detached so a controller failure cannot partially mutate retained workspace state.
         // runtime_state 保持分离，使控制器失败无法部分修改保留的工作区状态。
         let mut runtime_state = workspace
@@ -585,7 +592,7 @@ pub(crate) async fn service_suppress_context_injection_item(
         // vmm_controller is committed while the service guard freezes the ordinary-state baseline.
         // vmm_controller 在服务 guard 冻结普通状态基线期间完成提交。
         let vmm_controller = vmm_controller_registry.get_or_open(
-            &session_directory,
+            storage_locator,
             session_id,
             &mutation_timestamp,
         )?;
@@ -607,15 +614,13 @@ pub(crate) async fn service_suppress_context_injection_item(
                 .session_runtime_state
                 .insert(session_id, runtime_state);
         }
-        (controller_runtime, session_id, context_changed, vmm_changed)
+        (session_id, context_changed, vmm_changed)
     };
     // changed combines two independently owned projections without sharing mutable VMM state.
     // changed 合并两个独立所有投影，且不共享可变 VMM 状态。
     let changed = context_changed || vmm_changed;
-    // Persistence always runs after a duplicate command so a retry can repair an earlier projection write failure.
-    // 重复命令之后仍始终执行持久化，使重试能够修复先前的投影写入失败。
-    persist_latest_retained_workspace_session_update(&state, controller_runtime, session_id)
-        .await?;
+    // The VMM controller command is the durable owner; retained runtime state is a live UI projection only.
+    // VMM Controller 命令是持久化所有者；保留的运行时状态仅作为实时 UI 投影。
     // Projection emission is idempotent and likewise repairs an interrupted prior response path.
     // 投影发送具备幂等性，同样用于修复先前被中断的响应路径。
     emit_context_injection_changed_delta_for_session(&app, &state, session_id)?;

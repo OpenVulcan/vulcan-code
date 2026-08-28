@@ -4,7 +4,6 @@ import {
   normalizeThinkingDisplayMode,
   type ThinkingDisplayMode,
 } from "@/components/conversation/thinking-display";
-import { thinkingOverlayBlockSignature } from "@/components/conversation/conversation-transcript";
 
 // CONVERSATION_ENTRY_MOTION_MS matches the empty-prompt and Composer entry transition duration.
 // CONVERSATION_ENTRY_MOTION_MS 与空提示和输入区入场过渡时长保持一致。
@@ -13,6 +12,17 @@ const CONVERSATION_ENTRY_MOTION_MS = 360;
 // FIRST_SUBMISSION_MASK_FADE_MS defines the visual-only mask fade after entry motion settles.
 // FIRST_SUBMISSION_MASK_FADE_MS 定义入场动画稳定后纯视觉遮罩的淡出时长。
 const FIRST_SUBMISSION_MASK_FADE_MS = 500;
+
+// thinkingOverlayBlockSignature identifies one displayed thinking block without importing the legacy transcript parser.
+// thinkingOverlayBlockSignature 在不导入旧转录解析器的前提下标识一个已显示的思考块。
+function thinkingOverlayBlockSignature(block: ConversationBlock): string {
+  return [
+    block.id,
+    block.title,
+    block.summary,
+    block.status ?? "",
+  ].join("\u0000");
+}
 
 // FirstSubmissionMaskPhase describes the visual-only first-submit mask lifecycle.
 // FirstSubmissionMaskPhase 描述首次提交纯视觉遮罩的生命周期。

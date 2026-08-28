@@ -17,6 +17,9 @@ import {
   BROWSER_SERVICE_CONNECTION_EVENT,
   type BrowserServiceConnectionDetail,
 } from "@/service";
+import { createConversationEventWindowClient } from "@/service/conversation-event-window-client";
+import { ConversationEventWindowController } from "@/service/conversation-event-window-controller";
+import { SelectedConversationEventWindowRegistry } from "@/service/selected-conversation-event-window-registry";
 import {
   BROWSER_SERVICE_CONNECTION_TOAST_ID,
   hasServiceRuntime,
@@ -30,11 +33,14 @@ import {
 import { ConversationLiveStreamProvider } from "@/state/conversation-live-stream-context";
 import { ConversationLiveStreamStore } from "@/state/conversation-live-stream-store";
 import {
+  ConversationEventWindowExternalStoreProvider,
+  createConversationEventWindowExternalStore,
+} from "@/state/conversation-event-window-react";
+import {
   mergePendingWorkbenchDeltaSignal,
   workbenchEnvelopeRequiresImmediateLiveFlush,
   workbenchEnvelopeRequiresReactProjection,
 } from "@/state/workbench-stream-projection";
-import { coalesceWorkbenchDeltaEnvelopes } from "@/state/workbench-state";
 import type {
   StartupSnapshot,
   ConversationRunSettledEvent,
@@ -75,6 +81,22 @@ export function WorkbenchApp(props: {
   // liveStreamStore owns ordered streamed bodies without routing every fragment through global React state.
   // liveStreamStore 持有有序流式正文，避免每个片段经过全局 React 状态。
   const [liveStreamStore] = React.useState(() => new ConversationLiveStreamStore());
+  // conversationEventWindowRegistry owns the sole V1 controller for the real selected durable session.
+  // conversationEventWindowRegistry 持有真实选中持久化会话的唯一 V1 控制器。
+  const [conversationEventWindowRegistry] = React.useState(() =>
+    new SelectedConversationEventWindowRegistry(
+      () => new ConversationEventWindowController(
+        createConversationEventWindowClient(serviceClient),
+        undefined,
+        liveStreamStore,
+      ),
+    ),
+  );
+  // conversationEventWindowExternalStore exposes stable snapshot/subscribe callbacks across session switches.
+  // conversationEventWindowExternalStore 跨会话切换暴露稳定的 snapshot/subscribe 回调。
+  const [conversationEventWindowExternalStore] = React.useState(() =>
+    createConversationEventWindowExternalStore(conversationEventWindowRegistry),
+  );
   // workbenchRef exposes the latest authoritative conversation titles to service event callbacks.
   // workbenchRef 向服务事件回调暴露最近的权威会话标题。
   const workbenchRef = React.useRef<WorkbenchSnapshot | null>(null);
@@ -124,6 +146,24 @@ export function WorkbenchApp(props: {
   React.useEffect(() => {
     appLocaleRef.current = webuiAppLocale(workbench?.uiLocale ?? startup.uiLocale);
   }, [startup.uiLocale, workbench?.uiLocale]);
+
+  // Release the selected-session live subscription and controller when WorkbenchApp unmounts.
+  // WorkbenchApp 卸载时释放选中会话实时订阅与控制器。
+  React.useEffect(
+    () => () => conversationEventWindowRegistry.dispose(),
+    [conversationEventWindowRegistry],
+  );
+
+  // Route one real local selected-session change into the sole V1 owner registry.
+  // 将一次真实本地选中会话变化路由到唯一 V1 归属 registry。
+  const handleSelectedConversationIdChanged = React.useCallback(
+    (conversationId: string | null) => {
+      void conversationEventWindowRegistry.selectSession(conversationId).catch((selectionError) => {
+        console.error("Failed to select the V1 conversation event window.", selectionError);
+      });
+    },
+    [conversationEventWindowRegistry],
+  );
 
   React.useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) {
@@ -260,11 +300,9 @@ export function WorkbenchApp(props: {
       workbenchDeltaBufferRef.current = [];
       workbenchDeltaTimerRef.current = null;
       liveStreamStore.flushNotifications();
-      // envelopes excludes pure body continuations so WorkbenchLayout does not rerender for streamed text growth.
-      // envelopes 排除纯正文续传，使 WorkbenchLayout 不因流式文本增长而重渲染。
-      const envelopes = coalesceWorkbenchDeltaEnvelopes(
-        readyEnvelopes.filter(workbenchEnvelopeRequiresReactProjection),
-      );
+      // envelopes excludes request-local leaf state owned by ConversationLiveStreamStore.
+      // envelopes 排除由 ConversationLiveStreamStore 持有的请求局部叶子状态。
+      const envelopes = readyEnvelopes.filter(workbenchEnvelopeRequiresReactProjection);
       if (envelopes.length > 0) {
         workbenchDeltaSignalSequenceRef.current += 1;
         // signalSequence remains monotonic even when a child acknowledgement clears the current signal first.
@@ -327,7 +365,7 @@ export function WorkbenchApp(props: {
       workbenchRevisionRef.current = revision;
       workbenchBaselineReadyRef.current = true;
       workbenchSnapshotSeqRef.current += 1;
-      liveStreamStore.rebaseWorkbenchSnapshot(payload);
+      liveStreamStore.resetForWorkbenchSnapshot();
       liveStreamStore.flushNotifications();
       setWorkbench(payload);
       workbenchRef.current = payload;
@@ -507,6 +545,13 @@ export function WorkbenchApp(props: {
       if (!detail) {
         return;
       }
+      // The V1 registry never infers service replacement from WorkbenchApp's local epoch.
+      // V1 registry 绝不从 WorkbenchApp 本地 epoch 推断服务是否替换。
+      void conversationEventWindowRegistry
+        .observeConnectionStatus(detail.status)
+        .catch((recoveryError) => {
+          console.error("Failed to recover the selected V1 conversation event window.", recoveryError);
+        });
       if (detail.status === "connected") {
         serviceHasConnectedRef.current = true;
         if (!serviceWasDisconnectedRef.current) {
@@ -693,13 +738,16 @@ export function WorkbenchApp(props: {
     <I18nProvider initialLocale={workbench.uiLocale ?? startup.uiLocale}>
       <TooltipProvider>
         <ConversationLiveStreamProvider store={liveStreamStore}>
-          <WorkbenchLayout
-            serviceInstanceEpoch={serviceInstanceEpoch}
-            startup={startup}
-            workbench={workbench}
-            workbenchDelta={workbenchDelta}
-            onWorkbenchDeltaConsumed={handleWorkbenchDeltaConsumed}
-          />
+          <ConversationEventWindowExternalStoreProvider store={conversationEventWindowExternalStore}>
+            <WorkbenchLayout
+              serviceInstanceEpoch={serviceInstanceEpoch}
+              startup={startup}
+              workbench={workbench}
+              workbenchDelta={workbenchDelta}
+              onWorkbenchDeltaConsumed={handleWorkbenchDeltaConsumed}
+              onSelectedConversationIdChanged={handleSelectedConversationIdChanged}
+            />
+          </ConversationEventWindowExternalStoreProvider>
         </ConversationLiveStreamProvider>
         <Toaster />
       </TooltipProvider>

@@ -76,6 +76,33 @@ pub struct ControllerRuntimeHandle {
     pub(crate) knowledge_runtime_state: Arc<KnowledgeBaseRuntimeSharedState>,
 }
 
+/// Immutable location and binding metadata retained by one controller runtime.
+/// 单个控制器运行时保留的不可变位置与绑定元数据。
+#[derive(Debug, Clone)]
+pub struct ControllerRuntimeMetadata {
+    /// Normalized controller endpoint URL used by the SDK.
+    /// SDK 使用的标准化控制器端点 URL。
+    pub endpoint: String,
+    /// Resolved controller executable path or command name.
+    /// 已解析的控制器可执行文件路径或命令名。
+    pub executable: String,
+    /// Local data root reserved for the application data plane.
+    /// 为应用数据平面保留的本地数据根目录。
+    pub data_root: PathBuf,
+    /// SQLite file path used by the application state space.
+    /// 应用状态空间使用的 SQLite 文件路径。
+    pub sqlite_path: PathBuf,
+    /// Bootstrap-scoped SQLite binding identifier for application state.
+    /// 应用状态使用的单次引导作用域 SQLite 绑定标识符。
+    pub sqlite_binding_id: String,
+    /// SQLite file path used by the independent system-statistics binding.
+    /// 独立系统统计绑定使用的 SQLite 文件路径。
+    pub system_statistics_sqlite_path: PathBuf,
+    /// Bootstrap-scoped SQLite binding identifier for system statistics.
+    /// 系统统计使用的单次引导作用域 SQLite 绑定标识符。
+    pub system_statistics_sqlite_binding_id: String,
+}
+
 impl fmt::Debug for ControllerRuntimeHandle {
     /// Formats one controller runtime handle without dumping the opaque client internals.
     /// 在不输出不透明客户端内部状态的前提下格式化控制器运行时句柄。
@@ -103,35 +130,21 @@ impl ControllerRuntimeHandle {
     /// Builds one long-lived controller handle and initializes its shared knowledge runtime state.
     /// 构建一个长生命周期控制器句柄，并初始化其共享知识库运行时状态。
     ///
-    /// `client` is the connected controller proxy, `endpoint` is its normalized URL,
-    /// `executable` identifies the controller process, `data_root` owns application data,
-    /// `sqlite_path` points to the application database, `sqlite_binding_id` identifies
-    /// the bootstrap-scoped application binding, and the system-statistics arguments identify
-    /// the independent Provider usage database. The returned handle shares one knowledge
-    /// activation and mutation state across every clone.
-    /// `client` 是已连接的控制器代理，`endpoint` 是其标准化 URL，`executable` 标识控制器进程，
-    /// `data_root` 保存应用数据，`sqlite_path` 指向应用数据库，`sqlite_binding_id` 标识单次引导作用域的
-    /// 应用绑定，系统统计参数标识独立的 Provider 用量数据库。返回的句柄会在所有克隆之间共享同一份
-    /// 知识库激活与变更状态。
-    pub fn new(
-        client: ControllerClient,
-        endpoint: String,
-        executable: String,
-        data_root: PathBuf,
-        sqlite_path: PathBuf,
-        sqlite_binding_id: String,
-        system_statistics_sqlite_path: PathBuf,
-        system_statistics_sqlite_binding_id: String,
-    ) -> Self {
+    /// `client` is the connected controller proxy and `metadata` is the complete,
+    /// already-resolved location and binding identity retained by the handle.
+    /// The returned handle shares one knowledge activation and mutation state across every clone.
+    /// `client` 是已连接的控制器代理，`metadata` 是句柄保留的完整且已解析的位置与绑定身份。
+    /// 返回的句柄会在所有克隆之间共享同一份知识库激活与变更状态。
+    pub fn new(client: ControllerClient, metadata: ControllerRuntimeMetadata) -> Self {
         Self {
             client,
-            endpoint,
-            executable,
-            data_root,
-            sqlite_path,
-            sqlite_binding_id,
-            system_statistics_sqlite_path,
-            system_statistics_sqlite_binding_id,
+            endpoint: metadata.endpoint,
+            executable: metadata.executable,
+            data_root: metadata.data_root,
+            sqlite_path: metadata.sqlite_path,
+            sqlite_binding_id: metadata.sqlite_binding_id,
+            system_statistics_sqlite_path: metadata.system_statistics_sqlite_path,
+            system_statistics_sqlite_binding_id: metadata.system_statistics_sqlite_binding_id,
             knowledge_runtime_state: Arc::new(KnowledgeBaseRuntimeSharedState::default()),
         }
     }
@@ -266,13 +279,15 @@ pub async fn bootstrap_application_data_plane(
 
         let runtime_handle = ControllerRuntimeHandle::new(
             client.clone(),
-            endpoint.clone(),
-            executable.clone(),
-            data_root.clone(),
-            sqlite_path.clone(),
-            sqlite_binding_id,
-            system_statistics_sqlite_path.clone(),
-            system_statistics_sqlite_binding_id,
+            ControllerRuntimeMetadata {
+                endpoint: endpoint.clone(),
+                executable: executable.clone(),
+                data_root: data_root.clone(),
+                sqlite_path: sqlite_path.clone(),
+                sqlite_binding_id,
+                system_statistics_sqlite_path: system_statistics_sqlite_path.clone(),
+                system_statistics_sqlite_binding_id,
+            },
         );
         crate::workspace_store::ensure_provider_usage_schema(&runtime_handle).await?;
         crate::workspace_store::migrate_application_provider_usage(&runtime_handle).await?;
@@ -295,8 +310,10 @@ pub async fn bootstrap_application_data_plane(
 fn build_controller_client_config(
     controller: &PersistedControllerConfiguration,
 ) -> Result<ControllerClientConfig, String> {
-    let mut config = ControllerClientConfig::default();
-    config.endpoint = runtime_assets::default_vldb_controller_endpoint();
+    let mut config = ControllerClientConfig {
+        endpoint: runtime_assets::default_vldb_controller_endpoint(),
+        ..ControllerClientConfig::default()
+    };
 
     if let Some(endpoint) = controller.endpoint.as_deref() {
         let trimmed = endpoint.trim();

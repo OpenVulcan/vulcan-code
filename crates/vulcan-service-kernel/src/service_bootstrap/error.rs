@@ -1,8 +1,6 @@
 //! Service bootstrap error helpers.
 //! 服务引导 error 辅助逻辑。
 
-use vulcan_service_api::StartupRecoverySnapshot;
-
 #[derive(Debug, Clone)]
 pub(crate) struct ServiceBootstrapError {
     /// Stable startup step identifier shown in the boot overlay.
@@ -14,9 +12,6 @@ pub(crate) struct ServiceBootstrapError {
     /// Concrete failure message produced by the failed subsystem.
     /// 失败子系统产出的具体失败信息。
     pub(crate) message: String,
-    /// Optional classified recovery that requires an explicit user action.
-    /// 需要用户明确操作的可选已分类恢复方案。
-    pub(crate) recovery: Option<StartupRecoverySnapshot>,
 }
 
 impl ServiceBootstrapError {
@@ -31,25 +26,7 @@ impl ServiceBootstrapError {
             step_id,
             step_label,
             message: message.into(),
-            recovery: None,
         }
-    }
-
-    /// Attaches one exact user-authorized recovery to this startup failure.
-    /// 为该启动失败附加一项精确的用户授权恢复操作。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `recovery` is the service-classified destructive recovery scope.
-    /// `recovery` 是服务端分类后的破坏性恢复范围。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The same startup error carrying the recovery projection.
-    /// 返回携带恢复投影的同一启动错误。
-    pub(crate) fn with_recovery(mut self, recovery: StartupRecoverySnapshot) -> Self {
-        self.recovery = Some(recovery);
-        self
     }
 }
 

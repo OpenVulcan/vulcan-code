@@ -17,9 +17,7 @@ use vulcan_ai_contract::{
     RerankScoreSemantics, RerankText, RerankTruncation, ResourceKind, StructuredOutputCapability,
     StructuredOutputPolicy, ToolChoicePolicy,
 };
-use vulcan_context::{
-    ContextWindowPolicyOverrides, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,
-};
+use vulcan_context::ContextWindowPolicyOverrides;
 use vulcan_core::types::ConversationAttachmentKind;
 use vulcan_provider_adapters::{
     AccountUsageQueryKind, ActiveAiModelSelection, AvailableProviderToolTarget,
@@ -45,6 +43,11 @@ use vulcan_provider_adapters::{
 };
 use vulcan_service_api::{
     ContextCompactionWindowNodeSummary, ServiceEventEmitter, WorkbenchSnapshot,
+};
+use vulcan_session_core::v1::config::{
+    ProviderExtensionTargetSetConfig, ProviderMediaUnderstandingMode,
+    ProviderMediaUnderstandingSelection, ProviderToolCapabilitySelection,
+    ProviderToolSelectionConfig, ProviderToolTargetConfig,
 };
 use vulcan_workbench_model::SessionPendingModelSelection;
 
@@ -455,6 +458,103 @@ pub(super) struct PublicAiSessionProviderToolSettingsSnapshot {
     /// Invalid retained choices that require explicit user confirmation.
     /// 需要用户显式确认的无效保留选择。
     conflicts: Vec<PublicAiSessionProviderToolConflict>,
+}
+
+/// Converts one exact public-AI target into the Provider-agnostic V1 metadata contract.
+/// 把一个精确公共 AI 目标转换为与 Provider 无关的 V1 metadata 契约。
+fn provider_tool_target_config_v1(
+    selection: &ProviderToolTargetSelection,
+) -> ProviderToolTargetConfig {
+    ProviderToolTargetConfig {
+        connection_id: selection.connection_id.clone(),
+        target_id: selection.target_id.clone(),
+    }
+}
+
+/// Builds one canonical V1 Provider-tool selection from exact validated configuration parts.
+/// 从精确且已校验的配置组成部分构建一份规范 V1 Provider 工具选择。
+///
+/// # Parameters
+/// 参数
+/// The collection parameters are the exact enabled capabilities, targets, media modes, and
+/// extension target sets; `overridden` records whether the browser supplied an explicit session
+/// override.
+/// 各集合参数分别是精确的启用能力、目标、媒体模式与扩展目标集合；`overridden` 记录浏览器是否
+/// 提供了显式会话覆盖。
+///
+/// # Returns
+/// 返回值
+/// Returns the strongly typed canonical metadata contract in source collection order.
+/// 按来源集合顺序返回强类型规范 metadata 契约。
+pub(crate) fn provider_tool_selection_config_from_parts_v1(
+    enabled_capabilities: &BTreeSet<ProviderToolCapabilityKind>,
+    selections: &BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
+    media_understanding_modes: &BTreeMap<
+        ProviderToolCapabilityKind,
+        vulcan_workbench_model::SessionMediaUnderstandingMode,
+    >,
+    extension_target_sets: &BTreeMap<
+        ProviderToolCapabilityKind,
+        BTreeSet<ProviderToolTargetSelection>,
+    >,
+    overridden: bool,
+) -> ProviderToolSelectionConfig {
+    ProviderToolSelectionConfig {
+        initialized: true,
+        overridden,
+        enabled_capabilities: enabled_capabilities
+            .iter()
+            .map(|capability| provider_tool_capability_key(*capability))
+            .collect(),
+        selections: selections
+            .iter()
+            .map(|(capability, selection)| ProviderToolCapabilitySelection {
+                capability: provider_tool_capability_key(*capability),
+                target: provider_tool_target_config_v1(selection),
+            })
+            .collect(),
+        media_understanding_modes: media_understanding_modes
+            .iter()
+            .map(|(capability, mode)| ProviderMediaUnderstandingSelection {
+                capability: provider_tool_capability_key(*capability),
+                mode: match mode {
+                    vulcan_workbench_model::SessionMediaUnderstandingMode::ProviderTool => {
+                        ProviderMediaUnderstandingMode::ProviderTool
+                    }
+                    vulcan_workbench_model::SessionMediaUnderstandingMode::ModelReplacement => {
+                        ProviderMediaUnderstandingMode::ModelReplacement
+                    }
+                },
+            })
+            .collect(),
+        extension_target_sets: extension_target_sets
+            .iter()
+            .map(
+                |(capability, selections)| ProviderExtensionTargetSetConfig {
+                    capability: provider_tool_capability_key(*capability),
+                    targets: selections
+                        .iter()
+                        .map(provider_tool_target_config_v1)
+                        .collect(),
+                },
+            )
+            .collect(),
+    }
+}
+
+/// Builds the complete canonical V1 Provider-tool selection from one validated browser snapshot.
+/// 从一份已校验浏览器快照构建完整规范的 V1 Provider 工具选择。
+fn provider_tool_selection_config_v1(
+    snapshot: &PublicAiSessionProviderToolSettingsSnapshot,
+    overridden: bool,
+) -> ProviderToolSelectionConfig {
+    provider_tool_selection_config_from_parts_v1(
+        &snapshot.enabled_capabilities,
+        &snapshot.selections,
+        &snapshot.media_understanding_modes,
+        &snapshot.extension_target_sets,
+        overridden,
+    )
 }
 
 /// Browser-facing credential metadata that excludes the host secret-store reference.
@@ -2926,9 +3026,6 @@ pub(super) async fn service_remove_public_ai_custom_provider(
             ));
         }
     };
-    // fallback is the exact post-removal global selection applied to revoked sessions.
-    // fallback 是应用于已撤销会话的精确移除后全局选择。
-    let fallback = configuration.active.clone();
     let publication_result = (|| {
         for connection in &provider_connections {
             runtime.remove_connection_catalog(connection.id.as_str())?;
@@ -2945,7 +3042,6 @@ pub(super) async fn service_remove_public_ai_custom_provider(
             |workspace| {
                 Ok(reconcile_explicitly_revoked_session_model_selections(
                     workspace,
-                    fallback.as_ref(),
                     |_session_id, runtime_state| {
                         runtime_state.active_provider_id.as_deref() == Some(provider_id.as_str())
                     },
@@ -3829,7 +3925,6 @@ pub(super) async fn service_save_public_ai_connection_model_enabled(
                         workspace,
                         request.connection_id.as_str(),
                         Some(request.model_id.as_str()),
-                        replacement.as_ref(),
                     )
                 })
             },
@@ -3934,7 +4029,6 @@ pub(super) async fn service_save_public_ai_connection_models_enabled(
                         workspace,
                         request.connection_id.as_str(),
                         None,
-                        replacement.as_ref(),
                     )
                 })
             },
@@ -6171,9 +6265,6 @@ pub(super) async fn service_remove_public_ai_connection(
             ));
         }
     };
-    // fallback is the exact post-removal global selection used for every revoked owner.
-    // fallback 是用于每个被撤销所有者的精确移除后全局选择。
-    let fallback = configuration.active.clone();
     let publication_result = (|| {
         runtime.remove_connection_catalog(connection_id.as_str())?;
         runtime.remove_connection_usage(connection_id.as_str())?;
@@ -6190,7 +6281,6 @@ pub(super) async fn service_remove_public_ai_connection(
                     workspace,
                     connection_id.as_str(),
                     None,
-                    fallback.as_ref(),
                 ))
             },
             "connection_removed",
@@ -7341,68 +7431,6 @@ pub(super) async fn service_save_public_ai_context_compaction_window_nodes(
 /// 返回值
 /// Success after both canonical and display transcript layers contain the new record.
 /// 在规范层与显示层转录都包含新记录后返回成功。
-fn append_session_model_switch_record(
-    workspace: &mut vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
-    session_id: crate::SessionId,
-    selection: &SessionPendingModelSelection,
-    provider_display_name: &str,
-    connection_display_name: &str,
-    model_display_name: &str,
-) -> Result<(), String> {
-    // projectedEntry contains only the newly canonicalized row, never a clone of conversation history.
-    // projectedEntry 仅包含刚完成规范化的新记录，绝不克隆会话历史。
-    let projected_entry = {
-        // runtimeState is the unique canonical owner of the model-switch audit record.
-        // runtimeState 是模型切换审计记录的唯一规范所有者。
-        let runtime_state = workspace
-            .session_runtime_state
-            .get_mut(&session_id)
-            .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
-        // entry is context-excluded so the UI record can never become provider-visible prompt input.
-        // entry 不参与上下文，因此界面记录绝不会变成 Provider 可见的提示词输入。
-        let mut entry = SessionMessageEntry::new(
-            SessionMessageKind::Assistant,
-            "",
-            format!(
-                "provider_id={}\nconnection_id={}\nmodel_id={}",
-                selection.provider_id, selection.connection_id, selection.model_id
-            ),
-        );
-        entry.record_kind = SessionMessageRecordKind::DisplayNote;
-        entry.visible = true;
-        entry.metadata = Some(serde_json::json!({
-            "notice_kind": "model_switch",
-            "activation": "next_provider_request",
-            "provider_id": selection.provider_id,
-            "provider_name": provider_display_name,
-            "connection_id": selection.connection_id,
-            "connection_name": connection_display_name,
-            "model_id": selection.model_id,
-            "model_name": model_display_name,
-        }));
-        let message_id =
-            crate::append_webui_session_message_entry_to_state(runtime_state, session_id, entry)?;
-        let appended_record = runtime_state
-            .conversation_state
-            .records
-            .last()
-            .filter(|record| record.id == message_id)
-            .ok_or_else(|| {
-                String::from(
-                    "The canonical model-switch record was not retained at the append boundary.",
-                )
-            })?;
-        crate::session_message_entry_from_conversation_record(appended_record)
-    };
-    crate::append_new_canonical_row_to_loaded_display_window(
-        workspace,
-        session_id,
-        projected_entry,
-    );
-    crate::sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
-    Ok(())
-}
-
 /// Plans one exact session model selection without disturbing the route frozen by the current turn.
 /// 在不干扰当前回合冻结路由的前提下规划一个精确会话模型选择。
 ///
@@ -7421,9 +7449,6 @@ fn plan_session_model_selection_for_next_provider_request(
     workspace: &mut vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
     session_id: crate::SessionId,
     selection: &SessionPendingModelSelection,
-    provider_display_name: &str,
-    connection_display_name: &str,
-    model_display_name: &str,
 ) -> Result<PublicAiWorkspaceReconciliation, String> {
     // futureSelectionAlreadyMatches compares against pending authority first, then the active tuple.
     // futureSelectionAlreadyMatches 优先比较待生效权威，再比较当前活动三元组。
@@ -7454,17 +7479,11 @@ fn plan_session_model_selection_for_next_provider_request(
         .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
     runtime_state.pending_model_selection = Some(selection.clone());
     runtime_state.updated_at = crate::current_unix_millis_text();
-    append_session_model_switch_record(
-        workspace,
-        session_id,
-        selection,
-        provider_display_name,
-        connection_display_name,
-        model_display_name,
-    )?;
-    Ok(PublicAiWorkspaceReconciliation::workspace_only(
-        BTreeSet::from([session_id]),
-    ))
+    // The legacy pending row is an in-memory WebUI adapter only. V1 metadata is the durable authority,
+    // and the typed request-switch display fact is appended only when Core promotes the pending request.
+    // 旧待生效行仅作为内存 WebUI 适配器。V1 metadata 是可靠权威，强类型请求切换显示事实只在 Core
+    // 提升待生效请求时追加。
+    Ok(PublicAiWorkspaceReconciliation::default())
 }
 
 /// Selects one model and remembers its exact account.
@@ -7485,32 +7504,51 @@ pub(super) async fn service_select_public_ai_model(
                 .map_err(|error| format!("Invalid conversation id `{value}`: {error}"))
         })
         .transpose()?;
-    // transaction serializes validation, durable preferences, pending intent, and publication.
-    // transaction 串行化校验、持久偏好、待生效意图与发布。
-    let transaction = begin_public_ai_configuration_transaction().await;
     // session_context_compaction_window_node_id preserves the current session lock across models.
     // session_context_compaction_window_node_id 在模型之间保留当前会话锁定节点。
-    let session_context_compaction_window_node_id = if let Some(session_id) = conversation_id {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("Failed to lock service state: {error}"))?;
-        // session_exists prevents account-preference persistence when the target session is already gone.
-        // session_exists 防止目标会话已经消失时仍持久化账号偏好。
-        let session_exists = guard
-            .workspace_snapshot
-            .as_ref()
-            .is_some_and(|workspace| workspace.session_runtime_state.contains_key(&session_id));
-        if !session_exists {
-            return Err(format!("Conversation `{session_id}` has no runtime state."));
-        }
-        guard
-            .workspace_snapshot
-            .as_ref()
-            .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
-            .and_then(|runtime_state| runtime_state.context_compaction_window_node_id)
+    let (session_context_compaction_window_node_id, session_request_fallback) =
+        if let Some(session_id) = conversation_id {
+            let guard = state
+                .lock()
+                .map_err(|error| format!("Failed to lock service state: {error}"))?;
+            // session_exists prevents account-preference persistence when the target session is already gone.
+            // session_exists 防止目标会话已经消失时仍持久化账号偏好。
+            let session_exists = guard
+                .workspace_snapshot
+                .as_ref()
+                .is_some_and(|workspace| workspace.session_runtime_state.contains_key(&session_id));
+            if !session_exists {
+                return Err(format!("Conversation `{session_id}` has no runtime state."));
+            }
+            let runtime_state = guard
+                .workspace_snapshot
+                .as_ref()
+                .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+                .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
+            (
+                runtime_state.context_compaction_window_node_id,
+                crate::session_request_config_v1::SessionRequestFallback {
+                    provider: runtime_state.active_provider_id.clone(),
+                    connection_id: runtime_state.active_connection_id.clone(),
+                    model: runtime_state.active_model_id.clone(),
+                    thinking_level: runtime_state.active_reasoning_effort,
+                    temperature: runtime_state.active_temperature,
+                },
+            )
+        } else {
+            (
+                None,
+                crate::session_request_config_v1::SessionRequestFallback::default(),
+            )
+        };
+    let session_handle = if let Some(session_id) = conversation_id {
+        Some(crate::session_goal_lifecycle::session_v1_handle_from_state(&state, session_id).await?)
     } else {
         None
     };
+    // transaction serializes validation, durable preferences, pending intent, and publication.
+    // transaction 串行化校验、持久偏好、待生效意图与发布。
+    let transaction = begin_public_ai_configuration_transaction().await;
     // current_configuration is the immutable validation baseline before persistent mutation.
     // current_configuration 是持久化修改前使用的不可变校验基线。
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
@@ -7593,24 +7631,6 @@ pub(super) async fn service_select_public_ai_model(
             ));
         }
     }
-    // selectedProviderDisplayName is frozen with the validated provider generation for audit display.
-    // selectedProviderDisplayName 与已校验供应商代际一同冻结，供审计展示使用。
-    let selected_provider_display_name = runtime
-        .providers()?
-        .provider(request.provider_id.as_str())
-        .map(|provider| provider.display_name.clone())
-        .ok_or_else(|| {
-            format!(
-                "Provider `{}` is not registered in the current catalog.",
-                request.provider_id
-            )
-        })?;
-    // selectedConnectionDisplayName is the exact account label accepted by validation.
-    // selectedConnectionDisplayName 是校验已接受的精确账号标签。
-    let selected_connection_display_name = selected_connection.display_name.clone();
-    // selectedModelDisplayName is the exact catalog label accepted by route resolution.
-    // selectedModelDisplayName 是路由解析已接受的精确目录模型标签。
-    let selected_model_display_name = selected_model.model.display_name.clone();
     // selectedTarget is the exact future session tuple or process-wide active tuple.
     // selectedTarget 是精确的未来会话三元组或进程级活动三元组。
     let selected_target = ActiveAiModelSelection {
@@ -7625,6 +7645,17 @@ pub(super) async fn service_select_public_ai_model(
         connection_id: request.connection_id.clone(),
         model_id: request.model_id.clone(),
     };
+    let pending_requested_at_ms = crate::session_goal_lifecycle::current_v1_goal_unix_millis()?;
+    let v1_pending_target = session_handle.map(|handle| {
+        (
+            handle,
+            request.provider_id.clone(),
+            request.connection_id.clone(),
+            request.model_id.clone(),
+            session_request_fallback,
+            pending_requested_at_ms,
+        )
+    });
     let (_configuration, snapshot) =
         mutate_public_ai_configuration_and_publish_using_in_transaction(
             &state,
@@ -7664,9 +7695,6 @@ pub(super) async fn service_select_public_ai_model(
                                 workspace,
                                 session_id,
                                 &pending_target,
-                                selected_provider_display_name.as_str(),
-                                selected_connection_display_name.as_str(),
-                                selected_model_display_name.as_str(),
                             )
                         } else {
                             Ok(PublicAiWorkspaceReconciliation::default())
@@ -7674,37 +7702,31 @@ pub(super) async fn service_select_public_ai_model(
                     },
                     false,
                     "model_selection",
-                    || Ok(()),
+                    move || {
+                        if let Some((
+                            handle,
+                            provider_id,
+                            connection_id,
+                            model_id,
+                            fallback,
+                            now_ms,
+                        )) = v1_pending_target
+                        {
+                            crate::session_request_config_v1::set_pending_model_request_v1(
+                                handle.as_ref(),
+                                provider_id,
+                                connection_id,
+                                model_id,
+                                fallback,
+                                now_ms,
+                            )?;
+                        }
+                        Ok(())
+                    },
                 )
                 .map(|_| ())
             },
         )?;
-    if let Some(session_id) = conversation_id {
-        // controllerRuntime is captured after atomic publication; the persistence gate reads the exact retained session later.
-        // controllerRuntime 在原子发布后捕获；持久化闸门随后读取精确保留会话。
-        let controller_runtime = {
-            let guard = state
-                .lock()
-                .map_err(|error| format!("Failed to lock service state: {error}"))?;
-            guard
-                .controller_runtime
-                .clone()
-                .ok_or_else(|| {
-                    String::from(
-                        "Session model selection cannot persist because controller workspace storage is unavailable.",
-                    )
-                })?
-        };
-        // The authoritative write gate reloads the newest retained session row, so this synchronous
-        // durability boundary cannot overwrite tool, Continue, or terminal mutations committed after publication.
-        // 权威写入闸门会重新加载最新保留会话行，因此该同步可靠边界不会覆盖发布后提交的工具、Continue 或终态变更。
-        crate::persist_latest_retained_workspace_session_update(
-            &state,
-            controller_runtime,
-            session_id,
-        )
-        .await?;
-    }
     drop(transaction);
     Ok(snapshot)
 }
@@ -7871,7 +7893,6 @@ pub(super) async fn service_save_public_ai_model_enabled(
                 Ok(if model_effectively_disabled {
                     reconcile_explicitly_revoked_session_model_selections(
                         workspace,
-                        fallback.as_ref(),
                         |_session_id, runtime_state| {
                             runtime_state.active_provider_id.as_deref()
                                 == Some(request.provider_id.as_str())
@@ -9119,13 +9140,15 @@ pub(super) async fn service_public_ai_session_provider_tool_selections(
     let session_id = conversation_id
         .parse::<crate::SessionId>()
         .map_err(|error| format!("Invalid conversation id `{conversation_id}`: {error}"))?;
+    let session_handle =
+        crate::session_goal_lifecycle::session_v1_handle_from_state(&state, session_id).await?;
     // transaction freezes provider-tool defaults through optional lazy-state publication.
     // transaction 在可选惰性状态发布期间冻结供应商工具默认值。
     let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
     // preview determines whether the authoritative session row requires any lazy migration.
     // preview 判断权威会话行是否需要任何惰性迁移。
-    let (preview, requires_publication) = {
+    let (preview, runtime_overridden, runtime_requires_publication) = {
         let guard = state
             .lock()
             .map_err(|error| format!("Failed to lock service state: {error}"))?;
@@ -9168,17 +9191,24 @@ pub(super) async fn service_public_ai_session_provider_tool_selections(
             &media_understanding_modes,
             &extension_target_sets,
         )?;
+        let preview = PublicAiSessionProviderToolSettingsSnapshot {
+            enabled_capabilities,
+            selections,
+            media_understanding_modes,
+            extension_target_sets,
+            conflicts,
+        };
         (
-            PublicAiSessionProviderToolSettingsSnapshot {
-                enabled_capabilities,
-                selections,
-                media_understanding_modes,
-                extension_target_sets,
-                conflicts,
-            },
+            preview,
+            planned_runtime_state.provider_tool_selections_overridden,
             state_changed,
         )
     };
+    let expected_v1_selection = provider_tool_selection_config_v1(&preview, runtime_overridden);
+    let v1_selection_matches = session_handle
+        .read(|document| document.metadata.config.selection.provider_tools == expected_v1_selection)
+        .map_err(|error| format!("读取 V1 Provider 工具选择失败：{error}"))?;
+    let requires_publication = runtime_requires_publication || !v1_selection_matches;
     if !requires_publication {
         drop(transaction);
         return Ok(preview);
@@ -9186,6 +9216,8 @@ pub(super) async fn service_public_ai_session_provider_tool_selections(
     // committedSnapshot is written only by the detached reconciliation that wins publication.
     // committedSnapshot 仅由赢得发布的独立协调写入。
     let committed_snapshot = std::cell::RefCell::new(None);
+    let provider_tools_updated_at_ms =
+        crate::session_goal_lifecycle::current_v1_goal_unix_millis()?;
     publish_public_ai_workbench_with_workspace_reconciliation_and_commit(
         &app,
         &state,
@@ -9224,7 +9256,21 @@ pub(super) async fn service_public_ai_session_provider_tool_selections(
         },
         false,
         "provider_tool_settings_initialize",
-        || Ok(()),
+        || {
+            let snapshot = committed_snapshot.borrow();
+            let snapshot = snapshot.as_ref().ok_or_else(|| {
+                String::from(
+                    "Provider tool session settings publication produced no committed snapshot.",
+                )
+            })?;
+            let selection = provider_tool_selection_config_v1(snapshot, runtime_overridden);
+            crate::session_request_config_v1::set_provider_tool_selection_v1(
+                session_handle.as_ref(),
+                selection,
+                provider_tools_updated_at_ms,
+            )?;
+            Ok(())
+        },
     )?;
     drop(transaction);
     committed_snapshot.into_inner().ok_or_else(|| {
@@ -9446,6 +9492,8 @@ pub(super) async fn service_save_public_ai_session_provider_tool_selections(
                 request.conversation_id
             )
         })?;
+    let session_handle =
+        crate::session_goal_lifecycle::session_v1_handle_from_state(&state, session_id).await?;
     // transaction keeps target validation and detached workspace publication on one generation.
     // transaction 让目标校验与独立工作区发布保持在同一代际。
     let transaction = begin_public_ai_configuration_transaction().await;
@@ -9467,6 +9515,8 @@ pub(super) async fn service_save_public_ai_session_provider_tool_selections(
         extension_target_sets: request.extension_target_sets,
         conflicts: Vec::new(),
     };
+    let provider_tools_updated_at_ms =
+        crate::session_goal_lifecycle::current_v1_goal_unix_millis()?;
     publish_public_ai_workbench_with_workspace_reconciliation_and_commit(
         &app,
         &state,
@@ -9519,7 +9569,14 @@ pub(super) async fn service_save_public_ai_session_provider_tool_selections(
         },
         false,
         "provider_tool_settings",
-        || Ok(()),
+        || {
+            crate::session_request_config_v1::set_provider_tool_selection_v1(
+                session_handle.as_ref(),
+                provider_tool_selection_config_v1(&snapshot, true),
+                provider_tools_updated_at_ms,
+            )?;
+            Ok(())
+        },
     )?;
     drop(transaction);
     Ok(snapshot)
@@ -10507,11 +10564,9 @@ fn reconcile_disabled_connection_sessions(
     workspace: &mut vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
     connection_id: &str,
     model_id: Option<&str>,
-    fallback: Option<&ActiveAiModelSelection>,
 ) -> BTreeSet<crate::SessionId> {
     reconcile_explicitly_revoked_session_model_selections(
         workspace,
-        fallback,
         |_session_id, runtime_state| {
             let exact_connection =
                 runtime_state.active_connection_id.as_deref() == Some(connection_id);
@@ -10522,24 +10577,21 @@ fn reconcile_disabled_connection_sessions(
     )
 }
 
-/// Reconciles every explicitly revoked active or archived session to one deterministic fallback.
-/// 将每个被显式撤销的活动或归档会话协调到一个确定性回退选择。
+/// Revokes process-local route leases without rewriting exact session-owned route facts.
+/// 撤销进程内路由租约，同时不改写会话持有的精确路由事实。
 ///
 /// # Parameters
 /// 参数
-/// `workspace` is the detached candidate; `fallback` is the exact replacement without protocol
-/// probing; `matches` identifies the complete set whose current route authority was revoked.
-/// `workspace` 是独立候选；`fallback` 是不进行协议探测的精确替代选择；`matches` 标识当前
-/// 路由权威已被撤销的完整会话集合。
+/// `workspace` is the detached candidate; `matches` identifies the complete set whose current
+/// route authority was revoked.
+/// `workspace` 是独立候选；`matches` 标识当前路由权威已被撤销的完整会话集合。
 ///
 /// # Returns
 /// 返回值
-/// The exact active and archived session identifiers whose persisted route and lease identity were
-/// replaced.
-/// 返回持久路由与租约身份已被替换的精确活动及归档会话标识集合。
+/// The exact active and archived session identifiers whose process-local lease was revoked.
+/// 返回进程内租约已被撤销的精确活动及归档会话标识集合。
 fn reconcile_explicitly_revoked_session_model_selections<Matches>(
     workspace: &mut vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
-    fallback: Option<&ActiveAiModelSelection>,
     matches: Matches,
 ) -> BTreeSet<crate::SessionId>
 where
@@ -10558,13 +10610,12 @@ where
             if !matches(*session_id, runtime_state) {
                 continue;
             }
-            runtime_state.active_provider_id =
-                fallback.map(|selection| selection.provider_id.clone());
-            runtime_state.active_connection_id =
-                fallback.map(|selection| selection.connection_id.clone());
-            runtime_state.active_model_id = fallback.map(|selection| selection.model_id.clone());
+            // The exact V1 route is user-owned and may only change through an explicit pending
+            // request selection at a safe Provider boundary. Revocation removes only the
+            // process-local lease so projection becomes unavailable and requires reselection.
+            // 精确 V1 路由由用户持有，只能通过显式待生效请求在安全 Provider 边界修改。
+            // 撤销仅移除进程内租约，使投影变为不可用并要求用户重新选择。
             runtime_state.provider_route_lease = None;
-            runtime_state.updated_at = crate::current_unix_millis_text();
             changed_session_ids.insert(*session_id);
         }
     };
@@ -12287,9 +12338,11 @@ fn publish_public_ai_workbench_after_context_compaction_window_nodes_change(
         |workspace| {
             // invalidatedSessionIds is empty for an idempotent save and preserves every route lease.
             // invalidatedSessionIds 在幂等保存时为空，并始终保留全部路由租约。
-            let invalidated_session_ids = nodes_changed
-                .then(|| invalidate_context_compaction_window_budget_fingerprints(workspace))
-                .unwrap_or_default();
+            let invalidated_session_ids = if nodes_changed {
+                invalidate_context_compaction_window_budget_fingerprints(workspace)
+            } else {
+                BTreeSet::new()
+            };
             Ok(
                 PublicAiWorkspaceReconciliation::context_budget_invalidations(
                     invalidated_session_ids,
@@ -12405,21 +12458,21 @@ struct PublicAiWorkspaceReconciliation {
 }
 
 impl PublicAiWorkspaceReconciliation {
-    /// Creates a reconciliation whose every changed row is an explicit route revocation.
-    /// 创建一份每个已修改行均属于显式路由撤销的协调结果。
+    /// Creates a lease-only reconciliation for explicit route revocation.
+    /// 为显式路由撤销创建一份仅租约协调结果。
     ///
     /// # Parameters
     /// 参数
-    /// `session_ids` is the exact changed and revoked owner set.
-    /// `session_ids` 是精确的已修改与已撤销所有者集合。
+    /// `session_ids` is the exact revoked owner set; durable session configuration remains unchanged.
+    /// `session_ids` 是精确的已撤销所有者集合；可靠会话配置保持不变。
     ///
     /// # Returns
     /// 返回值
-    /// A reconciliation with identical changed and revoked sets.
-    /// 返回已修改与已撤销集合完全相同的协调结果。
+    /// A reconciliation with no durable row changes and the exact revoked set.
+    /// 返回不包含可靠行变化且包含精确撤销集合的协调结果。
     fn route_revocations(session_ids: BTreeSet<crate::SessionId>) -> Self {
         Self {
-            changed_session_ids: session_ids.clone(),
+            changed_session_ids: BTreeSet::new(),
             revoked_session_ids: session_ids,
             invalidated_context_budget_session_ids: BTreeSet::new(),
         }
@@ -12541,7 +12594,7 @@ fn publish_public_ai_workbench_with_workspace_reconciliation_and_commit<
     configuration: &PersistedAiConfiguration,
     reconcile_workspace: ReconcileWorkspace,
     reconcile_session_models: bool,
-    persistence_reason: &'static str,
+    _persistence_reason: &'static str,
     commit: Commit,
 ) -> Result<WorkbenchSnapshot, String>
 where
@@ -12553,7 +12606,7 @@ where
     // catalogs freezes the exact runtime model image used by the whole candidate projection.
     // catalogs 冻结整个候选投影使用的精确运行时模型镜像。
     let catalogs = runtime.catalog_snapshot()?;
-    let (workbench, persistence_context) = {
+    let workbench = {
         // guard excludes every concurrent Service state writer while the detached candidate is
         // prepared and committed.
         // guard 在独立候选准备与提交期间排除全部并发 Service 状态写入方。
@@ -12686,10 +12739,20 @@ where
                     selected_runtime_state,
                     Some(configuration),
                 );
+            let selected_context_usage_facts = selected_session_id
+                .map(|session_id| {
+                    crate::session_context_usage_facts_from_v1_registry(
+                        guard.session_runtime_registry.as_ref(),
+                        session_id,
+                    )
+                })
+                .transpose()?
+                .flatten();
             planned_workbench.context_usage = selected_session_id.and_then(|session_id| {
                 crate::context_usage_snapshot_from_runtime_state(
                     session_id,
                     selected_runtime_state,
+                    selected_context_usage_facts.as_ref(),
                     live_context_budgets,
                     effective_selection
                         .as_ref()
@@ -12719,14 +12782,6 @@ where
                         .map(|selection| &selection.model.capabilities),
                     &bridged_media_kinds,
                 );
-        }
-        if let Some(planned_workspace) = planned_workspace.as_ref() {
-            // selectedMessages publishes any transaction-owned display record in the same revision as the picker state.
-            // selectedMessages 在与选择器状态相同的修订中发布事务自有的显示记录。
-            crate::project_conversation_services::refresh_selected_workbench_messages_from_workspace(
-                planned_workspace,
-                &mut planned_workbench,
-            );
         }
         // leaseScopeIds materializes the exact sessions proven unleased during planning.
         // leaseScopeIds 物化规划期间被证明未租用的精确会话。
@@ -12780,50 +12835,13 @@ where
         if let Some(lease_guard) = lease_guard {
             lease_guard.commit();
         }
-        // persistenceContext captures only exact directory and addon payloads after the state swap.
-        // persistenceContext 只在状态交换后捕获精确目录与附属状态载荷。
-        let persistence_context = if changed_session_ids.is_empty() {
-            None
-        } else {
-            let data_root = guard
-                .controller_runtime
-                .as_ref()
-                .map(|runtime| runtime.data_root.clone())
-                .ok_or_else(|| String::from("controller runtime is not ready"))?;
-            let mut payloads = Vec::with_capacity(changed_session_ids.len());
-            for session_id in changed_session_ids {
-                let Some(addon_state) = guard.workspace_snapshot.as_ref().and_then(|workspace| {
-                    crate::session_addon_state_from_workspace_snapshot(
-                        workspace,
-                        session_id,
-                        &[crate::SessionAddonNamespace::RuntimeControls],
-                    )
-                }) else {
-                    continue;
-                };
-                let session_directory =
-                    crate::require_segmented_session_directory_for_retained_session(
-                        &guard, &data_root, session_id,
-                    )?;
-                payloads.push((session_directory, session_id, addon_state));
-            }
-            Some(payloads)
-        };
-        (guard.workbench.clone(), persistence_context)
+        // Durable session configuration is committed by the caller's exact V1 mutation before
+        // browser publication. Route revocation only removes process-local leases and never
+        // rewrites session-owned metadata, so no legacy SessionAddon payload remains here.
+        // 可靠会话配置由调用方在浏览器发布前通过精确 V1 修改提交。路由撤销只移除
+        // 进程内租约且绝不改写会话自有 metadata，因此此处不再存在旧 SessionAddon 载荷。
+        guard.workbench.clone()
     };
-    if let Some(payloads) = persistence_context {
-        for (session_directory, session_id, addon_state) in payloads {
-            crate::spawn_exact_session_addon_state_persist_task(
-                app.clone(),
-                state.clone(),
-                session_directory,
-                session_id,
-                addon_state,
-                vec![crate::SessionAddonNamespace::RuntimeControls],
-                Some(String::from(persistence_reason)),
-            );
-        }
-    }
     emit_workbench_event(app, &workbench);
     Ok(workbench)
 }
@@ -13160,10 +13178,6 @@ mod context_compaction_window_node_tests {
             archived_task_projects: Vec::new(),
             sessions: Vec::new(),
             archived_sessions: Vec::new(),
-            session_messages: BTreeMap::new(),
-            archived_session_messages: BTreeMap::new(),
-            session_compactions: BTreeMap::new(),
-            archived_session_compactions: BTreeMap::new(),
             session_runtime_state: BTreeMap::from([
                 (active_locked_id, locked_state.clone()),
                 (active_unlocked_id, unlocked_state),
@@ -14505,10 +14519,6 @@ mod inference_settings_route_tests {
             archived_task_projects: Vec::new(),
             sessions: Vec::new(),
             archived_sessions: Vec::new(),
-            session_messages: BTreeMap::new(),
-            archived_session_messages: BTreeMap::new(),
-            session_compactions: BTreeMap::new(),
-            archived_session_compactions: BTreeMap::new(),
             session_runtime_state: BTreeMap::from([(session_id, runtime_state)]),
             archived_session_runtime_state: BTreeMap::new(),
             session_run_phases: BTreeMap::new(),
@@ -14524,19 +14534,16 @@ mod inference_settings_route_tests {
             model_id: String::from("deepseek"),
         };
 
-        // firstPlan records one workspace-only mutation without route revocation.
-        // firstPlan 记录一次仅工作区修改，不撤销路由。
+        // firstPlan records no durable legacy mutation; V1 metadata owns persistence.
+        // firstPlan 不记录可靠旧链修改；持久化由 V1 metadata 持有。
         let first_plan = plan_session_model_selection_for_next_provider_request(
             &mut workspace,
             session_id,
             &target,
-            "Command Code",
-            "Command Code account",
-            "DeepSeek",
         )
         .expect("session selection should be accepted for the next Provider request");
 
-        assert_eq!(first_plan.changed_session_ids, BTreeSet::from([session_id]));
+        assert!(first_plan.changed_session_ids.is_empty());
         assert!(first_plan.revoked_session_ids.is_empty());
         // retainedState proves current route authority stayed untouched while pending authority changed.
         // retainedState 证明待生效权威改变时，当前路由权威保持不变。
@@ -14561,20 +14568,7 @@ mod inference_settings_route_tests {
             retained_state.pending_model_selection.as_ref(),
             Some(&target)
         );
-        assert_eq!(retained_state.conversation_state.records.len(), 1);
-        assert_eq!(
-            retained_state.conversation_state.records[0]
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.get("notice_kind"))
-                .and_then(serde_json::Value::as_str),
-            Some("model_switch")
-        );
-        assert_eq!(
-            crate::display_session_messages_from_workspace(&workspace, session_id)
-                .map(|messages| messages.len()),
-            Some(1)
-        );
+        assert!(retained_state.conversation_state.records.is_empty());
 
         // secondPlan proves selecting the same future tuple does not append a second audit row.
         // secondPlan 证明再次选择同一未来三元组不会追加第二条审计记录。
@@ -14582,9 +14576,6 @@ mod inference_settings_route_tests {
             &mut workspace,
             session_id,
             &target,
-            "Command Code",
-            "Command Code account",
-            "DeepSeek",
         )
         .expect("repeated session selection should be idempotent");
         assert!(second_plan.changed_session_ids.is_empty());
@@ -14593,7 +14584,7 @@ mod inference_settings_route_tests {
                 .session_runtime_state
                 .get(&session_id)
                 .map(|state| state.conversation_state.records.len()),
-            Some(1)
+            Some(0)
         );
     }
 
@@ -14703,10 +14694,6 @@ mod inference_settings_route_tests {
             archived_task_projects: Vec::new(),
             sessions: Vec::new(),
             archived_sessions: Vec::new(),
-            session_messages: BTreeMap::new(),
-            archived_session_messages: BTreeMap::new(),
-            session_compactions: BTreeMap::new(),
-            archived_session_compactions: BTreeMap::new(),
             session_runtime_state: BTreeMap::from([(active_session_id, missing_selection.clone())]),
             archived_session_runtime_state: BTreeMap::from([(
                 archived_session_id,
@@ -14748,8 +14735,8 @@ mod inference_settings_route_tests {
             );
         }
 
-        // revokedStates reset both stores to one explicitly disabled credential route.
-        // revokedStates 将两类存储重置到同一条被显式禁用的凭据路由。
+        // revokedStates install one explicitly disabled credential route in both stores.
+        // revokedStates 在两类存储中安装同一条被显式禁用的凭据路由。
         for runtime_state in workspace
             .session_runtime_state
             .values_mut()
@@ -14759,14 +14746,12 @@ mod inference_settings_route_tests {
             runtime_state.active_connection_id = Some(String::from("revoked-connection"));
             runtime_state.active_model_id = Some(String::from("revoked-model"));
         }
-        // revokedSessionIds proves explicit access revocation covers active and archived owners.
-        // revokedSessionIds 证明显式访问撤销会覆盖活动与归档所有者。
-        let revoked_session_ids = reconcile_disabled_connection_sessions(
-            &mut workspace,
-            "revoked-connection",
-            None,
-            configuration.active.as_ref(),
-        );
+        // revokedSessionIds proves explicit access revocation covers active and archived owners
+        // without silently replacing either user-owned route.
+        // revokedSessionIds 证明显式访问撤销会覆盖活动与归档所有者，同时不会静默替换
+        // 任一用户自有路由。
+        let revoked_session_ids =
+            reconcile_disabled_connection_sessions(&mut workspace, "revoked-connection", None);
         assert_eq!(
             revoked_session_ids,
             BTreeSet::from([active_session_id, archived_session_id])
@@ -14778,7 +14763,7 @@ mod inference_settings_route_tests {
         {
             assert_eq!(
                 runtime_state.active_connection_id.as_deref(),
-                Some("fallback-connection")
+                Some("revoked-connection")
             );
         }
 

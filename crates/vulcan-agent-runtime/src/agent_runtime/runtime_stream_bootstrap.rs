@@ -18,7 +18,11 @@ use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use std::sync::Arc;
 use vulcan_context::RuntimeProviderLoweringRepairEvent;
 use vulcan_core::controller::VulcanCoreController;
-use vulcan_core::types::ConversationSnapshot as CoreConversationSnapshot;
+use vulcan_core::types::{
+    ConversationSnapshot as CoreConversationSnapshot,
+    ProviderPromptLayers as CoreProviderPromptLayers,
+};
+use vulcan_session_core::v1::context::LockedBaselineProjection;
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
 /// Bootstrap payload that captures the fully prepared runtime turn before provider streaming begins.
@@ -54,6 +58,12 @@ pub(crate) struct RuntimeStreamBootstrap {
     /// Effective system preamble sent to the provider transport layer.
     /// 发送给 Provider 传输层的生效系统前导语。
     pub system_preamble: String,
+    /// Canonical typed prompt baseline proposed for a fresh context generation.
+    /// 为新上下文代际提出的规范强类型提示词基线。
+    pub locked_baseline: LockedBaselineProjection,
+    /// Request-dynamic prompt layers preserved independently from the locked baseline.
+    /// 与锁定基线独立保留的请求动态提示词层。
+    pub dynamic_prompt_layers: CoreProviderPromptLayers,
     /// Canonical conversation snapshot handed to `vulcan-core`.
     /// 交给 `vulcan-core` 的规范会话快照。
     pub core_snapshot: CoreConversationSnapshot,
@@ -109,6 +119,8 @@ pub(crate) async fn bootstrap_runtime_stream(
     let RuntimeBootstrapCore {
         system_preamble,
         prompt_layers,
+        dynamic_prompt_layers,
+        locked_baseline,
         core_snapshot,
         core_controller,
         lowering_repair_events,
@@ -159,6 +171,8 @@ pub(crate) async fn bootstrap_runtime_stream(
         discovery_errors,
         warnings,
         system_preamble,
+        dynamic_prompt_layers,
+        locked_baseline,
         core_snapshot,
         core_controller,
         lowering_repair_events,

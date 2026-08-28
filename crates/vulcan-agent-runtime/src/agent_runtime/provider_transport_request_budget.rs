@@ -9,7 +9,6 @@ use crate::context_budget::{
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::sync::{Arc, RwLock};
 use vulcan_ai_contract::ModelCapabilities;
 use vulcan_core::provider::{
     VulcanProviderAdapter, VulcanProviderDeltaSink, VulcanStreamingProviderAdapter,
@@ -17,33 +16,13 @@ use vulcan_core::provider::{
 use vulcan_core::types::{
     ConversationPayload, CoreError as VulcanCoreError,
     ProviderRequestSnapshot as CoreProviderRequestSnapshot,
-    ProviderTurnResponse as CoreProviderTurnResponse,
+    ProviderTurnResponse as CoreProviderTurnResponse, ProviderUsageSnapshot,
 };
-use vulcan_workbench_model::{
-    SessionProviderCallRecord, SessionProviderRequestContextBreakdown,
-    SessionProviderRequestTextMeasurement,
+pub(crate) use vulcan_session_core::v1::ProviderRequestBudgetEvidence;
+use vulcan_session_core::v1::{
+    JS_SAFE_INTEGER_MAX, ProviderProjectionProof, ProviderRequestContextBreakdown,
+    ProviderRequestTextMeasurement, ProviderUsageBudgetAnchor,
 };
-
-/// Stable non-sensitive evidence derived from one exact canonical Provider request.
-/// 从单个精确规范 Provider 请求派生的稳定非敏感证据。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ProviderRequestBudgetEvidence {
-    /// Digest of the complete canonical request.
-    /// 完整规范请求的摘要。
-    pub(crate) request_assembly_fingerprint: String,
-    /// Digest of the immutable provider/model/protocol route.
-    /// 不可变 Provider/Model/协议路由摘要。
-    pub(crate) model_route_fingerprint: String,
-    /// Digest of the exact exposed tool schemas.
-    /// 精确暴露工具 Schema 的摘要。
-    pub(crate) toolset_fingerprint: String,
-    /// Digest of system and layered prompt inputs.
-    /// 系统提示与分层提示输入的摘要。
-    pub(crate) system_prompt_fingerprint: String,
-    /// Non-sensitive request size and history-prefix measurement.
-    /// 非敏感请求尺寸与历史前缀测量。
-    pub(crate) request_text_measurement: SessionProviderRequestTextMeasurement,
-}
 
 /// Maximum nested JSON container depth admitted into request evidence serialization.
 /// 请求证据序列化允许接受的 JSON 容器最大嵌套深度。
@@ -213,22 +192,43 @@ pub(crate) fn build_provider_request_budget_evidence(
         model_route_fingerprint,
         toolset_fingerprint,
         system_prompt_fingerprint,
-        request_text_measurement: SessionProviderRequestTextMeasurement {
-            character_count: serialized_text.chars().count(),
-            utf8_byte_count: serialized.len(),
-            structural_units: snapshot
-                .history
-                .len()
-                .saturating_mul(4)
-                .saturating_add(snapshot.tool_schemas.len().saturating_mul(8))
-                .saturating_add(16),
-            history_message_count: snapshot.history.len(),
+        request_text_measurement: ProviderRequestTextMeasurement {
+            character_count: budget_u64(
+                "request.character_count",
+                serialized_text.chars().count(),
+            )?,
+            utf8_byte_count: budget_u64("request.utf8_byte_count", serialized.len())?,
+            structural_units: budget_u64(
+                "request.structural_units",
+                snapshot
+                    .history
+                    .len()
+                    .saturating_mul(4)
+                    .saturating_add(snapshot.tool_schemas.len().saturating_mul(8))
+                    .saturating_add(16),
+            )?,
+            history_message_count: budget_u64(
+                "request.history_message_count",
+                snapshot.history.len(),
+            )?,
             prompt_in_history: snapshot.prompt_in_history,
-            history_fingerprint: Some(history_fingerprint),
-            prefix_invariant_fingerprint: Some(prefix_invariant_fingerprint),
-            context_breakdown: Some(build_request_context_breakdown(snapshot, distinct_prompt)?),
+            history_fingerprint,
+            prefix_invariant_fingerprint,
+            context_breakdown: build_request_context_breakdown(snapshot, distinct_prompt)?,
         },
     })
+}
+
+/// Exact budget decision and durable request evidence for one V1-permitted physical request.
+/// 一次经 V1 许可的物理请求所对应的精确预算判定与持久化请求证据。
+#[derive(Debug, Clone)]
+pub struct ProviderRequestBudgetDecision {
+    /// Context-budget decision validated against the exact final request.
+    /// 针对精确最终请求校验得到的上下文预算判定。
+    pub context_budget: ContextBudgetSnapshot,
+    /// Non-sensitive evidence that must be persisted in the matching api_started event.
+    /// 必须持久化到匹配 api_started 事件中的非敏感证据。
+    pub evidence: ProviderRequestBudgetEvidence,
 }
 
 /// Builds non-sensitive request-category weights from exact structured request ownership.
@@ -236,24 +236,24 @@ pub(crate) fn build_provider_request_budget_evidence(
 fn build_request_context_breakdown(
     snapshot: &CoreProviderRequestSnapshot,
     distinct_prompt: Option<&str>,
-) -> Result<SessionProviderRequestContextBreakdown, String> {
+) -> Result<ProviderRequestContextBreakdown, String> {
     // breakdown keeps display categories separate without treating character weights as Provider facts.
     // breakdown 保持展示分类分离，同时不把字符权重冒充 Provider 事实。
-    let mut breakdown = SessionProviderRequestContextBreakdown {
+    let mut breakdown = ProviderRequestContextBreakdown {
         message_units: serialized_character_units(&(distinct_prompt, &snapshot.history))?,
-        ..SessionProviderRequestContextBreakdown::default()
+        ..ProviderRequestContextBreakdown::default()
     };
     if snapshot.prompt_layers.is_empty() {
-        breakdown.system_prompt_units = text_character_units(&[snapshot.system_prompt.as_str()]);
+        breakdown.system_prompt_units = text_character_units(&[snapshot.system_prompt.as_str()])?;
     } else {
         breakdown.system_prompt_units = text_character_units(&[
             snapshot.prompt_layers.system.as_str(),
             snapshot.prompt_layers.developer.as_str(),
-        ]);
+        ])?;
         breakdown.system_tool_units =
-            text_character_units(&[snapshot.prompt_layers.tool_guidance.as_str()]);
+            text_character_units(&[snapshot.prompt_layers.tool_guidance.as_str()])?;
         breakdown.other_units =
-            text_character_units(&[snapshot.prompt_layers.runtime_context.as_str()]);
+            text_character_units(&[snapshot.prompt_layers.runtime_context.as_str()])?;
     }
     for tool in &snapshot.tool_schemas {
         // toolUnits measures the exact projected schema, including its stable source metadata.
@@ -288,7 +288,7 @@ fn build_request_context_breakdown(
 
 /// Counts visible text units with the same blank-line separators used by prompt rendering.
 /// 按提示词渲染使用的空行分隔统计可见文本权重。
-fn text_character_units(parts: &[&str]) -> usize {
+fn text_character_units(parts: &[&str]) -> Result<u64, String> {
     let non_empty_parts = parts
         .iter()
         .map(|part| part.trim())
@@ -297,15 +297,34 @@ fn text_character_units(parts: &[&str]) -> usize {
     let body_units = non_empty_parts.iter().fold(0_usize, |sum, part| {
         sum.saturating_add(part.chars().count())
     });
-    body_units.saturating_add(non_empty_parts.len().saturating_sub(1).saturating_mul(2))
+    budget_u64(
+        "request.context_breakdown.text_units",
+        body_units.saturating_add(non_empty_parts.len().saturating_sub(1).saturating_mul(2)),
+    )
 }
 
 /// Counts Unicode scalar units in one validated structured request component.
 /// 统计单个已校验结构化请求组件中的 Unicode 标量权重。
-fn serialized_character_units(value: &impl Serialize) -> Result<usize, String> {
-    serde_json::to_string(value)
-        .map(|serialized| serialized.chars().count())
-        .map_err(|error| format!("Provider request breakdown serialization failed: {error}"))
+fn serialized_character_units(value: &impl Serialize) -> Result<u64, String> {
+    let serialized = serde_json::to_string(value)
+        .map_err(|error| format!("Provider request breakdown serialization failed: {error}"))?;
+    budget_u64(
+        "request.context_breakdown.serialized_units",
+        serialized.chars().count(),
+    )
+}
+
+/// Converts one in-memory collection size into the durable JS-safe request-budget domain.
+/// 把一个内存集合尺寸转换为持久化且 JS 安全的请求预算数值域。
+fn budget_u64(field: &str, value: usize) -> Result<u64, String> {
+    let value = u64::try_from(value)
+        .map_err(|_| format!("Provider request budget `{field}` exceeds the u64 domain."))?;
+    if value > JS_SAFE_INTEGER_MAX {
+        return Err(format!(
+            "Provider request budget `{field}` exceeds the JS-safe integer domain."
+        ));
+    }
+    Ok(value)
 }
 
 /// Returns a SHA-256 identity for one serializable non-secret value.
@@ -316,51 +335,10 @@ fn digest_serializable(value: &impl Serialize) -> Result<String, String> {
     Ok(format!("sha256:{}", hex::encode(Sha256::digest(bytes))))
 }
 
-/// Shared mutable baseline updated only after a Provider call boundary is durably persisted.
-/// 仅在 Provider 调用边界持久化成功后更新的共享可变基线。
-#[derive(Debug, Clone)]
-pub(crate) struct ProviderUsageBudgetBaselineHandle {
-    /// Latest exact ledger record visible to the next logical Provider request.
-    /// 下一次逻辑 Provider 请求可见的最近精确账本记录。
-    value: Arc<RwLock<Option<SessionProviderCallRecord>>>,
-}
-
-impl ProviderUsageBudgetBaselineHandle {
-    /// Builds one shared baseline from the persisted session snapshot used at launch.
-    /// 根据启动时使用的持久化会话快照构建共享基线。
-    pub(crate) fn new(baseline: Option<SessionProviderCallRecord>) -> Self {
-        Self {
-            value: Arc::new(RwLock::new(baseline)),
-        }
-    }
-
-    /// Reads the latest durably admitted baseline.
-    /// 读取最近已通过持久化准入的基线。
-    pub(crate) fn snapshot(&self) -> Result<Option<SessionProviderCallRecord>, String> {
-        self.value
-            .read()
-            .map(|value| value.clone())
-            .map_err(|_| String::from("The Provider Usage budget baseline is locked."))
-    }
-
-    /// Replaces the baseline after its owning ledger revision is durable.
-    /// 在所属账本修订持久化完成后替换基线。
-    pub(crate) fn replace(
-        &self,
-        baseline: Option<SessionProviderCallRecord>,
-    ) -> Result<(), String> {
-        *self
-            .value
-            .write()
-            .map_err(|_| String::from("The Provider Usage budget baseline is locked."))? = baseline;
-        Ok(())
-    }
-}
-
 /// Request-budget guard shared by the host-controlled streaming adapter wrapper.
 /// 由宿主控制流式适配器包装层共享的请求预算守卫。
-#[derive(Clone)]
-pub(crate) struct ProviderRequestBudgetGuard {
+#[derive(Debug, Clone)]
+pub struct ProviderRequestBudgetGuard {
     /// Stable provider identifier used by the request budget fingerprint.
     /// 请求预算指纹使用的稳定 Provider 标识。
     provider_id: String,
@@ -388,50 +366,24 @@ pub(crate) struct ProviderRequestBudgetGuard {
     /// Absolute BodyAfterPrefix baseline from the active compaction window.
     /// 当前压缩窗口的绝对 BodyAfterPrefix 基线。
     prefill_input_tokens: Option<usize>,
-    /// Current context generation used to reject stale Provider anchors.
-    /// 用于拒绝过期 Provider 锚点的当前上下文代际。
-    context_generation_id: Option<String>,
-    /// Latest durable Provider call candidate shared with telemetry persistence.
-    /// 与遥测持久化共享的最近持久 Provider 调用候选。
-    provider_usage_baseline: ProviderUsageBudgetBaselineHandle,
 }
 
 impl ProviderRequestBudgetGuard {
-    /// Builds one request-budget guard for the active provider/model pair.
-    /// 为当前 Provider/Model 组合构建一份请求预算守卫。
-    #[cfg(test)]
-    pub(crate) fn new(
-        provider_id: impl Into<String>,
-        model_id: impl Into<String>,
-        protocol_profile_id: impl Into<String>,
-        route_revision: impl Into<String>,
-        capabilities: ModelCapabilities,
-        reasoning: ProviderRuntimeReasoningResolution,
-        context_compaction_policy: Option<ContextCompactionPolicy>,
-        context_budget_override: Option<usize>,
-        prefill_input_tokens: Option<usize>,
-        context_generation_id: Option<String>,
-        provider_usage_baseline: Option<SessionProviderCallRecord>,
-    ) -> Self {
-        Self::with_shared_baseline(
-            provider_id,
-            model_id,
-            protocol_profile_id,
-            route_revision,
-            capabilities,
-            reasoning,
-            context_compaction_policy,
-            context_budget_override,
-            prefill_input_tokens,
-            context_generation_id,
-            ProviderUsageBudgetBaselineHandle::new(provider_usage_baseline),
-        )
-    }
-
-    /// Builds one guard around a baseline handle shared with Provider telemetry.
-    /// 围绕与 Provider 遥测共享的基线句柄构建预算守卫。
+    /// Builds a guard whose calibration authority is exclusively the V1 event ledger.
+    /// 构建一份仅以 V1 事件账本作为校准权威的预算守卫。
+    ///
+    /// # Parameters
+    /// 参数
+    /// Route, capabilities, reasoning, compaction, and explicit limits are frozen for the physical
+    /// request family; no legacy Provider-call ledger baseline participates.
+    /// 路由、能力、推理、压缩与显式限制会针对物理请求族冻结；不再参与任何旧 Provider 调用账本基线。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns a reusable guard that accepts only an explicit V1 usage anchor at final preparation.
+    /// 返回一份可复用守卫，仅在最终准备阶段接受显式 V1 用量锚点。
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn with_shared_baseline(
+    pub fn new_v1(
         provider_id: impl Into<String>,
         model_id: impl Into<String>,
         protocol_profile_id: impl Into<String>,
@@ -441,8 +393,6 @@ impl ProviderRequestBudgetGuard {
         context_compaction_policy: Option<ContextCompactionPolicy>,
         context_budget_override: Option<usize>,
         prefill_input_tokens: Option<usize>,
-        context_generation_id: Option<String>,
-        provider_usage_baseline: ProviderUsageBudgetBaselineHandle,
     ) -> Self {
         Self {
             provider_id: provider_id.into(),
@@ -454,8 +404,6 @@ impl ProviderRequestBudgetGuard {
             context_compaction_policy,
             context_budget_override,
             prefill_input_tokens,
-            context_generation_id,
-            provider_usage_baseline,
         }
     }
 
@@ -465,6 +413,51 @@ impl ProviderRequestBudgetGuard {
         &self,
         snapshot: &CoreProviderRequestSnapshot,
     ) -> Result<ContextBudgetSnapshot, String> {
+        build_provider_request_budget_evidence(
+            snapshot,
+            self.protocol_profile_id.as_str(),
+            self.route_revision.as_str(),
+        )?;
+        Ok(build_request_context_compaction_budget_snapshot(
+            RequestContextCompactionBudgetSnapshotInput {
+                provider_id: self.provider_id.as_str(),
+                model_id: self.model_id.as_str(),
+                protocol_profile_id: self.protocol_profile_id.as_str(),
+                capabilities: &self.capabilities,
+                reasoning: &self.reasoning,
+                request_snapshot: snapshot,
+                compaction_policy: self.context_compaction_policy,
+                context_budget_override: self.context_budget_override,
+                observed_usage: None,
+                accounted_input_tokens: None,
+                accounting_source: ContextBudgetAccountingSource::CharacterEstimate,
+                accounting_warning_code: Some("provider_usage_baseline_unavailable"),
+                provider_anchor_call_id: None,
+                prefill_input_tokens: self.prefill_input_tokens,
+            },
+        ))
+    }
+
+    /// Builds and validates the budget for the exact request rebuilt by the V1 permit owner.
+    /// 为 V1 许可 owner 重建的精确请求构建并校验预算。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `snapshot` is the immutable request that will reach transport, `projection` is the exact V1
+    /// range used to build it, and `anchor` is the latest matching api_started/api_stats pair.
+    /// `snapshot` 是即将进入传输层的不可变请求，`projection` 是构建它所使用的精确 V1 区间，
+    /// `anchor` 是最近一组匹配的 api_started/api_stats 事实。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns one validated budget plus the evidence that must enter the same api_started commit.
+    /// 返回一份已校验预算，以及必须进入同一 api_started 提交的请求证据。
+    pub fn build_v1_budget_decision(
+        &self,
+        snapshot: &CoreProviderRequestSnapshot,
+        projection: &ProviderProjectionProof,
+        anchor: Option<&ProviderUsageBudgetAnchor>,
+    ) -> Result<ProviderRequestBudgetDecision, String> {
         let evidence = build_provider_request_budget_evidence(
             snapshot,
             self.protocol_profile_id.as_str(),
@@ -488,48 +481,53 @@ impl ProviderRequestBudgetGuard {
                 prefill_input_tokens: self.prefill_input_tokens,
             },
         );
-        let provider_usage_baseline = self.provider_usage_baseline.snapshot()?;
-        let Some(baseline) = provider_usage_baseline.as_ref() else {
-            return Ok(fallback);
+        let Some(anchor) = anchor else {
+            self.validate_budget(&fallback)
+                .map_err(|error| error.to_string())?;
+            return Ok(ProviderRequestBudgetDecision {
+                context_budget: fallback,
+                evidence,
+            });
         };
-        let Some(provider_usage) = baseline.provider_usage_evidence.provider_usage.as_ref() else {
-            return Ok(fallback);
-        };
+        let provider_usage = v1_usage_to_provider_usage(&anchor.usage)?;
         let Some(provider_input_tokens) =
-            vulcan_context::observed_input_tokens_from_usage(Some(provider_usage))
+            vulcan_context::observed_input_tokens_from_usage(Some(&provider_usage))
         else {
-            return Ok(fallback);
+            self.validate_budget(&fallback)
+                .map_err(|error| error.to_string())?;
+            return Ok(ProviderRequestBudgetDecision {
+                context_budget: fallback,
+                evidence,
+            });
         };
         let current_measurement = &evidence.request_text_measurement;
-        let prefix_match = if let Some(previous) = baseline.request_text_measurement.as_ref()
-            && previous.history_message_count < snapshot.history.len()
-        {
+        let previous_measurement = &anchor.evidence.request_text_measurement;
+        let previous_history_count = usize::try_from(previous_measurement.history_message_count)
+            .map_err(|_| {
+                String::from("The V1 Provider budget anchor history count exceeds usize.")
+            })?;
+        let prefix_match = if previous_history_count < snapshot.history.len() {
             let prefix_fingerprint =
-                digest_serializable(&&snapshot.history[..previous.history_message_count])?;
-            previous.prompt_in_history
+                digest_serializable(&&snapshot.history[..previous_history_count])?;
+            previous_measurement.prompt_in_history
                 && current_measurement.prompt_in_history
-                && previous.history_fingerprint.as_deref() == Some(prefix_fingerprint.as_str())
-                && previous.prefix_invariant_fingerprint.is_some()
-                && previous.prefix_invariant_fingerprint
+                && previous_measurement.history_fingerprint == prefix_fingerprint
+                && previous_measurement.prefix_invariant_fingerprint
                     == current_measurement.prefix_invariant_fingerprint
-                && current_measurement.character_count >= previous.character_count
-                && current_measurement.utf8_byte_count >= previous.utf8_byte_count
-                && current_measurement.structural_units >= previous.structural_units
+                && current_measurement.character_count >= previous_measurement.character_count
+                && current_measurement.utf8_byte_count >= previous_measurement.utf8_byte_count
+                && current_measurement.structural_units >= previous_measurement.structural_units
         } else {
             false
         };
-        let stable_shape = baseline.active_branch_member
-            && baseline.superseded_by_edit_generation.is_none()
-            && baseline.context_generation_id == self.context_generation_id
-            && baseline.model_route_fingerprint.as_deref()
-                == Some(evidence.model_route_fingerprint.as_str())
-            && baseline.toolset_fingerprint.as_deref()
-                == Some(evidence.toolset_fingerprint.as_str())
-            && baseline.system_prompt_fingerprint.as_deref()
-                == Some(evidence.system_prompt_fingerprint.as_str());
+        let stable_shape = anchor.projection.segment_generation == projection.segment_generation
+            && anchor.projection.retained_from_seq == projection.retained_from_seq
+            && anchor.evidence.model_route_fingerprint == evidence.model_route_fingerprint
+            && anchor.evidence.toolset_fingerprint == evidence.toolset_fingerprint
+            && anchor.evidence.system_prompt_fingerprint == evidence.system_prompt_fingerprint;
         let exact_match = stable_shape
-            && baseline.request_assembly_fingerprint.as_deref()
-                == Some(evidence.request_assembly_fingerprint.as_str());
+            && anchor.evidence.request_assembly_fingerprint
+                == evidence.request_assembly_fingerprint;
         let (accounted_input_tokens, accounting_source, warning_code) = if exact_match {
             (
                 provider_input_tokens,
@@ -537,25 +535,28 @@ impl ProviderRequestBudgetGuard {
                 None,
             )
         } else if stable_shape && prefix_match {
-            let Some(previous) = baseline.request_text_measurement.as_ref() else {
-                return Ok(ContextBudgetSnapshot {
-                    accounting_warning_code: Some(String::from("provider_usage_baseline_mismatch")),
-                    ..fallback
-                });
-            };
-            let delta_tokens = estimate_measurement_delta_tokens(previous, current_measurement);
             (
-                provider_input_tokens.saturating_add(delta_tokens),
+                provider_input_tokens.saturating_add(estimate_v1_measurement_delta_tokens(
+                    previous_measurement,
+                    current_measurement,
+                )?),
                 ContextBudgetAccountingSource::ProviderAnchorPlusCharacterDelta,
                 Some("provider_anchor_character_delta"),
             )
         } else {
-            return Ok(ContextBudgetSnapshot {
+            let budget = ContextBudgetSnapshot {
                 accounting_warning_code: Some(String::from("provider_usage_baseline_mismatch")),
                 ..fallback
+            };
+            self.validate_budget(&budget)
+                .map_err(|error| error.to_string())?;
+            return Ok(ProviderRequestBudgetDecision {
+                context_budget: budget,
+                evidence,
             });
         };
-        Ok(build_request_context_compaction_budget_snapshot(
+        let anchor_id = anchor.api_call_id.value().to_string();
+        let budget = build_request_context_compaction_budget_snapshot(
             RequestContextCompactionBudgetSnapshotInput {
                 provider_id: self.provider_id.as_str(),
                 model_id: self.model_id.as_str(),
@@ -565,14 +566,20 @@ impl ProviderRequestBudgetGuard {
                 request_snapshot: snapshot,
                 compaction_policy: self.context_compaction_policy,
                 context_budget_override: self.context_budget_override,
-                observed_usage: Some(provider_usage),
+                observed_usage: Some(&provider_usage),
                 accounted_input_tokens: Some(accounted_input_tokens),
                 accounting_source,
                 accounting_warning_code: warning_code,
-                provider_anchor_call_id: Some(baseline.provider_call_id.as_str()),
+                provider_anchor_call_id: Some(anchor_id.as_str()),
                 prefill_input_tokens: self.prefill_input_tokens,
             },
-        ))
+        );
+        self.validate_budget(&budget)
+            .map_err(|error| error.to_string())?;
+        Ok(ProviderRequestBudgetDecision {
+            context_budget: budget,
+            evidence,
+        })
     }
 
     /// Validates one already-built budget snapshot before dispatch.
@@ -595,12 +602,58 @@ impl ProviderRequestBudgetGuard {
     }
 }
 
-/// Estimates only the proven appended request delta without loading a tokenizer dictionary.
-/// 在不加载 Tokenizer 词典的前提下，仅估算已证明追加的请求增量。
-fn estimate_measurement_delta_tokens(
-    previous: &SessionProviderRequestTextMeasurement,
-    current: &SessionProviderRequestTextMeasurement,
-) -> usize {
+/// Converts persisted V1 usage into the provider-neutral runtime accounting shape.
+/// 把持久化 V1 用量转换为 Provider 中立的运行时记账结构。
+fn v1_usage_to_provider_usage(
+    usage: &vulcan_session_core::v1::UsageSnapshot,
+) -> Result<ProviderUsageSnapshot, String> {
+    Ok(ProviderUsageSnapshot {
+        update_kind: Some(vulcan_ai_contract::UsageUpdateKind::Final),
+        input_tokens: optional_usage_usize("usage.input_tokens", usage.input_tokens)?,
+        uncached_input_tokens: optional_usage_usize(
+            "usage.uncached_input_tokens",
+            usage.uncached_input_tokens,
+        )?,
+        output_tokens: optional_usage_usize("usage.output_tokens", usage.output_tokens)?,
+        reasoning_tokens: optional_usage_usize("usage.reasoning_tokens", usage.reasoning_tokens)?,
+        total_tokens: optional_usage_usize("usage.total_tokens", usage.total_tokens)?,
+        cached_input_tokens: optional_usage_usize(
+            "usage.cache_read_tokens",
+            usage.cache_read_tokens,
+        )?,
+        cache_creation_input_tokens: optional_usage_usize(
+            "usage.cache_write_tokens",
+            usage.cache_write_tokens,
+        )?,
+        audio_input_tokens: optional_usage_usize(
+            "usage.audio_input_tokens",
+            usage.audio_input_tokens,
+        )?,
+        audio_output_tokens: optional_usage_usize(
+            "usage.audio_output_tokens",
+            usage.audio_output_tokens,
+        )?,
+        ..ProviderUsageSnapshot::default()
+    })
+}
+
+/// Converts one optional durable usage dimension into the host runtime integer domain.
+/// 把一个可选持久化用量维度转换为宿主运行时整数域。
+fn optional_usage_usize(field: &str, value: Option<u64>) -> Result<Option<usize>, String> {
+    value
+        .map(|value| {
+            usize::try_from(value)
+                .map_err(|_| format!("Provider budget anchor `{field}` exceeds usize."))
+        })
+        .transpose()
+}
+
+/// Estimates the proven append-only delta between two durable V1 request measurements.
+/// 估算两份持久化 V1 请求测量之间已经证明的仅追加增量。
+fn estimate_v1_measurement_delta_tokens(
+    previous: &ProviderRequestTextMeasurement,
+    current: &ProviderRequestTextMeasurement,
+) -> Result<usize, String> {
     let character_delta = current
         .character_count
         .saturating_sub(previous.character_count);
@@ -612,9 +665,12 @@ fn estimate_measurement_delta_tokens(
         .saturating_sub(previous.structural_units);
     let non_ascii_upper_bound = byte_delta.saturating_sub(character_delta).div_ceil(2);
     let ascii_characters = character_delta.saturating_sub(non_ascii_upper_bound);
-    non_ascii_upper_bound
-        .saturating_add(ascii_characters.div_ceil(4))
-        .saturating_add(structural_delta)
+    usize::try_from(
+        non_ascii_upper_bound
+            .saturating_add(ascii_characters.div_ceil(4))
+            .saturating_add(structural_delta),
+    )
+    .map_err(|_| String::from("V1 Provider request delta exceeds the host usize domain."))
 }
 
 /// Streaming adapter wrapper that validates the exact built request before provider dispatch.
@@ -641,6 +697,9 @@ pub(crate) trait ProviderBudgetRequest {
     /// Returns the stored request-aligned budget decision.
     /// 返回已保存且与请求对齐的预算决策。
     fn context_budget(&self) -> Option<&ContextBudgetSnapshot>;
+    /// Stores the same frozen guard for the unique V1 final-request preparation boundary.
+    /// 为唯一 V1 最终请求准备边界保存同一份冻结守卫。
+    fn set_request_budget_guard(&mut self, guard: ProviderRequestBudgetGuard);
 }
 
 impl ProviderBudgetRequest for VulcanPublicContractRequest {
@@ -654,6 +713,10 @@ impl ProviderBudgetRequest for VulcanPublicContractRequest {
 
     fn context_budget(&self) -> Option<&ContextBudgetSnapshot> {
         self.context_budget.as_ref()
+    }
+
+    fn set_request_budget_guard(&mut self, guard: ProviderRequestBudgetGuard) {
+        self.request_budget_guard = Some(guard);
     }
 }
 
@@ -702,6 +765,7 @@ where
                 .build_budget_snapshot(request.budget_snapshot())
                 .map_err(|message| VulcanCoreError::ContextCompactionRequired { message })?;
             request.set_context_budget(budget);
+            request.set_request_budget_guard(guard.clone());
         }
         Ok(request)
     }
@@ -761,12 +825,6 @@ mod tests {
     use super::*;
     use vulcan_core::types::{
         ConversationMessage, ConversationPayload, ProviderContinuation, ProviderPromptLayers,
-        ProviderUsageSnapshot,
-    };
-    use vulcan_workbench_model::{
-        SessionProviderCallCompleted, SessionProviderCallIdentity, SessionProviderCallLedger,
-        SessionProviderCallRecord, SessionProviderCallStarted, SessionProviderCallStatus,
-        SessionProviderUsageAvailability, SessionProviderUsageEvidence,
     };
 
     /// Builds one minimal request snapshot for request-boundary budget tests.
@@ -830,107 +888,54 @@ mod tests {
         assert!(breakdown.other_units > 0);
     }
 
-    /// Builds one completed durable Provider call that exactly describes the supplied request.
-    /// 构建一条精确描述给定请求的已完成持久化 Provider 调用。
-    ///
-    /// `request` supplies the immutable request fingerprints and text measurement.
-    /// `request` 提供不可变请求指纹与文本测量。
-    /// `provider_input_tokens` is the final input-token count reported by the Provider.
-    /// `provider_input_tokens` 是 Provider 最终报告的输入 Token 数。
-    /// The returned record belongs to context generation `context-1` and can seed a budget guard.
-    /// 返回记录属于上下文代际 `context-1`，可用于初始化预算守卫。
-    fn completed_provider_baseline(
-        request: &CoreProviderRequestSnapshot,
-        provider_input_tokens: usize,
-    ) -> SessionProviderCallRecord {
-        let evidence = build_provider_request_budget_evidence(
-            request,
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
-            "sha256:test-route",
-        )
-        .expect("baseline request evidence should build");
-        let identity = SessionProviderCallIdentity {
-            logical_request_id: String::from("logical-1"),
-            execution_id: String::from("execution-1"),
-            turn_id: Some(String::from("turn-1")),
-            attempt_index: 0,
-            retry_number: 0,
-            owner_kind: String::from("main_agent"),
-            owner_id: String::from("agent-1"),
-            owner_name_snapshot: String::from("Agent One"),
-            operation: String::from("conversation"),
-            provider_id: String::from("test-provider"),
-            provider_name_snapshot: String::from("Test Provider"),
-            model_id: String::from("test-model"),
-            model_name_snapshot: String::from("Test Model"),
-            connection_id: String::from("connection-1"),
-            service_entry_id: String::from("public-api"),
-            protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
-            manifest_revision: 1,
-            manifest_generation: 1,
-            binding_source: String::from("system_manifest"),
-            binding_rule: Some(String::from("rule-1")),
-            route_revision: String::from("sha256:test-route"),
-            request_profiles: Vec::new(),
-            response_profiles: Vec::new(),
-        };
-        let mut ledger = SessionProviderCallLedger::default();
-        assert!(ledger.advance_context_generation(String::from("context-1")));
-        assert!(ledger.observe_started(SessionProviderCallStarted {
-            provider_call_id: String::from("call-1"),
-            identity: identity.clone(),
-            prepared_at_ms: 1,
-            request_assembly_fingerprint: Some(evidence.request_assembly_fingerprint),
-            context_generation_id: Some(String::from("context-1")),
-            context_start_record_id: None,
-            model_route_fingerprint: Some(evidence.model_route_fingerprint),
-            toolset_fingerprint: Some(evidence.toolset_fingerprint),
-            system_prompt_fingerprint: Some(evidence.system_prompt_fingerprint),
-            request_text_measurement: Some(evidence.request_text_measurement),
-            budget_accounting: None,
-        }));
-        assert!(ledger.observe_completed(SessionProviderCallCompleted {
-            provider_call_id: String::from("call-1"),
-            identity,
-            status: SessionProviderCallStatus::Succeeded,
-            provider_usage_evidence: SessionProviderUsageEvidence {
-                availability: SessionProviderUsageAvailability::Final,
-                provider_usage: Some(ProviderUsageSnapshot {
-                    update_kind: Some(vulcan_ai_contract::UsageUpdateKind::Final),
-                    input_tokens: Some(provider_input_tokens),
-                    output_tokens: Some(9),
-                    total_tokens: Some(provider_input_tokens.saturating_add(9)),
-                    ..ProviderUsageSnapshot::default()
-                }),
-            },
-            prepared_at_ms: 1,
-            dispatched_at_ms: Some(2),
-            first_event_at_ms: Some(3),
-            first_token_at_ms: Some(4),
-            completed_at_ms: 5,
-            dispatch_outcome: Some(String::from("dispatched")),
-            dispatch_outcome_known: Some(true),
-            semantic_output_observed: Some(true),
-            semantic_output_observed_known: Some(true),
-            replay_safe: Some(false),
-            error_category: None,
-            error_code: None,
-        }));
-        ledger
-            .calls
-            .remove("call-1")
-            .expect("durable ledger should contain the terminal call")
+    /// Builds one exact V1 projection proof for budget-anchor tests.
+    /// 为预算锚点测试构建一份精确的 V1 投影证明。
+    fn v1_projection(segment_generation: u64) -> ProviderProjectionProof {
+        ProviderProjectionProof {
+            segment_generation,
+            document_revision: 2,
+            retained_from_seq: vulcan_session_core::v1::Seq::try_new(1)
+                .expect("valid retained seq"),
+            through_seq: vulcan_session_core::v1::Seq::try_new(3).expect("valid through seq"),
+            fingerprint_sha256: "a".repeat(64),
+        }
     }
 
-    /// Builds a request-budget guard seeded by one durable Provider usage baseline.
-    /// 构建一个由持久化 Provider 用量基线初始化的请求预算守卫。
-    ///
-    /// `baseline` is the exact terminal call eligible for reuse in context generation `context-1`.
-    /// `baseline` 是可在上下文代际 `context-1` 中复用的精确终态调用。
-    /// The returned guard uses the stable route and model fixtures shared by this test module.
-    /// 返回守卫使用本测试模块共享的稳定路由与模型夹具。
-    fn guard_with_baseline(baseline: SessionProviderCallRecord) -> ProviderRequestBudgetGuard {
-        ProviderRequestBudgetGuard::new(
+    /// Builds one V1 usage anchor from the exact request evidence.
+    /// 从精确请求证据构建一个 V1 用量锚点。
+    fn v1_budget_anchor(
+        request: &CoreProviderRequestSnapshot,
+        projection: ProviderProjectionProof,
+        input_tokens: u64,
+    ) -> ProviderUsageBudgetAnchor {
+        ProviderUsageBudgetAnchor {
+            api_call_id: vulcan_session_core::v1::ApiCallId::try_new(7)
+                .expect("valid API identity"),
+            projection,
+            evidence: build_provider_request_budget_evidence(
+                request,
+                vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+                "sha256:test-route",
+            )
+            .expect("valid request evidence"),
+            usage: vulcan_session_core::v1::UsageSnapshot {
+                input_tokens: Some(input_tokens),
+                uncached_input_tokens: Some(input_tokens),
+                output_tokens: Some(3),
+                total_tokens: Some(input_tokens + 3),
+                ..vulcan_session_core::v1::UsageSnapshot::default()
+            },
+        }
+    }
+
+    /// An exact V1 request and projection reuse only the matching durable usage pair.
+    /// 精确的 V1 请求与投影只复用匹配的可靠用量事实组合。
+    #[test]
+    fn exact_v1_anchor_calibrates_the_final_request_budget() {
+        let request = request_snapshot(Vec::new());
+        let projection = v1_projection(4);
+        let anchor = v1_budget_anchor(&request, projection.clone(), 77);
+        let guard = ProviderRequestBudgetGuard::new_v1(
             "test-provider",
             "test-model",
             vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
@@ -943,16 +948,66 @@ mod tests {
             Some(ContextCompactionPolicy::default()),
             None,
             None,
-            Some(String::from("context-1")),
-            Some(baseline),
-        )
+        );
+
+        let decision = guard
+            .build_v1_budget_decision(&request, &projection, Some(&anchor))
+            .expect("matching V1 budget anchor must calibrate the final request");
+
+        assert_eq!(
+            decision.context_budget.accounting_source,
+            ContextBudgetAccountingSource::ProviderReported
+        );
+        assert_eq!(decision.context_budget.active_context_tokens, 77);
+        assert_eq!(
+            decision.context_budget.provider_anchor_call_id.as_deref(),
+            Some("7")
+        );
+        assert_eq!(decision.evidence, anchor.evidence);
+    }
+
+    /// A different V1 segment generation explicitly rejects durable usage reuse.
+    /// 不同的 V1 分片代际会显式拒绝复用可靠用量。
+    #[test]
+    fn v1_generation_mismatch_falls_back_without_reusing_the_anchor() {
+        let request = request_snapshot(Vec::new());
+        let current_projection = v1_projection(5);
+        let anchor = v1_budget_anchor(&request, v1_projection(4), 77);
+        let guard = ProviderRequestBudgetGuard::new_v1(
+            "test-provider",
+            "test-model",
+            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+            "sha256:test-route",
+            ModelCapabilities {
+                context_limit: Some(10_000),
+                ..ModelCapabilities::default()
+            },
+            ProviderRuntimeReasoningResolution::default(),
+            Some(ContextCompactionPolicy::default()),
+            None,
+            None,
+        );
+
+        let decision = guard
+            .build_v1_budget_decision(&request, &current_projection, Some(&anchor))
+            .expect("generation mismatch must use an explicit character estimate");
+
+        assert_eq!(
+            decision.context_budget.accounting_source,
+            ContextBudgetAccountingSource::CharacterEstimate
+        );
+        assert_eq!(decision.context_budget.provider_anchor_call_id, None);
+        assert_eq!(
+            decision.context_budget.accounting_warning_code.as_deref(),
+            Some("provider_usage_baseline_mismatch")
+        );
     }
 
     /// Verifies a large tool result is rechecked before the next physical provider request.
     /// 验证大型工具结果会在下一次真实 Provider 请求前重新接受预算检查。
     #[test]
     fn tool_result_growth_requires_compaction_before_next_provider_request() {
-        let guard = ProviderRequestBudgetGuard::new(
+        let guard = ProviderRequestBudgetGuard::new_v1(
             "test-provider",
             "test-model",
             vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
@@ -964,8 +1019,6 @@ mod tests {
             ProviderRuntimeReasoningResolution::default(),
             Some(ContextCompactionPolicy::default()),
             Some(100),
-            None,
-            None,
             None,
         );
 
@@ -1001,7 +1054,7 @@ mod tests {
     /// 验证关闭自动压缩绝不会同时关闭硬窗口分派门禁。
     #[test]
     fn auto_disabled_hard_window_still_rejects_dispatch() {
-        let guard = ProviderRequestBudgetGuard::new(
+        let guard = ProviderRequestBudgetGuard::new_v1(
             "test-provider",
             "test-model",
             vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
@@ -1015,8 +1068,6 @@ mod tests {
                 auto: false,
                 ..ContextCompactionPolicy::default()
             }),
-            None,
-            None,
             None,
             None,
         );
@@ -1046,7 +1097,7 @@ mod tests {
     /// 验证模型未声明窗口时显式绝对压缩线仍然生效。
     #[test]
     fn absolute_compaction_limit_works_without_model_window() {
-        let guard = ProviderRequestBudgetGuard::new(
+        let guard = ProviderRequestBudgetGuard::new_v1(
             "test-provider",
             "test-model",
             vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
@@ -1060,8 +1111,6 @@ mod tests {
                 },
                 ..ContextCompactionPolicy::default()
             }),
-            None,
-            None,
             None,
             None,
         );
@@ -1106,7 +1155,7 @@ mod tests {
             "sha256:test-route",
         )
         .expect("embedded request evidence should build");
-        let guard = ProviderRequestBudgetGuard::new(
+        let guard = ProviderRequestBudgetGuard::new_v1(
             "test-provider",
             "test-model",
             vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
@@ -1117,8 +1166,6 @@ mod tests {
             },
             ProviderRuntimeReasoningResolution::default(),
             Some(ContextCompactionPolicy::default()),
-            None,
-            None,
             None,
             None,
         );
@@ -1162,7 +1209,7 @@ mod tests {
                 attachments: Vec::new(),
             },
         }]);
-        let guard = ProviderRequestBudgetGuard::new(
+        let guard = ProviderRequestBudgetGuard::new_v1(
             "test-provider",
             "test-model",
             vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
@@ -1173,8 +1220,6 @@ mod tests {
             },
             ProviderRuntimeReasoningResolution::default(),
             Some(ContextCompactionPolicy::default()),
-            None,
-            None,
             None,
             None,
         );
@@ -1209,7 +1254,7 @@ mod tests {
                 source_label: String::from("test"),
                 parameters_schema,
             });
-        let guard = ProviderRequestBudgetGuard::new(
+        let guard = ProviderRequestBudgetGuard::new_v1(
             "test-provider",
             "test-model",
             vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
@@ -1220,8 +1265,6 @@ mod tests {
             },
             ProviderRuntimeReasoningResolution::default(),
             Some(ContextCompactionPolicy::default()),
-            None,
-            None,
             None,
             None,
         );
@@ -1231,203 +1274,5 @@ mod tests {
             .expect_err("deep tool schemas must fail before dispatch");
 
         assert!(error.contains("JSON depth limit"));
-    }
-
-    /// Verifies a durable terminal Usage boundary changes the next logical request baseline immediately.
-    /// 验证持久化终态用量边界会立即改变下一次逻辑请求的基线。
-    #[test]
-    fn durable_usage_handle_refreshes_the_next_request_budget() {
-        let request = request_snapshot(Vec::new());
-        let baseline_handle = ProviderUsageBudgetBaselineHandle::new(None);
-        let guard = ProviderRequestBudgetGuard::with_shared_baseline(
-            "test-provider",
-            "test-model",
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
-            "sha256:test-route",
-            ModelCapabilities {
-                context_limit: Some(10_000),
-                ..ModelCapabilities::default()
-            },
-            ProviderRuntimeReasoningResolution::default(),
-            Some(ContextCompactionPolicy::default()),
-            None,
-            None,
-            Some(String::from("context-1")),
-            baseline_handle.clone(),
-        );
-        let before = guard
-            .build_budget_snapshot(&request)
-            .expect("budget without a Provider baseline should build");
-        assert_eq!(
-            before.accounting_source,
-            ContextBudgetAccountingSource::CharacterEstimate
-        );
-
-        let durable_record = completed_provider_baseline(&request, 77);
-        baseline_handle
-            .replace(Some(durable_record))
-            .expect("durable boundary should refresh the shared baseline");
-
-        let after = guard
-            .build_budget_snapshot(&request)
-            .expect("budget with the durable Provider baseline should build");
-        assert_eq!(
-            after.accounting_source,
-            ContextBudgetAccountingSource::ProviderReported
-        );
-        assert_eq!(after.active_context_tokens, 77);
-        assert_eq!(after.provider_anchor_call_id.as_deref(), Some("call-1"));
-    }
-
-    /// Verifies a proven canonical-history prefix reuses Provider input usage and estimates only the suffix.
-    /// 验证已证明的规范历史前缀会复用 Provider 输入用量，并且只估算新增后缀。
-    #[test]
-    fn canonical_prefix_uses_provider_anchor_plus_character_delta() {
-        let mut baseline_request = request_snapshot(vec![ConversationMessage {
-            id: String::from("user-1"),
-            payload: ConversationPayload::UserText {
-                text: String::from("first request"),
-                attachments: Vec::new(),
-            },
-        }]);
-        baseline_request.prompt = String::from("first request");
-        baseline_request.prompt_in_history = true;
-        let guard = guard_with_baseline(completed_provider_baseline(&baseline_request, 101));
-
-        let mut next_request = request_snapshot(vec![
-            baseline_request.history[0].clone(),
-            ConversationMessage {
-                id: String::from("tool-result-1"),
-                payload: ConversationPayload::ToolResult {
-                    tool_call_id: Some(String::from("tool-call-1")),
-                    is_error: false,
-                    text: String::from("a durable response followed by a tool result"),
-                },
-            },
-        ]);
-        next_request.prompt = String::from("a durable response followed by a tool result");
-        next_request.prompt_in_history = true;
-        let budget = guard
-            .build_budget_snapshot(&next_request)
-            .expect("prefix-aligned request budget should build");
-
-        assert_eq!(
-            budget.accounting_source,
-            ContextBudgetAccountingSource::ProviderAnchorPlusCharacterDelta
-        );
-        assert!(budget.active_context_tokens > 101);
-        assert_eq!(
-            budget.accounting_warning_code.as_deref(),
-            Some("provider_anchor_character_delta")
-        );
-        assert_eq!(budget.provider_anchor_call_id.as_deref(), Some("call-1"));
-    }
-
-    /// Verifies appended history cannot reuse a Provider anchor when non-history request shape changes.
-    /// 验证追加历史时如果非历史请求形状发生变化，则不能复用 Provider 锚点。
-    #[test]
-    fn changed_prefix_invariant_rejects_provider_anchor_reuse() {
-        let mut baseline_request = request_snapshot(vec![ConversationMessage {
-            id: String::from("user-1"),
-            payload: ConversationPayload::UserText {
-                text: String::from("first request"),
-                attachments: Vec::new(),
-            },
-        }]);
-        baseline_request.prompt = String::from("first request");
-        baseline_request.prompt_in_history = true;
-        baseline_request.additional_params = Some(serde_json::json!({"mode": "baseline"}));
-        let guard = guard_with_baseline(completed_provider_baseline(&baseline_request, 101));
-
-        let mut next_request = baseline_request.clone();
-        next_request.history.push(ConversationMessage {
-            id: String::from("tool-result-1"),
-            payload: ConversationPayload::ToolResult {
-                tool_call_id: Some(String::from("tool-call-1")),
-                is_error: false,
-                text: String::from("new tool result"),
-            },
-        });
-        next_request.additional_params = Some(serde_json::json!({"mode": "changed"}));
-        let budget = guard
-            .build_budget_snapshot(&next_request)
-            .expect("shape-mismatched request budget should use character estimation");
-
-        assert_eq!(
-            budget.accounting_source,
-            ContextBudgetAccountingSource::CharacterEstimate
-        );
-        assert_eq!(
-            budget.accounting_warning_code.as_deref(),
-            Some("provider_usage_baseline_mismatch")
-        );
-        assert_eq!(budget.provider_anchor_call_id, None);
-    }
-
-    /// Verifies an altered request with unchanged history is never classified as a strict append.
-    /// 验证历史未增长的变更请求绝不会被归类为严格追加。
-    #[test]
-    fn unchanged_history_cannot_enter_prefix_delta_mode() {
-        let mut baseline_request = request_snapshot(vec![ConversationMessage {
-            id: String::from("user-1"),
-            payload: ConversationPayload::UserText {
-                text: String::from("first request"),
-                attachments: Vec::new(),
-            },
-        }]);
-        baseline_request.prompt = String::from("first request");
-        baseline_request.prompt_in_history = true;
-        let guard = guard_with_baseline(completed_provider_baseline(&baseline_request, 101));
-
-        let mut changed_request = baseline_request.clone();
-        changed_request.max_turns = baseline_request.max_turns.saturating_add(1);
-        let budget = guard
-            .build_budget_snapshot(&changed_request)
-            .expect("same-history request change should use character estimation");
-
-        assert_eq!(
-            budget.accounting_source,
-            ContextBudgetAccountingSource::CharacterEstimate
-        );
-        assert_eq!(budget.provider_anchor_call_id, None);
-    }
-
-    /// Verifies a changed canonical prefix invalidates Provider usage reuse and falls back explicitly.
-    /// 验证规范前缀发生变化时会使 Provider 用量复用失效，并显式回退。
-    #[test]
-    fn changed_canonical_prefix_rejects_provider_anchor_reuse() {
-        let mut baseline_request = request_snapshot(vec![ConversationMessage {
-            id: String::from("user-1"),
-            payload: ConversationPayload::UserText {
-                text: String::from("original branch"),
-                attachments: Vec::new(),
-            },
-        }]);
-        baseline_request.prompt = String::from("original branch");
-        baseline_request.prompt_in_history = true;
-        let guard = guard_with_baseline(completed_provider_baseline(&baseline_request, 101));
-
-        let mut edited_request = request_snapshot(vec![ConversationMessage {
-            id: String::from("user-1"),
-            payload: ConversationPayload::UserText {
-                text: String::from("edited branch"),
-                attachments: Vec::new(),
-            },
-        }]);
-        edited_request.prompt = String::from("edited branch");
-        edited_request.prompt_in_history = true;
-        let budget = guard
-            .build_budget_snapshot(&edited_request)
-            .expect("mismatched request budget should build through character estimation");
-
-        assert_eq!(
-            budget.accounting_source,
-            ContextBudgetAccountingSource::CharacterEstimate
-        );
-        assert_eq!(
-            budget.accounting_warning_code.as_deref(),
-            Some("provider_usage_baseline_mismatch")
-        );
-        assert_eq!(budget.provider_anchor_call_id, None);
     }
 }

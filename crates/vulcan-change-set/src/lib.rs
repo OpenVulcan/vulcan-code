@@ -1,12 +1,19 @@
 //! Host-side helpers for structured `change_set` tool results.
 //! 结构化 `change_set` 工具结果的宿主侧辅助逻辑。
 
+mod persistent;
 mod types;
 mod verification;
 
 #[cfg(test)]
 mod tests;
 
+pub use persistent::{
+    PersistentChangeSet, PersistentChangeSetDiagnostic, PersistentChangeSetError,
+    PersistentChangeSetFile, PersistentChangeSetHunk, PersistentChangeSetLine,
+    PersistentLifecycleContent, PersistentTextFormat, persistent_change_set_from_host_result,
+    persistent_change_set_stats, validate_persistent_change_set,
+};
 use serde_json::{Map, Value, json};
 pub use types::{
     ChangeSetDeleteContentMode, ChangeSetDiagnosticSummary, ChangeSetFileChangeKind,

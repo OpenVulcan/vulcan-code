@@ -8,43 +8,25 @@ use vulcan_agent_runtime::{
     },
     conversation_protocol::SessionConversationState,
 };
-use vulcan_context::SessionMessageEntry;
 use vulcan_service_api::{
     ConversationRunOutcome, ConversationSummaryChangedDelta, ServiceEventEmitter,
 };
-use vulcan_workbench_model::{
-    EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION, SessionId, SessionRunPhase, SessionRuntimeStateEntry,
-    SessionState,
-};
-use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
-
-use super::vmm_runtime_audit::{
-    VmmRemovedLeaseAuditAction, build_vmm_lifecycle_events_for_state_diff,
-};
+use vulcan_workbench_model::{SessionId, SessionRunPhase, SessionRuntimeStateEntry, SessionState};
 
 use super::{
     AgentRuntimeBridge, ContextUsageChangedDelta, ServiceBridgeState, ServiceEvent,
     SharedServiceBridgeState, UpdateConversationRunPhaseDelta, WorkbenchDelta,
     WorkbenchDeltaEnvelope, active_public_ai_model_capabilities,
-    active_session_summary_for_session_mut, apply_checkpoint_conversation_state,
-    apply_vmm_writeback_effects_to_runtime_state, build_conversation_messages_patched_delta,
-    build_terminal_execution_report_state, canonical_conversation_tail_kind,
-    context_usage_snapshot_from_runtime_state,
-    conversation_continuation_summary_for_session_runtime, conversation_messages_from_session,
+    active_session_summary_for_session_mut, apply_vmm_writeback_effects_to_runtime_state,
+    build_terminal_execution_report_state, context_usage_snapshot_from_runtime_state,
     current_unix_millis_text, current_unix_millis_value, emit_service_event_with_trace,
-    is_prompt_free_continuation_tail_kind, merge_runtime_state_records_into_display_messages,
-    owning_project_id_for_session, persist_latest_retained_workspace_session_update,
-    refresh_exact_vmm_hook_session_projection, replace_conversation_messages_in_workbench_window,
-    replace_task_display_messages_with_runtime_state_records,
-    require_segmented_session_directory_for_retained_session,
-    session_continuation_runtime_blockers, session_message_entry_from_conversation_record,
-    spawn_latest_conversation_checkpoint_persist_task, spawn_service_task,
-    spawn_session_transcript_messages_persist_task, sync_hydrated_session_dialogue_ready_marker,
-    task_display_prompt_anchor_from_workspace, webui_trace, webui_trace_if_slow,
+    owning_project_id_for_session, refresh_exact_vmm_hook_session_projection,
+    session_context_usage_facts_from_v1_registry, spawn_service_task,
+    sync_hydrated_session_dialogue_ready_marker, webui_trace, webui_trace_if_slow,
     webui_turn_completion_gate_from_state, workbench_surface_matches_conversation,
     workspace_session_summary_for_session, workspace_snapshot_contains_regular_session,
-    workspace_surface_allows_user_prompt_editing,
 };
+use crate::vmm_session_controller::open_registered_session_vmm_controller;
 
 /// Applies one streamed conversation checkpoint to retained workspace memory.
 /// 将单个流式对话检查点应用到保留工作区内存。
@@ -64,162 +46,6 @@ use super::{
 /// # Returns
 /// 返回值
 /// Returns `Ok(())` after memory mutation and any required persistence tasks are scheduled.
-/// 在完成内存变更并调度必要持久化任务后返回 `Ok(())`。
-pub(super) fn apply_conversation_checkpoint(
-    app: &ServiceEventEmitter,
-    state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
-    session_id: SessionId,
-    conversation_state: SessionConversationState,
-) -> Result<(), String> {
-    let (is_main_session, visible_records_changed, context_usage_event) = {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let cached_task_prompt_anchor = cached_subagent_task_prompt_anchor(&guard, session_id);
-        let (is_main_session, visible_records_changed) = {
-            let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
-                String::from("service is still starting; workspace snapshot is not ready")
-            })?;
-            let now = current_unix_millis_text();
-            // Only main-session checkpoints may persist through workspace-store; TaskSession checkpoints stay in memory here.
-            // 只有主会话 checkpoint 可以通过 workspace-store 持久化；TaskSession checkpoint 在这里仅更新内存显示态。
-            let is_main_session =
-                workspace_session_summary_for_session(workspace, session_id).is_some();
-            // runtime_state moves out of the map so display projection can borrow the workspace without cloning history.
-            // runtime_state 从映射中移出，使显示投影可以借用工作区且无需克隆历史。
-            let mut runtime_state = workspace
-                .session_runtime_state
-                .remove(&session_id)
-                .unwrap_or_else(|| SessionRuntimeStateEntry {
-                    updated_at: now.clone(),
-                    ..SessionRuntimeStateEntry::default()
-                });
-            let visible_records_changed = match apply_checkpoint_conversation_state(
-                &mut runtime_state,
-                conversation_state,
-                &now,
-            ) {
-                Ok(changed) => changed,
-                Err(error) => {
-                    // apply_checkpoint_conversation_state preserves state on every validation failure.
-                    // apply_checkpoint_conversation_state 在任何校验失败时都会保留原状态。
-                    workspace
-                        .session_runtime_state
-                        .insert(session_id, runtime_state);
-                    return Err(error);
-                }
-            };
-            if let Some(usage) = runtime_state.provider_call_ledger.last_usage()
-                && runtime_state
-                    .active_context_window_policy
-                    .is_some_and(|policy| {
-                        policy.auto_compact_scope
-                            == vulcan_context::ContextWindowUsageScope::BodyAfterPrefix
-                    })
-                && runtime_state.auto_compact_prefill_input_tokens.is_none()
-            {
-                // Codex captures the first successful input usage as the absolute body-window baseline.
-                // Codex 将首次成功输入用量捕获为正文窗口的绝对基线。
-                runtime_state.auto_compact_prefill_input_tokens =
-                    vulcan_context::budget::observed_input_tokens_from_usage(Some(&usage));
-            }
-            if is_main_session && visible_records_changed {
-                merge_runtime_state_records_into_display_messages(
-                    workspace,
-                    session_id,
-                    &runtime_state,
-                );
-            } else if !is_main_session {
-                let task_prompt_anchor =
-                    task_display_prompt_anchor_from_workspace(workspace, session_id)
-                        .or(cached_task_prompt_anchor);
-                replace_task_display_messages_with_runtime_state_records(
-                    workspace,
-                    session_id,
-                    &runtime_state,
-                    task_prompt_anchor.as_deref(),
-                );
-            }
-            workspace
-                .session_runtime_state
-                .insert(session_id, runtime_state);
-            sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
-            (is_main_session, visible_records_changed)
-        };
-        // Context usage is a live projection, so publish it at every canonical checkpoint,
-        // including tool-result and continuation checkpoints between Provider calls.
-        // 上下文用量属于实时投影，因此每个规范检查点都要发布，包括 Provider 调用之间的工具结果与续跑检查点。
-        let context_usage_event = if workbench_surface_matches_conversation(
-            &guard.workbench,
-            session_id.to_string().as_str(),
-        ) {
-            let workspace = guard.workspace_snapshot.as_ref().ok_or_else(|| {
-                String::from("service is still starting; workspace snapshot is not ready")
-            })?;
-            let public_model_capabilities = active_public_ai_model_capabilities(
-                guard
-                    .agent_runtime
-                    .as_ref()
-                    .map(|runtime| runtime.public_ai_runtime.as_ref()),
-            );
-            let context_usage = context_usage_snapshot_from_runtime_state(
-                session_id,
-                workspace.session_runtime_state.get(&session_id),
-                &guard.live_context_budgets,
-                public_model_capabilities.as_ref(),
-                None,
-            );
-            guard.workbench.context_usage = context_usage.clone();
-            guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
-            let generation = guard.workbench_generation;
-            guard.workbench.revision = generation;
-            Some(WorkbenchDeltaEnvelope {
-                generation,
-                delta: WorkbenchDelta::ContextUsageChanged(ContextUsageChangedDelta {
-                    context_usage,
-                }),
-            })
-        } else {
-            None
-        };
-        (
-            is_main_session,
-            visible_records_changed,
-            context_usage_event,
-        )
-    };
-    if is_main_session {
-        // Canonical checkpoint persistence borrows only the bounded runtime tail after writer coalescing.
-        // 规范检查点持久化在写入者合并后只借用有界运行时尾部。
-        spawn_latest_conversation_checkpoint_persist_task(
-            state.clone(),
-            controller_runtime.clone(),
-            session_id,
-            Some(String::from("conversation_checkpoint")),
-        );
-        if visible_records_changed {
-            spawn_session_transcript_messages_persist_task(
-                state.clone(),
-                controller_runtime.clone(),
-                session_id,
-                Some(String::from("conversation_checkpoint_visible_records")),
-            );
-        }
-    }
-    if let Some(event) = context_usage_event {
-        // Emit after releasing the state lock so a slow WebUI client cannot block canonical state mutation.
-        // 释放状态锁后再发事件，避免缓慢的 WebUI 客户端阻塞规范状态变更。
-        emit_service_event_with_trace(
-            app,
-            "workbench_checkpoint_context_usage_delta_emit",
-            ServiceEvent::WorkbenchDelta(Box::new(event)),
-        );
-    }
-    Ok(())
-}
-
-/// Result produced after applying one terminal report to retained memory.
 /// 将一份终态报告应用到保留内存后产生的结果。
 pub(super) struct TerminalReportMemoryApply {
     /// Exact owning project id for a regular main-session terminal report.
@@ -231,45 +57,6 @@ pub(super) struct TerminalReportMemoryApply {
     /// Final conversation outcome when this report closes a regular user-facing turn.
     /// 当本报告闭合普通用户会话回合时的最终会话结果。
     pub(super) conversation_run_outcome: Option<ConversationRunOutcome>,
-    /// Body-free VMM lifecycle events produced by terminal TTL consumption.
-    /// 终态 TTL 消费产生的不含正文 VMM 生命周期事件。
-    pub(super) vmm_lifecycle_events: Vec<vulcan_context::RuntimeVmmLifecycleEvent>,
-    /// Exact immutable transcript rows appended while applying this terminal report.
-    /// 应用本次终态报告时追加的精确不可变转录记录。
-    pub(super) terminal_transcript_entries: Vec<SessionMessageEntry>,
-}
-
-/// Projects only the immutable transcript suffix appended after one retained prefix.
-/// 仅投影在某个保留前缀之后追加的不可变转录后缀。
-///
-/// # Parameters
-/// 参数
-/// `runtime_state` is the detached terminal candidate containing the complete canonical record list.
-/// `runtime_state` 是包含完整规范记录列表的分离终态候选。
-/// `source_record_count` is the exact record count before terminal projection began.
-/// `source_record_count` 是终态投影开始前的精确记录数量。
-///
-/// # Returns
-/// 返回值
-/// Returns the exact appended entries, or rejects a terminal projection that shortened history.
-/// 返回精确追加记录；若终态投影缩短历史则拒绝。
-fn terminal_transcript_entries_after_prefix(
-    runtime_state: &SessionRuntimeStateEntry,
-    source_record_count: usize,
-) -> Result<Vec<SessionMessageEntry>, String> {
-    runtime_state
-        .conversation_state
-        .records
-        .get(source_record_count..)
-        .ok_or_else(|| {
-            String::from("Terminal report projection shortened the retained display transcript.")
-        })
-        .map(|records| {
-            records
-                .iter()
-                .map(session_message_entry_from_conversation_record)
-                .collect()
-        })
 }
 
 /// Exact conversation-hook side effect committed for one terminal report.
@@ -500,8 +287,6 @@ pub(super) fn apply_task_session_execution_report_to_memory(
         project_id: None,
         completion_request: None,
         conversation_run_outcome: None,
-        vmm_lifecycle_events: Vec::new(),
-        terminal_transcript_entries: Vec::new(),
     })
 }
 
@@ -528,15 +313,11 @@ pub(super) fn apply_task_session_execution_report_to_memory_in_place(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let cached_task_prompt_anchor = cached_subagent_task_prompt_anchor(&guard, session_id);
-        let (is_success, display_messages) = {
+        let is_success = {
             let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
                 String::from("service is still starting; workspace snapshot is not ready")
             })?;
             let now = current_unix_millis_text();
-            let task_prompt_anchor =
-                task_display_prompt_anchor_from_workspace(workspace, session_id)
-                    .or(cached_task_prompt_anchor);
             let (is_success, runtime_state) = {
                 let default_runtime_state = SessionRuntimeStateEntry {
                     updated_at: now.clone(),
@@ -556,12 +337,6 @@ pub(super) fn apply_task_session_execution_report_to_memory_in_place(
                 )?;
                 (apply_result.is_success, runtime_state)
             };
-            replace_task_display_messages_with_runtime_state_records(
-                workspace,
-                session_id,
-                &runtime_state,
-                task_prompt_anchor.as_deref(),
-            );
             workspace
                 .session_runtime_state
                 .insert(session_id, runtime_state);
@@ -574,12 +349,7 @@ pub(super) fn apply_task_session_execution_report_to_memory_in_place(
                 },
             );
             sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
-            let display_messages = workspace
-                .session_messages
-                .get(&session_id)
-                .cloned()
-                .unwrap_or_default();
-            (is_success, display_messages)
+            is_success
         };
         let cached_conversation_state = guard
             .workspace_snapshot
@@ -587,7 +357,6 @@ pub(super) fn apply_task_session_execution_report_to_memory_in_place(
             .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
             .map(|runtime_state| runtime_state.conversation_state.clone());
         if let Some(cache_entry) = guard.subagent_surface_detail_cache.get_mut(&session_id) {
-            cache_entry.messages = display_messages;
             cache_entry.task_state.conversation_state = cached_conversation_state;
             cache_entry.last_access_ms = current_unix_millis_value();
         }
@@ -607,35 +376,6 @@ pub(super) fn apply_task_session_execution_report_to_memory_in_place(
         ),
     );
     Ok((session_id, is_success))
-}
-
-/// Returns the cached child-task prompt anchor retained by the subagent detail surface.
-/// 返回子代理详情界面缓存中保留的子任务提示词锚点。
-///
-/// # Parameters
-/// 参数
-/// `state` is the retained service bridge state that may contain a subagent detail cache entry.
-/// `state` 是可能包含子代理详情缓存条目的保留服务桥状态。
-/// `session_id` selects the child TaskSession whose prompt anchor is needed.
-/// `session_id` 选择需要提示词锚点的子 TaskSession。
-///
-/// # Returns
-/// 返回值
-/// A non-empty cached task description when available.
-/// 当存在非空任务描述时返回缓存锚点。
-fn cached_subagent_task_prompt_anchor(
-    state: &ServiceBridgeState,
-    session_id: SessionId,
-) -> Option<String> {
-    state
-        .subagent_surface_detail_cache
-        .get(&session_id)?
-        .task_state
-        .description
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
 }
 
 /// Applies the terminal execution report to retained memory and emits the updated workbench view.
@@ -681,33 +421,14 @@ pub(super) fn apply_execution_report_to_memory(
     if !report_is_regular_session {
         return apply_task_session_execution_report_to_memory(state, report);
     }
-    // vmm_runtime_context is cloned before the retained workspace transaction begins.
-    // vmm_runtime_context 在保留工作区事务开始前完成克隆。
-    let (vmm_controller_registry, session_directory) = {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
-            String::from("Core VMM controller runtime is unavailable at terminal completion.")
-        })?;
-        let session_directory = require_segmented_session_directory_for_retained_session(
-            &guard,
-            &controller_runtime.data_root,
-            session_id,
-        )?;
-        (guard.vmm_controller_registry.clone(), session_directory)
-    };
     // vmm_controller is the sole terminal TTL state owner for this session.
     // vmm_controller 是该会话终态 TTL 状态的唯一所有者。
     webui_trace(
         "execution_report_vmm_controller_open_start",
         format!("session={session_id}"),
     );
-    let vmm_controller = vmm_controller_registry.get_or_open(
-        &session_directory,
-        session_id,
-        &current_unix_millis_text(),
-    )?;
+    let vmm_controller =
+        open_registered_session_vmm_controller(state, session_id, &current_unix_millis_text())?;
     webui_trace(
         "execution_report_vmm_controller_open_finished",
         format!("session={session_id}"),
@@ -743,14 +464,7 @@ pub(super) fn apply_execution_report_to_memory(
         "execution_report_workspace_apply_start",
         format!("session={session_id}"),
     );
-    let (
-        project_id,
-        is_main_session,
-        terminal_run_phase,
-        terminal_status_label,
-        vmm_lifecycle_events,
-        terminal_transcript_entries,
-    ) = {
+    let (project_id, is_main_session, terminal_run_phase, terminal_status_label) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -774,9 +488,6 @@ pub(super) fn apply_execution_report_to_memory(
                 .session_runtime_state
                 .get(&session_id)
                 .unwrap_or(&default_runtime_state);
-            // sourceRecordCount anchors the immutable suffix created only by terminal projection.
-            // sourceRecordCount 锚定仅由终态投影创建的不可变后缀。
-            let source_record_count = source_runtime_state.conversation_state.records.len();
             // vmm_state_before_terminal is the exact controller audit baseline before TTL consumption.
             // vmm_state_before_terminal 是 TTL 消费前精确的控制器审计基线。
             let vmm_state_before_terminal = vmm_controller.snapshot()?;
@@ -786,10 +497,6 @@ pub(super) fn apply_execution_report_to_memory(
                 &now,
                 &report,
             )?;
-            // terminalTranscriptEntries excludes every existing live row, including mutable tool cards.
-            // terminalTranscriptEntries 排除全部既有实时记录，包括可变工具卡片。
-            let terminal_transcript_entries =
-                terminal_transcript_entries_after_prefix(&runtime_state, source_record_count)?;
             // hook_action encodes the only legal logical-turn transition for this terminal report.
             // hook_action 编码此终态报告唯一合法的逻辑回合转换。
             let hook_action = TerminalConversationHookAction::from_terminal_facts(
@@ -887,12 +594,6 @@ pub(super) fn apply_execution_report_to_memory(
             if workspace.selected_session != session_id {
                 runtime_state.ui_state.unread = true;
             }
-            refresh_terminal_continuation_state(&mut runtime_state, apply_result.is_success, &now)?;
-            merge_runtime_state_records_into_display_messages(
-                workspace,
-                session_id,
-                &runtime_state,
-            );
             workspace
                 .session_runtime_state
                 .insert(session_id, runtime_state);
@@ -928,24 +629,11 @@ pub(super) fn apply_execution_report_to_memory(
             } else {
                 SessionState::Blocked.label().to_string()
             };
-            // vmm_lifecycle_events retain no provider-visible memory text.
-            // vmm_lifecycle_events 不保留任何 Provider 可见记忆正文。
-            // vmm_state_after_terminal binds every audit field to one exact controller revision.
-            // vmm_state_after_terminal 将全部审计字段绑定到同一个精确控制器修订。
-            let vmm_state_after_terminal = vmm_controller.snapshot()?;
-            let vmm_lifecycle_events = build_vmm_lifecycle_events_for_state_diff(
-                &vmm_state_before_terminal,
-                &vmm_state_after_terminal,
-                vmm_state_after_terminal.last_consumed_turn_id.as_deref(),
-                VmmRemovedLeaseAuditAction::Expired,
-            );
             (
                 project_id,
                 is_main_session,
                 terminal_run_phase,
                 terminal_status_label,
-                vmm_lifecycle_events,
-                terminal_transcript_entries,
             )
         }
     };
@@ -1003,65 +691,7 @@ pub(super) fn apply_execution_report_to_memory(
         project_id,
         completion_request,
         conversation_run_outcome,
-        vmm_lifecycle_events,
-        terminal_transcript_entries,
     })
-}
-
-/// Rebuilds prompt-free continuation eligibility from the canonical terminal state.
-/// 根据规范终止状态重建无提示词 Continue 资格。
-pub(crate) fn refresh_terminal_continuation_state(
-    runtime_state: &mut SessionRuntimeStateEntry,
-    is_success: bool,
-    terminal_at: &str,
-) -> Result<(), String> {
-    let terminal_at_ms = terminal_at
-        .parse::<i64>()
-        .map_err(|_| String::from("ERR_CONVERSATION_CONTINUE_TERMINAL_TIMESTAMP_INVALID"))?;
-    let tail_kind = canonical_conversation_tail_kind(runtime_state)
-        .unwrap_or("empty")
-        .to_string();
-    let terminal_execution_id = runtime_state
-        .provider_call_ledger
-        .active_calls_in_sequence()
-        .into_iter()
-        .next_back()
-        .map(|record| record.identity.execution_id.clone());
-    // replaySafety is authoritative for terminal Continue admission; a successful tail alone cannot prove replay safety.
-    // replaySafety 是终态 Continue 准入的权威事实；仅凭尾部类型不能证明重放安全。
-    let replay_safety_proven =
-        runtime_state
-            .execution_retry_snapshot
-            .as_ref()
-            .is_some_and(|reference| {
-                reference.schema_version == EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION
-                    && reference.replay_safety_proven()
-            });
-    // A prompt-free retry belongs only to a problem turn; every successful terminal report closes normally even when its last visible row is a tool.
-    // 无提示词重试只属于问题回合；即使最后一条可见记录是工具，任何成功终态报告也必须正常闭合。
-    let eligible = !is_success
-        && is_prompt_free_continuation_tail_kind(tail_kind.as_str())
-        && runtime_state.provider_call_ledger.in_flight_call_count() == 0
-        && replay_safety_proven;
-    if !runtime_state
-        .provider_call_ledger
-        .mark_continuation_terminal(
-            terminal_execution_id,
-            if is_success {
-                String::from("completed")
-            } else {
-                String::from("failed")
-            },
-            terminal_at_ms,
-            tail_kind,
-            eligible,
-        )
-    {
-        return Err(String::from(
-            "ERR_CONVERSATION_CONTINUE_LEDGER_REVISION_EXHAUSTED",
-        ));
-    }
-    Ok(())
 }
 
 /// Emits terminal-report deltas without rebuilding the full workbench snapshot.
@@ -1092,6 +722,14 @@ fn emit_terminal_execution_report_workbench_deltas(
     status_label: &str,
 ) -> Result<(), String> {
     let conversation_id = session_id.to_string();
+    let v1_usage_facts = {
+        let registry = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?
+            .session_runtime_registry
+            .clone();
+        session_context_usage_facts_from_v1_registry(registry.as_ref(), session_id)?
+    };
     let events = {
         let mut guard = state
             .lock()
@@ -1101,30 +739,6 @@ fn emit_terminal_execution_report_workbench_deltas(
         })?;
         let surface_matches =
             workbench_surface_matches_conversation(&guard.workbench, &conversation_id);
-        let before_visible_messages = guard
-            .workbench
-            .messages
-            .iter()
-            .filter(|message| message.conversation_id == conversation_id)
-            .cloned()
-            .collect::<Vec<_>>();
-        let messages = if surface_matches {
-            let allow_user_prompt_editing =
-                workspace_surface_allows_user_prompt_editing(workspace, session_id, None);
-            workspace
-                .session_messages
-                .get(&session_id)
-                .map(|entries| {
-                    conversation_messages_from_session(
-                        &conversation_id,
-                        entries,
-                        allow_user_prompt_editing,
-                    )
-                })
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
         let public_model_capabilities = active_public_ai_model_capabilities(
             guard
                 .agent_runtime
@@ -1135,6 +749,7 @@ fn emit_terminal_execution_report_workbench_deltas(
             context_usage_snapshot_from_runtime_state(
                 session_id,
                 workspace.session_runtime_state.get(&session_id),
+                v1_usage_facts.as_ref(),
                 &guard.live_context_budgets,
                 public_model_capabilities.as_ref(),
                 None,
@@ -1142,15 +757,8 @@ fn emit_terminal_execution_report_workbench_deltas(
         } else {
             None
         };
-        let continuation_blockers =
-            session_continuation_runtime_blockers(&guard, workspace, session_id)?;
-        let continuation = conversation_continuation_summary_for_session_runtime(
-            workspace.session_runtime_state.get(&session_id),
-            run_phase,
-            continuation_blockers,
-        );
         let mut events = Vec::new();
-        let phase_event = terminal_report_workbench_delta_envelope(
+        events.push(terminal_report_workbench_delta_envelope(
             &mut guard,
             WorkbenchDelta::UpdateConversationRunPhase(UpdateConversationRunPhaseDelta {
                 conversation_id: conversation_id.clone(),
@@ -1158,7 +766,7 @@ fn emit_terminal_execution_report_workbench_deltas(
                 status: Some(status_label.to_string()),
                 last_updated_label: Some(String::from("now")),
             }),
-        );
+        ));
         let mut changed_conversation = None;
         for conversation in &mut guard.workbench.conversations {
             if conversation.id == conversation_id {
@@ -1166,12 +774,10 @@ fn emit_terminal_execution_report_workbench_deltas(
                 conversation.status = status_label.to_string();
                 conversation.last_updated_label = String::from("刚刚");
                 conversation.last_updated_at = current_unix_millis_text();
-                conversation.continuation = continuation.clone();
                 changed_conversation = Some(conversation.clone());
                 break;
             }
         }
-        events.push(phase_event);
         if let Some(conversation) = changed_conversation {
             let selected_conversation_id = guard.workbench.selected_conversation_id.clone();
             events.push(terminal_report_workbench_delta_envelope(
@@ -1183,30 +789,13 @@ fn emit_terminal_execution_report_workbench_deltas(
             ));
         }
         if surface_matches {
-            if let Some(message_patch) = build_conversation_messages_patched_delta(
-                &conversation_id,
-                before_visible_messages.as_slice(),
-                messages.as_slice(),
-            ) {
-                let message_event = terminal_report_workbench_delta_envelope(
-                    &mut guard,
-                    WorkbenchDelta::ConversationMessagesPatched(message_patch),
-                );
-                replace_conversation_messages_in_workbench_window(
-                    &mut guard.workbench.messages,
-                    &conversation_id,
-                    messages,
-                );
-                events.push(message_event);
-            }
-            let context_event = terminal_report_workbench_delta_envelope(
+            events.push(terminal_report_workbench_delta_envelope(
                 &mut guard,
                 WorkbenchDelta::ContextUsageChanged(ContextUsageChangedDelta {
                     context_usage: context_usage.clone(),
                 }),
-            );
+            ));
             guard.workbench.context_usage = context_usage;
-            events.push(context_event);
         }
         events
     };
@@ -1214,79 +803,6 @@ fn emit_terminal_execution_report_workbench_deltas(
         emit_service_event_with_trace(
             app,
             "workbench_terminal_report_delta_emit",
-            ServiceEvent::WorkbenchDelta(Box::new(event)),
-        );
-    }
-    Ok(())
-}
-
-/// Reprojects only the continuation summary after its durable retry sidecar changes lifecycle state.
-/// 在可靠重试 sidecar 生命周期状态变化后，仅重新投影 Continue 摘要。
-///
-/// # Parameters
-/// 参数
-/// `app` emits the exact conversation-summary delta after the retained state is updated.
-/// `app` 在保留状态更新后发送精确的会话摘要增量。
-/// `state` owns the lock-consistent workspace, live blockers, and Workbench projection.
-/// `state` 持有锁一致的工作区、实时阻断条件与 Workbench 投影。
-/// `session_id` selects the exact conversation whose retry eligibility changed.
-/// `session_id` 选择重试资格发生变化的精确会话。
-///
-/// # Returns
-/// 返回值
-/// Success after the retained Workbench state and optional visible delta share one generation.
-/// 保留工作台状态与可选可见增量共享同一代际后返回成功。
-pub(crate) fn emit_conversation_continuation_summary_changed(
-    app: &ServiceEventEmitter,
-    state: &SharedServiceBridgeState,
-    session_id: SessionId,
-) -> Result<(), String> {
-    let conversation_id = session_id.to_string();
-    let event = {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let workspace = guard.workspace_snapshot.as_ref().ok_or_else(|| {
-            String::from("service is still starting; workspace snapshot is not ready")
-        })?;
-        let run_phase = workspace
-            .session_run_phases
-            .get(&session_id)
-            .copied()
-            .ok_or_else(|| {
-                format!("Session `{session_id}` has no retained run phase for Continue projection.")
-            })?;
-        let continuation_blockers =
-            session_continuation_runtime_blockers(&guard, workspace, session_id)?;
-        let continuation = conversation_continuation_summary_for_session_runtime(
-            workspace.session_runtime_state.get(&session_id),
-            run_phase,
-            continuation_blockers,
-        );
-        let selected_conversation_id = guard.workbench.selected_conversation_id.clone();
-        let changed_conversation = guard
-            .workbench
-            .conversations
-            .iter_mut()
-            .find(|conversation| conversation.id == conversation_id)
-            .map(|conversation| {
-                conversation.continuation = continuation;
-                conversation.clone()
-            });
-        changed_conversation.map(|conversation| {
-            terminal_report_workbench_delta_envelope(
-                &mut guard,
-                WorkbenchDelta::ConversationSummaryChanged(ConversationSummaryChangedDelta {
-                    conversation,
-                    selected_conversation_id,
-                }),
-            )
-        })
-    };
-    if let Some(event) = event {
-        emit_service_event_with_trace(
-            app,
-            "workbench_continuation_summary_delta_emit",
             ServiceEvent::WorkbenchDelta(Box::new(event)),
         );
     }
@@ -1326,8 +842,6 @@ fn terminal_report_workbench_delta_envelope(
 /// `app` 是用于发出后续 VMM outbox 更新的 Tauri 应用句柄。
 /// `state` owns the retained workspace snapshot that receives hook side effects.
 /// `state` 持有接收 hook 副作用的保留工作区快照。
-/// `controller_runtime` persists VMM outbox changes after the hook finishes.
-/// `controller_runtime` 在 hook 完成后持久化 VMM outbox 变更。
 /// `agent_runtime` provides VMM hook snapshot refresh state.
 /// `agent_runtime` 提供 VMM hook 快照刷新状态。
 /// `completion_request` is the prepared completed-turn hook dispatch request.
@@ -1335,7 +849,6 @@ fn terminal_report_workbench_delta_envelope(
 pub(super) fn spawn_conversation_completion_hook_task(
     _app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
-    controller_runtime: ControllerRuntimeHandle,
     agent_runtime: AgentRuntimeBridge,
     completion_request: ConversationCompletionRequest,
 ) {
@@ -1362,35 +875,9 @@ pub(super) fn spawn_conversation_completion_hook_task(
                 _ => None,
             });
         if let Some(status) = authoritative_status {
-            let (vmm_controller_registry, session_directory) = match state.lock() {
-                Ok(guard) => {
-                    let session_directory =
-                        match require_segmented_session_directory_for_retained_session(
-                            &guard,
-                            &controller_runtime.data_root,
-                            session_id,
-                        ) {
-                            Ok(session_directory) => session_directory,
-                            Err(error) => {
-                                eprintln!(
-                                    "[webui-service] failed to resolve exact VMM session directory after PostAction for {session_id}: {error}"
-                                );
-                                return;
-                            }
-                        };
-                    (guard.vmm_controller_registry.clone(), session_directory)
-                }
-                Err(error) => {
-                    eprintln!("failed to lock service state: {error}");
-                    return;
-                }
-            };
             let now = current_unix_millis_text();
-            let controller = match vmm_controller_registry.get_or_open(
-                &session_directory,
-                session_id,
-                &now,
-            ) {
+            let controller = match open_registered_session_vmm_controller(&state, session_id, &now)
+            {
                 Ok(controller) => controller,
                 Err(error) => {
                     eprintln!(
@@ -1453,85 +940,14 @@ pub(super) fn spawn_conversation_completion_hook_task(
                 );
             }
         }
-        if let Err(error) =
-            persist_latest_retained_workspace_session_update(&state, controller_runtime, session_id)
-                .await
-        {
-            eprintln!("[webui-service] persist completed-turn hook effects failed: {error}");
-        }
+        // The VMM controller command above is the durable owner; workspace state is only a live UI projection.
+        // 上述 VMM Controller 命令是持久化所有者；workspace 状态仅作为实时 UI 投影。
     });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vulcan_agent_runtime::conversation_protocol::conversation_state_from_session_messages;
-    use vulcan_workbench_model::{
-        SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,
-    };
-
-    /// Verifies terminal persistence receives only rows appended after the pre-terminal prefix.
-    /// 验证终态持久化仅接收终态前缀之后追加的记录。
-    #[test]
-    fn terminal_transcript_entries_preserve_exact_appended_suffix() {
-        // ready models an already-persisted mutable tool card at the terminal boundary.
-        // ready 模拟终态边界处已经持久化的可变工具卡片。
-        let mut ready = SessionMessageEntry::new(SessionMessageKind::Assistant, "", "")
-            .with_runtime_metadata("tool-card", "1000");
-        ready.record_kind = SessionMessageRecordKind::ToolCallOutput;
-        // detail models the immutable terminal evidence appended by terminal projection.
-        // detail 模拟终态投影追加的不可变终态证据。
-        let mut detail = SessionMessageEntry::new(SessionMessageKind::Assistant, "", "result")
-            .with_runtime_metadata("tool-detail", "1001");
-        detail.record_kind = SessionMessageRecordKind::ToolDetailOutput;
-        detail.visible = false;
-        // runtimeState contains the complete terminal candidate while one row belongs to the old prefix.
-        // runtimeState 包含完整终态候选，其中一条记录属于旧前缀。
-        let runtime_state = SessionRuntimeStateEntry {
-            conversation_state: conversation_state_from_session_messages(&[ready, detail.clone()])
-                .expect("terminal rows should form canonical conversation state"),
-            ..SessionRuntimeStateEntry::default()
-        };
-
-        let entries = terminal_transcript_entries_after_prefix(&runtime_state, 1)
-            .expect("terminal suffix should project");
-
-        assert_eq!(entries, vec![detail]);
-        assert!(terminal_transcript_entries_after_prefix(&runtime_state, 3).is_err());
-    }
-
-    /// Verifies a successful final AssistantOutput closes the turn without granting prompt-free continuation.
-    /// 验证成功的最终 AssistantOutput 会闭合回合且不会授予无提示词继续资格。
-    #[test]
-    fn completed_assistant_output_disables_continuation() {
-        // assistant_output models the durable final response emitted by the normal Provider success path.
-        // assistant_output 模拟正常 Provider 成功路径生成的持久最终回复。
-        let mut assistant_output =
-            SessionMessageEntry::new(SessionMessageKind::Assistant, "Answer", "complete")
-                .with_runtime_metadata("assistant-1", "1000");
-        assistant_output.record_kind = SessionMessageRecordKind::AssistantOutput;
-        // runtime_state owns the canonical record stream inspected by terminal continuation projection.
-        // runtime_state 持有终态继续投影检查的规范记录流。
-        let mut runtime_state = SessionRuntimeStateEntry {
-            conversation_state: conversation_state_from_session_messages(&[assistant_output])
-                .expect("assistant output must project into canonical conversation state"),
-            ..SessionRuntimeStateEntry::default()
-        };
-
-        refresh_terminal_continuation_state(&mut runtime_state, true, "1000")
-            .expect("successful terminal projection must update continuation state");
-
-        // continuation is the authoritative prompt-free continuation lifecycle after terminal projection.
-        // continuation 是终态投影后的权威无提示词继续生命周期。
-        let continuation = &runtime_state.provider_call_ledger.continuation;
-        assert!(!continuation.eligible);
-        assert_eq!(
-            continuation.canonical_tail_kind.as_deref(),
-            Some("assistant")
-        );
-        assert_eq!(continuation.terminal_reason.as_deref(), Some("completed"));
-    }
-
     /// Verifies terminal hook ownership selects one exclusive action for every outcome.
     /// 验证终态 Hook 所有权为每种结果选择唯一互斥操作。
     #[test]

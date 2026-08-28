@@ -80,6 +80,35 @@ pub struct PreparedLocalMediaReference {
     pub reference_encoding: Option<crate::UploadReferenceEncoding>,
 }
 
+/// Carries the complete immutable admission for one local-media preparation.
+/// 携带一次本地媒体准备所需的完整不可变准入信息。
+pub struct PrepareLocalMediaRequest<'a> {
+    /// Exact resolved Provider selection used for preparation and caching.
+    /// 用于准备与缓存的精确已解析供应商选择。
+    pub selection: &'a ResolvedPublicAiSelection,
+    /// Optional owning session required by session-scoped upload channels.
+    /// 会话作用域上传通道要求的可选所有会话。
+    pub owner_session_id: Option<&'a str>,
+    /// Stable host operation identity used for progress projection.
+    /// 用于进度投影的稳定宿主操作身份。
+    pub operation_id: &'a str,
+    /// Exact local source path read during preparation.
+    /// 准备期间读取的精确本地源路径。
+    pub local_path: &'a Path,
+    /// Closed source resource kind.
+    /// 封闭源资源类型。
+    pub kind: ResourceKind,
+    /// Canonical source MIME type.
+    /// 规范源 MIME 类型。
+    pub mime_type: &'a str,
+    /// Optional transfer-progress callback.
+    /// 可选传输进度回调。
+    pub progress: Option<crate::MediaUploadProgressCallback>,
+    /// Cooperative cancellation owner for the complete preparation.
+    /// 完整准备过程使用的协作取消所有者。
+    pub cancellation: &'a crate::MediaUploadCancellation,
+}
+
 /// Immutable emitter context for one media upload performed after request dispatch.
 /// 请求分派后执行单次媒体上传时使用的不可变发射上下文。
 #[derive(Clone)]
@@ -8774,15 +8803,18 @@ impl PublicAiRuntime {
     /// 返回不可变引用及其精确供应商编码，或内联 Data URL 标记。
     pub async fn prepare_and_remember_local_media(
         &self,
-        selection: &ResolvedPublicAiSelection,
-        owner_session_id: Option<&str>,
-        operation_id: &str,
-        local_path: &Path,
-        kind: ResourceKind,
-        mime_type: &str,
-        progress: Option<crate::MediaUploadProgressCallback>,
-        cancellation: &crate::MediaUploadCancellation,
+        request: PrepareLocalMediaRequest<'_>,
     ) -> Result<PreparedLocalMediaReference, String> {
+        let PrepareLocalMediaRequest {
+            selection,
+            owner_session_id,
+            operation_id,
+            local_path,
+            kind,
+            mime_type,
+            progress,
+            cancellation,
+        } = request;
         if cancellation.is_cancelled() {
             return Err(String::from("media upload cancelled"));
         }
@@ -8836,8 +8868,8 @@ impl PublicAiRuntime {
         // cachedReference 证明精确源字节已经拥有仍有效的供应商引用；
         // a cache hit must not create a synthetic upload-progress row.
         // 命中缓存时不得创建伪造的上传进度行。
-        if use_provider_upload {
-            if let Some(cached_reference) = self
+        if use_provider_upload
+            && let Some(cached_reference) = self
                 .execution_client
                 .prepared_media_reference(
                     &selection.route,
@@ -8848,12 +8880,11 @@ impl PublicAiRuntime {
                     Some(cancellation),
                 )
                 .await
-            {
-                return Ok(PreparedLocalMediaReference {
-                    reference: cached_reference.provider_reference,
-                    reference_encoding: Some(cached_reference.reference_encoding),
-                });
-            }
+        {
+            return Ok(PreparedLocalMediaReference {
+                reference: cached_reference.provider_reference,
+                reference_encoding: Some(cached_reference.reference_encoding),
+            });
         }
         // observer is cloned before any callback invocation to avoid retaining the registry lock.
         // observer 在任何回调调用前完成克隆，避免占用注册表锁。

@@ -2,8 +2,7 @@
 //! WebUI 提示词生命周期 precheck continue 辅助逻辑。
 
 use uuid::Uuid;
-use vulcan_agent_runtime::conversation_protocol::SessionConversationState;
-use vulcan_service_api::{ServiceEvent, WorkbenchDelta, WorkbenchDeltaEnvelope};
+use vulcan_service_api::{ServiceEvent, WorkbenchDeltaEnvelope};
 use vulcan_workbench_model::{SessionMessageEntry, SessionMessageKind};
 
 use super::*;
@@ -11,22 +10,12 @@ use crate::state::{
     SessionTerminalPersistenceOwner, SessionTerminalPersistenceOwnerGuard,
     SessionTurnAdmissionReservationKind,
 };
+use crate::vmm_session_controller::open_registered_session_vmm_controller;
 use crate::{
     append_webui_session_message_entry_to_state, apply_session_phase_to_state,
-    build_conversation_messages_patched_delta, conversation_messages_from_session,
-    emit_context_injection_changed_delta, emit_conversation_continuation_summary_changed,
-    emit_service_event_with_trace, is_prompt_free_continuation_tail_kind,
-    merge_runtime_state_records_into_display_messages, owning_project_id_for_session,
-    persist_latest_retained_workspace_session_update, register_session_terminal_persistence_owner,
-    replace_conversation_messages_in_workbench_window,
-    require_segmented_session_directory_for_retained_session,
-    retain_hydrated_conversation_windows_for_workspace,
-    sync_hydrated_session_dialogue_ready_marker, workbench_surface_matches_conversation,
-};
-use crate::{
-    invalidate_execution_retry_reference, invalidate_execution_retry_runtime_state,
-    mark_execution_retry_snapshot_provider_dispatch_unknown,
-    refreeze_claimed_execution_retry_snapshot_with_canonical_state,
+    emit_context_injection_changed_delta, emit_service_event_with_trace,
+    owning_project_id_for_session, register_session_terminal_persistence_owner,
+    sync_hydrated_session_dialogue_ready_marker,
 };
 
 /// Builds the shared precheck plan for a WebUI session using the service VMM layering rules.
@@ -100,8 +89,8 @@ pub(crate) fn webui_shared_prompt_precheck_plan(
 /// `app` 发出工作台快照与诊断信息。
 /// `state` owns the retained workspace snapshot.
 /// `state` 持有保留的工作区快照。
-/// `controller_runtime` provides segmented session persistence.
-/// `controller_runtime` 提供分段会话持久化能力。
+/// `controller_runtime` provides the controller services needed by prompt preparation.
+/// `controller_runtime` 提供提示词准备所需的控制器服务。
 /// `agent_runtime` owns provider, hook, and AI tool configuration.
 /// `agent_runtime` 持有 Provider、hook 与 AI 工具配置。
 /// `start` is the prompt turn start produced by the shared reducer.
@@ -181,12 +170,6 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         if let Ok(mut guard) = state.lock() {
             stop_webui_session_kernel_generation(&mut guard, session_id);
         }
-        spawn_workspace_session_persist_task(
-            state.clone(),
-            controller_runtime.clone(),
-            session_id,
-            Some(String::from("precheck_stopped")),
-        );
         return Ok(None);
     }
     ensure_webui_session_runtime_entry(
@@ -194,29 +177,10 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         session_id,
         Some(&start.preparation_turn_id),
     )?;
-    // vmm_controller_registry is cloned outside command execution so the shared service lock is never nested.
-    // vmm_controller_registry 在命令执行外完成克隆，避免嵌套共享服务锁。
-    let vmm_controller_registry = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?
-        .vmm_controller_registry
-        .clone();
     // vmm_controller is the sole authoritative state owner for this session.
     // vmm_controller 是该会话唯一的权威状态所有者。
-    let session_directory = segmented_session_directory_for_workspace_session(
-        &controller_runtime.data_root,
-        &workspace_snapshot,
-        session_id,
-    )
-    .ok_or_else(|| format!("Session `{session_id}` has no exact VMM storage locator."))?;
-    let vmm_controller = vmm_controller_registry.get_or_open(
-        &session_directory,
-        session_id,
-        &current_unix_millis_text(),
-    )?;
-    // vmm_state_before_precheck is retained only for post-commit audit projection.
-    // vmm_state_before_precheck 仅为提交后的审计投影保留。
-    let vmm_state_before_precheck = vmm_controller.snapshot()?;
+    let vmm_controller =
+        open_registered_session_vmm_controller(state, session_id, &current_unix_millis_text())?;
     webui_after_precheck_trace(
         "after_precheck_03_runtime_state_ready",
         format!(
@@ -259,8 +223,6 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         .session_runtime_state
         .get(&session_id)
         .and_then(|runtime_state| runtime_state.active_reasoning_effort);
-    let session_title_for_context = start.session_title.clone();
-    let visible_user_prompt_record_id = start.visible_user_prompt_record_id.clone();
     // canonicalUserMessageId identifies the exact provider-history row that must receive post-precheck Goal text.
     // canonicalUserMessageId 标识必须接收预检后目标文本的精确 Provider 历史行。
     let canonical_user_message_id = start.canonical_user_message_id.clone();
@@ -375,35 +337,6 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
             eprintln!("[webui-service] record profile warning failed: {error}");
         }
     }
-    if let Some(message_id) = visible_user_prompt_record_id.as_deref()
-        && let Some(message) = workspace_snapshot
-            .session_messages
-            .get(&session_id)
-            .and_then(|messages| messages.iter().find(|message| message.id == message_id))
-    {
-        let message_delta_started_at = current_unix_millis_value();
-        emit_materialized_session_message_delta_if_prompt_owner_current(
-            app,
-            state,
-            session_id,
-            message,
-            SessionRunPhase::Preparing,
-            expected_kernel_generation,
-            &prompt_turn_id,
-        )?;
-        webui_after_precheck_trace(
-            "after_precheck_08_prompt_delta_emitted",
-            format!(
-                "session={session_id} message_id={message_id} elapsed_ms={}",
-                current_unix_millis_value().saturating_sub(message_delta_started_at)
-            ),
-        );
-    } else {
-        webui_after_precheck_trace(
-            "after_precheck_08_prompt_delta_skipped",
-            format!("session={session_id}"),
-        );
-    }
     let mut request = continuation.request;
     // Live VMM readiness is captured at turn admission so model-visible memory tools cannot outlive
     // a stopped or failed transport. Child tasks inherit the same immutable request fact.
@@ -447,6 +380,11 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         request.provider_route_lease_identity = None;
     }
     request.controller_runtime = Some(controller_runtime.clone());
+    // Native Goal tools receive the exact request session's V1 domain port; no SQLite store is exposed.
+    // 原生 Goal 工具取得精确请求会话的 V1 领域端口；不再暴露 SQLite 存储。
+    request.native_goal_runtime = Some(crate::session_goals::session_v1_native_goal_runtime(
+        state.clone(),
+    ));
     // managedCodebaseMemory is resolved from the live controller authorization table without any workspace-path fallback.
     // managedCodebaseMemory 从实时控制器授权表解析，绝不使用工作区路径回退。
     request.managed_codebase_memory = {
@@ -520,29 +458,32 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
             current_unix_millis_value().saturating_sub(plan_context_started_at)
         ),
     );
-    let task_session_root_started_at = current_unix_millis_value();
-    request.task_session_store_root = segmented_session_directory_for_workspace_session(
-        &controller_runtime.data_root,
-        &workspace_snapshot,
-        session_id,
-    );
-    // sessionDirectory is the exact main-session storage locator reused by every hot-path audit write.
-    // sessionDirectory 是由全部热路径审计写入复用的精确主会话存储定位。
-    let session_directory = request.task_session_store_root.clone().ok_or_else(|| {
-        format!("Session `{session_id}` has no exact storage locator before prompt continuation.")
-    })?;
+    let session_locator_started_at = current_unix_millis_value();
+    // sessionRegistry is cloned without retaining the service-state lock across registry access.
+    // sessionRegistry 在不让服务状态锁跨越注册表访问的前提下完成克隆。
+    let session_registry = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .session_runtime_registry
+        .clone();
+    // sessionDirectory comes only from the registered V1 owner; the removed TaskSession store must
+    // never receive the V1 root because it writes legacy metadata and transcript segments there.
+    // sessionDirectory 只来自已注册的 V1 owner；已移除的 TaskSession 存储绝不能接收 V1 根目录，
+    // 因为它会在该目录写入旧 metadata 与转录分段。
+    let session_directory = session_registry
+        .get(session_id)
+        .map_err(|error| error.to_string())?
+        .storage_locator()
+        .map_err(|error| error.to_string())?
+        .session_directory();
     request.session_storage_directory = Some(session_directory.clone());
     webui_after_precheck_trace(
-        "after_precheck_11_task_session_root_ready",
+        "after_precheck_11_v1_session_locator_ready",
         format!(
-            "session={session_id} found={} elapsed_ms={}",
-            request.task_session_store_root.is_some(),
-            current_unix_millis_value().saturating_sub(task_session_root_started_at)
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(session_locator_started_at)
         ),
     );
-    // vmm_state_after_precheck is the already persisted controller-confirmed snapshot.
-    // vmm_state_after_precheck 是已经持久化并由控制器确认的快照。
-    let vmm_state_after_precheck = vmm_commit.state.clone();
     // now timestamps the authoritative pre-provider workspace transition.
     // now 为权威的 Provider 调用前工作区转换提供时间戳。
     let now = current_unix_millis_text();
@@ -564,9 +505,9 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         session.focus = String::from("正在请求");
         session.last_updated_label = String::from("刚刚");
     }
-    // vmmProjection and contextProjection are exact, history-free payloads retained after the detached slice moves into commit.
-    // vmmProjection 与 contextProjection 是在分离切片移入提交后继续保留的精确无历史载荷。
-    let (vmm_layer, vmm_outbox, last_compaction_id, context_projection) = {
+    // vmmProjection retains the exact memory state after the detached slice moves into commit.
+    // vmmProjection 在分离切片移入提交后继续保留精确记忆状态。
+    let (vmm_layer, vmm_outbox, last_compaction_id) = {
         let runtime_state = workspace_snapshot
             .session_runtime_state
             .get(&session_id)
@@ -577,10 +518,6 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
             runtime_state.vmm.clone(),
             runtime_state.vmm_writeback_outbox.clone(),
             runtime_state.last_compaction_id.clone(),
-            vulcan_workspace_store::workspace_store::project_single_session_runtime_state_update(
-                session_id,
-                runtime_state,
-            )?,
         )
     };
     // phase_commit_started_at measures the authoritative in-memory commit and its required projections.
@@ -650,166 +587,9 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
             current_unix_millis_value().saturating_sub(phase_commit_started_at)
         ),
     );
-    // vmm_lifecycle_events describe only identities, hashes, counters, and byte totals.
-    // vmm_lifecycle_events 仅描述身份、哈希、计数与字节总量。
-    let vmm_lifecycle_events =
-        super::super::vmm_runtime_audit::build_vmm_lifecycle_events_for_state_diff(
-            &vmm_state_before_precheck,
-            &vmm_state_after_precheck,
-            Some(&prompt_turn_id),
-            super::super::vmm_runtime_audit::VmmRemovedLeaseAuditAction::Revoked,
-        );
-    if !vmm_lifecycle_events.is_empty() {
-        let vmm_audit_session_directory = session_directory.clone();
-        spawn_service_task(async move {
-            let timestamp = current_unix_millis_text();
-            if let Err(error) = super::super::vmm_runtime_audit::record_vmm_lifecycle_events(
-                &vmm_audit_session_directory,
-                session_id,
-                &timestamp,
-                vmm_lifecycle_events,
-            ) {
-                webui_trace(
-                    "runtime_vmm_lifecycle_audit_failed",
-                    format!("session={session_id} error={error}"),
-                );
-            }
-        });
-    }
-    let runtime_updates_started_at = current_unix_millis_value();
-    request.runtime_system_updates =
-        match vulcan_workspace_store::workspace_store::load_session_runtime_system_updates(
-            &session_directory,
-            session_id,
-        ) {
-            Ok(updates) => updates,
-            Err(error) => {
-                webui_trace(
-                    "runtime_system_updates_load_failed",
-                    format!("session={session_id} error={error}"),
-                );
-                Vec::new()
-            }
-        };
-    webui_after_precheck_trace(
-        "after_precheck_12_runtime_updates_ready",
-        format!(
-            "session={session_id} count={} elapsed_ms={}",
-            request.runtime_system_updates.len(),
-            current_unix_millis_value().saturating_sub(runtime_updates_started_at)
-        ),
-    );
-    if let Some(injection) = request.context_injection.as_ref() {
-        let session_directory = session_directory.clone();
-        let prompt_turn_id_for_audit = prompt_turn_id.clone();
-        let fingerprint = injection.fingerprint.clone();
-        let persistent_blocks = injection.persistent_blocks.clone();
-        let transient_prefix = injection
-            .has_transient()
-            .then(|| injection.transient_prefix.clone());
-        // cache_epoch_id and anchor_revision expose exact continuation coverage without memory text.
-        // cache_epoch_id 与 anchor_revision 在不记录记忆正文的前提下暴露精确 continuation 覆盖范围。
-        let cache_epoch_id = injection.cache_epoch_id.clone();
-        let anchor_revision = injection.anchor_revision;
-        // mutation_kind is serialized as the stable protocol spelling used by ProviderContextInjection.
-        // mutation_kind 按 ProviderContextInjection 使用的稳定协议拼写序列化。
-        let mutation_kind = Some(match injection.mutation_kind {
-            vulcan_core::types::ProviderContextMutationKind::None => String::from("none"),
-            vulcan_core::types::ProviderContextMutationKind::AppendOnly => {
-                String::from("append_only")
-            }
-            vulcan_core::types::ProviderContextMutationKind::HistoricalRewrite => {
-                String::from("historical_rewrite")
-            }
-            vulcan_core::types::ProviderContextMutationKind::EpochReset => {
-                String::from("epoch_reset")
-            }
-        });
-        // vmm_anchor_ids retain only stable identities for cache diagnostics.
-        // vmm_anchor_ids 仅保留用于缓存诊断的稳定身份。
-        let vmm_anchor_ids = injection
-            .anchored_prefixes
-            .iter()
-            .map(|anchor| anchor.anchor_id.clone())
-            .collect::<Vec<_>>();
-        let active_memory_body_bytes = injection.active_memory_body_bytes;
-        let active_memory_estimated_tokens = injection.active_memory_estimated_tokens;
-        let reclaimable_anchor_bytes = injection.reclaimable_anchor_bytes;
-        let reclaimable_anchor_estimated_tokens = injection.reclaimable_anchor_estimated_tokens;
-        spawn_service_task(async move {
-            let timestamp = current_unix_millis_text();
-            if let Err(error) =
-                vulcan_workspace_store::workspace_store::record_session_runtime_injection_applied(
-                    vulcan_workspace_store::workspace_store::SessionRuntimeInjectionAppliedRecord {
-                        session_directory: &session_directory,
-                        session_id,
-                        turn_id: Some(prompt_turn_id_for_audit),
-                        combined_fingerprint: Some(fingerprint),
-                        persistent_blocks: &persistent_blocks,
-                        transient_prefix: transient_prefix.as_deref(),
-                        merged_baseline_fingerprint: None,
-                        cache_epoch_id,
-                        anchor_revision,
-                        mutation_kind,
-                        vmm_anchor_ids,
-                        active_memory_body_bytes,
-                        active_memory_estimated_tokens,
-                        reclaimable_anchor_bytes,
-                        reclaimable_anchor_estimated_tokens,
-                        timestamp: &timestamp,
-                    },
-                )
-            {
-                webui_trace(
-                    "runtime_injection_audit_failed",
-                    format!("session={session_id} error={error}"),
-                );
-            }
-        });
-        webui_after_precheck_trace(
-            "after_precheck_13_injection_audit_spawned",
-            format!("session={session_id}"),
-        );
-    } else {
-        webui_after_precheck_trace(
-            "after_precheck_13_injection_audit_skipped",
-            format!("session={session_id}"),
-        );
-    }
     if runs_user_prompt_precheck {
-        let context_persist_started_at = current_unix_millis_value();
-        spawn_projected_webui_context_current_document_persist_task(
-            session_directory.clone(),
-            session_id,
-            context_projection,
-            session_title_for_context,
-        );
-        webui_trace(
-            "precheck_continue_context_document_persisted",
-            format!(
-                "session={session_id} elapsed_ms={}",
-                current_unix_millis_value().saturating_sub(context_persist_started_at)
-            ),
-        );
         webui_after_precheck_trace(
-            "after_precheck_14_context_persist_spawned",
-            format!("session={session_id}"),
-        );
-    } else {
-        webui_after_precheck_trace(
-            "after_precheck_14_context_persist_skipped",
-            format!("session={session_id}"),
-        );
-    }
-    if runs_user_prompt_precheck {
-        spawn_workspace_session_persist_task(
-            state.clone(),
-            controller_runtime.clone(),
-            session_id,
-            Some(String::from("precheck_continue")),
-        );
-        webui_after_precheck_trace(
-            "after_precheck_16_snapshot_persist_spawned",
+            "after_precheck_16_v1_owner_retained",
             format!("session={session_id}"),
         );
     } else {
@@ -951,10 +731,9 @@ pub(crate) fn spawn_webui_prompt_prepare_continue_task(
                 eprintln!(
                     "[webui-service] continue WebUI prompt after preparation failed: {error}"
                 );
-                let cleanup_succeeded = match mark_webui_prompt_preparation_failed(
+                if let Err(cleanup_error) = mark_webui_prompt_preparation_failed(
                     &app,
                     &state,
-                    &controller_runtime,
                     &agent_runtime,
                     session_id,
                     &preparation_turn_id,
@@ -962,49 +741,9 @@ pub(crate) fn spawn_webui_prompt_prepare_continue_task(
                 )
                 .await
                 {
-                    Ok(()) => true,
-                    Err(cleanup_error) => {
-                        eprintln!(
-                            "[webui-service] cleanup failed WebUI prompt preparation failed: {cleanup_error}"
-                        );
-                        false
-                    }
-                };
-                if cleanup_succeeded {
-                    // Failure cleanup closes the former turn; explicitly guided queued work must receive a new dispatch chance.
-                    // 失败清理会闭合旧回合；已显式引导的排队工作必须获得新的分发机会。
-                    let started_mailbox_turn = match maybe_start_webui_mailbox_turn_if_ready(
-                        &app,
-                        &state,
-                        &controller_runtime,
-                        &agent_runtime,
-                        session_id,
-                    )
-                    .await
-                    {
-                        Ok(started) => started,
-                        Err(dispatch_error) => {
-                            eprintln!(
-                                "[webui-service] resume mailbox after preparation failure failed: {dispatch_error}"
-                            );
-                            false
-                        }
-                    };
-                    if !started_mailbox_turn
-                        && let Err(dispatch_error) = maybe_prepare_next_webui_pending_prompt(
-                            &app,
-                            &state,
-                            &controller_runtime,
-                            &agent_runtime,
-                            session_id,
-                            true,
-                        )
-                        .await
-                    {
-                        eprintln!(
-                            "[webui-service] resume guided prompt after preparation failure failed: {dispatch_error}"
-                        );
-                    }
+                    eprintln!(
+                        "[webui-service] cleanup failed WebUI prompt preparation failed: {cleanup_error}"
+                    );
                 }
             }
         }
@@ -1131,15 +870,9 @@ pub(crate) struct PromptPreparationFailureBoundaryCommit {
     /// Optional ordered phase delta produced by the same terminal-state transaction.
     /// 由同一终态事务产出的可选有序阶段增量。
     phase_event: Option<WorkbenchDeltaEnvelope>,
-    /// Canonical state eligible for retry refreeze only when every safety check succeeds.
-    /// 仅在所有安全检查成功时可用于重冻重试的规范状态。
-    retry_refreeze_conversation_state: Option<SessionConversationState>,
     /// Project identity required to terminate the exact Hook turn.
     /// 终止精确 Hook 回合所需的项目身份。
     owning_project_id: Option<String>,
-    /// Whether the detached ledger reached a replay-safe terminal boundary.
-    /// 分离账本是否到达可安全重放的终态边界。
-    retry_boundary_safe: bool,
     /// Non-fatal diagnostics accumulated while forcing the boundary closed.
     /// 强制关闭边界时累计的非致命诊断。
     diagnostics: Vec<String>,
@@ -1154,8 +887,8 @@ pub(crate) struct PromptPreparationFailureBoundaryCommit {
 /// `state` 持有精确 kernel、所有者表、保留工作区与可见工作台投影。
 /// `session_id` and `failed_turn_id` identify the preparation turn being terminalized.
 /// `session_id` 与 `failed_turn_id` 标识正在终态化的准备回合。
-/// `error` is the controlled failure diagnostic, while `provider_boundary_dispatch_unknown` closes replay after an uncertain Provider boundary.
-/// `error` 是受控失败诊断；`provider_boundary_dispatch_unknown` 在 Provider 边界不确定时关闭重放。
+/// `error` is the controlled failure diagnostic.
+/// `error` 是受控失败诊断。
 ///
 /// # Returns
 /// 返回值
@@ -1166,7 +899,6 @@ pub(crate) fn commit_prompt_preparation_failure_boundary(
     session_id: SessionId,
     failed_turn_id: &str,
     error: &str,
-    provider_boundary_dispatch_unknown: bool,
 ) -> Result<PromptPreparationFailureBoundaryCommit, String> {
     // guard serializes owner validation, kernel stop, retry closure, and retained-state replacement.
     // guard 串行化所有者校验、kernel 停止、重试关闭与保留状态替换。
@@ -1242,12 +974,6 @@ pub(crate) fn commit_prompt_preparation_failure_boundary(
     // diagnostics records every degraded projection while terminal ownership remains closed.
     // diagnostics 记录终态所有权保持关闭期间的每个降级投影。
     let mut diagnostics = Vec::new();
-    // retry_refreeze_conversation_state remains absent unless terminal ledger safety is proven.
-    // retry_refreeze_conversation_state 仅在终态账本安全性得到证明后才会存在。
-    let mut retry_refreeze_conversation_state = None;
-    // retry_boundary_safe is promoted only after the terminal ledger revision commits.
-    // retry_boundary_safe 仅在终态账本修订提交后才会提升为真。
-    let mut retry_boundary_safe = false;
     if let Some(runtime_state) = workspace_snapshot
         .session_runtime_state
         .get_mut(&session_id)
@@ -1267,106 +993,16 @@ pub(crate) fn commit_prompt_preparation_failure_boundary(
                 "Prompt preparation failure message projection failed: {projection_error}"
             ));
         }
-        // canonical_tail_kind is derived only after the failure record attempt completes.
-        // canonical_tail_kind 仅在失败记录尝试完成后从规范状态派生。
-        let canonical_tail_kind = runtime_state
-            .conversation_state
-            .records
-            .iter()
-            .rev()
-            .find(|record| {
-                record.visible
-                    && record.record_kind
-                        == vulcan_workbench_model::SessionMessageRecordKind::Transcript
-            })
-            .map(|record| match record.kind {
-                vulcan_workbench_model::SessionMessageKind::Assistant => "assistant",
-                vulcan_workbench_model::SessionMessageKind::User => "user",
-                vulcan_workbench_model::SessionMessageKind::Error => "error",
-            })
-            .unwrap_or("empty")
-            .to_string();
-        // replay_safety_proven requires the exact immutable retry reference to carry safe evidence.
-        // replay_safety_proven 要求精确不可变重试引用携带安全证据。
-        let replay_safety_proven = runtime_state
-            .execution_retry_snapshot
-            .as_ref()
-            .is_some_and(|reference| reference.replay_safety_proven());
-        // provider_call_still_active is an explicit uncertain side-effect boundary and cannot be terminalized as replayable.
-        // provider_call_still_active 是明确的不确定副作用边界，不能被终态化为可重放。
-        let provider_call_still_active =
-            runtime_state.provider_call_ledger.in_flight_call_count() != 0;
-        // terminal_at_ms validates the timestamp before the monotonic ledger revision is advanced.
-        // terminal_at_ms 在推进单调账本修订前校验时间戳。
-        let terminal_at_ms = now.parse::<i64>();
-        if provider_call_still_active {
-            diagnostics.push(String::from(
-                "ERR_CONVERSATION_PREPARATION_FAILED_PROVIDER_CALL_STILL_ACTIVE",
-            ));
-            let _ = invalidate_execution_retry_runtime_state(
-                runtime_state,
-                "provider_dispatch_outcome_unknown",
-                "Prompt preparation failed while a Provider call was still active.",
-                now.clone(),
-            );
-        } else if let Ok(terminal_at_ms) = terminal_at_ms {
-            // continuation_eligible requires the exact prompt-free tail, replay proof, and a known pre-dispatch boundary.
-            // continuation_eligible 要求精确无提示词尾部、重放证明与确定的分派前边界。
-            let continuation_eligible =
-                is_prompt_free_continuation_tail_kind(canonical_tail_kind.as_str())
-                    && replay_safety_proven
-                    && !provider_boundary_dispatch_unknown;
-            if runtime_state
-                .provider_call_ledger
-                .mark_continuation_terminal(
-                    Some(failed_turn_id.to_string()),
-                    String::from("preparation_failed"),
-                    terminal_at_ms,
-                    canonical_tail_kind,
-                    continuation_eligible,
-                )
-            {
-                retry_boundary_safe = !provider_boundary_dispatch_unknown;
-                retry_refreeze_conversation_state = Some(runtime_state.conversation_state.clone());
-            } else {
-                diagnostics.push(String::from(
-                    "ERR_CONVERSATION_PREPARATION_FAILED_CONTINUATION_REVISION_EXHAUSTED",
-                ));
-                let _ = invalidate_execution_retry_runtime_state(
-                    runtime_state,
-                    "retry_snapshot_transition_failed",
-                    "Prompt preparation failure could not advance the continuation ledger.",
-                    now.clone(),
-                );
-            }
-        } else if let Err(timestamp_error) = terminal_at_ms {
-            diagnostics.push(format!(
-                "Prompt preparation terminal timestamp is invalid: {timestamp_error}"
-            ));
-            let _ = invalidate_execution_retry_runtime_state(
-                runtime_state,
-                "retry_snapshot_transition_failed",
-                "Prompt preparation failure produced an invalid terminal timestamp.",
-                now.clone(),
-            );
-        }
         runtime_state.updated_at = now.clone();
     } else {
         diagnostics.push(String::from(
             "Prompt preparation failure runtime state is unavailable.",
         ));
     }
-    // runtime_state moves temporarily so failure display projection never clones canonical history.
-    // runtime_state 临时移出，使失败显示投影绝不复制规范历史。
-    if let Some(runtime_state) = workspace_snapshot.session_runtime_state.remove(&session_id) {
-        merge_runtime_state_records_into_display_messages(
-            &mut workspace_snapshot,
-            session_id,
-            &runtime_state,
-        );
-        workspace_snapshot
-            .session_runtime_state
-            .insert(session_id, runtime_state);
+    if workspace_snapshot
+        .session_runtime_state
+        .contains_key(&session_id)
+    {
         sync_hydrated_session_dialogue_ready_marker(&mut workspace_snapshot, session_id);
     }
     workspace_snapshot
@@ -1384,10 +1020,6 @@ pub(crate) fn commit_prompt_preparation_failure_boundary(
     // owning_project_id is derived before the committed workspace replaces shared state.
     // owning_project_id 在已提交工作区替换共享状态前派生。
     let owning_project_id = owning_project_id_for_session(&workspace_snapshot, session_id);
-    retain_hydrated_conversation_windows_for_workspace(
-        &mut guard.hydrated_conversation_windows,
-        &workspace_snapshot,
-    );
     guard.workspace_snapshot = Some(workspace_snapshot);
     // phase_event is best-effort because the owner marker and stopped kernel already fail closed.
     // phase_event 为尽力投影，因为所有者标记与已停止 kernel 已经失败关闭。
@@ -1404,9 +1036,7 @@ pub(crate) fn commit_prompt_preparation_failure_boundary(
     Ok(PromptPreparationFailureBoundaryCommit {
         terminal_persistence_owner,
         phase_event,
-        retry_refreeze_conversation_state,
         owning_project_id,
-        retry_boundary_safe,
         diagnostics,
     })
 }
@@ -1424,69 +1054,12 @@ pub(crate) fn commit_prompt_preparation_failure_boundary(
 /// Success when no focused surface needs a patch or the exact patch was emitted.
 /// 没有聚焦界面需要补丁或精确补丁已发出时返回成功。
 fn emit_prompt_preparation_failure_message_window_delta(
-    app: &ServiceEventEmitter,
-    state: &SharedServiceBridgeState,
-    session_id: SessionId,
+    _app: &ServiceEventEmitter,
+    _state: &SharedServiceBridgeState,
+    _session_id: SessionId,
 ) -> Result<(), String> {
-    // conversation_id is the stable workbench surface key for the failed session.
-    // conversation_id 是失败会话的稳定工作台界面键。
-    let conversation_id = session_id.to_string();
-    // event is produced only when the currently focused surface has a real message difference.
-    // event 仅在当前聚焦界面存在真实消息差异时产出。
-    let event = {
-        let mut guard = state
-            .lock()
-            .map_err(|lock_error| format!("failed to lock service state: {lock_error}"))?;
-        // before_visible_messages captures the exact client-visible baseline for node-level diffing.
-        // before_visible_messages 捕获用于节点级差异计算的精确客户端可见基线。
-        let before_visible_messages = guard
-            .workbench
-            .messages
-            .iter()
-            .filter(|message| message.conversation_id == conversation_id)
-            .cloned()
-            .collect::<Vec<_>>();
-        // messages projects the committed retained display records without reconstructing canonical history.
-        // messages 从已提交保留显示记录投影，不重建规范历史。
-        let messages = guard
-            .workspace_snapshot
-            .as_ref()
-            .and_then(|workspace| workspace.session_messages.get(&session_id))
-            .map(|entries| conversation_messages_from_session(&conversation_id, entries, false))
-            .unwrap_or_default();
-        if workbench_surface_matches_conversation(&guard.workbench, &conversation_id) {
-            build_conversation_messages_patched_delta(
-                &conversation_id,
-                before_visible_messages.as_slice(),
-                messages.as_slice(),
-            )
-            .map(|message_patch| {
-                guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
-                // generation binds the retained workbench mutation to its emitted delta.
-                // generation 将保留工作台变更绑定到其发出增量。
-                let generation = guard.workbench_generation;
-                guard.workbench.revision = generation;
-                replace_conversation_messages_in_workbench_window(
-                    &mut guard.workbench.messages,
-                    &conversation_id,
-                    messages,
-                );
-                WorkbenchDeltaEnvelope {
-                    generation,
-                    delta: WorkbenchDelta::ConversationMessagesPatched(message_patch),
-                }
-            })
-        } else {
-            None
-        }
-    };
-    if let Some(event) = event {
-        emit_service_event_with_trace(
-            app,
-            "prompt_preparation_failure_messages_patch_emit",
-            ServiceEvent::WorkbenchDelta(Box::new(event)),
-        );
-    }
+    // Preparation failures are durable V1 display/control events and need no Workbench transcript rebuild.
+    // 准备失败属于持久化 V1 显示/控制事件，不需要重建 Workbench 转录。
     Ok(())
 }
 
@@ -1499,8 +1072,6 @@ fn emit_prompt_preparation_failure_message_window_delta(
 /// `app` 发出刷新后的工作台快照。
 /// `state` owns the retained workspace snapshot.
 /// `state` 持有保留的工作区快照。
-/// `controller_runtime` persists the cleaned session state.
-/// `controller_runtime` 持久化清理后的会话状态。
 /// `agent_runtime` provides projection configuration for the emitted workbench.
 /// `agent_runtime` 提供发出工作台快照所需的投影配置。
 /// `session_id` selects the failed prompt turn.
@@ -1517,27 +1088,15 @@ fn emit_prompt_preparation_failure_message_window_delta(
 pub(crate) async fn mark_webui_prompt_preparation_failed(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
     failed_turn_id: &str,
     error: &str,
 ) -> Result<(), String> {
-    // A committed provider-boundary receipt without a rebuilt request leaves dispatch outcome
-    // unknown, so the cleanup path must close Continue instead of reopening the same boundary.
-    // 已提交 Provider 边界回执但未能重建请求表示分派结果未知，清理路径必须关闭 Continue，
-    // 不能重新打开同一边界。
-    let provider_boundary_dispatch_unknown =
-        error.contains("Provider-boundary command `") && error.contains("was already committed");
     // boundary_commit atomically closes execution ownership before any external cleanup can fail.
     // boundary_commit 在任何外部清理可能失败前原子关闭执行所有权。
-    let boundary_commit = commit_prompt_preparation_failure_boundary(
-        state,
-        session_id,
-        failed_turn_id,
-        error,
-        provider_boundary_dispatch_unknown,
-    )?;
+    let boundary_commit =
+        commit_prompt_preparation_failure_boundary(state, session_id, failed_turn_id, error)?;
     // terminal_persistence_guard keeps every replacement submission and Continue claim blocked until durable settlement.
     // terminal_persistence_guard 在可靠结算前阻止所有替代提交与 Continue 领取。
     let terminal_persistence_guard = SessionTerminalPersistenceOwnerGuard::adopt_registered(
@@ -1565,17 +1124,9 @@ pub(crate) async fn mark_webui_prompt_preparation_failed(
     // cleanup_updated_at provides one stable command timestamp for the idempotent VMM abandonment.
     // cleanup_updated_at 为幂等 VMM 放弃命令提供一个稳定时间戳。
     let cleanup_updated_at = current_unix_millis_text();
-    // external_cleanup_safe remains true only when both VMM and Hook ownership are conclusively closed.
-    // external_cleanup_safe 仅在 VMM 与 Hook 所有权均被确定关闭时保持为真。
-    let mut external_cleanup_safe = true;
-    if let Err(vmm_error) = abandon_failed_webui_prompt_vmm_turn(
-        state,
-        controller_runtime,
-        session_id,
-        failed_turn_id,
-        &cleanup_updated_at,
-    ) {
-        external_cleanup_safe = false;
+    if let Err(vmm_error) =
+        abandon_failed_webui_prompt_vmm_turn(state, session_id, failed_turn_id, &cleanup_updated_at)
+    {
         diagnostics.push(format!(
             "Prompt preparation VMM cleanup failed: {vmm_error}"
         ));
@@ -1585,101 +1136,25 @@ pub(crate) async fn mark_webui_prompt_preparation_failed(
             hook_runtime.terminate_turn(session_id, boundary_commit.owning_project_id, error, 0);
         }
         Err(hook_error) => {
-            external_cleanup_safe = false;
             diagnostics.push(format!(
                 "Prompt preparation Hook cleanup failed: {hook_error}"
             ));
         }
     }
-    if provider_boundary_dispatch_unknown {
-        if let Err(provider_boundary_error) =
-            mark_execution_retry_snapshot_provider_dispatch_unknown(
-                state,
-                controller_runtime,
-                session_id,
-                error,
-            )
-        {
-            diagnostics.push(format!(
-                "Prompt preparation Provider-boundary closure failed: {provider_boundary_error}"
-            ));
-            if let Err(invalidation_error) = invalidate_execution_retry_reference(
-                state,
-                session_id,
-                "provider_dispatch_outcome_unknown",
-                "Provider dispatch outcome remained unknown during prompt-preparation cleanup.",
-            ) {
-                diagnostics.push(format!(
-                    "Prompt preparation Provider-boundary invalidation failed: {invalidation_error}"
-                ));
-            }
-        }
-    } else if boundary_commit.retry_boundary_safe && external_cleanup_safe {
-        if let Some(conversation_state) = boundary_commit.retry_refreeze_conversation_state.as_ref()
-            && let Err(refreeze_failure) =
-                refreeze_claimed_execution_retry_snapshot_with_canonical_state(
-                    state,
-                    controller_runtime,
-                    session_id,
-                    conversation_state,
-                    None,
-                    error,
-                )
-        {
-            diagnostics.push(format!(
-                "Prompt preparation retry refreeze failed: {refreeze_failure}"
-            ));
-            // A failed refreeze closes the claim in-process instead of leaving duplicate requests in admission-in-flight.
-            // 重冻失败会在进程内关闭领取，避免重复请求停留在准入进行中。
-            if let Err(invalidation_error) = invalidate_execution_retry_reference(
-                state,
-                session_id,
-                refreeze_failure.blocked_reason(),
-                refreeze_failure.error_summary(),
-            ) {
-                diagnostics.push(format!(
-                    "Prompt preparation retry invalidation failed: {invalidation_error}"
-                ));
-            }
-        }
-    } else if let Err(invalidation_error) = invalidate_execution_retry_reference(
+    // V1 execution controls and API terminal facts are the only continuation authority; no retry sidecar is rewritten here.
+    // V1 执行控制与 API 终态事实是唯一 Continue 权威；此处不再改写重试 sidecar。
+    crate::persist_v1_execution_failure_boundary(
         state,
         session_id,
-        "retry_snapshot_transition_failed",
-        "Prompt-preparation cleanup could not prove a safe replay boundary.",
-    ) {
-        diagnostics.push(format!(
-            "Prompt preparation unsafe-boundary invalidation failed: {invalidation_error}"
-        ));
-    }
-    // exact retained persistence captures only the target session after every boundary invalidation.
-    // 精确保留持久化仅在全部边界失效变更完成后捕获目标会话。
-    if let Err(persist_error) = persist_latest_retained_workspace_session_update(
-        state,
-        controller_runtime.clone(),
-        session_id,
+        "prompt_preparation_failed",
     )
     .await
-    {
-        if let Err(projection_error) =
-            emit_conversation_continuation_summary_changed(app, state, session_id)
-        {
-            eprintln!(
-                "[webui-service] continuation summary refresh after failure persistence error failed: {projection_error}"
-            );
-        }
-        return Err(format!(
+    .map_err(|persist_error| {
+        format!(
             "Prompt preparation terminal persistence failed: {persist_error}; terminal owner retained"
-        ));
-    }
+        )
+    })?;
     terminal_persistence_guard.release()?;
-    if let Err(projection_error) =
-        emit_conversation_continuation_summary_changed(app, state, session_id)
-    {
-        eprintln!(
-            "[webui-service] continuation summary refresh after precheck failure failed: {projection_error}"
-        );
-    }
     if diagnostics.is_empty() {
         Ok(())
     } else {
@@ -1694,8 +1169,6 @@ pub(crate) async fn mark_webui_prompt_preparation_failed(
 /// 参数
 /// `state` owns the process-wide session controller registry.
 /// `state` 持有进程级会话 Controller Registry。
-/// `controller_runtime` fixes the sole durable data root for this process.
-/// `controller_runtime` 固定本进程唯一的持久数据根目录。
 /// `session_id` selects the exact session controller.
 /// `session_id` 选择精确的会话 Controller。
 /// `failed_turn_id` is the logical turn whose active ownership must be cleared.
@@ -1709,27 +1182,13 @@ pub(crate) async fn mark_webui_prompt_preparation_failed(
 /// 未登记 VMM 回合或精确活动回合已持久放弃时返回成功。
 fn abandon_failed_webui_prompt_vmm_turn(
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
     session_id: SessionId,
     failed_turn_id: &str,
     updated_at: &str,
 ) -> Result<(), String> {
-    // registry is cloned without retaining the shared service lock during controller I/O.
-    // registry 在 Controller I/O 期间不保留共享服务锁。
-    let (registry, session_directory) = {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let session_directory = require_segmented_session_directory_for_retained_session(
-            &guard,
-            &controller_runtime.data_root,
-            session_id,
-        )?;
-        (guard.vmm_controller_registry.clone(), session_directory)
-    };
     // controller is the sole authority for active VMM logical-turn ownership.
     // controller 是 VMM 活动逻辑回合所有权的唯一权威。
-    let controller = registry.get_or_open(&session_directory, session_id, updated_at)?;
+    let controller = open_registered_session_vmm_controller(state, session_id, updated_at)?;
     // active_turn_id distinguishes failures before the Provider-boundary command from committed failures.
     // active_turn_id 区分 Provider 边界命令前的失败与已经提交的失败。
     let active_turn_id = controller.snapshot()?.active_turn_id;

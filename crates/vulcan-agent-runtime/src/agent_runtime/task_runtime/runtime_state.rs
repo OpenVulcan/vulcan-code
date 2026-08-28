@@ -20,8 +20,6 @@ impl TaskRuntime {
             agent_inboxes: RwLock::new(HashMap::new()),
             subagent_registry: RwLock::new(SubagentRegistry::new()),
             subagent_catalog: RwLock::new(SubagentCatalog::default()),
-            task_session_store_roots: RwLock::new(HashMap::new()),
-            restored_task_session_registry_roots: RwLock::new(BTreeSet::new()),
             max_depth: DEFAULT_TASK_NESTING_LIMIT,
         }
     }
@@ -302,74 +300,6 @@ impl TaskRuntime {
                     "Subagent definition `{agent_id}` is not enabled or does not exist in the catalog."
                 )
             })
-    }
-
-    /// Registers the file-domain root used by TaskSession artifacts under one root main session.
-    /// 注册某个根主会话下 TaskSession 文件产物使用的文件域根目录。
-    pub fn configure_task_session_store_root(
-        &self,
-        root_session_id: SessionId,
-        root_session_dir: PathBuf,
-    ) -> Result<(), String> {
-        self.task_session_store_roots
-            .write()
-            .map_err(|_| {
-                String::from("The task-session store root registry is locked and cannot update.")
-            })?
-            .insert(root_session_id, root_session_dir);
-        self.restored_task_session_registry_roots
-            .write()
-            .map_err(|_| {
-                String::from(
-                    "The restored task-session registry marker is locked and cannot update.",
-                )
-            })?
-            .remove(&root_session_id);
-        Ok(())
-    }
-
-    /// Ensures the task-session store root exists without invalidating an unchanged restore marker.
-    /// 确保任务会话存储根目录存在，并且在目录未变化时不使已恢复标记失效。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `root_session_id` is the root conversation session id that owns the subagent task store.
-    /// `root_session_id` 是拥有子代理任务存储的根对话会话标识。
-    /// `root_session_dir` is the filesystem directory that stores segmented task-session artifacts.
-    /// `root_session_dir` 是保存分段任务会话产物的文件系统目录。
-    ///
-    /// # Returns
-    /// 返回值
-    /// `Ok(())` when the root is registered or already matches the requested directory.
-    /// 当根目录已注册或已经与请求目录一致时返回 `Ok(())`。
-    pub fn ensure_task_session_store_root(
-        &self,
-        root_session_id: SessionId,
-        root_session_dir: PathBuf,
-    ) -> Result<(), String> {
-        let root_changed = {
-            let mut roots = self.task_session_store_roots.write().map_err(|_| {
-                String::from("The task-session store root registry is locked and cannot update.")
-            })?;
-            match roots.get(&root_session_id) {
-                Some(existing_root) if existing_root == &root_session_dir => false,
-                _ => {
-                    roots.insert(root_session_id, root_session_dir);
-                    true
-                }
-            }
-        };
-        if root_changed {
-            self.restored_task_session_registry_roots
-                .write()
-                .map_err(|_| {
-                    String::from(
-                        "The restored task-session registry marker is locked and cannot update.",
-                    )
-                })?
-                .remove(&root_session_id);
-        }
-        Ok(())
     }
 
     /// Installs one backend handler for the given controller session and returns a guard that unregisters it on drop.

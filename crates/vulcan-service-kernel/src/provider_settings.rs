@@ -11,11 +11,12 @@ use vulcan_service_api::{
     ProviderRateLimitRetrySettingsSummary, ProviderRetrySettingsSummary, ServiceEventEmitter,
     WorkbenchSnapshot,
 };
+use vulcan_workspace_store::workspace_store::ProviderApiTraceStore;
 
+use crate::session_goal_lifecycle::registered_session_v1_handle_from_state;
 use crate::{
     SharedServiceBridgeState, emit_workbench_event, mutate_provider_configuration,
-    refresh_settings_projection_locked, require_segmented_session_directory_for_retained_session,
-    shell_host_from_state,
+    refresh_settings_projection_locked, shell_host_from_state,
 };
 
 /// Hard delay ceiling shared by the retry settings page and runtime rate-limit policy.
@@ -189,12 +190,10 @@ pub(super) async fn service_save_provider_request_trace_settings(
 pub(super) fn service_open_selected_provider_api_trace_directory(
     state: SharedServiceBridgeState,
 ) -> Result<String, String> {
-    let (session_id, session_directory) = selected_provider_trace_session(&state)?;
-    let trace_directory =
-        vulcan_workspace_store::workspace_store::prepare_provider_api_trace_directory(
-            &session_directory,
-            session_id,
-        )?;
+    let trace_store = selected_provider_trace_store(&state)?;
+    let trace_directory = trace_store
+        .prepare_directory()
+        .map_err(provider_trace_diagnostic_message)?;
     let trace_path = trace_directory.to_string_lossy().into_owned();
     shell_host_from_state(&state)?.open_path(&trace_path)?;
     Ok(trace_path)
@@ -215,35 +214,47 @@ pub(super) fn service_open_selected_provider_api_trace_directory(
 pub(super) fn service_clear_selected_provider_api_trace_directory(
     state: SharedServiceBridgeState,
 ) -> Result<bool, String> {
-    let (session_id, session_directory) = selected_provider_trace_session(&state)?;
-    vulcan_workspace_store::workspace_store::clear_provider_api_trace_directory(
-        &session_directory,
-        session_id,
-    )
+    selected_provider_trace_store(&state)?
+        .clear_directory()
+        .map_err(provider_trace_diagnostic_message)
 }
 
-/// Resolves the exact selected session identity and retained directory without filesystem scans.
-/// 在不扫描文件系统的情况下解析当前会话的精确身份与保留目录。
-fn selected_provider_trace_session(
+/// Resolves the exact V1 trace-store owner for the selected hydrated session.
+/// 为当前选中的已 hydration 会话解析精确 V1 追踪存储 owner。
+fn selected_provider_trace_store(
     state: &SharedServiceBridgeState,
-) -> Result<(uuid::Uuid, std::path::PathBuf), String> {
-    let data_root = vulcan_workspace_store::data_plane::application_data_root();
-    let guard = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    let selected_conversation_id = guard
-        .workbench
-        .selected_conversation_id
-        .as_deref()
-        .ok_or_else(|| String::from("No conversation is selected for Provider API traces."))?;
-    let session_id = uuid::Uuid::parse_str(selected_conversation_id).map_err(|error| {
+) -> Result<ProviderApiTraceStore, String> {
+    let selected_conversation_id = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard
+            .workbench
+            .selected_conversation_id
+            .clone()
+            .ok_or_else(|| String::from("No conversation is selected for Provider API traces."))?
+    };
+    let session_id = crate::SessionId::parse_str(&selected_conversation_id).map_err(|error| {
         format!(
             "Selected conversation id `{selected_conversation_id}` is not a valid session id: {error}"
         )
     })?;
-    let session_directory =
-        require_segmented_session_directory_for_retained_session(&guard, &data_root, session_id)?;
-    Ok((session_id, session_directory))
+    let handle = registered_session_v1_handle_from_state(state, session_id)?;
+    handle
+        .provider_api_trace_store()
+        .ok_or_else(|| format!("V1 session `{session_id}` has no Provider API trace-store owner."))
+}
+
+/// Formats one non-fatal trace diagnostic for an explicit user maintenance action.
+/// 为显式用户维护操作格式化一条非致命追踪诊断。
+fn provider_trace_diagnostic_message(
+    diagnostic: vulcan_workspace_store::workspace_store::ProviderApiTraceDiagnostic,
+) -> String {
+    format!(
+        "Provider API trace operation failed [{}]: {}",
+        diagnostic.code.as_str(),
+        diagnostic.detail
+    )
 }
 
 /// Builds the browser-facing retry settings summary from shared Provider configuration.

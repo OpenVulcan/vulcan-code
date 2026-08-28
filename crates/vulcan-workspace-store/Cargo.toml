@@ -10,6 +10,11 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Exposes exact V1 storage fixtures only to downstream crate tests.
+# 仅向下游 crate 测试暴露精确 V1 存储夹具。
+test-support = []
+
 [dependencies]
 dirs.workspace = true
 futures-util.workspace = true

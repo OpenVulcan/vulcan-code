@@ -49,7 +49,7 @@ describe("conversation continuation architecture", () => {
     expect(handlerSource).toContain('kind: "failed"');
   });
 
-  it("keeps ordinary composer submissions independent from problem-turn recovery", () => {
+  it("keeps the ordinary service boundary free of continuation authorization", () => {
     // actions owns the selected-conversation decision at the composer submission boundary.
     // actions 持有输入区提交边界的选中会话决策。
     const actions = readContinuationSource("../workspace/workbench-layout/conversation-actions.ts");
@@ -71,6 +71,10 @@ describe("conversation continuation architecture", () => {
     expect(handlerSource).not.toContain("continuationExpectation");
     expect(handlerSource).not.toContain("selectedConversation?.continuation");
     expect(service).not.toContain("ConversationContinuationExpectation");
-    expect(service).toContain("// 普通输入区提交无法通过此服务边界领取问题回合恢复。\n    continuationExpectation: null,");
+    expect(service).not.toContain("continuationExpectation");
+    expect(service).not.toContain("expectedGeneration");
+    expect(service).not.toContain("expectedLedgerRevision");
+    expect(service).toContain("clientContinuationId");
+    expect(service).toContain("supplement?.prompt");
   });
 });

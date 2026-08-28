@@ -2,13 +2,6 @@
 //! 上下文压缩 persist display 辅助逻辑。
 
 use super::*;
-use crate::{
-    next_webui_session_addon_persist_version,
-    persist_latest_retained_workspace_session_update_unlocked,
-    persist_workspace_session_addon_state_update, webui_session_addon_persist_versions_are_current,
-    workspace_session_with_archive_status,
-};
-use vulcan_workbench_model::{SessionAddonNamespace, SessionAddonState};
 
 /// Builds one usage segment from a completed context-compaction execution.
 /// 从已完成的上下文压缩执行结果构建一段用量统计。
@@ -48,7 +41,7 @@ pub(crate) fn context_compaction_usage_segment_from_execution(
 /// 自动续接路径会等待此函数，确保重建请求不会与建立新上下文边界的转录写入竞态。
 pub(crate) async fn persist_context_compaction_snapshot(
     state: SharedServiceBridgeState,
-    controller_runtime: ControllerRuntimeHandle,
+    _controller_runtime: ControllerRuntimeHandle,
     workspace_snapshot: WorkspaceSnapshot,
     session_id: SessionId,
     _section_id: String,
@@ -57,157 +50,14 @@ pub(crate) async fn persist_context_compaction_snapshot(
     if !workspace_snapshot_contains_regular_session(&workspace_snapshot, session_id) {
         return Ok(());
     }
-    let output_style_persist_version = workspace_snapshot
-        .session_runtime_state
-        .get(&session_id)
-        .or_else(|| {
-            workspace_snapshot
-                .archived_session_runtime_state
-                .get(&session_id)
-        })
-        .filter(|runtime_state| !runtime_state.output_style.is_empty())
-        .map(|_| {
-            next_webui_session_addon_persist_version(
-                &state,
-                session_id,
-                SessionAddonNamespace::OutputStyle,
-            )
-        });
-    let output_style_persist_version = match output_style_persist_version {
-        Some(Ok(version)) => Some(version),
-        Some(Err(error)) => {
-            return Err(format!(
-                "context-compaction output-style persist version failed: {error}"
-            ));
-        }
-        None => None,
-    };
-    // session_persist_version is the shared runtime/transcript ticket for this snapshot.
-    // session_persist_version 是此快照共享的运行态/转录持久化票据。
-    let session_persist_version =
-        match next_webui_session_runtime_persist_version(&state, session_id) {
-            Ok(version) => version,
-            Err(error) => {
-                return Err(format!(
-                    "context-compaction persist version failed: {error}"
-                ));
-            }
-        };
-    let persist_lock = webui_session_persist_lock(session_id);
-    let _persist_guard = persist_lock.lock().await;
-    if !webui_session_runtime_persist_version_is_current(
-        &state,
-        session_id,
-        session_persist_version,
-    ) {
-        return Err(format!(
-            "context-compaction persistence was superseded before write: session={session_id}"
-        ));
-    }
-    // persistenceSnapshot is already owned by this task, so its exact session row can move without
-    // cloning the workspace or canonical conversation history a second time.
-    // persistenceSnapshot 已由当前任务独占，因此其精确会话行可以直接移动，无需再次复制工作区
-    // 或规范会话历史。
-    let mut persistence_snapshot = workspace_snapshot;
-    let archived = workspace_session_with_archive_status(&persistence_snapshot, session_id)
-        .map(|(_, archived)| archived)
-        .ok_or_else(|| format!("context-compaction session disappeared: {session_id}"))?;
-    let runtime_state = if archived {
-        persistence_snapshot
-            .archived_session_runtime_state
-            .remove(&session_id)
-    } else {
-        persistence_snapshot
-            .session_runtime_state
-            .remove(&session_id)
-    };
-    let Some(mut runtime_state) = runtime_state else {
-        return Err(format!(
-            "context-compaction runtime state is missing: session={session_id}"
-        ));
-    };
-    // current_output_style preserves a newer user selection made after the compaction snapshot.
-    // current_output_style 确保压缩快照之后发生的用户风格切换不会被后台任务覆盖。
-    let current_output_style = match state.lock() {
-        Ok(guard) => guard
-            .workspace_snapshot
-            .as_ref()
-            .and_then(|workspace| {
-                workspace
-                    .session_runtime_state
-                    .get(&session_id)
-                    .or_else(|| workspace.archived_session_runtime_state.get(&session_id))
-            })
-            .map(|current_runtime_state| current_runtime_state.output_style.clone()),
-        Err(error) => {
-            return Err(format!(
-                "context-compaction current output-style read failed: {error}"
-            ));
-        }
-    };
-    if let Some(current_output_style) = current_output_style {
-        runtime_state.output_style = current_output_style;
-    }
-    // outputStyleAddonState is constant-size and captured before runtimeState moves back into its exact map.
-    // outputStyleAddonState 为常量大小，并在 runtimeState 移回精确映射前完成捕获。
-    let output_style_addon_state = if runtime_state.output_style.is_empty() {
-        None
-    } else {
-        let mut addon_state = SessionAddonState::new(session_id);
-        if !addon_state.set_typed_namespace(
-            SessionAddonNamespace::OutputStyle,
-            &runtime_state.output_style,
-            runtime_state.updated_at.clone(),
-        ) {
-            return Err(String::from(
-                "context-compaction output-style state build failed",
-            ));
-        }
-        Some(addon_state)
-    };
-    // The retained-session path classifies lazy display windows before writing, so compaction can
-    // never promote a bounded in-memory window into complete-transcript overwrite authority.
-    // 保留会话路径会在写入前分类懒加载展示窗口，因此压缩绝不会把有界内存窗口提升为完整转录覆盖权威。
-    persist_latest_retained_workspace_session_update_unlocked(
-        &state,
-        controller_runtime.clone(),
-        session_id,
-    )
-    .await
-    .map_err(|error| {
+    // The V1 handle is the sole durable owner of compaction, runtime-lock, and selection facts.
+    // V1 handle 是压缩、运行时锁定与选择配置事实的唯一持久化所有者。
+    let handle =
+        crate::session_goal_lifecycle::registered_session_v1_handle_from_state(&state, session_id)?;
+    handle.flush_all().map_err(|error| {
         let reason_label = reason.as_deref().unwrap_or("context_compaction");
-        format!("background context-compaction session persist failed ({reason_label}): {error}")
-    })?;
-    if let Some(addon_state) = output_style_addon_state {
-        let output_style_persist_is_current = output_style_persist_version
-            .map(|version| {
-                webui_session_addon_persist_versions_are_current(
-                    &state,
-                    session_id,
-                    &[(SessionAddonNamespace::OutputStyle, version)],
-                )
-            })
-            .unwrap_or(true);
-        if !output_style_persist_is_current {
-            return Err(format!(
-                "context-compaction output-style persistence was superseded: session={session_id}"
-            ));
-        }
-        persist_workspace_session_addon_state_update(
-            &state,
-            controller_runtime,
-            session_id,
-            addon_state,
-        )
-        .await
-        .map_err(|error| {
-            let reason_label = reason.as_deref().unwrap_or("context_compaction");
-            format!(
-                "background context-compaction output-style addon persist failed ({reason_label}): {error}"
-            )
-        })?;
-    }
-    Ok(())
+        format!("V1 context-compaction flush failed ({reason_label}): {error}")
+    })
 }
 
 /// Spawns a background compaction persistence task for non-blocking manual flows.
@@ -234,60 +84,4 @@ pub(crate) fn spawn_context_compaction_persist_task(
             eprintln!("[webui-service] context-compaction persistence failed: {error}");
         }
     });
-}
-/// Returns the complete visible display window used by context-compaction projection tests.
-/// 返回上下文压缩投影测试使用的完整可见展示窗口。
-#[cfg(test)]
-pub(crate) fn context_compaction_complete_display_messages(
-    workspace_snapshot: &WorkspaceSnapshot,
-    session_id: SessionId,
-    section_id: &str,
-) -> Vec<SessionMessageEntry> {
-    workspace_snapshot
-        .session_messages
-        .get(&session_id)
-        .or_else(|| {
-            workspace_snapshot
-                .archived_session_messages
-                .get(&session_id)
-        })
-        .cloned()
-        .filter(|messages| !messages.is_empty())
-        .unwrap_or_else(|| {
-            context_compaction_section_display_messages(workspace_snapshot, session_id, section_id)
-        })
-}
-
-/// Returns the visible display rows that belong to one context-compaction section in tests.
-/// 在测试中返回归属于单个上下文压缩分段的可见显示行。
-#[cfg(test)]
-fn context_compaction_section_display_messages(
-    workspace_snapshot: &WorkspaceSnapshot,
-    session_id: SessionId,
-    section_id: &str,
-) -> Vec<SessionMessageEntry> {
-    workspace_snapshot
-        .session_messages
-        .get(&session_id)
-        .into_iter()
-        .flat_map(|messages| messages.iter())
-        .filter(|message| context_compaction_message_belongs_to_section(message, section_id))
-        .cloned()
-        .collect()
-}
-
-/// Returns whether one display row belongs to the requested context-compaction section in tests.
-/// 在测试中返回单条显示行是否归属于请求的上下文压缩分段。
-#[cfg(test)]
-fn context_compaction_message_belongs_to_section(
-    message: &SessionMessageEntry,
-    section_id: &str,
-) -> bool {
-    message.id == section_id
-        || message
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.get("context_compaction_section_id"))
-            .and_then(Value::as_str)
-            == Some(section_id)
 }

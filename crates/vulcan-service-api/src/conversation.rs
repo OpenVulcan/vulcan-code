@@ -77,38 +77,6 @@ pub struct ConversationSummary {
     /// 可选所属项目标识。
     #[serde(default)]
     pub project_id: Option<String>,
-    /// Display-only fork source marker.
-    /// 纯展示用分叉来源标记。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fork_source: Option<ConversationForkSourceSummary>,
-    /// Problem-turn recovery admission state for the canonical terminal boundary.
-    /// 规范终止边界的问题回合恢复准入状态。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub continuation: Option<ConversationContinuationSummary>,
-}
-
-/// Minimal revisioned continuation state exposed to the WebUI.
-/// 暴露给 WebUI 的最小带修订 Continue 状态。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ConversationContinuationSummary {
-    /// Whether the backend currently considers continuation eligible.
-    /// 后端当前是否认为 Continue 可用。
-    pub eligible: bool,
-    /// Exact continuation generation required by the claim RPC.
-    /// 领取 RPC 所需的精确 Continue 代际。
-    pub generation: u64,
-    /// Exact ledger revision required by the claim RPC.
-    /// 领取 RPC 所需的精确账本修订号。
-    pub expected_ledger_revision: u64,
-    /// Stable reason recorded by the terminal continuation boundary.
-    /// 终止 Continue 边界记录的稳定原因。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    /// Stable safety reason when the terminal boundary cannot be continued.
-    /// 终止边界无法继续时的稳定安全原因。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub blocked_reason: Option<String>,
 }
 
 /// Describes one conversation-level action marker for cross-session navigation.
@@ -134,68 +102,6 @@ pub struct ConversationAttentionSummary {
     /// 用于排序诊断的 Unix 毫秒时间戳文本。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
-}
-
-/// Describes the display-only source marker for a forked conversation.
-/// 描述分叉会话的纯展示来源标记。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ConversationForkSourceSummary {
-    /// Source project tag used to locate the original conversation.
-    /// 用于定位原始会话的源项目标签。
-    pub source_project_tag: String,
-    /// Source conversation identifier for navigation.
-    /// 用于导航的源会话标识。
-    pub source_conversation_id: String,
-    /// Source conversation title captured at fork time.
-    /// 分叉时捕获的源会话标题。
-    pub source_title: String,
-    /// Last retained message id at the fork boundary.
-    /// 分叉边界处最后保留的消息标识。
-    pub anchor_message_id: Option<String>,
-    /// Fork creation timestamp.
-    /// 分叉创建时间戳。
-    pub created_at: String,
-}
-
-/// Represents one rendered conversation message.
-/// 表示单条已渲染的会话消息。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ConversationMessage {
-    /// Stable message identifier.
-    /// 稳定消息标识。
-    pub id: String,
-    /// Stable conversation identifier that owns this message.
-    /// 拥有该消息的稳定会话标识。
-    pub conversation_id: String,
-    /// Unix-millisecond creation timestamp for turn duration projection.
-    /// 用于轮次耗时投影的 Unix 毫秒创建时间戳。
-    #[serde(default)]
-    pub created_at: String,
-    /// Message author role.
-    /// 消息作者角色。
-    pub role: MessageRole,
-    /// Optional transcript title projected from the persisted session entry.
-    /// 从持久化会话项投影出的可选转录标题。
-    pub title: Option<String>,
-    /// Durable transcript record kind such as transcript, tool-call-output, or turn-stats.
-    /// 持久化转录记录类型，例如 transcript、tool-call-output 或 turn-stats。
-    pub record_kind: Option<String>,
-    /// Markdown or plain text body.
-    /// Markdown 或纯文本正文。
-    pub body: String,
-    /// Optional structured metadata for WebUI-specific transcript renderers.
-    /// 供 WebUI 专用转录渲染器使用的可选结构化元数据。
-    pub metadata: Option<serde_json::Value>,
-    /// Structured user attachments projected from transcript metadata.
-    /// 从转录元数据投影出的结构化用户附件。
-    #[serde(default)]
-    pub attachments: Vec<ComposerAttachmentSummary>,
-    /// Whether this user prompt can be safely edited and replayed by the backend.
-    /// 后端判定该用户提示词是否可以安全编辑并重新执行。
-    #[serde(default)]
-    pub editable_user_prompt: bool,
 }
 
 /// Carries one ordered partial workbench update that avoids resending the full snapshot.
@@ -384,9 +290,6 @@ pub struct ToolRequestProgressChangedDelta {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "kind", content = "payload")]
 pub enum WorkbenchDelta {
-    /// Append-only body delta for a visible conversation message.
-    /// 针对可见会话消息的追加式正文增量。
-    AppendMessageBody(AppendMessageBodyDelta),
     /// Phase-only update for a running conversation.
     /// 针对运行中会话的纯阶段更新。
     UpdateConversationRunPhase(UpdateConversationRunPhaseDelta),
@@ -420,18 +323,9 @@ pub enum WorkbenchDelta {
     /// Context-injection replacement for the selected-session memory panel.
     /// 用于当前选中会话记忆面板的上下文注入替换增量。
     ContextInjectionChanged(ContextInjectionChangedDelta),
-    /// Message-window replacement for one focused conversation surface.
-    /// 单个聚焦会话界面的消息窗口替换增量。
-    ConversationMessagesChanged(ConversationMessagesChangedDelta),
-    /// Message-node patch for one focused conversation surface.
-    /// 单个聚焦会话界面的消息节点补丁增量。
-    ConversationMessagesPatched(ConversationMessagesPatchedDelta),
     /// Session addon-state replacement for goal, todolist, and Plan mode surfaces.
     /// 面向目标、待办与计划模式界面的会话附属状态替换增量。
-    SessionAddonsChanged(SessionAddonsChangedDelta),
-    /// Conversation hydration progress replacement for one lazy-loaded transcript.
-    /// 单个懒加载转录的会话水合进度替换增量。
-    ConversationHydrationChanged(ConversationHydrationChangedDelta),
+    SessionAddonsChanged(Box<SessionAddonsChangedDelta>),
     /// Complete Agent Skills catalog replacement after one effective filesystem change.
     /// Agent Skills 文件系统发生一次有效变化后的完整目录替换增量。
     AgentSkillsCatalogChanged(AgentSkillsCatalogChangedDelta),
@@ -609,61 +503,6 @@ pub struct LuaSkillsManagedRuntimeProgressChangedDelta {
     pub progress: Option<LuaSkillsManagedRuntimeProgressSummary>,
 }
 
-/// Replaces the current conversation hydration progress without resending a full workbench.
-/// 在不重发完整工作台的情况下替换当前会话水合进度。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ConversationHydrationChangedDelta {
-    /// Latest hydration progress payload for the target conversation.
-    /// 目标会话的最新水合进度载荷。
-    pub progress: ConversationHydrationProgress,
-}
-
-/// Describes whether one streamed conversation message can still receive body deltas.
-/// 描述单条流式会话消息是否仍可接收正文增量。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub enum ConversationMessageStreamState {
-    /// The message remains open for additional provider content.
-    /// 消息仍可接收后续 Provider 内容。
-    Active,
-    /// The message has been permanently closed with its authoritative final body.
-    /// 消息已使用权威最终正文永久封口。
-    Sealed,
-}
-
-/// Appends streamed text to one visible conversation message.
-/// 向单条可见会话消息追加流式文本。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct AppendMessageBodyDelta {
-    /// Stable conversation identifier that owns the message.
-    /// 拥有该消息的稳定会话标识。
-    pub conversation_id: String,
-    /// Stable message identifier that should receive the appended body text.
-    /// 接收正文追加片段的稳定消息标识。
-    pub message_id: String,
-    /// Text appended by this event only.
-    /// 本事件单独追加的文本片段。
-    pub body_delta: String,
-    /// Full message body after applying this delta, used by WebUI as the authoritative streaming text.
-    /// 应用本次增量后的完整消息正文，供 WebUI 作为权威流式文本使用。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub current_body: Option<String>,
-    /// Initial full message metadata when this delta creates the row on the client.
-    /// 当本次增量在客户端创建行时携带的初始完整消息元数据。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub initial_message: Option<ConversationMessage>,
-    /// Current per-conversation run phase after applying this delta.
-    /// 应用本次增量后的当前会话运行阶段。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run_phase: Option<String>,
-    /// Explicit lifecycle for provider-streamed thinking and assistant output records.
-    /// Provider 流式思考与助手输出记录的显式生命周期。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stream_state: Option<ConversationMessageStreamState>,
-}
-
 /// Updates one conversation lifecycle phase without resending transcript rows.
 /// 更新单个会话的生命周期阶段，避免重新发送转录行。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -822,10 +661,6 @@ pub struct SubagentPanelRouteResponse {
     /// 当前子代理导航；没有活动子代理面板时为空。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_navigation: Option<SubagentNavigationSnapshot>,
-    /// Messages for the active surface only.
-    /// 仅当前活动界面的消息列表。
-    #[serde(default)]
-    pub messages: Vec<ConversationMessage>,
     /// Latest workbench revision after applying the route update.
     /// 应用路由更新后的最新工作台版本。
     pub revision: u64,
@@ -854,46 +689,6 @@ pub struct ContextInjectionChangedDelta {
     /// 当前上下文注入投影；运行态不可用时为空。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_injection: Option<ContextInjectionSnapshot>,
-}
-
-/// Replaces the visible message window for one conversation.
-/// 替换单个会话的可见消息窗口。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ConversationMessagesChangedDelta {
-    /// Stable conversation identifier receiving the message window.
-    /// 接收消息窗口的稳定会话标识。
-    pub conversation_id: String,
-    /// Current visible messages for the conversation.
-    /// 当前会话的可见消息列表。
-    #[serde(default)]
-    pub messages: Vec<ConversationMessage>,
-}
-
-/// Patches message nodes for one conversation without replacing the full visible window.
-/// 在不替换完整可见窗口的情况下修补单个会话的消息节点。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ConversationMessagesPatchedDelta {
-    /// Stable conversation identifier receiving the message patch.
-    /// 接收消息补丁的稳定会话标识。
-    pub conversation_id: String,
-    /// Full message nodes to insert or replace by id.
-    /// 需要按标识插入或替换的完整消息节点。
-    #[serde(default)]
-    pub upsert_messages: Vec<ConversationMessage>,
-    /// Message ids that should be removed from the visible window.
-    /// 需要从可见窗口移除的消息标识。
-    #[serde(default)]
-    pub remove_message_ids: Vec<String>,
-    /// Optional authoritative order for visible nodes in this conversation.
-    /// 当前会话可见节点的可选权威顺序。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message_order: Option<Vec<String>>,
-    /// Optional run phase that should be applied atomically with this message patch.
-    /// 需要与本次消息补丁原子应用的可选运行阶段。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run_phase: Option<String>,
 }
 
 /// One token-usage snapshot projected for the live Provider request panel.
@@ -967,23 +762,6 @@ pub struct SessionProviderUsageCallSummary {
     pub error_code: Option<String>,
 }
 
-/// Aggregates one explicit Provider usage scope without mixing branch or billing semantics.
-/// 汇总一个明确的 Provider 用量口径，不混合分支或账单语义。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionProviderUsageAggregateSummary {
-    /// Number of physical calls in this exact scope.
-    /// 当前精确口径中的物理调用数量。
-    pub provider_call_count: usize,
-    /// Number of terminal calls without usable Provider usage in this scope.
-    /// 当前口径中没有可用 Provider 用量的终态调用数量。
-    pub unknown_usage_call_count: usize,
-    /// Provider-reported cumulative usage in this scope.
-    /// 当前口径中的 Provider 实测累计用量。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage: Option<SessionProviderUsageTokenSummary>,
-}
-
 /// Projects per-session Provider request counts and token usage at every physical request boundary.
 /// 在每个物理请求边界投影会话级 Provider 请求计数与 Token 用量。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -1006,15 +784,6 @@ pub struct SessionProviderUsageSummary {
     /// 全部终态请求的可用用量累计值。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cumulative_usage: Option<SessionProviderUsageTokenSummary>,
-    /// Current active branch, including inherited calls that still belong to its context.
-    /// 当前活动分支，包含仍属于其上下文的继承调用。
-    pub active_branch: SessionProviderUsageAggregateSummary,
-    /// Calls physically produced during this session lifetime, including superseded edit branches.
-    /// 此会话生命周期内真实产生的调用，包含编辑后被取代的分支。
-    pub lifetime: SessionProviderUsageAggregateSummary,
-    /// Calls inherited from the source session by a fork and not billed again here.
-    /// 分叉自源会话继承且未在当前会话重复计费的调用。
-    pub inherited: SessionProviderUsageAggregateSummary,
     /// Latest physical request lifecycle projection.
     /// 最近一次物理请求的生命周期投影。
     #[serde(default, skip_serializing_if = "Option::is_none")]

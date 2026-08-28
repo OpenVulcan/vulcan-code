@@ -348,7 +348,7 @@ pub struct ProjectTerminalDisplayChangedEvent {
 
 /// Represents one event emitted from the local service bridge.
 /// 表示本地服务桥接层发出的单个事件。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "kind", content = "payload")]
 pub enum ServiceEvent {
     /// Startup snapshot event.
@@ -363,6 +363,9 @@ pub enum ServiceEvent {
     /// Fully settled conversation run lifecycle event.
     /// 完全结束的会话运行生命周期事件。
     ConversationRunSettled(Box<ConversationRunSettledEvent>),
+    /// Durable V1 conversation-event delta published from the canonical session writer.
+    /// 由规范会话写入器发布的可靠 V1 会话事件增量。
+    ConversationEventDeltaV1(Box<ConversationEventLiveDeltaV1>),
     /// Session addon namespace change event.
     /// 会话附属状态命名空间变更事件。
     SessionAddonChanged(Box<SessionAddonChangedEvent>),

@@ -7,20 +7,6 @@ import type {
 // ThemeMode 描述 shadcn 默认的两种主题模式。
 export type ThemeMode = "light" | "dark";
 
-// ConversationHistoryCursor stores the backend cursor for one loaded conversation window.
-// ConversationHistoryCursor 保存单个已加载会话窗口的后端历史游标。
-export interface ConversationHistoryCursor {
-  // earliestOrdinal points to the oldest loaded transcript row.
-  // earliestOrdinal 指向当前已加载的最早转录行。
-  earliestOrdinal: number | null;
-  // hasMoreHistory indicates whether an older page can be requested.
-  // hasMoreHistory 表示是否还能请求更早历史页。
-  hasMoreHistory: boolean;
-  // loading marks an in-flight older-page request for this conversation.
-  // loading 标记该会话是否正在请求更早历史页。
-  loading: boolean;
-}
-
 // WorkbenchDeltaSignal wraps the newest partial update with a React-visible sequence.
 // WorkbenchDeltaSignal 使用 React 可见序号包装最新局部更新。
 export interface WorkbenchDeltaSignal {
@@ -57,19 +43,6 @@ export type RequestStopConversationRunChoice = (
   // 当前精确会话树报告的运行中子代理。
   agents: StopConversationRunAgentPromptItem[],
 ) => Promise<StopConversationRunChoice | null>;
-
-// conversationHistoryCursorFromWindow converts one service-retained body window into UI cursor state.
-// conversationHistoryCursorFromWindow 将单个服务端保留正文窗口转换为 UI 游标状态。
-export function conversationHistoryCursorFromWindow(
-  window: NonNullable<WorkbenchSnapshot["hydratedConversationWindows"]>[number],
-  loading: boolean,
-): ConversationHistoryCursor {
-  return {
-    earliestOrdinal: window.earliestOrdinal ?? null,
-    hasMoreHistory: window.hasMoreHistory,
-    loading,
-  };
-}
 
 // initialThemeMode returns the persisted shadcn theme, defaulting to light.
 // initialThemeMode 返回持久化的 shadcn 主题，默认使用亮色。

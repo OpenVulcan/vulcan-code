@@ -11,9 +11,6 @@ fn frontend_service_rpc_methods_are_dispatched_by_kernel() {
         include_str!(
             "../../../../apps/vulcan-code-web/src/service/conversation-actions-service.ts"
         ),
-        include_str!(
-            "../../../../apps/vulcan-code-web/src/service/conversation-tool-detail-service.ts"
-        ),
         include_str!("../../../../apps/vulcan-code-web/src/service/memory-actions-service.ts"),
         include_str!("../../../../apps/vulcan-code-web/src/service/project-actions-service.ts"),
         include_str!("../../../../apps/vulcan-code-web/src/service/settings-actions-service.ts"),

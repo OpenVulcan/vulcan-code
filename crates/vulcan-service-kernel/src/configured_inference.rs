@@ -3068,7 +3068,7 @@ impl ConfiguredInferenceService {
                 .fetch_add(1, Ordering::Relaxed)
                 .saturating_add(1);
             let slot_index = sequence.saturating_sub(1)
-                % vulcan_workspace_store::workspace_store::PROVIDER_REQUEST_TRACE_SLOT_COUNT;
+                % vulcan_workspace_store::workspace_store::CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_SLOT_COUNT;
             let trace = json!({
                 "schema_version": CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_SCHEMA_VERSION,
                 "captured_at_unix_ms": captured_at_unix_ms,

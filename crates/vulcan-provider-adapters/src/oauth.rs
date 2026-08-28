@@ -534,7 +534,7 @@ impl OAuthAuthorizationRuntime {
             }
             CredentialAuthorization::BrowserCallback { profile } => {
                 self.start_browser_callback_flow(
-                    profile.clone(),
+                    profile.as_ref().clone(),
                     authorization_binding,
                     required_secret_prefix,
                 )

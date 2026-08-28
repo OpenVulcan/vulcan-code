@@ -3,15 +3,14 @@
 
 use crate::model::SessionId;
 use crate::output_decode::ShellOutputStreamDecoder;
-use crate::process_creation::{apply_child_path_prefixes, apply_windows_release_no_window};
+use crate::process_creation::{apply_child_path_prefixes, new_background_tokio_command};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::process::Command as StdCommand;
 use std::process::Stdio;
 use std::sync::{Arc, RwLock};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command as TokioCommand};
+use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout};
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::sync::{Mutex, Notify, oneshot};
 use tokio::time::{Duration, Instant, timeout};

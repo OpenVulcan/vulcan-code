@@ -44,6 +44,7 @@ pub mod provider_transport_stream_executor;
 pub mod provider_transport_stream_runtime;
 pub mod provider_transport_tool_context;
 pub mod provider_transport_vulcan;
+pub mod provider_v1_bridge;
 pub mod provider_visible_agent_messages;
 pub mod question_runtime;
 pub mod runtime;

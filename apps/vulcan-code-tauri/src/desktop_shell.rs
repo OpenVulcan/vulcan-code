@@ -18,8 +18,9 @@ use vulcan_service_host::webui_service_event_bus_sink;
 
 use vulcan_service_kernel::{
     ServiceShellHost, create_service_bridge_state, emit_initial_service_events,
-    service_prepare_for_app_shutdown, service_resume_after_failed_app_shutdown,
-    spawn_service_bootstrap, spawn_webui_service_http_bridge,
+    service_install_conversation_event_v1_emitter, service_prepare_for_app_shutdown,
+    service_resume_after_failed_app_shutdown, spawn_service_bootstrap,
+    spawn_webui_service_http_bridge,
 };
 
 /// Tauri desktop event sink used only by the desktop shell.
@@ -152,10 +153,17 @@ pub fn run() {
                     Err(error) => {
                         // Reopen admission before the UI lets the user keep working or retry close.
                         // 在界面允许用户继续工作或重试关闭之前重新开放准入。
-                        service_resume_after_failed_app_shutdown();
+                        let recovery_failure =
+                            service_resume_after_failed_app_shutdown(&shutdown_worker_state).err();
                         shutdown_worker_in_progress.store(false, Ordering::Release);
-                        eprintln!("[vulcan-code-tauri] app shutdown preparation failed: {error}");
-                        let _ = shutdown_window.emit("vulcan://shutdown-persist-failed", error);
+                        let failure = match recovery_failure {
+                            Some(recovery_error) => format!(
+                                "{error} Shutdown admission recovery also failed: {recovery_error}"
+                            ),
+                            None => error,
+                        };
+                        eprintln!("[vulcan-code-tauri] app shutdown preparation failed: {failure}");
+                        let _ = shutdown_window.emit("vulcan://shutdown-persist-failed", failure);
                     }
                 }
             });
@@ -165,6 +173,7 @@ pub fn run() {
                 app.handle().clone(),
                 service_event_bus.clone(),
             );
+            service_install_conversation_event_v1_emitter(&managed_state, event_emitter.clone())?;
             spawn_webui_service_http_bridge(
                 event_emitter.clone(),
                 Arc::clone(&managed_state),

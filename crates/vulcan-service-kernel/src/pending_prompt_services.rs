@@ -1,30 +1,37 @@
 //! WebUI pending prompt queue RPC service handlers.
 //! WebUI 待发送提示词队列 RPC 服务处理器。
 
-use vulcan_agent_runtime::attachment_asset_index::{
-    acquire_staged_attachment_ref, release_staged_attachment_ref,
-};
+use std::path::Path;
+
+use vulcan_agent_runtime::attachment_asset_index::release_staged_attachment_ref;
 use vulcan_core::types::ConversationAttachment;
 use vulcan_service_api::{PendingPromptSummary, ServiceEventEmitter};
-use vulcan_workbench_model::{
-    PendingPromptPanelDropTarget, apply_pending_prompt_panel_drop_target,
-    remove_pending_prompt_panel_entry,
+use vulcan_session_core::v1::config::QueuedInputIdentity;
+use vulcan_session_core::v1::document::QueuedInputDraftReceipt;
+use vulcan_session_core::v1::event::{EventBody, QueuedInputResolutionKind};
+use vulcan_session_core::v1::ids::ClientActionId;
+use vulcan_workspace_store::workspace_store::{
+    ProjectResourceCatalog, load_project_resource_catalog,
 };
 
-use super::conversation_submission::mutate_latest_workspace_for_existing_session;
 use super::pending_prompts::{
-    pending_prompt_attachment_staging_scope, pending_prompt_summary_from_panel_entry,
+    pending_prompt_attachment_staging_scope, pending_prompt_preview_text,
+    pending_prompt_process_mirror_from_v1_queued_inputs,
 };
+use super::session_goal_lifecycle::{
+    conversation_attachments_from_resource_ids, current_v1_goal_unix_millis,
+    session_v1_handle_from_state,
+};
+use super::session_runtime_registry_v1::SessionHandle;
 use super::{
-    ControllerRuntimeHandle, SessionId, SharedServiceBridgeState, WorkspaceSnapshot,
-    composer_attachment_draft_scope, current_unix_millis_text, emit_pending_prompts_changed_delta,
-    parse_session_id, runtime_parts_from_state, selected_session_id_from_state,
-    spawn_workspace_session_runtime_state_persist_task, webui_trace, workspace_path_for_session,
+    SessionId, SharedServiceBridgeState, composer_attachment_summary_from_core,
+    emit_pending_prompts_changed_delta, parse_session_id, selected_session_id_from_state,
+    webui_trace, workspace_path_for_session,
 };
 
 /// Describes one attachment-owner transition committed with a pending-queue snapshot mutation.
 /// 描述一次与待发送队列快照变更共同提交的附件所有者迁移。
-struct PendingPromptAttachmentLeaseTransition {
+pub(crate) struct PendingPromptAttachmentLeaseTransition {
     /// Authoritative workspace path owning the managed asset index.
     /// 持有托管资产索引的权威工作区路径。
     workspace_path: String,
@@ -34,235 +41,6 @@ struct PendingPromptAttachmentLeaseTransition {
     /// Canonical attachments governed by both sides of the transition.
     /// 由迁移两侧共同管辖的规范附件集合。
     attachments: Vec<ConversationAttachment>,
-}
-
-/// Error text returned while the workspace snapshot is still unavailable.
-/// 工作区快照尚不可用时返回的错误文本。
-const WORKSPACE_SNAPSHOT_NOT_READY_MESSAGE: &str =
-    "service is still starting; workspace snapshot is not ready";
-
-/// Describes the result and persistence needs of one pending prompt queue mutation.
-/// 描述一次待发送提示词队列变更的结果与持久化需求。
-struct PendingPromptQueueServiceMutation<T> {
-    /// Value returned by the service entry after the shared mutation flow completes.
-    /// 共享变更流程完成后由服务入口返回的值。
-    result: T,
-    /// Optional persistence reason used when the mutation changed stored session state.
-    /// 当变更修改了已存储会话状态时使用的可选持久化原因。
-    persist_reason: Option<&'static str>,
-    /// Optional attachment-owner transition committed at the snapshot storage boundary.
-    /// 在快照存储边界提交的可选附件所有者迁移。
-    attachment_lease_transition: Option<PendingPromptAttachmentLeaseTransition>,
-}
-
-impl<T> PendingPromptQueueServiceMutation<T> {
-    /// Builds a mutation outcome that must persist the changed session state.
-    /// 构建必须持久化已变更会话状态的变更结果。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `result` is the service return value.
-    /// `result` 是服务返回值。
-    /// `persist_reason` labels the asynchronous session persistence task.
-    /// `persist_reason` 标记异步会话持久化任务。
-    ///
-    /// # Returns
-    /// 返回值
-    /// A mutation outcome with persistence enabled.
-    /// 返回已启用持久化的变更结果。
-    fn persisted(result: T, persist_reason: &'static str) -> Self {
-        Self {
-            result,
-            persist_reason: Some(persist_reason),
-            attachment_lease_transition: None,
-        }
-    }
-
-    /// Builds a mutation outcome with conditional persistence.
-    /// 构建按条件持久化的变更结果。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `result` is the service return value.
-    /// `result` 是服务返回值。
-    /// `should_persist` indicates whether the session state actually changed.
-    /// `should_persist` 表示会话状态是否真实发生变更。
-    /// `persist_reason` labels the asynchronous session persistence task when needed.
-    /// `persist_reason` 在需要时标记异步会话持久化任务。
-    ///
-    /// # Returns
-    /// 返回值
-    /// A mutation outcome whose persistence reason is present only when requested.
-    /// 返回仅在需要时携带持久化原因的变更结果。
-    fn maybe_persisted(result: T, should_persist: bool, persist_reason: &'static str) -> Self {
-        Self {
-            result,
-            persist_reason: should_persist.then_some(persist_reason),
-            attachment_lease_transition: None,
-        }
-    }
-
-    /// Adds one attachment-owner transition to this queue mutation.
-    /// 为当前队列变更增加一项附件所有者迁移。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `transition` contains the exact pre-store rollback and post-store commit scopes.
-    /// `transition` 包含精确的存储前回滚与存储后提交作用域。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The same mutation carrying the transition for the shared commit boundary.
-    /// 返回携带迁移、供共享提交边界处理的同一变更。
-    fn with_attachment_lease_transition(
-        mut self,
-        transition: PendingPromptAttachmentLeaseTransition,
-    ) -> Self {
-        self.attachment_lease_transition = Some(transition);
-        self
-    }
-}
-
-/// Applies a pending prompt queue mutation and runs the shared service side effects.
-/// 应用一次待发送提示词队列变更并执行共享服务副作用。
-///
-/// # Parameters
-/// 参数
-/// `app` emits the pending prompt queue delta after the retained snapshot is stored.
-/// `app` 在保留快照写回后发送待发送提示词队列增量。
-/// `state` owns the retained workspace snapshot and workbench projection.
-/// `state` 持有保留的工作区快照与工作台投影。
-/// `controller_runtime` owns the async persistence bridge used after real mutations.
-/// `controller_runtime` 持有真实变更后使用的异步持久化桥。
-/// `session_id` identifies the session whose pending prompt queue is mutated.
-/// `session_id` 标识待发送提示词队列被变更的会话。
-/// `mutate` applies the entry-specific mutation to the cloned workspace snapshot.
-/// `mutate` 对克隆出的工作区快照应用入口专属变更。
-///
-/// # Returns
-/// 返回值
-/// The entry-specific service result after storage, delta emission, and optional persistence.
-/// 返回完成存储、增量发送与可选持久化后的入口专属服务结果。
-fn apply_pending_prompt_queue_service_mutation<T, Mutation>(
-    app: &ServiceEventEmitter,
-    state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
-    session_id: SessionId,
-    mutate: Mutation,
-) -> Result<T, String>
-where
-    Mutation: FnOnce(
-        &mut WorkspaceSnapshot,
-        SessionId,
-    ) -> Result<PendingPromptQueueServiceMutation<T>, String>,
-{
-    let mutation = apply_pending_prompt_queue_snapshot_mutation(app, state, session_id, mutate)?;
-    if let Some(persist_reason) = mutation.persist_reason {
-        spawn_pending_prompt_queue_persist_task(
-            state,
-            controller_runtime,
-            session_id,
-            persist_reason,
-        )?;
-    }
-    Ok(mutation.result)
-}
-
-/// Applies a pending prompt queue mutation to the retained workspace snapshot.
-/// 将一次待发送提示词队列变更应用到保留工作区快照。
-///
-/// # Parameters
-/// 参数
-/// `app` emits the pending prompt queue delta after the retained snapshot is stored.
-/// `app` 在保留快照写回后发送待发送提示词队列增量。
-/// `state` owns the retained workspace snapshot and workbench projection.
-/// `state` 持有保留的工作区快照与工作台投影。
-/// `session_id` identifies the session whose pending prompt queue is mutated.
-/// `session_id` 标识待发送提示词队列被变更的会话。
-/// `mutate` applies the entry-specific mutation to the cloned workspace snapshot.
-/// `mutate` 对克隆出的工作区快照应用入口专属变更。
-///
-/// # Returns
-/// 返回值
-/// The mutation outcome after storage and delta emission, before optional persistence.
-/// 返回完成存储与增量发送后、可选持久化前的变更结果。
-fn apply_pending_prompt_queue_snapshot_mutation<T, Mutation>(
-    app: &ServiceEventEmitter,
-    state: &SharedServiceBridgeState,
-    session_id: SessionId,
-    mutate: Mutation,
-) -> Result<PendingPromptQueueServiceMutation<T>, String>
-where
-    Mutation: FnOnce(
-        &mut WorkspaceSnapshot,
-        SessionId,
-    ) -> Result<PendingPromptQueueServiceMutation<T>, String>,
-{
-    let mut mutation =
-        mutate_latest_workspace_for_existing_session(state, None, session_id, |workspace_slice| {
-            mutate(workspace_slice, session_id)
-        })?;
-    if let Some(transition) = mutation.attachment_lease_transition.take() {
-        commit_pending_prompt_attachment_lease_transition(transition);
-    }
-    emit_pending_prompts_changed_delta(app, state, session_id)?;
-    Ok(mutation)
-}
-
-/// Spawns persistence for a pending prompt queue mutation using the latest retained snapshot.
-/// 使用最新保留快照为一次待发送提示词队列变更启动持久化。
-///
-/// # Parameters
-/// 参数
-/// `state` owns the retained workspace snapshot used as the persistence source.
-/// `state` 持有作为持久化来源的保留工作区快照。
-/// `controller_runtime` owns the workspace-store runtime bridge.
-/// `controller_runtime` 持有工作区存储运行时桥。
-/// `session_id` identifies the session whose runtime state should be persisted.
-/// `session_id` 标识运行态需要持久化的会话。
-/// `persist_reason` labels the asynchronous persistence task.
-/// `persist_reason` 标记异步持久化任务。
-///
-/// # Returns
-/// 返回值
-/// `Ok(())` after the persistence task has been spawned.
-/// 启动持久化任务后返回 `Ok(())`。
-fn spawn_pending_prompt_queue_persist_task(
-    state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
-    session_id: SessionId,
-    persist_reason: &'static str,
-) -> Result<(), String> {
-    // Workspace readiness is checked without cloning any retained session maps.
-    // 在不克隆任何保留会话映射的情况下检查工作区就绪状态。
-    let workspace_is_ready = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?
-        .workspace_snapshot
-        .is_some();
-    if !workspace_is_ready {
-        return Err(workspace_snapshot_not_ready_error());
-    }
-    // Queue edits own runtime metadata only and must not publish the retained transcript prefix.
-    // 队列编辑只拥有运行态元数据，不得发布保留转录前缀。
-    spawn_workspace_session_runtime_state_persist_task(
-        state.clone(),
-        controller_runtime.clone(),
-        session_id,
-        Some(String::from(persist_reason)),
-    );
-    Ok(())
-}
-
-/// Builds the canonical workspace snapshot readiness error.
-/// 构建标准工作区快照就绪错误。
-///
-/// # Returns
-/// 返回值
-/// The user-facing service startup error text.
-/// 返回面向用户的服务启动错误文本。
-fn workspace_snapshot_not_ready_error() -> String {
-    String::from(WORKSPACE_SNAPSHOT_NOT_READY_MESSAGE)
 }
 
 /// Releases one exact attachment-owner scope and retains failures as diagnostics.
@@ -289,7 +67,7 @@ fn release_pending_prompt_attachment_lease_scope(
 
 /// Commits one queue-to-next-owner transition after the snapshot store succeeds.
 /// 在快照存储成功后提交一次队列到下一所有者的迁移。
-fn commit_pending_prompt_attachment_lease_transition(
+pub(crate) fn commit_pending_prompt_attachment_lease_transition(
     transition: PendingPromptAttachmentLeaseTransition,
 ) {
     release_pending_prompt_attachment_lease_scope(
@@ -298,6 +76,153 @@ fn commit_pending_prompt_attachment_lease_transition(
         &transition.attachments,
         "commit",
     );
+}
+
+/// Parses one visible queue entry id as the authoritative browser action identity.
+/// 把一条可见队列条目 ID 解析为权威浏览器动作身份。
+pub(crate) fn pending_prompt_action_id(entry_id: &str) -> Result<ClientActionId, String> {
+    ClientActionId::try_new(entry_id.to_string())
+        .map_err(|error| format!("待发送消息身份无效：{error}"))
+}
+
+/// Resolves the current or terminal local queue identity for one exact browser action.
+/// 为一个精确浏览器动作解析当前或已终结的本地队列身份。
+pub(crate) fn pending_prompt_queue_identity(
+    handle: &SessionHandle,
+    client_action_id: &ClientActionId,
+) -> Result<QueuedInputIdentity, String> {
+    let identity = handle
+        .read(|document| document.queued_input_identity_for_action(client_action_id))
+        .map_err(|error| format!("读取 V1 待发送消息身份失败：{error}"))?
+        .map_err(|error| format!("解析 V1 待发送消息身份失败：{error}"))?;
+    identity.ok_or_else(|| format!("没有找到待发送消息 `{}`。", client_action_id.as_str()))
+}
+
+/// Captures the transient queue attachment lease that may be released after V1 commit.
+/// 捕获可在 V1 提交后释放的瞬时队列附件租约。
+pub(crate) fn pending_prompt_attachment_transition(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    entry_id: &str,
+) -> Result<Option<PendingPromptAttachmentLeaseTransition>, String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let Some(entry) = guard
+        .pending_prompt_process_mirrors
+        .get(&session_id)
+        .and_then(|mirror| {
+            mirror
+                .ui_state
+                .pending_prompt_panel_queue
+                .iter()
+                .find(|entry| entry.id == entry_id)
+        })
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    let workspace_path = guard
+        .workspace_snapshot
+        .as_ref()
+        .map(|workspace| workspace_path_for_session(workspace, session_id))
+        .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+    Ok(Some(PendingPromptAttachmentLeaseTransition {
+        workspace_path,
+        committed_release_scope: pending_prompt_attachment_staging_scope(&entry.id)?,
+        attachments: entry.attachments,
+    }))
+}
+
+/// Rebuilds only the visible queue panel from authoritative V1 metadata.
+/// 仅从权威 V1 metadata 重建可见队列面板。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the process-local projection, `session_id` and `handle` select the V1 authority,
+/// while `project_directory` and `catalog` resolve ordered resource display data.
+/// `state` 持有进程内投影，`session_id` 与 `handle` 选择 V1 权威，
+/// `project_directory` 与 `catalog` 解析有序资源展示数据。
+///
+/// # Returns
+/// 返回值
+/// Returns whether the visible process projection changed, or an explicit read/lock error.
+/// 返回可见进程投影是否发生变化，或明确的读取/加锁错误。
+pub(crate) fn rebuild_pending_prompt_panel_from_v1(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    handle: &SessionHandle,
+    project_directory: &Path,
+    catalog: &ProjectResourceCatalog,
+) -> Result<bool, String> {
+    let queued_inputs = handle
+        .read(|document| document.metadata.input_state.queued_inputs.clone())
+        .map_err(|error| format!("读取 V1 待发送消息队列失败：{error}"))?;
+    let rebuilt =
+        pending_prompt_process_mirror_from_v1_queued_inputs(&queued_inputs, |queued_input| {
+            Ok(conversation_attachments_from_resource_ids(
+                project_directory,
+                catalog,
+                &queued_input.resource_ids,
+            ))
+        })?;
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let panel_queue = &mut guard
+        .pending_prompt_process_mirrors
+        .entry(session_id)
+        .or_default()
+        .ui_state
+        .pending_prompt_panel_queue;
+    if *panel_queue == rebuilt.ui_state.pending_prompt_panel_queue {
+        return Ok(false);
+    }
+    *panel_queue = rebuilt.ui_state.pending_prompt_panel_queue;
+    Ok(true)
+}
+
+/// Reads the exact durable resolution timestamp for a moved queue entry.
+/// 读取一条已移动队列条目的精确持久化处置时间戳。
+fn moved_pending_prompt_timestamp(
+    handle: &SessionHandle,
+    identity: &QueuedInputIdentity,
+) -> Result<i64, String> {
+    handle
+        .read(|document| {
+            document.events().iter().find_map(|event| {
+                let EventBody::QueuedInputResolution(resolution) = &event.event else {
+                    return None;
+                };
+                (resolution.client_action_id == identity.client_action_id
+                    && resolution.input_id == identity.input_id
+                    && resolution.resolution == QueuedInputResolutionKind::MovedToDraft)
+                    .then_some(event.updated_at_ms)
+            })
+        })
+        .map_err(|error| format!("读取 V1 待发送消息处置事实失败：{error}"))?
+        .ok_or_else(|| String::from("V1 待发送消息已移动，但缺少对应的持久化处置事实。"))
+}
+
+/// Builds the edit response only from the durable draft receipt and project resources.
+/// 仅从持久化草稿 receipt 与项目资源构建编辑响应。
+fn pending_prompt_summary_from_durable_draft(
+    identity: &QueuedInputIdentity,
+    text: &str,
+    attachments: &[ConversationAttachment],
+    created_at_ms: i64,
+) -> PendingPromptSummary {
+    PendingPromptSummary {
+        id: identity.client_action_id.as_str().to_string(),
+        prompt: text.to_string(),
+        preview: pending_prompt_preview_text(text, attachments),
+        attachments: attachments
+            .iter()
+            .map(composer_attachment_summary_from_core)
+            .collect(),
+        state: String::from("ready"),
+        created_at: created_at_ms.to_string(),
+    }
 }
 
 /// Restores one visible pending prompt into the WebUI composer and removes it from the queue.
@@ -321,52 +246,47 @@ pub(super) async fn service_edit_pending_prompt(
     state: SharedServiceBridgeState,
     entry_id: String,
 ) -> Result<PendingPromptSummary, String> {
-    let (controller_runtime, _, _, _, _) = runtime_parts_from_state(&state)?;
     let selected_session_id = selected_session_id_from_state(&state)?;
-    apply_pending_prompt_queue_service_mutation(
-        &app,
+    let client_action_id = pending_prompt_action_id(&entry_id)?;
+    let handle = session_v1_handle_from_state(&state, selected_session_id).await?;
+    let identity = pending_prompt_queue_identity(handle.as_ref(), &client_action_id)?;
+    let attachment_transition =
+        pending_prompt_attachment_transition(&state, selected_session_id, &entry_id)?;
+    let now_ms = current_v1_goal_unix_millis()?;
+    let receipt = handle
+        .move_queued_input_to_draft(identity, now_ms)
+        .map_err(|error| format!("把 V1 待发送消息恢复为草稿失败：{error}"))?;
+    let locator = handle
+        .storage_locator()
+        .map_err(|error| format!("读取 V1 会话资源定位失败：{error}"))?;
+    let project_directory = locator.project_directory();
+    let catalog = load_project_resource_catalog(&project_directory)
+        .map_err(|error| format!("加载 V1 项目资源目录失败：{error}"))?;
+    let QueuedInputDraftReceipt { identity, draft } = receipt.value;
+    let attachments = conversation_attachments_from_resource_ids(
+        &project_directory,
+        &catalog,
+        &draft.resource_ids,
+    );
+    let created_at_ms = moved_pending_prompt_timestamp(handle.as_ref(), &identity)?;
+    let summary = pending_prompt_summary_from_durable_draft(
+        &identity,
+        &draft.text,
+        &attachments,
+        created_at_ms,
+    );
+    rebuild_pending_prompt_panel_from_v1(
         &state,
-        &controller_runtime,
         selected_session_id,
-        |workspace_snapshot, selected_session_id| {
-            let workspace_path =
-                workspace_path_for_session(workspace_snapshot, selected_session_id);
-            let composer_scope =
-                composer_attachment_draft_scope(&format!("conversation:{selected_session_id}"))?;
-            let Some(runtime_state) = workspace_snapshot
-                .session_runtime_state
-                .get_mut(&selected_session_id)
-            else {
-                return Err(String::from("当前会话没有可编辑的待发送队列。"));
-            };
-            let entry = runtime_state
-                .ui_state
-                .pending_prompt_panel_queue
-                .iter()
-                .find(|entry| entry.id == entry_id)
-                .cloned()
-                .ok_or_else(|| String::from("没有找到待编辑的待发送提示词。"))?;
-            let queue_scope = pending_prompt_attachment_staging_scope(&entry.id)?;
-            // composerScope is acquired before queue removal so the returned attachments remain durable until the WebUI reconciles the replacement draft.
-            // composerScope 在移除队列项前获取，确保返回的附件在 WebUI 对账替换草稿前持续有效。
-            acquire_staged_attachment_ref(&workspace_path, &composer_scope, &entry.attachments)?;
-            let Some(entry) =
-                remove_pending_prompt_panel_entry(&mut runtime_state.ui_state, &entry_id)
-            else {
-                return Err(String::from("没有找到待编辑的待发送提示词。"));
-            };
-            runtime_state.updated_at = current_unix_millis_text();
-            let summary = pending_prompt_summary_from_panel_entry(&entry);
-            Ok(
-                PendingPromptQueueServiceMutation::persisted(summary, "pending_edit")
-                    .with_attachment_lease_transition(PendingPromptAttachmentLeaseTransition {
-                        workspace_path,
-                        committed_release_scope: queue_scope,
-                        attachments: entry.attachments,
-                    }),
-            )
-        },
-    )
+        handle.as_ref(),
+        &project_directory,
+        &catalog,
+    )?;
+    if let Some(transition) = attachment_transition {
+        commit_pending_prompt_attachment_lease_transition(transition);
+    }
+    emit_pending_prompts_changed_delta(&app, &state, selected_session_id)?;
+    Ok(summary)
 }
 
 /// Removes one visible pending prompt from the selected conversation queue.
@@ -390,48 +310,33 @@ pub(super) async fn service_remove_pending_prompt(
     state: SharedServiceBridgeState,
     entry_id: String,
 ) -> Result<bool, String> {
-    let (controller_runtime, _, _, _, _) = runtime_parts_from_state(&state)?;
     let selected_session_id = selected_session_id_from_state(&state)?;
-    apply_pending_prompt_queue_service_mutation(
-        &app,
+    let client_action_id = pending_prompt_action_id(&entry_id)?;
+    let handle = session_v1_handle_from_state(&state, selected_session_id).await?;
+    let identity = pending_prompt_queue_identity(handle.as_ref(), &client_action_id)?;
+    let attachment_transition =
+        pending_prompt_attachment_transition(&state, selected_session_id, &entry_id)?;
+    let receipt = handle
+        .remove_queued_input(identity, current_v1_goal_unix_millis()?)
+        .map_err(|error| format!("移除 V1 待发送消息失败：{error}"))?;
+    let locator = handle
+        .storage_locator()
+        .map_err(|error| format!("读取 V1 会话资源定位失败：{error}"))?;
+    let project_directory = locator.project_directory();
+    let catalog = load_project_resource_catalog(&project_directory)
+        .map_err(|error| format!("加载 V1 项目资源目录失败：{error}"))?;
+    rebuild_pending_prompt_panel_from_v1(
         &state,
-        &controller_runtime,
         selected_session_id,
-        |workspace_snapshot, selected_session_id| {
-            let workspace_path =
-                workspace_path_for_session(workspace_snapshot, selected_session_id);
-            let removed = if let Some(runtime_state) = workspace_snapshot
-                .session_runtime_state
-                .get_mut(&selected_session_id)
-            {
-                if let Some(entry) =
-                    remove_pending_prompt_panel_entry(&mut runtime_state.ui_state, &entry_id)
-                {
-                    runtime_state.updated_at = current_unix_millis_text();
-                    let queue_scope = pending_prompt_attachment_staging_scope(&entry.id)?;
-                    Some(PendingPromptAttachmentLeaseTransition {
-                        workspace_path,
-                        committed_release_scope: queue_scope,
-                        attachments: entry.attachments,
-                    })
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            let changed = removed.is_some();
-            let mutation = PendingPromptQueueServiceMutation::maybe_persisted(
-                changed,
-                changed,
-                "pending_remove",
-            );
-            Ok(match removed {
-                Some(transition) => mutation.with_attachment_lease_transition(transition),
-                None => mutation,
-            })
-        },
-    )
+        handle.as_ref(),
+        &project_directory,
+        &catalog,
+    )?;
+    if let Some(transition) = attachment_transition {
+        commit_pending_prompt_attachment_lease_transition(transition);
+    }
+    emit_pending_prompts_changed_delta(&app, &state, selected_session_id)?;
+    Ok(receipt.changed)
 }
 
 /// Reorders the visible pending prompt queue for the selected conversation.
@@ -461,171 +366,70 @@ pub(super) async fn service_reorder_pending_prompts(
     dragged_entry_id: String,
     target_entry_id: Option<String>,
 ) -> Result<bool, String> {
-    let (controller_runtime, _, _, _, _) = runtime_parts_from_state(&state)?;
     let selected_session_id = conversation_id
         .as_deref()
         .and_then(parse_session_id)
         .map(Ok)
         .unwrap_or_else(|| selected_session_id_from_state(&state))?;
-    let drop_target = target_entry_id
+    let dragged_action_id = pending_prompt_action_id(&dragged_entry_id)?;
+    let target_action_id = target_entry_id
         .filter(|entry_id| !entry_id.trim().is_empty())
-        .map(PendingPromptPanelDropTarget::Before)
-        .unwrap_or(PendingPromptPanelDropTarget::End);
-    apply_pending_prompt_queue_service_mutation(
-        &app,
-        &state,
-        &controller_runtime,
-        selected_session_id,
-        |workspace_snapshot, selected_session_id| {
-            workspace_snapshot.selected_session = selected_session_id;
-            let did_reorder = if let Some(runtime_state) = workspace_snapshot
-                .session_runtime_state
-                .get_mut(&selected_session_id)
-            {
-                if apply_pending_prompt_panel_drop_target(
-                    &mut runtime_state.ui_state,
-                    &dragged_entry_id,
-                    &drop_target,
-                ) {
-                    runtime_state.updated_at = current_unix_millis_text();
-                    true
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
-            Ok(PendingPromptQueueServiceMutation::maybe_persisted(
-                did_reorder,
-                did_reorder,
-                "pending_reorder",
-            ))
-        },
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        collections::{BTreeMap, BTreeSet},
-        sync::Arc,
+        .map(|entry_id| pending_prompt_action_id(&entry_id))
+        .transpose()?;
+    let handle = session_v1_handle_from_state(&state, selected_session_id).await?;
+    let current_order = handle
+        .read(|document| {
+            document
+                .metadata
+                .input_state
+                .queued_inputs
+                .iter()
+                .map(|queued| QueuedInputIdentity {
+                    client_action_id: queued.client_action_id.clone(),
+                    input_id: queued.input_id,
+                })
+                .collect::<Vec<_>>()
+        })
+        .map_err(|error| format!("读取 V1 待发送消息顺序失败：{error}"))?;
+    let dragged_identity = current_order
+        .iter()
+        .find(|identity| identity.client_action_id == dragged_action_id)
+        .cloned()
+        .ok_or_else(|| format!("没有找到待移动消息 `{}`。", dragged_action_id.as_str()))?;
+    let ordered = if target_action_id.as_ref() == Some(&dragged_action_id) {
+        current_order
+    } else {
+        let mut ordered = current_order
+            .into_iter()
+            .filter(|identity| identity.client_action_id != dragged_action_id)
+            .collect::<Vec<_>>();
+        if let Some(target_action_id) = target_action_id {
+            let target_index = ordered
+                .iter()
+                .position(|identity| identity.client_action_id == target_action_id)
+                .ok_or_else(|| format!("没有找到目标消息 `{}`。", target_action_id.as_str()))?;
+            ordered.insert(target_index, dragged_identity);
+        } else {
+            ordered.push(dragged_identity);
+        }
+        ordered
     };
-
-    use super::*;
-    use crate::{ServiceShellHost, create_service_bridge_state};
-    use vulcan_workbench_model::{SessionRunPhase, SessionState, SessionSummary};
-
-    /// Test shell host that prevents unit tests from launching host shell actions.
-    /// 防止单元测试启动宿主壳操作的测试宿主壳。
-    struct PendingPromptServiceTestShellHost;
-
-    impl ServiceShellHost for PendingPromptServiceTestShellHost {
-        /// Rejects file-manager requests issued by accidental test paths.
-        /// 拒绝意外测试路径发起的文件管理器请求。
-        fn open_path(&self, _path: &str) -> Result<(), String> {
-            Err(String::from(
-                "pending prompt service tests do not open host paths",
-            ))
-        }
-
-        /// Rejects browser requests issued by accidental test paths.
-        /// 拒绝意外测试路径发起的浏览器请求。
-        fn open_url(&self, _url: &str) -> Result<(), String> {
-            Err(String::from(
-                "pending prompt service tests do not open host URLs",
-            ))
-        }
-    }
-
-    /// Builds shared service state containing one retained workspace session.
-    /// 构建包含一个保留工作区会话的共享服务状态。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `session_id` is the selected session stored in the retained workspace snapshot.
-    /// `session_id` 是写入保留工作区快照的选中会话。
-    ///
-    /// # Returns
-    /// 返回值
-    /// A shared service state handle ready for pending prompt helper tests.
-    /// 返回可用于待发送提示词 helper 测试的共享服务状态句柄。
-    fn service_state_with_workspace_session(session_id: SessionId) -> SharedServiceBridgeState {
-        let state = create_service_bridge_state(Arc::new(PendingPromptServiceTestShellHost));
-        let mut guard = state.lock().expect("test service state lock must be valid");
-        guard.workbench_generation = 0;
-        guard.workbench.revision = 0;
-        guard.workbench.selected_conversation_id = Some(session_id.to_string());
-        guard.workspace_snapshot = Some(WorkspaceSnapshot {
-            task_projects: vec![vulcan_workbench_model::TaskProjectSummary::new(
-                "project-a",
-                "Project A",
-                "D:/project-a",
-                false,
-                0,
-                None,
-                None,
-                vec![session_id],
-            )],
-            archived_task_projects: Vec::new(),
-            sessions: vec![SessionSummary::new(
-                session_id,
-                Some(String::from("project-a")),
-                "待发送提示词测试会话",
-                "",
-                SessionState::Completed,
-                0,
-                0,
-                "刚刚",
-            )],
-            archived_sessions: Vec::new(),
-            session_messages: BTreeMap::new(),
-            archived_session_messages: BTreeMap::new(),
-            session_compactions: BTreeMap::new(),
-            archived_session_compactions: BTreeMap::new(),
-            session_runtime_state: BTreeMap::new(),
-            archived_session_runtime_state: BTreeMap::new(),
-            session_run_phases: BTreeMap::from([(session_id, SessionRunPhase::Ready)]),
-            expanded_task_projects: BTreeSet::new(),
-            selected_session: session_id,
-            hydrated_session_ids: BTreeSet::new(),
-        });
-        drop(guard);
-        state
-    }
-
-    /// Verifies the shared snapshot mutation helper stores the workspace and emits a delta revision.
-    /// 验证共享快照变更 helper 会存储工作区并发送增量版本。
-    #[test]
-    fn pending_prompt_snapshot_mutation_stores_snapshot_and_bumps_delta_revision() {
-        let session_id = SessionId::new_v4();
-        let state = service_state_with_workspace_session(session_id);
-        let app = ServiceEventEmitter::new(Vec::new());
-
-        let mutation = apply_pending_prompt_queue_snapshot_mutation(
-            &app,
-            &state,
-            session_id,
-            |workspace_snapshot, session_id| {
-                workspace_snapshot.selected_session = session_id;
-                Ok(PendingPromptQueueServiceMutation::maybe_persisted(
-                    true, false, "unused",
-                ))
-            },
-        )
-        .expect("snapshot mutation should store the pending prompt workspace");
-
-        let guard = state.lock().expect("test service state lock must be valid");
-        assert!(mutation.result);
-        assert!(mutation.persist_reason.is_none());
-        assert_eq!(
-            session_id,
-            guard
-                .workspace_snapshot
-                .as_ref()
-                .expect("test workspace snapshot must exist")
-                .selected_session
-        );
-        assert_eq!(1, guard.workbench_generation);
-        assert_eq!(1, guard.workbench.revision);
-    }
+    let receipt = handle
+        .reorder_queued_inputs(ordered, current_v1_goal_unix_millis()?)
+        .map_err(|error| format!("重排 V1 待发送消息失败：{error}"))?;
+    let locator = handle
+        .storage_locator()
+        .map_err(|error| format!("读取 V1 会话资源定位失败：{error}"))?;
+    let project_directory = locator.project_directory();
+    let catalog = load_project_resource_catalog(&project_directory)
+        .map_err(|error| format!("加载 V1 项目资源目录失败：{error}"))?;
+    rebuild_pending_prompt_panel_from_v1(
+        &state,
+        selected_session_id,
+        handle.as_ref(),
+        &project_directory,
+        &catalog,
+    )?;
+    emit_pending_prompts_changed_delta(&app, &state, selected_session_id)?;
+    Ok(receipt.changed)
 }

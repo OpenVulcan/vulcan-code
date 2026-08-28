@@ -1,0 +1,772 @@
+//! V1 metadata document: session mode, config, input state, and split map.
+//! V1 元数据文档：会话模式、配置、输入区状态与分片映射。
+//!
+//! `metadata.json` stays lightweight: mode switches, the latest user
+//! selections, request configuration for the current/next safe API boundary,
+//! input drafts and queues, and the physical split map. It never stores the
+//! main event stream, transcripts, recovery copies, or statistics ledgers.
+//! `metadata.json` 保持轻量：模式开关、用户最新选择、当前/下一个安全 API
+//! 边界使用的请求配置、输入草稿与队列、物理分片映射。它绝不保存主事件流、
+//! 转录、恢复副本或统计账本。
+
+use serde::{Deserialize, Serialize};
+use vulcan_ai_contract::ContextCompactionWindowNodeId;
+
+use crate::v1::ids::{ClientActionId, PendingInputId, ResourceId, Seq, TurnId};
+
+/// File contract of the V1 session metadata document.
+/// V1 会话元数据文档的文件契约。
+pub const METADATA_CONTRACT: &str = "vulcan.session.v1";
+
+/// Maximum number of Unicode scalar values accepted in one Goal objective.
+/// 一个 Goal 目标内容允许的 Unicode 标量值最大数量。
+pub const MAX_GOAL_OBJECTIVE_CHARS: usize = 4_000;
+
+/// Returns whether one serialized boolean is false.
+/// 返回一个序列化布尔值是否为 false。
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// Current state of one Goal configuration.
+/// 一个 Goal 配置的当前状态。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GoalState {
+    /// Goal is enabled and auto-continue may schedule turns.
+    /// Goal 已启用，自动续跑可以调度回合。
+    Active,
+    /// Goal auto-continue is paused.
+    /// Goal 自动续跑已暂停。
+    #[default]
+    Paused,
+    /// Goal completed its objective.
+    /// Goal 已完成目标。
+    Completed,
+    /// Goal is blocked and cannot continue.
+    /// Goal 被阻塞，无法继续。
+    Blocked,
+    /// Goal budget was exhausted.
+    /// Goal 预算耗尽。
+    BudgetExhausted,
+}
+
+/// Cached Goal budget counters with their covered statistics seq.
+/// 带覆盖统计 seq 的 Goal 预算缓存计数。
+///
+/// This is only an accelerator cache. On mismatch the cache must be
+/// recomputed from main events and must never become a second fact source.
+/// 这只是加速缓存。失配时必须从主事件重算，绝不能成为第二事实源。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GoalBudgetCache {
+    /// Main-event seq of the last statistic covered by this cache.
+    /// 本缓存覆盖到的最后一个统计的主事件 seq。
+    pub covered_until_seq: Seq,
+    /// Cached direct-scope budget tokens.
+    /// 缓存的 direct 口径预算 token。
+    pub direct_total_tokens: u64,
+    /// Cached subagent-scope budget tokens.
+    /// 缓存的 subagent 口径预算 token。
+    pub subagent_total_tokens: u64,
+    /// Cached merged total budget tokens.
+    /// 缓存的归并 total 口径预算 token。
+    pub total_tokens: u64,
+    /// Last modified time in Unix milliseconds.
+    /// 最后修改时间(Unix 毫秒)。
+    pub updated_at_ms: i64,
+}
+
+/// Goal configuration persisted inside `mode.goal`.
+/// 保存在 `mode.goal` 内的 Goal 配置。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GoalConfig {
+    /// Whether Goal mode is enabled.
+    /// Goal 模式是否启用。
+    pub enabled: bool,
+    /// Goal objective text.
+    /// 目标内容。
+    pub objective: String,
+    /// Optional token budget for auto-continue decisions.
+    /// 可选的自动续跑 token 预算。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_tokens: Option<u64>,
+    /// Turn that started the Goal execution, if any.
+    /// 启动 Goal 执行的回合(如有)。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_turn_id: Option<TurnId>,
+    /// Main-event seq where the Goal started, if any.
+    /// Goal 启动处的主事件 seq(如有)。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_seq: Option<Seq>,
+    /// Current Goal state.
+    /// 当前 Goal 状态。
+    pub state: GoalState,
+    /// Optional budget accelerator cache.
+    /// 可选预算加速缓存。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_cache: Option<GoalBudgetCache>,
+}
+
+/// Plan-mode configuration persisted inside `mode.plan`.
+/// 保存在 `mode.plan` 内的 Plan 模式配置。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanModeConfig {
+    /// Whether Plan mode is enabled.
+    /// Plan 模式是否开启。
+    pub enabled: bool,
+}
+
+/// Future session-level access authorizations.
+/// 未来会话级授权选择。
+///
+/// Only real implemented fields may be added; no speculative configuration is
+/// created ahead of the product feature.
+/// 只允许加入真实已实现的字段；不为尚未到来的产品功能提前创造配置。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccessConfig {}
+
+/// Session mode switches.
+/// 会话模式开关。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModeConfig {
+    /// Goal-mode configuration.
+    /// Goal 模式配置。
+    pub goal: GoalConfig,
+    /// Plan-mode configuration.
+    /// Plan 模式配置。
+    pub plan: PlanModeConfig,
+    /// Session-level access selections.
+    /// 会话级授权选择。
+    pub access: AccessConfig,
+}
+
+/// Request configuration already effective at the last safe API boundary.
+/// 已在最近一次安全 API 边界生效的请求配置。
+///
+/// This is the default for the next physical request; it is never a copy of
+/// the execution scene of an in-flight request. Actual per-request usage is
+/// recorded only in that request's `api_stats`.
+/// 这是下一物理请求的默认配置；它绝不是某个在途请求的执行现场副本。
+/// 每次请求实际使用的配置只记录在该请求的 `api_stats` 中。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActiveRequestConfig {
+    /// Provider name in effect.
+    /// 生效的 Provider 名。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Non-secret connection id in effect.
+    /// 生效的非秘密连接 id。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_id: Option<String>,
+    /// Model in effect.
+    /// 生效的模型。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Thinking level in effect.
+    /// 生效的思考级别。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<String>,
+    /// Temperature in effect.
+    /// 生效的温度。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+}
+
+/// Pending request-configuration change applied at the next safe API boundary.
+/// 将在下一个安全 API 边界生效的请求配置变更。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PendingRequestConfig {
+    /// Pending provider name.
+    /// 待生效 Provider 名。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Pending non-secret connection id.
+    /// 待生效非秘密连接 id。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_id: Option<String>,
+    /// Pending model.
+    /// 待生效模型。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Pending thinking level.
+    /// 待生效思考级别。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<String>,
+    /// Pending temperature.
+    /// 待生效温度。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    /// When the change was requested in Unix milliseconds.
+    /// 变更请求时刻(Unix 毫秒)。
+    pub set_at_ms: i64,
+}
+
+/// One prompt-skill session-level enable/disable override.
+/// 一个提示词技能的会话级启停覆盖。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PromptSkillOverride {
+    /// Skill id being overridden.
+    /// 被覆盖的技能 id。
+    pub skill_id: String,
+    /// Whether the skill is enabled for this session.
+    /// 该技能在本会话是否启用。
+    pub enabled: bool,
+}
+
+/// One exact provider-tool target selected without carrying Provider-specific schemas.
+/// 一个不携带 Provider 专属 Schema 的精确供应商工具目标选择。
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderToolTargetConfig {
+    /// Credential connection exposing the selected target.
+    /// 暴露所选目标的凭据连接。
+    pub connection_id: String,
+    /// Provider-declared target identity.
+    /// Provider 声明的目标身份。
+    pub target_id: String,
+}
+
+/// One direct capability-to-target selection in canonical capability order.
+/// 一项按规范能力顺序排列的直接能力到目标选择。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderToolCapabilitySelection {
+    /// Stable semantic capability key.
+    /// 稳定的语义能力键。
+    pub capability: String,
+    /// Exact selected target.
+    /// 精确选中的目标。
+    pub target: ProviderToolTargetConfig,
+}
+
+/// Backend family selected for one media-understanding capability.
+/// 一项媒体理解能力选择的后端类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderMediaUnderstandingMode {
+    /// Use the Provider-owned understanding tool.
+    /// 使用 Provider 持有的理解工具。
+    ProviderTool,
+    /// Use a replacement multimodal model.
+    /// 使用替代多模态模型。
+    ModelReplacement,
+}
+
+/// One media capability backend selection in canonical capability order.
+/// 一项按规范能力顺序排列的媒体能力后端选择。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderMediaUnderstandingSelection {
+    /// Stable semantic capability key.
+    /// 稳定的语义能力键。
+    pub capability: String,
+    /// Exact backend family selected for the capability.
+    /// 为该能力选择的精确后端类型。
+    pub mode: ProviderMediaUnderstandingMode,
+}
+
+/// One native model-extension capability and its ordered target set.
+/// 一项原生模型扩展能力及其有序目标集合。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderExtensionTargetSetConfig {
+    /// Stable semantic extension capability key.
+    /// 稳定的语义扩展能力键。
+    pub capability: String,
+    /// Canonically ordered exact targets enabled for this capability.
+    /// 为该能力启用的按规范顺序排列的精确目标。
+    pub targets: Vec<ProviderToolTargetConfig>,
+}
+
+/// Complete provider-tool selection owned by one session.
+/// 一个会话持有的完整供应商工具选择。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderToolSelectionConfig {
+    /// Whether global defaults have been materialized into this session.
+    /// 全局默认值是否已经物化到当前会话。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub initialized: bool,
+    /// Whether this session explicitly overrides global defaults.
+    /// 当前会话是否显式覆盖全局默认值。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub overridden: bool,
+    /// Enabled semantic capability keys in canonical order.
+    /// 按规范顺序排列的已启用语义能力键。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enabled_capabilities: Vec<String>,
+    /// Direct capability target selections in canonical order.
+    /// 按规范顺序排列的直接能力目标选择。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selections: Vec<ProviderToolCapabilitySelection>,
+    /// Media backend selections in canonical order.
+    /// 按规范顺序排列的媒体后端选择。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub media_understanding_modes: Vec<ProviderMediaUnderstandingSelection>,
+    /// Native extension target sets in canonical order.
+    /// 按规范顺序排列的原生扩展目标集合。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extension_target_sets: Vec<ProviderExtensionTargetSetConfig>,
+}
+
+impl ProviderToolSelectionConfig {
+    /// Returns whether no provider-tool selection fact has been materialized.
+    /// 返回是否尚未物化任何供应商工具选择事实。
+    pub fn is_empty(&self) -> bool {
+        !self.initialized
+            && !self.overridden
+            && self.enabled_capabilities.is_empty()
+            && self.selections.is_empty()
+            && self.media_understanding_modes.is_empty()
+            && self.extension_target_sets.is_empty()
+    }
+}
+
+/// Session policy for selecting project-authorized knowledge libraries.
+/// 会话选择项目已授权知识库时使用的策略。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeLibrarySelectionMode {
+    /// Inherit the project default-enabled libraries.
+    /// 继承项目默认启用的知识库。
+    #[default]
+    Inherit,
+    /// Use only the explicitly selected authorized libraries.
+    /// 仅使用显式选择且已授权的知识库。
+    Explicit,
+}
+
+/// Session-selected retrieval policy for knowledge tools.
+/// 会话为知识工具选择的检索策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeRetrievalMode {
+    /// Return raw BM25 matches.
+    /// 返回原始 BM25 匹配结果。
+    RawBm25,
+    /// Return display-oriented BM25 matches.
+    /// 返回面向展示的 BM25 匹配结果。
+    DisplayBm25,
+    /// Return display-oriented hybrid matches.
+    /// 返回面向展示的混合检索结果。
+    DisplayHybrid,
+}
+
+/// Complete session-owned knowledge-library selection.
+/// 当前会话持有的完整知识库选择。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeLibrarySelectionConfig {
+    /// Selection mode for project-authorized libraries.
+    /// 项目已授权知识库的选择模式。
+    pub mode: KnowledgeLibrarySelectionMode,
+    /// Canonically ordered explicit library identifiers.
+    /// 按规范顺序排列的显式知识库标识。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub library_ids: Vec<String>,
+    /// Optional retrieval policy selected for knowledge tools.
+    /// 为知识工具选择的可选检索策略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retrieval_mode: Option<KnowledgeRetrievalMode>,
+}
+
+impl KnowledgeLibrarySelectionConfig {
+    /// Returns whether this selection is the project-inherited default.
+    /// 返回该选择是否为继承项目配置的默认状态。
+    pub fn is_default(&self) -> bool {
+        self.mode == KnowledgeLibrarySelectionMode::Inherit
+            && self.library_ids.is_empty()
+            && self.retrieval_mode.is_none()
+    }
+}
+
+/// Session-level VMM behavior overrides owned by metadata.
+/// 由 metadata 持有的会话级 VMM 行为覆盖。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VmmSessionPolicyConfig {
+    /// Optional precheck-memory injection override.
+    /// 可选的预检记忆注入覆盖。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub precheck_enabled: Option<bool>,
+    /// Optional completed-turn memory writeback override.
+    /// 可选的已完成回合记忆回写覆盖。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_writeback_enabled: Option<bool>,
+}
+
+impl VmmSessionPolicyConfig {
+    /// Returns whether this session inherits both VMM behavior values.
+    /// 返回该会话是否同时继承两项 VMM 行为配置。
+    pub fn is_empty(&self) -> bool {
+        self.precheck_enabled.is_none() && self.memory_writeback_enabled.is_none()
+    }
+}
+
+/// Latest user selections for capabilities and personalities.
+/// 用户在能力与人格上的最新选择。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectionConfig {
+    /// Latest agent-persona selection.
+    /// 最新 Agent 人格选择。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_persona: Option<String>,
+    /// Latest output-style selection.
+    /// 最新输出风格选择。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_style: Option<String>,
+    /// Complete session-owned knowledge-library selection.
+    /// 当前会话持有的完整知识库选择。
+    #[serde(
+        default,
+        skip_serializing_if = "KnowledgeLibrarySelectionConfig::is_default"
+    )]
+    pub knowledge_libraries: KnowledgeLibrarySelectionConfig,
+    /// Complete session-owned Provider tool configuration.
+    /// 当前会话持有的完整 Provider 工具配置。
+    #[serde(default, skip_serializing_if = "ProviderToolSelectionConfig::is_empty")]
+    pub provider_tools: ProviderToolSelectionConfig,
+    /// Explicit capability enablements.
+    /// 显式启用的能力集合。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub explicit_capabilities: Vec<String>,
+    /// Media-understanding backend selection.
+    /// 媒体理解后端选择。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_understanding_backend: Option<String>,
+    /// Prompt-skill session-level overrides.
+    /// 提示词技能会话级覆盖。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prompt_skill_overrides: Vec<PromptSkillOverride>,
+    /// Session-level VMM behavior overrides.
+    /// 会话级 VMM 行为覆盖。
+    #[serde(default, skip_serializing_if = "VmmSessionPolicyConfig::is_empty")]
+    pub vmm: VmmSessionPolicyConfig,
+    /// Web-search enable flag.
+    /// 网页搜索启用标记。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_search_enabled: Option<bool>,
+    /// Media understanding enable flag.
+    /// 媒体理解启用标记。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_understanding_enabled: Option<bool>,
+}
+
+/// Session-level configuration persisted inside `metadata.config`.
+/// 保存在 `metadata.config` 内的会话级配置。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionConfig {
+    /// Request configuration effective at the last safe API boundary.
+    /// 已在最近一次安全 API 边界生效的请求配置。
+    pub active_request: ActiveRequestConfig,
+    /// Pending request change applied at the next safe boundary.
+    /// 将在下一个安全边界生效的请求变更。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_request: Option<PendingRequestConfig>,
+    /// Latest user selections.
+    /// 用户最新选择。
+    pub selection: SelectionConfig,
+    /// Stable context-compaction window node selected for the next safe request boundary.
+    /// 为下一个安全请求边界选择的稳定上下文压缩窗口节点。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_compaction_window_node_id: Option<ContextCompactionWindowNodeId>,
+}
+
+/// Stable identity of one queued input across metadata mutations.
+/// 一条排队输入在元数据修改间保持稳定的身份。
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QueuedInputIdentity {
+    /// External client action that originally enqueued the input.
+    /// 最初把该输入加入队列的外部客户端动作。
+    pub client_action_id: ClientActionId,
+    /// Session-local pending-input identity.
+    /// 会话本地待处理输入身份。
+    pub input_id: PendingInputId,
+}
+
+/// Input draft state.
+/// 输入草稿状态。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DraftState {
+    /// Draft text.
+    /// 草稿正文。
+    pub text: String,
+    /// Ordered project resource ids attached to the draft.
+    /// 附着在草稿上的有序项目资源 id。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_ids: Vec<ResourceId>,
+    /// Queue identity retained only while this exact draft was restored from a queued input.
+    /// 仅当当前精确草稿由排队输入恢复时保留的队列身份。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restored_from_queue: Option<QueuedInputIdentity>,
+}
+
+/// One in-turn supplementary input bound to the open turn.
+/// 一条绑定开放回合的过程内补充输入。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PendingInTurnInput {
+    /// Stable external idempotency identity of the client action.
+    /// 客户端动作的稳定外部幂等身份。
+    pub client_action_id: ClientActionId,
+    /// Stable input id.
+    /// 稳定输入 id。
+    pub input_id: PendingInputId,
+    /// Open turn this input belongs to.
+    /// 该输入所属的开放回合。
+    pub turn_id: TurnId,
+    /// Supplementary text.
+    /// 补充正文。
+    pub text: String,
+    /// Ordered project resource ids.
+    /// 有序项目资源 id。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_ids: Vec<ResourceId>,
+    /// Creation time in Unix milliseconds.
+    /// 创建时间(Unix 毫秒)。
+    pub created_at_ms: i64,
+}
+
+/// One queued future-turn input.
+/// 一条排队中的未来回合输入。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QueuedInput {
+    /// Stable external idempotency identity of the client action.
+    /// 客户端动作的稳定外部幂等身份。
+    pub client_action_id: ClientActionId,
+    /// Stable input id.
+    /// 稳定输入 id。
+    pub input_id: PendingInputId,
+    /// Queued text.
+    /// 排队正文。
+    pub text: String,
+    /// Ordered project resource ids.
+    /// 有序项目资源 id。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_ids: Vec<ResourceId>,
+    /// Creation time in Unix milliseconds.
+    /// 创建时间(Unix 毫秒)。
+    pub created_at_ms: i64,
+}
+
+/// Input area state persisted inside `metadata.input_state`.
+/// 保存在 `metadata.input_state` 内的输入区状态。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputState {
+    /// Input draft text and ordered resources.
+    /// 输入草稿正文与有序资源。
+    pub draft: DraftState,
+    /// Supplementary inputs bound to the open turn, not yet streamed.
+    /// 绑定开放回合、尚未流入主事件的过程内补充。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_in_turn_inputs: Vec<PendingInTurnInput>,
+    /// Future-turn queued inputs.
+    /// 未来回合的排队输入。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queued_inputs: Vec<QueuedInput>,
+}
+
+/// One physical segment row of the current generation split map.
+/// 当前 generation 分片映射中的一行。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SegmentInfo {
+    /// 1-based segment number within the generation.
+    /// generation 内以 1 为起点的分片序号。
+    pub segment_number: u64,
+    /// Exact segment file name.
+    /// 精确分片文件名。
+    pub file_name: String,
+    /// First event seq of this segment.
+    /// 该分片的第一个事件 seq。
+    pub start_seq: Seq,
+    /// Terminal seq of a sealed segment, or `None` for the active tail.
+    /// 封口分片的终止 seq；活动尾段为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_seq: Option<Seq>,
+    /// Event count of this segment.
+    /// 该分片事件数。
+    pub event_count: u64,
+    /// Byte length of this segment file.
+    /// 该分片文件字节数。
+    pub byte_len: u64,
+    /// Next local id after all event-referenced ids in this segment prefix.
+    /// 该分片前缀中全部事件引用 id 之后的下一个本地 id。
+    pub next_event_local_id: u64,
+}
+
+/// Cached id/seq frontier used only as an allocator accelerator.
+/// 仅作分配器加速用的 id/seq frontier 缓存。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IdFrontier {
+    /// Next available local entity id.
+    /// 下一个可用本地实体 id。
+    pub next_local_id: u64,
+    /// Next available stream seq.
+    /// 下一个可用流 seq。
+    pub next_seq: u64,
+}
+
+/// Immutable identity of the exact source boundary that created a forked session.
+/// 创建分叉会话的精确来源边界不可变身份。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForkOrigin {
+    /// Parent session UUID.
+    /// 父会话 UUID。
+    pub source_session_id: String,
+    /// Parent event-tree generation observed by the fork request.
+    /// 分叉请求观察到的父事件树 generation。
+    pub source_segment_generation: u64,
+    /// Retained parent root-input seq that became the child open boundary.
+    /// 成为子会话开放边界的父根输入 seq。
+    pub source_target_seq: Seq,
+}
+
+/// The full V1 session metadata document.
+/// 完整 V1 会话元数据文档。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MetadataDocument {
+    /// File contract marking the V1 metadata format.
+    /// 标记 V1 元数据格式的文件契约。
+    pub contract: String,
+    /// Schema version of the document.
+    /// 文档的 schema 版本。
+    pub schema_version: u32,
+    /// Cross-system session UUID.
+    /// 跨系统会话 UUID。
+    pub session_id: String,
+    /// Immutable source boundary for a forked session; root sessions store `None`.
+    /// 分叉会话的不可变来源边界；根会话保存 `None`。
+    pub fork_origin: Option<ForkOrigin>,
+    /// Project tag used for human-readable partitioning.
+    /// 用于人类可读分区的项目标识。
+    pub project_tag: String,
+    /// Creation time in Unix milliseconds.
+    /// 创建时间(Unix 毫秒)。
+    pub created_at_ms: i64,
+    /// Last metadata write time in Unix milliseconds.
+    /// 最后写入时间(Unix 毫秒)。可落后于已原子发布的活动尾段，不可反向截断。
+    pub updated_at_ms: i64,
+    /// Exact complete document revision published with this metadata snapshot.
+    /// 与该 metadata 快照一同完整发布的精确文档修订号。
+    pub document_revision: u64,
+    /// Archive time in Unix milliseconds, if archived.
+    /// 归档时间(Unix 毫秒)；未归档时为 None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at_ms: Option<i64>,
+    /// Session display title.
+    /// 会话显示标题。
+    pub title: String,
+    /// Session mode switches.
+    /// 会话模式开关。
+    pub mode: ModeConfig,
+    /// Session-level configuration.
+    /// 会话级配置。
+    pub config: SessionConfig,
+    /// Input-area state.
+    /// 输入区状态。
+    pub input_state: InputState,
+    /// Current generation id of the segment tree.
+    /// 分片树的当前 generation id。
+    pub segment_generation: u64,
+    /// Current immutable context generation containing runtime and compactions.
+    /// 当前包含 runtime 与 compactions 的不可变上下文 generation。
+    pub active_context_generation: u64,
+    /// Cached start seq of the currently open Turn, if one crosses the active
+    /// tail boundary. The event stream remains authoritative; this cursor only
+    /// bounds precise startup reads.
+    /// 当前开放回合的起始 seq 缓存；当回合跨越活动尾段边界时用于精确限定启动读取。
+    /// 主事件流仍是权威事实，该游标不保存任何转录内容。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_turn_start_seq: Option<Seq>,
+    /// Exact split map of the current generation.
+    /// 当前 generation 的精确分片映射。
+    pub split_list: Vec<SegmentInfo>,
+    /// Allocator frontier cache.
+    /// 分配器 frontier 缓存。
+    pub id_frontier: IdFrontier,
+}
+
+impl MetadataDocument {
+    /// Builds a fresh empty metadata document with the current contract.
+    /// 使用当前契约构建一份全新的空元数据文档。
+    pub fn new(
+        session_id: impl Into<String>,
+        project_tag: impl Into<String>,
+        title: impl Into<String>,
+        created_at_ms: i64,
+    ) -> Self {
+        Self {
+            contract: METADATA_CONTRACT.to_string(),
+            schema_version: 1,
+            session_id: session_id.into(),
+            fork_origin: None,
+            project_tag: project_tag.into(),
+            created_at_ms,
+            updated_at_ms: created_at_ms,
+            document_revision: 0,
+            archived_at_ms: None,
+            title: title.into(),
+            mode: ModeConfig::default(),
+            config: SessionConfig::default(),
+            input_state: InputState::default(),
+            segment_generation: 1,
+            active_context_generation: 1,
+            open_turn_start_seq: None,
+            split_list: Vec::new(),
+            id_frontier: IdFrontier {
+                next_local_id: 1,
+                next_seq: 1,
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The metadata document serializes with the exact frozen contract values.
+    /// 元数据文档使用精确冻结的契约值序列化。
+    #[test]
+    fn metadata_contract_round_trip() {
+        let document = MetadataDocument::new(
+            "session-uuid",
+            "project-tag",
+            "default title",
+            1_700_000_000_000,
+        );
+        let json = serde_json::to_string(&document).unwrap();
+        assert!(json.contains(r#""contract":"vulcan.session.v1""#));
+        assert!(json.contains(r#""schema_version":1"#));
+        let decoded: MetadataDocument = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, document);
+    }
+
+    /// Unknown fields in the metadata document are rejected.
+    /// 元数据文档中的未知字段被拒绝。
+    #[test]
+    fn metadata_rejects_unknown_fields() {
+        let document = MetadataDocument::new("s", "p", "t", 1);
+        let mut json: serde_json::Value = serde_json::to_value(&document).unwrap();
+        json["unexpected_field"] = serde_json::Value::Bool(true);
+        let result: Result<MetadataDocument, _> = serde_json::from_value(json);
+        assert!(result.is_err());
+    }
+}

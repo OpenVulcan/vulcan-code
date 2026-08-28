@@ -6725,6 +6725,7 @@ version = "0.1.0"
 name = "vulcan-change-set"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "serde_json",
  "workspace-hack",
 ]
@@ -6751,6 +6752,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "vulcan-ai-contract",
  "vulcan-core",
  "workspace-hack",
 ]
@@ -6874,16 +6876,6 @@ version = "0.1.0"
 dependencies = [
  "serde_json",
  "vulcan-tools-luaskills-call",
- "workspace-hack",
-]
-
-[[package]]
-name = "vulcan-main-session"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "vulcan-session-core",
  "workspace-hack",
 ]
 
@@ -7045,6 +7037,7 @@ dependencies = [
  "vulcan-ai-contract",
  "vulcan-luaskills-config",
  "vulcan-runtime-assets",
+ "vulcan-session-core",
  "vulcan-vmm",
  "workspace-hack",
 ]
@@ -7093,6 +7086,7 @@ dependencies = [
  "vldb-controller-client",
  "vulcan-agent-runtime",
  "vulcan-ai-contract",
+ "vulcan-change-set",
  "vulcan-context",
  "vulcan-context-compaction",
  "vulcan-context-injection",
@@ -7167,10 +7161,12 @@ dependencies = [
 name = "vulcan-session-core"
 version = "0.1.0"
 dependencies = [
- "futures-core",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "uuid",
+ "vulcan-ai-contract",
+ "vulcan-change-set",
  "workspace-hack",
 ]
 
@@ -7190,8 +7186,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
- "vulcan-context",
- "vulcan-context-compaction",
  "vulcan-runtime-assets",
  "vulcan-session-core",
  "workspace-hack",
@@ -7233,6 +7227,7 @@ name = "vulcan-tools-manager"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "vulcan-session-core",
  "workspace-hack",
 ]
 

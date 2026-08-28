@@ -124,14 +124,10 @@ pub(crate) fn drive_runtime_stream_provider_loop(
         let discovery_errors = launch.discovery_errors;
         let warnings = launch.warnings;
         let system_preamble = launch.system_preamble;
+        let dynamic_prompt_layers = launch.dynamic_prompt_layers;
+        let locked_baseline = launch.locked_baseline;
         let core_snapshot = launch.core_snapshot;
-        let initial_provider_request = launch.initial_provider_request;
-        let controller_config_override = launch.controller_config_override;
-        let recovery_action = launch.recovery_action;
         let mut stream_state = launch.stream_state;
-        let provider_usage_budget_baseline = stream_state
-            .provider_usage_budget_baseline_handle()
-            .expect("runtime launch must install Provider Usage telemetry context");
         let public_ai_runtime = launch.public_ai_runtime;
         // taskExecutionContextGuard owns the exact context generation used by this provider loop.
         // taskExecutionContextGuard 拥有本 Provider 循环使用的精确上下文注册世代。
@@ -162,17 +158,15 @@ pub(crate) fn drive_runtime_stream_provider_loop(
             &preparation,
             active_agent.as_ref(),
             &system_preamble,
+            dynamic_prompt_layers,
+            locked_baseline,
             &effective_prompt,
             turn_start_mode,
             core_snapshot,
-            initial_provider_request,
-            controller_config_override,
-            recovery_action,
             task_runtime,
             tools_manager,
             resolved_tool_definitions,
             public_ai_runtime,
-            provider_usage_budget_baseline,
             prompt_intervention,
         );
 

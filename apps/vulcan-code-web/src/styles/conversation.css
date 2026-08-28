@@ -39,6 +39,227 @@
   pointer-events: none;
 }
 
+/* Keep the V1 transcript as one canonical seq-ordered column.
+ * 将 V1 转录保持为一个按 canonical seq 排列的纵向列表。 */
+.conversation-v1-display {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Give every persisted display fact a stable layout boundary without changing order.
+ * 为每条持久化显示事实提供稳定布局边界，同时不改变顺序。 */
+.conversation-v1-event {
+  min-width: 0;
+  color: var(--text-primary);
+}
+
+.conversation-v1-event[data-event-kind="user_input"],
+.conversation-v1-optimistic-user-input {
+  width: fit-content;
+  max-width: min(86%, 680px);
+  margin-left: auto;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 22%, var(--border-subtle));
+  border-radius: 16px 16px 4px 16px;
+  background: color-mix(in srgb, var(--accent-primary) 8%, var(--surface-elevated));
+}
+
+.conversation-v1-event[data-event-kind="user_input"] > p,
+.conversation-v1-optimistic-user-input > p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Keep edit and fork actions subordinate to one exact persisted root-input card.
+ * 让编辑与分叉动作从属于一张精确持久化根输入卡片。
+ */
+.conversation-v1-root-input-actions {
+  margin-top: 8px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.conversation-v1-root-input-actions > button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.conversation-v1-root-input-actions > button:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.conversation-v1-root-input-actions > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* Preserve exact multiline edit text inside the controlled V1 generation dialog.
+ * 在受控 V1 generation 对话框中保留精确多行编辑正文。
+ */
+.conversation-generation-dialog-v1-textarea {
+  width: 100%;
+  min-height: 160px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+  font: inherit;
+  line-height: 1.5;
+}
+
+.conversation-generation-dialog-v1-textarea:focus {
+  border-color: var(--accent-primary);
+  outline: none;
+}
+
+.conversation-v1-optimistic-user-input {
+  opacity: 0.76;
+}
+
+.conversation-v1-optimistic-user-input > ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.conversation-v1-assistant-text {
+  width: 100%;
+  line-height: 1.7;
+}
+
+.conversation-v1-reasoning {
+  border-left: 2px solid color-mix(in srgb, var(--accent-primary) 46%, var(--border-subtle));
+  padding-left: 12px;
+  color: var(--muted-foreground);
+}
+
+.conversation-v1-reasoning > summary {
+  width: fit-content;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+}
+
+.conversation-v1-request-config,
+.conversation-v1-auxiliary-event {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: baseline;
+  padding: 8px 10px;
+  border-left: 2px solid var(--border-subtle);
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.conversation-v1-auxiliary-event[data-event-kind="system_context"] pre {
+  flex-basis: 100%;
+  max-height: 240px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Render project resources from the owner-bound catalog only.
+ * 仅从绑定归属的项目资源目录渲染资源。 */
+.conversation-v1-resources {
+  margin: 10px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+  list-style: none;
+}
+
+/* Keep generated resources inside the persisted tool card detail surface.
+ * 将生成资源保持在持久化工具卡详情区域内。 */
+.conversation-v1-generated-resources {
+  margin-top: 10px;
+}
+
+.conversation-v1-resource {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-elevated) 92%, transparent);
+}
+
+.conversation-v1-resource > a,
+.conversation-v1-resource-unavailable {
+  min-width: 0;
+  padding: 8px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  color: inherit;
+  text-decoration: none;
+}
+
+.conversation-v1-resource img {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--muted);
+}
+
+/* Preview media always uses controlled project-resource URLs.
+ * 预览媒体始终使用受控的项目资源 URL。 */
+.conversation-v1-resource > video,
+.conversation-v1-resource > audio {
+  width: 100%;
+  display: block;
+}
+
+.conversation-v1-resource > video {
+  max-height: 320px;
+  background: #000;
+}
+
+.conversation-v1-resource span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.conversation-v1-resource strong,
+.conversation-v1-resource small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-v1-resource small,
+.conversation-v1-resources-state,
+.conversation-v1-resource-missing,
+.conversation-v1-resource-unavailable span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.conversation-v1-resource-missing,
+.conversation-v1-resources-state {
+  padding: 8px 10px;
+}
+
+.conversation-v1-resources-error,
+.conversation-v1-resource-unavailable {
+  color: var(--destructive);
+}
+
 .transient-reasoning-status-stack {
   width: min(100%, 760px);
   min-width: 0;

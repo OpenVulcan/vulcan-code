@@ -1,6 +1,6 @@
 import { StartupLogoMark } from "@/components/shell/startup-logo-mark";
 import { StartupDownloadProgress } from "@/components/shell/startup-download-progress";
-import type { StartupRecoverySnapshot, StartupSnapshot, StartupStepSnapshot } from "@/types";
+import type { StartupSnapshot, StartupStepSnapshot } from "@/types";
 
 // BootLocale is the minimal language set needed before the full i18n bundle is loaded.
 // BootLocale 是完整 i18n 包加载前所需的最小语言集合。
@@ -24,15 +24,6 @@ interface BootText {
   // Startup failure prefix.
   // 启动失败前缀。
   failedPrefix: string;
-  // VMM rebuild action label.
-  // VMM 重建操作标签。
-  rebuildVmm: string;
-  // Active VMM rebuild action label.
-  // VMM 重建进行中操作标签。
-  rebuildingVmm: string;
-  // VMM rebuild scope explanation.
-  // VMM 重建范围说明。
-  rebuildVmmHint: string;
   // Managed-runtime download progress label.
   // 受管运行时下载进度标签。
   downloadProgress: string;
@@ -47,9 +38,6 @@ const BOOT_TEXT: Record<BootLocale, BootText> = {
     loadingProjectIndex: "正在加载项目与会话索引",
     loadingStepPrefix: "正在加载",
     failedPrefix: "启动失败：",
-    rebuildVmm: "丢弃损坏的 VMM 记忆并重建",
-    rebuildingVmm: "正在重建 VMM 状态…",
-    rebuildVmmHint: "仅重建此会话的 VMM 记忆状态；会话消息、工具记录与项目文件都会保留。",
     downloadProgress: "下载进度",
   },
   "en-US": {
@@ -58,9 +46,6 @@ const BOOT_TEXT: Record<BootLocale, BootText> = {
     loadingProjectIndex: "Loading project and conversation indexes",
     loadingStepPrefix: "Loading",
     failedPrefix: "Startup failed: ",
-    rebuildVmm: "Discard damaged VMM memory and rebuild",
-    rebuildingVmm: "Rebuilding VMM state…",
-    rebuildVmmHint: "Only this conversation's VMM memory state is rebuilt. Messages, tool records, and project files are preserved.",
     downloadProgress: "Download progress",
   },
 };
@@ -119,25 +104,10 @@ export function BootErrorScreen(props: {
   // Service-provided UI locale.
   // 服务提供的界面语言。
   uiLocale?: string | null;
-  // Optional service-classified recovery action.
-  // 可选的服务端已分类恢复操作。
-  recovery?: StartupRecoverySnapshot | null;
-  // Whether the recovery request is currently running.
-  // 恢复请求当前是否正在执行。
-  recovering?: boolean;
-  // Concrete failure from the most recent recovery attempt.
-  // 最近一次恢复尝试产生的具体失败。
-  recoveryError?: string | null;
-  // Executes the service-authorized recovery action.
-  // 执行服务端授权的恢复操作。
-  onRecover?: () => void;
 }) {
   // text stores localized labels for the boot error.
   // text 保存启动错误的本地化文案。
   const text = BOOT_TEXT[bootLocale(props.uiLocale)];
-  // canRebuildVmm prevents generic startup failures from exposing a destructive action.
-  // canRebuildVmm 防止普通启动失败暴露破坏性操作。
-  const canRebuildVmm = props.recovery?.kind === "rebuildSessionVmm" && Boolean(props.onRecover);
   return (
     <main className="loading-screen error">
       <section className="startup-error-panel" aria-live="assertive">
@@ -145,22 +115,6 @@ export function BootErrorScreen(props: {
         <div className="startup-error-content">
           <strong>{text.failedPrefix}</strong>
           <p className="startup-error-message">{props.error}</p>
-          {canRebuildVmm ? (
-            <>
-              <p className="startup-recovery-hint">{text.rebuildVmmHint}</p>
-              <button
-                className="startup-recovery-action"
-                disabled={props.recovering}
-                onClick={props.onRecover}
-                type="button"
-              >
-                {props.recovering ? text.rebuildingVmm : text.rebuildVmm}
-              </button>
-              {props.recoveryError ? (
-                <p className="startup-recovery-error">{props.recoveryError}</p>
-              ) : null}
-            </>
-          ) : null}
         </div>
       </section>
     </main>

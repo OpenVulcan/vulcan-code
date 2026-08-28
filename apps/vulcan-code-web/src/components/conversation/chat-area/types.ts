@@ -6,22 +6,16 @@ import type {
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import type { ConversationSessionReviewSummary } from "@/components/conversation/session-todolist-panel";
 import type { PlanArtifactActionPayload } from "@/components/conversation/conversation-plan-artifact";
-import type {
-  ConversationDetailRef,
-  ToolDetailPayload,
-} from "@/components/conversation/conversation-detail";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
 import type {
   ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
   ContextCompactionWindowNodeId,
-  ConversationHydrationProgress,
   PendingPromptSummary,
   ProviderModelSecondaryRouteSelection,
   ProviderModelSecondaryRouteSummary,
   SessionGoalUserStatusUpdate,
   StartupSnapshot,
-  UserPromptEditDraftSummary,
   WorkbenchSnapshot,
 } from "@/types";
 
@@ -40,21 +34,6 @@ export interface ChatAreaProps {
   // Selected parent conversation id.
   // 当前选中的父会话标识。
   selectedConversationId: string | null;
-  // Conversation id currently being hydrated from the service.
-  // 当前正在从服务水合的会话标识。
-  loadingConversationId: string | null;
-  // Last conversation body loading error.
-  // 最近一次会话正文加载错误。
-  conversationLoadError: string | null;
-  // Current lazy conversation body loading progress.
-  // 当前懒加载会话正文进度。
-  conversationHydration: ConversationHydrationProgress | null;
-  // Whether the selected conversation has older history before the loaded window.
-  // 当前选中会话已加载窗口之前是否还有更早历史。
-  conversationHasMoreHistory: boolean;
-  // Whether an older history page is currently being loaded.
-  // 当前是否正在加载更早历史页。
-  conversationHistoryLoading: boolean;
   // Current Git review summary shown beside compact session progress.
   // 当前用于紧凑会话进程旁展示的 Git 审查摘要。
   sessionReviewSummary: ConversationSessionReviewSummary | null;
@@ -127,9 +106,8 @@ export interface ChatAreaProps {
   // 从精确保留账本代际继续已终止会话。
   onContinueConversation?: (
     conversationId: string,
-    expectedGeneration: number,
-    expectedLedgerRevision: number,
     clientContinuationId: string,
+    supplement: ComposerSubmission | null,
   ) => Promise<boolean>;
   // Opens a subagent transcript in the right context panel.
   // 在右侧上下文面板中打开子代理转录。
@@ -161,33 +139,27 @@ export interface ChatAreaProps {
   onCopyText: (text: string) => Promise<void>;
   // Loads one backend-validated user prompt edit draft.
   // 加载单条后端校验过的用户提示词编辑草稿。
-  onGetUserPromptEditDraft: (
-    conversationId: string,
-    messageId: string,
-  ) => Promise<UserPromptEditDraftSummary | null>;
-  // Submits one user prompt edit and replays it.
-  // 提交单条用户提示词编辑并重新执行。
-  onSubmitUserPromptEdit: (request: {
-    conversationId: string;
-    messageId: string;
-    prompt: string;
-    attachments: ComposerAttachmentSummary[];
-  }) => Promise<boolean>;
-  // Creates a forked copy of one conversation.
-  // 创建单个会话的分叉副本。
-  onForkConversation: (conversationId: string, anchorMessageId?: string) => Promise<boolean>;
+  onEditConversationGeneration: (
+    sessionId: string,
+    expectedWindowGeneration: number,
+    targetSeq: number,
+    replacementText: string,
+  ) => Promise<boolean>;
+  // Creates or exactly retries one immutable V1 conversation fork.
+  // 创建或精确重试一个不可变 V1 会话分叉。
+  onForkConversationGeneration: (
+    sourceSessionId: string,
+    expectedWindowGeneration: number,
+    targetSeq: number,
+    childSessionId: string,
+    title: string,
+  ) => Promise<string | null>;
+  // Resolves one composer attachment path into a browser-readable URL.
+  // 将一个输入区附件路径解析为浏览器可读 URL。
+  resolveMediaSourceUrl: (path: string) => string;
   // Selects one persisted conversation from a transcript navigation affordance.
   // 从转录导航入口选择一个持久化会话。
   onSelectConversation: (conversationId: string) => void;
-  // Loads one older history page for a conversation.
-  // 为单个会话加载一页更早历史。
-  onLoadConversationHistory: (conversationId: string) => Promise<boolean>;
-  // Loads hidden tool details for expanded transcript rows.
-  // 为展开的转录行加载隐藏工具详情。
-  onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
-  // Resolves local media paths into renderable URLs.
-  // 将本地媒体路径解析为可渲染 URL。
-  resolveMediaSourceUrl: (path: string) => string;
   // Emits lightweight click diagnostics.
   // 输出轻量点击诊断信息。
   onTrace: (action: string, detail?: Record<string, unknown>) => void;

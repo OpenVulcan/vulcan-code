@@ -332,7 +332,7 @@ pub fn build_runlua_tool_candidates(
             ai_visible: true,
             plan_policy: VulcanPlanToolPolicy::Hidden,
             request_streaming: None,
-            invoke: Arc::new(move |arguments, owner_session_id| {
+            invoke: Arc::new(move |arguments, context| {
                 // invocation_handle keeps the registry shared across every action call.
                 // invocation_handle 使归属注册表在所有动作调用之间保持共享。
                 let invocation_handle = session_handle.clone();
@@ -343,7 +343,7 @@ pub fn build_runlua_tool_candidates(
                     execute_runlua_session_tool(
                         invocation_handle,
                         invocation_workspace_root,
-                        owner_session_id,
+                        Some(context.session_id),
                         arguments,
                     )
                     .await

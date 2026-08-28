@@ -95,40 +95,6 @@ pub(crate) fn commit_prepared_stream_failure(
                     None
                 }
             };
-            // terminalAt closes the resumable execution ledger before exact stream ownership is released.
-            // terminalAt 在释放精确流所有权前闭合可恢复执行账本。
-            let terminal_at = current_unix_millis_text();
-            let continuation_result = guard
-                .workspace_snapshot
-                .as_mut()
-                .and_then(|workspace| workspace.session_runtime_state.get_mut(&session_id))
-                .ok_or_else(|| {
-                    String::from("Prepared stream failure runtime state is unavailable.")
-                })
-                .and_then(|runtime_state| {
-                    refresh_terminal_continuation_state(runtime_state, false, &terminal_at)?;
-                    runtime_state.updated_at = terminal_at;
-                    Ok(())
-                });
-            if let Err(error) = continuation_result {
-                // retryInvalidated closes the exact token fail-closed when its terminal ledger cannot advance.
-                // retryInvalidated 在终态账本无法推进时以失败关闭方式闭合精确令牌。
-                let retry_invalidated = guard
-                    .workspace_snapshot
-                    .as_mut()
-                    .and_then(|workspace| workspace.session_runtime_state.get_mut(&session_id))
-                    .is_some_and(|runtime_state| {
-                        super::conversation_checkpoint::invalidate_execution_retry_runtime_state(
-                            runtime_state,
-                            "retry_snapshot_transition_failed",
-                            "The Prepared stream terminal continuation could not advance and was invalidated.",
-                            current_unix_millis_text(),
-                        )
-                    });
-                eprintln!(
-                    "[webui-service] {failure_context} continuation terminalization failed: session={session_id} task={active_stream_task_id} retry_invalidated={retry_invalidated} error={error}"
-                );
-            }
             // removed_task consumes the exact owner only after its Failed phase is retained.
             // removed_task 仅在 Failed 阶段保留后消费精确所有者。
             let removed_task =
@@ -230,13 +196,9 @@ pub(crate) async fn handle_prepared_stream_event(
             current_unix_millis_value().saturating_sub(stream_task_started_at)
         ),
     );
-    if let Err(error) = apply_execution_preparation(
-        app,
-        task_state,
-        controller_runtime,
-        active_stream_task_id,
-        &preparation,
-    ) {
+    if let Err(error) =
+        apply_execution_preparation(app, task_state, active_stream_task_id, &preparation)
+    {
         eprintln!("[webui-service] apply preparation failed: {error}");
         // failure_commit records whether this exact stream owned the terminal kernel transition.
         // failure_commit 记录当前精确流是否拥有终止 kernel 转换。
@@ -253,13 +215,10 @@ pub(crate) async fn handle_prepared_stream_event(
         );
         if failure_commit == PreparedStreamFailureCommit::Committed {
             finalize_failed_execution_stream_retry_lifecycle(
-                app.clone(),
                 task_state.clone(),
-                controller_runtime.clone(),
                 session_id,
                 SessionTerminalPersistenceOwner::StreamTask(active_stream_task_id),
-                FailedExecutionStreamRetryEvidence::ProvenNotDispatchedBeforeProviderDispatch,
-                format!("The execution preparation could not be applied: {error}"),
+                "execution_preparation_failed",
             )
             .await;
         }
@@ -343,15 +302,10 @@ pub(crate) async fn handle_prepared_stream_event(
             );
             if failure_commit == PreparedStreamFailureCommit::Committed {
                 finalize_failed_execution_stream_retry_lifecycle(
-                    app.clone(),
                     task_state.clone(),
-                    controller_runtime.clone(),
                     session_id,
                     SessionTerminalPersistenceOwner::StreamTask(active_stream_task_id),
-                    FailedExecutionStreamRetryEvidence::ProvenNotDispatchedBeforeProviderDispatch,
-                    format!(
-                        "Automatic context compaction failed before Provider dispatch: {error}"
-                    ),
+                    "automatic_context_compaction_failed",
                 )
                 .await;
             }

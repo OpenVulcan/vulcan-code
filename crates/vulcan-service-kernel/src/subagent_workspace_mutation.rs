@@ -1,27 +1,22 @@
-//! subagent workspace mutation helpers.
-//! subagent workspace mutation 辅助逻辑。
-
-use std::{collections::BTreeMap, path::PathBuf};
+//! Subagent workspace mutation helpers.
+//! 子代理工作区变更辅助逻辑。
 
 use super::*;
-use crate::session_hydration::is_missing_segmented_session_file_error;
-use vulcan_agent_runtime::agent_runtime::task_runtime::TaskRuntime;
-use vulcan_session_core::{SubagentRegistryEntry, SubagentStatus};
-
-/// Disk-loaded child-agent surface batch ready to merge into service navigation and transcript caches.
-/// 已从磁盘读取、可合并进服务导航与转录缓存的子智能体界面批次。
-#[derive(Debug, Clone)]
-pub(crate) struct WebuiSubagentSurfacePreload {
-    /// Direct parent session that owns these child task states.
-    /// 拥有这些子任务状态的直接父会话。
-    parent_session_id: SessionId,
-    /// Detail-ready child task states loaded from the segmented TaskSession store.
-    /// 从分段 TaskSession 存储读取的可直接展示详情子任务状态。
-    task_states: Vec<SubagentTaskPanelState>,
-}
 
 /// Hides the selected parent subagent navigation round once service-equivalent blocking work has settled.
-/// 当与服务运行时等价的阻塞工作全部收敛后，隐藏该轮子代理导航。
+/// 当与服务运行时等价的阻塞工作全部收敛后，隐藏所选父会话的子代理导航轮次。
+///
+/// # Parameters / 参数
+///
+/// - `state`: Shared service state owning runtime and navigation projections.
+///   `state`：持有运行时与导航投影的共享服务状态。
+/// - `parent_session_id`: Exact parent session whose navigation visibility is recomputed.
+///   `parent_session_id`：需要重新计算导航可见性的精确父会话。
+///
+/// # Returns / 返回值
+///
+/// Success after the retained navigation projection is reconciled.
+/// 保留导航投影完成协调后返回成功。
 pub(crate) fn refresh_webui_subagent_navigation_round_visibility(
     state: &SharedServiceBridgeState,
     parent_session_id: SessionId,
@@ -64,6 +59,20 @@ pub(crate) fn refresh_webui_subagent_navigation_round_visibility(
 
 /// Reprojects subagent navigation for one parent conversation and emits a focused navigation delta.
 /// 为单个父会话重新投影子代理导航并发出聚焦导航增量。
+///
+/// # Parameters / 参数
+///
+/// - `app`: Service event emitter receiving the focused delta.
+///   `app`：接收聚焦增量的服务事件发射器。
+/// - `state`: Shared service state owning the retained navigation projection.
+///   `state`：持有保留导航投影的共享服务状态。
+/// - `parent_session_id`: Exact parent session to project.
+///   `parent_session_id`：需要投影的精确父会话。
+///
+/// # Returns / 返回值
+///
+/// Returns the resulting optional navigation snapshot after emission.
+/// 发射后返回结果导航快照（可为空）。
 pub(crate) fn emit_webui_subagent_navigation_changed_delta_for_parent(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
@@ -118,513 +127,24 @@ pub(crate) fn emit_webui_subagent_navigation_changed_delta_for_parent(
     Ok(subagent_navigation)
 }
 
-/// Applies one safe canonical conversation checkpoint and persists it off the stream path.
-/// 应用一份安全规范会话检查点，并在流式关键路径外持久化。
-/// Mutates the retained workspace snapshot and emits a rebuilt workbench snapshot.
 /// Controls whether one workbench refresh rebuilds structural subagent navigation.
-/// 控制一次工作台刷新是否重建结构性的子代理导航。
+/// 控制一次工作台刷新是否重建结构化子代理导航。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SubagentNavigationRefreshMode {
-    /// Rebuild subagent navigation from the already-hydrated runtime cache.
-    /// 从已经水合完成的运行时缓存重建子代理导航。
+    /// Rebuilds subagent navigation from the already-hydrated process-local cache.
+    /// 从已经水合的进程内缓存重建子代理导航。
     Rebuild,
-}
-
-/// Returns whether one child task still has a live run after honoring terminal workspace phases.
-/// 在优先遵守工作区终态阶段后，返回单个子任务是否仍有实时运行。
-pub(crate) fn webui_subagent_task_has_live_run_in_workspace(
-    workspace_snapshot: Option<&WorkspaceSnapshot>,
-    task_runtime: Option<&Arc<TaskRuntime>>,
-    has_live_listener: bool,
-    task_id: SessionId,
-) -> bool {
-    webui_subagent_task_has_live_run_for_phase(
-        webui_subagent_task_workspace_phase(workspace_snapshot, task_id),
-        task_runtime,
-        has_live_listener,
-        task_id,
-    )
-}
-
-/// Returns whether one child task still has a live run after applying one known workspace phase.
-/// 在应用单个已知工作区阶段后，返回单个子任务是否仍有实时运行。
-pub(crate) fn webui_subagent_task_has_live_run_for_phase(
-    workspace_phase: Option<SessionRunPhase>,
-    task_runtime: Option<&Arc<TaskRuntime>>,
-    has_live_listener: bool,
-    task_id: SessionId,
-) -> bool {
-    let has_runtime_run =
-        task_runtime.is_some_and(|runtime| runtime.is_task_running(task_id).unwrap_or(false));
-    if has_runtime_run {
-        return true;
-    }
-    has_live_listener && workspace_phase.is_none_or(is_active_session_run_phase)
-}
-
-/// Returns the workspace phase recorded for one child task when present.
-/// 返回工作区中为某个子任务记录的阶段。
-fn webui_subagent_task_workspace_phase(
-    workspace_snapshot: Option<&WorkspaceSnapshot>,
-    task_id: SessionId,
-) -> Option<SessionRunPhase> {
-    workspace_snapshot.and_then(|workspace| workspace.session_run_phases.get(&task_id).copied())
-}
-
-/// Resolves the shared segmented TaskSession store root for one WebUI parent.
-/// 解析单个 WebUI 父会话对应的共享分段 TaskSession 存储根目录。
-///
-/// # Parameters
-/// 参数
-/// `workspace_snapshot` is the selected workspace snapshot that owns session/project mappings.
-/// `workspace_snapshot` 是拥有会话与项目映射的当前工作区快照。
-/// `parent_session_id` is either the root parent session or a nested child session.
-/// `parent_session_id` 是根父会话或嵌套子会话。
-///
-/// # Returns
-/// 返回值
-/// The root directory used by TaskRuntime and WebUI segmented readers.
-/// 返回 TaskRuntime 与 WebUI 分段读取器共同使用的根目录。
-pub(crate) fn webui_task_session_store_root_for_parent_session(
-    workspace_snapshot: &WorkspaceSnapshot,
-    parent_session_id: SessionId,
-) -> Option<PathBuf> {
-    let session = if let Some(session) =
-        workspace_session_summary_for_session(workspace_snapshot, parent_session_id)
-    {
-        session
-    } else {
-        let root_session_id = workspace_snapshot.selected_session;
-        if root_session_id == SessionId::nil() {
-            return None;
-        }
-        workspace_session_summary_for_session(workspace_snapshot, root_session_id)?
-    };
-    let data_root = vulcan_workspace_store::data_plane::application_data_root();
-    segmented_session_directory_for_summary(&data_root, session)
-}
-
-/// Builds the shared segmented TaskSession store for one direct WebUI parent when its selected root session belongs to a project.
-/// 当 WebUI 直接父级所属的选中根会话属于项目时构建共享分段 TaskSession 存储。
-pub(crate) fn webui_task_session_store_for_parent_session(
-    workspace_snapshot: &WorkspaceSnapshot,
-    parent_session_id: SessionId,
-) -> Option<SegmentedTaskSessionStore> {
-    let session_dir =
-        webui_task_session_store_root_for_parent_session(workspace_snapshot, parent_session_id)?;
-    Some(SegmentedTaskSessionStore::new(session_dir))
-}
-
-/// Restores the authoritative subagent registry during selected-session hydration.
-/// 在选中会话水合阶段恢复权威子代理注册表。
-///
-/// # Parameters
-/// 参数
-/// `state` provides the shared runtime bridge that owns the authoritative TaskRuntime registry.
-/// `state` 提供拥有权威 TaskRuntime 注册表的共享运行时桥接。
-/// `workspace_snapshot` locates the selected session's task-session store directory.
-/// `workspace_snapshot` 用于定位选中会话的任务会话存储目录。
-/// `parent_session_id` is the selected root parent session being hydrated.
-/// `parent_session_id` 是正在水合的选中根父会话。
-///
-/// # Returns
-/// 返回值
-/// `Ok(())` once the registry is restored or when no store/runtime exists for the session.
-/// 当注册表已恢复，或当前会话没有可用存储/运行时时返回 `Ok(())`。
-pub(crate) fn restore_webui_subagent_registry_for_session_hydration(
-    state: &SharedServiceBridgeState,
-    workspace_snapshot: &WorkspaceSnapshot,
-    parent_session_id: SessionId,
-) -> Result<(), String> {
-    if parent_session_id == SessionId::nil() {
-        return Ok(());
-    }
-    let Some(session_dir) =
-        webui_task_session_store_root_for_parent_session(workspace_snapshot, parent_session_id)
-    else {
-        return Ok(());
-    };
-    let Some(agent_runtime) = ({
-        let guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        guard.agent_runtime.clone()
-    }) else {
-        return Ok(());
-    };
-    agent_runtime
-        .task_runtime
-        .ensure_task_session_store_root(parent_session_id, session_dir)?;
-    match agent_runtime
-        .task_runtime
-        .restore_persisted_subagent_registry_for_parent_tree(parent_session_id)
-    {
-        Ok(()) => Ok(()),
-        Err(error) if is_missing_segmented_session_file_error(&error) => Ok(()),
-        Err(error) => Err(error),
-    }
-}
-
-/// Stores one loaded subagent detail in the service cache and mirrors its messages into the workspace snapshot.
-/// 将单个已加载子代理详情写入服务缓存，并把它的消息镜像进工作区快照。
-///
-/// # Parameters
-/// 参数
-/// `guard` receives the render-only detail cache entry.
-/// `guard` 接收仅用于渲染的详情缓存项。
-/// `workspace_snapshot` receives child transcript messages when the task has replayable state.
-/// `workspace_snapshot` 在任务存在可复放状态时接收子转录消息。
-/// `parent_session_id` is retained only for the caller's grouping context.
-/// `parent_session_id` 仅保留为调用方分组上下文。
-/// `task_state` is the loaded child panel state to cache and mirror.
-/// `task_state` 是需要缓存和镜像的已加载子面板状态。
-pub(crate) fn cache_webui_subagent_surface_detail_for_task(
-    guard: &mut ServiceBridgeState,
-    workspace_snapshot: &mut WorkspaceSnapshot,
-    parent_session_id: SessionId,
-    task_state: SubagentTaskPanelState,
-) {
-    let now = current_unix_millis_value();
-    if let Some(conversation_state) = task_state.conversation_state.clone() {
-        let task_prompt_anchor = task_state.description.as_deref();
-        replace_webui_subagent_task_conversation_state(
-            workspace_snapshot,
-            task_state.task_id,
-            conversation_state,
-            task_prompt_anchor,
-        );
-    }
-    let messages = display_session_messages_from_workspace(workspace_snapshot, task_state.task_id)
-        .map(|messages| {
-            task_scoped_display_session_messages(messages, task_state.description.as_deref())
-        })
-        .unwrap_or_else(|| {
-            task_state
-                .conversation_state
-                .as_ref()
-                .map(|conversation_state| {
-                    display_messages_from_task_conversation_state(
-                        conversation_state,
-                        task_state.description.as_deref(),
-                    )
-                })
-                .unwrap_or_default()
-        });
-    let _ = parent_session_id;
-    guard.subagent_surface_detail_cache.insert(
-        task_state.task_id,
-        WebuiSubagentSurfaceDetailCacheEntry {
-            task_state,
-            messages,
-            last_access_ms: now,
-        },
-    );
-    prune_webui_subagent_surface_detail_cache(guard, now);
-}
-
-/// Loads every unclosed WebUI subagent surface state from disk during session hydration.
-/// 在会话水合期间从磁盘读取所有未关闭 WebUI 子智能体界面状态。
-///
-/// # Parameters
-/// 参数
-/// `workspace_snapshot` locates the selected session's shared segmented TaskSession store.
-/// `workspace_snapshot` 用于定位选中会话共享的分段 TaskSession 存储。
-/// `parent_session_id` is the root parent session whose unclosed child tree should be inspected.
-/// `parent_session_id` 是需要检查未关闭子树的根父会话。
-///
-/// # Returns
-/// 返回值
-/// Disk-loaded surface batches grouped by direct parent session, or a read error that must block the preload marker.
-/// 返回按直接父会话分组的磁盘界面批次；若读取失败则返回必须阻止预载标记的错误。
-pub(crate) fn load_webui_unclosed_subagent_surface_preload(
-    state: &SharedServiceBridgeState,
-    workspace_snapshot: &WorkspaceSnapshot,
-    parent_session_id: SessionId,
-) -> Result<Vec<WebuiSubagentSurfacePreload>, String> {
-    if parent_session_id == SessionId::nil() {
-        return Ok(Vec::new());
-    }
-    let entries = {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let Some(task_runtime) = guard
-            .agent_runtime
-            .as_ref()
-            .map(|runtime| &runtime.task_runtime)
-        else {
-            return Ok(Vec::new());
-        };
-        task_runtime.open_subagent_registry_entries_for_parent_tree(parent_session_id)?
-    };
-    if entries.is_empty() {
-        return Ok(Vec::new());
-    };
-    let store = webui_task_session_store_for_parent_session(workspace_snapshot, parent_session_id);
-    let mut states_by_parent: BTreeMap<SessionId, Vec<SubagentTaskPanelState>> = BTreeMap::new();
-    for entry in &entries {
-        let direct_parent_session_id = entry.parent_session_id.as_uuid();
-        let state =
-            subagent_task_panel_state_from_registry_entry_for_preload(store.as_ref(), entry)
-                .map_err(|error| format!("failed to load subagent panel detail: {error}"))?;
-        states_by_parent
-            .entry(direct_parent_session_id)
-            .or_default()
-            .push(state);
-    }
-    Ok(states_by_parent
-        .into_iter()
-        .map(
-            |(parent_session_id, task_states)| WebuiSubagentSurfacePreload {
-                parent_session_id,
-                task_states,
-            },
-        )
-        .collect())
-}
-
-/// Loads WebUI subagent states from the root task mirror index and their persisted detail records.
-/// 从根任务镜像索引及其持久化详情记录加载 WebUI 子智能体状态。
-///
-/// # Parameters
-/// 参数
-/// `store` is the shared segmented task-session store for the root conversation.
-/// `store` 是根会话共享的分段任务会话存储。
-/// `root_session_id` identifies the root task tree to inspect.
-/// `root_session_id` 标识需要检查的根任务树。
-///
-/// # Returns
-/// 返回值
-/// Visible, non-archived child panel states grouped by direct persisted parent reference.
-/// 返回按直接持久化父引用分组的可见、未归档子面板状态。
-/// Converts one root task mirror summary into a detail-ready WebUI subagent panel state.
-/// 将单条根任务镜像摘要转换为可展示详情的 WebUI 子智能体面板状态。
-///
-/// # Parameters
-/// 参数
-/// `store` provides persisted detail data for the mirrored task session.
-/// `store` 提供镜像任务会话对应的持久化详情数据。
-/// `mirror` is the root-tree visibility and lifecycle summary.
-/// `mirror` 是根任务树中的可见性与生命周期摘要。
-///
-/// # Returns
-/// 返回值
-/// A panel state merged from mirror visibility and replayable task details.
-/// 返回由镜像可见性与可复放任务详情合并得到的面板状态。
-fn subagent_task_panel_state_from_registry_entry_for_preload(
-    store: Option<&SegmentedTaskSessionStore>,
-    entry: &SubagentRegistryEntry,
-) -> Result<SubagentTaskPanelState, vulcan_session_core::SessionStoreError> {
-    let parent_session_id = entry.parent_session_id.as_uuid();
-    let metadata_state = SubagentTaskPanelState {
-        task_id: entry.session_id.as_uuid(),
-        public_task_id: entry.agent_id.clone(),
-        parent_session_id,
-        subagent_label: entry.agent_id.clone(),
-        description: entry.last_task_message.clone(),
-        run_state: subagent_run_state_from_registry_status_for_preload(entry.status),
-        result_text: entry.result_summary.clone().unwrap_or_default(),
-        conversation_state: None,
-    };
-    let detailed_state = store
-        .map(|store| {
-            subagent_task_panel_state_detail_from_segmented_task_session_store(
-                store,
-                entry.session_id,
-            )
-        })
-        .transpose()?
-        .flatten();
-    if let Some(state) = detailed_state.as_ref()
-        && state.parent_session_id != parent_session_id
-    {
-        return Err(vulcan_session_core::SessionStoreError::new(format!(
-            "TaskSession `{}` parent mismatch: registry parent `{}`, persisted parent `{}`.",
-            entry.session_id, parent_session_id, state.parent_session_id
-        )));
-    }
-    // The mirror owns visibility; the task detail owns replayable transcript data.
-    // 镜像记录负责可见性；任务详情负责可复放的转录数据。
-    let state = match detailed_state {
-        Some(mut state) => {
-            if state.public_task_id.is_empty() {
-                state.public_task_id = metadata_state.public_task_id.clone();
-            }
-            if state.subagent_label.is_empty() {
-                state.subagent_label = metadata_state.subagent_label.clone();
-            }
-            if state.description.is_none() {
-                state.description = metadata_state.description.clone();
-            }
-            if state.result_text.is_empty() {
-                state.result_text = metadata_state.result_text.clone();
-            }
-            state.run_state = metadata_state.run_state;
-            state
-        }
-        None => metadata_state,
-    };
-    Ok(state)
-}
-
-/// Converts a persisted parent reference into the WebUI session id represented by that parent.
-/// 将持久化父级引用转换为该父级对应的 WebUI 会话标识。
-fn subagent_run_state_from_registry_status_for_preload(
-    status: SubagentStatus,
-) -> SubagentTaskRunState {
-    match status {
-        SubagentStatus::Created
-        | SubagentStatus::Running
-        | SubagentStatus::WaitingChildren
-        | SubagentStatus::WaitingFollowup
-        | SubagentStatus::Compacting => SubagentTaskRunState::Running,
-        SubagentStatus::Completed => SubagentTaskRunState::Completed,
-        SubagentStatus::Failed => SubagentTaskRunState::Failed,
-        SubagentStatus::Stopped | SubagentStatus::Archived => SubagentTaskRunState::Stopped,
-    }
-}
-
-/// Applies disk-loaded child-agent surface batches to service navigation and transcript caches.
-/// 将磁盘读取的子智能体界面批次应用到服务导航与转录缓存。
-///
-/// # Parameters
-/// 参数
-/// `guard` is the shared service state receiving task-panel caches.
-/// `guard` 是接收任务面板缓存的共享服务状态。
-/// `workspace_snapshot` receives child transcript messages from loaded task surfaces.
-/// `workspace_snapshot` 接收已加载任务界面的子转录消息。
-/// `preload` is the already loaded disk surface batch list.
-/// `preload` 是已经完成磁盘读取的界面批次列表。
-///
-/// # Returns
-/// 返回值
-/// The number of task states merged into the WebUI cache.
-/// 返回已合并进 WebUI 缓存的任务状态数量。
-pub(crate) fn apply_webui_unclosed_subagent_surface_preload(
-    guard: &mut ServiceBridgeState,
-    workspace_snapshot: &mut WorkspaceSnapshot,
-    preload: Vec<WebuiSubagentSurfacePreload>,
-) -> usize {
-    let mut restored_count = 0;
-    for batch in preload {
-        restored_count += batch.task_states.len();
-        for task_state in batch.task_states {
-            cache_webui_subagent_surface_detail_for_task(
-                guard,
-                workspace_snapshot,
-                batch.parent_session_id,
-                task_state,
-            );
-        }
-    }
-    restored_count
-}
-
-/// Returns whether the selected root already has a complete in-memory unclosed subagent surface tree.
-/// 返回选中根会话是否已经拥有完整的内存未关闭子智能体界面树。
-///
-/// # Parameters
-/// 参数
-/// `guard` is the shared service state that owns the detail preload marker.
-/// `guard` 是持有详情预载标记的共享服务状态。
-/// `_workspace_snapshot` is reserved for future validation against the selected workspace identity.
-/// `_workspace_snapshot` 预留用于后续校验当前选中工作区身份。
-/// `parent_session_id` is the root parent session being hydrated.
-/// `parent_session_id` 是正在水合的根父会话。
-///
-/// # Returns
-/// 返回值
-/// `true` when the detail preload marker exists for this root.
-/// 当该根会话存在详情预载标记时返回 `true`。
-fn preloaded_unclosed_subagent_surfaces_are_complete(
-    guard: &ServiceBridgeState,
-    _workspace_snapshot: &WorkspaceSnapshot,
-    parent_session_id: SessionId,
-) -> bool {
-    guard
-        .webui_preloaded_unclosed_subagent_roots
-        .contains(&parent_session_id)
-}
-
-/// Loads render details for unclosed subagent surfaces when the selected root has not been preloaded.
-/// 当选中根会话尚未预载时加载未关闭子智能体界面的渲染详情。
-///
-/// # Parameters
-/// 参数
-/// `state` is the shared service state that tracks already-preloaded detail roots.
-/// `state` 是跟踪已预载详情根会话的共享服务状态。
-/// `workspace_snapshot` locates the selected session's segmented TaskSession store.
-/// `workspace_snapshot` 用于定位选中会话的分段 TaskSession 存储。
-/// `parent_session_id` is the root parent session whose child tree may need preload.
-/// `parent_session_id` 是可能需要预载子树的根父会话。
-///
-/// # Returns
-/// 返回值
-/// `Some(preload)` when hydration must read render detail; `None` when detail was already preloaded.
-/// 当水合必须读取渲染详情时返回 `Some(preload)`；详情已经预载时返回 `None`。
-pub(crate) fn load_webui_unclosed_subagent_surface_preload_once(
-    state: &SharedServiceBridgeState,
-    workspace_snapshot: &WorkspaceSnapshot,
-    parent_session_id: SessionId,
-) -> Result<Option<Vec<WebuiSubagentSurfacePreload>>, String> {
-    if parent_session_id == SessionId::nil() {
-        return Ok(None);
-    }
-    {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        if preloaded_unclosed_subagent_surfaces_are_complete(
-            &guard,
-            workspace_snapshot,
-            parent_session_id,
-        ) {
-            return Ok(None);
-        }
-    }
-    load_webui_unclosed_subagent_surface_preload(state, workspace_snapshot, parent_session_id)
-        .map(Some)
-}
-
-/// Applies one root-session surface preload and marks that root as preloaded.
-/// 应用一次根会话界面预载并标记该根已经预载。
-///
-/// # Parameters
-/// 参数
-/// `guard` is the shared service state receiving the preload and marker update.
-/// `guard` 是接收预载结果与标记更新的共享服务状态。
-/// `workspace_snapshot` receives loaded child transcript surfaces.
-/// `workspace_snapshot` 接收已加载的子转录界面。
-/// `parent_session_id` is the root parent session represented by the preload.
-/// `parent_session_id` 是该预载结果对应的根父会话。
-/// `preload` is an optional disk-loaded surface batch list.
-/// `preload` 是可选的磁盘界面批次列表。
-///
-/// # Returns
-/// 返回值
-/// The number of task states merged into the WebUI cache; `None` leaves the completion marker unchanged.
-/// 返回已合并进 WebUI 缓存的任务状态数量；`None` 会保持完成标记不变。
-pub(crate) fn apply_webui_unclosed_subagent_surface_preload_once(
-    guard: &mut ServiceBridgeState,
-    workspace_snapshot: &mut WorkspaceSnapshot,
-    parent_session_id: SessionId,
-    preload: Option<Vec<WebuiSubagentSurfacePreload>>,
-) -> usize {
-    let Some(preload) = preload else {
-        return 0;
-    };
-    let restored_count =
-        apply_webui_unclosed_subagent_surface_preload(guard, workspace_snapshot, preload);
-    if parent_session_id != SessionId::nil() {
-        guard
-            .webui_preloaded_unclosed_subagent_roots
-            .insert(parent_session_id);
-    }
-    restored_count
 }
 
 /// Removes stale or excessive loaded subagent detail cache entries.
 /// 移除过期或超量的已加载子代理详情缓存项。
+///
+/// # Parameters / 参数
+///
+/// - `guard`: Mutable service state owning the process-local detail cache.
+///   `guard`：持有进程内详情缓存的可变服务状态。
+/// - `now_ms`: Current timestamp used only for cache eviction.
+///   `now_ms`：仅用于缓存淘汰的当前时间戳。
 pub(crate) fn prune_webui_subagent_surface_detail_cache(
     guard: &mut ServiceBridgeState,
     now_ms: i128,

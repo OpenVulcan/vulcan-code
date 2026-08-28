@@ -1,9 +1,9 @@
-use super::prepare_execution_with_tool_snapshot;
 use super::tool_exposure::{
     ExecutionToolExposureSelection, ToolExposureSelectorState, filter_luaskill_prompt_entries,
     filter_luaskills_entries, filter_native_tool_ids, filter_resolved_tool_set_by_tool_exposure,
     managed_codebase_memory_tool_is_visible, vulcan_tool_descriptor_is_visible,
 };
+use super::{append_vulcan_plugin_prompt_contributions, prepare_execution_with_tool_snapshot};
 use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::config::PLAN_AGENT_ID;
 use crate::agent_runtime::execution_models::{
@@ -22,10 +22,13 @@ use crate::tooling::native::{
 use luaskills::RuntimeEntryDescriptor;
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 use vulcan_hooks::{SystemPromptHookBlock, SystemPromptHookPhase};
 use vulcan_luaskills_prompt::LuaSkillPromptEntry;
+use vulcan_plugin_runtime::{VulcanPluginCatalogSnapshot, VulcanPluginPromptContribution};
+use vulcan_prompt_composer::PromptBaselineKind;
 use vulcan_session_core::{
     CapabilityPolicyMode, CapabilityPolicySnapshot, ExecutionRuntimePolicy, ExecutionScope,
     SessionNodeId, ToolExposureSnapshot,
@@ -47,6 +50,51 @@ fn execution_preparation_reuses_published_prompt_skill_catalog() {
         "conversation preparation must reuse the published prompt-skill generation"
     );
     assert!(source.contains("foundation.prompt_skill_catalog()"));
+}
+
+/// Plugin prompt contributions retain one producer identity per contribution.
+/// 插件提示词贡献为每条贡献保留独立的生产者身份。
+#[test]
+fn plugin_prompt_contributions_keep_distinct_typed_identity() {
+    let mut catalog = VulcanPluginCatalogSnapshot::empty(PathBuf::from("plugins"));
+    catalog.prompt_contributions = vec![
+        VulcanPluginPromptContribution {
+            plugin_id: String::from("plugin.alpha"),
+            id: String::from("rules"),
+            body: String::from("Alpha rules."),
+            required_tools: Vec::new(),
+        },
+        VulcanPluginPromptContribution {
+            plugin_id: String::from("plugin.beta"),
+            id: String::from("workflow"),
+            body: String::from("Beta workflow."),
+            required_tools: Vec::new(),
+        },
+    ];
+    let mut segments = Vec::new();
+
+    append_vulcan_plugin_prompt_contributions(&mut segments, Some(&catalog), &[]);
+
+    assert_eq!(segments.len(), 2);
+    assert_eq!(segments[0].body, "Alpha rules.");
+    assert_eq!(segments[1].body, "Beta workflow.");
+    assert_eq!(
+        segments[0]
+            .baseline_provenance
+            .as_ref()
+            .map(|provenance| (provenance.kind, provenance.source_id.as_str())),
+        Some((PromptBaselineKind::PluginInstructions, "plugin.alpha/rules"))
+    );
+    assert_eq!(
+        segments[1]
+            .baseline_provenance
+            .as_ref()
+            .map(|provenance| (provenance.kind, provenance.source_id.as_str())),
+        Some((
+            PromptBaselineKind::PluginInstructions,
+            "plugin.beta/workflow"
+        ))
+    );
 }
 
 /// Verifies request-scoped agent routing makes preparation use the requested agent instead of the global active worker.
@@ -639,6 +687,7 @@ fn prepare_execution_clears_side_effect_inputs_for_task_session_policy() {
         content: String::from("User memory that must not enter a child agent."),
         source: Some(String::from("test")),
         phase: SystemPromptHookPhase::FirstSession,
+        baseline_provenance: None,
     }];
     request.project_vmm = VmmConfigLayer {
         enabled: Some(true),
@@ -793,7 +842,7 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         },
         runtime_policy: ExecutionRuntimePolicy::main_session(),
         conversation_hook_turn_id: Some(String::from("test-hook-turn")),
-        execution_retry_snapshot: None,
+        continuation_action_id: None,
         provider_request_continuation: None,
         execution_agent_id: None,
         agent_prompt_snapshot: None,
@@ -806,7 +855,6 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         provider_tool_enabled_capabilities_override: Default::default(),
         provider_extension_target_sets_override: None,
         subagent_prompt_context: None,
-        task_session_store_root: None,
         session_title: String::from("测试会话"),
         workspace_path: String::from(r"D:\workspace"),
         prompt: String::from("请规划当前任务"),
@@ -817,8 +865,6 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         context_compaction_policy: None,
         context_compaction_window_node_id: None,
         context_budget_override: None,
-        provider_usage_budget_baseline: None,
-        provider_usage_context_generation_id: None,
         context_window_prefill_input_tokens: None,
         execution_mode: String::from("Build"),
         temperature: None,
@@ -840,6 +886,7 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         boundary_events: Vec::new(),
         runtime_system_updates: Vec::new(),
         controller_runtime: None,
+        native_goal_runtime: None,
         knowledge_access: None,
         session_goal_context: None,
         session_plan_context: None,

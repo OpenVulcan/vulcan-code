@@ -97,25 +97,10 @@ describe("composer toolbar primary action", () => {
     // sessionProviderUsage mirrors one selected-session accounting projection.
     // sessionProviderUsage 模拟当前选中会话的一份统计投影。
     const sessionProviderUsage: SessionProviderUsageSummary = {
-      activeBranch: {
-        providerCallCount: 2,
-        unknownUsageCallCount: 0,
-        usage: { totalTokens: 35_037_962 },
-      },
       cumulativeUsage: { totalTokens: 35_037_962 },
       inFlightCallCount: 0,
-      inherited: {
-        providerCallCount: 0,
-        unknownUsageCallCount: 0,
-        usage: null,
-      },
       lastUsage: { totalTokens: 35_037_962 },
       latestCall: null,
-      lifetime: {
-        providerCallCount: 2,
-        unknownUsageCallCount: 0,
-        usage: { totalTokens: 35_037_962 },
-      },
       providerCallCount: 2,
       unknownUsageCallCount: 0,
       usageRevision: 1,

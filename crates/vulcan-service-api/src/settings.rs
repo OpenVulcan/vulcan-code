@@ -530,30 +530,6 @@ pub struct ProviderModelSecondaryRouteSelection {
     pub endpoint_name: String,
 }
 
-/// Draft data used by the WebUI user-prompt edit dialog.
-/// WebUI 用户提示词编辑弹窗使用的草稿数据。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct UserPromptEditDraftSummary {
-    /// Stable conversation identifier.
-    /// 稳定会话标识。
-    pub conversation_id: String,
-    /// Stable user prompt message identifier.
-    /// 稳定用户提示词消息标识。
-    pub message_id: String,
-    /// Editable prompt text.
-    /// 可编辑提示词文本。
-    pub prompt: String,
-    /// Attachments that will be replayed with the edited prompt.
-    /// 将随编辑后提示词重新执行的附件。
-    #[serde(default)]
-    pub attachments: Vec<ComposerAttachmentSummary>,
-    /// Whether the owning conversation is currently running.
-    /// 所属会话当前是否正在运行。
-    #[serde(default)]
-    pub running: bool,
-}
-
 /// Summarizes one editable provider configuration field.
 /// 汇总单个可编辑 Provider 配置字段。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]

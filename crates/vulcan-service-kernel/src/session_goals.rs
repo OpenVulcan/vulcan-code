@@ -1,7 +1,238 @@
 //! Session goal WebUI service handlers.
 //! 会话目标 WebUI 服务处理器。
 
+use std::fmt;
+use std::sync::Arc;
+
 use super::*;
+use async_trait::async_trait;
+use vulcan_agent_runtime::tooling::native::{
+    NativeGoalRuntime, NativeGoalSnapshot, NativeGoalStatus, NativeGoalTerminalStatus,
+};
+use vulcan_service_api::{SessionGoalStatus, SessionGoalSummary};
+use vulcan_session_core::v1::config::GoalState;
+
+use crate::session_goal_lifecycle::{
+    current_v1_goal_unix_millis, registered_session_v1_handle_from_state,
+    session_goal_summary_from_v1_handle, session_v1_handle_from_state,
+};
+use crate::session_runtime_registry_v1::{
+    SessionConditionalMutationReceipt, SessionFlushReason, SessionHandle, SessionMutationAdmission,
+    SessionMutationChange, SessionRuntimeError,
+};
+
+/// Provider-visible semantic recorded when a user pauses autonomous Goal work.
+/// 用户暂停目标自动执行时记录的 Provider 可见语义。
+const GOAL_PAUSED_PROVIDER_CONTEXT: &str =
+    "The session goal is paused. Do not continue autonomous goal work until it is resumed.";
+
+/// Provider-visible semantic recorded when a user removes the Goal entirely.
+/// 用户彻底移除目标时记录的 Provider 可见语义。
+const GOAL_CLEARED_PROVIDER_CONTEXT: &str =
+    "The session goal was cleared. Stop applying the previous goal context.";
+
+/// Stable display reason recorded when the model reports that Goal work is blocked.
+/// 模型报告 Goal 工作受阻时记录的稳定显示原因。
+const GOAL_BLOCKED_REASON_CODE: &str = "goal_blocked";
+
+/// Service-owned adapter exposing the authoritative V1 Goal document to native tools.
+/// 服务层持有的适配器，用于向原生工具暴露权威 V1 Goal 文档。
+#[derive(Clone)]
+struct SessionV1NativeGoalRuntime {
+    /// Shared service state used only to resolve the exact registered V1 session handle.
+    /// 仅用于解析精确已注册 V1 会话句柄的共享服务状态。
+    state: SharedServiceBridgeState,
+}
+
+impl fmt::Debug for SessionV1NativeGoalRuntime {
+    /// Renders a non-sensitive adapter label without exposing the shared service state.
+    /// 渲染不暴露共享服务状态的非敏感适配器标签。
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SessionV1NativeGoalRuntime")
+            .finish_non_exhaustive()
+    }
+}
+
+/// Builds the strong V1 Goal domain port injected into one Provider execution request.
+/// 构建注入单次 Provider 执行请求的强类型 V1 Goal 领域端口。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the exact session registry and the temporary WebUI projection cache.
+/// `state` 持有精确会话注册表与临时 WebUI 投影缓存。
+///
+/// # Returns
+/// 返回值
+/// A request-scoped domain port whose reads and writes use only the V1 session handle.
+/// 返回仅通过 V1 会话句柄读写的请求级领域端口。
+pub(crate) fn session_v1_native_goal_runtime(
+    state: SharedServiceBridgeState,
+) -> Arc<dyn NativeGoalRuntime> {
+    Arc::new(SessionV1NativeGoalRuntime { state })
+}
+
+#[async_trait]
+impl NativeGoalRuntime for SessionV1NativeGoalRuntime {
+    /// Reads one Goal from the authoritative V1 document.
+    /// 从权威 V1 文档读取一个 Goal。
+    async fn get_goal(&self, session_id: SessionId) -> Result<Option<NativeGoalSnapshot>, String> {
+        let handle = registered_session_v1_handle_from_state(&self.state, session_id)?;
+        let summary = session_goal_summary_from_v1_handle(handle.as_ref(), session_id)?;
+        Ok(summary.map(|summary| native_goal_snapshot_from_summary(session_id, summary)))
+    }
+
+    /// Creates a Goal or replaces only a completed generation in one durable V1 mutation.
+    /// 通过一次可靠 V1 修改创建 Goal，或仅替换已经完成的代际。
+    async fn create_goal(
+        &self,
+        session_id: SessionId,
+        objective: String,
+        token_budget: Option<u64>,
+    ) -> Result<NativeGoalSnapshot, String> {
+        let handle = registered_session_v1_handle_from_state(&self.state, session_id)?;
+        let now_ms = current_v1_goal_unix_millis()?;
+        handle
+            .mutate_durable_if_changed(
+                SessionMutationAdmission::MetadataOnly,
+                SessionFlushReason::MetadataChanged,
+                move |document| {
+                    let transition = if document.metadata.mode.goal.enabled
+                        && document.metadata.mode.goal.state == GoalState::Completed
+                    {
+                        document.save_goal(
+                            objective.clone(),
+                            token_budget,
+                            objective.clone(),
+                            now_ms,
+                        )?
+                    } else {
+                        Some(document.create_goal(
+                            objective.clone(),
+                            token_budget,
+                            objective.clone(),
+                            now_ms,
+                        )?)
+                    };
+                    Ok(SessionMutationChange::Changed(
+                        transition.is_some_and(|value| value.continuation_turn_id.is_some()),
+                    ))
+                },
+            )
+            .map_err(|error| format!("创建 V1 Goal 失败：{error}"))?;
+        native_goal_snapshot_after_mutation(&self.state, handle.as_ref(), session_id)
+    }
+
+    /// Applies a model-requested terminal Goal transition through one durable V1 mutation.
+    /// 通过一次可靠 V1 修改应用模型请求的 Goal 终态转换。
+    async fn update_goal_status(
+        &self,
+        session_id: SessionId,
+        status: NativeGoalTerminalStatus,
+    ) -> Result<NativeGoalSnapshot, String> {
+        let handle = registered_session_v1_handle_from_state(&self.state, session_id)?;
+        let now_ms = current_v1_goal_unix_millis()?;
+        handle
+            .mutate_durable_if_changed(
+                SessionMutationAdmission::MetadataOnly,
+                SessionFlushReason::MetadataChanged,
+                move |document| match status {
+                    NativeGoalTerminalStatus::Complete
+                        if document.metadata.mode.goal.enabled
+                            && document.metadata.mode.goal.state == GoalState::Completed =>
+                    {
+                        Ok(SessionMutationChange::Unchanged(()))
+                    }
+                    NativeGoalTerminalStatus::Complete => {
+                        document.complete_goal(now_ms)?;
+                        Ok(SessionMutationChange::Changed(()))
+                    }
+                    NativeGoalTerminalStatus::Blocked
+                        if document.metadata.mode.goal.enabled
+                            && document.metadata.mode.goal.state == GoalState::Blocked =>
+                    {
+                        Ok(SessionMutationChange::Unchanged(()))
+                    }
+                    NativeGoalTerminalStatus::Blocked => {
+                        document.block_goal(GOAL_BLOCKED_REASON_CODE, now_ms)?;
+                        Ok(SessionMutationChange::Changed(()))
+                    }
+                },
+            )
+            .map_err(|error| format!("更新 V1 Goal 状态失败：{error}"))?;
+        native_goal_snapshot_after_mutation(&self.state, handle.as_ref(), session_id)
+    }
+}
+
+/// Reads and caches the exact Goal projection after one successful durable mutation.
+/// 在一次可靠修改成功后读取并缓存精确 Goal 投影。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the temporary UI cache, `handle` owns the V1 document, and `session_id` identifies the Goal owner.
+/// `state` 持有临时 UI 缓存，`handle` 持有 V1 文档，`session_id` 标识 Goal 所有者。
+///
+/// # Returns
+/// 返回值
+/// The required native Goal snapshot, or an explicit projection error.
+/// 返回必需的原生 Goal 快照，或显式投影错误。
+fn native_goal_snapshot_after_mutation(
+    state: &SharedServiceBridgeState,
+    handle: &SessionHandle,
+    session_id: SessionId,
+) -> Result<NativeGoalSnapshot, String> {
+    let summary = session_goal_summary_from_v1_handle(handle, session_id)?
+        .ok_or_else(|| format!("V1 会话 `{session_id}` 的 Goal 修改成功后缺少权威摘要"))?;
+    cache_session_goal_summary(state, session_id, Some(summary.clone()))?;
+    Ok(native_goal_snapshot_from_summary(session_id, summary))
+}
+
+/// Converts the service projection into the strong native-tool Goal snapshot.
+/// 将服务投影转换为原生工具使用的强类型 Goal 快照。
+///
+/// # Parameters
+/// 参数
+/// `session_id` is the already validated owner and `summary` contains V1-derived Goal facts.
+/// `session_id` 是已校验的所有者，`summary` 包含从 V1 派生的 Goal 事实。
+///
+/// # Returns
+/// 返回值
+/// A lossless native-tool snapshot using the same accounting totals.
+/// 返回使用相同记账汇总的无损原生工具快照。
+fn native_goal_snapshot_from_summary(
+    session_id: SessionId,
+    summary: SessionGoalSummary,
+) -> NativeGoalSnapshot {
+    NativeGoalSnapshot {
+        session_id,
+        goal_id: summary.goal_id,
+        objective: summary.objective,
+        status: native_goal_status_from_service(summary.status),
+        token_budget: summary.token_budget,
+        tokens_used: summary.tokens_used,
+        uncached_input_tokens: summary.input_tokens,
+        cached_input_tokens: summary.cached_input_tokens,
+        output_tokens: summary.output_tokens,
+        reasoning_tokens: summary.reasoning_tokens,
+        total_tokens: summary.total_tokens,
+        time_used_seconds: summary.time_used_seconds,
+        created_at_ms: summary.created_at_ms,
+        updated_at_ms: summary.updated_at_ms,
+    }
+}
+
+/// Maps the stable service status into the native-tool protocol status.
+/// 将稳定服务状态映射为原生工具协议状态。
+const fn native_goal_status_from_service(status: SessionGoalStatus) -> NativeGoalStatus {
+    match status {
+        SessionGoalStatus::Active => NativeGoalStatus::Active,
+        SessionGoalStatus::Paused => NativeGoalStatus::Paused,
+        SessionGoalStatus::Blocked => NativeGoalStatus::Blocked,
+        SessionGoalStatus::UsageLimited => NativeGoalStatus::UsageLimited,
+        SessionGoalStatus::BudgetLimited => NativeGoalStatus::BudgetLimited,
+        SessionGoalStatus::Complete => NativeGoalStatus::Complete,
+    }
+}
 
 /// WebUI 输入区目标弹窗发送的会话目标保存请求。
 #[derive(Debug, Clone, Deserialize)]
@@ -70,52 +301,35 @@ enum SessionGoalUserStatusUpdate {
 /// Returns success after the active goal is durably created.
 /// 在活动目标持久创建后返回成功。
 pub(crate) async fn persist_initial_submission_goal(
-    controller_runtime: &ControllerRuntimeHandle,
+    state: &SharedServiceBridgeState,
     session_id: SessionId,
     objective: &str,
     token_budget: Option<i64>,
 ) -> Result<(), String> {
     let objective = normalize_session_goal_objective(objective)?;
     validate_session_goal_budget(token_budget)?;
-    VulcanGoalStore::new(controller_runtime.clone())
-        .replace_thread_goal(
-            session_id,
-            objective.as_str(),
-            ThreadGoalStatus::Active,
-            token_budget,
-        )
-        .await
-        .map_err(|error| format!("保存初始目标失败：{error}"))?;
+    let handle = session_v1_handle_from_state(state, session_id).await?;
+    let token_budget = token_budget.map(|value| value as u64);
+    let now_ms = current_v1_goal_unix_millis()?;
+    let receipt = save_session_goal_v1(handle.as_ref(), objective, token_budget, now_ms)
+        .map_err(|error| format!("保存初始 V1 Goal 失败：{error}"))?;
+    if !receipt.changed {
+        return Err(format!("新会话 `{session_id}` 的初始 Goal 未产生 V1 修改"));
+    }
+    let summary = session_goal_summary_from_v1_handle(handle.as_ref(), session_id)?;
+    cache_session_goal_summary(state, session_id, summary)?;
     Ok(())
 }
 
 impl SessionGoalUserStatusUpdate {
-    /// Converts one user-authorized target into the persisted store status.
-    /// 将用户授权的目标转换为持久化存储状态。
-    const fn into_thread_goal_status(self) -> ThreadGoalStatus {
+    /// Converts one user-authorized target into the V1 metadata state.
+    /// 将用户授权的目标转换为 V1 metadata 状态。
+    const fn into_goal_state(self) -> GoalState {
         match self {
-            Self::Active => ThreadGoalStatus::Active,
-            Self::Paused => ThreadGoalStatus::Paused,
+            Self::Active => GoalState::Active,
+            Self::Paused => GoalState::Paused,
         }
     }
-}
-
-/// Validates that a user status request does not override a system-owned lifecycle state.
-/// 校验用户状态请求不会覆盖系统拥有的生命周期状态。
-fn ensure_session_goal_user_status_transition(
-    current: ThreadGoalStatus,
-    target: ThreadGoalStatus,
-) -> Result<(), String> {
-    if matches!(current, ThreadGoalStatus::Active | ThreadGoalStatus::Paused)
-        && matches!(target, ThreadGoalStatus::Active | ThreadGoalStatus::Paused)
-    {
-        return Ok(());
-    }
-    Err(format!(
-        "当前目标状态 `{}` 不允许用户直接切换为 `{}`。",
-        current.as_str(),
-        target.as_str()
-    ))
 }
 
 /// Session goal status update request sent by the WebUI goal area.
@@ -131,6 +345,42 @@ pub(super) struct SessionGoalStatusUpdateRequest {
     status: SessionGoalUserStatusUpdate,
 }
 
+/// Saves one Goal through the single failure-atomic V1 domain transition.
+/// 通过唯一的失败原子 V1 领域转换保存一个 Goal。
+///
+/// # Parameters
+/// 参数
+/// `handle` owns the authoritative session document; the remaining values are validated Goal facts.
+/// `handle` 持有权威会话文档；其余值为已经校验的 Goal 事实。
+///
+/// # Returns
+/// 返回值
+/// Returns the durable conditional receipt and whether a newly opened continuation Turn needs dispatch.
+/// 返回可靠条件修改回执，以及是否需要调度新打开的 continuation Turn。
+fn save_session_goal_v1(
+    handle: &SessionHandle,
+    objective: String,
+    token_budget: Option<u64>,
+    now_ms: i64,
+) -> Result<SessionConditionalMutationReceipt<bool>, SessionRuntimeError> {
+    handle.mutate_durable_if_changed(
+        SessionMutationAdmission::MetadataOnly,
+        SessionFlushReason::MetadataChanged,
+        move |document| {
+            // save_goal owns create, update, and completed-generation replacement as one failure-atomic domain transaction.
+            // save_goal 以单个失败原子领域事务统一拥有创建、更新及已完成代际替换。
+            let transition =
+                document.save_goal(objective.clone(), token_budget, objective, now_ms)?;
+            Ok(match transition {
+                Some(transition) => {
+                    SessionMutationChange::Changed(transition.continuation_turn_id.is_some())
+                }
+                None => SessionMutationChange::Unchanged(false),
+            })
+        },
+    )
+}
+
 /// Saves one session goal and emits an addon-state delta.
 /// 保存单个会话目标并发出附属状态增量。
 pub(super) async fn service_save_session_goal(
@@ -138,83 +388,36 @@ pub(super) async fn service_save_session_goal(
     state: SharedServiceBridgeState,
     request: SessionGoalSaveRequest,
 ) -> Result<SessionAddonsChangedResponse, String> {
-    let controller_runtime = controller_runtime_from_state(&state)?;
+    let (controller_runtime, agent_runtime, _luaskills_catalog, _mcp_catalog, _logs) =
+        runtime_parts_from_state(&state)?;
     let session_id = session_goal_request_session_id(&state, request.conversation_id.as_deref())?;
     let objective = normalize_session_goal_objective(&request.objective)?;
     validate_session_goal_budget(request.token_budget)?;
     ensure_regular_session_exists(&state, session_id, "保存目标")?;
-    ensure_session_not_in_plan_mode_for_goal(&state, session_id)?;
     let goal_transition_guard =
         begin_session_turn_start_exclusion(&state, [session_id], "保存目标")?;
-    let goal_store = VulcanGoalStore::new(controller_runtime.clone());
-    let existing_goal = goal_store
-        .get_thread_goal(session_id)
-        .await
-        .map_err(|error| format!("读取当前目标失败：{error}"))?;
-    let objective_changed = existing_goal
-        .as_ref()
-        .is_some_and(|goal| goal.objective != objective);
-    let goal = if let Some(existing_goal) = existing_goal {
-        if existing_goal.status == ThreadGoalStatus::Complete {
-            goal_store
-                .replace_thread_goal(
-                    session_id,
-                    objective.as_str(),
-                    ThreadGoalStatus::Active,
-                    request.token_budget,
-                )
-                .await
-                .map_err(|error| format!("保存目标失败：{error}"))?
-        } else {
-            goal_store
-                .update_thread_goal(
-                    session_id,
-                    GoalUpdate {
-                        objective: Some(objective),
-                        status: Some(saved_goal_status_after_edit(existing_goal.status)),
-                        token_budget: Some(request.token_budget),
-                        expected_goal_id: Some(existing_goal.goal_id),
-                        expected_status: Some(existing_goal.status),
-                    },
-                )
-                .await
-                .map_err(|error| format!("保存目标失败：{error}"))?
-                .ok_or_else(|| String::from("当前目标已变化，请刷新后重试。"))?
-        }
-    } else {
-        goal_store
-            .replace_thread_goal(
-                session_id,
-                objective.as_str(),
-                ThreadGoalStatus::Active,
-                request.token_budget,
-            )
-            .await
-            .map_err(|error| format!("保存目标失败：{error}"))?
-    };
-    advance_session_goal_dispatch_version(&state, session_id)?;
-    if objective_changed
-        && goal.status == ThreadGoalStatus::Active
-        && let Err(error) = enqueue_session_goal_objective_updated_guidance(
-            &state,
-            session_id,
-            &session_goal_summary_from_thread_goal(&goal),
-        )
-    {
-        eprintln!("[webui-service] enqueue goal objective update guidance failed: {error}");
-    }
+    let handle = session_v1_handle_from_state(&state, session_id).await?;
+    let token_budget = request.token_budget.map(|value| value as u64);
+    let now_ms = current_v1_goal_unix_millis()?;
+    let receipt = save_session_goal_v1(handle.as_ref(), objective, token_budget, now_ms)
+        .map_err(|error| format!("保存 V1 Goal 失败：{error}"))?;
+    let summary = session_goal_summary_from_v1_handle(handle.as_ref(), session_id)?;
+    cache_session_goal_summary(&state, session_id, summary.clone())?;
     drop(goal_transition_guard);
-    refresh_session_goal_summary_and_emit(&app, &state, session_id, Some(goal))
-}
-
-/// Returns the lifecycle status to keep after a user edits an existing goal.
-/// 返回用户编辑既有目标后应保留的生命周期状态。
-pub(super) fn saved_goal_status_after_edit(status: ThreadGoalStatus) -> ThreadGoalStatus {
-    if status == ThreadGoalStatus::Complete {
-        ThreadGoalStatus::Active
-    } else {
-        status
+    let response = refresh_session_goal_summary_and_emit(&app, &state, session_id, summary)?;
+    if receipt.value
+        && let Err(error) = maybe_start_session_goal_continuation_if_idle(
+            &app,
+            &state,
+            &controller_runtime,
+            &agent_runtime,
+            session_id,
+        )
+        .await
+    {
+        eprintln!("[webui-service] created goal continuation failed: {error}");
     }
+    Ok(response)
 }
 
 /// Resumes a stopped session goal as a fresh user-approved budget stage.
@@ -244,52 +447,28 @@ pub(super) async fn service_resume_session_goal(
     let objective = normalize_session_goal_objective(&request.objective)?;
     validate_session_goal_budget(request.token_budget)?;
     ensure_regular_session_exists(&state, session_id, "继续目标")?;
-    ensure_session_not_in_plan_mode_for_goal(&state, session_id)?;
     let goal_transition_guard =
         begin_session_turn_start_exclusion(&state, [session_id], "继续目标")?;
-    let goal_store = VulcanGoalStore::new(controller_runtime.clone());
-    let existing_goal = goal_store
-        .get_thread_goal(session_id)
-        .await
-        .map_err(|error| format!("读取当前目标失败：{error}"))?
-        .ok_or_else(|| String::from("当前会话还没有可继续的目标。"))?;
-    if existing_goal.status == ThreadGoalStatus::Complete {
-        return Err(String::from("已完成目标不能继续，请创建新目标。"));
-    }
-    if existing_goal.status == ThreadGoalStatus::Active {
-        return Err(String::from("当前目标已经在进行中。"));
-    }
-    let objective_changed = existing_goal.objective != objective;
-    let resumed_from_goal_id = existing_goal.goal_id.clone();
-    let goal = goal_store
-        .resume_thread_goal(
-            session_id,
-            GoalResume {
-                objective,
-                token_budget: request.token_budget,
-                expected_goal_id: resumed_from_goal_id.clone(),
-                expected_status: existing_goal.status,
+    let handle = session_v1_handle_from_state(&state, session_id).await?;
+    let token_budget = request.token_budget.map(|value| value as u64);
+    let now_ms = current_v1_goal_unix_millis()?;
+    handle
+        .mutate_durable_if_changed(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            move |document| {
+                let transition =
+                    document.resume_goal(objective.clone(), token_budget, objective, now_ms)?;
+                Ok(SessionMutationChange::Changed(
+                    transition.continuation_turn_id.is_some(),
+                ))
             },
         )
-        .await
-        .map_err(|error| format!("继续目标失败：{error}"))?
-        .ok_or_else(|| String::from("当前目标已变化，请刷新后重试。"))?;
-    if goal.status != ThreadGoalStatus::Active || goal.goal_id == resumed_from_goal_id {
-        return Err(String::from("目标继续结果没有创建新的活动预算阶段。"));
-    }
-    advance_session_goal_dispatch_version(&state, session_id)?;
-    clear_session_goal_stage_runtime_state(&state, session_id, &resumed_from_goal_id)?;
-    if objective_changed
-        && let Err(error) = enqueue_session_goal_objective_updated_guidance(
-            &state,
-            session_id,
-            &session_goal_summary_from_thread_goal(&goal),
-        )
-    {
-        eprintln!("[webui-service] enqueue resumed goal objective update guidance failed: {error}");
-    }
+        .map_err(|error| format!("继续 V1 Goal 失败：{error}"))?;
+    let summary = session_goal_summary_from_v1_handle(handle.as_ref(), session_id)?;
+    cache_session_goal_summary(&state, session_id, summary.clone())?;
     drop(goal_transition_guard);
-    let response = refresh_session_goal_summary_and_emit(&app, &state, session_id, Some(goal))?;
+    let response = refresh_session_goal_summary_and_emit(&app, &state, session_id, summary)?;
     if let Err(error) = maybe_start_session_goal_continuation_if_idle(
         &app,
         &state,
@@ -325,28 +504,23 @@ pub(super) async fn service_clear_session_goal(
     state: SharedServiceBridgeState,
     request: SessionGoalClearRequest,
 ) -> Result<SessionAddonsChangedResponse, String> {
-    let controller_runtime = controller_runtime_from_state(&state)?;
     let session_id = session_goal_request_session_id(&state, request.conversation_id.as_deref())?;
     ensure_regular_session_exists(&state, session_id, "清理目标")?;
     let goal_transition_guard =
         begin_session_turn_start_exclusion(&state, [session_id], "清理目标")?;
-    let goal_store = VulcanGoalStore::new(controller_runtime.clone());
-    let existing_goal = goal_store
-        .get_thread_goal(session_id)
-        .await
-        .map_err(|error| format!("读取当前目标失败：{error}"))?
-        .ok_or_else(|| String::from("当前会话还没有可清理的目标。"))?;
-    let expected_goal_id = existing_goal.goal_id;
-    let removed_goal = goal_store
-        .delete_thread_goal(session_id, &expected_goal_id)
-        .await
-        .map_err(|error| format!("清理目标失败：{error}"))?
-        .ok_or_else(|| String::from("当前目标已变化，请刷新后重试。"))?;
-    if removed_goal.goal_id != expected_goal_id {
-        return Err(String::from("目标清理结果与请求不一致，请刷新后重试。"));
-    }
-    advance_session_goal_dispatch_version(&state, session_id)?;
-    clear_session_goal_stage_runtime_state(&state, session_id, &removed_goal.goal_id)?;
+    let handle = session_v1_handle_from_state(&state, session_id).await?;
+    let now_ms = current_v1_goal_unix_millis()?;
+    handle
+        .mutate_durable_if_changed(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            move |document| {
+                document.clear_goal(GOAL_CLEARED_PROVIDER_CONTEXT, now_ms)?;
+                Ok(SessionMutationChange::Changed(()))
+            },
+        )
+        .map_err(|error| format!("清理 V1 Goal 失败：{error}"))?;
+    cache_session_goal_summary(&state, session_id, None)?;
     drop(goal_transition_guard);
     refresh_session_goal_summary_and_emit(&app, &state, session_id, None)
 }
@@ -376,42 +550,44 @@ pub(super) async fn service_update_session_goal_status(
         runtime_parts_from_state(&state)?;
     let session_id = session_goal_request_session_id(&state, request.conversation_id.as_deref())?;
     ensure_regular_session_exists(&state, session_id, "更新目标状态")?;
-    let target_status = request.status.into_thread_goal_status();
+    let target_status = request.status.into_goal_state();
     let goal_transition_guard =
         begin_session_turn_start_exclusion(&state, [session_id], "更新目标状态")?;
-    let goal_store = VulcanGoalStore::new(controller_runtime.clone());
-    let existing_goal = goal_store
-        .get_thread_goal(session_id)
-        .await
-        .map_err(|error| format!("读取当前目标失败：{error}"))?
-        .ok_or_else(|| String::from("当前会话还没有可更新的目标。"))?;
-    ensure_session_goal_user_status_transition(existing_goal.status, target_status)?;
-    let expected_goal_id = existing_goal.goal_id;
-    let expected_status = existing_goal.status;
-    let goal = goal_store
-        .update_thread_goal(
-            session_id,
-            GoalUpdate {
-                objective: None,
-                status: Some(target_status),
-                token_budget: None,
-                expected_goal_id: Some(expected_goal_id.clone()),
-                expected_status: Some(expected_status),
+    let handle = session_v1_handle_from_state(&state, session_id).await?;
+    let now_ms = current_v1_goal_unix_millis()?;
+    let receipt = handle
+        .mutate_durable_if_changed(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            move |document| {
+                if document.metadata.mode.goal.enabled
+                    && document.metadata.mode.goal.state == target_status
+                {
+                    return Ok(SessionMutationChange::Unchanged(false));
+                }
+                let transition = match target_status {
+                    GoalState::Active => {
+                        let objective = document.metadata.mode.goal.objective.clone();
+                        let budget_tokens = document.metadata.mode.goal.budget_tokens;
+                        document.resume_goal(objective.clone(), budget_tokens, objective, now_ms)?
+                    }
+                    GoalState::Paused => {
+                        document.pause_goal(GOAL_PAUSED_PROVIDER_CONTEXT, now_ms)?
+                    }
+                    _ => unreachable!("the WebUI status enum admits only active or paused"),
+                };
+                Ok(SessionMutationChange::Changed(
+                    transition.continuation_turn_id.is_some(),
+                ))
             },
         )
-        .await
-        .map_err(|error| format!("更新目标状态失败：{error}"))?
-        .ok_or_else(|| String::from("当前目标已变化，请刷新后重试。"))?;
-    if goal.goal_id != expected_goal_id || goal.status != target_status {
-        return Err(String::from("目标状态更新结果与请求不一致，请刷新后重试。"));
-    }
-    advance_session_goal_dispatch_version(&state, session_id)?;
-    if target_status == ThreadGoalStatus::Paused {
-        clear_session_goal_stage_runtime_state(&state, session_id, &goal.goal_id)?;
-    }
+        .map_err(|error| format!("更新 V1 Goal 状态失败：{error}"))?;
+    let summary = session_goal_summary_from_v1_handle(handle.as_ref(), session_id)?;
+    cache_session_goal_summary(&state, session_id, summary.clone())?;
     drop(goal_transition_guard);
-    let response = refresh_session_goal_summary_and_emit(&app, &state, session_id, Some(goal))?;
-    if target_status == ThreadGoalStatus::Active
+    let response = refresh_session_goal_summary_and_emit(&app, &state, session_id, summary)?;
+    if target_status == GoalState::Active
+        && receipt.value
         && let Err(error) = maybe_start_session_goal_continuation_if_idle(
             &app,
             &state,
@@ -445,14 +621,8 @@ mod tests {
         }))
         .expect("paused user transition should deserialize");
 
-        assert_eq!(
-            active.status.into_thread_goal_status(),
-            ThreadGoalStatus::Active
-        );
-        assert_eq!(
-            paused.status.into_thread_goal_status(),
-            ThreadGoalStatus::Paused
-        );
+        assert_eq!(active.status.into_goal_state(), GoalState::Active);
+        assert_eq!(paused.status.into_goal_state(), GoalState::Paused);
     }
 
     /// Verifies system-owned and unknown statuses are rejected during RPC request decoding.
@@ -476,34 +646,11 @@ mod tests {
         }
     }
 
-    /// Verifies user transitions cannot overwrite system-owned lifecycle states.
-    /// 验证用户转换不能覆盖系统拥有的生命周期状态。
+    /// Verifies pause and clear transitions always carry explicit non-empty exit semantics.
+    /// 验证暂停与清理转换始终携带明确且非空的退出语义。
     #[test]
-    fn session_goal_user_status_transition_rejects_system_owned_current_state() {
-        assert!(
-            ensure_session_goal_user_status_transition(
-                ThreadGoalStatus::Active,
-                ThreadGoalStatus::Paused
-            )
-            .is_ok()
-        );
-        assert!(
-            ensure_session_goal_user_status_transition(
-                ThreadGoalStatus::Paused,
-                ThreadGoalStatus::Active
-            )
-            .is_ok()
-        );
-        for current in [
-            ThreadGoalStatus::Blocked,
-            ThreadGoalStatus::UsageLimited,
-            ThreadGoalStatus::BudgetLimited,
-            ThreadGoalStatus::Complete,
-        ] {
-            assert!(
-                ensure_session_goal_user_status_transition(current, ThreadGoalStatus::Active)
-                    .is_err()
-            );
-        }
+    fn session_goal_exit_contexts_are_explicit() {
+        assert!(!GOAL_PAUSED_PROVIDER_CONTEXT.trim().is_empty());
+        assert!(!GOAL_CLEARED_PROVIDER_CONTEXT.trim().is_empty());
     }
 }

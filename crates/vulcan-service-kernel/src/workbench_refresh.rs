@@ -2,8 +2,9 @@
 //! workbench refresh 辅助逻辑。
 
 use super::*;
+use crate::pending_prompts::pending_prompt_summaries_from_process_mirror;
 use crate::vmm::hydrate_vmm_default_identity;
-use vulcan_service_api::PendingPromptsChangedDelta;
+use vulcan_service_api::{PendingPromptsChangedDelta, SessionProviderUsageSummary};
 
 /// Minimum elapsed time that makes one workbench-refresh stage worth reporting.
 /// 工作台刷新阶段需要输出诊断日志的最小耗时。
@@ -79,6 +80,9 @@ pub(crate) struct WorkbenchRuntimeProjection<'a> {
     /// Canonical workspace snapshot being projected.
     /// 正在投影的规范工作区快照。
     pub(crate) workspace: &'a vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+    /// Non-serializable pending-prompt compatibility mirrors owned by the kernel process.
+    /// 由内核进程持有的不可序列化待发送提示词兼容镜像。
+    pub(crate) pending_prompt_process_mirrors: &'a BTreeMap<SessionId, PendingPromptProcessMirror>,
     /// Read-only state snapshots from currently open Core VMM session controllers.
     /// 当前已打开 Core VMM 会话控制器提供的只读状态快照。
     pub(crate) vmm_session_states: &'a BTreeMap<SessionId, vulcan_vmm::VmmSessionMemoryState>,
@@ -86,9 +90,6 @@ pub(crate) struct WorkbenchRuntimeProjection<'a> {
     /// 可选的进程内托管 VMM 生命周期快照。
     pub(crate) managed_vmm_runtime:
         Option<crate::managed_memory_mesh_runtime::ManagedMemoryMeshSnapshot>,
-    /// Surface messages for the active visible conversation.
-    /// 当前可见会话的界面消息。
-    pub(crate) surface_messages: &'a [SessionMessageEntry],
     /// Optional subagent navigation snapshot for the active surface.
     /// 当前界面的可选子代理导航快照。
     pub(crate) subagent_navigation: Option<SubagentNavigationSnapshot>,
@@ -104,9 +105,13 @@ pub(crate) struct WorkbenchRuntimeProjection<'a> {
     /// Session goal summaries keyed by session id.
     /// 按会话标识索引的会话目标摘要。
     pub(crate) session_goal_summaries: &'a BTreeMap<SessionId, SessionGoalSummary>,
-    /// Hydrated conversation window summaries retained by the service state.
-    /// 服务状态中保留的已水合会话窗口摘要。
-    pub(crate) hydrated_conversation_windows: &'a [HydratedConversationWindowSummary],
+    /// Provider usage summaries projected from currently registered V1 documents.
+    /// 从当前已注册 V1 文档投影的 Provider 用量摘要。
+    pub(crate) session_provider_usage_summaries:
+        &'a BTreeMap<SessionId, SessionProviderUsageSummary>,
+    /// Canonical V1 context-usage facts for the selected registered session.
+    /// 当前已注册选中会话的规范 V1 上下文用量事实。
+    pub(crate) selected_context_usage_facts: Option<&'a SessionContextUsageFacts>,
     /// Native tool summaries exposed by the active agent runtime.
     /// 当前代理运行时暴露的原生工具摘要。
     pub(crate) native_tools: Vec<vulcan_service_api::NativeToolSummary>,
@@ -150,6 +155,7 @@ async fn refresh_workbench_snapshot_with_selected_session(
         provider_configuration,
         live_context_budgets,
         agent_runtime_for_status,
+        session_runtime_registry,
         captured_workbench_generation,
     ) = {
         let guard = state
@@ -185,6 +191,7 @@ async fn refresh_workbench_snapshot_with_selected_session(
             provider_configuration,
             live_context_budgets,
             guard.agent_runtime.clone(),
+            Arc::clone(&guard.session_runtime_registry),
             captured_workbench_generation,
         )
     };
@@ -229,7 +236,7 @@ async fn refresh_workbench_snapshot_with_selected_session(
     // projection_inputs_started_at isolates state-derived WebUI projection input assembly.
     // projection_inputs_started_at 将从状态派生 WebUI 投影输入的组装过程单独测量。
     let projection_inputs_started_at = std::time::Instant::now();
-    let (surface_messages, subagent_navigation, session_goal_summaries, hydrated_window_summaries) = {
+    let (subagent_navigation, session_goal_summaries, pending_prompt_process_mirrors) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -246,25 +253,17 @@ async fn refresh_workbench_snapshot_with_selected_session(
         let selected_session_id =
             selected_session_id_after_refresh(&refreshed_snapshot, target_session_id);
         refreshed_snapshot.selected_session = selected_session_id;
-        retain_hydrated_conversation_windows_for_workspace(
-            &mut guard.hydrated_conversation_windows,
-            &refreshed_snapshot,
-        );
         (
-            active_surface_messages_from_workspace_and_state(&mut guard, &refreshed_snapshot)?,
             subagent_navigation_snapshot_from_cached_state(&mut guard, &refreshed_snapshot)?,
             guard.session_goal_summaries.clone(),
-            hydrated_conversation_window_summaries(
-                &guard.hydrated_conversation_windows,
-                &guard.webui_preloaded_unclosed_subagent_roots,
-            ),
+            guard.pending_prompt_process_mirrors.clone(),
         )
     };
     trace_workbench_refresh_if_slow(
         "projection_inputs",
         selected_session_id,
         projection_inputs_started_at,
-        format!("surface_messages={}", surface_messages.len()),
+        "result=captured",
     );
     let vulcan_plugin_catalog = agent_runtime_for_status
         .as_ref()
@@ -304,6 +303,14 @@ async fn refresh_workbench_snapshot_with_selected_session(
         format!("sessions={}", vmm_session_states.len()),
     );
     let managed_vmm_runtime = crate::managed_memory_mesh_runtime::snapshot_from_state(&state);
+    let session_provider_usage_summaries = session_provider_usage_summaries_from_v1_registry(
+        session_runtime_registry.as_ref(),
+        refreshed_snapshot.sessions.iter().map(|session| session.id),
+    )?;
+    let selected_context_usage_facts = session_context_usage_facts_from_v1_registry(
+        session_runtime_registry.as_ref(),
+        refreshed_snapshot.selected_session,
+    )?;
     // workbench_projection_started_at isolates pure model projection from storage I/O.
     // workbench_projection_started_at 将纯模型投影与存储 I/O 分开测量。
     let workbench_projection_started_at = std::time::Instant::now();
@@ -322,9 +329,9 @@ async fn refresh_workbench_snapshot_with_selected_session(
             .as_ref()
             .map(|runtime| runtime.public_ai_runtime.as_ref()),
         workspace: &refreshed_snapshot,
+        pending_prompt_process_mirrors: &pending_prompt_process_mirrors,
         vmm_session_states: &vmm_session_states,
         managed_vmm_runtime,
-        surface_messages: surface_messages.as_slice(),
         subagent_navigation,
         pending_questions: pending_question_snapshots_from_agent_runtime(
             agent_runtime_for_status.as_ref(),
@@ -332,7 +339,8 @@ async fn refresh_workbench_snapshot_with_selected_session(
         logs: &logs,
         live_context_budgets: &live_context_budgets,
         session_goal_summaries: &session_goal_summaries,
-        hydrated_conversation_windows: &hydrated_window_summaries,
+        session_provider_usage_summaries: &session_provider_usage_summaries,
+        selected_context_usage_facts: selected_context_usage_facts.as_ref(),
         native_tools: native_tool_summaries_from_agent_runtime(agent_runtime_for_status.as_ref()),
     });
     trace_workbench_refresh_if_slow(
@@ -416,11 +424,11 @@ async fn refresh_workbench_snapshot_with_selected_session(
 /// 全部匹配会话刷新后返回 `Ok(())`，实时注册表读取失败时返回精确错误。
 pub(crate) fn reconcile_workbench_conversation_lifecycle_projection(
     workbench: &mut WorkbenchSnapshot,
-    state: &ServiceBridgeState,
+    _state: &ServiceBridgeState,
     workspace: &WorkspaceSnapshot,
 ) -> Result<(), String> {
-    // live_projections keeps status, phase, and Continue state sourced from the same final lock revision.
-    // live_projections 保留来自同一最终锁修订的状态、阶段与 Continue 状态。
+    // liveProjections keeps status and phase sourced from the same final lock revision.
+    // liveProjections 保留来自同一最终锁修订的状态与阶段。
     let mut live_projections = BTreeMap::new();
     for session in &workspace.sessions {
         // run_phase is the exact workspace phase after the final active-run preservation pass.
@@ -439,47 +447,14 @@ pub(crate) fn reconcile_workbench_conversation_lifecycle_projection(
                 session.status.label()
             }
             .to_string();
-        // runtimeState is optional because failed legacy or damaged sessions still require a disabled problem-turn control.
-        // runtimeState 为可选值，因为失败的旧会话或受损会话仍需显示问题回合禁用控件。
-        let runtime_state = workspace.session_runtime_state.get(&session.id);
-        // hasStoredRecoveryBoundary avoids fallible live-registry reads for normal sessions while retaining restart-recovered abnormal idle boundaries.
-        // hasStoredRecoveryBoundary 避免为正常会话执行可失败的实时注册表读取，同时保留重启恢复出的异常空闲边界。
-        let has_stored_recovery_boundary = runtime_state.is_some_and(|runtime_state| {
-            let stored_continuation = &runtime_state.provider_call_ledger.continuation;
-            !stored_continuation.is_empty()
-                && !matches!(
-                    stored_continuation.terminal_reason.as_deref(),
-                    Some("completed" | "completed_non_assistant_tail")
-                )
-        });
-        // shouldProjectContinuation includes explicit problem phases even when no runtime row or continuation ledger survived.
-        // shouldProjectContinuation 即使未保留运行态记录或 Continue 账本，也会包含显式问题阶段。
-        let should_project_continuation = matches!(
-            run_phase,
-            SessionRunPhase::Failed | SessionRunPhase::Stopped
-        ) || has_stored_recovery_boundary;
-        let continuation = if should_project_continuation {
-            let blockers = session_continuation_runtime_blockers(state, workspace, session.id)?;
-            conversation_continuation_summary_for_session_runtime(
-                runtime_state,
-                run_phase,
-                blockers,
-            )
-        } else {
-            None
-        };
-        live_projections.insert(
-            session.id.to_string(),
-            (status, run_phase.to_string(), continuation),
-        );
+        live_projections.insert(session.id.to_string(), (status, run_phase.to_string()));
     }
     for conversation in &mut workbench.conversations {
-        let Some((status, run_phase, continuation)) = live_projections.get(&conversation.id) else {
+        let Some((status, run_phase)) = live_projections.get(&conversation.id) else {
             continue;
         };
         conversation.status.clone_from(status);
         conversation.run_phase.clone_from(run_phase);
-        conversation.continuation.clone_from(continuation);
     }
     Ok(())
 }
@@ -606,17 +581,6 @@ pub(crate) fn session_state_for_run_phase(phase: SessionRunPhase) -> SessionStat
 
 /// Returns whether a runtime event closes the current streamed thinking segment.
 /// 判断运行时事件是否会关闭当前流式思考片段。
-pub(crate) fn is_provider_tool_boundary_runtime_event(event: &RuntimeEvent) -> bool {
-    matches!(
-        event.kind,
-        RuntimeEventKind::ToolRequestStarted
-            | RuntimeEventKind::ToolStarted
-            | RuntimeEventKind::ToolFinished
-    ) && (event.title.starts_with("工具请求 · ")
-        || event.title.starts_with("工具调用 · ")
-        || event.title.starts_with("工具返回 · "))
-}
-
 /// Returns the current Unix timestamp as millisecond text for SQLite metadata rows.
 /// 返回当前 Unix 毫秒时间戳文本，用于 SQLite 元数据行。
 pub(crate) fn current_unix_millis_text() -> String {
@@ -954,6 +918,9 @@ pub(crate) fn detached_task_event_label(event: &DetachedTaskRuntimeEvent) -> &'s
             ExecutionStreamEvent::ProviderRequestDurabilityBoundary { .. },
         ) => "child.provider_request_durability_boundary",
         DetachedTaskRuntimeEvent::ChildExecution(
+            ExecutionStreamEvent::ProviderRequestPreparationBoundary { .. },
+        ) => "child.provider_request_preparation_boundary",
+        DetachedTaskRuntimeEvent::ChildExecution(
             ExecutionStreamEvent::ProviderLoweringRepair { .. },
         ) => "child.provider_lowering_repair",
         DetachedTaskRuntimeEvent::ChildExecution(ExecutionStreamEvent::RequestReady { .. }) => {
@@ -1024,15 +991,16 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         provider_configuration,
         public_ai_runtime,
         workspace,
+        pending_prompt_process_mirrors,
         vmm_session_states,
         managed_vmm_runtime,
-        surface_messages,
         subagent_navigation,
         pending_questions,
         logs,
         live_context_budgets,
         session_goal_summaries,
-        hydrated_conversation_windows,
+        session_provider_usage_summaries,
+        selected_context_usage_facts,
         native_tools,
     } = input;
     let public_ai_configuration =
@@ -1058,8 +1026,9 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
     let selected_runtime_state = workspace
         .session_runtime_state
         .get(&workspace.selected_session);
-    let selected_session_provider_usage =
-        selected_runtime_state.and_then(session_provider_usage_summary_from_runtime_state);
+    let selected_session_provider_usage = session_provider_usage_summaries
+        .get(&workspace.selected_session)
+        .cloned();
     let public_ai_selection = public_ai_runtime
         .zip(public_ai_configuration.as_ref())
         .and_then(|(runtime, configuration)| {
@@ -1098,24 +1067,6 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 .find(|question| question.session_id == *conversation_id)
                 .cloned()
         });
-    let active_conversation_id = subagent_navigation
-        .as_ref()
-        .map(|navigation| navigation.active_conversation_id.as_str())
-        .or(selected_conversation_id.as_deref());
-    let messages = active_conversation_id
-        .map(|conversation_id| {
-            let allow_user_prompt_editing = workspace_surface_allows_user_prompt_editing(
-                workspace,
-                workspace.selected_session,
-                subagent_navigation.as_ref(),
-            );
-            conversation_messages_from_session(
-                conversation_id,
-                surface_messages,
-                allow_user_prompt_editing,
-            )
-        })
-        .unwrap_or_default();
     // selected_vmm_session_state is a read-only controller projection for the active surface.
     // selected_vmm_session_state 是活动界面使用的只读控制器投影。
     let selected_vmm_session_state = vmm_session_states.get(&workspace.selected_session);
@@ -1124,11 +1075,10 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
     let restorable_project_ids = workspace_task_projects_including_archived(workspace)
         .map(|project| project.id.as_str())
         .collect::<BTreeSet<_>>();
-    let pending_prompts_by_conversation = workspace
-        .session_runtime_state
+    let pending_prompts_by_conversation = pending_prompt_process_mirrors
         .iter()
-        .filter_map(|(session_id, runtime_state)| {
-            let pending_prompts = pending_prompt_summaries_from_runtime_state(runtime_state);
+        .filter_map(|(session_id, mirror)| {
+            let pending_prompts = pending_prompt_summaries_from_process_mirror(mirror);
             if pending_prompts.is_empty() {
                 return None;
             }
@@ -1143,8 +1093,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         .iter()
         .filter_map(|session| {
             let runtime_state = workspace.session_runtime_state.get(&session.id);
-            let session_provider_usage =
-                runtime_state.and_then(session_provider_usage_summary_from_runtime_state);
+            let session_provider_usage = session_provider_usage_summaries.get(&session.id).cloned();
             let session_goal = session_goal_summary_with_provider_usage(
                 session_goal_summaries.get(&session.id).cloned(),
                 session_provider_usage.as_ref(),
@@ -1183,7 +1132,6 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
     let session_vmm_policies_by_conversation = workspace
         .sessions
         .iter()
-        .filter(|session| session_segmented_metadata_exists(session))
         .map(|session| {
             let runtime_state = workspace.session_runtime_state.get(&session.id);
             let project_layer = cached_project_vmm_layer_for_session(workspace, session);
@@ -1223,7 +1171,6 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         conversations: workspace
             .sessions
             .iter()
-            .filter(|session| session_segmented_metadata_exists(session))
             .map(|session| {
                 let run_phase = workspace
                     .session_run_phases
@@ -1264,24 +1211,6 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                         Some(session.updated_at.clone()),
                     ),
                     project_id: session_summary_project_id_owned(session),
-                    fork_source: conversation_fork_source_summary_from_session(session),
-                    continuation: conversation_continuation_summary_for_session_runtime(
-                        workspace.session_runtime_state.get(&session.id),
-                        run_phase,
-                        SessionContinuationRuntimeBlockers {
-                            session_is_running: session.status == SessionState::Running,
-                            has_pending_question: pending_questions
-                                .iter()
-                                .any(|question| question.session_id == session_id_text),
-                            has_running_task: subagent_navigation.as_ref().is_some_and(
-                                |navigation| {
-                                    navigation.parent_conversation_id == session_id_text
-                                        && navigation.tasks.iter().any(|task| task.is_running)
-                                },
-                            ),
-                            ..SessionContinuationRuntimeBlockers::default()
-                        },
-                    ),
                 }
             })
             .collect(),
@@ -1302,7 +1231,6 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
             .archived_sessions
             .iter()
             .filter(|session| session_has_restorable_project_id(session, &restorable_project_ids))
-            .filter(|session| session_segmented_metadata_exists(session))
             .map(|session| ConversationSummary {
                 id: session.id.to_string(),
                 title: session.title.clone(),
@@ -1313,14 +1241,9 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 unread: false,
                 attention: None,
                 project_id: session_summary_project_id_owned(session),
-                fork_source: conversation_fork_source_summary_from_session(session),
-                continuation: None,
             })
             .collect(),
         selected_conversation_id,
-        messages,
-        hydrated_conversation_windows: hydrated_conversation_windows.to_vec(),
-        conversation_hydration: None,
         subagent_navigation,
         tool_calls: tool_calls(),
         feature_areas: feature_areas(),
@@ -1375,8 +1298,9 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         ),
         output_style_catalog: output_style_catalog_summary(provider_configuration),
         composer_slash_commands: vulcan_service_api::composer_slash_command_catalog(),
-        pending_prompts: selected_runtime_state
-            .map(pending_prompt_summaries_from_runtime_state)
+        pending_prompts: pending_prompt_process_mirrors
+            .get(&workspace.selected_session)
+            .map(pending_prompt_summaries_from_process_mirror)
             .unwrap_or_default(),
         pending_prompts_by_conversation,
         pending_question,
@@ -1440,6 +1364,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         context_usage: context_usage_snapshot_from_runtime_state(
             workspace.selected_session,
             selected_runtime_state,
+            selected_context_usage_facts,
             live_context_budgets,
             public_ai_selection
                 .as_ref()
@@ -1593,10 +1518,6 @@ mod tests {
                 "刚刚",
             )],
             archived_sessions: Vec::new(),
-            session_messages: BTreeMap::new(),
-            archived_session_messages: BTreeMap::new(),
-            session_compactions: BTreeMap::new(),
-            archived_session_compactions: BTreeMap::new(),
             session_runtime_state: BTreeMap::new(),
             archived_session_runtime_state: BTreeMap::new(),
             session_run_phases: BTreeMap::new(),

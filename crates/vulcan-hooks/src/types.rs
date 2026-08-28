@@ -210,6 +210,54 @@ impl SystemPromptHookPhase {
     }
 }
 
+/// Stable runtime-baseline class declared by a system-prompt hook producer.
+/// 由系统提示词 Hook 生产者声明的稳定运行时基线类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SystemPromptHookBaselineKind {
+    /// Captured memory-profile baseline.
+    /// 已捕获的记忆画像基线。
+    MemoryProfile,
+    /// Long-lived plugin instruction block.
+    /// 长期插件指令块。
+    PluginInstructions,
+    /// Long-lived baseline hook body.
+    /// 长期基线 Hook 正文。
+    BaselineHooks,
+}
+
+/// Typed baseline provenance supplied by the authoritative hook producer.
+/// 由权威 Hook 生产者提供的强类型基线来源。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SystemPromptHookBaselineProvenance {
+    /// Stable baseline class declared without string inference.
+    /// 无需字符串推断即可声明的稳定基线类型。
+    pub kind: SystemPromptHookBaselineKind,
+    /// Stable final prompt-node identity declared by the producer.
+    /// 由生产者声明的稳定最终提示词节点身份。
+    pub node_id: String,
+    /// Stable producer-owned source identity.
+    /// 由生产者持有的稳定来源身份。
+    pub source_id: String,
+}
+
+impl SystemPromptHookBaselineProvenance {
+    /// Builds one explicit hook-baseline provenance value.
+    /// 构建一条显式 Hook 基线来源信息。
+    pub fn new(
+        kind: SystemPromptHookBaselineKind,
+        node_id: impl Into<String>,
+        source_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind,
+            node_id: node_id.into(),
+            source_id: source_id.into(),
+        }
+    }
+}
+
 /// System-prompt contribution returned by a hook for the current provider request.
 /// hook 为当前 Provider 请求返回的系统提示词贡献块。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -232,6 +280,10 @@ pub struct SystemPromptHookBlock {
     /// 生成该块时观察到的阶段。
     #[serde(default)]
     pub phase: SystemPromptHookPhase,
+    /// Optional typed provenance; `None` means request-dynamic hook content.
+    /// 可选强类型来源；`None` 表示请求动态 Hook 内容。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_provenance: Option<SystemPromptHookBaselineProvenance>,
 }
 
 impl SystemPromptHookBlock {
@@ -244,6 +296,7 @@ impl SystemPromptHookBlock {
             content: content.into(),
             source: None,
             phase: SystemPromptHookPhase::default(),
+            baseline_provenance: None,
         }
     }
 }

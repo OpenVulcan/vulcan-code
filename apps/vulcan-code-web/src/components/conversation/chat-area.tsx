@@ -1,59 +1,65 @@
 import React from "react";
-import {
-  ChatAreaComposerDockLayer,
-  composerAttachmentMedia,
-} from "@/components/conversation/chat-area/composer-dock-layer";
-import { UserPromptEditDialog } from "@/components/conversation/chat-area/user-prompt-edit-dialog";
+import { ChatAreaComposerDockLayer } from "@/components/conversation/chat-area/composer-dock-layer";
 import {
   ConversationLoadingCenter,
   ConversationSubmissionStatus,
   EmptyConversationPrompt,
 } from "@/components/conversation/conversation-chrome";
-import { ConversationWorkspace } from "@/components/conversation/conversation-workspace";
+import { ConversationV1Workspace } from "@/components/conversation/conversation-v1-workspace";
+import {
+  ConversationGenerationDialogV1,
+  type ConversationGenerationDialogActionV1,
+} from "@/components/conversation/conversation-generation-dialog-v1";
+import type { ConversationV1RootInputGenerationAction } from "@/components/conversation/conversation-v1-display-renderer";
 import {
   StreamingThinkingOverlay,
   TransientReasoningStatusLine,
-} from "@/components/conversation/conversation-blocks";
+} from "@/components/conversation/conversation-live-reasoning";
 import {
-  activeStreamingThinkingBlock,
   conversationIsRunning,
   conversationRuntimeCue,
   normalizedSessionRunPhase,
 } from "@/components/conversation/conversation-runtime";
-import {
-  activeThinkingOverlayBlock,
-  hiddenThinkingBlockIdsForDisplayMode,
-} from "@/components/conversation/thinking-display";
-import {
-  generatedMediaAttachmentsFromToolDetailPayload,
-  projectConversationRenderItems,
-} from "@/components/conversation/conversation-transcript";
-import {
-  buildConversationStreamSignature,
-} from "@/components/conversation/chat-area-scroll";
-import type { ConversationPlanArtifact } from "@/components/conversation/conversation-model";
+import type {
+  ConversationBlock,
+  ConversationPlanArtifact,
+} from "@/components/conversation/conversation-model";
+import type { ComposerSubmission } from "@/components/composer/composer-model";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
 import { projectForConversation } from "@/state/workbench-selectors";
 import { useConversationTransientReasoningStatus } from "@/state/conversation-live-stream-context";
 import { toast } from "sonner";
-import type {
-  ComposerAttachmentSummary,
-  ComposerSlashCommandSummary,
-  ConversationMessage,
-} from "@/types";
+import type { ComposerAttachmentSummary, ComposerSlashCommandSummary } from "@/types";
 import type { ChatAreaProps } from "@/components/conversation/chat-area/types";
 import { useChatAreaPlanActions } from "@/components/conversation/chat-area/plan-actions";
-import { useUserPromptEditState } from "@/components/conversation/chat-area/user-prompt-edit-state";
 import {
   useConversationVisualTransitions,
   useThinkingDisplayMode,
 } from "@/components/conversation/chat-area/visual-state";
 import { useConversationSurfaceLayoutMemory } from "@/components/conversation/chat-area/surface-layout-memory";
 import { useConversationScrollController } from "@/components/conversation/chat-area/conversation-scroll-controller";
-import { hasAuthoritativeSubmissionCorrelation } from "@/components/workspace/draft-submission-state";
-import { conversationContinuationBlockedReasonText } from "@/components/conversation/continuation-blocked-reason";
 import { ConversationContinueControl } from "@/components/conversation/conversation-continue-control";
+import { selectConversationContinueCandidateV1 } from "@/service/conversation-continuation-selector-v1";
+import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
+import type {
+  ConversationEventSummary,
+  ExternalResourceRef,
+} from "@/service/conversation-event-window-store";
+import {
+  useSelectedConversationEventWindowCommands,
+  useSelectedConversationEventWindowSnapshot,
+} from "@/state/conversation-event-window-react";
+
+/** Process-local target for one exact V1 edit or fork action.
+ * 一次精确 V1 编辑或分叉动作的进程内目标。
+ */
+interface ConversationGenerationTargetV1 extends ConversationV1RootInputGenerationAction {
+  /** Stable child identity reused by every fork retry from this dialog.
+   * 当前对话框中每次分叉重试复用的稳定子会话身份。
+   */
+  childSessionId: string | null;
+}
 
 // ChatArea renders the conversation workspace and composer.
 // ChatArea 渲染会话工作区与输入区域。
@@ -70,10 +76,6 @@ export function ChatArea(props: ChatAreaProps) {
   // composerDockHeight tracks the actual floating composer stack height for overlay positioning.
   // composerDockHeight 跟踪浮动输入区堆栈真实高度，用于定位浮层。
   const [composerDockHeight, setComposerDockHeight] = React.useState(132);
-  const userPromptEdit = useUserPromptEditState({
-    onGetUserPromptEditDraft: props.onGetUserPromptEditDraft,
-    onSubmitUserPromptEdit: props.onSubmitUserPromptEdit,
-  });
   // Thinking display state synchronizes the backend preference with stale-safe optimistic selection.
   // 思考展示状态将后端偏好与过期安全的乐观选择保持同步。
   const {
@@ -84,8 +86,36 @@ export function ChatArea(props: ChatAreaProps) {
     onSelectMode: props.onSelectWorkbenchThinkingDisplayMode,
   });
   const selectedConversation = props.workbench.conversations.find((conversation) => conversation.id === props.selectedConversationId);
-  // continuationClaimKey suppresses duplicate claims until the authoritative workbench revision changes.
-  // continuationClaimKey 在权威工作台修订变化前阻止重复领取 Continue。
+  // eventWindowSnapshot is the sole durable authority for Continue eligibility and consumption.
+  // eventWindowSnapshot 是 Continue 资格与消费状态的唯一可靠权威。
+  const eventWindowSnapshot = useSelectedConversationEventWindowSnapshot();
+  // eventWindowCommands stays bound to the exact owner generation represented by the selected store.
+  // eventWindowCommands 始终绑定到选中 store 所表示的精确归属代次。
+  const eventWindowCommands = useSelectedConversationEventWindowCommands();
+  // selectedConversationIdRef prevents a completed action from retargeting a newly selected owner.
+  // selectedConversationIdRef 防止已完成动作重新定向到新选中的归属。
+  const selectedConversationIdRef = React.useRef(props.selectedConversationId);
+  selectedConversationIdRef.current = props.selectedConversationId;
+  // generationTarget owns the exact seq and stable fork child identity until success or cancellation.
+  // generationTarget 在成功或取消前持有精确 seq 与稳定分叉子会话身份。
+  const [generationTarget, setGenerationTarget] = React.useState<ConversationGenerationTargetV1 | null>(null);
+  // generationSubmitting blocks duplicate dialog submissions while the durable boundary is in flight.
+  // generationSubmitting 在可靠边界执行期间阻止重复提交对话框。
+  const [generationSubmitting, setGenerationSubmitting] = React.useState(false);
+  // continuationCandidate identifies the latest eligible physical API in the selected V1 open Turn.
+  // continuationCandidate 标识选中 V1 开放 Turn 中最近的可继续物理 API。
+  const continuationCandidate = React.useMemo(
+    () => selectConversationContinueCandidateV1(eventWindowSnapshot),
+    [eventWindowSnapshot],
+  );
+  // activeContinuationKey is UI-only and never becomes backend authorization.
+  // activeContinuationKey 仅供界面使用，绝不会成为后端授权信息。
+  const activeContinuationKey = selectedConversation
+    && continuationCandidate?.session_id === selectedConversation.id
+    ? continuationCandidate.ui_identity
+    : null;
+  // continuationClaimKey suppresses duplicate claims until the authoritative V1 candidate identity changes.
+  // continuationClaimKey 在权威 V1 候选身份变化前阻止重复领取 Continue。
   const [continuationClaimKey, setContinuationClaimKey] = React.useState<string | null>(null);
   // continuationFeedback keeps claim progress and failures visible after transient toasts disappear.
   // continuationFeedback 在瞬时 toast 消失后继续保留领取进度与失败反馈。
@@ -96,29 +126,117 @@ export function ChatArea(props: ChatAreaProps) {
   // continuationClientIdsRef preserves one retry id across timeout/retry clicks for the same snapshot.
   // continuationClientIdsRef 为同一快照跨超时/重试点击保留一个继续请求标识。
   const continuationClientIdsRef = React.useRef<Map<string, string>>(new Map());
-  const continuation = selectedConversation?.continuation;
-  const activeContinuationKey = selectedConversation && continuation
-    ? `${selectedConversation.id}:${continuation.generation}:${continuation.expectedLedgerRevision}`
-    : null;
   React.useEffect(() => {
-    if (!continuation?.eligible || continuationClaimKey !== activeContinuationKey) {
+    if (continuationClaimKey !== activeContinuationKey) {
       setContinuationClaimKey(null);
     }
     if (continuationFeedback && continuationFeedback.key !== activeContinuationKey) {
       setContinuationFeedback(null);
     }
-  }, [activeContinuationKey, continuation?.eligible, continuationClaimKey, continuationFeedback]);
-  // handleContinueConversation claims one exact terminal generation without synthesizing user input.
-  // handleContinueConversation 在不伪造用户输入的情况下领取一个精确终止代际。
-  const handleContinueConversation = React.useCallback(async () => {
+  }, [activeContinuationKey, continuationClaimKey, continuationFeedback]);
+  React.useEffect(() => {
+    setGenerationTarget(null);
+    setGenerationSubmitting(false);
+  }, [props.selectedConversationId]);
+
+  /** Opens one generation dialog from a canonical root-input event.
+   * 从一条 canonical 根输入事件打开 generation 对话框。
+   */
+  const handleRootInputGenerationAction = React.useCallback((
+    action: ConversationV1RootInputGenerationAction,
+  ) => {
+    setGenerationTarget({
+      ...action,
+      childSessionId: action.kind === "fork" ? crypto.randomUUID() : null,
+    });
+  }, []);
+
+  /** Commits the currently frozen edit or fork boundary exactly once.
+   * 精确一次提交当前冻结的编辑或分叉边界。
+   */
+  const handleConfirmGenerationAction = React.useCallback(async (value: string) => {
+    const target = generationTarget;
+    const owner = eventWindowSnapshot.owner;
+    const session = selectedConversation;
+    if (
+      target === null
+      || owner === null
+      || session === undefined
+      || owner.session_id !== session.id
+    ) {
+      return;
+    }
+    setGenerationSubmitting(true);
+    try {
+      if (target.kind === "edit") {
+        const edited = await props.onEditConversationGeneration(
+          session.id,
+          owner.window_generation,
+          target.seq,
+          value,
+        );
+        if (!edited) return;
+        if (selectedConversationIdRef.current === session.id) {
+          const hydrated = await eventWindowCommands.rehydrate();
+          if (!hydrated) {
+            throw new Error("ERR_CONVERSATION_EDIT_GENERATION_REHYDRATE_FAILED");
+          }
+        }
+      } else {
+        const childSessionId = target.childSessionId;
+        if (childSessionId === null) {
+          throw new Error("ERR_CONVERSATION_FORK_CHILD_ID_MISSING");
+        }
+        const forked = await props.onForkConversationGeneration(
+          session.id,
+          owner.window_generation,
+          target.seq,
+          childSessionId,
+          value,
+        );
+        if (forked === null) return;
+      }
+      setGenerationTarget((current) => current === target ? null : current);
+    } catch (nextError) {
+      const message = nextError instanceof Error ? nextError.message : String(nextError);
+      toast.error(message);
+    } finally {
+      setGenerationSubmitting(false);
+    }
+  }, [
+    eventWindowCommands,
+    eventWindowSnapshot.owner,
+    generationTarget,
+    props,
+    selectedConversation,
+  ]);
+
+  // generationDialogAction contains only the editable field; seq and identities remain frozen outside it.
+  // generationDialogAction 仅包含可编辑字段；seq 与身份继续在其外部冻结。
+  const generationDialogAction = React.useMemo<ConversationGenerationDialogActionV1 | null>(
+    () => generationTarget
+      ? generationTarget.kind === "edit"
+        ? { kind: "edit", text: generationTarget.text }
+        : {
+            kind: "fork",
+            title: `${selectedConversation?.title ?? ""}${t("conversation.action.forkTitleSuffix")}`,
+          }
+      : null,
+    [generationTarget, selectedConversation?.title, t],
+  );
+  // handleContinueConversation resumes one exact V1 Turn with an optional in-Turn supplement.
+  // handleContinueConversation 使用可选的 Turn 内补充输入继续一个精确 V1 Turn。
+  const handleContinueConversation = React.useCallback(async (
+    supplement: ComposerSubmission | null,
+  ): Promise<boolean> => {
     if (
       !selectedConversation
-      || !continuation?.eligible
+      || continuationCandidate?.session_id !== selectedConversation.id
       || !props.onContinueConversation
       || activeContinuationKey === null
       || continuationClaimKey === activeContinuationKey
     ) {
-      return;
+      return false;
     }
     setContinuationClaimKey(activeContinuationKey);
     setContinuationFeedback({ key: activeContinuationKey, kind: "claiming" });
@@ -141,9 +259,8 @@ export function ChatArea(props: ChatAreaProps) {
       }
       accepted = await props.onContinueConversation(
         selectedConversation.id,
-        continuation.generation,
-        continuation.expectedLedgerRevision,
         clientContinuationId,
+        supplement,
       );
     } catch {
       toast.error(t("conversation.continuation.claimFailed"));
@@ -154,28 +271,26 @@ export function ChatArea(props: ChatAreaProps) {
     } else {
       setContinuationFeedback({ key: activeContinuationKey, kind: "accepted" });
     }
+    return accepted;
   }, [
     activeContinuationKey,
-    continuation,
+    continuationCandidate,
     continuationClaimKey,
     props.onContinueConversation,
     selectedConversation,
     t,
   ]);
+  // handleComposerSubmit keeps an interrupted Turn open when the user supplies a supplement.
+  // handleComposerSubmit 在用户提供补充内容时保持中断的 Turn 不变。
+  const handleComposerSubmit = React.useCallback((submission: ComposerSubmission): Promise<boolean> => {
+    if (activeContinuationKey !== null) {
+      return handleContinueConversation(submission);
+    }
+    return props.onSubmitPrompt(submission);
+  }, [activeContinuationKey, handleContinueConversation, props.onSubmitPrompt]);
   const subagentNavigation = props.workbench.subagentNavigation?.parentConversationId === props.selectedConversationId
     ? props.workbench.subagentNavigation
     : null;
-  // handleForkSourceConversationSelect opens the original source only when it is still active.
-  // handleForkSourceConversationSelect 仅在原始来源仍处于活动会话时打开它。
-  const handleForkSourceConversationSelect = React.useCallback((conversationId: string) => {
-    const activeSource = props.workbench.conversations.some((conversation) => conversation.id === conversationId);
-    const archivedSource = (props.workbench.archivedConversations ?? []).some((conversation) => conversation.id === conversationId);
-    if (!activeSource || archivedSource) {
-      toast.info(t("conversation.forkSource.missing"));
-      return;
-    }
-    props.onSelectConversation(conversationId);
-  }, [props.onSelectConversation, props.workbench.archivedConversations, props.workbench.conversations, t]);
   const activeSurfaceConversationId = props.selectedConversationId;
   // liveLayoutSurfaceIds includes every conversation represented by the main transcript registry.
   // liveLayoutSurfaceIds 包含主转录注册表所表示的全部会话。
@@ -189,75 +304,45 @@ export function ChatArea(props: ChatAreaProps) {
   const {
     read: readConversationSurfaceLayoutState,
     writeScroll: writeSurfaceScrollSnapshot,
-    writeExpandedState: handleExpandedStateChange,
   } = useConversationSurfaceLayoutMemory({ liveSurfaceIds: liveLayoutSurfaceIds });
   const surfaceConversation = selectedConversation;
-  const messages = React.useMemo(() => {
-    const authoritativeMessages = props.workbench.messages
-      .filter((message) => message.conversationId === activeSurfaceConversationId);
-    const pendingSubmission = props.selectedDraftConversation?.pendingSubmission;
-    if (!pendingSubmission || props.selectedDraftConversation?.id !== activeSurfaceConversationId) {
-      return authoritativeMessages;
-    }
-    if (hasAuthoritativeSubmissionCorrelation(authoritativeMessages, pendingSubmission.clientSubmissionId)) {
-      return authoritativeMessages;
-    }
-    // optimisticMessage uses the draft id as its temporary conversation scope until the ACK supplies the durable id.
-    // optimisticMessage 在确认返回持久化标识前使用草稿标识作为临时会话作用域。
-    const optimisticMessage: ConversationMessage = {
-      id: `optimistic:${pendingSubmission.clientSubmissionId}`,
-      conversationId: props.selectedDraftConversation.id,
-      createdAt: String(pendingSubmission.startedAt),
-      role: "user",
-      body: pendingSubmission.prompt,
-      attachments: pendingSubmission.attachments,
-      editableUserPrompt: false,
-      metadata: {
-        client_submission_id: pendingSubmission.clientSubmissionId,
-        optimistic: true,
-      },
-    };
-    return [...authoritativeMessages, optimisticMessage];
-  }, [activeSurfaceConversationId, props.selectedDraftConversation, props.workbench.messages]);
+  // eventWindowOwnerReady permits rendering only when the selected durable session owns the V1 snapshot.
+  // eventWindowOwnerReady 仅在选中的持久化会话拥有 V1 快照时允许渲染。
+  const eventWindowOwnerReady = Boolean(
+    selectedConversation
+    && eventWindowSnapshot.owner?.session_id === selectedConversation.id,
+  );
+  // authoritativeEvents is empty during owner handoff and never falls back to legacy messages.
+  // authoritativeEvents 在归属切换期间保持为空，绝不回退到旧 messages。
+  const authoritativeEvents = eventWindowOwnerReady ? eventWindowSnapshot.events : [];
   // pendingSubmissionVisible remains true only until the exact authoritative user record replaces the optimistic row.
   // pendingSubmissionVisible 仅在精确权威用户记录替代乐观行之前保持为真。
   const pendingSubmissionVisible = Boolean(
     props.selectedDraftConversation?.pendingSubmission
-    && !hasAuthoritativeSubmissionCorrelation(
-      props.workbench.messages.filter((message) => message.conversationId === activeSurfaceConversationId),
+    && !eventWindowHasAuthoritativeSubmissionCorrelation(
+      authoritativeEvents,
       props.selectedDraftConversation.pendingSubmission.clientSubmissionId,
     ),
   );
-  // visibleCommandSessions limits transcript tool cards to this conversation surface's runtime resources.
-  // visibleCommandSessions 将转录工具卡片限定到当前会话界面的运行时资源。
-  const visibleCommandSessions = React.useMemo(
-    () => activeSurfaceConversationId
-      ? (props.workbench.commandSessions ?? []).filter((session) => session.ownerSessionId === activeSurfaceConversationId)
-      : [],
-    [activeSurfaceConversationId, props.workbench.commandSessions],
-  );
-  // renderItems stores parsed transcript rows for this active surface.
-  // renderItems 保存当前活动界面的已解析转录行。
-  const renderItems = React.useMemo(() => projectConversationRenderItems(messages, t), [messages, t]);
-  const activeConversationHydration = props.conversationHydration?.sessionId === activeSurfaceConversationId
-    ? props.conversationHydration
+  // optimisticUserInput is process-local and disappears only after exact V1 ClientActionId reconciliation.
+  // optimisticUserInput 仅属于进程内，并且只在精确 V1 ClientActionId 对账后消失。
+  const optimisticUserInput = props.selectedDraftConversation?.pendingSubmission && pendingSubmissionVisible
+    ? {
+      clientActionId: props.selectedDraftConversation.pendingSubmission.clientSubmissionId,
+      text: props.selectedDraftConversation.pendingSubmission.prompt,
+      attachmentNames: props.selectedDraftConversation.pendingSubmission.attachments.map(
+        (attachment) => attachment.fileName,
+      ),
+    }
     : null;
-  const isLoadingByRequest = props.loadingConversationId === activeSurfaceConversationId;
-  const isLoading = isLoadingByRequest
-    || activeConversationHydration?.status === "loading";
-  // displayedConversationHydration avoids rendering stale ready progress while a fresh request is active.
-  // displayedConversationHydration 避免在新请求进行中渲染旧的完成态进度。
-  const displayedConversationHydration = isLoadingByRequest && activeConversationHydration?.status !== "loading"
-    ? null
-    : activeConversationHydration;
-  // showConversationLoadingOnly is true only when no cached messages can be shown during hydration.
-  // showConversationLoadingOnly 仅在水合期间没有可展示缓存消息时为真。
-  const showConversationLoadingOnly = isLoading && messages.length === 0 && !props.conversationLoadError;
+  // showConversationLoadingOnly covers only the exact V1 owner handoff for a persisted selection.
+  // showConversationLoadingOnly 仅覆盖持久化选择的精确 V1 归属切换阶段。
+  const showConversationLoadingOnly = Boolean(selectedConversation && !eventWindowOwnerReady);
   const selectedProject = selectedConversation ? projectForConversation(props.workbench, selectedConversation) : null;
   const emptyProjectName = props.selectedDraftConversation?.projectName ?? selectedProject?.name ?? t("conversation.unlinkedProject");
   const isEmptyConversation = Boolean(
     (props.selectedDraftConversation && !props.selectedDraftConversation.pendingSubmission)
-      || (selectedConversation && !showConversationLoadingOnly && !props.conversationLoadError && messages.length === 0),
+      || (selectedConversation && eventWindowOwnerReady && !eventWindowHasVisibleTranscript(authoritativeEvents)),
   );
   // isMaterializingConversationSurface identifies the brief draft-to-summary frame that must remain visually blank.
   // isMaterializingConversationSurface 标识草稿转为真实摘要期间必须保持空白的短暂帧。
@@ -268,7 +353,6 @@ export function ChatArea(props: ChatAreaProps) {
   // visualSurfaceKey 区分已持久化会话与项目范围的新建会话界面。
   const visualSurfaceKey = activeSurfaceConversationId
     ?? `draft:${props.selectedDraftConversation?.projectId ?? "workspace"}`;
-  const streamingThinkingBlock = activeStreamingThinkingBlock(surfaceConversation, renderItems);
   // transientReasoningStatus is request-local and never enters the stable Workbench snapshot.
   // transientReasoningStatus 仅属于当前请求，绝不进入稳定 Workbench 快照。
   const transientReasoningStatus = useConversationTransientReasoningStatus(
@@ -283,20 +367,30 @@ export function ChatArea(props: ChatAreaProps) {
   if (pendingFirstSubmissionKey) {
     retainedFirstSubmissionKeyRef.current = pendingFirstSubmissionKey;
   }
-  // retainedFirstSubmissionKey is accepted after materialization only when the authoritative message carries the same correlation.
-  // retainedFirstSubmissionKey 仅在物化后的权威消息携带相同关联时继续生效。
+  // retainedFirstSubmissionKey is accepted after materialization only when the V1 UserInput carries the same correlation.
+  // retainedFirstSubmissionKey 仅在物化后的 V1 UserInput 携带相同关联时继续生效。
   const retainedFirstSubmissionKey = retainedFirstSubmissionKeyRef.current;
   const firstSubmissionTransitionKey = pendingFirstSubmissionKey
     ?? (retainedFirstSubmissionKey
-      && hasAuthoritativeSubmissionCorrelation(messages, retainedFirstSubmissionKey)
+      && eventWindowHasAuthoritativeSubmissionCorrelation(authoritativeEvents, retainedFirstSubmissionKey)
       ? retainedFirstSubmissionKey
       : null);
   // transientReasoningStatusVisible tracks insertion and removal; the shared ResizeObserver owns node reflow.
   // transientReasoningStatusVisible 跟踪插入与移除；共享 ResizeObserver 负责节点重排。
   const transientReasoningStatusVisible = transientReasoningStatus !== null;
-  const displayedStreamingThinkingBlock = activeThinkingOverlayBlock(thinkingDisplayMode, streamingThinkingBlock);
-  // Visual transitions retain empty/overlay surfaces only within the current conversation scope.
-  // 视觉过渡仅在当前会话作用域内保留空状态与浮层。
+  // streamingReasoningBlock is derived only from the latest canonical V1 streaming reasoning event.
+  // streamingReasoningBlock 仅从最新 canonical V1 流式思考事件派生。
+  const streamingReasoningBlock = React.useMemo(
+    () => latestStreamingReasoningBlock(authoritativeEvents),
+    [authoritativeEvents],
+  );
+  // displayedStreamingReasoningBlock drives the popup modes without reading legacy transcript rows.
+  // displayedStreamingReasoningBlock 在不读取旧转录行的情况下驱动浮层模式。
+  const displayedStreamingReasoningBlock = thinkingDisplayMode === "inline_output"
+    ? null
+    : streamingReasoningBlock;
+  // Visual transitions retain empty, popup, and first-submission surfaces within the current conversation scope.
+  // 视觉过渡在当前会话作用域内保留空状态、思考浮层与首条提交界面。
   const {
     visibleThinkingBlock: visibleStreamingThinkingOverlayBlock,
     thinkingOverlayLeaving: streamingThinkingOverlayLeaving,
@@ -307,29 +401,13 @@ export function ChatArea(props: ChatAreaProps) {
   } = useConversationVisualTransitions({
     surfaceKey: visualSurfaceKey,
     isEmptyConversation,
-    displayedThinkingBlock: displayedStreamingThinkingBlock,
+    displayedThinkingBlock: displayedStreamingReasoningBlock,
     firstSubmissionTransitionKey,
     firstSubmissionMaterializing: isMaterializingConversationSurface,
   });
-  // projectedHiddenThinkingBlockIds contains the freshly projected hidden thinking identities.
-  // projectedHiddenThinkingBlockIds 包含本次新投影出的隐藏思考身份。
-  const projectedHiddenThinkingBlockIds = React.useMemo(
-    () => Array.from(hiddenThinkingBlockIdsForDisplayMode(
-      thinkingDisplayMode,
-      renderItems,
-      visibleStreamingThinkingOverlayBlock?.id ?? null,
-    )).sort(),
-    [thinkingDisplayMode, renderItems, visibleStreamingThinkingOverlayBlock?.id],
-  );
-  // hiddenThinkingSignature is a stable change marker for restoring scroll after filter changes.
-  // hiddenThinkingSignature 是过滤变化后恢复滚动位置的稳定变更标记。
-  const hiddenThinkingSignature = JSON.stringify(projectedHiddenThinkingBlockIds);
-  // hiddenThinkingBlockIds preserves Set identity while the projected values remain equal.
-  // hiddenThinkingBlockIds 在投影值保持相等时保留 Set 身份。
-  const hiddenThinkingBlockIds = React.useMemo(
-    () => new Set<string>(JSON.parse(hiddenThinkingSignature) as string[]),
-    [hiddenThinkingSignature],
-  );
+  // reasoningDisplaySignature is a stable scroll-restoration marker for V1 reasoning filtering.
+  // reasoningDisplaySignature 是 V1 思考过滤使用的稳定滚动恢复标记。
+  const reasoningDisplaySignature = `${thinkingDisplayMode}:${eventWindowSnapshot.owner?.window_generation ?? "none"}`;
   // hasRunningSubagents reflects the backend-routed subagent lane rather than local UI inference.
   // hasRunningSubagents 反映后端路由的子代理通道，而不是本地界面推断。
   const hasRunningSubagents = subagentNavigation?.tasks?.some((task) => task.isRunning || task.runState === "running") ?? false;
@@ -339,7 +417,7 @@ export function ChatArea(props: ChatAreaProps) {
     && normalizedSessionRunPhase(surfaceConversation?.runPhase) === "toolrunning";
   const runtimeCue = visibleStreamingThinkingOverlayBlock || suppressSubagentOnlyMainCue
     ? null
-    : conversationRuntimeCue(surfaceConversation, renderItems, t);
+    : conversationRuntimeCue(surfaceConversation, t);
   // isConversationRunning controls only the main composer stop affordance.
   // isConversationRunning 仅控制主输入区的停止操作展示。
   const isConversationRunning = conversationIsRunning(selectedConversation);
@@ -378,8 +456,8 @@ export function ChatArea(props: ChatAreaProps) {
   // conversationStreamSignature tracks transcript structure without rescanning cumulative streamed bodies.
   // conversationStreamSignature 跟踪转录结构，且不重复扫描累计流式正文。
   const conversationStreamSignature = React.useMemo(
-    () => buildConversationStreamSignature(messages),
-    [messages],
+    () => buildConversationEventWindowStreamSignature(eventWindowSnapshot),
+    [eventWindowSnapshot],
   );
   // readConversationScrollSnapshot returns the exact saved semantic viewport for one surface.
   // readConversationScrollSnapshot 返回单个界面精确保存的语义视口。
@@ -418,7 +496,7 @@ export function ChatArea(props: ChatAreaProps) {
   // 思考过滤或外部布局键变化会从最近一次变化前语义快照恢复。
   React.useLayoutEffect(() => {
     conversationScrollController.scheduleStoredRestore();
-  }, [conversationScrollController, hiddenThinkingSignature, props.layoutStabilityKey]);
+  }, [conversationScrollController, props.layoutStabilityKey, reasoningDisplaySignature]);
 
   // handleOpenSubagentPanelFromTimeline preserves the current scroll before opening a child transcript.
   // handleOpenSubagentPanelFromTimeline 在打开子代理转录前保留当前滚动位置。
@@ -429,6 +507,22 @@ export function ChatArea(props: ChatAreaProps) {
     conversationScrollController.remember();
     return props.onOpenSubagentPanel(parentConversationId, taskId);
   }, [conversationScrollController, props.onOpenSubagentPanel]);
+  // availableExternalRefKeys contains only references with a real production navigation route.
+  // availableExternalRefKeys 仅包含拥有真实生产导航路径的引用。
+  const availableExternalRefKeys = React.useMemo(
+    () => new Set(
+      (subagentNavigation?.tasks ?? []).map((task) => `subagent:${task.taskId}`),
+    ),
+    [subagentNavigation?.tasks],
+  );
+  // handleOpenExternalRef routes only the strongly typed resource kinds currently owned by this surface.
+  // handleOpenExternalRef 仅路由当前界面真实持有的强类型资源种类。
+  const handleOpenExternalRef = React.useCallback((reference: ExternalResourceRef) => {
+    if (reference.kind !== "subagent" || !activeSurfaceConversationId) {
+      return;
+    }
+    void handleOpenSubagentPanelFromTimeline(activeSurfaceConversationId, reference.id);
+  }, [activeSurfaceConversationId, handleOpenSubagentPanelFromTimeline]);
 
   // scrollConversationToBottom transfers the main viewport to explicit tail ownership.
   // scrollConversationToBottom 将主视口切换到显式尾部所有权。
@@ -489,15 +583,11 @@ export function ChatArea(props: ChatAreaProps) {
       onComposerDockHeightChange={handleComposerDockHeightChange}
       onScrollToBottom={() => scrollConversationToBottom()}
       onThinkingDisplayModeChange={handleThinkingDisplayModeChange}
+      onSubmitPrompt={handleComposerSubmit}
     />
   );
   // conversationSurfaceContent keeps transcript, overlays, and composer in one adaptive content coordinate space.
   // conversationSurfaceContent 将转录、浮层与输入区保留在同一个自适应内容坐标空间内。
-  // activeSurfaceLayoutState reuses one surface-scoped layout snapshot for this render.
-  // activeSurfaceLayoutState 在本次渲染中复用单个界面级布局快照。
-  const activeSurfaceLayoutState = activeSurfaceConversationId
-    ? readConversationSurfaceLayoutState(activeSurfaceConversationId)
-    : null;
   const conversationSurfaceContent = (
     <>
       {emptyPromptVisible ? (
@@ -506,44 +596,20 @@ export function ChatArea(props: ChatAreaProps) {
           projectName={emptyProjectName}
         />
       ) : null}
-      <ConversationWorkspace
-        autoExpandStreamingThinking={thinkingDisplayMode !== "first_inline_with_popup"}
-        conversation={surfaceConversation}
-        sessionRunning={conversationIsRunning(surfaceConversation)}
-        hiddenThinkingBlockIds={hiddenThinkingBlockIds}
-        messages={messages}
-        renderItems={renderItems}
-        error={props.conversationLoadError}
-        hasMoreHistory={props.conversationHasMoreHistory}
-        historyLoading={props.conversationHistoryLoading}
-        onLoadMoreHistory={props.onLoadConversationHistory}
-        parentConversationId={props.selectedConversationId ?? null}
-        workspacePath={selectedProject?.path ?? null}
-        commandSessions={visibleCommandSessions}
-        pendingPlanArtifact={pendingPlanArtifact}
-        onPlanArtifactExecute={handlePlanArtifactExecute}
-        onPlanArtifactSuggest={handlePlanArtifactSuggest}
-        onPlanArtifactCancel={handlePlanArtifactCancel}
-        onPreserveHistoryPrepend={conversationScrollController.preserveHistoryPrepend}
-        onScrollStateChange={conversationScrollController.handleScroll}
-        onOpenSubagentPanel={handleOpenSubagentPanelFromTimeline}
-        scrollRef={workspaceRef}
-        initialExpandedState={activeSurfaceLayoutState?.expandedState ?? null}
-        onExpandedStateChange={handleExpandedStateChange}
-        transientReasoningStatus={transientReasoningStatus ? (
-          <TransientReasoningStatusLine status={transientReasoningStatus} />
-        ) : null}
-         footer={selectedConversation
-           && continuation
-           && !conversationIsRunning(selectedConversation)
-           && props.onContinueConversation ? (
+      {selectedConversation ? (
+        <ConversationV1Workspace
+          availableExternalRefKeys={availableExternalRefKeys}
+          commands={eventWindowCommands}
+          footer={continuationCandidate?.session_id === selectedConversation.id
+            && !conversationIsRunning(selectedConversation)
+            && props.onContinueConversation ? (
               <ConversationContinueControl
                 blockedLabel={t("conversation.continuation.blocked")}
-                blockedReason={conversationContinuationBlockedReasonText(continuation.blockedReason, t)}
+                blockedReason=""
                 claiming={continuationClaimKey === activeContinuationKey}
                 continueLabel={t("conversation.continue")}
                 continuingLabel={t("conversation.continuing")}
-                eligible={continuation.eligible}
+                eligible
                 feedback={continuationFeedback?.key === activeContinuationKey
                   && continuationFeedback.kind !== "claiming" ? {
                     kind: continuationFeedback.kind,
@@ -551,20 +617,31 @@ export function ChatArea(props: ChatAreaProps) {
                       ? t("conversation.continuation.claimFailed")
                       : t("conversation.continuing"),
                   } : null}
-                onContinue={() => void handleContinueConversation()}
+                onContinue={() => void handleContinueConversation(null)}
               />
             ) : null}
-        suppressEmptyPlaceholder={isEmptyConversation || isMaterializingConversationSurface}
-        onCopyText={props.onCopyText}
-        onEditUserPrompt={userPromptEdit.open}
-        onForkConversation={props.onForkConversation}
-        onSelectForkSourceConversation={handleForkSourceConversationSelect}
-        onLoadToolDetail={props.onLoadToolDetail}
-        onExtractGeneratedMediaAttachments={generatedMediaAttachmentsFromToolDetailPayload}
-        resolveMediaSourceUrl={props.resolveMediaSourceUrl}
-        resolveComposerAttachmentMedia={composerAttachmentMedia}
-        onTrace={props.onTrace}
-      />
+          onCopyText={props.onCopyText}
+          onOpenExternalRef={handleOpenExternalRef}
+          onRootInputGenerationAction={handleRootInputGenerationAction}
+          optimisticUserInput={optimisticUserInput}
+          onPlanArtifactCancel={handlePlanArtifactCancel}
+          onPlanArtifactExecute={handlePlanArtifactExecute}
+          onPlanArtifactSuggest={handlePlanArtifactSuggest}
+          onPreserveHistoryPrepend={conversationScrollController.preserveHistoryPrepend}
+          onScrollStateChange={conversationScrollController.handleScroll}
+          pendingPlanArtifact={pendingPlanArtifact}
+          reasoningDisplayMode={thinkingDisplayMode}
+          scrollRef={workspaceRef}
+          sessionId={selectedConversation.id}
+          sessionRunning={conversationIsRunning(surfaceConversation)}
+          snapshot={eventWindowSnapshot}
+          suppressEmptyPlaceholder={isEmptyConversation || isMaterializingConversationSurface}
+          transientReasoningStatus={transientReasoningStatus ? (
+            <TransientReasoningStatusLine status={transientReasoningStatus} />
+          ) : null}
+          workspacePath={selectedProject?.path ?? null}
+        />
+      ) : null}
       {props.selectedDraftConversation?.pendingSubmission && pendingSubmissionVisible ? (
         <ConversationSubmissionStatus stage={props.selectedDraftConversation.pendingSubmission.stage} />
       ) : null}
@@ -585,16 +662,13 @@ export function ChatArea(props: ChatAreaProps) {
         />
       ) : null}
       {composerDock}
-      <UserPromptEditDialog
-        cancelLabel={t("conversation.action.cancel")}
-        draft={userPromptEdit.draft}
-        onClose={userPromptEdit.close}
-        onSubmit={() => void userPromptEdit.submit()}
-        onTextChange={userPromptEdit.setText}
-        saving={userPromptEdit.saving}
-        submitLabel={t("conversation.action.saveAndReplay")}
-        text={userPromptEdit.text}
-        title={t("conversation.action.editPrompt")}
+      <ConversationGenerationDialogV1
+        action={generationDialogAction}
+        onCancel={() => {
+          if (!generationSubmitting) setGenerationTarget(null);
+        }}
+        onConfirm={handleConfirmGenerationAction}
+        submitting={generationSubmitting}
       />
     </>
   );
@@ -608,10 +682,110 @@ export function ChatArea(props: ChatAreaProps) {
       style={{ "--composer-dock-height": `${composerDockHeight}px` } as React.CSSProperties}
     >
       {showConversationLoadingOnly ? (
-        <ConversationLoadingCenter progress={displayedConversationHydration} />
+        <ConversationLoadingCenter />
       ) : (
         conversationSurfaceContent
       )}
     </div>
   );
+}
+
+/** Reports whether one V1 UserInput already owns the browser submission identity.
+ * 判断一条 V1 UserInput 是否已经拥有浏览器提交身份。
+ *
+ * @param events canonical selected-session events.
+ *               当前选中会话的 canonical 事件。
+ * @param clientActionId exact browser idempotency identity.
+ *                       精确的浏览器幂等身份。
+ * @returns true only for one exact persisted UserInput match.
+ *          仅在存在精确持久化 UserInput 匹配时返回 true。 */
+function eventWindowHasAuthoritativeSubmissionCorrelation(
+  events: readonly ConversationEventSummary[],
+  clientActionId: string,
+): boolean {
+  return events.some((event) => (
+    event.event.kind === "user_input"
+    && event.event.client_action_id === clientActionId
+  ));
+}
+
+/** Reports whether a canonical V1 window contains visible transcript content.
+ * 判断一个 canonical V1 窗口是否包含可见转录内容。
+ *
+ * @param events canonical selected-session events.
+ *               当前选中会话的 canonical 事件。
+ * @returns true when at least one user, assistant, tool, or durable display fact exists.
+ *          存在至少一条用户、assistant、工具或可靠显示事实时返回 true。 */
+function eventWindowHasVisibleTranscript(events: readonly ConversationEventSummary[]): boolean {
+  return events.some((summary) => {
+    if (summary.visibility === "host_only") {
+      return false;
+    }
+    switch (summary.event.kind) {
+      case "user_input":
+      case "assistant_reasoning":
+      case "assistant_text":
+      case "tool_call":
+      case "display_note":
+      case "request_config_changed":
+      case "subagent_return":
+        return true;
+      default:
+        return false;
+    }
+  });
+}
+
+/** Projects the latest actively streaming V1 reasoning event into the established popup shell.
+ * 将最新活动流式 V1 思考事件投影到既有浮层外壳。
+ *
+ * @param events canonical selected-session events.
+ *               当前选中会话的 canonical 事件。
+ * @returns one presentation-only block, or null when no reasoning stream is active.
+ *          一条仅用于展示的块；没有活动思考流时返回 null。 */
+function latestStreamingReasoningBlock(
+  events: readonly ConversationEventSummary[],
+): ConversationBlock | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    // summary is inspected in reverse only to select the latest fact; no display order is changed.
+    // summary 仅为选择最新事实而逆向检查；不会改变任何显示顺序。
+    const summary = events[index];
+    if (summary.event.kind !== "assistant_reasoning" || summary.event.status !== "streaming") {
+      continue;
+    }
+    return {
+      id: `v1-reasoning:${summary.seq}:${summary.event_revision}`,
+      kind: "thinking",
+      title: "思考过程",
+      summary: "正在思考",
+      body: summary.event.text,
+      status: summary.event.status,
+    };
+  }
+  return null;
+}
+
+/** Builds a structure-only V1 stream signature without reading cumulative event bodies.
+ * 在不读取累计事件正文的情况下构建仅结构性的 V1 流签名。
+ *
+ * @param snapshot atomic controller snapshot.
+ *                 原子控制器快照。
+ * @returns stable owner, frontier, and per-event revision identity.
+ *          稳定的归属、前沿与逐事件修订身份。 */
+function buildConversationEventWindowStreamSignature(
+  snapshot: ConversationEventWindowControllerSnapshot,
+): string {
+  // eventRevisions captures same-seq streaming updates without hashing large text bodies.
+  // eventRevisions 捕获同 seq 流式更新，同时不散列大段文本正文。
+  const eventRevisions = snapshot.events
+    .map((event) => `${event.seq}:${event.event_revision}`)
+    .join(",");
+  return [
+    snapshot.owner?.session_id ?? "none",
+    snapshot.owner?.window_generation ?? "none",
+    snapshot.memory_revision ?? "none",
+    snapshot.durable_revision ?? "none",
+    snapshot.has_more ? "more" : "complete",
+    eventRevisions,
+  ].join("|");
 }

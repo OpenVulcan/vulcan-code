@@ -28,6 +28,7 @@ use vulcan_core::types::{
     ConversationSnapshot as CoreConversationSnapshot,
     ProviderPromptLayers as CoreProviderPromptLayers,
 };
+use vulcan_session_core::v1::context::LockedBaselineProjection;
 use vulcan_tools_manager::ResolvedToolDefinition;
 
 /// Returns whether focused after-precheck diagnostic traces are enabled.
@@ -91,6 +92,12 @@ pub(crate) struct RuntimeBootstrapCore {
     /// Structured prompt layers sent through `vulcan-core` request snapshots.
     /// 通过 `vulcan-core` 请求快照发送的结构化提示词层。
     pub prompt_layers: CoreProviderPromptLayers,
+    /// Request-dynamic prompt layers excluded from the locked context baseline.
+    /// 从锁定上下文基线中排除的请求动态提示词层。
+    pub dynamic_prompt_layers: CoreProviderPromptLayers,
+    /// Canonical locked baseline derived from the same typed prompt composition.
+    /// 从同一强类型提示词组合推导出的规范锁定基线。
+    pub locked_baseline: LockedBaselineProjection,
     /// Canonical conversation snapshot handed to `vulcan-core`.
     /// 交给 `vulcan-core` 的规范会话快照。
     pub core_snapshot: CoreConversationSnapshot,
@@ -123,45 +130,6 @@ pub(crate) fn build_runtime_bootstrap_core(
     request: &ExecutionPreparationRequest,
     active_agent: Option<&RuntimeAgentDefinition>,
 ) -> Result<RuntimeBootstrapCore, String> {
-    let restored_retry_snapshot = request
-        .execution_retry_snapshot
-        .as_ref()
-        .filter(|snapshot| {
-            !matches!(
-                &snapshot.pending_action,
-                vulcan_workbench_model::ExecutionRetryPendingAction::ResumePreparation { .. }
-            )
-        });
-    if let Some(snapshot) = restored_retry_snapshot {
-        let provider_route = snapshot.provider_route.as_ref().ok_or_else(|| {
-            String::from("The claimed provider retry has no frozen provider route.")
-        })?;
-        let credential_profile_id = preparation
-            .model_blueprint
-            .frozen_selection
-            .as_ref()
-            .map(|selection| selection.route.connection.credential_profile_id.as_str())
-            .unwrap_or_default();
-        let connection_id = preparation
-            .model_blueprint
-            .frozen_selection
-            .as_ref()
-            .map(|selection| selection.route.connection.id.as_str())
-            .unwrap_or_default();
-        if preparation.model_blueprint.provider_id != provider_route.provider_id
-            || preparation.model_blueprint.model_id != provider_route.model_id
-            || preparation.model_blueprint.protocol_profile_id != provider_route.protocol_profile_id
-            || preparation.model_blueprint.route_revision != provider_route.route_revision
-            || Some(preparation.model_blueprint.service_entry_id.as_str())
-                != snapshot.provider_service_entry_id.as_deref()
-            || Some(credential_profile_id) != snapshot.credential_profile_id.as_deref()
-            || connection_id != provider_route.connection_id
-        {
-            return Err(String::from(
-                "The claimed execution retry route no longer matches the frozen runtime selection.",
-            ));
-        }
-    }
     // runtime_prompt is complete only after every configured project prompt source loads successfully.
     // runtime_prompt 仅在所有已配置项目提示来源均成功加载后才是完整结果。
     let runtime_prompt = build_runtime_prompt_layers_for_agent(preparation, active_agent)?;
@@ -191,33 +159,21 @@ pub(crate) fn build_runtime_bootstrap_core(
         &mut core_snapshot,
         &request.provider_visible_agent_messages,
     )?;
-    // retryControllerState restores the exact controller boundary; ordinary turns retain the rebuilt state.
-    // retryControllerState 恢复精确控制器边界；普通回合继续使用重建状态。
-    let (controller_config, core_snapshot) = if let Some(snapshot) = restored_retry_snapshot {
-        (
-            snapshot.controller_config.clone().ok_or_else(|| {
-                String::from("The claimed provider retry has no frozen controller configuration.")
-            })?,
-            snapshot.controller_snapshot.clone(),
-        )
-    } else {
-        (
-            build_core_controller_config_with_layers(
-                preparation,
-                &system_preamble,
-                runtime_prompt.provider_layers.clone(),
-                resolve_runtime_max_turns(active_agent, preparation.prompt_purpose),
-                None,
-            ),
-            core_snapshot,
-        )
-    };
+    let controller_config = build_core_controller_config_with_layers(
+        preparation,
+        &system_preamble,
+        runtime_prompt.provider_layers.clone(),
+        resolve_runtime_max_turns(active_agent, preparation.prompt_purpose),
+        None,
+    );
     let core_controller = VulcanCoreController::new(controller_config, core_snapshot.clone())
         .map_err(|error| format!("Invalid core conversation snapshot: {error}"))?;
 
     Ok(RuntimeBootstrapCore {
         system_preamble,
         prompt_layers: runtime_prompt.provider_layers,
+        dynamic_prompt_layers: runtime_prompt.dynamic_prompt_layers,
+        locked_baseline: runtime_prompt.locked_baseline,
         core_snapshot,
         core_controller,
         lowering_repair_events,

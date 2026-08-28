@@ -25,18 +25,9 @@ use crate::agent_runtime::tool_runtime_bridge::{
     attach_runtime_event_projection_barrier, cancel_runtime_event_projection_barrier,
     wait_runtime_event_projection_barrier,
 };
-use crate::conversation_protocol::{SessionConversationRecord, SessionConversationState};
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
-use crate::model::{
-    SessionId, SessionMessageKind, SessionMessageRecordKind, SessionProviderCallLedger,
-    SessionTurnStats, SessionTurnStatsKind, SessionTurnStatsStatus, SessionTurnUsageSegment,
-    SessionTurnUsageSegmentKind, build_session_record_message_id,
-};
+use crate::model::{SessionId, SessionTurnUsageSegment, SessionTurnUsageSegmentKind};
 use crate::provider_config::{PersistedPromptSkillState, ProviderConfigurationFile};
-use crate::turn_stats::{
-    build_session_turn_stats_from_state_with_ledger_owner_and_segments,
-    build_session_turn_stats_from_state_with_segments, merge_usage_segment_into_turn_stats,
-};
 use async_stream::stream;
 use futures_util::StreamExt;
 use serde::Deserialize;
@@ -44,7 +35,6 @@ use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::Duration;
@@ -70,10 +60,8 @@ use vulcan_session_boundary::{
 use vulcan_session_core::{
     CapabilityPolicyMode, CapabilityPolicySnapshot, ContextCompactionPolicyRequest,
     ContextCompactionPolicySnapshot, ExecutionRuntimePolicyRequest, ExecutionScope,
-    ParentSessionRef, PromptSkillSnapshot, ProviderModelSnapshot, SessionContextDocument,
-    SessionEffectiveConfig, SessionEventKind, SessionEventRecord, SessionNodeId, SessionNodeStore,
-    SessionRequestedConfig, SessionRuntimeCheckpoint, SessionSegmentSummary, SubagentKind,
-    SubagentRegistry, SubagentRegistryEntry, SubagentStatus, ToolExposureSnapshot,
+    PromptSkillSnapshot, ProviderModelSnapshot, SessionEffectiveConfig, SessionNodeId,
+    SubagentKind, SubagentRegistry, SubagentRegistryEntry, SubagentStatus, ToolExposureSnapshot,
 };
 use vulcan_subagent_core::{
     AGENT_ORCHESTRATION_INFO_TOOL, CLOSE_AGENT_TOOL, INTERRUPT_AGENT_TOOL, LIST_AGENTS_TOOL,
@@ -81,22 +69,14 @@ use vulcan_subagent_core::{
     SUBAGENT_TASK_KIND, WAIT_AGENT_TOOL, WaitAgentActivityResult,
 };
 use vulcan_task_session::{
-    SUBAGENT_MODE_DEFAULT, SUBAGENT_MODE_EXPERT, SUBAGENT_MODE_MIRROR, SegmentedTaskSessionStore,
-    SubagentCatalog, SubagentDefinition, TaskInvocationConfig, TaskInvocationEvent,
-    TaskInvocationEventKind, TaskSessionCompactionStore, TaskSessionConfigResolutionInput,
-    TaskSessionConfigResolver, TaskSessionMetadata, TaskSessionMirrorSummary,
-    TaskSessionResolvedConfig, TaskSessionStatus, TaskSessionStore,
-    apply_task_session_compaction_result,
+    SUBAGENT_MODE_DEFAULT, SUBAGENT_MODE_EXPERT, SUBAGENT_MODE_MIRROR, SubagentCatalog,
+    SubagentDefinition, TaskInvocationConfig, TaskSessionConfigResolutionInput,
+    TaskSessionConfigResolver, TaskSessionResolvedConfig, TaskSessionStatus,
 };
 use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
     VulcanToolInvocationResult, VulcanToolSourceKind,
 };
-use vulcan_workspace_store::workspace_store::{
-    sync_segmented_session_display_from_conversation_state,
-    sync_segmented_session_runtime_log_from_conversation_state,
-};
-
 /// Default nested-task depth limit used to prevent unbounded recursive task spawning.
 /// 用于防止无限递归任务派生的默认嵌套任务深度上限。
 const DEFAULT_TASK_NESTING_LIMIT: usize = 1;
@@ -116,12 +96,12 @@ mod invocation_methods;
 mod invocation_results;
 mod lifecycle_methods;
 mod parent_events;
-mod persistence_methods;
 mod request_records;
 mod runtime_execution;
 mod runtime_launch;
 mod runtime_state;
 mod status_events;
+mod task_records;
 mod tool_surface;
 
 use agent_control::*;
@@ -293,24 +273,6 @@ struct TaskSessionRecord {
     stop_reason: Option<String>,
 }
 
-/// Fully materialized persisted subagent restore projection with no remaining fallible reads.
-/// 已完整物化且不再包含可失败读取的持久化子代理恢复投影。
-#[derive(Debug, Clone)]
-struct PreparedPersistedSubagentRestore {
-    /// Enriched registry projection derived from one normalized persisted lifecycle state.
-    /// 从单个规范化持久化生命周期状态派生的增强注册表投影。
-    entry: SubagentRegistryEntry,
-    /// In-memory task-session record derived from the same normalized metadata and context.
-    /// 从同一规范化元数据与上下文派生的内存任务会话记录。
-    record: TaskSessionRecord,
-    /// Original metadata snapshot used for exact persistence rollback.
-    /// 用于精确持久化回滚的原始元数据快照。
-    original_metadata: TaskSessionMetadata,
-    /// Runtime-lost stopped metadata persisted only when no live registry owner already exists.
-    /// 仅在不存在实时注册表所有者时持久化的 runtime-lost stopped 元数据。
-    normalized_active_metadata: Option<TaskSessionMetadata>,
-}
-
 /// Task execution request handed to the backend runner for one concrete task session.
 /// 交给后端执行器的单条具体任务会话执行请求。
 #[derive(Debug, Clone)]
@@ -362,6 +324,63 @@ pub struct TaskExecutionRequest {
     pub is_resumed: bool,
 }
 
+/// Immutable V1 admission facts retained for one exact active child execution.
+/// 为一次精确活动子执行保留的不可变 V1 准入事实。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskV1ExecutionFacts {
+    /// Root main-session identity that owns the physical `TASK` directory.
+    /// 拥有物理 `TASK` 目录的根主会话身份。
+    pub root_session_id: SessionId,
+    /// Direct parent session whose open Turn receives the final child return.
+    /// 其开放 Turn 接收最终子代理回流的直接父会话。
+    pub parent_session_id: SessionId,
+    /// Stable child TaskSession identity.
+    /// 稳定子 TaskSession 身份。
+    pub task_id: SessionId,
+    /// Stable identity of this concrete child execution attempt.
+    /// 本次具体子执行尝试的稳定身份。
+    pub execution_id: String,
+    /// Exact root input text submitted for this execution.
+    /// 本次执行提交的精确根输入正文。
+    pub prompt: String,
+    /// Stable child-session display title.
+    /// 稳定子会话显示标题。
+    pub display_title: String,
+    /// Whether this execution continues an already published child session.
+    /// 本次执行是否继续一个已经发布的子会话。
+    pub is_resumed: bool,
+    /// Stable Unix-millisecond admission timestamp retained before lifecycle publication.
+    /// 在生命周期发布前保留的稳定 Unix 毫秒准入时间戳。
+    pub admitted_at_ms: u64,
+}
+
+impl TaskV1ExecutionFacts {
+    /// Projects the exact V1 admission facts from one owned execution request.
+    /// 从一条已拥有的执行请求投影精确 V1 准入事实。
+    ///
+    /// # Parameters / 参数
+    ///
+    /// - `request`: Authoritative task execution request before any lifecycle event escapes.
+    ///   `request`：任何生命周期事件逸出前的权威任务执行请求。
+    ///
+    /// # Returns / 返回值
+    ///
+    /// One immutable fact set safe to clone across the detached listener boundary.
+    /// 一组可安全跨分离监听边界克隆的不可变事实。
+    fn from_request(request: &TaskExecutionRequest, admitted_at_ms: u64) -> Self {
+        Self {
+            root_session_id: request.root_session_id,
+            parent_session_id: request.current_session_id,
+            task_id: request.task_id,
+            execution_id: request.execution_id.clone(),
+            prompt: request.prompt.clone(),
+            display_title: request.display_title.clone(),
+            is_resumed: request.is_resumed,
+            admitted_at_ms,
+        }
+    }
+}
+
 /// Task execution outcome returned by the backend after the child controller finishes.
 /// 子控制器完成后由后端返回的任务执行结果。
 #[derive(Debug, Clone)]
@@ -410,18 +429,6 @@ struct TaskExecutionCompletion {
     should_compact_context: bool,
 }
 
-/// Persisted child Turn Stats together with its canonical source record identity.
-/// 带有规范来源记录身份的持久化子任务 Turn Stats。
-#[derive(Debug, Clone)]
-struct PersistedTaskTurnStats {
-    /// Canonical TaskSession record that owns the materialized statistic.
-    /// 持有该物化统计的规范 TaskSession 记录。
-    record_id: String,
-    /// Ledger-derived inclusive statistic stored in that record.
-    /// 保存在该记录中的账本派生包容性统计。
-    stats: SessionTurnStats,
-}
-
 /// Stable terminal status produced by one task execution attempt.
 /// 一次任务执行尝试产出的稳定终态状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -450,9 +457,6 @@ struct ResolvedTaskSessionIdentifier {
     /// Whether the resolved internal session already exists and should resume in place.
     /// 解析出的内部会话是否已经存在并应原地续跑。
     is_resumed: bool,
-    /// Persisted metadata loaded when the in-memory registry had no matching record.
-    /// 当内存注册表没有匹配记录时从持久化存储加载的元数据。
-    persisted_metadata: Option<TaskSessionMetadata>,
 }
 
 /// Detached runtime event mirrored out of one child task while its parent tool call waits for the terminal result.
@@ -538,6 +542,9 @@ struct ActiveTaskRunEntry {
     /// Protocol execution identity shared with runtime events and detached streams.
     /// 与运行时事件及分离流共享的协议执行身份。
     execution_id: String,
+    /// Immutable V1 session-admission facts for this exact execution.
+    /// 本次精确执行的不可变 V1 会话准入事实。
+    v1_execution_facts: Option<TaskV1ExecutionFacts>,
     /// Abort handle attached after the child provider future is created.
     /// 创建子 Provider future 后附加的中止句柄。
     abort_handle: Option<AbortHandle>,
@@ -866,9 +873,6 @@ impl Drop for AbortChildRunOnDrop {
 /// 单次 close-agent 归档事务的稳定失败阶段。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CloseAgentArchiveFailurePhase {
-    /// Persisting archive metadata failed.
-    /// 持久化归档元数据失败。
-    PersistArchive,
     /// Committing archive state to runtime projections failed.
     /// 向运行时投影提交归档状态失败。
     CommitRuntimeArchive,
@@ -884,58 +888,7 @@ impl CloseAgentArchiveFailurePhase {
     /// 稳定的蛇形命名阶段值。
     const fn as_str(self) -> &'static str {
         match self {
-            Self::PersistArchive => "persist_archive",
             Self::CommitRuntimeArchive => "commit_runtime_archive",
-        }
-    }
-}
-
-/// Proven rollback outcome for the persisted half of one close-agent archive transaction.
-/// 单次 close-agent 归档事务持久化半段的已证实回滚结果。
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum CloseAgentArchiveRollbackOutcome {
-    /// No archive metadata write completed before the failure.
-    /// 失败前没有完成任何归档元数据写入。
-    NotRequired,
-    /// Every touched metadata snapshot was restored.
-    /// 全部已触碰元数据快照均已恢复。
-    Completed,
-    /// At least one touched metadata snapshot could not be restored.
-    /// 至少一个已触碰元数据快照无法恢复。
-    Incomplete {
-        /// Aggregated errors from every metadata snapshot that could not be restored.
-        /// 无法恢复的每个元数据快照产生的聚合错误。
-        error: String,
-    },
-}
-
-impl CloseAgentArchiveRollbackOutcome {
-    /// Returns the stable protocol value exposed in close-agent failure metadata.
-    /// 返回 close-agent 失败元数据中暴露的稳定协议值。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Stable snake-case rollback status.
-    /// 稳定的蛇形命名回滚状态。
-    const fn as_str(&self) -> &'static str {
-        match self {
-            Self::NotRequired => "not_required",
-            Self::Completed => "completed",
-            Self::Incomplete { .. } => "incomplete",
-        }
-    }
-
-    /// Returns the aggregated rollback error only for an incomplete outcome.
-    /// 仅在回滚不完整结果下返回聚合回滚错误。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Aggregated rollback error when incomplete, otherwise none.
-    /// 回滚不完整时返回聚合错误，否则返回空。
-    fn error(&self) -> Option<&str> {
-        match self {
-            Self::Incomplete { error } => Some(error.as_str()),
-            Self::NotRequired | Self::Completed => None,
         }
     }
 }
@@ -947,12 +900,9 @@ struct CloseAgentArchiveFailure {
     /// Exact post-stop archive phase that failed.
     /// 发生失败的精确停止后归档阶段。
     phase: CloseAgentArchiveFailurePhase,
-    /// Primary phase failure retained separately from rollback errors.
-    /// 与回滚错误分开保留的阶段主错误。
+    /// Primary phase failure retained for protocol projection.
+    /// 为协议投影保留的阶段主错误。
     error: String,
-    /// Proven persistence rollback outcome for this failure.
-    /// 本次失败已证实的持久化回滚结果。
-    rollback: CloseAgentArchiveRollbackOutcome,
 }
 
 /// Stable archive scope and lifecycle projections prepared for one close-agent transaction.
@@ -1046,36 +996,13 @@ impl CloseAgentArchiveFailure {
     /// - `phase`：发生失败的精确归档阶段。
     /// - `error`: Primary human-readable stage error.
     /// - `error`：人类可读的阶段主错误。
-    /// - `rollback`: Proven persistence rollback outcome.
-    /// - `rollback`：已证实的持久化回滚结果。
-    ///
     /// # Returns
     /// 返回值
     /// Unified failure value ready for protocol projection.
     /// 可供协议投影的统一失败值。
-    fn new(
-        phase: CloseAgentArchiveFailurePhase,
-        error: String,
-        rollback: CloseAgentArchiveRollbackOutcome,
-    ) -> Self {
-        Self {
-            phase,
-            error,
-            rollback,
-        }
+    fn new(phase: CloseAgentArchiveFailurePhase, error: String) -> Self {
+        Self { phase, error }
     }
-}
-
-/// Successfully persisted close-agent archive transaction retained for exact runtime-failure rollback.
-/// 为运行时失败精确回滚而保留的已成功持久化 close-agent 归档事务。
-#[derive(Debug)]
-struct CloseAgentArchivePersistenceCommit {
-    /// Exact store instance used by the successful archive persistence transaction.
-    /// 成功归档持久化事务实际使用的精确存储实例。
-    store: Option<SegmentedTaskSessionStore>,
-    /// Original metadata snapshots restored if the runtime archive cannot commit.
-    /// 运行时归档无法提交时恢复的原始元数据快照。
-    rollback_metadata_snapshots: Vec<TaskSessionMetadata>,
 }
 
 /// Host-managed registry for resumable task sessions and per-session task execution backends.
@@ -1122,12 +1049,6 @@ pub struct TaskRuntime {
     /// Merged subagent catalog used to resolve expert and catalog-backed child agents.
     /// 用于解析专家与目录驱动子代理的合并子代理目录。
     subagent_catalog: RwLock<SubagentCatalog>,
-    /// Segmented task-session roots keyed by root main-session identifier.
-    /// 按根主会话标识索引的分段子代理会话根目录。
-    task_session_store_roots: RwLock<HashMap<SessionId, PathBuf>>,
-    /// Root sessions whose persisted child-agent registry has already been restored in this runtime.
-    /// 当前运行时内已经完成持久化子代理注册表恢复的根会话集合。
-    restored_task_session_registry_roots: RwLock<BTreeSet<SessionId>>,
     /// Maximum supported nested task depth.
     /// 支持的最大嵌套任务深度。
     max_depth: usize,

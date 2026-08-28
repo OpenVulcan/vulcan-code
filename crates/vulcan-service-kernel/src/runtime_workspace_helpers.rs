@@ -267,174 +267,6 @@ pub(crate) fn session_summary_project_id_owned(session: &SessionSummary) -> Opti
     session_summary_project_id(session).map(str::to_string)
 }
 
-/// Returns the stable project and creation timestamp locator fields from one session summary.
-/// 从单个会话摘要返回稳定的项目与创建时间定位字段。
-///
-/// # Parameters
-/// 参数
-/// `session` is the retained session summary.
-/// `session` 是保留的会话摘要。
-///
-/// # Returns
-/// 返回值
-/// Non-empty project id and raw Unix-milliseconds creation timestamp when both are present.
-/// 当两者均存在时返回非空项目标识与原始 Unix 毫秒创建时间戳。
-pub(crate) fn session_summary_project_and_created_at(
-    session: &SessionSummary,
-) -> Option<(&str, &str)> {
-    let project_id = session_summary_project_id(session)?;
-    let created_at = session.created_at.trim();
-    if created_at.is_empty() {
-        return None;
-    }
-    Some((project_id, created_at))
-}
-
-/// Resolves a segmented session directory from the stable summary locator.
-/// 通过稳定会话摘要定位分段会话目录。
-///
-/// # Parameters
-/// 参数
-/// `data_root` is the Vulcan Code data root containing segmented session directories.
-/// `data_root` 是包含分段会话目录的 Vulcan Code 数据根。
-/// `session` is the retained session summary with project and creation metadata.
-/// `session` 是携带项目与创建时间元数据的保留会话摘要。
-///
-/// # Returns
-/// 返回值
-/// The active or archived segmented session directory when it exists.
-/// 存在时返回活动或归档分段会话目录。
-pub(crate) fn segmented_session_directory_for_summary(
-    data_root: &Path,
-    session: &SessionSummary,
-) -> Option<PathBuf> {
-    let (project_id, created_at) = session_summary_project_and_created_at(session)?;
-    let session_id_text = session.id.to_string();
-    vulcan_workspace_store::workspace_store::find_segmented_session_directory_for_task_store_created_at(
-        data_root,
-        project_id,
-        created_at,
-        &session_id_text,
-    )
-}
-
-/// Resolves a segmented session directory for one active workspace session.
-/// 为单个活动工作区会话解析分段会话目录。
-///
-/// # Parameters
-/// 参数
-/// `data_root` is the Vulcan Code data root containing segmented session directories.
-/// `data_root` 是包含分段会话目录的 Vulcan Code 数据根。
-/// `workspace_snapshot` contains active session summaries.
-/// `workspace_snapshot` 包含活动会话摘要。
-/// `session_id` identifies the session to resolve.
-/// `session_id` 标识需要解析的会话。
-///
-/// # Returns
-/// 返回值
-/// The active or archived segmented session directory when it exists.
-/// 存在时返回活动或归档分段会话目录。
-pub(crate) fn segmented_session_directory_for_workspace_session(
-    data_root: &Path,
-    workspace_snapshot: &WorkspaceSnapshot,
-    session_id: SessionId,
-) -> Option<PathBuf> {
-    workspace_session_summary_for_session(workspace_snapshot, session_id)
-        .and_then(|session| segmented_session_directory_for_summary(data_root, session))
-}
-
-/// Resolves one regular-session or TaskSession directory through retained exact locator indexes.
-/// 通过保留的精确定位索引解析一个普通会话或 TaskSession 目录。
-///
-/// # Parameters
-/// 参数
-/// `guard` owns the retained workspace and TaskRuntime indexes, `data_root` owns session storage,
-/// and `session_id` is the exact requested owner.
-/// `guard` 持有保留工作区与 TaskRuntime 索引，`data_root` 持有会话存储，`session_id`
-/// 是精确请求的所有者。
-///
-/// # Returns
-/// 返回值
-/// The deterministic directory, `None` for an unknown identity, or an explicit task locator error.
-/// 返回确定性目录；未知身份返回 `None`；任务定位异常返回显式错误。
-pub(crate) fn segmented_session_directory_for_retained_session(
-    guard: &ServiceBridgeState,
-    data_root: &Path,
-    session_id: SessionId,
-) -> Result<Option<PathBuf>, String> {
-    // workspaceDirectory is resolved from one retained session summary without directory enumeration.
-    // workspaceDirectory 从单条保留会话摘要解析，不进行目录枚举。
-    let workspace_directory = guard.workspace_snapshot.as_ref().and_then(|workspace| {
-        segmented_session_directory_for_workspace_session(data_root, workspace, session_id)
-    });
-    if workspace_directory.is_some() {
-        return Ok(workspace_directory);
-    }
-    // taskRuntime owns the exact task-id to root-id locator maps for child sessions.
-    // taskRuntime 持有子会话的精确任务标识到根标识定位映射。
-    let Some(task_runtime) = guard
-        .agent_runtime
-        .as_ref()
-        .map(|runtime| &runtime.task_runtime)
-    else {
-        return Ok(None);
-    };
-    task_runtime.task_session_directory_for_task(session_id)
-}
-
-/// Requires one exact retained session directory for a hot-path storage operation.
-/// 为热路径存储操作要求一个精确的保留会话目录。
-///
-/// # Parameters
-/// 参数
-/// `guard`, `data_root`, and `session_id` carry the same exact locator inputs as
-/// `segmented_session_directory_for_retained_session`.
-/// `guard`、`data_root` 与 `session_id` 携带与
-/// `segmented_session_directory_for_retained_session` 相同的精确定位输入。
-///
-/// # Returns
-/// 返回值
-/// The deterministic directory or an explicit missing-locator contract error.
-/// 返回确定性目录，或明确的定位信息缺失契约错误。
-pub(crate) fn require_segmented_session_directory_for_retained_session(
-    guard: &ServiceBridgeState,
-    data_root: &Path,
-    session_id: SessionId,
-) -> Result<PathBuf, String> {
-    segmented_session_directory_for_retained_session(guard, data_root, session_id)?.ok_or_else(
-        || {
-            format!(
-                "Session `{session_id}` has no exact retained storage locator; hot-path directory scanning is disabled."
-            )
-        },
-    )
-}
-
-/// Resolves one exact retained session directory while owning the shared service-state lock briefly.
-/// 在短暂持有共享服务状态锁期间解析一个精确保留会话目录。
-///
-/// # Parameters
-/// 参数
-/// `state` owns retained locator indexes, `data_root` owns storage, and `session_id` selects one owner.
-/// `state` 持有保留定位索引，`data_root` 持有存储，`session_id` 选择单个所有者。
-///
-/// # Returns
-/// 返回值
-/// The exact directory or a lock/missing-locator contract error.
-/// 返回精确目录，或锁/定位信息缺失契约错误。
-pub(crate) fn require_segmented_session_directory_from_state(
-    state: &SharedServiceBridgeState,
-    data_root: &Path,
-    session_id: SessionId,
-) -> Result<PathBuf, String> {
-    // guard is held only for two indexed lookups and path cloning; no filesystem I/O occurs under this lock.
-    // guard 仅用于两次索引查询与路径克隆；持锁期间不进行文件系统 I/O。
-    let guard = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    require_segmented_session_directory_for_retained_session(&guard, data_root, session_id)
-}
-
 /// Reads all long-lived runtime handles required by a WebUI prompt submission.
 /// 读取 WebUI 提示词提交所需的全部长生命周期运行时句柄。
 pub(crate) fn runtime_parts_from_state(
@@ -487,29 +319,6 @@ pub(crate) fn ensure_webui_session_runtime_state(
     active_precheck_turn_id: Option<&str>,
 ) -> Result<(), String> {
     ensure_webui_session_runtime_entry(workspace_snapshot, session_id, active_precheck_turn_id)?;
-    // runtime_state moves out temporarily so display repair can borrow the workspace without cloning canonical history.
-    // runtime_state 临时移出，使显示修复可以借用工作区而不复制规范历史。
-    let runtime_state = workspace_snapshot
-        .session_runtime_state
-        .remove(&session_id)
-        .ok_or_else(|| {
-            format!("Conversation `{session_id}` runtime state was not materialized.")
-        })?;
-    if runtime_state_has_concrete_conversation_context(&runtime_state) {
-        merge_runtime_state_records_into_display_messages(
-            workspace_snapshot,
-            session_id,
-            &runtime_state,
-        );
-    } else {
-        workspace_snapshot
-            .session_messages
-            .entry(session_id)
-            .or_default();
-    }
-    workspace_snapshot
-        .session_runtime_state
-        .insert(session_id, runtime_state);
     sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, session_id);
     Ok(())
 }
@@ -735,34 +544,6 @@ fn subagent_task_panel_state_from_registry_for_gate(
         conversation_state: None,
     }
 }
-
-/// Marks one exact child execution as non-blocking for the parent turn completion gate.
-/// 将单个精确子执行标记为不阻塞父级回合完成闸门。
-///
-/// # Parameters
-/// 参数
-/// `guard` owns the in-memory service state.
-/// `guard` 持有内存中的服务状态。
-/// `task_id` identifies the stable child task.
-/// `task_id` 标识稳定子任务。
-/// `execution_id` identifies the concrete run asynchronous to the parent turn.
-/// `execution_id` 标识相对父回合异步的具体运行。
-pub(crate) fn mark_webui_subagent_completion_gate_ignored(
-    guard: &mut ServiceBridgeState,
-    task_id: SessionId,
-    execution_id: &str,
-) {
-    if guard
-        .subagent_completion_gate_ignored_tasks
-        .insert(SubagentExecutionKey::new(task_id, execution_id))
-    {
-        webui_trace(
-            "subagent_completion_gate_ignored",
-            format!("task={task_id} execution_id={execution_id}"),
-        );
-    }
-}
-
 /// Clears the non-blocking parent completion-gate marker for one exact child execution.
 /// 清理单个精确子执行的非阻塞父级完成闸门标记。
 ///
@@ -823,7 +604,6 @@ pub(crate) fn mark_webui_subagent_tasks_stopped_in_state(
         }
         guard.detached_subagent_task_listeners.remove(task_id);
         clear_all_webui_subagent_completion_gate_ignored_for_task(guard, *task_id);
-        clear_all_webui_subagent_parent_turn_bindings_for_task(guard, *task_id);
         guard
             .session_subagent_navigation_rounds
             .remove(direct_parent_session_id);
@@ -871,7 +651,6 @@ pub(crate) fn remove_webui_closed_subagent_tasks_in_state(
             .subagent_surface_detail_cache
             .remove(task_id)
             .is_some();
-        clear_all_webui_subagent_parent_turn_bindings_for_task(guard, *task_id);
     }
     if guard
         .active_subagent_panel
@@ -907,7 +686,6 @@ pub(crate) fn stop_webui_session_work(
         });
     let had_pending_precheck =
         had_pending_precheck || runtime_state.active_precheck_turn_id.is_some();
-    let cleared_system_queue = clear_internal_pending_prompt_queue_for_stop(&mut runtime_state);
     // hadActiveRunProjection closes a retained Running state even when a prior abnormal exit already lost both live owners.
     // hadActiveRunProjection 即使先前异常退出已经丢失两个实时所有者，也会收敛保留的 Running 状态。
     let had_active_run_projection = workspace_snapshot
@@ -920,7 +698,6 @@ pub(crate) fn stop_webui_session_work(
         && !had_active_stream_task
         && !stopped_running_subagents
         && !had_pending_precheck
-        && !cleared_system_queue
         && !had_active_run_projection
     {
         return Ok(false);
@@ -939,11 +716,6 @@ pub(crate) fn stop_webui_session_work(
         session_id,
         terminated_entry,
     )?;
-    // The explicit stopped boundary owns the calls from the latest execution before stats materialize.
-    // 显式停止边界会在统计物化前归属最近一次执行的调用。
-    let _ = runtime_state
-        .provider_call_ledger
-        .assign_closing_record_id_to_latest_execution(terminated_message_id.clone());
     let _ = append_webui_session_turn_stats_to_state(
         &mut runtime_state,
         session_id,
@@ -953,40 +725,6 @@ pub(crate) fn stop_webui_session_work(
         SessionTurnStatsKind::UserTurn,
         Vec::new(),
     )?;
-    let terminal_execution_id = runtime_state
-        .provider_call_ledger
-        .active_calls_in_sequence()
-        .into_iter()
-        .next_back()
-        .map(|record| record.identity.execution_id.clone());
-    let terminal_at_ms = now
-        .parse::<i64>()
-        .map_err(|_| String::from("ERR_CONVERSATION_CONTINUE_TERMINAL_TIMESTAMP_INVALID"))?;
-    if runtime_state.provider_call_ledger.in_flight_call_count() > 0 {
-        return Err(String::from(
-            "ERR_CONVERSATION_CONTINUE_PROVIDER_CALL_STILL_ACTIVE",
-        ));
-    }
-    // replaySafety is evaluated before the stop ledger is published because refreeze may happen after this detached projection.
-    // replaySafety 在停止账本发布前评估，因为重冻可能在这份分离投影之后发生。
-    let replay_safety_proven = runtime_state
-        .execution_retry_snapshot
-        .as_ref()
-        .is_some_and(|reference| reference.replay_safety_proven());
-    if !runtime_state
-        .provider_call_ledger
-        .mark_continuation_terminal(
-            terminal_execution_id,
-            String::from("stopped"),
-            terminal_at_ms,
-            String::from("error"),
-            replay_safety_proven,
-        )
-    {
-        return Err(String::from(
-            "ERR_CONVERSATION_CONTINUE_LEDGER_REVISION_EXHAUSTED",
-        ));
-    }
     workspace_snapshot
         .session_run_phases
         .insert(session_id, SessionRunPhase::Stopped);
@@ -996,11 +734,6 @@ pub(crate) fn stop_webui_session_work(
         session.focus = String::from("已按用户请求停止当前会话运行。");
         session.last_updated_label = String::from("刚刚");
     }
-    merge_runtime_state_records_into_display_messages(
-        workspace_snapshot,
-        session_id,
-        &runtime_state,
-    );
     workspace_snapshot
         .session_runtime_state
         .insert(session_id, runtime_state);
@@ -1025,7 +758,6 @@ pub(crate) fn mark_webui_session_stop_requested_in_workspace(
             updated_at: now.clone(),
             ..SessionRuntimeStateEntry::default()
         });
-    clear_internal_pending_prompt_queue_for_stop(runtime_state);
     runtime_state.active_precheck_turn_id = None;
     runtime_state.updated_at = now;
 }
@@ -1113,15 +845,15 @@ pub(crate) fn append_webui_session_turn_stats_to_state(
     session_id: SessionId,
     closing_record_id: &str,
     status: SessionTurnStatsStatus,
-    _provider_request_count_override: Option<usize>,
+    provider_request_count_override: Option<usize>,
     turn_kind: SessionTurnStatsKind,
     usage_segments: Vec<SessionTurnUsageSegment>,
 ) -> Result<Option<String>, String> {
-    let Some(turn_stats) = build_session_turn_stats_from_state_with_ledger_and_segments(
+    let Some(turn_stats) = build_session_turn_stats_from_state_with_segments(
         &runtime_state.conversation_state,
-        &runtime_state.provider_call_ledger,
         closing_record_id,
         status,
+        provider_request_count_override,
         turn_kind,
         usage_segments,
     ) else {
@@ -1226,10 +958,6 @@ mod tests {
                 "刚刚",
             )],
             archived_sessions: Vec::new(),
-            session_messages: BTreeMap::new(),
-            archived_session_messages: BTreeMap::new(),
-            session_compactions: BTreeMap::new(),
-            archived_session_compactions: BTreeMap::new(),
             session_runtime_state: BTreeMap::new(),
             archived_session_runtime_state: BTreeMap::new(),
             session_run_phases: BTreeMap::new(),

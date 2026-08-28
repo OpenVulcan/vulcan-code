@@ -66,21 +66,6 @@ export interface StartupStepSnapshot {
   progressPhase?: string | null;
 }
 
-// StartupRecoveryKind identifies the exact destructive scope of a startup recovery.
-// StartupRecoveryKind 标识启动恢复操作的精确破坏范围。
-export type StartupRecoveryKind = "rebuildSessionVmm";
-
-// StartupRecoverySnapshot describes one service-authorized startup recovery action.
-// StartupRecoverySnapshot 描述一项由服务端授权的启动恢复操作。
-export interface StartupRecoverySnapshot {
-  // Stable recovery kind selected by the service.
-  // 服务端选择的稳定恢复类型。
-  kind: StartupRecoveryKind;
-  // Exact session whose isolated VMM state may be rebuilt.
-  // 可重建独立 VMM 状态的精确会话标识。
-  sessionId: string;
-}
-
 // StartupSnapshot describes the full startup status returned by the service.
 // StartupSnapshot 描述服务返回的完整启动状态。
 export interface StartupSnapshot {
@@ -96,9 +81,6 @@ export interface StartupSnapshot {
   // Ordered startup steps.
   // 有序启动步骤。
   steps: StartupStepSnapshot[];
-  // Explicit recovery available for a classified startup failure.
-  // 已分类启动失败可用的明确恢复操作。
-  recovery?: StartupRecoverySnapshot | null;
   // Recent startup log lines.
   // 最近启动日志行。
   recentLogs: string[];

@@ -10,6 +10,7 @@ use vulcan_agent_runtime::{
     ExecutionPreparationRequest, ExecutionPromptPurpose, ExecutionRunReport, ExecutionStreamEvent,
     agent_runtime::{
         conversation_hooks::HOOK_GIT_COMMIT_SUMMARY_CONTEXT,
+        provider_v1_bridge::ProviderV1LifecycleFacts,
         vulcan_plugin_hooks::dispatch_vulcan_plugin_hook,
     },
     conversation_protocol::SessionConversationState,
@@ -532,7 +533,7 @@ async fn run_git_commit_summary_model(
         },
         runtime_policy: ExecutionRuntimePolicy::context_compaction(),
         conversation_hook_turn_id: None,
-        execution_retry_snapshot: None,
+        continuation_action_id: None,
         provider_request_continuation: None,
         execution_agent_id: None,
         agent_prompt_snapshot: None,
@@ -540,14 +541,11 @@ async fn run_git_commit_summary_model(
         model_id_override: None,
         connection_id_override: None,
         provider_route_lease_identity: None,
-        provider_usage_budget_baseline: None,
-        provider_usage_context_generation_id: None,
         provider_tool_selections_override: Default::default(),
         provider_tool_media_understanding_modes_override: Default::default(),
         provider_tool_enabled_capabilities_override: Default::default(),
         provider_extension_target_sets_override: Default::default(),
         subagent_prompt_context: None,
-        task_session_store_root: None,
         session_storage_directory: None,
         session_title: String::from("Git commit summary"),
         workspace_path: workspace_path.to_string(),
@@ -580,6 +578,7 @@ async fn run_git_commit_summary_model(
         boundary_events: Vec::new(),
         runtime_system_updates: Vec::new(),
         controller_runtime: None,
+        native_goal_runtime: None,
         knowledge_access: None,
         session_goal_context: None,
         session_plan_context: None,
@@ -604,44 +603,49 @@ async fn run_git_commit_summary_model(
     let mut provider_telemetry_guard = ProviderTelemetryHookGuard::new_with_persistence(
         state.clone(),
         Some(controller_runtime.clone()),
-        None,
     );
     while let Some(event) = stream.next().await {
         match event {
             ExecutionStreamEvent::ProviderRequestTelemetry(event) => {
-                crate::process_provider_request_telemetry_event(
-                    &state,
-                    &controller_runtime,
-                    None,
-                    &mut provider_telemetry_guard,
-                    event,
-                    "git_commit_summary_provider_usage_telemetry",
-                )
-                .await?;
+                provider_telemetry_guard.forward(event);
+            }
+            ExecutionStreamEvent::ProviderRequestPreparationBoundary {
+                event,
+                candidate,
+                completion,
+            } => {
+                let result = match event.v1_lifecycle {
+                    Some(ProviderV1LifecycleFacts::ExcludedNonSession) => {
+                        Ok(candidate.into_excluded_non_session())
+                    }
+                    _ => Err(String::from(
+                        "Git commit summary Provider preparation is not marked as excluded from the session ledger.",
+                    )),
+                };
+                let response = result.as_ref().map(|_| ()).map_err(Clone::clone);
+                let _ = completion.complete(result);
+                response?;
             }
             ExecutionStreamEvent::ProviderRequestDurabilityBoundary { event, completion } => {
-                crate::process_provider_request_durability_boundary(
-                    &state,
-                    &controller_runtime,
-                    None,
-                    &mut provider_telemetry_guard,
-                    event,
-                    completion,
-                    "git_commit_summary_provider_usage_durability_boundary",
-                )
-                .await?;
+                if !matches!(
+                    event.v1_lifecycle,
+                    Some(ProviderV1LifecycleFacts::ExcludedNonSession)
+                ) {
+                    let error = String::from(
+                        "Git commit summary Provider boundary is not marked as excluded from the session ledger.",
+                    );
+                    let _ = completion.complete(Err(error.clone()));
+                    return Err(error);
+                }
+                provider_telemetry_guard.observe_durable_boundary(&event);
+                provider_telemetry_guard.forward(event);
+                let result = Ok(());
+                let _ = completion.complete(result.clone());
+                result?;
             }
             ExecutionStreamEvent::Finished(report) => {
                 if let Some(event) = provider_telemetry_guard.take_cancelled_event() {
-                    crate::process_provider_request_telemetry_event(
-                        &state,
-                        &controller_runtime,
-                        None,
-                        &mut provider_telemetry_guard,
-                        event,
-                        "git_commit_summary_provider_usage_cancelled",
-                    )
-                    .await?;
+                    provider_telemetry_guard.forward(event);
                 }
                 if let Some(error) = report.error.as_ref() {
                     return Err(error.clone());
@@ -652,15 +656,7 @@ async fn run_git_commit_summary_model(
         }
     }
     if let Some(event) = provider_telemetry_guard.take_cancelled_event() {
-        crate::process_provider_request_telemetry_event(
-            &state,
-            &controller_runtime,
-            None,
-            &mut provider_telemetry_guard,
-            event,
-            "git_commit_summary_provider_usage_cancelled",
-        )
-        .await?;
+        provider_telemetry_guard.forward(event);
     }
     Err(String::from(
         "git commit summary stream ended without a terminal report.",

@@ -3,10 +3,11 @@
 
 use vulcan_provider_config::config::ProjectVulcanCodeConfigurationFile;
 use vulcan_session_boundary::{SessionBoundaryEventKind, SessionEventVisibility};
+use vulcan_session_core::v1::ids::ClientActionId;
 use vulcan_vmm::{ContextItem, VmmPromptAnchorKind, VmmRecallBatch, VmmSessionMemoryState};
 use vulcan_workbench_model::{
-    PendingSessionPromptSource, SessionId, SessionMessageEntry, SessionMessageKind,
-    SessionProviderToolTargetSelection, SessionRuntimeStateEntry, VmmProfileSyncState,
+    PendingSessionPromptSource, SessionId, SessionProviderToolTargetSelection,
+    SessionRuntimeStateEntry, VmmProfileSyncState,
 };
 
 use crate::{
@@ -14,10 +15,7 @@ use crate::{
         ConversationHookRuntime, HOOK_METADATA_VMM_PROFILE_SYNC_EFFECT,
         HOOK_METADATA_VMM_RECALL_BATCH_EFFECT, VmmProfileSyncHookEffect, VmmRecallBatchHookEffect,
     },
-    conversation_protocol::{
-        SessionConversationPayload, append_user_text_message,
-        conversation_state_to_session_messages,
-    },
+    conversation_protocol::{SessionConversationPayload, append_user_text_message},
 };
 
 use super::*;
@@ -127,81 +125,14 @@ fn visible_user_prompt_reuses_authoritative_canonical_message_id() {
         .as_deref()
         .expect("visible user prompt must expose its transcript record identity");
     assert_ne!(visible_record_id, canonical_user_message_id);
-    // projectedTranscript proves shell persistence can resolve the returned record id exactly.
-    // projectedTranscript 证明外壳持久化能够精确解析返回的记录标识。
-    let projected_transcript = merge_session_messages_with_conversation_state_records(
-        &[],
-        &runtime_state.conversation_state,
-    );
     assert_eq!(
-        projected_transcript
+        runtime_state
+            .conversation_state
+            .records
             .iter()
-            .filter(|message| message.id == visible_record_id)
+            .filter(|record| record.id == visible_record_id)
             .count(),
         1
-    );
-}
-
-/// Verifies pre-provider retry restoration reuses the original turn and prompt without appending a user message.
-/// 验证 Provider 调用前重试恢复会复用原回合与提示词，且不会追加用户消息。
-#[test]
-fn resume_preparation_restores_exact_started_turn_without_duplicate_user_message() {
-    let mut runtime_state = SessionRuntimeStateEntry::default();
-    let mut start = begin_user_prompt(&mut runtime_state);
-    // providerAttachment differs from canonical history and proves retry preserves the request-local projection.
-    // providerAttachment 与规范历史不同，用于证明重试保留单次请求局部投影。
-    let provider_attachment = ConversationAttachment {
-        kind: vulcan_core::types::ConversationAttachmentKind::Image,
-        file_name: String::from("retry-image.png"),
-        local_path: String::from("D:\\workspace\\.vulcan\\attachments\\retry-image.png"),
-        resource_path: Some(String::from(".vulcan/attachments/retry-image.png")),
-        source_path: None,
-        asset_id: Some(String::from("asset-retry-image")),
-        byte_len: Some(2048),
-        source_sha256: Some("a".repeat(64)),
-        delivery_mode: Some(vulcan_core::types::ConversationAttachmentDeliveryMode::MetadataOnly),
-        preview_local_path: None,
-        mime_type: String::from("image/png"),
-    };
-    start.provider_attachments = vec![provider_attachment.clone()];
-    let original_message_count = runtime_state.conversation_state.messages.len();
-    let original_record_count = runtime_state.conversation_state.records.len();
-    let original_turn_id = start.preparation_turn_id.clone();
-    let original_prompt = start.prompt.clone();
-    let original_canonical_user_message_id = start.canonical_user_message_id.clone();
-    let frozen_input = start
-        .execution_retry_preparation_input(&runtime_state)
-        .expect("accepted prompt turn should freeze exactly");
-    assert!(frozen_input.attachments.is_empty());
-    assert_eq!(
-        frozen_input.provider_attachments,
-        vec![provider_attachment.clone()]
-    );
-    let mut restored_hook_runtime = ConversationHookRuntime::new();
-
-    let restored = restore_shared_prompt_turn_from_execution_retry(
-        start.session_id,
-        &mut restored_hook_runtime,
-        frozen_input,
-    )
-    .expect("frozen accepted prompt turn should restore");
-
-    assert_eq!(restored.preparation_turn_id, original_turn_id);
-    assert_eq!(restored.prompt, original_prompt);
-    assert_eq!(
-        restored.canonical_user_message_id,
-        original_canonical_user_message_id
-    );
-    assert_eq!(restored.source, PendingSessionPromptSource::UserFollowup);
-    assert!(restored.attachments.is_empty());
-    assert_eq!(restored.provider_attachments, vec![provider_attachment]);
-    assert_eq!(
-        runtime_state.conversation_state.messages.len(),
-        original_message_count
-    );
-    assert_eq!(
-        runtime_state.conversation_state.records.len(),
-        original_record_count
     );
 }
 
@@ -310,6 +241,7 @@ fn begin_user_prompt(runtime_state: &mut SessionRuntimeStateEntry) -> SharedProm
             session_title: "主会话",
             workspace_path: "D:/workspace",
             prompt_entry_id: String::from("user-entry"),
+            continuation_action_id: None,
             prompt: "生成一张图片",
             hidden_model_guidance: None,
             provider_visible_agent_messages: Vec::new(),
@@ -321,7 +253,6 @@ fn begin_user_prompt(runtime_state: &mut SessionRuntimeStateEntry) -> SharedProm
             execution_mode: String::from("Build"),
             reasoning_effort: None,
             owning_project_id: Some(String::from("project-a")),
-            prior_session_messages: None,
         },
     )
     .expect("user prompt should start")
@@ -343,6 +274,7 @@ fn idle_dispatched_interrupt_produces_conversation_hook_turn_id() {
             session_title: "主会话",
             workspace_path: "D:/workspace",
             prompt_entry_id: String::from("late-interrupt-entry"),
+            continuation_action_id: None,
             prompt: "继续检查",
             hidden_model_guidance: None,
             provider_visible_agent_messages: Vec::new(),
@@ -354,7 +286,6 @@ fn idle_dispatched_interrupt_produces_conversation_hook_turn_id() {
             execution_mode: String::from("Build"),
             reasoning_effort: None,
             owning_project_id: Some(String::from("project-a")),
-            prior_session_messages: None,
         },
     )
     .expect("idle-dispatched interrupt should begin as a user follow-up");
@@ -430,6 +361,7 @@ fn session_mailbox_begin_keeps_user_input_hidden_even_if_visibility_flag_is_true
             session_title: "主会话",
             workspace_path: "D:/workspace",
             prompt_entry_id: String::from("mailbox-entry"),
+            continuation_action_id: None,
             prompt: "<subagent_mailbox_event>\n{}\n</subagent_mailbox_event>",
             hidden_model_guidance: None,
             provider_visible_agent_messages: Vec::new(),
@@ -441,7 +373,6 @@ fn session_mailbox_begin_keeps_user_input_hidden_even_if_visibility_flag_is_true
             execution_mode: String::from("Build"),
             reasoning_effort: None,
             owning_project_id: Some(String::from("project-a")),
-            prior_session_messages: None,
         },
     )
     .expect("mailbox prompt should start");
@@ -476,6 +407,7 @@ fn goal_continuation_begin_never_persists_user_message() {
             session_title: "主会话",
             workspace_path: "D:/workspace",
             prompt_entry_id: String::from("goal-entry"),
+            continuation_action_id: None,
             prompt: "Continue working toward the active thread goal.",
             hidden_model_guidance: None,
             provider_visible_agent_messages: Vec::new(),
@@ -487,7 +419,6 @@ fn goal_continuation_begin_never_persists_user_message() {
             execution_mode: String::from("Build"),
             reasoning_effort: None,
             owning_project_id: Some(String::from("project-a")),
-            prior_session_messages: None,
         },
     )
     .expect("goal continuation prompt should start");
@@ -528,6 +459,10 @@ fn manual_continuation_preparation_preserves_exact_hook_correlation() {
             session_title: "主会话",
             workspace_path: "D:/workspace",
             prompt_entry_id: String::from("continuation-entry"),
+            continuation_action_id: Some(
+                ClientActionId::try_new("manual-continuation-action")
+                    .expect("valid continuation action"),
+            ),
             prompt: "",
             hidden_model_guidance: None,
             provider_visible_agent_messages: Vec::new(),
@@ -539,7 +474,6 @@ fn manual_continuation_preparation_preserves_exact_hook_correlation() {
             execution_mode: String::from("Build"),
             reasoning_effort: None,
             owning_project_id: Some(String::from("project-a")),
-            prior_session_messages: None,
         },
     )
     .expect("manual continuation should prepare retained state");
@@ -608,6 +542,7 @@ fn goal_continuation_reuses_persisted_vmm_profile_baseline() {
             session_title: "主会话",
             workspace_path: "D:/workspace",
             prompt_entry_id: String::from("goal-baseline-entry"),
+            continuation_action_id: None,
             prompt: "Continue working toward the active thread goal.",
             hidden_model_guidance: None,
             provider_visible_agent_messages: Vec::new(),
@@ -619,7 +554,6 @@ fn goal_continuation_reuses_persisted_vmm_profile_baseline() {
             execution_mode: String::from("Build"),
             reasoning_effort: None,
             owning_project_id: Some(String::from("project-a")),
-            prior_session_messages: None,
         },
     )
     .expect("goal continuation prompt should start");
@@ -721,6 +655,7 @@ fn precheck_cannot_own_vmm_profile_state_or_system_block() {
             content: String::from("[USER]\nprecheck block"),
             source: Some(String::from("precheck")),
             phase: vulcan_hooks::SystemPromptHookPhase::SubsequentSession,
+            baseline_provenance: None,
         });
 
     // vmm_session_memory models the independent Core controller state for this continuation.
@@ -779,6 +714,7 @@ fn hidden_model_guidance_stays_out_of_visible_transcript() {
             session_title: "主会话",
             workspace_path: "D:/workspace",
             prompt_entry_id: String::from("plan-execute-entry"),
+            continuation_action_id: None,
             prompt: "执行计划",
             hidden_model_guidance: Some("Plan file: D:/workspace/docs/plan/demo.md"),
             provider_visible_agent_messages: Vec::new(),
@@ -790,7 +726,6 @@ fn hidden_model_guidance_stays_out_of_visible_transcript() {
             execution_mode: String::from("Build"),
             reasoning_effort: None,
             owning_project_id: Some(String::from("project-a")),
-            prior_session_messages: None,
         },
     )
     .expect("plan execution prompt should start");
@@ -818,9 +753,11 @@ fn hidden_model_guidance_stays_out_of_visible_transcript() {
         },
     )
     .expect("prompt should continue");
-    let transcript_text = conversation_state_to_session_messages(&runtime_state.conversation_state)
-        .into_iter()
-        .map(|message| message.body)
+    let transcript_text = runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .map(|record| record.body.as_str())
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -961,13 +898,6 @@ fn begin_prompt_keeps_runtime_messages_when_records_are_empty() {
         Vec::new(),
     )
     .expect("valid user prompt identity");
-    // display_rows simulate a visible turn window that must not become the API source of truth.
-    // display_rows 模拟不应变成 API 真相来源的可见 turn 窗口。
-    let display_rows = vec![SessionMessageEntry::new(
-        SessionMessageKind::User,
-        "用户",
-        "显示层历史",
-    )];
     let mut hook_runtime = ConversationHookRuntime::new();
 
     begin_shared_prompt_turn_with_runtime_state(
@@ -978,6 +908,7 @@ fn begin_prompt_keeps_runtime_messages_when_records_are_empty() {
             session_title: "主会话",
             workspace_path: "D:/workspace",
             prompt_entry_id: String::from("followup-entry"),
+            continuation_action_id: None,
             prompt: "继续",
             hidden_model_guidance: None,
             provider_visible_agent_messages: Vec::new(),
@@ -989,7 +920,6 @@ fn begin_prompt_keeps_runtime_messages_when_records_are_empty() {
             execution_mode: String::from("Build"),
             reasoning_effort: None,
             owning_project_id: Some(String::from("project-a")),
-            prior_session_messages: Some(&display_rows),
         },
     )
     .expect("prompt should start");
@@ -1004,63 +934,4 @@ fn begin_prompt_keeps_runtime_messages_when_records_are_empty() {
         })
         .collect::<Vec<_>>();
     assert_eq!(bodies, vec!["对话层历史", "继续"]);
-}
-
-/// Verifies invalid hydrated message ownership is rejected without changing the active runtime state.
-/// 验证无效的水合消息归属会被拒绝且不修改活动运行态。
-#[test]
-fn begin_prompt_rejects_invalid_hydration_atomically() {
-    // runtime_state is the empty active transaction target that must remain untouched.
-    // runtime_state 是必须保持不变的空活动事务目标。
-    let mut runtime_state = SessionRuntimeStateEntry::default();
-    runtime_state.ui_state.unread = true;
-    runtime_state.updated_at = String::from("before-hydration");
-    // original_state captures every field before detached hydration validation begins.
-    // original_state 捕获分离水合校验开始前的每个字段。
-    let original_state =
-        serde_json::to_value(&runtime_state).expect("runtime state should serialize");
-    // first_row and second_row intentionally claim the same canonical message identity.
-    // first_row 与 second_row 故意占用相同的规范消息身份。
-    let mut first_row = SessionMessageEntry::new(SessionMessageKind::User, "用户", "first");
-    first_row.id = String::from("duplicate-history");
-    let mut second_row = SessionMessageEntry::new(SessionMessageKind::User, "用户", "second");
-    second_row.id = String::from("duplicate-history");
-    // display_rows is the invalid detached hydration source presented to prompt start.
-    // display_rows 是提交给提示词启动流程的无效分离水合来源。
-    let display_rows = vec![first_row, second_row];
-    // hook_runtime remains available only if canonical preflight succeeds.
-    // hook_runtime 仅在规范预检成功后才会被实际使用。
-    let mut hook_runtime = ConversationHookRuntime::new();
-
-    // error proves hydration is rejected before assignment or unread-state mutation.
-    // error 证明水合会在赋值或 unread 状态修改前被拒绝。
-    let error = begin_shared_prompt_turn_with_runtime_state(
-        &mut runtime_state,
-        &mut hook_runtime,
-        SharedPromptTurnRuntimeBeginInput {
-            session_id: SessionId::from_u128(907),
-            session_title: "主会话",
-            workspace_path: "D:/workspace",
-            prompt_entry_id: String::from("followup-entry"),
-            prompt: "继续",
-            hidden_model_guidance: None,
-            provider_visible_agent_messages: Vec::new(),
-            attachments: Vec::new(),
-            provider_attachments: None,
-            append_canonical_user_message: true,
-            append_visible_user_prompt_record: true,
-            source: PendingSessionPromptSource::UserFollowup,
-            execution_mode: String::from("Build"),
-            reasoning_effort: None,
-            owning_project_id: Some(String::from("project-a")),
-            prior_session_messages: Some(&display_rows),
-        },
-    )
-    .expect_err("invalid hydrated identities must fail");
-
-    assert!(error.contains("duplicates id"));
-    assert_eq!(
-        serde_json::to_value(&runtime_state).expect("runtime state should serialize after failure"),
-        original_state
-    );
 }

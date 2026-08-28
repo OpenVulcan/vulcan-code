@@ -180,7 +180,34 @@ pub type VulcanToolInvokeFuture =
 /// Shared host-owned asynchronous tool invoker closure.
 /// 宿主自有共享异步工具调用闭包。
 pub type VulcanToolInvokeHandler =
-    Arc<dyn Fn(Value, Option<String>) -> VulcanToolInvokeFuture + Send + Sync>;
+    Arc<dyn Fn(Value, VulcanToolInvocationContext) -> VulcanToolInvokeFuture + Send + Sync>;
+
+/// Immutable identity context of one exact Provider tool invocation.
+/// 一次精确 Provider 工具调用的不可变身份上下文。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VulcanToolInvocationContext {
+    /// Stable owner session identity selected before Provider dispatch.
+    /// 在 Provider 分派前选定的稳定所有者会话身份。
+    pub session_id: String,
+    /// Exact Provider stream-item identity bound to the durable local tool receipt.
+    /// 与可靠本地工具回执绑定的精确 Provider 流项目身份。
+    pub request_stream_id: RequestStreamId,
+    /// Exact local physical API identity allocated by the authoritative session document.
+    /// 由权威会话文档分配的精确本地物理 API 身份。
+    pub api_call_id: ApiCallId,
+    /// Exact local tool-call identity allocated by the authoritative session document.
+    /// 由权威会话文档分配的精确本地工具调用身份。
+    pub tool_call_id: ToolCallId,
+    /// Exact event seq of the durable local ToolCall fact.
+    /// 可靠本地 ToolCall 事实的精确事件 seq。
+    pub tool_seq: Seq,
+    /// Exact controller-owned tool-call identity used by runtime request and result envelopes.
+    /// 运行时请求与结果信封使用的精确控制器所有工具调用身份。
+    pub controller_tool_call_id: String,
+    /// Optional Provider-native tool-call identity retained only for correlation.
+    /// 仅用于关联而保留的可选 Provider 原生工具调用身份。
+    pub provider_tool_call_id: Option<String>,
+}
 
 /// One candidate tool surface item provided by the host before public exposure projection.
 /// 宿主在公开暴露投影前提供的单个候选工具面条目。

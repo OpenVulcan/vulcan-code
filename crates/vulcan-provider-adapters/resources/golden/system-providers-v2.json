@@ -3842,6 +3842,59 @@
             "verified": true
           },
           {
+            "protocol_profile_id": "anthropic-messages-video.v1",
+            "endpoint_path": "/anthropic/v1/messages",
+            "model_discovery_base_url_override": "https://api.minimax.io/anthropic/v1",
+            "input_resource_constraints": [
+              {
+                "resource_kind": "video",
+                "max_bytes": 50000000,
+                "reference_policy": "local_only",
+                "upload_channel_refs": [
+                  "global.video-file"
+                ]
+              }
+            ],
+            "request_projection_profiles": [
+              {
+                "profile_id": "minimax.anthropic.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "enum_map",
+                    "path": "/thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": {
+                        "type": "adaptive"
+                      },
+                      "none": {
+                        "type": "disabled"
+                      }
+                    },
+                    "unmatched": "error"
+                  },
+                  {
+                    "op": "delete_json_pointer",
+                    "path": "/output_config/effort"
+                  },
+                  {
+                    "op": "remove_if_empty",
+                    "path": "/output_config"
+                  },
+                  {
+                    "op": "reject_if_present",
+                    "source": "request_field",
+                    "source_path": "@model_parameters.minimax.reasoning_split",
+                    "message": "MiniMax reasoning_split is registered only for OpenAI Chat."
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
             "protocol_profile_id": "openai-chat-completions.v1",
             "endpoint_path": "/v1/chat/completions",
             "authentication": "bearer_authorization",
@@ -3952,6 +4005,59 @@
         "protocol_routes": [
           {
             "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/anthropic/v1/messages",
+            "model_discovery_base_url_override": "https://api.minimaxi.com/anthropic/v1",
+            "input_resource_constraints": [
+              {
+                "resource_kind": "video",
+                "max_bytes": 50000000,
+                "reference_policy": "local_only",
+                "upload_channel_refs": [
+                  "cn.video-file"
+                ]
+              }
+            ],
+            "request_projection_profiles": [
+              {
+                "profile_id": "minimax.anthropic.thinking.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "enum_map",
+                    "path": "/thinking",
+                    "source": "request_field",
+                    "source_path": "@reasoning_effort",
+                    "mapping": {
+                      "adaptive": {
+                        "type": "adaptive"
+                      },
+                      "none": {
+                        "type": "disabled"
+                      }
+                    },
+                    "unmatched": "error"
+                  },
+                  {
+                    "op": "delete_json_pointer",
+                    "path": "/output_config/effort"
+                  },
+                  {
+                    "op": "remove_if_empty",
+                    "path": "/output_config"
+                  },
+                  {
+                    "op": "reject_if_present",
+                    "source": "request_field",
+                    "source_path": "@model_parameters.minimax.reasoning_split",
+                    "message": "MiniMax reasoning_split is registered only for OpenAI Chat."
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "anthropic-messages-video.v1",
             "endpoint_path": "/anthropic/v1/messages",
             "model_discovery_base_url_override": "https://api.minimaxi.com/anthropic/v1",
             "input_resource_constraints": [

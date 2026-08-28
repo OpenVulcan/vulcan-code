@@ -2,89 +2,204 @@
 //! session plan runtime 辅助逻辑。
 
 use super::*;
+use crate::session_goal_lifecycle::{
+    current_v1_goal_unix_millis, registered_session_v1_handle_from_state,
+    session_v1_handle_from_state,
+};
+use crate::session_runtime_registry_v1::{
+    SessionFlushReason, SessionMutationAdmission, SessionMutationChange,
+};
+use vulcan_session_core::v1::document::PlanModeTransitionInput;
+use vulcan_session_core::v1::document::SessionDocument;
+use vulcan_session_core::v1::event::{EventBody, SystemContextOperation};
 
 /// 会话当前处于计划模式时返回计划模式开发者提示段。
 pub(crate) fn session_plan_context_for_prompt_from_state(
-    app: &ServiceEventEmitter,
+    _app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    _controller_runtime: &ControllerRuntimeHandle,
     session_id: SessionId,
 ) -> Result<Option<String>, String> {
-    let updated_at = current_unix_millis_text();
-    let mut context: Option<String> = None;
-    let mut next_plan_mode: Option<SessionPlanModeState> = None;
-    let mut next_execution_mode = String::from("build");
-    let session_directory = {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let workspace = guard
-            .workspace_snapshot
-            .as_mut()
-            .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
-        if let Some(runtime_state) = workspace.session_runtime_state.get_mut(&session_id) {
-            let is_plan = runtime_state
-                .active_work_mode
-                .as_deref()
-                .is_some_and(|mode| mode.eq_ignore_ascii_case("plan"));
-            if !is_plan {
-                if runtime_state.plan_mode.pending_execution_notice {
-                    runtime_state.plan_mode.pending_execution_notice = false;
-                    runtime_state.updated_at = updated_at.clone();
-                    next_plan_mode = Some(runtime_state.plan_mode.clone());
-                    next_execution_mode = String::from("build");
-                    context = Some(render_plan_mode_exit_developer_context());
-                }
-            } else {
-                next_execution_mode = String::from("plan");
-                context = Some(render_plan_mode_developer_context());
-                if runtime_state.plan_mode.pending_execution_notice {
-                    runtime_state.plan_mode.pending_execution_notice = false;
-                    runtime_state.updated_at = updated_at.clone();
-                    next_plan_mode = Some(runtime_state.plan_mode.clone());
-                }
-                if !runtime_state.plan_mode.prompt_injected {
-                    runtime_state.plan_mode.prompt_injected = true;
-                    runtime_state.updated_at = updated_at.clone();
-                    next_plan_mode = Some(runtime_state.plan_mode.clone());
-                    next_execution_mode = String::from("plan");
-                }
-            }
-        }
-        if next_plan_mode.is_some() {
-            Some(require_segmented_session_directory_for_retained_session(
-                &guard,
-                &controller_runtime.data_root,
-                session_id,
-            )?)
+    let handle = registered_session_v1_handle_from_state(state, session_id)?;
+    handle
+        .read(plan_context_for_next_provider_request)
+        .map_err(|error| format!("读取 V1 Plan 提示词状态失败：{error}"))?
+}
+
+/// Persists one Plan-mode choice through the failure-atomic V1 domain transition.
+/// 通过失败原子的 V1 领域转换持久化一次 Plan 模式选择。
+///
+/// # Parameters
+/// 参数
+/// `state` resolves the authoritative session handle, `session_id` selects the session, and `enabled` is the requested mode.
+/// `state` 解析权威会话句柄，`session_id` 选择会话，`enabled` 是请求的模式。
+///
+/// # Returns
+/// 返回值
+/// Returns `true` only when metadata and the ordered system-context event changed durably.
+/// 仅当 metadata 与有序系统上下文事件已经可靠改变时返回 `true`。
+pub(crate) async fn persist_session_plan_mode_v1(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    enabled: bool,
+) -> Result<bool, String> {
+    let handle = session_v1_handle_from_state(state, session_id).await?;
+    let now_ms = current_v1_goal_unix_millis()?;
+    let provider_context = if enabled {
+        render_plan_mode_developer_context()
+    } else {
+        render_plan_mode_exit_developer_context()
+    };
+    let transition_input = PlanModeTransitionInput::try_new(enabled, provider_context)
+        .map_err(|error| format!("构建 V1 Plan 模式转换失败：{error}"))?;
+    let receipt = handle
+        .mutate_durable_if_changed(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::ContextChanged,
+            move |document| {
+                let changed = document.set_plan_mode(transition_input, now_ms)?;
+                Ok(if changed {
+                    SessionMutationChange::Changed(())
+                } else {
+                    SessionMutationChange::Unchanged(())
+                })
+            },
+        )
+        .map_err(|error| format!("持久化 V1 Plan 模式失败：{error}"))?;
+    Ok(receipt.changed)
+}
+
+/// Projects the transient Plan prompt adapter from the append-only V1 event sequence.
+/// 从只追加的 V1 事件序列投影临时 Plan 提示词适配器。
+///
+/// # Parameters
+/// 参数
+/// `document` is the authoritative resident V1 session document.
+/// `document` 是权威的驻留 V1 会话文档。
+///
+/// # Returns
+/// 返回值
+/// Returns the current Plan context, a pending one-shot exit context, or no adapter context.
+/// 返回当前 Plan 上下文、待发送的一次性退出上下文，或不返回适配上下文。
+fn plan_context_for_next_provider_request(
+    document: &SessionDocument,
+) -> Result<Option<String>, String> {
+    let plan_enabled = document.metadata.mode.plan.enabled;
+    let latest_plan_context = document.events().iter().rev().find_map(|event| {
+        let EventBody::SystemContext(context) = &event.event else {
+            return None;
+        };
+        (context.context_key == "plan_mode").then_some((event.seq(), context))
+    });
+    let Some((context_seq, context)) = latest_plan_context else {
+        return if plan_enabled {
+            Err(String::from(
+                "V1 Plan metadata is enabled without its Provider-visible context event.",
+            ))
         } else {
-            None
+            Ok(None)
+        };
+    };
+    match (plan_enabled, context.operation) {
+        (true, SystemContextOperation::Upsert) => Ok(Some(context.content.clone())),
+        (false, SystemContextOperation::Remove) => {
+            let already_crossed_api_boundary = document.events().iter().any(|event| {
+                event.seq() > context_seq && matches!(&event.event, EventBody::ApiStarted(_))
+            });
+            Ok((!already_crossed_api_boundary).then(|| context.content.clone()))
         }
+        _ => Err(String::from(
+            "V1 Plan metadata and its latest Provider-visible context operation disagree.",
+        )),
+    }
+}
+
+#[cfg(test)]
+mod v1_plan_context_tests {
+    use super::*;
+    use vulcan_session_core::v1::context::LockedBaselineProjection;
+    use vulcan_session_core::v1::document::{
+        ClientInputSubmission, PlanModeTransitionInput, PrepareAndStartApiInput,
     };
-    let Some(plan_mode) = next_plan_mode else {
-        return Ok(context);
+    use vulcan_session_core::v1::event::{
+        ApiPurposeKind, ApiRequestSnapshot, ProviderProjectionProof,
     };
-    let session_directory = session_directory.ok_or_else(|| {
-        format!("Session `{session_id}` plan-mode persistence target is missing.")
-    })?;
-    let mut addon_state = SessionAddonState::new(session_id);
-    let _ = addon_state.set_work_mode(
-        &SessionWorkMode {
-            execution_mode: next_execution_mode,
-            plan_mode,
-        },
-        updated_at,
-    );
-    spawn_exact_session_addon_state_persist_task(
-        app.clone(),
-        state.clone(),
-        session_directory,
-        session_id,
-        addon_state,
-        vec![SessionAddonNamespace::WorkMode],
-        Some(String::from("plan_mode_prompt_injected")),
-    );
-    Ok(context)
+    use vulcan_session_core::v1::ids::ClientActionId;
+    use vulcan_session_core::v1::projection::provider_visible_fingerprint;
+
+    /// Plan exit context remains pending until the next physical API boundary crosses its seq.
+    /// Plan 退出上下文会保留到下一次物理 API 边界越过其 seq 为止。
+    #[test]
+    fn plan_context_adapter_is_derived_from_v1_sequence_without_legacy_persistence() {
+        let mut document = SessionDocument::new("session-1", "project-1", "title", 1);
+        document
+            .submit_root_input(
+                ClientInputSubmission::new(
+                    ClientActionId::try_new("plan-context-root")
+                        .expect("plan-context root action id should be valid"),
+                    "root",
+                    Vec::new(),
+                ),
+                2,
+            )
+            .expect("root turn")
+            .into_value();
+        document
+            .set_plan_mode(
+                PlanModeTransitionInput::try_new(true, "plan-enter").expect("enable plan"),
+                3,
+            )
+            .expect("enable plan mode");
+        assert_eq!(
+            plan_context_for_next_provider_request(&document).expect("active plan context"),
+            Some(String::from("plan-enter"))
+        );
+
+        document
+            .set_plan_mode(
+                PlanModeTransitionInput::try_new(false, "plan-exit").expect("disable plan"),
+                4,
+            )
+            .expect("disable plan mode");
+        assert_eq!(
+            plan_context_for_next_provider_request(&document).expect("pending exit context"),
+            Some(String::from("plan-exit"))
+        );
+
+        let retained_from_seq = document.events().first().expect("root input event").seq;
+        let through_seq = document.events().last().expect("plan exit event").seq;
+        let prepared = document
+            .prepare_and_start_api(PrepareAndStartApiInput {
+                purpose: ApiPurposeKind::MainGeneration,
+                request: ApiRequestSnapshot::new("provider", "model"),
+                request_budget_evidence:
+                    crate::session_runtime_registry_v1::test_provider_request_budget_evidence(),
+                projection: ProviderProjectionProof {
+                    segment_generation: document.segment_generation(),
+                    document_revision: document.memory_revision(),
+                    retained_from_seq,
+                    through_seq,
+                    fingerprint_sha256: provider_visible_fingerprint(
+                        document.events(),
+                        through_seq,
+                    )
+                    .expect("provider-visible fingerprint"),
+                },
+                locked_baseline: LockedBaselineProjection::empty(),
+                continuation_action_id: None,
+                now_ms: 5,
+            })
+            .expect("cross next physical API boundary")
+            .into_value();
+        assert_eq!(
+            document.active_api().expect("active API").api_call_id,
+            prepared.api_call_id
+        );
+        assert_eq!(
+            plan_context_for_next_provider_request(&document).expect("consumed exit context"),
+            None
+        );
+    }
 }
 
 /// Renders the Plan-mode developer guidance attached to each active Plan request.
@@ -244,13 +359,13 @@ pub(crate) fn refresh_session_goal_summary_and_emit(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     session_id: SessionId,
-    goal: Option<ThreadGoal>,
+    summary: Option<SessionGoalSummary>,
 ) -> Result<SessionAddonsChangedResponse, String> {
     {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        match goal.as_ref().map(session_goal_summary_from_thread_goal) {
+        match summary {
             Some(summary) => {
                 guard.session_goal_summaries.insert(session_id, summary);
             }
@@ -284,6 +399,9 @@ pub(crate) fn emit_session_addons_changed_delta(
     session_id: SessionId,
 ) -> Result<SessionAddonsChangedResponse, String> {
     let conversation_id = session_id.to_string();
+    let session_provider_usage = registered_session_v1_handle_from_state(state, session_id)?
+        .read(session_provider_usage_summary_from_v1_document)
+        .map_err(|error| format!("读取 V1 Provider 用量投影失败：{error}"))??;
     let (event, response) = {
         let mut guard = state
             .lock()
@@ -330,8 +448,6 @@ pub(crate) fn emit_session_addons_changed_delta(
         let session_context_compaction_window_node_id = runtime_state
             .and_then(|runtime_state| runtime_state.context_compaction_window_node_id)
             .map(|node_id| node_id.as_str().to_string());
-        let session_provider_usage =
-            runtime_state.and_then(session_provider_usage_summary_from_runtime_state);
         let session_goal =
             session_goal_summary_with_provider_usage(session_goal, session_provider_usage.as_ref());
         let session_addons_list_entry = session_addons_changed_delta_for_retained_list(
@@ -412,7 +528,7 @@ pub(crate) fn emit_session_addons_changed_delta(
         (
             WorkbenchDeltaEnvelope {
                 generation,
-                delta: WorkbenchDelta::SessionAddonsChanged(delta),
+                delta: WorkbenchDelta::SessionAddonsChanged(Box::new(delta)),
             },
             SessionAddonsChangedResponse {
                 conversation_id,
@@ -434,142 +550,6 @@ pub(crate) fn emit_session_addons_changed_delta(
     );
     Ok(response)
 }
-
-/// Builds session todolist state from one completed `todolist` tool event.
-/// 从单条已完成的 `todolist` 工具事件构建会话 todolist 状态。
-///
-/// # Parameters
-/// 参数
-/// `event` is the runtime event emitted after a tool call finishes.
-/// `event` 是工具调用结束后发出的运行时事件。
-/// `updated_at` is the timestamp assigned to the projected todolist.
-/// `updated_at` 是分配给投影 todolist 的时间戳。
-///
-/// # Returns
-/// 返回值
-/// The parsed todolist when the event carries a matching host result.
-/// 当事件携带匹配的宿主结果时返回已解析 todolist。
-pub(crate) fn todolist_state_from_tool_finished_event(
-    event: &RuntimeEvent,
-    updated_at: &str,
-) -> Option<SessionTodolistState> {
-    if event.kind != RuntimeEventKind::ToolFinished {
-        return None;
-    }
-    let payload = event
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.get("host_result"))
-        .and_then(|host_result| {
-            (host_result.get("kind").and_then(Value::as_str) == Some("todolist"))
-                .then(|| host_result.get("payload"))
-                .flatten()
-        })?;
-    let items = payload
-        .get("items")
-        .and_then(Value::as_array)?
-        .iter()
-        .map(todolist_item_from_value)
-        .collect::<Option<Vec<_>>>()?;
-    let explanation = payload
-        .get("explanation")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
-    Some(SessionTodolistState {
-        explanation,
-        items,
-        updated_at: Some(updated_at.to_string()),
-    })
-}
-
-/// Parses one host-result JSON value into a session todolist item.
-/// 将单个宿主结果 JSON 值解析为会话 todolist 条目。
-///
-/// # Parameters
-/// 参数
-/// `value` is one raw todolist item emitted by the native tool.
-/// `value` 是原生工具发出的单个原始 todolist 条目。
-///
-/// # Returns
-/// 返回值
-/// The parsed todolist item when both step and status are valid.
-/// 当步骤与状态均有效时返回已解析 todolist 条目。
-pub(crate) fn todolist_item_from_value(value: &Value) -> Option<SessionTodolistItem> {
-    let step = value
-        .get("step")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?
-        .to_string();
-    let status = match value.get("status").and_then(Value::as_str)? {
-        "pending" => SessionTodolistItemStatus::Pending,
-        "in_progress" => SessionTodolistItemStatus::InProgress,
-        "completed" => SessionTodolistItemStatus::Completed,
-        _ => return None,
-    };
-    Some(SessionTodolistItem { step, status })
-}
-
-/// Builds a Plan artifact state from one completed submit_plan tool event.
-/// 从单条已完成 submit_plan 工具事件构建计划产物状态。
-///
-/// # Parameters
-/// 参数
-/// `event` is the runtime event emitted after a tool call finishes.
-/// `event` 是工具调用结束后发出的运行时事件。
-///
-/// # Returns
-/// 返回值
-/// The parsed plan artifact when the event carries a valid host payload.
-/// 当事件携带有效宿主载荷时返回解析后的计划产物。
-pub(crate) fn plan_artifact_state_from_tool_finished_event(
-    event: &RuntimeEvent,
-) -> Option<SessionPlanArtifactState> {
-    if event.kind != RuntimeEventKind::ToolFinished {
-        return None;
-    }
-    let payload = event
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.get("host_result"))
-        .and_then(|host_result| {
-            (host_result.get("kind").and_then(Value::as_str) == Some("plan_artifact"))
-                .then(|| host_result.get("payload"))
-                .flatten()
-        })?;
-    let name = payload
-        .get("name")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?
-        .to_string();
-    let path = payload
-        .get("path")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?
-        .to_string();
-    let updated_at = payload
-        .get("updatedAt")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?
-        .to_string();
-    let content = payload
-        .get("content")
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-        .filter(|value| !value.trim().is_empty());
-    Some(SessionPlanArtifactState {
-        name,
-        path,
-        content,
-        updated_at,
-    })
-}
-
 /// Releases one runtime-event barrier after the host finishes its projection attempt.
 /// 在宿主完成运行时事件投影尝试后释放对应屏障。
 ///

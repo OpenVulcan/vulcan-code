@@ -1,8 +1,3 @@
-#[cfg(test)]
-use super::segmented_session_store::read_session_metadata;
-use super::segmented_session_store::{
-    archive_segmented_session_by_created_date, restore_segmented_session_by_created_date,
-};
 use super::*;
 
 const DEFAULT_WORKSPACE_PROJECT_NAME: &str = "VulcanProject";
@@ -35,8 +30,8 @@ pub async fn load_or_seed_workspace_index(
     load_workspace_index_snapshot(controller).await
 }
 
-/// Loads the current persisted workspace snapshot from project config and segmented text metadata.
-/// 从项目配置与分段文本元数据加载当前持久化工作台快照。
+/// Loads the current persisted workspace snapshot from the project rows and V1 session index.
+/// 从项目记录与 V1 会话索引加载当前持久化工作台快照。
 pub async fn load_workspace_snapshot(
     controller: ControllerRuntimeHandle,
 ) -> Result<WorkspaceSnapshot, String> {
@@ -214,168 +209,6 @@ fn retained_project_row_for_session<'a>(
         .find(|candidate| candidate.stored.id == project_id)
 }
 
-/// Validated session index row used by deterministic workspace loading.
-/// 确定性工作区加载使用的已验证会话索引行。
-#[derive(Debug)]
-struct ValidatedSessionIndexRow {
-    /// Original decoded SQLite row retained for display-field projection.
-    /// 为展示字段投影保留的原始 SQLite 解码行。
-    stored: StoredSessionIndexRow,
-    /// Strictly parsed stable session identity.
-    /// 严格解析后的稳定会话身份。
-    session_id: SessionId,
-    /// Exact lifecycle state decoded from the numeric archive flag.
-    /// 从数值归档标记解码出的精确生命周期状态。
-    archived: bool,
-    /// Canonical directory date derived from the persisted creation timestamp.
-    /// 从持久化创建时间戳派生的规范目录日期。
-    created_date: String,
-    /// Strictly parsed update timestamp used for ordering and relative labels.
-    /// 用于排序与相对时间标签的严格解析更新时间戳。
-    updated_at_millis: i64,
-}
-
-/// Validates one raw SQLite session row before it can influence paths or workspace projection.
-/// 在原始 SQLite 会话行影响路径或工作区投影前对其进行验证。
-///
-/// # Parameters
-/// 参数
-/// `row` is the complete session index row decoded from the Controller response.
-/// `row` 是从 Controller 响应解码出的完整会话索引行。
-///
-/// # Returns
-/// 返回值
-/// Returns a validated row or an explicit identity, lifecycle, or timestamp corruption error.
-/// 返回已验证行；身份、生命周期或时间戳损坏时返回显式错误。
-fn validate_session_index_row(
-    row: StoredSessionIndexRow,
-) -> Result<ValidatedSessionIndexRow, String> {
-    // session_id is parsed before any path component is accepted.
-    // session_id 在接受任何路径组成部分前完成解析。
-    let session_id = parse_session_id(&row.id)?;
-    if row.project_id.trim().is_empty() {
-        return Err(format!("会话索引 `{session_id}` 缺少所属项目标识。"));
-    }
-    if row.project_tag.trim().is_empty() {
-        return Err(format!("会话索引 `{session_id}` 缺少目录项目标签。"));
-    }
-    // archived accepts only the two persisted lifecycle states defined by the schema protocol.
-    // archived 只接受 Schema 协议定义的两种持久化生命周期状态。
-    let archived = match row.archived {
-        0 => false,
-        1 => true,
-        value => {
-            return Err(format!(
-                "会话索引 `{session_id}` 包含无效归档标记 `{value}`。"
-            ));
-        }
-    };
-    // created_date rejects blank or malformed locator identity instead of selecting 1970-01-01.
-    // created_date 拒绝空白或格式错误的定位身份，而不是选择 1970-01-01。
-    let created_date = session_directory_date_from_unix_millis_text(&row.created_at)
-        .map_err(|error| format!("会话索引 `{session_id}` 的创建时间无效：{error}"))?;
-    // updated_at_millis is shared by ordering and relative-label projection to prevent divergent parsing.
-    // updated_at_millis 由排序与相对时间投影共享，防止解析规则漂移。
-    let updated_at_millis = parse_unix_millis_text(&row.updated_at)
-        .map_err(|error| format!("会话索引 `{session_id}` 的更新时间无效：{error}"))?;
-    Ok(ValidatedSessionIndexRow {
-        stored: row,
-        session_id,
-        archived,
-        created_date,
-        updated_at_millis,
-    })
-}
-
-/// Resolves the one real directory allowed by a validated session lifecycle locator.
-/// 解析已验证会话生命周期定位信息唯一允许的真实目录。
-///
-/// # Parameters
-/// 参数
-/// `data_root` is the workspace persistence root containing both lifecycle trees.
-/// `data_root` 是包含两个生命周期树的工作区持久化根。
-/// `row` is the validated SQLite locator and lifecycle state.
-/// `row` 是已验证的 SQLite 定位信息与生命周期状态。
-///
-/// # Returns
-/// 返回值
-/// Returns the expected real directory after reconciling one interrupted move, or `None` for a physically missing session.
-/// 将一次中断移动校正到 SQLite 生命周期状态后返回预期真实目录；会话物理缺失时返回 `None`。
-fn required_session_directory_for_index_row(
-    data_root: &std::path::Path,
-    row: &ValidatedSessionIndexRow,
-) -> Result<Option<std::path::PathBuf>, String> {
-    // expected_dir is the only path consistent with the persisted archive flag.
-    // expected_dir 是唯一与持久化归档标记一致的路径。
-    let expected_dir = segmented_session_directory(
-        data_root,
-        row.archived,
-        &row.stored.project_tag,
-        &row.created_date,
-        &row.stored.id,
-    );
-    // opposite_dir detects an interrupted archive or restore without treating it as normal state.
-    // opposite_dir 用于检测中断的归档或恢复，且不会把它视为正常状态。
-    let opposite_dir = segmented_session_directory(
-        data_root,
-        !row.archived,
-        &row.stored.project_tag,
-        &row.created_date,
-        &row.stored.id,
-    );
-    // expected_exists and opposite_exists establish the complete two-tree locator state.
-    // expected_exists 与 opposite_exists 建立完整的双树定位状态。
-    let expected_exists = segmented_session_directory_exists(&expected_dir)?;
-    let opposite_exists = segmented_session_directory_exists(&opposite_dir)?;
-    match (expected_exists, opposite_exists) {
-        (true, false) => Ok(Some(expected_dir)),
-        (false, true) => {
-            eprintln!(
-                "[workspace-load] recovering interrupted session lifecycle: id={} archived={} source={} destination={}",
-                row.session_id,
-                row.archived,
-                opposite_dir.display(),
-                expected_dir.display()
-            );
-            // recovered_dir is produced only by moving the sole filesystem copy back to the authoritative SQLite state.
-            // recovered_dir 只通过把唯一文件系统副本移回权威 SQLite 状态来生成。
-            let recovered_dir = if row.archived {
-                archive_segmented_session_by_created_date(
-                    data_root,
-                    &row.stored.project_tag,
-                    &row.created_date,
-                    &row.stored.id,
-                    &row.stored.updated_at,
-                )?
-            } else {
-                restore_segmented_session_by_created_date(
-                    data_root,
-                    &row.stored.project_tag,
-                    &row.created_date,
-                    &row.stored.id,
-                    &row.stored.updated_at,
-                )?
-            };
-            if recovered_dir != expected_dir {
-                return Err(format!(
-                    "会话索引 `{}` 的生命周期恢复返回意外目录 `{}`，期望 `{}`。",
-                    row.session_id,
-                    recovered_dir.display(),
-                    expected_dir.display()
-                ));
-            }
-            Ok(Some(recovered_dir))
-        }
-        (false, false) => Ok(None),
-        (true, true) => Err(format!(
-            "会话索引 `{}` 同时存在活动与归档目录，无法确定权威副本：预期 `{}`，相反 `{}`。",
-            row.session_id,
-            expected_dir.display(),
-            opposite_dir.display()
-        )),
-    }
-}
-
 /// Builds an overflow-safe descending update-time key for one session identity.
 /// 为单个会话身份构建无溢出的更新时间降序键。
 ///
@@ -406,7 +239,7 @@ fn descending_session_updated_at_key(
 /// 按可选运行态加载过程读取当前持久化工作区快照。
 async fn load_workspace_snapshot_with_runtime_state(
     controller: ControllerRuntimeHandle,
-    load_runtime_state: bool,
+    _load_runtime_state: bool,
 ) -> Result<WorkspaceSnapshot, String> {
     // project_rows are validated before their archive flags are allowed to trigger default seeding.
     // project_rows 在其归档标记获准触发默认播种前完成验证。
@@ -418,7 +251,40 @@ async fn load_workspace_snapshot_with_runtime_state(
             return Err(String::from("默认项目播种完成后仍不存在活动项目。"));
         }
     }
-    let session_rows = query_session_index_rows(&controller).await?;
+    // Session-index bootstrap is non-essential to the desktop shell: an old profile without the
+    // V1 table must start with an empty V1 index instead of failing the whole application.
+    // 会话索引初始化并不是桌面壳启动的必要条件：缺少 V1 表的旧配置必须以空 V1 索引启动，不能让整个应用失败。
+    let session_index_available = match ensure_session_v1_storage_schema(&controller).await {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!(
+                "[workspace-store][session-index-v1-ignored] schema bootstrap failed; starting without persisted sessions: {error}"
+            );
+            false
+        }
+    };
+    let mut indexed_sessions = Vec::new();
+    if session_index_available {
+        for validated_project in &project_rows {
+            let project_id = validated_project.stored.id.as_str();
+            match list_active_sessions_v1(&controller, project_id).await {
+                Ok(sessions) => {
+                    indexed_sessions.extend(sessions.into_iter().map(|session| (session, false)))
+                }
+                Err(error) => eprintln!(
+                    "[workspace-store][session-index-v1-ignored] active list failed for project {project_id}; ignoring only that session list: {error}"
+                ),
+            }
+            match list_archived_sessions_v1(&controller, project_id).await {
+                Ok(sessions) => {
+                    indexed_sessions.extend(sessions.into_iter().map(|session| (session, true)))
+                }
+                Err(error) => eprintln!(
+                    "[workspace-store][session-index-v1-ignored] archived list failed for project {project_id}; ignoring only that session list: {error}"
+                ),
+            }
+        }
+    }
 
     let mut task_projects = Vec::new();
     let mut archived_task_projects = Vec::new();
@@ -447,60 +313,40 @@ async fn load_workspace_snapshot_with_runtime_state(
         }
     }
 
-    let transcript_map: BTreeMap<SessionId, Vec<SessionMessageEntry>> = BTreeMap::new();
-    let archived_transcript_map: BTreeMap<SessionId, Vec<SessionMessageEntry>> = BTreeMap::new();
-    let compaction_map: BTreeMap<SessionId, Vec<SessionCompactionEntry>> = BTreeMap::new();
-    let archived_compaction_map: BTreeMap<SessionId, Vec<SessionCompactionEntry>> = BTreeMap::new();
-
-    let mut runtime_state_map: BTreeMap<SessionId, SessionRuntimeStateEntry> = BTreeMap::new();
+    let runtime_state_map: BTreeMap<SessionId, SessionRuntimeStateEntry> = BTreeMap::new();
     let archived_runtime_state_map: BTreeMap<SessionId, SessionRuntimeStateEntry> = BTreeMap::new();
     let mut visible_sessions = Vec::new();
     let mut archived_sessions = Vec::new();
     let mut session_updated_at = BTreeMap::new();
-    for stored_row in session_rows {
-        // validated_row is the only representation allowed to address directories or build summaries.
-        // validated_row 是唯一允许用于目录寻址或摘要构建的表示。
-        let validated_row = validate_session_index_row(stored_row)?;
-        // row retains the display fields after identity and timestamp validation succeeds.
-        // row 在身份与时间戳验证成功后保留展示字段。
-        let row = &validated_row.stored;
-        // session_id is the strictly parsed UUID shared by project ownership and runtime maps.
-        // session_id 是项目归属与运行态映射共享的严格解析 UUID。
-        let session_id = validated_row.session_id;
-        // project_id is the exact persisted owner and never falls back to the directory tag.
-        // project_id 是精确持久化所属项目，绝不会回退到目录标签。
+    for (row, archived) in indexed_sessions {
+        // session_id is the strictly parsed V1 identity shared by project ownership and runtime maps.
+        // session_id 是项目归属与运行态映射共享的严格 V1 身份。
+        let session_id = match row.session_id.parse::<SessionId>() {
+            Ok(session_id) => session_id,
+            Err(error) => {
+                eprintln!(
+                    "[workspace-store][session-index-v1-ignored] invalid session_id {}; ignoring that session: {error}",
+                    row.session_id
+                );
+                continue;
+            }
+        };
         let project_id = row.project_id.as_str();
-        // project_row proves the locator does not reference a missing project record.
-        // project_row 证明定位信息没有引用缺失的项目记录。
+        // project_row proves the V1 locator does not reference a missing project record.
+        // project_row 证明 V1 定位信息没有引用缺失的项目记录。
         let Some(project_row) = retained_project_row_for_session(&project_rows, project_id) else {
             continue;
         };
-        if !validated_row.archived && project_row.archived {
-            return Err(format!(
-                "活动会话索引 `{session_id}` 仍属于归档项目 `{project_id}`，项目恢复状态未提交。"
-            ));
+        if !archived && project_row.archived {
+            eprintln!(
+                "[workspace-store][session-index-v1-ignored] active session {session_id} belongs to archived project {project_id}; ignoring that session"
+            );
+            continue;
         }
         // project_name is the authoritative persisted display name of the existing project row.
         // project_name 是现有项目行的权威持久化展示名称。
         let project_name = project_row.stored.name.as_str();
-        // session_dir must be the one real directory consistent with the exact archive flag.
-        // session_dir 必须是与精确归档标记一致的唯一真实目录。
-        let Some(session_dir) =
-            required_session_directory_for_index_row(&controller.data_root, &validated_row)?
-        else {
-            // cleanup_result removes only the exact row whose two lifecycle directories are both absent.
-            // cleanup_result 仅删除活动与归档目录均缺失的精确索引行。
-            let cleanup_result =
-                cleanup_missing_session_index(controller.clone(), session_id).await?;
-            if cleanup_result {
-                eprintln!(
-                    "[workspace-load] removed stale physically missing session index: id={session_id} archived={}",
-                    validated_row.archived
-                );
-            }
-            continue;
-        };
-        if validated_row.archived {
+        if archived {
             ensure_project_summary_for_session(
                 &mut archived_task_projects,
                 project_id,
@@ -515,69 +361,22 @@ async fn load_workspace_snapshot_with_runtime_state(
                 session_id,
             );
         }
-        if !validated_row.archived && load_runtime_state {
-            persistence::reject_historical_segmented_runtime_checkpoint(&session_dir, &row.id)?;
-            let mut runtime_state = if let Some(state_document) = read_state(&session_dir)? {
-                if state_document.runtime_state.is_null() {
-                    None
-                } else {
-                    reject_embedded_historical_vmm_runtime_state(
-                        &state_document.runtime_state,
-                        &row.id,
-                    )?;
-                    let mut runtime_state = deserialize_session_runtime_state_entry(
-                        state_document.runtime_state,
-                        format!("解析分段会话 `{}` 的 state.json 失败：", row.id),
-                    )?;
-                    reject_historical_vmm_profile_context_injection(&runtime_state, &row.id)?;
-                    if runtime_state.updated_at.trim().is_empty()
-                        && !state_document.updated_at.trim().is_empty()
-                    {
-                        runtime_state.updated_at = state_document.updated_at;
-                    }
-                    Some(runtime_state)
-                }
-            } else {
-                None
-            };
-            if let Some(addon_state) = read_session_addon_state(&session_dir)? {
-                addon_state.apply_to_runtime_state(
-                    runtime_state.get_or_insert_with(SessionRuntimeStateEntry::default),
-                );
-            }
-            if let Some(mut runtime_state) = runtime_state {
-                if sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state)? {
-                    runtime_state.updated_at = current_unix_millis_text();
-                    let state_document =
-                        state_document_from_runtime_state(&session_id.to_string(), &runtime_state)?;
-                    write_state(&session_dir, &state_document)?;
-                }
-                runtime_state_map.insert(session_id, runtime_state);
-            }
-        }
-        let focus = session_focus_preview(&[]);
-        let title = row
-            .title
-            .clone()
-            .unwrap_or_else(|| String::from("Untitled"));
         let session_summary = SessionSummary::new(
             session_id,
             Some(project_id.to_string()),
-            title,
-            focus,
+            row.title,
+            String::new(),
             SessionState::Draft,
             0,
             0,
-            relative_time_label_from_unix_millis(validated_row.updated_at_millis),
+            relative_time_label_from_unix_millis(row.updated_at_ms),
         )
-        .with_title_source(SessionTitleSource::from_persisted_key(
-            row.title_source.as_deref().unwrap_or("manual"),
-        ))
-        .with_created_at(row.created_at.clone())
-        .with_updated_at(row.updated_at.clone());
-        session_updated_at.insert(session_id, validated_row.updated_at_millis);
+        .with_title_source(SessionTitleSource::Manual)
+        .with_created_at(row.created_at_ms.to_string())
+        .with_updated_at(row.updated_at_ms.to_string());
+        session_updated_at.insert(session_id, row.updated_at_ms);
 
-        if validated_row.archived {
+        if archived {
             archived_sessions.push(session_summary);
         } else {
             visible_sessions.push(session_summary);
@@ -585,22 +384,36 @@ async fn load_workspace_snapshot_with_runtime_state(
     }
 
     for project in &mut task_projects {
-        project.session_ids.sort_unstable_by_key(|session_id| {
-            descending_session_updated_at_key(&session_updated_at, session_id)
+        project.session_ids.sort_by_key(|session_id| {
+            (
+                descending_session_updated_at_key(&session_updated_at, session_id),
+                *session_id,
+            )
         });
     }
 
     for project in &mut archived_task_projects {
-        project.session_ids.sort_unstable_by_key(|session_id| {
-            descending_session_updated_at_key(&session_updated_at, session_id)
+        project.session_ids.sort_by_key(|session_id| {
+            (
+                descending_session_updated_at_key(&session_updated_at, session_id),
+                *session_id,
+            )
         });
     }
 
-    visible_sessions
-        .sort_by_key(|session| descending_session_updated_at_key(&session_updated_at, &session.id));
+    visible_sessions.sort_by_key(|session| {
+        (
+            descending_session_updated_at_key(&session_updated_at, &session.id),
+            session.id,
+        )
+    });
 
-    archived_sessions
-        .sort_by_key(|session| descending_session_updated_at_key(&session_updated_at, &session.id));
+    archived_sessions.sort_by_key(|session| {
+        (
+            descending_session_updated_at_key(&session_updated_at, &session.id),
+            session.id,
+        )
+    });
 
     let collapsed_task_projects = query_collapsed_task_project_ids(&controller)
         .await?
@@ -624,10 +437,6 @@ async fn load_workspace_snapshot_with_runtime_state(
         archived_task_projects,
         sessions: visible_sessions,
         archived_sessions,
-        session_messages: transcript_map,
-        archived_session_messages: archived_transcript_map,
-        session_compactions: compaction_map,
-        archived_session_compactions: archived_compaction_map,
         session_runtime_state: runtime_state_map,
         archived_session_runtime_state: archived_runtime_state_map,
         session_run_phases,
@@ -843,187 +652,6 @@ fn normalize_workspace_project_path_text(path: &str) -> String {
     vulcan_runtime_assets::native_host_path_text(path)
 }
 
-/// Clears process-scoped runtime latches that must never survive an application restart.
-/// 清理绝不能跨应用重启保留的进程级运行态闩锁。
-///
-/// # Parameters
-/// 参数
-/// `runtime_state` is the freshly loaded persisted session runtime state.
-/// `runtime_state` 是刚从持久化内容加载出的会话运行态。
-///
-/// # Returns
-/// 返回值
-/// Whether any volatile field was cleared.
-/// 是否清理了任何临时字段。
-pub(super) fn sanitize_loaded_runtime_state_for_fresh_process(
-    runtime_state: &mut SessionRuntimeStateEntry,
-) -> Result<bool, String> {
-    let mut changed = runtime_state.migrate_legacy_provider_usage_summaries()?;
-    changed |= runtime_state.active_precheck_turn_id.take().is_some();
-    // Guided queue ownership is process-local; restart restores visible rows instead of retaining a dead inserted latch.
-    // 引导队列所有权属于进程级状态；重启时恢复可见行，不能保留失效的已插入闩锁。
-    changed |= restore_guided_pending_prompts_for_fresh_process(&mut runtime_state.ui_state);
-    let completed_at_ms = current_unix_millis_text()
-        .parse::<i64>()
-        .map_err(|error| format!("解析宿主生成的 Unix 毫秒时间失败：{error}"))?;
-    // openProviderExecutionId identifies a physical Provider request that lost its process owner.
-    // openProviderExecutionId 标识失去进程所有者的物理 Provider 请求。
-    let open_provider_execution_id = runtime_state
-        .provider_call_ledger
-        .active_calls_in_sequence()
-        .into_iter()
-        .rev()
-        .find(|record| !record.status.is_terminal())
-        .map(|record| record.identity.execution_id.clone());
-    let orphaned_continuation_claim = runtime_state
-        .provider_call_ledger
-        .continuation
-        .claimed_at_ms
-        .is_some();
-    // strandedFrozenRetryExecutionId recovers a normal execution that crashed after its latest
-    // replay boundary was durable but before a terminal Continue generation was published.
-    // strandedFrozenRetryExecutionId 恢复这样一种普通执行：最新可重放边界已经可靠保存，
-    // 但进程在发布终态 Continue 代际之前崩溃。
-    let stranded_frozen_retry_execution_id = runtime_state
-        .execution_retry_snapshot
-        .as_ref()
-        .filter(|reference| {
-            reference.state == vulcan_workbench_model::ExecutionRetrySnapshotState::Frozen
-                && reference.claimed_attempt_id.is_none()
-                && (runtime_state
-                    .provider_call_ledger
-                    .continuation
-                    .terminal_execution_id
-                    .as_deref()
-                    != Some(reference.logical_execution_id.as_str())
-                    || runtime_state
-                        .provider_call_ledger
-                        .continuation
-                        .terminal_at_ms
-                        .is_none()
-                    || runtime_state
-                        .provider_call_ledger
-                        .continuation
-                        .invalidated_at_ms
-                        .is_some())
-        })
-        .map(|reference| reference.logical_execution_id.clone());
-    // terminalExecutionId chooses the exact lost owner without inventing a fallback identity.
-    // terminalExecutionId 选择精确的失效所有者，不凭空构造兜底身份。
-    let terminal_execution_id = open_provider_execution_id
-        .clone()
-        .or_else(|| {
-            runtime_state
-                .provider_call_ledger
-                .continuation
-                .claimed_execution_id
-                .clone()
-        })
-        .or_else(|| stranded_frozen_retry_execution_id.clone());
-    if (terminal_execution_id.is_some() || orphaned_continuation_claim)
-        && runtime_state.provider_call_ledger.revision == u64::MAX
-    {
-        return Err(String::from(
-            "无法恢复未闭合 Provider 调用或孤立 Continue 领取：会话调用账本修订号已耗尽。",
-        ));
-    }
-    let interrupted_call_count = runtime_state
-        .provider_call_ledger
-        .close_open_calls_as_interrupted(completed_at_ms);
-    changed |= interrupted_call_count > 0;
-    if interrupted_call_count > 0
-        && let Some(reference) = runtime_state.execution_retry_snapshot.as_mut()
-        && !reference.retryable
-        && reference.requires_manual_confirmation
-        && reference
-            .blocked_reason
-            .as_deref()
-            .is_none_or(|reason| reason.trim().is_empty())
-    {
-        // An already unsafe legacy projection still needs one concrete diagnosis, but an exact
-        // replayable Provider request is retained because Provider completion cannot execute host tools.
-        // 已经不安全的旧投影仍需要一个具体诊断；但精确且可重放的 Provider 请求必须保留，
-        // 因为 Provider 完成之前不可能执行宿主工具。
-        reference.invalidate_for_safety_reason(
-            String::from("retry_snapshot_transition_failed"),
-            String::from(
-                "The retained retry reference was already unsafe and did not contain a concrete blocked reason before restart.",
-            ),
-            completed_at_ms.to_string(),
-        );
-    }
-    // strandedFrozenRetry records process loss at a durable local recovery boundary even when no
-    // Provider call or Continue claim remained open, such as a crash during a tool batch.
-    // strandedFrozenRetry 记录可靠本地恢复边界上的进程丢失，即使当时没有未闭合 Provider 调用
-    // 或 Continue 领取，例如工具批次执行期间发生崩溃。
-    let stranded_frozen_retry = stranded_frozen_retry_execution_id.is_some();
-    if interrupted_call_count > 0 || orphaned_continuation_claim || stranded_frozen_retry {
-        let tail_kind = runtime_state
-            .conversation_state
-            .records
-            .iter()
-            .rev()
-            .find(|record| {
-                record.visible
-                    && matches!(
-                        record.record_kind,
-                        vulcan_workbench_model::SessionMessageRecordKind::Transcript
-                            | vulcan_workbench_model::SessionMessageRecordKind::AssistantOutput
-                            | vulcan_workbench_model::SessionMessageRecordKind::ToolCallOutput
-                            | vulcan_workbench_model::SessionMessageRecordKind::ToolResultOutput
-                    )
-            })
-            .map(|record| match record.record_kind {
-                vulcan_workbench_model::SessionMessageRecordKind::ToolCallOutput
-                | vulcan_workbench_model::SessionMessageRecordKind::ToolResultOutput => "tool",
-                _ => match record.kind {
-                    vulcan_workbench_model::SessionMessageKind::Assistant => "assistant",
-                    vulcan_workbench_model::SessionMessageKind::User => "user",
-                    vulcan_workbench_model::SessionMessageKind::Error => "error",
-                },
-            })
-            .unwrap_or("empty")
-            .to_string();
-        // replaySafety is required before restart reconciliation can expose a Continue boundary.
-        // replaySafety 是重启收敛重新暴露 Continue 边界前的必要条件。
-        let replay_safety_proven =
-            runtime_state
-                .execution_retry_snapshot
-                .as_ref()
-                .is_some_and(|reference| {
-                    reference.state == vulcan_workbench_model::ExecutionRetrySnapshotState::Frozen
-                        && reference.claimed_attempt_id.is_none()
-                        && reference.replay_safety_proven()
-                });
-        // Replay eligibility comes from the exact sidecar and closed Provider ledger, never from a UI transcript tail label.
-        // 重放资格来自精确 sidecar 与已闭合 Provider 账本，绝不由 UI 转录尾部标签推断。
-        let eligible =
-            runtime_state.provider_call_ledger.in_flight_call_count() == 0 && replay_safety_proven;
-        let continuation_changed = runtime_state
-            .provider_call_ledger
-            .mark_continuation_terminal(
-                terminal_execution_id,
-                if interrupted_call_count > 0 {
-                    String::from("interrupted_after_restart")
-                } else if orphaned_continuation_claim {
-                    String::from("continuation_interrupted_after_restart")
-                } else {
-                    String::from("execution_interrupted_after_restart")
-                },
-                completed_at_ms,
-                tail_kind,
-                eligible,
-            );
-        if !continuation_changed {
-            return Err(String::from(
-                "无法恢复 Continue 状态：会话调用账本修订号或 Continue 代际已耗尽。",
-            ));
-        }
-        changed = true;
-    }
-    Ok(changed)
-}
-
 /// Ensures a project summary exists and owns the provided session id exactly once.
 /// 确保项目摘要存在，并且只拥有一次给定会话标识。
 pub(super) fn ensure_project_summary_for_session(
@@ -1053,9 +681,6 @@ pub(super) fn ensure_project_summary_for_session(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace_store::segmented_session_store::{
-        SegmentPolicy, SegmentedSessionCreateRequest, create_segmented_session_in_location,
-    };
 
     /// Builds one canonical raw project row for strict loading tests.
     /// 为严格加载测试构建一条规范原始项目行。
@@ -1202,249 +827,6 @@ mod tests {
 
         assert!(retained_project_row_for_session(&project_rows, "project-load").is_some());
         assert!(retained_project_row_for_session(&project_rows, "removed-project").is_none());
-    }
-
-    /// Builds one canonical raw session index row for strict loading tests.
-    /// 为严格加载测试构建一条规范原始会话索引行。
-    ///
-    /// # Returns
-    /// 返回值
-    /// A complete active locator row with valid identity and timestamps.
-    /// 返回身份与时间戳均有效的完整活动定位行。
-    fn stored_session_index_row_for_loading_test() -> StoredSessionIndexRow {
-        StoredSessionIndexRow {
-            id: SessionId::from_u128(0x45).to_string(),
-            project_id: String::from("project-load"),
-            project_tag: String::from("project-load-tag"),
-            title: Some(String::from("严格加载测试")),
-            title_source: Some(String::from("manual")),
-            archived: 0,
-            created_at: String::from("0"),
-            updated_at: String::from("1000"),
-        }
-    }
-
-    /// Verifies raw session index validation rejects every locator field that previously used a fallback.
-    /// 验证原始会话索引校验会拒绝此前使用兜底逻辑的每个定位字段。
-    #[test]
-    fn session_index_validation_rejects_fallback_identity_and_timestamp_states() {
-        // valid_row proves the canonical protocol still decodes successfully.
-        // valid_row 证明规范协议仍可成功解码。
-        let valid_row = stored_session_index_row_for_loading_test();
-        assert!(validate_session_index_row(valid_row.clone()).is_ok());
-
-        // missing_project_id removes the authoritative ownership identity.
-        // missing_project_id 移除权威所属项目身份。
-        let mut missing_project_id = valid_row.clone();
-        missing_project_id.project_id = String::from("   ");
-        // missing_project_tag removes the authoritative directory identity.
-        // missing_project_tag 移除权威目录身份。
-        let mut missing_project_tag = valid_row.clone();
-        missing_project_tag.project_tag = String::from("   ");
-        // invalid_archive_flag supplies a lifecycle state outside the 0/1 protocol.
-        // invalid_archive_flag 提供 0/1 协议之外的生命周期状态。
-        let mut invalid_archive_flag = valid_row.clone();
-        invalid_archive_flag.archived = 2;
-        // invalid_created_at supplies a path identity that cannot be decoded.
-        // invalid_created_at 提供无法解码的路径身份。
-        let mut invalid_created_at = valid_row.clone();
-        invalid_created_at.created_at = String::from("not-created-at");
-        // invalid_updated_at supplies an ordering identity that cannot be decoded.
-        // invalid_updated_at 提供无法解码的排序身份。
-        let mut invalid_updated_at = valid_row;
-        invalid_updated_at.updated_at = String::from("not-updated-at");
-
-        assert!(
-            validate_session_index_row(missing_project_id)
-                .expect_err("missing project id should fail")
-                .contains("缺少所属项目标识")
-        );
-        assert!(
-            validate_session_index_row(missing_project_tag)
-                .expect_err("missing project tag should fail")
-                .contains("缺少目录项目标签")
-        );
-        assert!(
-            validate_session_index_row(invalid_archive_flag)
-                .expect_err("invalid archive flag should fail")
-                .contains("无效归档标记")
-        );
-        assert!(
-            validate_session_index_row(invalid_created_at)
-                .expect_err("invalid created timestamp should fail")
-                .contains("创建时间无效")
-        );
-        assert!(
-            validate_session_index_row(invalid_updated_at)
-                .expect_err("invalid updated timestamp should fail")
-                .contains("更新时间无效")
-        );
-    }
-
-    /// Verifies loading restores an interrupted filesystem move to the authoritative active index state.
-    /// 验证加载会把中断的文件系统移动恢复到权威活动索引状态。
-    #[test]
-    fn required_session_directory_recovers_active_index_and_rejects_invalid_states() {
-        // root isolates every filesystem state exercised by this locator.
-        // root 隔离该定位信息覆盖的每一种文件系统状态。
-        let root =
-            std::env::temp_dir().join(format!("vulcan-strict-session-load-{}", Uuid::new_v4()));
-        // validated_row provides the exact active lifecycle identity.
-        // validated_row 提供精确活动生命周期身份。
-        let validated_row = validate_session_index_row(stored_session_index_row_for_loading_test())
-            .expect("canonical row should validate");
-        // expected_dir is the only directory allowed by archived=false.
-        // expected_dir 是 archived=false 唯一允许的目录。
-        let expected_dir = segmented_session_directory(
-            &root,
-            false,
-            &validated_row.stored.project_tag,
-            &validated_row.created_date,
-            &validated_row.stored.id,
-        );
-        // opposite_dir represents an interrupted transition into the archived tree.
-        // opposite_dir 表示进入归档树但尚未提交的中断转换。
-        let opposite_dir = segmented_session_directory(
-            &root,
-            true,
-            &validated_row.stored.project_tag,
-            &validated_row.created_date,
-            &validated_row.stored.id,
-        );
-        // created_dir contains valid metadata required by lifecycle rollback.
-        // created_dir 包含生命周期回滚所需的有效元数据。
-        let created_dir = create_segmented_session_in_location(
-            &root,
-            false,
-            SegmentedSessionCreateRequest {
-                session_id: validated_row.stored.id.clone(),
-                project_tag: validated_row.stored.project_tag.clone(),
-                created_date: validated_row.created_date.clone(),
-                created_at: validated_row.stored.created_at.clone(),
-                project_id: Some(validated_row.stored.project_id.clone()),
-                title: validated_row.stored.title.clone(),
-                title_source: validated_row.stored.title_source.clone(),
-                segment_policy: SegmentPolicy::default(),
-            },
-        )
-        .expect("create expected active session directory");
-        assert_eq!(created_dir, expected_dir);
-        assert_eq!(
-            required_session_directory_for_index_row(&root, &validated_row)
-                .expect("expected-only directory should load"),
-            Some(expected_dir.clone())
-        );
-
-        std::fs::create_dir_all(&opposite_dir).expect("create ambiguous archived directory");
-        // ambiguous_error proves simultaneous copies never select a winner.
-        // ambiguous_error 证明副本同时存在时绝不会选择胜者。
-        let ambiguous_error = required_session_directory_for_index_row(&root, &validated_row)
-            .expect_err("simultaneous lifecycle directories should fail");
-        std::fs::remove_dir_all(&opposite_dir).expect("remove opposite directory");
-        archive_segmented_session_by_created_date(
-            &root,
-            &validated_row.stored.project_tag,
-            &validated_row.created_date,
-            &validated_row.stored.id,
-            "2000",
-        )
-        .expect("move session into interrupted archived state");
-        // recovered_dir proves SQLite archived=false deterministically rolls the sole copy back to active.
-        // recovered_dir 证明 SQLite archived=false 会确定性地把唯一副本回滚到活动树。
-        let recovered_dir = required_session_directory_for_index_row(&root, &validated_row)
-            .expect("opposite-only directory should recover")
-            .expect("recovered directory should be present");
-        let recovered_metadata =
-            read_session_metadata(&recovered_dir).expect("read recovered active metadata");
-        assert_eq!(recovered_dir, expected_dir);
-        assert!(expected_dir.is_dir());
-        assert!(!opposite_dir.exists());
-        assert_eq!(
-            recovered_metadata.updated_at,
-            validated_row.stored.updated_at
-        );
-        assert_eq!(recovered_metadata.archived_at, None);
-
-        std::fs::remove_dir_all(&expected_dir).expect("remove expected directory");
-        // missing_directory proves a physically deleted session is classified for index cleanup.
-        // missing_directory 证明物理删除的会话会被识别为需要清理索引。
-        let missing_directory = required_session_directory_for_index_row(&root, &validated_row)
-            .expect("missing lifecycle directories should be cleanable");
-        // expected_parent is retained so a regular file can occupy the canonical locator path.
-        // expected_parent 被保留以便普通文件占用规范定位路径。
-        let expected_parent = expected_dir
-            .parent()
-            .expect("expected directory should have parent");
-        std::fs::create_dir_all(expected_parent).expect("create expected directory parent");
-        std::fs::write(&expected_dir, b"not-a-directory").expect("create conflicting locator file");
-        // non_directory_error proves path type validation happens before state projection.
-        // non_directory_error 证明路径类型校验发生在状态投影前。
-        let non_directory_error = required_session_directory_for_index_row(&root, &validated_row)
-            .expect_err("non-directory locator should fail");
-        let _ = std::fs::remove_dir_all(&root);
-
-        assert!(ambiguous_error.contains("同时存在活动与归档目录"));
-        assert!(missing_directory.is_none());
-        assert!(non_directory_error.contains("not a real directory"));
-    }
-
-    /// Verifies loading commits an interrupted active-directory move to the authoritative archived index state.
-    /// 验证加载会把中断的活动目录移动提交到权威归档索引状态。
-    #[test]
-    fn required_session_directory_recovers_archived_index_state() {
-        // root isolates the archived-index recovery fixture.
-        // root 隔离归档索引恢复夹具。
-        let root =
-            std::env::temp_dir().join(format!("vulcan-archived-session-load-{}", Uuid::new_v4()));
-        // stored_row selects archived state while the fixture intentionally starts in the active tree.
-        // stored_row 选择归档状态，而夹具故意从活动树开始。
-        let mut stored_row = stored_session_index_row_for_loading_test();
-        stored_row.archived = 1;
-        // validated_row is the authoritative archived locator used by recovery.
-        // validated_row 是恢复过程使用的权威归档定位信息。
-        let validated_row =
-            validate_session_index_row(stored_row).expect("archived row should validate");
-        // active_dir is the interrupted filesystem state that must be moved to archived.
-        // active_dir 是必须移入归档树的中断文件系统状态。
-        let active_dir = create_segmented_session_in_location(
-            &root,
-            false,
-            SegmentedSessionCreateRequest {
-                session_id: validated_row.stored.id.clone(),
-                project_tag: validated_row.stored.project_tag.clone(),
-                created_date: validated_row.created_date.clone(),
-                created_at: validated_row.stored.created_at.clone(),
-                project_id: Some(validated_row.stored.project_id.clone()),
-                title: validated_row.stored.title.clone(),
-                title_source: validated_row.stored.title_source.clone(),
-                segment_policy: SegmentPolicy::default(),
-            },
-        )
-        .expect("create interrupted active session directory");
-        // recovered_dir is the exact archived directory selected by SQLite state.
-        // recovered_dir 是 SQLite 状态选中的精确归档目录。
-        let recovered_dir = required_session_directory_for_index_row(&root, &validated_row)
-            .expect("active-only directory should archive during recovery")
-            .expect("recovered archived directory should be present");
-        let recovered_metadata =
-            read_session_metadata(&recovered_dir).expect("read recovered archived metadata");
-
-        assert!(!active_dir.exists());
-        assert!(recovered_dir.is_dir());
-        assert_eq!(
-            recovered_metadata.updated_at,
-            validated_row.stored.updated_at
-        );
-        assert_eq!(
-            recovered_metadata.archived_at.as_deref(),
-            Some(validated_row.stored.updated_at.as_str())
-        );
-        std::fs::remove_dir_all(&recovered_dir)
-            .expect("remove physically deleted archived directory");
-        let missing_directory = required_session_directory_for_index_row(&root, &validated_row)
-            .expect("missing archived directories should be cleanable");
-        assert!(missing_directory.is_none());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Verifies descending timestamp ordering covers the complete signed range without negation overflow.

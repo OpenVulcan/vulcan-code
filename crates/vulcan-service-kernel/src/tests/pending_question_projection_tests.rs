@@ -4,6 +4,7 @@
 use super::*;
 use vulcan_agent_runtime::agent_runtime::question_runtime::{QuestionPrompt, QuestionReply};
 use vulcan_service_api::ServiceEventSink;
+use vulcan_session_core::v1::ids::{ApiCallId, RequestStreamId, ToolCallId};
 
 /// Captures service events delivered to one simulated client endpoint.
 /// 捕获投递到单个模拟客户端端点的服务事件。
@@ -85,25 +86,21 @@ fn session_addon_delta_generations(events: &Arc<Mutex<Vec<ServiceEvent>>>) -> Ve
         .collect()
 }
 
-/// Starts one ask request and returns its task plus the registered request identifier.
-/// 启动一条 ask 请求，并返回其任务与已注册请求标识。
+/// Starts one pending Ask request with explicit V1 local ownership identities.
+/// 使用明确的 V1 本地所有权身份启动一条待回答 Ask 请求。
 ///
-/// # Parameters
-/// 参数
-/// `question_runtime` owns the pending request registry.
-/// `question_runtime` 持有待回答请求注册表。
-/// `session_id` identifies the session that owns the request.
-/// `session_id` 标识拥有该请求的会话。
-/// `question_text` is the user-facing prompt text.
-/// `question_text` 是面向用户的问题文本。
-///
-/// # Returns
-/// 返回值
-/// A spawned ask task and the exact registered request identifier.
-/// 返回已启动的 ask 任务与精确的已注册请求标识。
+/// `session_id`, `api_call_id`, and `tool_call_id` form the authoritative local identity;
+/// `provider_tool_call_id` is optional correlation data, and `question_text` is display text.
+/// `session_id`、`api_call_id` 与 `tool_call_id` 组成权威本地身份；
+/// `provider_tool_call_id` 仅为可选关联数据，`question_text` 是展示文本。
+/// Returns the suspended Ask task and the registered request identifier.
+/// 返回挂起的 Ask 任务与已注册的请求标识。
 async fn start_pending_question(
     question_runtime: Arc<QuestionRuntime>,
     session_id: SessionId,
+    api_call_id: ApiCallId,
+    tool_call_id: ToolCallId,
+    provider_tool_call_id: &str,
     question_text: &str,
 ) -> (
     tokio::task::JoinHandle<Result<QuestionReply, String>>,
@@ -112,6 +109,17 @@ async fn start_pending_question(
     // promptText owns the question text across the spawned asynchronous task boundary.
     // promptText 跨越异步任务边界持有问题文本。
     let prompt_text = question_text.to_string();
+    // providerToolCallId owns the exact correlation identity across the spawned task boundary.
+    // providerToolCallId 跨越异步任务边界持有精确的关联身份。
+    let provider_tool_call_id = provider_tool_call_id.to_string();
+    // controllerToolCallId owns the exact runtime result-envelope identity.
+    // controllerToolCallId 持有精确的运行时结果信封身份。
+    let controller_tool_call_id = format!("controller-{provider_tool_call_id}");
+    // requestStreamId owns the exact Provider stream item bound to this local tool fact.
+    // requestStreamId 持有与本地工具事实绑定的精确 Provider 流项目。
+    let request_stream_id =
+        RequestStreamId::try_new(format!("pending-question-stream-{provider_tool_call_id}"))
+            .expect("pending question request-stream identity");
     // askRuntime shares the exact registry installed into the service state.
     // askRuntime 共享安装到服务状态中的同一注册表。
     let ask_runtime = Arc::clone(&question_runtime);
@@ -121,6 +129,13 @@ async fn start_pending_question(
         ask_runtime
             .ask(
                 session_id,
+                request_stream_id,
+                api_call_id,
+                tool_call_id,
+                controller_tool_call_id,
+                Some(provider_tool_call_id),
+                String::from("ask"),
+                serde_json::json!({"questions": []}),
                 vec![QuestionPrompt {
                     question: prompt_text,
                     header: String::from("Confirm"),
@@ -191,12 +206,23 @@ async fn ask_completions_publish_once_to_every_client_sink() {
     ]);
     install_webui_question_runtime_event_bridge(&app, &state, &question_runtime)
         .expect("question projection bridge should install");
+    // This focused projection test supplies deterministic successful durability after verifying
+    // the production installer wires both callbacks. V1 mutation semantics are covered by the
+    // SessionHandle and Ask durability tests with real session documents.
+    // 该聚焦投影测试在验证生产安装器同时接入两类回调后，提供确定性成功的可靠性提交；
+    // V1 修改语义由使用真实会话文档的 SessionHandle 与 Ask 可靠性测试覆盖。
+    question_runtime
+        .set_durability_callback(Some(Arc::new(|_| Ok(()))))
+        .expect("focused projection durability callback should install");
 
     // replyTask owns the first pending ask future that will receive structured answers.
     // replyTask 持有第一条将接收结构化答案的待回答 ask future。
     let (reply_task, reply_request_id) = start_pending_question(
         Arc::clone(&question_runtime),
         session_id,
+        ApiCallId::try_new(1).expect("reply API id should be valid"),
+        ToolCallId::try_new(1).expect("reply tool id should be valid"),
+        "provider-tool-call-reply",
         "Approve execution?",
     )
     .await;
@@ -260,6 +286,9 @@ async fn ask_completions_publish_once_to_every_client_sink() {
     let (reject_task, reject_request_id) = start_pending_question(
         Arc::clone(&question_runtime),
         session_id,
+        ApiCallId::try_new(1).expect("reject API id should be valid"),
+        ToolCallId::try_new(2).expect("reject tool id should be valid"),
+        "provider-tool-call-reject",
         "Abandon execution?",
     )
     .await;
@@ -327,17 +356,18 @@ fn plan_confirmation_projection_publishes_once_to_every_client_sink() {
             updated_at: String::from("1"),
         }),
     });
-    // runtimeState represents the authoritative post-confirmation Build state already committed by the Plan service.
-    // runtimeState 表示 Plan 服务已提交的权威确认后 Build 状态。
-    let runtime_state = service_state
-        .workspace_snapshot
-        .as_mut()
-        .expect("workspace snapshot should exist")
-        .session_runtime_state
-        .entry(session_id)
-        .or_default();
-    runtime_state.active_work_mode = Some(String::from("build"));
-    runtime_state.plan_mode = Default::default();
+    // The default V1 document is the authoritative post-confirmation Build state.
+    // 默认 V1 文档是确认后的权威 Build 状态。
+    register_test_session_v1_document(
+        &mut service_state,
+        session_id,
+        vulcan_session_core::v1::document::SessionDocument::new(
+            session_id.to_string(),
+            "project-a",
+            "Plan projection test",
+            1,
+        ),
+    );
     // state shares the authoritative Plan state with the projection function.
     // state 与投影函数共享权威 Plan 状态。
     let state = Arc::new(Mutex::new(service_state));

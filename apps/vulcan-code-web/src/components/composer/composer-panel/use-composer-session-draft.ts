@@ -1,4 +1,5 @@
 import React from "react";
+import { toast } from "sonner";
 import {
   useComposerAttachments,
   type UseComposerAttachmentsArgs,
@@ -10,91 +11,211 @@ import {
   writeComposerSessionMemoryDraft,
   type ComposerSessionMemoryDraft,
 } from "@/components/composer/composer-panel/helpers";
+import { useI18n } from "@/i18n";
+import { SessionDraftWriteCoordinatorV1 } from "@/service/conversation-session-draft-write-coordinator-v1";
+import { sessionDraftClientV1 } from "@/service/conversation-session-drafts-v1";
 import type { ComposerAttachmentSummary } from "@/types";
 
-// UseComposerSessionDraftOptions contains attachment staging dependencies for one draft slot.
-// UseComposerSessionDraftOptions 包含单个草稿槽的附件暂存依赖。
-export interface UseComposerSessionDraftOptions extends Omit<UseComposerAttachmentsArgs, "initialAttachments"> {}
-
-// ComposerDraftSubmissionSnapshot captures the exact draft slot content consumed by one send attempt.
-// ComposerDraftSubmissionSnapshot 捕获一次发送尝试消费的精确草稿槽内容。
-export interface ComposerDraftSubmissionSnapshot {
-  // Draft slot that owned the submission when it started.
-  // 发送开始时拥有该提交的草稿槽。
+/** One exact owner of the composer state currently rendered by the hook.
+ * Hook 当前渲染的输入区状态所对应的精确 owner。
+ */
+interface ComposerDraftOwnerV1 {
+  /** Stable UI slot used by submission rollback.
+   * 提交回滚使用的稳定界面槽位。
+   */
   draftSlotKey: string;
-  // Exact unsent input consumed by the submission.
-  // 本次提交消费的精确未发送文本。
+  /** Materialized session identity, or null for the new-session browser draft.
+   * 已物化会话标识；新建会话的浏览器草稿为 null。
+   */
+  sessionId: string | null;
+}
+
+/** One complete draft state expected from a programmatic owner transition.
+ * owner 程序化切换后预期出现的一份完整草稿状态。
+ */
+interface ExpectedComposerDraftStateV1 {
+  /** Exact owner slot receiving the state.
+   * 接收状态的精确 owner 槽位。
+   */
+  draftSlotKey: string;
+  /** Expected raw user text.
+   * 预期的原始用户文本。
+   */
   input: string;
-  // Exact staged attachments consumed by the submission.
-  // 本次提交消费的精确已暂存附件。
+  /** Expected ordered attachment projection.
+   * 预期的有序附件投影。
+   */
   attachments: ComposerAttachmentSummary[];
 }
 
-// UseComposerSessionDraftState exposes one coherent composer draft transaction boundary.
-// UseComposerSessionDraftState 暴露一个完整一致的输入区草稿事务边界。
-export interface UseComposerSessionDraftState extends Omit<UseComposerAttachmentsState, "setAttachments"> {
-  // Stable key identifying the currently active conversation or new-conversation draft slot.
-  // 标识当前会话或新建会话草稿槽的稳定键。
+/** UseComposerSessionDraftOptions contains attachment staging dependencies for one draft owner.
+ * UseComposerSessionDraftOptions 包含单个草稿 owner 的附件暂存依赖。
+ */
+export interface UseComposerSessionDraftOptions extends Omit<UseComposerAttachmentsArgs, "initialAttachments"> {}
+
+/** ComposerDraftSubmissionSnapshot captures the exact owner and content consumed by one send attempt.
+ * ComposerDraftSubmissionSnapshot 捕获一次发送尝试消费的精确 owner 与内容。
+ */
+export interface ComposerDraftSubmissionSnapshot {
+  /** Draft slot that owned the submission when it started.
+   * 发送开始时拥有该提交的草稿槽位。
+   */
   draftSlotKey: string;
-  // Current unsent composer text owned by the active draft slot.
-  // 当前草稿槽持有的未发送输入区文本。
+  /** Materialized session that owned the draft, or null for a new session.
+   * 拥有该草稿的已物化会话；新建会话为 null。
+   */
+  sessionId: string | null;
+  /** Exact unsent input consumed by the submission.
+   * 本次提交消费的精确未发送文本。
+   */
+  input: string;
+  /** Exact ordered attachments consumed by the submission.
+   * 本次提交消费的精确有序附件。
+   */
+  attachments: ComposerAttachmentSummary[];
+}
+
+/** UseComposerSessionDraftState exposes one coherent composer-draft transaction boundary.
+ * UseComposerSessionDraftState 暴露一个完整一致的输入区草稿事务边界。
+ */
+export interface UseComposerSessionDraftState extends Omit<UseComposerAttachmentsState, "setAttachments"> {
+  /** Stable key identifying the active conversation or new-conversation draft slot.
+   * 标识活动会话或新建会话草稿槽位的稳定键。
+   */
+  draftSlotKey: string;
+  /** Current unsent composer text owned by the active draft slot.
+   * 当前草稿槽持有的未发送输入区文本。
+   */
   draftInput: string;
-  // Updates unsent text while keeping the active draft slot synchronized.
-  // 更新未发送文本，同时保持当前草稿槽同步。
+  /** Updates unsent text while preserving the exact active owner.
+   * 在保持精确活动 owner 的同时更新未发送文本。
+   */
   setDraftInput: React.Dispatch<React.SetStateAction<string>>;
-  // Captures and clears submitted content before an async send begins.
-  // 在异步发送开始前捕获并清理已提交内容。
-  clearForSubmission: () => ComposerDraftSubmissionSnapshot;
-  // Restores a failed submission to its owning slot while preserving newer user edits.
-  // 将失败提交恢复到所属槽，同时保留用户较新的编辑。
+  /** Flushes and captures the exact durable draft before clearing its UI projection.
+   * 在清空界面投影前可靠刷新并捕获精确草稿。
+   */
+  clearForSubmission: () => Promise<ComposerDraftSubmissionSnapshot>;
+  /** Restores a failed submission while preserving newer user edits.
+   * 恢复失败提交，同时保留较新的用户编辑。
+   */
   restoreFailedSubmission: (snapshot: ComposerDraftSubmissionSnapshot) => void;
-  // Restores missing text to one explicit draft slot without contaminating another active slot.
-  // 将缺失文本恢复到一个显式草稿槽，且不污染另一个活动槽。
+  /** Restores missing generated text to one explicit draft slot.
+   * 将缺失的生成文本恢复到一个显式草稿槽位。
+   */
   restoreInputToSlot: (draftSlotKey: string, input: string) => void;
-  // Replaces the complete active draft from an explicit queued-prompt edit action.
-  // 通过显式的排队提示词编辑操作替换当前完整草稿。
+  /** Replaces the complete active draft from an explicit queued-input edit action.
+   * 通过显式排队输入编辑操作替换当前完整草稿。
+   */
   replaceDraft: (input: string, attachments: ComposerAttachmentSummary[]) => void;
 }
 
-// useComposerSessionDraft owns draft-slot hydration, persistence, attachments, and send rollback semantics.
-// useComposerSessionDraft 管理草稿槽恢复、持久化、附件以及发送回滚语义。
-// Parameters: options provides project-scoped attachment staging dependencies.
-// 参数：options 提供项目范围内的附件暂存依赖。
-// Returns: synchronized text and attachment state plus explicit submission transaction operations.
-// 返回值：同步的文本与附件状态，以及显式的提交事务操作。
-export function useComposerSessionDraft(options: UseComposerSessionDraftOptions): UseComposerSessionDraftState {
-  // draftKey selects either the persisted conversation slot or the project's new-conversation slot.
-  // draftKey 选择已持久化会话槽或项目的新建会话槽。
+/** Process-wide serialized writer preserving one ordering authority per materialized session.
+ * 进程级串行 writer，为每个已物化会话保留唯一写入顺序权威。
+ */
+const sessionDraftWriteCoordinatorV1 = new SessionDraftWriteCoordinatorV1(sessionDraftClientV1);
+
+/** Creates a detached attachment array for refs, state, and transport ownership.
+ * 为 ref、状态与传输所有权创建脱离引用的附件数组。
+ */
+function cloneAttachments(
+  attachments: readonly ComposerAttachmentSummary[],
+): ComposerAttachmentSummary[] {
+  return attachments.map((attachment) => ({ ...attachment }));
+}
+
+/** Compares one complete rendered draft with a programmatic transition target.
+ * 比较一份完整渲染草稿与程序化切换目标。
+ */
+function draftStateMatches(
+  expected: ExpectedComposerDraftStateV1,
+  input: string,
+  attachments: readonly ComposerAttachmentSummary[],
+): boolean {
+  return expected.input === input
+    && JSON.stringify(expected.attachments) === JSON.stringify(attachments);
+}
+
+/** Derives a materialized session only from the canonical slot format emitted by this module.
+ * 仅从本模块生成的规范槽位格式推导已物化会话。
+ */
+function materializedSessionIdFromDraftSlotKey(draftSlotKey: string): string | null {
+  const prefix = "conversation:";
+  if (!draftSlotKey.startsWith(prefix)) {
+    return null;
+  }
+  const sessionId = draftSlotKey.slice(prefix.length);
+  if (sessionId.length === 0 || sessionId.trim() !== sessionId) {
+    throw new Error("Materialized composer draft slot contains an invalid session id.");
+  }
+  return sessionId;
+}
+
+/** Persists one owner without redirecting an inactive slot to the current selection.
+ * 持久化一个 owner，且不会把非活动槽位重定向到当前选择。
+ */
+function persistDraftOwner(
+  owner: ComposerDraftOwnerV1,
+  input: string,
+  attachments: readonly ComposerAttachmentSummary[],
+): void {
+  if (owner.sessionId) {
+    sessionDraftWriteCoordinatorV1.enqueue(owner.sessionId, input, attachments);
+    return;
+  }
+  writeComposerSessionMemoryDraft(owner.draftSlotKey, input, cloneAttachments(attachments));
+}
+
+/** Restores one inactive materialized owner by reading its latest durable state first.
+ * 先读取最新可靠状态，再恢复一个非活动的已物化 owner。
+ */
+async function restoreInactiveMaterializedDraft(
+  sessionId: string,
+  fallbackInput: string,
+  fallbackAttachments: readonly ComposerAttachmentSummary[],
+): Promise<void> {
+  const current = await sessionDraftClientV1.read(sessionId);
+  const restoredInput = current.text || fallbackInput;
+  const restoredAttachments = current.attachments.length
+    ? current.attachments
+    : cloneAttachments(fallbackAttachments);
+  sessionDraftWriteCoordinatorV1.enqueue(
+    sessionId,
+    restoredInput,
+    restoredAttachments,
+  );
+  await sessionDraftWriteCoordinatorV1.flush(sessionId);
+}
+
+/** Owns draft hydration, persistence, attachment state, and submission rollback semantics.
+ * 管理草稿恢复、持久化、附件状态与提交回滚语义。
+ */
+export function useComposerSessionDraft(
+  options: UseComposerSessionDraftOptions,
+): UseComposerSessionDraftState {
+  const { t } = useI18n();
   const draftKey = React.useMemo(
     () => composerSessionDraftKey(options.projectId, options.conversationId),
     [options.conversationId, options.projectId],
   );
-  // initialDraftRef captures the draft that seeds this component mount exactly once.
-  // initialDraftRef 仅捕获一次用于初始化本次组件挂载的草稿。
   const initialDraftRef = React.useRef<ComposerSessionMemoryDraft | null>(null);
   if (initialDraftRef.current === null) {
-    initialDraftRef.current = readComposerSessionMemoryDraft(draftKey);
+    initialDraftRef.current = options.conversationId
+      ? { input: "", attachments: [] }
+      : readComposerSessionMemoryDraft(draftKey);
   }
-  // initialDraft is the non-null snapshot captured for initial text and attachment state.
-  // initialDraft 是为初始文本与附件状态捕获的非空快照。
   const initialDraft = initialDraftRef.current;
-  // activeDraftKeyRef tracks which draft slot currently owns local state.
-  // activeDraftKeyRef 跟踪当前本地状态所属的草稿槽。
-  const activeDraftKeyRef = React.useRef(draftKey);
-  // inputRef mirrors draftInput for slot switches and async submission rollback.
-  // inputRef 镜像 draftInput，供草稿槽切换与异步提交回滚使用。
+  const activeOwnerRef = React.useRef<ComposerDraftOwnerV1>({
+    draftSlotKey: draftKey,
+    sessionId: options.conversationId,
+  });
+  const ownerInitializedRef = React.useRef(false);
+  const hydrationGenerationRef = React.useRef(0);
+  const hydratingOwnerKeyRef = React.useRef<string | null>(null);
+  const ownerApplyBlockRef = React.useRef<ExpectedComposerDraftStateV1 | null>(null);
+  const suppressedUiStateRef = React.useRef<ExpectedComposerDraftStateV1 | null>(null);
   const inputRef = React.useRef(initialDraft.input);
-  // attachmentsRef mirrors attachments for slot switches and async submission rollback.
-  // attachmentsRef 镜像附件，供草稿槽切换与异步提交回滚使用。
   const attachmentsRef = React.useRef<ComposerAttachmentSummary[]>(initialDraft.attachments);
-  // restoredRef records whether the active draft slot has completed hydration.
-  // restoredRef 记录当前草稿槽是否已完成恢复。
-  const restoredRef = React.useRef(false);
-  // draftInput stores the current unsent composer text.
-  // draftInput 保存当前尚未发送的输入区文本。
   const [draftInput, setDraftInput] = React.useState(initialDraft.input);
-  // attachmentState owns attachment validation, staging, picker, paste, and drag-drop behavior.
-  // attachmentState 管理附件校验、暂存、选择器、粘贴与拖拽行为。
   const attachmentState = useComposerAttachments({
     initialAttachments: initialDraft.attachments,
     attachmentCapabilities: options.attachmentCapabilities,
@@ -102,71 +223,137 @@ export function useComposerSessionDraft(options: UseComposerSessionDraftOptions)
     conversationId: options.conversationId,
     onStageAttachmentBytes: options.onStageAttachmentBytes,
   });
-  // Internal attachment state connects attachment ownership to the draft transaction while hiding its raw setter.
-  // 内部附件状态将附件所有权连接到草稿事务，同时隐藏原始 setter。
   const { attachments, setAttachments, ...attachmentControls } = attachmentState;
 
   React.useLayoutEffect(() => {
-    // previousKey identifies the slot whose latest state may need to be persisted before switching.
-    // previousKey 标识切换前可能需要持久化最新状态的草稿槽。
-    const previousKey = activeDraftKeyRef.current;
-    if (restoredRef.current && previousKey === draftKey) {
-      return;
-    }
-    if (restoredRef.current) {
-      writeComposerSessionMemoryDraft(previousKey, inputRef.current, attachmentsRef.current);
-    }
-    // restoredDraft is the isolated snapshot that becomes the new active slot state.
-    // restoredDraft 是即将成为新活动槽状态的隔离快照。
-    const restoredDraft = readComposerSessionMemoryDraft(draftKey);
-    activeDraftKeyRef.current = draftKey;
-    inputRef.current = restoredDraft.input;
-    attachmentsRef.current = restoredDraft.attachments;
-    restoredRef.current = true;
-    setDraftInput(restoredDraft.input);
-    setAttachments(restoredDraft.attachments);
-  }, [draftKey, setAttachments]);
-
-  React.useEffect(() => {
-    if (!restoredRef.current) {
-      return;
-    }
     inputRef.current = draftInput;
-    writeComposerSessionMemoryDraft(activeDraftKeyRef.current, draftInput, attachmentsRef.current);
-  }, [draftInput]);
+    attachmentsRef.current = attachments;
+  }, [attachments, draftInput]);
 
-  React.useEffect(() => {
-    if (!restoredRef.current) {
+  React.useLayoutEffect(() => {
+    const previousOwner = activeOwnerRef.current;
+    if (
+      ownerInitializedRef.current
+      && previousOwner.draftSlotKey === draftKey
+      && previousOwner.sessionId === options.conversationId
+    ) {
       return;
     }
-    attachmentsRef.current = attachments;
-    writeComposerSessionMemoryDraft(activeDraftKeyRef.current, inputRef.current, attachments);
-  }, [attachments]);
+    if (ownerInitializedRef.current) {
+      persistDraftOwner(previousOwner, inputRef.current, attachmentsRef.current);
+    }
 
-  // clearForSubmission captures ownership and atomically clears the submitted draft before awaiting the backend.
-  // clearForSubmission 在等待后端前捕获归属并以事务方式清理已提交草稿。
-  const clearForSubmission = React.useCallback(() => {
-    // snapshot binds consumed content to the exact draft slot that owned it.
-    // snapshot 将已消费内容绑定到拥有它的精确草稿槽。
-    const snapshot: ComposerDraftSubmissionSnapshot = {
-      draftSlotKey: activeDraftKeyRef.current,
-      input: draftInput,
-      attachments: attachments.map((attachment) => ({ ...attachment })),
+    const nextOwner: ComposerDraftOwnerV1 = {
+      draftSlotKey: draftKey,
+      sessionId: options.conversationId,
+    };
+    activeOwnerRef.current = nextOwner;
+    ownerInitializedRef.current = true;
+    suppressedUiStateRef.current = null;
+    const generation = hydrationGenerationRef.current + 1;
+    hydrationGenerationRef.current = generation;
+
+    if (!nextOwner.sessionId) {
+      hydratingOwnerKeyRef.current = null;
+      const restoredDraft = readComposerSessionMemoryDraft(nextOwner.draftSlotKey);
+      const expected: ExpectedComposerDraftStateV1 = {
+        draftSlotKey: nextOwner.draftSlotKey,
+        input: restoredDraft.input,
+        attachments: cloneAttachments(restoredDraft.attachments),
+      };
+      ownerApplyBlockRef.current = expected;
+      inputRef.current = expected.input;
+      attachmentsRef.current = expected.attachments;
+      setDraftInput(expected.input);
+      setAttachments(expected.attachments);
+      return;
+    }
+
+    hydratingOwnerKeyRef.current = nextOwner.draftSlotKey;
+    ownerApplyBlockRef.current = {
+      draftSlotKey: nextOwner.draftSlotKey,
+      input: "",
+      attachments: [],
     };
     inputRef.current = "";
     attachmentsRef.current = [];
-    writeComposerSessionMemoryDraft(activeDraftKeyRef.current, "", []);
     setDraftInput("");
     setAttachments([]);
-    return snapshot;
-  }, [attachments, draftInput, setAttachments]);
+    void sessionDraftClientV1.read(nextOwner.sessionId).then((restoredDraft) => {
+      const currentOwner = activeOwnerRef.current;
+      if (
+        hydrationGenerationRef.current !== generation
+        || currentOwner.draftSlotKey !== nextOwner.draftSlotKey
+        || currentOwner.sessionId !== nextOwner.sessionId
+      ) {
+        return;
+      }
+      const expected: ExpectedComposerDraftStateV1 = {
+        draftSlotKey: nextOwner.draftSlotKey,
+        input: restoredDraft.text,
+        attachments: cloneAttachments(restoredDraft.attachments),
+      };
+      hydratingOwnerKeyRef.current = null;
+      ownerApplyBlockRef.current = expected;
+      inputRef.current = expected.input;
+      attachmentsRef.current = expected.attachments;
+      setDraftInput(expected.input);
+      setAttachments(expected.attachments);
+    }).catch(() => {
+      const currentOwner = activeOwnerRef.current;
+      if (
+        hydrationGenerationRef.current === generation
+        && currentOwner.draftSlotKey === nextOwner.draftSlotKey
+        && currentOwner.sessionId === nextOwner.sessionId
+      ) {
+        toast.error(t("composer.error.draftLoadFailed"));
+      }
+    });
+  }, [draftKey, options.conversationId, setAttachments, t]);
 
-  // restoreFailedSubmission merges a rejected submission into its original slot without contaminating the active slot.
-  // restoreFailedSubmission 将被拒绝的提交合并回原始槽，且不污染当前活动槽。
+  React.useEffect(() => {
+    if (!ownerInitializedRef.current) {
+      return;
+    }
+    const owner = activeOwnerRef.current;
+    if (hydratingOwnerKeyRef.current === owner.draftSlotKey) {
+      return;
+    }
+    const ownerApplyBlock = ownerApplyBlockRef.current;
+    if (ownerApplyBlock?.draftSlotKey === owner.draftSlotKey) {
+      if (draftStateMatches(ownerApplyBlock, draftInput, attachments)) {
+        ownerApplyBlockRef.current = null;
+      }
+      return;
+    }
+    const suppressedUiState = suppressedUiStateRef.current;
+    if (suppressedUiState?.draftSlotKey === owner.draftSlotKey) {
+      suppressedUiStateRef.current = null;
+      if (draftStateMatches(suppressedUiState, draftInput, attachments)) {
+        return;
+      }
+    }
+    persistDraftOwner(owner, draftInput, attachments);
+  }, [attachments, draftInput]);
+
+  React.useEffect(() => () => {
+    const owner = activeOwnerRef.current;
+    if (ownerInitializedRef.current && ownerApplyBlockRef.current === null) {
+      persistDraftOwner(owner, inputRef.current, attachmentsRef.current);
+    }
+  }, []);
+
   const restoreFailedSubmission = React.useCallback((snapshot: ComposerDraftSubmissionSnapshot) => {
-    if (activeDraftKeyRef.current !== snapshot.draftSlotKey) {
-      // inactiveDraft contains edits saved to the original slot after the submission started.
-      // inactiveDraft 包含提交开始后保存到原始槽的编辑。
+    const currentOwner = activeOwnerRef.current;
+    if (currentOwner.draftSlotKey !== snapshot.draftSlotKey) {
+      if (snapshot.sessionId) {
+        void restoreInactiveMaterializedDraft(
+          snapshot.sessionId,
+          snapshot.input,
+          snapshot.attachments,
+        ).catch(() => toast.error(t("composer.error.draftPersistFailed")));
+        return;
+      }
       const inactiveDraft = readComposerSessionMemoryDraft(snapshot.draftSlotKey);
       writeComposerSessionMemoryDraft(
         snapshot.draftSlotKey,
@@ -175,30 +362,75 @@ export function useComposerSessionDraft(options: UseComposerSessionDraftOptions)
       );
       return;
     }
-    setDraftInput((current) => {
-      // restoredInput preserves newer typed text and fills only an empty input.
-      // restoredInput 保留较新的输入文本，仅在输入为空时回填。
-      const restoredInput = current || snapshot.input;
-      inputRef.current = restoredInput;
-      writeComposerSessionMemoryDraft(activeDraftKeyRef.current, restoredInput, attachmentsRef.current);
-      return restoredInput;
-    });
-    setAttachments((current) => {
-      // restoredAttachments preserves newer staged files and fills only an empty attachment list.
-      // restoredAttachments 保留较新的已暂存文件，仅在附件列表为空时回填。
-      const restoredAttachments = current.length ? current : snapshot.attachments;
-      attachmentsRef.current = restoredAttachments;
-      writeComposerSessionMemoryDraft(activeDraftKeyRef.current, inputRef.current, restoredAttachments);
-      return restoredAttachments;
-    });
-  }, [setAttachments]);
 
-  // restoreInputToSlot restores a failed generated submission to the slot that owned it.
-  // restoreInputToSlot 将失败的生成式提交恢复到拥有它的草稿槽。
+    const restoredInput = inputRef.current || snapshot.input;
+    const restoredAttachments = attachmentsRef.current.length
+      ? attachmentsRef.current
+      : cloneAttachments(snapshot.attachments);
+    inputRef.current = restoredInput;
+    attachmentsRef.current = restoredAttachments;
+    suppressedUiStateRef.current = null;
+    persistDraftOwner(currentOwner, restoredInput, restoredAttachments);
+    setDraftInput(restoredInput);
+    setAttachments(restoredAttachments);
+  }, [setAttachments, t]);
+
+  const clearForSubmission = React.useCallback(async () => {
+    const owner = activeOwnerRef.current;
+    if (
+      hydratingOwnerKeyRef.current === owner.draftSlotKey
+      || ownerApplyBlockRef.current?.draftSlotKey === owner.draftSlotKey
+    ) {
+      throw new Error("Materialized session draft has not completed authoritative hydration.");
+    }
+    const snapshot: ComposerDraftSubmissionSnapshot = {
+      draftSlotKey: owner.draftSlotKey,
+      sessionId: owner.sessionId,
+      input: draftInput,
+      attachments: cloneAttachments(attachments),
+    };
+
+    if (owner.sessionId) {
+      sessionDraftWriteCoordinatorV1.enqueue(
+        owner.sessionId,
+        snapshot.input,
+        snapshot.attachments,
+      );
+    } else {
+      writeComposerSessionMemoryDraft(owner.draftSlotKey, snapshot.input, snapshot.attachments);
+    }
+
+    const clearedState: ExpectedComposerDraftStateV1 = {
+      draftSlotKey: owner.draftSlotKey,
+      input: "",
+      attachments: [],
+    };
+    suppressedUiStateRef.current = clearedState;
+    inputRef.current = "";
+    attachmentsRef.current = [];
+    setDraftInput("");
+    setAttachments([]);
+
+    if (owner.sessionId) {
+      try {
+        await sessionDraftWriteCoordinatorV1.flush(owner.sessionId);
+      } catch (error) {
+        restoreFailedSubmission(snapshot);
+        throw error;
+      }
+    }
+    return snapshot;
+  }, [attachments, draftInput, restoreFailedSubmission, setAttachments]);
+
   const restoreInputToSlot = React.useCallback((targetDraftSlotKey: string, input: string) => {
-    if (activeDraftKeyRef.current !== targetDraftSlotKey) {
-      // inactiveDraft preserves newer text and every staged attachment in the inactive slot.
-      // inactiveDraft 保留非活动槽中的较新文本与全部已暂存附件。
+    const currentOwner = activeOwnerRef.current;
+    if (currentOwner.draftSlotKey !== targetDraftSlotKey) {
+      const targetSessionId = materializedSessionIdFromDraftSlotKey(targetDraftSlotKey);
+      if (targetSessionId) {
+        void restoreInactiveMaterializedDraft(targetSessionId, input, [])
+          .catch(() => toast.error(t("composer.error.draftPersistFailed")));
+        return;
+      }
       const inactiveDraft = readComposerSessionMemoryDraft(targetDraftSlotKey);
       writeComposerSessionMemoryDraft(
         targetDraftSlotKey,
@@ -207,24 +439,30 @@ export function useComposerSessionDraft(options: UseComposerSessionDraftOptions)
       );
       return;
     }
-    setDraftInput((current) => {
-      // restoredInput fills only an empty active input.
-      // restoredInput 仅在当前活动输入为空时回填。
-      const restoredInput = current || input;
-      inputRef.current = restoredInput;
-      writeComposerSessionMemoryDraft(activeDraftKeyRef.current, restoredInput, attachmentsRef.current);
-      return restoredInput;
-    });
-  }, []);
-
-  // replaceDraft synchronously replaces both state dimensions and their persisted mirror.
-  // replaceDraft 同步替换两类状态及其持久化镜像。
-  const replaceDraft = React.useCallback((input: string, nextAttachments: ComposerAttachmentSummary[]) => {
+    if (inputRef.current) {
+      return;
+    }
     inputRef.current = input;
-    attachmentsRef.current = nextAttachments;
-    writeComposerSessionMemoryDraft(activeDraftKeyRef.current, input, nextAttachments);
+    persistDraftOwner(currentOwner, input, attachmentsRef.current);
     setDraftInput(input);
-    setAttachments(nextAttachments);
+  }, [t]);
+
+  const replaceDraft = React.useCallback((
+    input: string,
+    nextAttachments: ComposerAttachmentSummary[],
+  ) => {
+    const owner = activeOwnerRef.current;
+    const detachedAttachments = cloneAttachments(nextAttachments);
+    inputRef.current = input;
+    attachmentsRef.current = detachedAttachments;
+    persistDraftOwner(owner, input, detachedAttachments);
+    suppressedUiStateRef.current = {
+      draftSlotKey: owner.draftSlotKey,
+      input,
+      attachments: detachedAttachments,
+    };
+    setDraftInput(input);
+    setAttachments(detachedAttachments);
   }, [setAttachments]);
 
   return {

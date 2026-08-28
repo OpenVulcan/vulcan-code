@@ -14,12 +14,25 @@ use vulcan_service_api::{
 use vulcan_workbench_model::TaskProjectSummary;
 use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
+use crate::project_conversation_services::begin_project_lifecycle_transition;
 use crate::{
-    SharedServiceBridgeState, controller_runtime_from_state,
+    SharedServiceBridgeState, controller_runtime_from_state, current_unix_millis_value,
     normalized_workspace_path_text_from_path, refresh_workbench_snapshot,
     service_add_project_initial_directory, webui_workspace_persist_lock,
     workspace_task_project_for_project_id_including_archived,
 };
+
+/// Returns the current Unix millisecond timestamp within the signed V1 lifecycle contract.
+/// 返回符合有符号 V1 生命周期契约的当前 Unix 毫秒时间戳。
+///
+/// # Returns / 返回值
+///
+/// Returns the exact signed timestamp or an explicit range failure.
+/// 返回精确的有符号时间戳，或显式的范围错误。
+fn current_project_restore_unix_millis() -> Result<i64, String> {
+    i64::try_from(current_unix_millis_value())
+        .map_err(|_| String::from("Project restore timestamp exceeds the signed V1 range."))
+}
 
 /// Browses one host directory for the WebUI project folder picker.
 /// 为 WebUI 项目文件夹选择器浏览一个宿主目录。
@@ -280,11 +293,11 @@ pub async fn service_add_project_from_path(
     }
     let normalized_path_text = normalized_workspace_path_text_from_path(&normalized_path);
     let controller_runtime = controller_runtime_from_state(&state)?;
-    // persist_lock serializes project restoration and creation with every session lifecycle writer.
-    // persist_lock 将项目恢复与创建同每个会话生命周期写入者串行化。
+    // persist_lock serializes project restoration and creation decisions.
+    // persist_lock 串行化项目恢复与创建决策。
     let persist_lock = webui_workspace_persist_lock();
-    // persist_guard protects the retained snapshot decision and its resulting storage mutation.
-    // persist_guard 保护保留快照决策及其结果存储变更。
+    // persist_guard protects the retained snapshot decision and its resulting project-row mutation.
+    // persist_guard 保护保留快照决策及其结果项目行变更。
     let persist_guard = persist_lock.lock().await;
     let workspace_snapshot = state
         .lock()
@@ -300,8 +313,8 @@ pub async fn service_add_project_from_path(
         .iter()
         .any(|project| task_project_matches_path(project, &normalized_path_text))
     {
-        // refresh_result is computed while project/session writers remain serialized.
-        // refresh_result 在项目/会话写入者仍保持串行时计算。
+        // refresh_result is computed while project-row decisions remain serialized.
+        // refresh_result 在项目行决策保持串行时计算。
         let refresh_result = refresh_workbench_snapshot(state.clone()).await;
         drop(persist_guard);
         return refresh_result.map(Some);
@@ -313,25 +326,43 @@ pub async fn service_add_project_from_path(
         .find(|project| task_project_matches_path(project, &normalized_path_text))
         .cloned()
     {
-        // vmm_controller_registry owns the restore fence independently of the retained service lock.
-        // vmm_controller_registry 独立于保留服务锁持有恢复栅栏。
-        let vmm_controller_registry = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?
-            .vmm_controller_registry
-            .clone();
-        // vmm_lifecycle_fence blocks archived-history readers from reopening controllers while directories move.
-        // vmm_lifecycle_fence 在目录移动期间阻止归档历史读取器重新打开控制器。
+        // lifecycle_guard blocks new project/session admissions until every V1 projection commits.
+        // lifecycle_guard 在每个 V1 投影提交前阻止新的项目/会话准入。
+        let _lifecycle_guard = begin_project_lifecycle_transition(
+            &state,
+            &project.id,
+            project.session_ids.iter().copied(),
+            "恢复",
+        )?;
+        let (vmm_controller_registry, session_registry) = {
+            let guard = state
+                .lock()
+                .map_err(|error| format!("failed to lock service state: {error}"))?;
+            (
+                guard.vmm_controller_registry.clone(),
+                guard.session_runtime_registry.clone(),
+            )
+        };
+        // vmm_lifecycle_fence blocks archived-history readers while authoritative rows transition.
+        // vmm_lifecycle_fence 在权威行转换期间阻止归档历史读取器。
         let vmm_lifecycle_fence = vmm_controller_registry
             .begin_lifecycle_transition(project.session_ids.iter().copied())?;
-        vulcan_workspace_store::workspace_store::restore_project(controller_runtime, &project.id)
-            .await?;
-        // refresh_result publishes restored project/session membership before releasing the write gate.
-        // refresh_result 在释放写入闸门前发布已恢复的项目/会话成员关系。
-        let refresh_result = refresh_workbench_snapshot(state.clone()).await;
+        crate::session_v1_lifecycle::restore_project_sessions_lifecycle_v1(
+            &controller_runtime,
+            session_registry.as_ref(),
+            &project.id,
+            current_project_restore_unix_millis()?,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        vulcan_workspace_store::workspace_store::restore_archived_project_row_v1(
+            &controller_runtime,
+            &project.id,
+        )
+        .await?;
         // workbench must commit restored membership before replacement controllers may open active paths.
         // workbench 必须先提交恢复后的成员关系，替代控制器才可打开活动路径。
-        let workbench = refresh_result?;
+        let workbench = refresh_workbench_snapshot(state.clone()).await?;
         vmm_lifecycle_fence.release()?;
         drop(persist_guard);
         return Ok(Some(workbench));
@@ -364,8 +395,8 @@ pub async fn service_add_project_from_path(
     );
     vulcan_workspace_store::workspace_store::persist_new_project(controller_runtime, &project)
         .await?;
-    // refresh_result publishes the new project before another persistence writer proceeds.
-    // refresh_result 在其他持久化写入者继续前发布新项目。
+    // refresh_result publishes the new project before another project-row writer proceeds.
+    // refresh_result 在其他项目行写入者继续前发布新项目。
     let refresh_result = refresh_workbench_snapshot(state.clone()).await;
     drop(persist_guard);
     refresh_result.map(Some)
@@ -475,10 +506,6 @@ mod tests {
             archived_task_projects: Vec::new(),
             sessions: Vec::new(),
             archived_sessions: Vec::new(),
-            session_messages: BTreeMap::new(),
-            archived_session_messages: BTreeMap::new(),
-            session_compactions: BTreeMap::new(),
-            archived_session_compactions: BTreeMap::new(),
             session_runtime_state: BTreeMap::new(),
             archived_session_runtime_state: BTreeMap::new(),
             session_run_phases: BTreeMap::new(),

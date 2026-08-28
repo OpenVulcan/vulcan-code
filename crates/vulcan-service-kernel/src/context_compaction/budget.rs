@@ -31,7 +31,13 @@ pub(crate) fn context_compaction_budget_snapshot_from_state(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
 ) -> Option<ContextBudgetSnapshot> {
-    let (live_budget, runtime_state, public_model_capabilities, compression_window_limit) = state
+    let (
+        live_budget,
+        runtime_state,
+        public_model_capabilities,
+        compression_window_limit,
+        session_runtime_registry,
+    ) = state
         .lock()
         .ok()
         .map(|guard| {
@@ -61,16 +67,26 @@ pub(crate) fn context_compaction_budget_snapshot_from_state(
                     runtime_state.as_ref(),
                     public_ai_configuration.as_ref(),
                 ),
+                Some(guard.session_runtime_registry.clone()),
             )
         })
         .unwrap_or_default();
-    let historical_budget = runtime_state.as_ref().and_then(|runtime_state| {
-        historical_context_budget_snapshot_from_runtime_state(
-            runtime_state,
-            public_model_capabilities.as_ref(),
-            compression_window_limit,
-        )
+    let v1_usage_facts = session_runtime_registry.as_ref().and_then(|registry| {
+        crate::session_context_usage_facts_from_v1_registry(registry.as_ref(), session_id)
+            .ok()
+            .flatten()
     });
+    let historical_budget = runtime_state
+        .as_ref()
+        .zip(v1_usage_facts.as_ref())
+        .and_then(|(runtime_state, v1_usage_facts)| {
+            historical_context_budget_snapshot_from_runtime_state(
+                runtime_state,
+                v1_usage_facts,
+                public_model_capabilities.as_ref(),
+                compression_window_limit,
+            )
+        });
     live_budget
         .map(|mut live_budget| {
             if live_budget.observed_usage.is_none()
@@ -120,103 +136,4 @@ pub(crate) fn context_compaction_estimated_input_tokens_from_snapshot(
     budget: Option<&ContextBudgetSnapshot>,
 ) -> Option<usize> {
     budget.map(|budget| budget.estimated_input_tokens)
-}
-
-/// Immutable baseline captured before a compaction draft is built.
-/// 构建压缩候选状态前捕获的不可变基线。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct WebuiContextCompactionBaseline {
-    /// Number of canonical provider messages in the active state.
-    /// 活跃状态中的规范 Provider 消息数量。
-    message_count: usize,
-    /// Number of canonical transcript records in the active state.
-    /// 活跃状态中的规范转录记录数量。
-    record_count: usize,
-    /// Latest canonical provider message id in the active state.
-    /// 活跃状态中最新的规范 Provider 消息标识。
-    last_message_id: Option<String>,
-    /// Latest canonical transcript record id in the active state.
-    /// 活跃状态中最新的规范转录记录标识。
-    last_record_id: Option<String>,
-    /// Context-start anchor active when the draft was built.
-    /// 构建候选状态时生效的上下文起始锚点。
-    context_start_message_id: Option<String>,
-    /// Explicit output-style override active when the draft was built.
-    /// 构建候选状态时生效的显式输出风格覆盖。
-    output_style_override_id: Option<String>,
-    /// Live context-budget fingerprint active when the draft was built.
-    /// 构建候选状态时生效的实时上下文预算指纹。
-    live_context_budget_fingerprint: Option<String>,
-    /// Live layered-context assembly fingerprint active when the draft was built.
-    /// 构建候选状态时生效的实时分层上下文装配指纹。
-    live_context_assembly_fingerprint: Option<String>,
-    /// Immutable provider-route lease active when the draft was built.
-    /// 构建候选状态时生效的不可变 Provider 路由租约。
-    provider_route_lease: Option<vulcan_workbench_model::SessionProviderRouteLeaseIdentity>,
-    /// Active provider identifier used by manual target resolution.
-    /// 手动目标解析使用的活动 Provider 标识。
-    active_provider_id: Option<String>,
-    /// Active credential connection identifier used by manual target resolution.
-    /// 手动目标解析使用的活动凭据连接标识。
-    active_connection_id: Option<String>,
-    /// Active model identifier used by manual target resolution.
-    /// 手动目标解析使用的活动模型标识。
-    active_model_id: Option<String>,
-}
-
-impl WebuiContextCompactionBaseline {
-    /// Captures the current active runtime state shape used to validate a later draft commit.
-    /// 捕获当前活跃运行时状态形态，用于校验后续候选状态提交。
-    ///
-    /// # Parameters
-    /// # 参数
-    /// `runtime_state` is the active session runtime state before draft construction begins.
-    /// `runtime_state` 是候选状态构建开始前的活跃会话运行时状态。
-    ///
-    /// # Returns
-    /// # 返回值
-    /// A compact baseline containing state shape and anchor identifiers.
-    /// 返回包含状态形态与锚点标识的紧凑基线。
-    pub(crate) fn capture(runtime_state: &SessionRuntimeStateEntry) -> Self {
-        Self {
-            message_count: runtime_state.conversation_state.messages.len(),
-            record_count: runtime_state.conversation_state.records.len(),
-            last_message_id: runtime_state
-                .conversation_state
-                .messages
-                .last()
-                .map(|message| message.id.clone()),
-            last_record_id: runtime_state
-                .conversation_state
-                .records
-                .last()
-                .map(|record| record.id.clone()),
-            context_start_message_id: runtime_state.context_start_message_id.clone(),
-            output_style_override_id: runtime_state.output_style.override_style_id.clone(),
-            live_context_budget_fingerprint: runtime_state.live_context_budget_fingerprint.clone(),
-            live_context_assembly_fingerprint: runtime_state
-                .live_context_assembly_fingerprint
-                .clone(),
-            provider_route_lease: runtime_state.provider_route_lease.clone(),
-            active_provider_id: runtime_state.active_provider_id.clone(),
-            active_connection_id: runtime_state.active_connection_id.clone(),
-            active_model_id: runtime_state.active_model_id.clone(),
-        }
-    }
-
-    /// Returns whether the active runtime state still matches this baseline.
-    /// 返回活跃运行时状态是否仍匹配该基线。
-    ///
-    /// # Parameters
-    /// # 参数
-    /// `runtime_state` is the active runtime state checked immediately before draft commit.
-    /// `runtime_state` 是候选状态提交前立即检查的活跃运行时状态。
-    ///
-    /// # Returns
-    /// # 返回值
-    /// `true` when the active state has not changed in ways that would make the draft stale.
-    /// 当活跃状态未发生会使候选状态过期的变化时返回 `true`。
-    pub(crate) fn matches(&self, runtime_state: &SessionRuntimeStateEntry) -> bool {
-        self == &Self::capture(runtime_state)
-    }
 }

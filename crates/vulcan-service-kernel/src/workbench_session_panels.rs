@@ -2,156 +2,159 @@
 //! workbench session panels 辅助逻辑。
 
 use super::*;
+use crate::session_runtime_registry_v1::{SessionRuntimeError, SessionRuntimeRegistry};
 use vulcan_agent_runtime::agent_runtime::question_runtime::QuestionRequest;
 use vulcan_service_api::{
-    ConversationAttentionSummary, ConversationSummary, SessionProviderUsageAggregateSummary,
-    SessionProviderUsageCallSummary, SessionProviderUsageSummary, SessionProviderUsageTokenSummary,
+    ConversationAttentionSummary, ConversationSummary, SessionProviderUsageCallSummary,
+    SessionProviderUsageSummary, SessionProviderUsageTokenSummary,
+};
+use vulcan_session_core::v1::{
+    AggregatedUsage, ApiCallStatus, ApiErrorCategory, ApiPurposeKind, ApiStatsEvent,
+    ConversationEvent, EventBody, SessionDocument, UsageSnapshot,
 };
 
-/// Projects persisted physical Provider usage facts into the browser-facing session summary.
-/// 将持久化的物理 Provider 用量事实投影为浏览器侧会话摘要。
+/// Projects authoritative V1 API facts into the browser-facing session summary.
+/// 将权威 V1 API 事实投影为浏览器侧会话摘要。
 ///
 /// # Parameters
 /// 参数
-/// `runtime_state` contains the authoritative session runtime entry.
-/// `runtime_state` 包含权威会话运行态条目。
+/// `document` contains the authoritative ordered V1 session event stream.
+/// `document` 包含权威且有序的 V1 会话事件流。
 ///
 /// # Returns
 /// 返回值
-/// Returns `None` only when the session has not observed a physical Provider request.
-/// 仅当会话尚未观察到任何物理 Provider 请求时返回 `None`。
-pub(crate) fn session_provider_usage_summary_from_runtime_state(
-    runtime_state: &SessionRuntimeStateEntry,
-) -> Option<SessionProviderUsageSummary> {
-    let ledger = &runtime_state.provider_call_ledger;
-    if ledger.is_empty() {
-        return None;
+/// Returns `None` only when the V1 stream has no physical Provider API start fact.
+/// 仅当 V1 事件流中不存在物理 Provider API 启动事实时返回 `None`。
+pub(crate) fn session_provider_usage_summary_from_v1_document(
+    document: &SessionDocument,
+) -> Result<Option<SessionProviderUsageSummary>, String> {
+    let events = document.events();
+    let terminal_stats = events
+        .iter()
+        .filter_map(|event| match &event.event {
+            EventBody::ApiStats(stats) => Some(stats),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let starts = events
+        .iter()
+        .filter_map(|event| match &event.event {
+            EventBody::ApiStarted(started) => Some((event, started)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if starts.is_empty() {
+        return Ok(None);
     }
-    let active_records = ledger.active_calls_in_sequence();
-    let lifetime_records = ledger
-        .calls_in_sequence()
-        .into_iter()
-        .filter(|record| !record.inherited_from_fork)
-        .collect::<Vec<_>>();
-    let inherited_records = ledger
-        .calls_in_sequence()
-        .into_iter()
-        .filter(|record| record.inherited_from_fork)
-        .collect::<Vec<_>>();
-    let active_branch = session_provider_usage_aggregate(&active_records);
-    let lifetime = session_provider_usage_aggregate(&lifetime_records);
-    let inherited = session_provider_usage_aggregate(&inherited_records);
-    let latest_call = active_records
+    let in_flight_call_count = starts
+        .iter()
+        .filter(|(_, started)| {
+            !terminal_stats
+                .iter()
+                .any(|stats| stats.api_call_id == started.api_call_id)
+        })
+        .count();
+    let unknown_usage_call_count = terminal_stats
+        .iter()
+        .filter(|stats| stats.usage.has_no_usage())
+        .count();
+    let last_usage = terminal_stats
+        .iter()
+        .rev()
+        .find(|stats| !stats.usage.has_no_usage())
+        .map(|stats| session_provider_usage_tokens(&stats.usage))
+        .transpose()?
+        .flatten();
+    let cumulative_usage = (!terminal_stats.is_empty())
+        .then(|| AggregatedUsage::aggregate(terminal_stats.iter().map(|stats| &stats.usage)))
+        .map(|usage| aggregated_provider_usage_tokens(&usage))
+        .transpose()?
+        .flatten();
+    let latest_call = starts
         .last()
-        .map(|record| SessionProviderUsageCallSummary {
-            provider_call_id: record.provider_call_id.clone(),
-            owner_kind: record.identity.owner_kind.clone(),
-            status: session_provider_usage_status_key(record.status).to_string(),
-            usage: record
-                .provider_usage_evidence
-                .provider_usage
-                .as_ref()
-                .and_then(session_provider_usage_tokens),
-            started_at_ms: Some(record.prepared_at_ms),
-            completed_at_ms: record.completed_at_ms,
-            error_category: record.error_category.clone(),
-            error_code: record.error_code.clone(),
-        });
-    let last_usage = ledger.last_usage();
-    let cumulative_usage = ledger.cumulative_usage();
-    Some(SessionProviderUsageSummary {
-        provider_call_count: active_branch.provider_call_count,
-        in_flight_call_count: active_records
-            .iter()
-            .filter(|record| !record.status.is_terminal())
-            .count(),
-        unknown_usage_call_count: active_branch.unknown_usage_call_count,
-        last_usage: last_usage.as_ref().and_then(session_provider_usage_tokens),
-        cumulative_usage: cumulative_usage
-            .as_ref()
-            .and_then(session_provider_usage_tokens),
-        active_branch,
-        lifetime,
-        inherited,
-        latest_call,
-        usage_revision: ledger.revision,
-    })
-}
-
-/// Aggregates exact Provider-reported usage for one preselected session scope.
-/// 为一个预先选定的会话口径汇总精确的 Provider 实测用量。
-///
-/// # Parameters
-/// 参数
-/// `records` contains only records belonging to the requested branch or billing scope.
-/// `records` 仅包含属于目标分支或账单口径的记录。
-///
-/// # Returns
-/// 返回值
-/// Returns physical-call count, unknown terminal count, and cumulative real usage.
-/// 返回物理调用数、未知终态数与累计真实用量。
-fn session_provider_usage_aggregate(
-    records: &[&vulcan_workbench_model::SessionProviderCallRecord],
-) -> SessionProviderUsageAggregateSummary {
-    let mut usage = ProviderUsageSnapshot::default();
-    let mut observed_usage = false;
-    let mut unknown_usage_call_count = 0_usize;
-    for record in records {
-        if record.status.is_terminal()
-            && record.provider_usage_evidence.availability
-                == vulcan_workbench_model::SessionProviderUsageAvailability::Missing
-        {
-            unknown_usage_call_count = unknown_usage_call_count.saturating_add(1);
-        }
-        let Some(record_usage) = record.provider_usage_evidence.provider_usage.as_ref() else {
-            continue;
-        };
-        if session_provider_usage_tokens(record_usage).is_none() {
-            continue;
-        }
-        observed_usage = true;
-        add_provider_usage_dimension(&mut usage.input_tokens, record_usage.input_tokens);
-        add_provider_usage_dimension(
-            &mut usage.uncached_input_tokens,
-            record_usage.uncached_input_tokens,
-        );
-        add_provider_usage_dimension(
-            &mut usage.cached_input_tokens,
-            record_usage.cached_input_tokens,
-        );
-        add_provider_usage_dimension(
-            &mut usage.cache_creation_input_tokens,
-            record_usage.cache_creation_input_tokens,
-        );
-        add_provider_usage_dimension(&mut usage.output_tokens, record_usage.output_tokens);
-        add_provider_usage_dimension(&mut usage.reasoning_tokens, record_usage.reasoning_tokens);
-        add_provider_usage_dimension(&mut usage.total_tokens, record_usage.total_tokens);
-    }
-    SessionProviderUsageAggregateSummary {
-        provider_call_count: records.len(),
+        .map(|(event, started)| {
+            let stats = terminal_stats
+                .iter()
+                .find(|stats| stats.api_call_id == started.api_call_id)
+                .copied();
+            session_provider_usage_call_summary(event, started.purpose, stats)
+        })
+        .transpose()?;
+    Ok(Some(SessionProviderUsageSummary {
+        provider_call_count: starts.len(),
+        in_flight_call_count,
         unknown_usage_call_count,
-        usage: observed_usage
-            .then(|| session_provider_usage_tokens(&usage))
-            .flatten(),
-    }
+        last_usage,
+        cumulative_usage,
+        latest_call,
+        usage_revision: document.memory_revision(),
+    }))
 }
 
-/// Saturating-adds one optional Provider usage dimension without converting missing to zero.
-/// 对一个可选 Provider 用量维度执行饱和累加，且不把缺失值转换为零。
-///
-/// # Parameters
-/// 参数
-/// `target` is the cumulative dimension and `value` is one call's reported value.
-/// `target` 是累计维度，`value` 是单次调用报告的值。
-///
-/// # Returns
-/// 返回值
-/// Returns no value and mutates only when the Provider reported this dimension.
-/// 不返回值，仅当 Provider 报告该维度时才修改累计值。
-fn add_provider_usage_dimension(target: &mut Option<usize>, value: Option<usize>) {
-    if let Some(value) = value {
-        *target = Some(target.unwrap_or_default().saturating_add(value));
+/// Projects every currently registered session without opening cold session storage.
+/// 在不打开冷会话存储的前提下投影当前已注册的全部会话。
+pub(crate) fn session_provider_usage_summaries_from_v1_registry(
+    registry: &SessionRuntimeRegistry,
+    session_ids: impl IntoIterator<Item = SessionId>,
+) -> Result<BTreeMap<SessionId, SessionProviderUsageSummary>, String> {
+    let mut summaries = BTreeMap::new();
+    for session_id in session_ids {
+        let handle = match registry.get(session_id) {
+            Ok(handle) => handle,
+            Err(SessionRuntimeError::SessionNotRegistered(_)) => continue,
+            Err(error) => {
+                return Err(format!(
+                    "failed to read V1 Provider usage owner for session {session_id}: {error}"
+                ));
+            }
+        };
+        let summary = handle
+            .read(session_provider_usage_summary_from_v1_document)
+            .map_err(|error| {
+                format!("failed to read V1 Provider usage events for session {session_id}: {error}")
+            })??;
+        if let Some(summary) = summary {
+            summaries.insert(session_id, summary);
+        }
     }
+    Ok(summaries)
+}
+
+/// Builds the latest physical API lifecycle projection from one V1 start/stats pair.
+/// 从一组 V1 启动与统计事实构建最近一次物理 API 生命周期投影。
+fn session_provider_usage_call_summary(
+    started_event: &ConversationEvent,
+    purpose: ApiPurposeKind,
+    stats: Option<&ApiStatsEvent>,
+) -> Result<SessionProviderUsageCallSummary, String> {
+    let started = match &started_event.event {
+        EventBody::ApiStarted(started) => started,
+        _ => {
+            return Err(String::from(
+                "V1 Provider usage projection received a non-api_started event.",
+            ));
+        }
+    };
+    Ok(SessionProviderUsageCallSummary {
+        provider_call_id: started.api_call_id.value().to_string(),
+        owner_kind: api_purpose_key(purpose).to_string(),
+        status: stats
+            .map(|stats| api_call_status_key(stats.status))
+            .unwrap_or("prepared")
+            .to_string(),
+        usage: stats
+            .map(|stats| session_provider_usage_tokens(&stats.usage))
+            .transpose()?
+            .flatten(),
+        started_at_ms: Some(started_event.created_at_ms),
+        completed_at_ms: stats.and_then(|stats| stats.timing.completed_at_ms),
+        error_category: stats
+            .and_then(|stats| stats.error.as_ref())
+            .map(|error| api_error_category_key(error.category).to_string()),
+        error_code: stats
+            .and_then(|stats| stats.error.as_ref())
+            .and_then(|error| error.error_code.clone()),
+    })
 }
 
 /// Applies live Provider API call counts to the selected session goal summary.
@@ -171,38 +174,115 @@ pub(crate) fn session_goal_summary_with_provider_usage(
 /// Converts one internal usage snapshot to the stable WebUI token shape.
 /// 将内部用量快照转换为稳定的 WebUI Token 结构。
 fn session_provider_usage_tokens(
-    usage: &ProviderUsageSnapshot,
-) -> Option<SessionProviderUsageTokenSummary> {
+    usage: &UsageSnapshot,
+) -> Result<Option<SessionProviderUsageTokenSummary>, String> {
     let summary = SessionProviderUsageTokenSummary {
-        input_tokens: usage.input_tokens,
-        uncached_input_tokens: usage.uncached_input_tokens,
-        cached_input_tokens: usage.cached_input_tokens,
-        cache_creation_input_tokens: usage.cache_creation_input_tokens,
-        output_tokens: usage.output_tokens,
-        reasoning_tokens: usage.reasoning_tokens,
-        total_tokens: usage.total_tokens,
+        input_tokens: checked_provider_token(usage.input_tokens, "input_tokens")?,
+        uncached_input_tokens: checked_provider_token(
+            usage.uncached_input_tokens,
+            "uncached_input_tokens",
+        )?,
+        cached_input_tokens: checked_provider_token(usage.cache_read_tokens, "cache_read_tokens")?,
+        cache_creation_input_tokens: checked_provider_token(
+            usage.cache_write_tokens,
+            "cache_write_tokens",
+        )?,
+        output_tokens: checked_provider_token(usage.output_tokens, "output_tokens")?,
+        reasoning_tokens: checked_provider_token(usage.reasoning_tokens, "reasoning_tokens")?,
+        total_tokens: checked_provider_token(usage.total_tokens, "total_tokens")?,
     };
-    (summary.input_tokens.is_some()
+    Ok((summary.input_tokens.is_some()
         || summary.uncached_input_tokens.is_some()
         || summary.cached_input_tokens.is_some()
         || summary.cache_creation_input_tokens.is_some()
         || summary.output_tokens.is_some()
         || summary.reasoning_tokens.is_some()
         || summary.total_tokens.is_some())
-    .then_some(summary)
+    .then_some(summary))
 }
 
-/// Returns the stable WebUI status key for one persisted Provider request segment.
-/// 返回持久化 Provider 请求分段的稳定 WebUI 状态键。
-fn session_provider_usage_status_key(status: SessionProviderCallStatus) -> &'static str {
+/// Converts aggregate V1 usage into the stable WebUI token shape.
+/// 将聚合后的 V1 用量转换为稳定的 WebUI Token 结构。
+fn aggregated_provider_usage_tokens(
+    usage: &AggregatedUsage,
+) -> Result<Option<SessionProviderUsageTokenSummary>, String> {
+    let summary = SessionProviderUsageTokenSummary {
+        input_tokens: checked_provider_token(usage.input_tokens, "input_tokens")?,
+        uncached_input_tokens: checked_provider_token(
+            usage.uncached_input_tokens,
+            "uncached_input_tokens",
+        )?,
+        cached_input_tokens: checked_provider_token(usage.cache_read_tokens, "cache_read_tokens")?,
+        cache_creation_input_tokens: checked_provider_token(
+            usage.cache_write_tokens,
+            "cache_write_tokens",
+        )?,
+        output_tokens: checked_provider_token(usage.output_tokens, "output_tokens")?,
+        reasoning_tokens: checked_provider_token(usage.reasoning_tokens, "reasoning_tokens")?,
+        total_tokens: checked_provider_token(usage.total_tokens, "total_tokens")?,
+    };
+    Ok((summary.input_tokens.is_some()
+        || summary.uncached_input_tokens.is_some()
+        || summary.cached_input_tokens.is_some()
+        || summary.cache_creation_input_tokens.is_some()
+        || summary.output_tokens.is_some()
+        || summary.reasoning_tokens.is_some()
+        || summary.total_tokens.is_some())
+    .then_some(summary))
+}
+
+/// Converts one JS-safe V1 token dimension into the host display width.
+/// 将一个 JS 安全的 V1 Token 维度转换为宿主显示宽度。
+fn checked_provider_token(
+    value: Option<u64>,
+    field: &'static str,
+) -> Result<Option<usize>, String> {
+    value
+        .map(|value| {
+            usize::try_from(value).map_err(|_| {
+                format!("V1 Provider usage field `{field}` exceeds the host display width.")
+            })
+        })
+        .transpose()
+}
+
+/// Returns the stable WebUI purpose key for one physical V1 API call.
+/// 返回一次物理 V1 API 调用的稳定 WebUI 用途键。
+fn api_purpose_key(purpose: ApiPurposeKind) -> &'static str {
+    match purpose {
+        ApiPurposeKind::MainGeneration => "main_generation",
+        ApiPurposeKind::RetryGeneration => "retry_generation",
+        ApiPurposeKind::Compaction => "compaction",
+        ApiPurposeKind::Continue => "continue",
+        ApiPurposeKind::Subagent => "subagent",
+    }
+}
+
+/// Returns the stable WebUI lifecycle key for one physical V1 API call.
+/// 返回一次物理 V1 API 调用的稳定 WebUI 生命周期键。
+fn api_call_status_key(status: ApiCallStatus) -> &'static str {
     match status {
-        SessionProviderCallStatus::Prepared => "prepared",
-        SessionProviderCallStatus::Dispatched => "dispatched",
-        SessionProviderCallStatus::Succeeded => "succeeded",
-        SessionProviderCallStatus::Failed => "failed",
-        SessionProviderCallStatus::Cancelled => "cancelled",
-        SessionProviderCallStatus::TimedOut => "timed_out",
-        SessionProviderCallStatus::Interrupted => "interrupted",
+        ApiCallStatus::Prepared => "prepared",
+        ApiCallStatus::Dispatched => "dispatched",
+        ApiCallStatus::InProgress => "in_progress",
+        ApiCallStatus::Completed => "succeeded",
+        ApiCallStatus::Failed => "failed",
+        ApiCallStatus::Cancelled => "cancelled",
+        ApiCallStatus::Interrupted => "interrupted",
+    }
+}
+
+/// Returns the stable WebUI error category for one redacted V1 API error.
+/// 返回一条脱敏 V1 API 错误的稳定 WebUI 分类。
+fn api_error_category_key(category: ApiErrorCategory) -> &'static str {
+    match category {
+        ApiErrorCategory::Provider => "provider",
+        ApiErrorCategory::Network => "network",
+        ApiErrorCategory::Auth => "auth",
+        ApiErrorCategory::Balance => "balance",
+        ApiErrorCategory::Protocol => "protocol",
+        ApiErrorCategory::Timeout => "timeout",
+        ApiErrorCategory::Unknown => "unknown",
     }
 }
 
@@ -861,135 +941,140 @@ pub(crate) fn compact_panel_preview(content: &str) -> String {
 mod tests {
     use super::*;
     use vulcan_service_api::PendingPromptsChangedDelta;
+    use vulcan_session_core::v1::context::LockedBaselineProjection;
+    use vulcan_session_core::v1::document::{
+        ApiCompletion, ClientInputSubmission, PrepareAndStartApiInput,
+    };
+    use vulcan_session_core::v1::event::{
+        ApiEndReason, ApiRequestSnapshot, ApiTimings, ContinuationEligibility,
+        ProviderProjectionProof,
+    };
+    use vulcan_session_core::v1::ids::{ApiCallId, ClientActionId};
+    use vulcan_session_core::v1::projection::provider_visible_fingerprint;
     use vulcan_vmm::{ContextItem, VmmRecallBatch};
 
-    /// Appends one deterministic terminal Provider call for session-panel scope tests.
-    /// 为会话面板口径测试追加一条确定性的 Provider 终态调用。
+    /// Starts one deterministic physical V1 Provider API for session-panel tests.
+    /// 为会话面板测试启动一次确定性的 V1 物理 Provider API。
     ///
     /// # Parameters
     /// 参数
-    /// `ledger` is the authoritative test ledger, `call_id` is unique, and `total_tokens` is reported usage.
-    /// `ledger` 是权威测试账本，`call_id` 唯一，`total_tokens` 是报告用量。
+    /// `document` is the authoritative V1 document and `now_ms` timestamps the start fact.
+    /// `document` 是权威 V1 文档，`now_ms` 为启动事实提供时间戳。
     ///
     /// # Returns
     /// 返回值
-    /// Returns no value and asserts both lifecycle transitions are accepted.
-    /// 不返回值，并断言两个生命周期转换均被接受。
-    fn append_session_panel_usage_call(
-        ledger: &mut vulcan_workbench_model::SessionProviderCallLedger,
-        call_id: &str,
-        total_tokens: usize,
-    ) {
-        let identity = vulcan_workbench_model::SessionProviderCallIdentity {
-            logical_request_id: format!("execution-{call_id}"),
-            execution_id: format!("execution-{call_id}"),
-            turn_id: Some(format!("turn-{call_id}")),
-            attempt_index: 0,
-            retry_number: 0,
-            owner_kind: String::from("main_agent"),
-            owner_id: String::from("session"),
-            owner_name_snapshot: String::from("主代理"),
-            operation: String::from("conversation"),
-            provider_id: String::from("provider"),
-            provider_name_snapshot: String::from("Provider"),
-            model_id: String::from("model"),
-            model_name_snapshot: String::from("Model"),
-            connection_id: String::from("connection"),
-            service_entry_id: String::from("public-api"),
-            protocol_profile_id: String::from("responses"),
-            manifest_revision: 1,
-            manifest_generation: 1,
-            binding_source: String::from("manifest"),
-            binding_rule: None,
-            route_revision: String::from("route"),
-            request_profiles: Vec::new(),
-            response_profiles: Vec::new(),
-        };
-        assert!(
-            ledger.observe_started(vulcan_workbench_model::SessionProviderCallStarted {
-                provider_call_id: call_id.to_string(),
-                identity: identity.clone(),
-                prepared_at_ms: 1,
-                request_assembly_fingerprint: None,
-                context_generation_id: None,
-                context_start_record_id: None,
-                model_route_fingerprint: None,
-                toolset_fingerprint: None,
-                system_prompt_fingerprint: None,
-                request_text_measurement: None,
-                budget_accounting: None,
-            })
-        );
-        assert!(
-            ledger.observe_completed(vulcan_workbench_model::SessionProviderCallCompleted {
-                provider_call_id: call_id.to_string(),
-                identity,
-                status: vulcan_workbench_model::SessionProviderCallStatus::Succeeded,
-                provider_usage_evidence: vulcan_workbench_model::SessionProviderUsageEvidence {
-                    availability: vulcan_workbench_model::SessionProviderUsageAvailability::Final,
-                    provider_usage: Some(ProviderUsageSnapshot {
-                        total_tokens: Some(total_tokens),
-                        ..ProviderUsageSnapshot::default()
-                    }),
+    /// Returns the allocated local API identity.
+    /// 返回已分配的本地 API 身份。
+    fn start_session_panel_api(document: &mut SessionDocument, now_ms: i64) -> ApiCallId {
+        let retained_from_seq = document.events().first().expect("root input event").seq;
+        let through_seq = document.events().last().expect("provider-visible tail").seq;
+        document
+            .prepare_and_start_api(PrepareAndStartApiInput {
+                purpose: ApiPurposeKind::MainGeneration,
+                request: ApiRequestSnapshot::new("provider", "model"),
+                request_budget_evidence:
+                    crate::session_runtime_registry_v1::test_provider_request_budget_evidence(),
+                projection: ProviderProjectionProof {
+                    segment_generation: document.segment_generation(),
+                    document_revision: document.memory_revision(),
+                    retained_from_seq,
+                    through_seq,
+                    fingerprint_sha256: provider_visible_fingerprint(
+                        document.events(),
+                        through_seq,
+                    )
+                    .expect("provider-visible fingerprint"),
                 },
-                prepared_at_ms: 1,
-                dispatched_at_ms: Some(2),
-                first_event_at_ms: Some(3),
-                first_token_at_ms: Some(3),
-                completed_at_ms: 4,
-                dispatch_outcome: Some(String::from("dispatched")),
-                dispatch_outcome_known: Some(true),
-                semantic_output_observed: Some(true),
-                semantic_output_observed_known: Some(true),
-                replay_safe: Some(false),
-                error_category: None,
-                error_code: None,
+                locked_baseline: LockedBaselineProjection::empty(),
+                continuation_action_id: None,
+                now_ms,
             })
-        );
+            .expect("start V1 Provider API")
+            .into_value()
+            .api_call_id
     }
 
-    /// Verifies active, lifetime, and inherited Provider scopes never mix counts or tokens.
-    /// 验证活动分支、会话生命周期与分叉继承口径不会混合调用数或 Token。
-    #[test]
-    fn provider_usage_summary_separates_active_lifetime_and_inherited_scopes() {
-        let mut runtime_state = SessionRuntimeStateEntry::default();
-        append_session_panel_usage_call(&mut runtime_state.provider_call_ledger, "inherited", 5);
-        append_session_panel_usage_call(&mut runtime_state.provider_call_ledger, "current", 10);
-        append_session_panel_usage_call(&mut runtime_state.provider_call_ledger, "superseded", 20);
-        runtime_state
-            .provider_call_ledger
-            .calls
-            .get_mut("inherited")
-            .expect("inherited fixture call should exist")
-            .inherited_from_fork = true;
-        let superseded = runtime_state
-            .provider_call_ledger
-            .calls
-            .get_mut("superseded")
-            .expect("superseded fixture call should exist");
-        superseded.active_branch_member = false;
-        superseded.superseded_by_edit_generation = Some(1);
+    /// Completes one deterministic physical V1 Provider API with official usage.
+    /// 使用官方用量完成一次确定性的 V1 物理 Provider API。
+    fn complete_session_panel_api(
+        document: &mut SessionDocument,
+        api_call_id: ApiCallId,
+        total_tokens: u64,
+        now_ms: i64,
+    ) {
+        document
+            .complete_api_group(
+                api_call_id,
+                ApiCompletion {
+                    request: ApiRequestSnapshot::new("provider", "model"),
+                    usage: UsageSnapshot {
+                        total_tokens: Some(total_tokens),
+                        ..UsageSnapshot::default()
+                    },
+                    status: ApiCallStatus::Completed,
+                    end_reason: Some(ApiEndReason::CompletedSuccessfully),
+                    error: None,
+                    continuation_eligibility: ContinuationEligibility::Forbidden,
+                    timing: ApiTimings::default(),
+                    provider_source: None,
+                    completed_at_ms: now_ms,
+                },
+            )
+            .expect("complete V1 Provider API");
+    }
 
-        let summary = session_provider_usage_summary_from_runtime_state(&runtime_state)
-            .expect("non-empty ledger should project usage scopes");
-        assert_eq!(summary.provider_call_count, 2);
-        assert_eq!(summary.active_branch.provider_call_count, 2);
+    /// Verifies the panel derives counts and usage only from canonical V1 API facts.
+    /// 验证面板仅从规范 V1 API 事实派生调用计数与用量。
+    #[test]
+    fn provider_usage_summary_projects_canonical_v1_api_facts() {
+        let mut document = SessionDocument::new("session", "project", "title", 1);
+        document
+            .submit_root_input(
+                ClientInputSubmission::new(
+                    ClientActionId::try_new("provider-panel-root").expect("valid root action"),
+                    "root",
+                    Vec::new(),
+                ),
+                1,
+            )
+            .expect("root input")
+            .into_value();
+
+        let first_api = start_session_panel_api(&mut document, 2);
+        complete_session_panel_api(&mut document, first_api, 10, 3);
+        let second_api = start_session_panel_api(&mut document, 4);
+        complete_session_panel_api(&mut document, second_api, 20, 5);
+        let third_api = start_session_panel_api(&mut document, 6);
+
+        let summary = session_provider_usage_summary_from_v1_document(&document)
+            .expect("valid V1 usage projection")
+            .expect("started APIs should project usage");
+        assert_eq!(summary.provider_call_count, 3);
+        assert_eq!(summary.in_flight_call_count, 1);
+        assert_eq!(summary.unknown_usage_call_count, 0);
+        assert_eq!(
+            summary.last_usage.and_then(|usage| usage.total_tokens),
+            Some(20)
+        );
         assert_eq!(
             summary
-                .active_branch
-                .usage
+                .cumulative_usage
                 .and_then(|usage| usage.total_tokens),
-            Some(15)
-        );
-        assert_eq!(summary.lifetime.provider_call_count, 2);
-        assert_eq!(
-            summary.lifetime.usage.and_then(|usage| usage.total_tokens),
             Some(30)
         );
-        assert_eq!(summary.inherited.provider_call_count, 1);
         assert_eq!(
-            summary.inherited.usage.and_then(|usage| usage.total_tokens),
-            Some(5)
+            summary
+                .latest_call
+                .as_ref()
+                .map(|call| call.provider_call_id.as_str()),
+            Some(third_api.value().to_string().as_str())
+        );
+        assert_eq!(
+            summary
+                .latest_call
+                .as_ref()
+                .map(|call| call.status.as_str()),
+            Some("prepared")
         );
     }
 
@@ -1047,8 +1132,6 @@ mod tests {
             unread,
             attention: None,
             project_id: None,
-            fork_source: None,
-            continuation: None,
         }
     }
 

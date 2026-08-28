@@ -1,7 +1,7 @@
 //! Parent-side client for one isolated `vulcan-terminal-host` process.
 //! 单个隔离 `vulcan-terminal-host` 进程的父端客户端。
 
-use crate::process_creation::{apply_child_path_prefixes, apply_windows_no_window};
+use crate::process_creation::{apply_child_path_prefixes, new_background_tokio_command};
 use crate::terminal_host_protocol::{
     TERMINAL_HOST_CONTRACT, TERMINAL_HOST_MAX_COLS, TERMINAL_HOST_MAX_ROWS, TerminalHostErrorEvent,
     TerminalHostFrame, TerminalHostFrameKind, TerminalHostResizeRequest, TerminalHostStartRequest,
@@ -12,7 +12,7 @@ use crate::terminal_host_protocol::{
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::{env, io};
-use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
+use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout};
 use tokio::sync::mpsc::{Receiver, channel};
 use tokio::time::{Duration, Instant, timeout};
 
@@ -308,7 +308,8 @@ pub async fn spawn_terminal_host(
     path_prefixes: &[PathBuf],
 ) -> Result<TerminalHostConnection, String> {
     let host_path = resolve_terminal_host_path()?;
-    let mut command = Command::new(crate::runtime_assets::native_host_path(&host_path));
+    let mut command =
+        new_background_tokio_command(crate::runtime_assets::native_host_path(&host_path));
     command
         .arg("--contract")
         .arg(TERMINAL_HOST_CONTRACT)
@@ -316,16 +317,15 @@ pub async fn spawn_terminal_host(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    apply_windows_no_window(&mut command);
     // VULCAN_HOME keeps the terminal host and its PTY child aligned with the compiled user profile.
     // VULCAN_HOME 让终端宿主及其 PTY 子进程与当前编译用户配置保持一致。
-    if env::var_os("VULCAN_HOME").is_none() {
-        if let Some(user_vulcan_root) = crate::runtime_assets::resolve_user_vulcan_root() {
-            command.env(
-                "VULCAN_HOME",
-                crate::runtime_assets::native_host_path(&user_vulcan_root),
-            );
-        }
+    if env::var_os("VULCAN_HOME").is_none()
+        && let Some(user_vulcan_root) = crate::runtime_assets::resolve_user_vulcan_root()
+    {
+        command.env(
+            "VULCAN_HOME",
+            crate::runtime_assets::native_host_path(&user_vulcan_root),
+        );
     }
     apply_child_path_prefixes(&mut command, path_prefixes)?;
     let mut child = command.spawn().map_err(|error| {

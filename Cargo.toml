@@ -5,7 +5,6 @@ members = [
     "crates/vulcan-subagent-core",
     "crates/vulcan-session-core",
     "crates/vulcan-session-boundary",
-    "crates/vulcan-main-session",
     "crates/vulcan-task-session",
     "crates/vulcan-service-api",
     "crates/vulcan-service-host",
@@ -59,7 +58,6 @@ vulcan-agent-runtime = { path = "crates/vulcan-agent-runtime" }
 vulcan-subagent-core = { path = "crates/vulcan-subagent-core" }
 vulcan-session-core = { path = "crates/vulcan-session-core" }
 vulcan-session-boundary = { path = "crates/vulcan-session-boundary" }
-vulcan-main-session = { path = "crates/vulcan-main-session" }
 vulcan-task-session = { path = "crates/vulcan-task-session" }
 vulcan-mcp-runtime = { path = "crates/vulcan-mcp-runtime" }
 vulcan-plugin-runtime = { path = "crates/vulcan-plugin-runtime" }

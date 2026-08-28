@@ -1,6 +1,5 @@
 import type {
   ComposerSlashCommandSummary,
-  ConversationMessage,
   StartupSnapshot,
   VmmManagedRuntimeSettingsDraft,
   WorkbenchSnapshot,
@@ -151,49 +150,6 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
   archivedProjects: [],
   archivedConversations: [],
   selectedConversationId: "preview",
-  messages: [
-    { id: "preview-user", conversationId: "preview", role: "user", body: "The new WebUI should fully cover the current interface." },
-    {
-      id: "preview-assistant",
-      conversationId: "preview",
-      role: "assistant",
-      body: "This page previews the first layout pass for the workspace, settings, plugins, VMM, providers, tools, and diagnostics areas.\n\n:::tool-call tool_name=service_startup_snapshot tool_call_id=preview-service-startup status=preview\n## Tool Call\n\n`service_startup_snapshot`\n\n## Arguments\n\n```json\n{}\n```\n:::\n\n```diff\ndiff --git a/apps/vulcan-code-web/src/main.tsx b/apps/vulcan-code-web/src/main.tsx\n+ Add Markdown conversation rendering\n+ Support detail dialogs for special tool blocks\n```\n\nLive conversations will render tool calls, command output, and diff blocks in separate sections.",
-    },
-    {
-      id: "preview-turn-stats",
-      conversationId: "preview",
-      role: "assistant",
-      title: "Turn Stats · completed",
-      recordKind: "turn-stats",
-      body: "Status: completed\nProvider calls: 2\nTool calls: 3\nInput tokens: 45310\nOutput tokens: 1943\nReasoning tokens: 1182\nTotal tokens: 47253",
-      metadata: {
-        turn_stats: {
-          status: "completed",
-          provider_call_count: 2,
-          tool_call_count: 3,
-          input_tokens: 45310,
-          output_tokens: 1943,
-          reasoning_tokens: 1182,
-          total_tokens: 47253,
-          cached_input_tokens: 34944,
-          duration_ms: 51275,
-          output_tokens_per_second: 37.894,
-        },
-      },
-    },
-    {
-      id: "preview-tool-result",
-      conversationId: "preview",
-      role: "assistant",
-      title: "Tool Result · service_startup_snapshot",
-      recordKind: "tool-result-output",
-      body: "Ran 1 command\n\nCore Service is currently in browser-preview mode.",
-      metadata: {
-        tool_call_id: "preview-service-startup",
-        tool_name: "service_startup_snapshot",
-      },
-    },
-  ],
   toolCalls: [{ id: "preview-tool", name: "service_startup_snapshot", status: "preview", detail: "Browser mode is using fallback data." }],
   featureAreas: [
     { id: "chat", label: "Workspace", description: "Project conversations, message stream, and model input", status: "Available" },
@@ -695,12 +651,6 @@ function cloneWorkbenchSnapshot(snapshot: WorkbenchSnapshot): WorkbenchSnapshot 
 // browserFallbackSnapshot 返回当前浏览器预览快照。
 export function browserFallbackSnapshot(): WorkbenchSnapshot {
   return cloneWorkbenchSnapshot(browserFallbackWorkbenchState);
-}
-
-// loadBrowserFallbackConversationMessages returns preview messages for one conversation.
-// loadBrowserFallbackConversationMessages 返回单个会话的预览消息。
-export function loadBrowserFallbackConversationMessages(sessionId: string): ConversationMessage[] {
-  return browserFallbackWorkbenchState.messages.filter((message) => message.conversationId === sessionId);
 }
 
 // updateBrowserFallbackWorkbench mutates preview state and returns a fresh snapshot.

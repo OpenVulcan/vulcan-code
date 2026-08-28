@@ -123,8 +123,7 @@ pub(crate) async fn run_task_with_shared_runtime_context(
     let task_id = request.task_id;
     // active_task_run_guard reserves this protocol execution before any start event can escape.
     // active_task_run_guard 在任何启动事件逸出前预留本协议执行。
-    let active_task_run_guard =
-        task_runtime.claim_and_reserve_active_task_run(task_id, &request.execution_id)?;
+    let active_task_run_guard = task_runtime.claim_and_reserve_active_task_run(&request)?;
     let trace_started_at = current_unix_millis_u64();
     task_runtime_trace(
         "shared_task_start",
@@ -393,19 +392,11 @@ pub(crate) async fn run_task_with_shared_runtime_context(
             .is_some_and(|context_budget| context_budget.should_compact());
         let provider_limit_should_compact =
             task_provider_request_limit_should_compact_after_current_report(
-                &background_task_runtime,
-                background_request.root_session_id,
-                background_request.task_id,
-                &background_resolved_config.effective_config.context_compaction,
+                &background_resolved_config
+                    .effective_config
+                    .context_compaction,
                 report.provider_request_count,
-            )
-            .unwrap_or_else(|error| {
-                eprintln!(
-                    "[task-session-store] provider-request compaction check failed for task `{}`: {error}",
-                    background_request.public_task_id
-                );
-                false
-            });
+            );
         let should_compact_context = budget_should_compact || provider_limit_should_compact;
         let mut outcome = task_execution_outcome_from_report(
             &background_request,
@@ -494,13 +485,9 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                 }
             }
             Ok(Err(error)) if task_execution_error_is_stopped(error.as_str()) => {
-                let stopped_snapshot = stopped_task_snapshot_from_store_or_request(
-                    &task_runtime,
-                    request.root_session_id,
-                    task_id,
-                    &request,
-                )
-                .unwrap_or_else(|| request.snapshot.clone());
+                let stopped_snapshot =
+                    stopped_task_snapshot_from_runtime_or_request(&task_runtime, task_id, &request)
+                        .unwrap_or_else(|| request.snapshot.clone());
                 let outcome = build_stopped_task_execution_outcome(
                     task_id,
                     stopped_controller_config.clone(),
@@ -582,13 +569,9 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                 }
             }
             Err(join_error) if join_error.is_cancelled() => {
-                let stopped_snapshot = stopped_task_snapshot_from_store_or_request(
-                    &task_runtime,
-                    request.root_session_id,
-                    task_id,
-                    &request,
-                )
-                .unwrap_or_else(|| request.snapshot.clone());
+                let stopped_snapshot =
+                    stopped_task_snapshot_from_runtime_or_request(&task_runtime, task_id, &request)
+                        .unwrap_or_else(|| request.snapshot.clone());
                 let outcome = build_stopped_task_execution_outcome(
                     task_id,
                     stopped_controller_config,
@@ -823,12 +806,6 @@ fn merge_task_mid_turn_report(
 ///
 /// # Parameters
 /// 参数
-/// `task_runtime` owns the segmented TaskSession store roots.
-/// `task_runtime` 持有分段 TaskSession 存储根目录。
-/// `root_session_id` identifies the root workspace session that owns the task store.
-/// `root_session_id` 标识拥有子任务存储的根工作区会话。
-/// `task_id` identifies the child task session being measured.
-/// `task_id` 标识正在计量的子代理会话。
 /// `policy` is the resolved context-compaction policy for this child session.
 /// `policy` 是该子代理会话解析后的上下文压缩策略。
 /// `current_provider_requests` is the provider request count reported by the just-finished run.
@@ -839,117 +816,11 @@ fn merge_task_mid_turn_report(
 /// `true` when automatic compaction is enabled and the cumulative count reaches the configured limit.
 /// 当自动压缩启用且累计次数达到配置阈值时返回 `true`。
 fn task_provider_request_limit_should_compact_after_current_report(
-    task_runtime: &TaskRuntime,
-    root_session_id: SessionId,
-    task_id: SessionId,
     policy: &ContextCompactionPolicySnapshot,
     current_provider_requests: usize,
-) -> Result<bool, String> {
-    if !task_provider_request_limit_is_enabled(policy) {
-        return Ok(false);
-    }
-    let previous_provider_requests =
-        task_provider_requests_since_latest_compaction(task_runtime, root_session_id, task_id)?;
-    Ok(task_provider_request_limit_reached(
-        policy,
-        previous_provider_requests.saturating_add(current_provider_requests),
-    ))
-}
-
-/// Loads the provider request count accumulated after the latest completed task-context compaction.
-/// 加载最近一次子代理上下文压缩完成后累计的 Provider 请求次数。
-///
-/// # Parameters
-/// 参数
-/// `task_runtime` owns the segmented TaskSession store roots.
-/// `task_runtime` 持有分段 TaskSession 存储根目录。
-/// `root_session_id` identifies the root workspace session that owns the task store.
-/// `root_session_id` 标识拥有子任务存储的根工作区会话。
-/// `task_id` identifies the child task session being measured.
-/// `task_id` 标识正在计量的子代理会话。
-///
-/// # Returns
-/// 返回值
-/// The sum of persisted provider turns after the latest completed compaction marker.
-/// 返回最近一次完成压缩标记后的持久化 Provider 轮次数总和。
-pub(super) fn task_provider_requests_since_latest_compaction(
-    task_runtime: &TaskRuntime,
-    root_session_id: SessionId,
-    task_id: SessionId,
-) -> Result<usize, String> {
-    let Some(store) = task_runtime.task_session_store_for_root(root_session_id)? else {
-        return Ok(0);
-    };
-    let events = store
-        .load_events(SessionNodeId::from(task_id))
-        .map_err(|error| error.message)?;
-    Ok(task_provider_requests_since_latest_compaction_event(
-        &events,
-    ))
-}
-
-/// Sums provider requests from task events after the latest completed compaction marker.
-/// 汇总最近一次完成压缩标记后的子任务事件 Provider 请求数。
-///
-/// # Parameters
-/// 参数
-/// `events` are the persisted events loaded for one TaskSession node.
-/// `events` 是为单个子代理节点加载的持久化事件。
-///
-/// # Returns
-/// 返回值
-/// The provider turn count represented by task lifecycle events after the last compaction marker.
-/// 返回最近一次压缩标记后由子任务生命周期事件表示的 Provider 轮次数。
-pub(super) fn task_provider_requests_since_latest_compaction_event(
-    events: &[SessionEventRecord],
-) -> usize {
-    let start_index = events
-        .iter()
-        .rposition(task_event_is_completed_context_compaction_marker)
-        .map(|index| index.saturating_add(1))
-        .unwrap_or(0);
-    events[start_index..]
-        .iter()
-        .filter_map(task_event_provider_turns_executed)
-        .sum()
-}
-
-/// Determines whether one task event is a completed context-compaction marker.
-/// 判断单个子任务事件是否为已完成的上下文压缩标记。
-///
-/// # Parameters
-/// 参数
-/// `event` is the persisted TaskSession event being inspected.
-/// `event` 是正在检查的持久化子代理事件。
-///
-/// # Returns
-/// 返回值
-/// `true` when the event marks a completed context compaction pass.
-/// 当事件标记一次已完成的上下文压缩时返回 `true`。
-fn task_event_is_completed_context_compaction_marker(event: &SessionEventRecord) -> bool {
-    matches!(event.kind, SessionEventKind::RuntimeMarker)
-        && event
-            .payload
-            .get("context_compaction_status")
-            .and_then(Value::as_str)
-            == Some("completed")
-}
-
-/// Extracts the persisted provider-turn count from one TaskSession lifecycle event.
-/// 从单个子代理生命周期事件中提取持久化 Provider 轮次数。
-///
-/// # Parameters
-/// 参数
-/// `event` is the persisted TaskSession event being inspected.
-/// `event` 是正在检查的持久化子代理事件。
-///
-/// # Returns
-/// 返回值
-/// The provider-turn count stored by terminal task status events.
-/// 返回终态子任务状态事件保存的 Provider 轮次数。
-fn task_event_provider_turns_executed(event: &SessionEventRecord) -> Option<usize> {
-    let count = event.payload.get("provider_turns_executed")?.as_u64()?;
-    usize::try_from(count).ok()
+) -> bool {
+    task_provider_request_limit_is_enabled(policy)
+        && task_provider_request_limit_reached(policy, current_provider_requests)
 }
 
 /// Determines whether the provider-request count reaches the resolved compaction limit.
@@ -1084,53 +955,37 @@ async fn resume_queued_messages_after_active_run_released(
     }
 }
 
-/// Loads the latest persisted TaskSession context as a core snapshot when it is available.
-/// 在可用时将最新持久化 TaskSession 上下文加载为核心快照。
-pub(super) fn current_task_snapshot_from_store(
+/// Reads the latest resident child-execution snapshot when it is available.
+/// 在可用时读取最新的进程内子代理执行快照。
+pub(super) fn current_resident_task_snapshot(
     task_runtime: &TaskRuntime,
-    root_session_id: SessionId,
     task_id: SessionId,
 ) -> Result<Option<CoreConversationSnapshot>, String> {
-    let Some(store) = task_runtime
-        .task_session_store_for_root(root_session_id)
-        .map_err(|error| {
-            format!("TaskSession store root lookup failed for `{root_session_id}`: {error}")
+    let snapshot = task_runtime
+        .sessions
+        .read()
+        .map_err(|_| {
+            String::from(
+                "The task session registry is locked and cannot read the resident conversation snapshot.",
+            )
         })?
-    else {
-        return Ok(None);
-    };
-    let Some(context) = store
-        .load_context(SessionNodeId::from(task_id))
-        .map_err(|error| {
-            format!("TaskSession context load failed for task `{task_id}`: {error}")
-        })?
-    else {
-        return Ok(None);
-    };
-    let conversation_state: SessionConversationState = serde_json::from_value(
-        context.conversation_state,
-    )
-    .map_err(|error| {
-        format!(
-            "TaskSession context for task `{task_id}` contains invalid conversation state: {error}"
-        )
-    })?;
-    Ok(Some(build_core_conversation_snapshot(&conversation_state)?))
+        .get(&task_id)
+        .map(|record| record.snapshot.clone());
+    Ok(snapshot)
 }
 
-/// Loads the latest stopped-task snapshot and logs corrupted persisted context before falling back.
-/// 加载最新停止任务快照，并在持久化上下文损坏时记录诊断后再回退。
-fn stopped_task_snapshot_from_store_or_request(
+/// Reads the latest stopped-task snapshot and falls back to the request snapshot on registry failure.
+/// 读取最新停止任务快照，并在注册表失败时回退到请求快照。
+fn stopped_task_snapshot_from_runtime_or_request(
     task_runtime: &TaskRuntime,
-    root_session_id: SessionId,
     task_id: SessionId,
     request: &TaskExecutionRequest,
 ) -> Option<CoreConversationSnapshot> {
-    match current_task_snapshot_from_store(task_runtime, root_session_id, task_id) {
-        Ok(snapshot) => snapshot,
+    match current_resident_task_snapshot(task_runtime, task_id) {
+        Ok(snapshot) => snapshot.or_else(|| Some(request.snapshot.clone())),
         Err(error) => {
             eprintln!(
-                "[task-session-store] using request snapshot for stopped task `{}` because persisted context could not be loaded: {error}",
+                "[task-runtime] using request snapshot for stopped task `{}` because the resident snapshot could not be read: {error}",
                 request.public_task_id
             );
             Some(request.snapshot.clone())
@@ -1155,26 +1010,56 @@ pub(super) fn spawn_task_session_context_compaction(
     }
 
     tokio::spawn(async move {
-        if let Err(error) =
-            run_task_session_context_compaction(task_runtime, context, request, resolved_config)
-                .await
+        let compacted_snapshot = match run_task_session_context_compaction(
+            Arc::clone(&task_runtime),
+            context,
+            request.clone(),
+            resolved_config,
+        )
+        .await
         {
-            eprintln!("[task-session-store] context compaction failed: {error}");
+            Ok(compacted_snapshot) => compacted_snapshot,
+            Err(error) => {
+                eprintln!("[task-runtime] context compaction failed: {error}");
+                return;
+            }
+        };
+        let Some(compacted_snapshot) = compacted_snapshot else {
+            return;
+        };
+        let mut sessions = match task_runtime.sessions.write() {
+            Ok(sessions) => sessions,
+            Err(_) => {
+                eprintln!(
+                    "[task-runtime] compacted snapshot could not update task {} because the resident registry is locked",
+                    request.task_id
+                );
+                return;
+            }
+        };
+        let Some(record) = sessions.get_mut(&request.task_id) else {
+            return;
+        };
+        // A late compaction must never overwrite a newer execution generation.
+        // 晚到的压缩结果绝不能覆盖更新的执行代次。
+        if record.execution_id.as_deref() == Some(request.execution_id.as_str()) {
+            record.snapshot = compacted_snapshot;
+            record.updated_at = current_unix_millis_text();
         }
     });
 }
 
-/// Runs one TaskSession context compaction pass using the shared prompt-compaction runtime and segmented store.
-/// 使用共享提示词压缩运行时与分段存储执行一次 TaskSession 上下文压缩。
+/// Runs one child request-context compaction pass using the shared prompt-compaction runtime.
+/// 使用共享提示词压缩运行时执行一次子代理请求上下文压缩。
 ///
 /// # Parameters
 /// 参数
-/// `task_runtime` resolves the segmented store and shared task runtime dependencies.
-/// `task_runtime` 解析分段存储与共享子任务运行时依赖。
+/// `task_runtime` owns the process-local child execution registry.
+/// `task_runtime` 持有进程内子代理执行注册表。
 /// `context` supplies the exact provider and foundation context used for summary generation.
 /// `context` 提供摘要生成使用的精确 Provider 与基础运行时上下文。
-/// `request` identifies the completed task execution whose persisted context may be compacted.
-/// `request` 标识其持久化上下文可能被压缩的已完成子任务执行。
+/// `request` identifies the completed child execution whose request context may be compacted.
+/// `request` 标识其请求上下文可能被压缩的已完成子代理执行。
 /// `resolved_config` supplies the effective context-compaction policy for that execution.
 /// `resolved_config` 提供该次执行的有效上下文压缩策略。
 ///
@@ -1183,48 +1068,25 @@ pub(super) fn spawn_task_session_context_compaction(
 /// The committed compacted snapshot, `None` when compaction is unnecessary or superseded, or an explicit failure.
 /// 返回已提交的压缩快照；无需压缩或已被新状态替代时返回 `None`，失败时返回明确错误。
 pub(crate) async fn run_task_session_context_compaction(
-    task_runtime: Arc<TaskRuntime>,
+    _task_runtime: Arc<TaskRuntime>,
     context: TaskExecutionRuntimeContext,
     request: TaskExecutionRequest,
     resolved_config: TaskSessionResolvedConfig,
 ) -> Result<Option<CoreConversationSnapshot>, String> {
-    let Some(store) = task_runtime.task_session_store_for_root(request.root_session_id)? else {
-        return Ok(None);
-    };
-    let task_node_id = SessionNodeId::from(request.task_id);
-    let Some(context_document) = store
-        .load_context(task_node_id)
-        .map_err(|error| error.message)?
-    else {
-        return Ok(None);
-    };
-    let conversation_state: SessionConversationState =
-        serde_json::from_value(context_document.conversation_state.clone())
-            .map_err(|error| error.to_string())?;
+    let mut conversation_state = core_snapshot_to_session_conversation_state(&request.snapshot)?;
     let messages = conversation_state_to_compaction_source_messages(&conversation_state);
     if messages.is_empty() {
         return Ok(None);
     }
-    let event_sequence = store
-        .load_events(task_node_id)
-        .map(|events| events.len() as u64)
-        .unwrap_or(0);
-    // compactionPreparationRequest carries the exact provider overrides already resolved for this task execution.
-    // compactionPreparationRequest 携带已为本次任务执行解析的精确供应商覆盖。
+
+    // The preparation request carries the exact provider overrides already resolved for this task.
+    // 准备请求携带已为本次任务执行解析的精确供应商覆盖。
     let (provider_configuration, compaction_preparation_request) =
         build_task_runtime_preparation_request(&context, &request, &resolved_config)?;
-    // compactionSessionId scopes the task session's immutable provider-route lease.
-    // compactionSessionId 确定任务会话不可变供应商路由租约的作用域。
     let compaction_session_id = compaction_preparation_request.session_id.to_string();
-    // modelTarget freezes the same public route for remote and local task compaction when available.
-    // modelTarget 在公共运行时可用时为远端与本地任务压缩冻结同一路由。
-    // publicAiRuntime is required because TaskSession planning must bind to one exact model window.
-    // publicAiRuntime 是必需项，因为 TaskSession 规划必须绑定一个精确模型窗口。
     let public_ai_runtime = context.foundation.public_ai_runtime().ok_or_else(|| {
         String::from("TaskSession context compaction requires the public AI runtime.")
     })?;
-    // behaviorSeed carries only task-owned behavior switches into exact route resolution.
-    // behaviorSeed 仅把任务自有行为开关带入精确路由解析。
     let behavior_seed = task_context_compaction_policy_from_snapshot(
         &resolved_config.effective_config.context_compaction,
     );
@@ -1251,17 +1113,13 @@ pub(crate) async fn run_task_session_context_compaction(
         session_label: &request.public_task_id,
         messages: &messages,
         all_messages: &messages,
-        context_start_message_id: context_document.compaction_anchor.as_deref(),
+        context_start_message_id: None,
         source_until_message_id: None,
         policy: model_target.context_compaction_policy,
     }) else {
         return Ok(None);
     };
-    // modelLabel retains the resolved provider/model identity for terminal diagnostics.
-    // modelLabel 为终态诊断保留解析后的供应商/模型身份。
     let model_label = Some(model_target.label());
-    // launchContext freezes the task's exact agent prompt, tool policy, mode, and prompt-skill controls.
-    // launchContext 冻结子任务的精确代理提示词、工具策略、模式与提示词技能控制。
     let launch_context =
         PromptCompactionLaunchContext::from_execution_request(&compaction_preparation_request);
     let stream = stream_prompt_compaction_foundation_job(PromptCompactionFoundationJobRequest {
@@ -1288,74 +1146,27 @@ pub(crate) async fn run_task_session_context_compaction(
             continue;
         };
         let execution = result?;
-        // sourceContextDocument is the exact optimistic concurrency precondition for compaction publication.
-        // sourceContextDocument 是发布压缩结果时使用的精确乐观并发前置条件。
-        let source_context_document = context_document.clone();
-        let application = apply_task_session_compaction_result(
-            context_document,
+        let summary_message_id =
+            format!("task-summary-{}", execution.compaction_result.compaction_id);
+        vulcan_context_compaction::compact_conversation_with_compaction_result(
+            &mut conversation_state,
+            summary_message_id.clone(),
             &execution.compaction_result,
-            event_sequence,
         )
-        .map_err(|error| error.message)?;
-        let compacted_conversation_state: SessionConversationState =
-            serde_json::from_value(application.context.conversation_state.clone())
-                .map_err(|error| error.to_string())?;
-        let compacted_snapshot = build_core_conversation_snapshot(&compacted_conversation_state)?;
-        let checkpoint_id = application.checkpoint.checkpoint_id.clone();
-        let timestamp_ms = application.checkpoint.timestamp_ms;
-        let summary = application.checkpoint.summary.clone();
-        // recordCompactionReport is copied before the compacted context is moved into optimistic persistence.
-        // recordCompactionReport 在压缩上下文移入乐观持久化之前完成复制。
-        let record_compaction_report = application.record_compaction_report;
-        if !store
-            .save_compacted_context_if_current(&source_context_document, application.context)
-            .map_err(|error| error.message)?
-        {
-            task_runtime_trace(
-                "task_context_compaction_superseded",
-                format!(
-                    "task={} execution_id={}",
-                    request.task_id, request.execution_id
-                ),
-            );
-            return Ok(None);
-        }
-        store
-            .save_compaction_checkpoint(application.checkpoint)
-            .map_err(|error| error.message)?;
-        store
-            .append_event(SessionEventRecord::new(
-                format!("task-context-compaction-{checkpoint_id}"),
-                task_node_id,
-                event_sequence,
-                SessionEventKind::RuntimeMarker,
-                timestamp_ms,
-                json!({
-                    "context_compaction_status": "completed",
-                    "checkpoint_id": checkpoint_id,
-                    "summary": summary,
-                    "fallback_used": execution.fallback_used,
-                    "provider_request_count": execution.provider_request_count,
-                    "tail_context_limit": execution.compaction_result.tail_selection.context_limit,
-                    "tail_policy_source": execution.compaction_result.tail_selection.policy_source.label(),
-                    "tail_nominal_token_budget": execution.compaction_result.tail_selection.nominal_token_budget,
-                    "tail_segment_limit": execution.compaction_result.tail_selection.segment_limit,
-                    "tail_retained_segment_count": execution.compaction_result.tail_selection.retained_segment_count,
-                    "tail_retained_message_count": execution.compaction_result.tail_selection.retained_message_ids.len(),
-                    "tail_retained_token_estimate": execution.compaction_result.tail_selection.retained_token_estimate,
-                    "tail_previewed_tool_output_count": execution.compaction_result.tail_selection.previewed_tool_output_count,
-                    "tail_omitted_tool_output_token_estimate": execution.compaction_result.tail_selection.omitted_tool_output_token_estimate,
-                    "tail_newest_segment_exceeds_nominal_budget": execution.compaction_result.tail_selection.newest_segment_exceeds_nominal_budget,
-                    "record_original_count": record_compaction_report.original_record_count,
-                    "record_full_count": record_compaction_report.full_record_count,
-                    "record_compacted_historical_count": record_compaction_report.compacted_historical_record_count,
-                    "record_deleted_count": record_compaction_report.deleted_record_count,
-                    "record_final_count": record_compaction_report.final_record_count,
-                    "record_unmatched_retained_tool_identity_count": record_compaction_report.unmatched_retained_tool_identity_count,
-                }),
-            ))
-            .map_err(|error| error.message)?;
-        return Ok(Some(compacted_snapshot));
+        .map_err(|error| error.to_string())?;
+        vulcan_context_compaction::append_remote_responses_compaction_context(
+            &mut conversation_state,
+            &summary_message_id,
+            &execution.compaction_result,
+        )
+        .map_err(|error| error.to_string())?;
+        vulcan_context_compaction::compact_conversation_records_after_summary(
+            &mut conversation_state,
+            &summary_message_id,
+            execution.compaction_result.policy,
+            |value| Some(value.clone()),
+        );
+        return Ok(Some(build_core_conversation_snapshot(&conversation_state)?));
     }
     Ok(None)
 }

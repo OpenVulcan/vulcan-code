@@ -3,10 +3,26 @@
 
 use super::*;
 use crate::pending_prompts::dispatch_queued_pending_prompt_hook;
+use crate::session_goal_lifecycle::session_goal_dispatch_authority_from_v1_handle;
+use crate::session_runtime_registry_v1::{SessionHandle, SessionPersistenceBackend};
 use crate::webui_prompt_lifecycle::commit_prompt_preparation_failure_boundary;
-use vulcan_session_boundary::{
-    SessionBoundaryEventKind, SessionEventScope, SessionEventVisibility,
-};
+use vulcan_session_core::v1::document::{FlushCandidate, SessionDocument};
+use vulcan_workspace_store::workspace_store::{SessionV1FlushResult, SessionV1StoreError};
+
+/// Read-only persistence seam for restart-derived Goal dispatch authority tests.
+/// 用于重启派生 Goal 分发权威测试的只读持久化接缝。
+struct RestartGoalReadOnlyBackend;
+
+impl SessionPersistenceBackend for RestartGoalReadOnlyBackend {
+    /// Rejects writes because loaded Goal admission must remain read-only until Provider start.
+    /// 拒绝写入，因为已加载 Goal 的准入在 Provider 启动前必须保持只读。
+    fn flush(
+        &self,
+        _candidate: &FlushCandidate,
+    ) -> Result<SessionV1FlushResult, SessionV1StoreError> {
+        panic!("restart Goal dispatch authority must not flush before Provider start")
+    }
+}
 
 /// Inserts one Workbench conversation row matching an existing test workspace session.
 /// 插入一条与现有测试工作区会话匹配的 Workbench 会话行。
@@ -31,8 +47,6 @@ fn insert_test_workbench_conversation(state: &mut ServiceBridgeState, session_id
         unread: false,
         attention: None,
         project_id: Some(String::from("project-a")),
-        fork_source: None,
-        continuation: None,
     });
 }
 
@@ -81,22 +95,18 @@ fn webui_session_kernel_rejects_turn_during_lifecycle_transition() {
     assert!(!webui_session_kernel_has_active_turn(&state, session_id));
 }
 
-/// Verifies a Goal mutation blocks registration in-flight and permanently retires captured authority.
-/// 验证 Goal 变更会阻止进行中的注册，并永久退役已捕获的权威版本。
+/// Verifies Goal mutation and queued dispatch reservations cannot overlap kernel registration.
+/// 验证 Goal 变更预留与排队分发预留不能重叠进行 kernel 注册。
 #[test]
-fn goal_dispatch_authority_rejects_turns_during_and_after_mutation() {
-    // session_id identifies the Goal session whose dispatch authority changes.
-    // session_id 标识分发权威发生变化的 Goal 会话。
+fn goal_dispatch_registration_requires_the_current_prompt_reservation() {
+    // session_id identifies the Goal session whose dispatch is being admitted.
+    // session_id 标识正在准入 Goal 分发的会话。
     let session_id = SessionId::from_u128(0x95);
-    // state owns the exclusion reservation, authority version, and runtime kernel atomically.
-    // state 原子持有互斥预留、权威版本与运行时 kernel。
+    // state owns the exclusion reservation and runtime kernel atomically.
+    // state 原子持有互斥预留与运行时 kernel。
     let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
         session_id,
     )));
-    // captured_version represents a Goal dispatch validated before the mutation begins.
-    // captured_version 表示在变更开始前完成校验的 Goal 分发版本。
-    let captured_version = session_goal_dispatch_version(&state, session_id)
-        .expect("initial Goal dispatch version should be readable");
     // transition_guard prevents registration while the durable Goal mutation is incomplete.
     // transition_guard 在持久 Goal 变更尚未完成时阻止回合注册。
     let transition_guard = begin_session_turn_start_exclusion(&state, [session_id], "更新目标状态")
@@ -105,42 +115,125 @@ fn goal_dispatch_authority_rejects_turns_during_and_after_mutation() {
         // guard exposes the shared service state for the registration attempt under test.
         // guard 为测试中的注册尝试提供共享服务状态。
         let mut guard = state.lock().expect("service state lock");
-        let blocked = start_webui_goal_session_kernel_turn(
+        let blocked = start_reserved_webui_session_kernel_turn(
             &mut guard,
             session_id,
-            captured_version,
             "turn-during-mutation",
-            ActiveTurnKind::UserPrompt,
+            ActiveTurnKind::GoalContinuation,
+            Uuid::new_v4(),
         );
         assert!(blocked.is_err());
         assert!(!webui_session_kernel_has_active_turn(&guard, session_id));
     }
-    // current_version commits the in-process invalidation paired with the durable mutation.
-    // current_version 提交与持久变更配对的进程内失效版本。
-    let current_version = advance_session_goal_dispatch_version(&state, session_id)
-        .expect("Goal dispatch version should advance");
     drop(transition_guard);
-    // guard owns the atomic version check and kernel registration after mutation completion.
-    // guard 在变更完成后持有原子版本校验与 kernel 注册。
+    let dispatch_guard = try_begin_pending_prompt_dispatch_exclusion(&state, session_id)
+        .expect("Goal dispatch reservation should be readable")
+        .expect("idle Goal session should be reserved");
+    let authorization = dispatch_guard
+        .existing_submission_authorization(session_id)
+        .expect("dispatch guard should expose its exact reservation");
+    // guard owns atomic reservation validation and kernel registration after mutation completion.
+    // guard 在变更完成后持有原子预留校验与 kernel 注册。
     let mut guard = state.lock().expect("service state lock");
-    let stale = start_webui_goal_session_kernel_turn(
+    let stale = start_reserved_webui_session_kernel_turn(
         &mut guard,
         session_id,
-        captured_version,
         "turn-after-mutation",
-        ActiveTurnKind::UserPrompt,
+        ActiveTurnKind::GoalContinuation,
+        Uuid::new_v4(),
     );
     assert!(stale.is_err());
     assert!(!webui_session_kernel_has_active_turn(&guard, session_id));
-    start_webui_goal_session_kernel_turn(
+    start_reserved_webui_session_kernel_turn(
         &mut guard,
         session_id,
-        current_version,
         "turn-current-authority",
-        ActiveTurnKind::UserPrompt,
+        ActiveTurnKind::GoalContinuation,
+        authorization.reservation_id,
     )
-    .expect("current Goal authority should register exactly one turn");
+    .expect("current Goal dispatch owner should register exactly one turn");
     assert!(webui_session_kernel_has_active_turn(&guard, session_id));
+    drop(guard);
+    drop(dispatch_guard);
+    assert!(
+        try_begin_pending_prompt_dispatch_exclusion(&state, session_id)
+            .expect("running Goal continuation admission should be readable")
+            .is_none(),
+        "an already registered Goal continuation must not receive a second PromptSubmission owner"
+    );
+}
+
+/// Verifies a freshly registered open GoalContinuation Turn grants one concurrent dispatch owner.
+/// 验证新注册的开放 GoalContinuation 回合只授予一个并发分发所有者。
+#[test]
+fn restarted_open_goal_continuation_admits_exactly_one_dispatch_owner() {
+    let session_id = SessionId::from_u128(0x9610);
+    let mut document = SessionDocument::new(session_id.to_string(), "project-a", "Goal", 1);
+    let transition = document
+        .create_goal(
+            "resume after restart",
+            Some(10_000),
+            "Continue the active goal after restart.",
+            2,
+        )
+        .expect("Goal creation should open one continuation Turn");
+    let expected_turn_id = transition
+        .continuation_turn_id
+        .expect("new Goal should own one continuation Turn");
+    let handle =
+        SessionHandle::with_backend(session_id, document, Arc::new(RestartGoalReadOnlyBackend));
+    let service_state = test_service_state_with_parent_session(session_id);
+    service_state
+        .session_runtime_registry
+        .register(handle.clone())
+        .expect("loaded V1 handle should register once");
+    let authority = session_goal_dispatch_authority_from_v1_handle(handle.as_ref(), session_id)
+        .expect("loaded Goal authority should project")
+        .expect("open GoalContinuation should be dispatchable");
+    assert_eq!(authority.turn_id, expected_turn_id);
+    let state = Arc::new(Mutex::new(service_state));
+
+    let first_state = state.clone();
+    let second_state = state.clone();
+    let first = std::thread::spawn(move || {
+        try_begin_pending_prompt_dispatch_exclusion(&first_state, session_id)
+    });
+    let second = std::thread::spawn(move || {
+        try_begin_pending_prompt_dispatch_exclusion(&second_state, session_id)
+    });
+    let mut owners = [
+        first.join().expect("first admission thread should finish"),
+        second
+            .join()
+            .expect("second admission thread should finish"),
+    ]
+    .into_iter()
+    .filter_map(|result| result.expect("concurrent Goal admission should be readable"))
+    .collect::<Vec<_>>();
+    assert_eq!(owners.len(), 1, "only one PromptSubmission owner may win");
+    let owner = owners.pop().expect("one exact dispatch owner");
+    let authorization = owner
+        .existing_submission_authorization(session_id)
+        .expect("winning owner should expose its exact reservation");
+    let turn_label = format!("v1-goal-turn-{}", authority.turn_id.value());
+    {
+        let mut guard = state.lock().expect("service state lock");
+        start_reserved_webui_session_kernel_turn(
+            &mut guard,
+            session_id,
+            turn_label.as_str(),
+            ActiveTurnKind::GoalContinuation,
+            authorization.reservation_id,
+        )
+        .expect("winning Goal owner should register the formal turn");
+    }
+    drop(owner);
+    assert!(
+        try_begin_pending_prompt_dispatch_exclusion(&state, session_id)
+            .expect("registered Goal dispatch should remain readable")
+            .is_none(),
+        "restart reconciliation must not schedule the same open Turn twice"
+    );
 }
 
 /// Verifies a new user turn clears stale wait-agent coordination from earlier turns.
@@ -228,16 +321,19 @@ async fn webui_pending_prompt_enqueue_does_not_interrupt_active_wait_agent() {
     });
     tokio::time::sleep(std::time::Duration::from_millis(25)).await;
 
-    let workspace_snapshot = state
-        .workspace_snapshot
-        .as_mut()
-        .expect("workspace snapshot should exist");
-    let workspace_path = workspace_path_for_session(workspace_snapshot, session_id);
+    let workspace_path = workspace_path_for_session(
+        state
+            .workspace_snapshot
+            .as_ref()
+            .expect("workspace snapshot should exist"),
+        session_id,
+    );
     enqueue_webui_pending_prompt_from_submission(
-        workspace_snapshot,
+        &mut state,
         &agent_runtime,
         session_id,
         &workspace_path,
+        "queued-wait-agent-action",
         String::from("queued follow-up"),
         None,
         Vec::new(),
@@ -267,20 +363,23 @@ fn queued_prompt_hook_waits_for_authoritative_workspace_commit() {
     let agent_runtime = test_agent_runtime_bridge();
     // workspace is the detached queue draft that is not authoritative yet.
     // workspace 是尚未成为权威状态的分离队列草稿。
-    let workspace = service_state
-        .workspace_snapshot
-        .as_mut()
-        .expect("workspace fixture should exist");
     // workspace_path is the authoritative session path captured by the event descriptor.
     // workspace_path 是事件描述捕获的权威会话路径。
-    let workspace_path = workspace_path_for_session(workspace, session_id);
+    let workspace_path = workspace_path_for_session(
+        service_state
+            .workspace_snapshot
+            .as_ref()
+            .expect("workspace fixture should exist"),
+        session_id,
+    );
     // hook_event describes the queued prompt without mutating Hook runtime.
     // hook_event 描述排队提示词，但不修改 Hook 运行时。
     let hook_event = enqueue_webui_pending_prompt_from_submission(
-        workspace,
+        &mut service_state,
         &agent_runtime,
         session_id,
         &workspace_path,
+        "queued-hook-after-commit-action",
         String::from("queued after commit"),
         None,
         Vec::new(),
@@ -322,20 +421,23 @@ fn queued_prompt_hook_lock_failure_preserves_queue_entry() {
     let agent_runtime = test_agent_runtime_bridge();
     // workspace is the detached queue state preserved independently of Hook notification.
     // workspace 是独立于 Hook 通知保留的分离队列状态。
-    let workspace = service_state
-        .workspace_snapshot
-        .as_mut()
-        .expect("workspace fixture should exist");
     // workspace_path is the exact session path captured with the queued entry.
     // workspace_path 是随排队条目捕获的精确会话路径。
-    let workspace_path = workspace_path_for_session(workspace, session_id);
+    let workspace_path = workspace_path_for_session(
+        service_state
+            .workspace_snapshot
+            .as_ref()
+            .expect("workspace fixture should exist"),
+        session_id,
+    );
     // hook_event describes the queue mutation already present in the workspace.
     // hook_event 描述工作区中已经存在的队列变更。
     let hook_event = enqueue_webui_pending_prompt_from_submission(
-        workspace,
+        &mut service_state,
         &agent_runtime,
         session_id,
         &workspace_path,
+        "queued-hook-failure-action",
         String::from("queue survives hook failure"),
         None,
         Vec::new(),
@@ -364,10 +466,10 @@ fn queued_prompt_hook_lock_failure_preserves_queue_entry() {
         .expect_err("poisoned Hook runtime should reject dispatch");
     assert!(error.contains("failed to lock conversation hook runtime"));
     assert_eq!(
-        workspace
-            .session_runtime_state
+        service_state
+            .pending_prompt_process_mirrors
             .get(&session_id)
-            .map(|runtime_state| runtime_state.ui_state.pending_prompt_panel_queue.len()),
+            .map(|mirror| mirror.ui_state.pending_prompt_panel_queue.len()),
         Some(1)
     );
 }
@@ -869,20 +971,6 @@ fn owned_registration_failure_finalizes_failed_phase_and_kernel_turn() {
             .expect("kernel should exist")
             .has_active_turn()
     );
-    // continuation records a real failed terminal generation instead of leaving an ownerless admission claim.
-    // continuation 记录真实失败终态代际，而不是遗留无所有者的准入领取。
-    let continuation = &guard
-        .workspace_snapshot
-        .as_ref()
-        .expect("workspace should remain available")
-        .session_runtime_state
-        .get(&session_id)
-        .expect("runtime state should remain available")
-        .provider_call_ledger
-        .continuation;
-    assert_eq!(continuation.terminal_reason.as_deref(), Some("failed"));
-    assert!(continuation.terminal_at_ms.is_some());
-    assert!(continuation.claimed_at_ms.is_none());
 }
 
 /// Verifies a pre-registration compaction failure closes its exact kernel turn and phase.
@@ -951,20 +1039,6 @@ fn pre_registration_compaction_failure_finalizes_owned_kernel_turn() {
             .get(&session_id)
             .expect("kernel should exist")
             .has_active_turn()
-    );
-    // Compaction is not a resumable execution and must not manufacture a Continue generation.
-    // 压缩不是可恢复执行，绝不能凭空创建 Continue 代际。
-    assert!(
-        guard
-            .workspace_snapshot
-            .as_ref()
-            .expect("workspace should remain available")
-            .session_runtime_state
-            .get(&session_id)
-            .expect("runtime state should remain available")
-            .provider_call_ledger
-            .continuation
-            .is_empty()
     );
 }
 
@@ -1054,141 +1128,6 @@ async fn prepared_failure_terminalizes_exact_active_stream_owner() {
             .expect("kernel should exist")
             .has_active_turn()
     );
-    assert_eq!(
-        guard.session_terminal_persistence_owners.get(&session_id),
-        Some(&SessionTerminalPersistenceOwner::StreamTask(
-            active_stream_task_id
-        ))
-    );
-    // continuation closes the failed generation before the exact stream owner disappears.
-    // continuation 在精确流所有者消失前闭合失败代际。
-    let continuation = &guard
-        .workspace_snapshot
-        .as_ref()
-        .expect("workspace should remain available")
-        .session_runtime_state
-        .get(&session_id)
-        .expect("runtime state should remain available")
-        .provider_call_ledger
-        .continuation;
-    assert_eq!(continuation.terminal_reason.as_deref(), Some("failed"));
-    assert!(continuation.terminal_at_ms.is_some());
-}
-
-/// Verifies an exhausted continuation ledger invalidates the exact retry token without abandoning terminal cleanup.
-/// 验证 Continue 账本耗尽时会失效精确重试令牌，而不会放弃终态清理。
-///
-/// # Parameters
-/// 参数
-/// This test has no parameters.
-/// 此测试没有参数。
-///
-/// # Returns
-/// 返回值
-/// This test returns no value and fails if the claimed token or active owner survives the terminal transaction.
-/// 此测试无返回值；若已领取令牌或活动所有者在终态事务后仍然存活，则测试失败。
-#[tokio::test]
-async fn prepared_failure_invalidates_claim_when_continuation_revision_is_exhausted() {
-    // session_id identifies the exact retry owner whose continuation revision cannot advance.
-    // session_id 标识 Continue 修订无法推进的精确重试所有者。
-    let session_id = SessionId::new_v4();
-    // active_stream_task_id identifies the exact failing Prepared stream generation.
-    // active_stream_task_id 标识失败的精确 Prepared 流代次。
-    let active_stream_task_id = Uuid::new_v4();
-    // claimed_attempt_id identifies the Continue claim that must not remain ownerless.
-    // claimed_attempt_id 标识不得遗留为无所有者状态的 Continue 领取。
-    let claimed_attempt_id = Uuid::new_v4().to_string();
-    // service_state owns the exhausted ledger, claimed retry reference, kernel, and stream owner.
-    // service_state 持有耗尽账本、已领取重试引用、kernel 与流所有者。
-    let mut service_state = test_service_state_with_parent_session(session_id);
-    insert_test_workbench_conversation(&mut service_state, session_id);
-    start_webui_session_kernel_user_turn(&mut service_state, session_id, "prepared-exhausted")
-        .expect("kernel turn should start");
-    service_state.active_stream_tasks.insert(
-        session_id,
-        ActiveStreamTask::new(active_stream_task_id, spawn_service_task(async {}), None),
-    );
-    // runtime_state is the unique owner of both continuation revision and retry claim state.
-    // runtime_state 是 Continue 修订与重试领取状态的唯一所有者。
-    let runtime_state = service_state
-        .workspace_snapshot
-        .as_mut()
-        .expect("workspace should exist")
-        .session_runtime_state
-        .get_mut(&session_id)
-        .expect("runtime state should exist");
-    runtime_state.provider_call_ledger.revision = u64::MAX;
-    runtime_state.execution_retry_snapshot =
-        Some(vulcan_workbench_model::ExecutionRetrySnapshotRef {
-            schema_version: vulcan_workbench_model::EXECUTION_RETRY_SNAPSHOT_SCHEMA_VERSION,
-            snapshot_id: Uuid::new_v4().to_string(),
-            generation: 7,
-            state: vulcan_workbench_model::ExecutionRetrySnapshotState::Claimed,
-            content_sha256: "0".repeat(64),
-            content_bytes: 128,
-            logical_execution_id: String::from("logical-exhausted"),
-            pending_action_label: String::from("dispatch_provider_request"),
-            provider_route: None,
-            preparation_route_selection: None,
-            context_generation_id: None,
-            canonical_dispatch_sha256: "1".repeat(64),
-            retryable: false,
-            requires_manual_confirmation: false,
-            blocked_reason: None,
-            claimed_attempt_id: Some(claimed_attempt_id),
-            error_summary: None,
-            updated_at: String::from("1000"),
-        });
-    // state exposes the exact Prepared terminal transaction under test.
-    // state 提供被测的精确 Prepared 终态事务。
-    let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
-    // app discards emitted deltas because retained state is authoritative in this test.
-    // app 丢弃发送的增量，因为本测试以保留状态为权威。
-    let app = ServiceEventEmitter::new(Vec::new());
-
-    assert_eq!(
-        commit_prepared_stream_failure(
-            &app,
-            &state,
-            session_id,
-            active_stream_task_id,
-            "test exhausted Prepared failure",
-        ),
-        PreparedStreamFailureCommit::Committed
-    );
-
-    // guard exposes the atomically failed-closed token and completed owner cleanup.
-    // guard 提供原子失败关闭后的令牌与已完成的所有者清理。
-    let guard = state.lock().expect("service state lock");
-    assert!(!guard.active_stream_tasks.contains_key(&session_id));
-    assert!(
-        !guard
-            .session_runtime_kernels
-            .get(&session_id)
-            .expect("kernel should exist")
-            .has_active_turn()
-    );
-    // retry_reference proves the old Claimed owner became an explicit localized blocker.
-    // retry_reference 证明旧 Claimed 所有者已转为显式可本地化阻断项。
-    let retry_reference = guard
-        .workspace_snapshot
-        .as_ref()
-        .expect("workspace should remain available")
-        .session_runtime_state
-        .get(&session_id)
-        .expect("runtime state should remain available")
-        .execution_retry_snapshot
-        .as_ref()
-        .expect("invalidated retry reference should remain visible");
-    assert_eq!(
-        retry_reference.state,
-        vulcan_workbench_model::ExecutionRetrySnapshotState::Invalidated
-    );
-    assert_eq!(
-        retry_reference.blocked_reason.as_deref(),
-        Some("retry_snapshot_transition_failed")
-    );
-    assert!(retry_reference.claimed_attempt_id.is_none());
     assert_eq!(
         guard.session_terminal_persistence_owners.get(&session_id),
         Some(&SessionTerminalPersistenceOwner::StreamTask(
@@ -2432,69 +2371,6 @@ fn webui_session_kernel_finish_clears_active_turn() {
     );
 }
 
-/// Verifies lifecycle terminal status parsing accepts only explicit known statuses.
-/// 验证生命周期终态状态解析只接受显式已知状态。
-#[test]
-fn session_lifecycle_terminal_status_requires_explicit_known_status() {
-    let completed_event = test_terminal_boundary_event(serde_json::json!({
-        "status": "completed"
-    }));
-    let failed_event = test_terminal_boundary_event(serde_json::json!({
-        "status": "failed"
-    }));
-    let missing_status_event = test_terminal_boundary_event(serde_json::json!({}));
-    let unknown_status_event = test_terminal_boundary_event(serde_json::json!({
-        "status": "stopped"
-    }));
-
-    assert_eq!(
-        session_lifecycle_terminal_status_from_event(&completed_event)
-            .expect("completed status should parse"),
-        SessionTurnTerminalStatus::Completed
-    );
-    assert_eq!(
-        session_lifecycle_terminal_status_from_event(&failed_event)
-            .expect("failed status should parse"),
-        SessionTurnTerminalStatus::Failed
-    );
-    assert!(
-        session_lifecycle_terminal_status_from_event(&missing_status_event)
-            .expect_err("missing status must not default to completed")
-            .contains("missing payload.status")
-    );
-    assert!(
-        session_lifecycle_terminal_status_from_event(&unknown_status_event)
-            .expect_err("unknown status must not default to failed or completed")
-            .contains("unknown payload.status")
-    );
-}
-
-/// Builds a turn-completed session boundary event for lifecycle parsing tests.
-/// 为生命周期解析测试构建回合完成会话边界事件。
-///
-/// # Parameters
-/// 参数
-/// `payload` is attached as the terminal event payload.
-/// `payload` 会作为终态事件载荷写入。
-///
-/// # Returns
-/// 返回值
-/// A terminal boundary event with a stable test turn id.
-/// 返回带稳定测试轮次标识的终态边界事件。
-fn test_terminal_boundary_event(payload: serde_json::Value) -> SessionBoundaryEvent {
-    SessionBoundaryEvent::new(
-        "terminal-test",
-        SessionNodeId::from(SessionId::new_v4()),
-        1,
-        SessionBoundaryEventKind::TurnCompleted,
-        SessionEventScope::Turn,
-        SessionEventVisibility::Hidden,
-        10,
-    )
-    .with_turn_id("turn-a")
-    .with_payload(payload)
-}
-
 /// Verifies stopping a WebUI session kernel generation clears the active turn and marks stopped.
 /// 验证停止 WebUI 会话内核代际会清理活动回合并标记停止。
 #[test]
@@ -2544,127 +2420,6 @@ fn webui_stream_event_generation_gate_rejects_stopped_generation() {
     ));
 }
 
-/// Builds one minimal subagent-completed metadata payload for kernel restore tests.
-/// 为内核恢复测试构建一个最小子代理完成元数据载荷。
-fn restored_kernel_subagent_metadata(result: &str) -> serde_json::Value {
-    serde_json::json!({
-        "payload": {
-            "execution_id": format!("restored-kernel-{result}"),
-            "subagent_mailbox_event": {
-                "kind": "completed",
-                "payload": {
-                    "task_name": "agent-review",
-                    "result_text": result
-                }
-            }
-        }
-    })
-}
-
-/// Restores a service state from the current workspace snapshot but without live kernels.
-/// 从当前工作区快照恢复服务状态，但不携带实时内核。
-fn service_state_restored_from_workspace_snapshot(
-    source: &ServiceBridgeState,
-    session_id: SessionId,
-) -> ServiceBridgeState {
-    let mut restored = test_service_state_with_parent_session(session_id);
-    restored.workspace_snapshot = source.workspace_snapshot.clone();
-    restored
-}
-
-/// Verifies unconsumed persisted mailbox input restores as a triggerable kernel mailbox item.
-/// 验证未消费的持久化 mailbox 输入会恢复为可触发的内核 mailbox 项。
-#[test]
-fn persisted_session_kernel_restores_unconsumed_mailbox_input() {
-    let parent_session_id = SessionId::new_v4();
-    let task_session_id = SessionId::new_v4();
-    let mut state = test_service_state_with_parent_session(parent_session_id);
-
-    assert!(
-        enqueue_webui_subagent_mailbox_input(
-            &mut state,
-            parent_session_id,
-            task_session_id,
-            &restored_kernel_subagent_metadata("done"),
-        )
-        .is_queued()
-    );
-    let mut restored = service_state_restored_from_workspace_snapshot(&state, parent_session_id);
-    let kernel = session_runtime_kernel_mut(&mut restored, parent_session_id);
-
-    assert_eq!(kernel.input_queue().mailbox_len(), 1);
-    assert_eq!(kernel.input_queue().unconsumed_mailbox_len(), 1);
-    assert!(kernel.input_queue().has_trigger_turn_mailbox_items());
-}
-
-/// Verifies an existing live kernel is not replaced by a persisted workspace kernel.
-/// 验证已有实时内核不会被工作区中的持久化内核替换。
-#[test]
-fn session_runtime_kernel_mut_preserves_existing_live_kernel() {
-    let parent_session_id = SessionId::new_v4();
-    let task_session_id = SessionId::new_v4();
-    let mut persisted_source = test_service_state_with_parent_session(parent_session_id);
-
-    assert!(
-        enqueue_webui_subagent_mailbox_input(
-            &mut persisted_source,
-            parent_session_id,
-            task_session_id,
-            &restored_kernel_subagent_metadata("stale"),
-        )
-        .is_queued()
-    );
-
-    let mut state =
-        service_state_restored_from_workspace_snapshot(&persisted_source, parent_session_id);
-    state.session_runtime_kernels.insert(
-        parent_session_id,
-        SessionRuntimeKernel::new(SessionNodeId::from(parent_session_id)),
-    );
-
-    let kernel = session_runtime_kernel_mut(&mut state, parent_session_id);
-
-    assert_eq!(kernel.input_queue().mailbox_len(), 0);
-}
-
-/// Verifies consumed persisted mailbox input does not trigger another restored parent turn.
-/// 验证已消费的持久化 mailbox 输入不会再次触发恢复后的父级回合。
-#[test]
-fn persisted_session_kernel_restores_consumed_mailbox_cursor() {
-    let parent_session_id = SessionId::new_v4();
-    let task_session_id = SessionId::new_v4();
-    let mut state = test_service_state_with_parent_session(parent_session_id);
-    let input_id =
-        format!("subagent-mailbox-{parent_session_id}-{task_session_id}-restored-kernel-waited");
-
-    assert!(
-        enqueue_webui_subagent_mailbox_input(
-            &mut state,
-            parent_session_id,
-            task_session_id,
-            &restored_kernel_subagent_metadata("waited"),
-        )
-        .is_queued()
-    );
-    {
-        let kernel = session_runtime_kernel_mut(&mut state, parent_session_id);
-        kernel
-            .register_wait_scope("wait-agent-1", [task_session_id.to_string()], 10)
-            .expect("wait scope should register");
-        assert!(kernel.consume_mailbox_input_for_wait_scope("wait-agent-1", &input_id));
-    }
-    sync_webui_session_runtime_kernel_to_workspace_state(&mut state, parent_session_id);
-
-    let mut restored = service_state_restored_from_workspace_snapshot(&state, parent_session_id);
-    let kernel = session_runtime_kernel_mut(&mut restored, parent_session_id);
-
-    assert_eq!(kernel.input_queue().mailbox_len(), 1);
-    assert_eq!(kernel.input_queue().unconsumed_mailbox_len(), 0);
-    assert!(!kernel.input_queue().has_trigger_turn_mailbox_items());
-}
-
-/// Verifies preparation failure cleanup atomically stops its exact kernel and blocks admission until persistence release.
-/// 验证准备失败清理会原子停止精确 kernel，并在持久化释放前阻止准入。
 #[test]
 fn preparation_failure_boundary_holds_terminal_owner_until_explicit_release() {
     // session_id identifies the exact preparation failure transaction.
@@ -2688,7 +2443,6 @@ fn preparation_failure_boundary_holds_terminal_owner_until_explicit_release() {
         session_id,
         failed_turn_id,
         "controlled preparation failure",
-        false,
     )
     .expect("failure boundary should commit");
 
@@ -2773,7 +2527,6 @@ fn preparation_failure_boundary_rejects_replacement_kernel_turn() {
         session_id,
         "stale-turn",
         "stale preparation failure",
-        false,
     )
     .expect_err("stale cleanup should be rejected");
 

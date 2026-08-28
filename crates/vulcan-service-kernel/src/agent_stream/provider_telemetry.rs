@@ -10,15 +10,6 @@ use vulcan_hooks::{HookContext, HookScope};
 /// Drop-safe forwarding guard that guarantees an active request receives a cancelled terminal Hook.
 /// 支持安全丢弃的转发守卫，保证活动请求收到取消终态 Hook。
 pub(crate) struct ProviderTelemetryHookGuard {
-    /// Shared service state used to close live usage accounting on an aborted stream.
-    /// 用于在流任务中止时关闭实时用量统计的共享服务状态。
-    state: SharedServiceBridgeState,
-    /// Optional persistence runtime used when cancellation happens during task drop.
-    /// 任务丢弃期间发生取消时使用的可选持久化运行时。
-    controller_runtime: Option<ControllerRuntimeHandle>,
-    /// Optional WebUI emitter used to publish the cancellation accounting delta.
-    /// 用于发布取消记账增量的可选 WebUI 发射器。
-    app: Option<ServiceEventEmitter>,
     /// Protocol tracker that retains only the active request's redacted started payload.
     /// 仅保留活动请求脱敏开始载荷的协议跟踪器。
     cancellation: ProviderRequestTelemetryCancellationTracker,
@@ -35,17 +26,12 @@ impl ProviderTelemetryHookGuard {
     /// 参数
     /// `state` owns the authoritative workspace runtime state.
     /// `state` 持有权威工作区运行时状态。
-    /// `controller_runtime` persists a synthetic terminal usage snapshot when task cancellation
-    /// bypasses the normal stream-drain path.
-    /// `controller_runtime` 在任务取消绕过正常流排空路径时持久化合成终态用量快照。
-    /// `app` receives the matching live addon delta when the owning surface is still available.
-    /// `app` 在所属界面仍可用时接收对应的实时附属状态增量。
+    /// `controller_runtime` stores optional redacted native usage diagnostics independently of the session ledger.
+    /// `controller_runtime` 独立于会话账本保存可选的脱敏原生用量诊断。
     pub(crate) fn new_with_persistence(
         state: SharedServiceBridgeState,
         controller_runtime: Option<ControllerRuntimeHandle>,
-        app: Option<ServiceEventEmitter>,
     ) -> Self {
-        let accounting_state = state.clone();
         let native_usage_controller = controller_runtime.clone();
         // sender and receiver form one bounded low-frequency Effect queue per execution stream.
         // sender 与 receiver 为每条执行流构成一个有界低频 Effect 队列。
@@ -62,9 +48,6 @@ impl ProviderTelemetryHookGuard {
             }
         });
         Self {
-            state: accounting_state,
-            controller_runtime,
-            app,
             cancellation: ProviderRequestTelemetryCancellationTracker::default(),
             sender,
         }
@@ -126,40 +109,12 @@ impl Drop for ProviderTelemetryHookGuard {
     /// Emits one synthetic cancelled terminal event when the consumer future is aborted or dropped.
     /// 当消费 Future 被中止或丢弃时发出一条合成取消终态事件。
     fn drop(&mut self) {
-        if let Some(event) = self.cancellation.take_cancelled_event() {
-            match apply_provider_request_usage_telemetry(&self.state, &event) {
-                Ok(Some(snapshot)) => {
-                    if snapshot.regular_session
-                        && let Some(controller_runtime) = self.controller_runtime.clone()
-                    {
-                        spawn_latest_session_runtime_state_persist_task(
-                            self.state.clone(),
-                            controller_runtime,
-                            event.session_id,
-                            Some(String::from("provider_usage_cancelled_drop")),
-                        );
-                    }
-                    if let Some(app) = self.app.as_ref()
-                        && let Err(error) =
-                            emit_session_addons_changed_delta(app, &self.state, event.session_id)
-                    {
-                        eprintln!(
-                            "[webui-service] provider cancellation usage delta emit failed: {error}"
-                        );
-                    }
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    eprintln!(
-                        "[webui-service] provider cancellation usage accounting failed: {error}"
-                    );
-                }
-            }
-            if self.sender.try_send(event).is_err() {
-                eprintln!(
-                    "[webui-service] provider cancellation telemetry could not enter the Hook queue"
-                );
-            }
+        if let Some(event) = self.cancellation.take_cancelled_event()
+            && self.sender.try_send(event).is_err()
+        {
+            eprintln!(
+                "[webui-service] provider cancellation telemetry could not enter the Hook queue"
+            );
         }
     }
 }
@@ -259,7 +214,7 @@ mod tests {
         ));
         // guard owns an empty cancellation tracker and a best-effort forwarding queue.
         // guard 持有空取消跟踪器与尽力转发队列。
-        let mut guard = ProviderTelemetryHookGuard::new_with_persistence(state, None, None);
+        let mut guard = ProviderTelemetryHookGuard::new_with_persistence(state, None);
         // started is the exact event whose Hook copy may race ahead of durable accounting.
         // started 是 Hook 副本可能早于可靠记账的精确事件。
         let started = ProviderRequestTelemetryEvent::detached(

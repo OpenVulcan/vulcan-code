@@ -43,7 +43,7 @@ pub use cache::memory::MemoryPromptCache;
 pub use cache::report::PromptCacheReport;
 pub use composer::diagnostics::{PromptCacheEvent, PromptComposerDiagnostics};
 pub use composer::engine::PromptComposerEngine;
-pub use composer::request::PromptAssemblyInput;
+pub use composer::request::{AdditionalPromptSegment, PromptAssemblyInput};
 pub use composer::resources::PromptComposerResourceConfig;
 pub use composer::response::PromptAssemblyOutput;
 pub use error::PromptComposerError;
@@ -69,8 +69,8 @@ pub use source::snapshot::{
 pub use source::version::PromptSourceVersion;
 pub use tool_help::registry::{ToolHelpEntry, ToolHelpRegistry};
 pub use types::{
-    ModelDescriptor, PersonalitySelection, PromptAssemblyMode, PromptNodeKind, PromptSegment,
-    PromptTarget, ToolDescriptor,
+    ModelDescriptor, PersonalitySelection, PromptAssemblyMode, PromptBaselineKind,
+    PromptBaselineProvenance, PromptNodeKind, PromptSegment, PromptTarget, ToolDescriptor,
 };
 
 #[cfg(test)]

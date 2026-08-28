@@ -31,6 +31,9 @@ export interface ComposerAttachmentSummary {
   // Managed local path used for provider replay.
   // Provider 回放使用的托管本地路径。
   localPath: string;
+  // Optional project-scoped ResourceId owned by one materialized V1 session.
+  // 由一个已物化 V1 会话拥有的可选项目级 ResourceId。
+  projectResourceId?: number | null;
   // Project-relative resource path safe for model and host-tool use.
   // 可安全供模型与宿主工具使用的项目相对资源路径。
   resourcePath?: string | null;

@@ -8,11 +8,11 @@ import type {
   SessionGoalUserStatusUpdate,
   SubagentPanelRouteResponse,
   SubmitConversationPromptAck,
-  UserPromptEditDraftSummary,
   WorkbenchSnapshot,
 } from "@/types";
 import type {
   ComposerModelSelectionSnapshot,
+  ComposerSubmission,
   ComposerSessionSettingsSnapshot,
 } from "@/components/composer/composer-model";
 import {
@@ -51,9 +51,6 @@ export async function submitConversationPrompt(
     reasoningEffort,
     modelSelection,
     sessionSettings,
-    // Ordinary composer submissions cannot claim problem-turn recovery through this service boundary.
-    // 普通输入区提交无法通过此服务边界领取问题回合恢复。
-    continuationExpectation: null,
   });
 }
 
@@ -61,9 +58,8 @@ export async function submitConversationPrompt(
 // continueConversation 在不追加用户提示词的情况下继续单个已终止会话。
 export async function continueConversation(
   conversationId: string,
-  expectedGeneration: number,
-  expectedLedgerRevision: number,
   clientContinuationId: string,
+  supplement: ComposerSubmission | null,
   signal?: AbortSignal,
 ): Promise<SubmitConversationPromptAck | null> {
   if (!hasServiceRuntime()) {
@@ -73,11 +69,163 @@ export async function continueConversation(
     "service_continue_conversation",
     {
       conversationId,
-      expectedGeneration,
-      expectedLedgerRevision,
       clientContinuationId,
+      prompt: supplement?.prompt,
+      hiddenModelGuidance: supplement?.hiddenModelGuidance,
+      executionMode: supplement?.executionMode,
+      reasoningEffort: supplement?.reasoningEffort,
+      modelSelection: supplement?.modelSelection,
+      attachments: supplement?.attachments,
     },
     { signal },
+  );
+}
+
+/** Request for replacing one persisted root input through the V1 generation boundary.
+ * 通过 V1 generation 边界替换一条已持久化根输入的请求。
+ */
+export interface ConversationEditGenerationV1Request extends Record<string, unknown> {
+  /** Exact V1 session identity.
+   * 精确的 V1 会话身份。
+   */
+  sessionId: string;
+  /** Event-window generation observed before the edit.
+   * 编辑前观察到的事件窗口代次。
+   */
+  expectedWindowGeneration: number;
+  /** Persisted root-input seq being replaced.
+   * 被替换的持久化根输入 seq。
+   */
+  targetSeq: number;
+  /** Exact replacement text.
+   * 精确替换正文。
+   */
+  replacementText: string;
+}
+
+/** Response for one fully published V1 edit generation.
+ * 一次完整发布的 V1 编辑 generation 响应。
+ */
+export interface ConversationEditGenerationV1Response {
+  /** Edited V1 session identity.
+   * 已编辑的 V1 会话身份。
+   */
+  sessionId: string;
+  /** Rewritten root-input seq.
+   * 已重写的根输入 seq。
+   */
+  targetSeq: number;
+  /** Newly published event-window generation.
+   * 新发布的事件窗口代次。
+   */
+  windowGeneration: number;
+  /** Complete document revision after publication.
+   * 发布后的完整文档修订号。
+   */
+  documentRevision: number;
+  /** Whether the exact rewritten Turn entered physical dispatch.
+   * 精确重写回合是否已进入物理分发。
+   */
+  dispatchStarted: boolean;
+}
+
+/** Replaces one V1 root input and waits for durable physical admission.
+ * 替换一条 V1 根输入并等待可靠物理准入。
+ *
+ * @param request exact generation compare-and-swap request.
+ *                精确的 generation 比较交换请求。
+ * @returns the published generation response, or null without the desktop runtime.
+ *          已发布 generation 响应；桌面运行时不可用时返回 null。
+ */
+export async function editConversationGenerationV1(
+  request: ConversationEditGenerationV1Request,
+): Promise<ConversationEditGenerationV1Response | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<ConversationEditGenerationV1Response>(
+    "service_edit_conversation_generation_v1",
+    request,
+  );
+}
+
+/** Request for creating or exactly retrying one immutable V1 child generation.
+ * 创建或精确重试一个不可变 V1 子 generation 的请求。
+ */
+export interface ConversationForkGenerationV1Request extends Record<string, unknown> {
+  /** Exact parent V1 session identity.
+   * 精确的父 V1 会话身份。
+   */
+  sourceSessionId: string;
+  /** Parent event-window generation observed before the fork.
+   * 分叉前观察到的父事件窗口代次。
+   */
+  expectedWindowGeneration: number;
+  /** Parent root-input seq retained by the child.
+   * 子会话保留的父根输入 seq。
+   */
+  targetSeq: number;
+  /** Stable child identity reused after response loss.
+   * 响应丢失后复用的稳定子会话身份。
+   */
+  childSessionId: string;
+  /** Exact child title.
+   * 精确的子会话标题。
+   */
+  title: string;
+}
+
+/** Response for one created or exactly replayed V1 child generation.
+ * 一个已创建或精确重放的 V1 子 generation 响应。
+ */
+export interface ConversationForkGenerationV1Response {
+  /** Exact parent V1 session identity.
+   * 精确的父 V1 会话身份。
+   */
+  sourceSessionId: string;
+  /** Stable child V1 session identity.
+   * 稳定的子 V1 会话身份。
+   */
+  childSessionId: string;
+  /** Whether this request physically created the child.
+   * 当前请求是否物理创建了子会话。
+   */
+  created: boolean;
+  /** Parent root-input seq retained by the child.
+   * 子会话保留的父根输入 seq。
+   */
+  sourceTargetSeq: number;
+  /** Child event-window generation.
+   * 子事件窗口代次。
+   */
+  windowGeneration: number;
+  /** Child complete document revision.
+   * 子会话完整文档修订号。
+   */
+  documentRevision: number;
+  /** Whether the exact child Turn entered physical dispatch.
+   * 精确子回合是否已进入物理分发。
+   */
+  dispatchStarted: boolean;
+}
+
+/** Creates or exactly retries one V1 conversation fork.
+ * 创建或精确重试一个 V1 会话分叉。
+ *
+ * @param request immutable parent boundary and stable child identity.
+ *                不可变父边界与稳定子会话身份。
+ * @returns the child publication response, or null without the desktop runtime.
+ *          子会话发布响应；桌面运行时不可用时返回 null。
+ */
+export async function forkConversationGenerationV1(
+  request: ConversationForkGenerationV1Request,
+): Promise<ConversationForkGenerationV1Response | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<ConversationForkGenerationV1Response>(
+    "service_fork_conversation_generation_v1",
+    request,
   );
 }
 
@@ -319,49 +467,6 @@ export async function resizeCommandSession(
       cols,
     },
   });
-}
-
-// getUserPromptEditDraft loads a backend-validated editable prompt draft.
-// getUserPromptEditDraft 加载一份后端校验过的可编辑提示词草稿。
-export async function getUserPromptEditDraft(
-  conversationId: string,
-  messageId: string,
-): Promise<UserPromptEditDraftSummary | null> {
-  if (!hasServiceRuntime()) {
-    return null;
-  }
-  return serviceClient.request<UserPromptEditDraftSummary>("service_get_user_prompt_edit_draft", {
-    conversationId,
-    messageId,
-  });
-}
-
-// submitUserPromptEdit replaces one prompt and immediately replays the edited turn.
-// submitUserPromptEdit 替换单条提示词并立即重新执行编辑后的回合。
-export async function submitUserPromptEdit(request: {
-  conversationId: string;
-  messageId: string;
-  prompt: string;
-  attachments: ComposerAttachmentSummary[];
-  stopRunning?: boolean;
-}): Promise<SubmitConversationPromptAck | null> {
-  if (!hasServiceRuntime()) {
-    return null;
-  }
-  return serviceClient.request<SubmitConversationPromptAck>("service_submit_user_prompt_edit", { request });
-}
-
-// forkConversation copies one persisted conversation into a new session and opens it.
-// forkConversation 将一个持久化会话复制为新会话并打开。
-export async function forkConversation(request: {
-  conversationId: string;
-  title: string;
-  anchorMessageId?: string;
-}): Promise<WorkbenchSnapshot | null> {
-  if (!hasServiceRuntime()) {
-    return null;
-  }
-  return serviceClient.request<WorkbenchSnapshot>("service_fork_conversation", { request });
 }
 
 // saveSessionGoal persists a user-authored goal for the current conversation.

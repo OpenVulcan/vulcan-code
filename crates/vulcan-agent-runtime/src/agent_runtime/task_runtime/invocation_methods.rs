@@ -24,7 +24,6 @@ impl TaskRuntime {
         if let Some(cached_result) = self.cached_task_invocation_result_for_existing_run(
             current_session_id,
             &resolved_identifier,
-            &parsed_args.prompt,
         )? {
             return Ok(cached_result);
         }
@@ -696,35 +695,33 @@ impl TaskRuntime {
         }
         let parent_session_id = SessionNodeId::from(current_session_id);
         let entry = self
-            .subagent_registry_snapshot()?
-            .get_for_parent(parent_session_id, &normalized_target)
-            .cloned()
-            .ok_or_else(|| {
-                format!(
-                    "Unknown child agent `{normalized_target}` for parent session `{current_session_id}`."
-                )
-            })?;
+                .subagent_registry_snapshot()?
+                .get_for_parent(parent_session_id, &normalized_target)
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "Unknown child agent `{normalized_target}` for parent session `{current_session_id}`."
+                    )
+                })?;
         if entry.status == SubagentStatus::Archived {
             return Err(format!(
                 "Child agent `{normalized_target}` is already closed and cannot be closed again."
             ));
         }
         let previous_status = entry.status;
-        let root_session_id = self.root_session_id_for_subagent_tree(current_session_id)?;
         let mut prepared_archive = self.prepare_close_agent_archive_entries(entry.session_id)?;
         let transaction_locks =
             self.ordered_task_execution_state_locks(&prepared_archive.task_ids)?;
         let mut transaction_guards = Vec::with_capacity(transaction_locks.len());
         for transaction_lock in &transaction_locks {
             transaction_guards.push(transaction_lock.lock().map_err(|_| {
-                String::from(
-                    "The task execution transaction is locked and cannot close the selected agent tree.",
-                )
-            })?);
+                    String::from(
+                        "The task execution transaction is locked and cannot close the selected agent tree.",
+                    )
+                })?);
         }
-        // Stop ownership, persistence, runtime archival, and inbox clearing share these sorted
-        // task locks so an aborted background run cannot publish a newer non-archived state.
-        // 停止所有权、持久化、运行时归档与 inbox 清理共享这些有序任务锁，避免被中止后台运行写入更新的未归档状态。
+        // Stop ownership, runtime archival, and inbox clearing share the sorted task locks.
+        // 停止所有权、运行时归档与 inbox 清理共享有序任务锁。
         let stopped_task_ids =
             self.reserve_and_abort_selected_task_runs(&prepared_archive.task_ids)?;
         self.mark_stopped_tasks_with_transaction_locks_held(&stopped_task_ids, "user_interrupt")?;
@@ -736,18 +733,6 @@ impl TaskRuntime {
             stopped_task_ids,
             prepared_archive,
         };
-        let persistence_commit = match self.persist_close_agent_archive_transaction(
-            Uuid::from(root_session_id),
-            &transaction.prepared_archive,
-        ) {
-            Ok(persistence_commit) => persistence_commit,
-            Err(failure) => {
-                return Ok(build_close_agent_archive_failure_result(
-                    &transaction,
-                    failure,
-                ));
-            }
-        };
         let committed_archive = match self
             .commit_close_agent_runtime_archive_with_task_locks_held(&transaction.prepared_archive)
         {
@@ -756,7 +741,6 @@ impl TaskRuntime {
                 let failure = CloseAgentArchiveFailure::new(
                     CloseAgentArchiveFailurePhase::CommitRuntimeArchive,
                     commit_error,
-                    persistence_commit.rollback(),
                 );
                 return Ok(build_close_agent_archive_failure_result(
                     &transaction,
@@ -766,30 +750,30 @@ impl TaskRuntime {
         };
         drop(transaction_guards);
         let result = VulcanToolInvocationResult::from_model_output(json!({
-            "tool": CLOSE_AGENT_TOOL,
-            "target": transaction.target.as_str(),
-            "previous_status": transaction.previous_status,
-            "closed": true,
-            "closed_agents": committed_archive.entries.iter().map(|entry| entry.agent_id.clone()).collect::<Vec<_>>(),
-            "closed_count": committed_archive.entries.len(),
-            "cleared_message_count": committed_archive.cleared_message_count,
-        }))
-        .with_host_result(VulcanToolHostResult {
-            kind: String::from("subagent_control"),
-            payload: json!({
                 "tool": CLOSE_AGENT_TOOL,
-                "parent_session_id": transaction.parent_session_id.to_string(),
-                "matched_agents": committed_archive.entries.iter().map(|entry| {
-                    subagent_registry_entry_host_status_payload(entry, 0)
-                }).collect::<Vec<_>>(),
+                "target": transaction.target.as_str(),
+                "previous_status": transaction.previous_status,
+                "closed": true,
                 "closed_agents": committed_archive.entries.iter().map(|entry| entry.agent_id.clone()).collect::<Vec<_>>(),
                 "closed_count": committed_archive.entries.len(),
-                (STOPPED_SUBAGENT_TASK_IDS_KEY): transaction.stopped_task_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                "stopped_count": transaction.stopped_task_ids.len(),
-                "closed": true,
                 "cleared_message_count": committed_archive.cleared_message_count,
-            }),
-        });
+            }))
+            .with_host_result(VulcanToolHostResult {
+                kind: String::from("subagent_control"),
+                payload: json!({
+                    "tool": CLOSE_AGENT_TOOL,
+                    "parent_session_id": transaction.parent_session_id.to_string(),
+                    "matched_agents": committed_archive.entries.iter().map(|entry| {
+                        subagent_registry_entry_host_status_payload(entry, 0)
+                    }).collect::<Vec<_>>(),
+                    "closed_agents": committed_archive.entries.iter().map(|entry| entry.agent_id.clone()).collect::<Vec<_>>(),
+                    "closed_count": committed_archive.entries.len(),
+                    (STOPPED_SUBAGENT_TASK_IDS_KEY): transaction.stopped_task_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                    "stopped_count": transaction.stopped_task_ids.len(),
+                    "closed": true,
+                    "cleared_message_count": committed_archive.cleared_message_count,
+                }),
+            });
         Ok(result)
     }
 
@@ -1105,8 +1089,8 @@ fn handle_prestart_cancelled_backend_error(
 /// 参数
 /// - `transaction`: Complete request, stop, and archive facts for the close transaction.
 /// - `transaction`：关闭事务的完整请求、停止与归档事实。
-/// - `failure`: Unified phase error and proven rollback outcome.
-/// - `failure`：统一的阶段错误与已证实回滚结果。
+/// - `failure`: Unified runtime archive phase error.
+/// - `failure`：统一的运行时归档阶段错误。
 ///
 /// # Returns
 /// 返回值
@@ -1116,7 +1100,7 @@ fn build_close_agent_archive_failure_result(
     transaction: &CloseAgentTransaction,
     failure: CloseAgentArchiveFailure,
 ) -> VulcanToolInvocationResult {
-    let mut details = json!({
+    let details = json!({
         "tool": CLOSE_AGENT_TOOL,
         "operation": "close",
         "target": transaction.target.as_str(),
@@ -1126,15 +1110,11 @@ fn build_close_agent_archive_failure_result(
         "stopped": true,
         "archive_committed": false,
         "failure_phase": failure.phase.as_str(),
-        "archive_rollback": failure.rollback.as_str(),
         "archive_task_ids": transaction.prepared_archive.task_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
         "archive_task_count": transaction.prepared_archive.task_ids.len(),
         (STOPPED_SUBAGENT_TASK_IDS_KEY): transaction.stopped_task_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
         "stopped_count": transaction.stopped_task_ids.len(),
     });
-    if let Some(rollback_error) = failure.rollback.error() {
-        details["rollback_error"] = Value::String(rollback_error.to_string());
-    }
     VulcanToolInvocationResult::from_tool_error_details(failure.error, details)
 }
 

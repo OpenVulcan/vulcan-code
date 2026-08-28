@@ -2,6 +2,8 @@
 //! 宿主原生知识库服务处理器。
 
 use super::*;
+use crate::session_goal_lifecycle::{current_v1_goal_unix_millis, session_v1_handle_from_state};
+use crate::session_request_config_v1::set_knowledge_library_selection_v1;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -29,6 +31,11 @@ use vulcan_service_api::{
     KnowledgePackageImportStrategy, KnowledgePackageInspectRequest, KnowledgeProjectBindingRequest,
     KnowledgeRetrievalModeRequest, KnowledgeRouteBindingKindRequest, KnowledgeSearchRequest,
     SessionKnowledgeLibrarySelectionRequest, SessionKnowledgeLibrarySelectionSummary,
+};
+use vulcan_session_core::v1::config::{
+    KnowledgeLibrarySelectionConfig as KnowledgeLibrarySelectionConfigV1,
+    KnowledgeLibrarySelectionMode as KnowledgeLibrarySelectionModeV1,
+    KnowledgeRetrievalMode as KnowledgeRetrievalModeV1,
 };
 use vulcan_workbench_model::{
     SessionKnowledgeLibrarySelection, SessionKnowledgeLibrarySelectionMode,
@@ -3369,8 +3376,8 @@ pub(super) async fn service_set_session_knowledge_libraries(
     let session_id = parse_session_id(&request.conversation_id)
         .ok_or_else(|| String::from("会话标识符无效，无法保存知识库选择。"))?;
     let mode = match request.mode.as_str() {
-        "inherit" => SessionKnowledgeLibrarySelectionMode::Inherit,
-        "explicit" => SessionKnowledgeLibrarySelectionMode::Explicit,
+        "inherit" => KnowledgeLibrarySelectionModeV1::Inherit,
+        "explicit" => KnowledgeLibrarySelectionModeV1::Explicit,
         value => return Err(format!("未知知识库选择模式：{value}")),
     };
     let runtime = retained_knowledge_runtime(&state)?;
@@ -3387,52 +3394,53 @@ pub(super) async fn service_set_session_knowledge_libraries(
         return Err(format!("知识库未授权给当前项目：{denied}"));
     }
 
-    let controller_runtime = {
+    {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
-            String::from("service is still starting; controller runtime is not ready")
-        })?;
         let workspace_snapshot = guard.workspace_snapshot.as_ref().ok_or_else(|| {
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
-        if owning_project_id_for_session(&workspace_snapshot, session_id).as_deref()
+        if owning_project_id_for_session(workspace_snapshot, session_id).as_deref()
             != Some(request.project_id.as_str())
         {
             return Err(String::from(
                 "当前会话与请求项目不匹配，已拒绝保存知识库选择。",
             ));
         }
-        controller_runtime
-    };
-    let selection = SessionKnowledgeLibrarySelection {
-        mode,
-        library_ids: request.library_ids,
-        retrieval_mode: request.retrieval_mode.map(|mode| match mode {
-            KnowledgeRetrievalModeRequest::RawBm25 => String::from("raw_bm25"),
-            KnowledgeRetrievalModeRequest::DisplayBm25 => String::from("display_bm25"),
-            KnowledgeRetrievalModeRequest::DisplayHybrid => String::from("display_hybrid"),
-        }),
     }
-    .normalized();
-    let updated_at = current_unix_millis_text();
-    let mut addon_state = SessionAddonState::new(session_id);
-    let _ = addon_state.set_knowledge_library_selection(&selection, updated_at);
-    invalidate_webui_session_addon_persist_version(
-        &state,
-        session_id,
-        SessionAddonNamespace::KnowledgeBases,
-    )?;
-    let persist_lock = webui_session_persist_lock(session_id);
-    let _persist_guard = persist_lock.lock().await;
-    let persisted = persist_workspace_session_addon_state_update(
-        &state,
-        controller_runtime,
-        session_id,
-        addon_state,
-    )
-    .await?;
+    let mut library_ids = request.library_ids;
+    library_ids.sort();
+    library_ids.dedup();
+    if mode == KnowledgeLibrarySelectionModeV1::Inherit {
+        library_ids.clear();
+    }
+    let selection = KnowledgeLibrarySelectionConfigV1 {
+        mode,
+        library_ids,
+        retrieval_mode: request.retrieval_mode.map(|mode| match mode {
+            KnowledgeRetrievalModeRequest::RawBm25 => KnowledgeRetrievalModeV1::RawBm25,
+            KnowledgeRetrievalModeRequest::DisplayBm25 => KnowledgeRetrievalModeV1::DisplayBm25,
+            KnowledgeRetrievalModeRequest::DisplayHybrid => KnowledgeRetrievalModeV1::DisplayHybrid,
+        }),
+    };
+    let updated_at_ms = current_v1_goal_unix_millis()?;
+    let handle = session_v1_handle_from_state(&state, session_id).await?;
+    set_knowledge_library_selection_v1(handle.as_ref(), selection.clone(), updated_at_ms)?;
+    let (persisted, revision, updated_at) = handle
+        .read(|document| {
+            (
+                document
+                    .metadata
+                    .config
+                    .selection
+                    .knowledge_libraries
+                    .clone(),
+                document.memory_revision(),
+                document.metadata.updated_at_ms.to_string(),
+            )
+        })
+        .map_err(|error| format!("读取 V1 知识库选择失败：{error}"))?;
     {
         let mut guard = state
             .lock()
@@ -3445,14 +3453,29 @@ pub(super) async fn service_set_session_knowledge_libraries(
             .session_runtime_state
             .entry(session_id)
             .or_insert_with(SessionRuntimeStateEntry::default);
-        runtime_state.knowledge_library_selection = selection;
+        runtime_state.knowledge_library_selection = SessionKnowledgeLibrarySelection {
+            mode: match persisted.mode {
+                KnowledgeLibrarySelectionModeV1::Inherit => {
+                    SessionKnowledgeLibrarySelectionMode::Inherit
+                }
+                KnowledgeLibrarySelectionModeV1::Explicit => {
+                    SessionKnowledgeLibrarySelectionMode::Explicit
+                }
+            },
+            library_ids: persisted.library_ids.clone(),
+            retrieval_mode: persisted.retrieval_mode.map(|mode| match mode {
+                KnowledgeRetrievalModeV1::RawBm25 => String::from("raw_bm25"),
+                KnowledgeRetrievalModeV1::DisplayBm25 => String::from("display_bm25"),
+                KnowledgeRetrievalModeV1::DisplayHybrid => String::from("display_hybrid"),
+            }),
+        };
     }
     emit_session_addon_changed_event(
         &app,
         session_id,
         &[SessionAddonNamespace::KnowledgeBases],
-        persisted.revision,
-        latest_session_addon_updated_at(&persisted),
+        revision,
+        updated_at,
     );
     serde_json::to_value(persisted)
         .map_err(|error| format!("serialize session knowledge selection: {error}"))
@@ -3466,7 +3489,7 @@ pub(super) async fn service_get_session_knowledge_libraries(
 ) -> Result<Value, String> {
     let session_id = parse_session_id(&conversation_id)
         .ok_or_else(|| String::from("会话标识符无效，无法读取知识库选择。"))?;
-    let (runtime, project_id, selection) = {
+    let (runtime, project_id) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -3478,18 +3501,24 @@ pub(super) async fn service_get_session_knowledge_libraries(
         })?;
         let project_id = owning_project_id_for_session(workspace, session_id)
             .ok_or_else(|| String::from("当前会话不属于可用项目。"))?;
-        let selection = workspace
-            .session_runtime_state
-            .get(&session_id)
-            .map(|runtime_state| runtime_state.knowledge_library_selection.clone())
-            .unwrap_or_default();
-        (runtime, project_id, selection)
+        (runtime, project_id)
     };
+    let handle = session_v1_handle_from_state(&state, session_id).await?;
+    let selection = handle
+        .read(|document| {
+            document
+                .metadata
+                .config
+                .selection
+                .knowledge_libraries
+                .clone()
+        })
+        .map_err(|error| format!("读取 V1 知识库选择失败：{error}"))?;
     let effective_library_ids = match selection.mode {
-        SessionKnowledgeLibrarySelectionMode::Inherit => {
+        KnowledgeLibrarySelectionModeV1::Inherit => {
             runtime.authorized_library_ids(&project_id, true).await?
         }
-        SessionKnowledgeLibrarySelectionMode::Explicit => {
+        KnowledgeLibrarySelectionModeV1::Explicit => {
             let authorized: BTreeSet<String> = runtime
                 .authorized_library_ids(&project_id, false)
                 .await?
@@ -3505,22 +3534,18 @@ pub(super) async fn service_get_session_knowledge_libraries(
     };
     let summary = SessionKnowledgeLibrarySelectionSummary {
         mode: match selection.mode {
-            SessionKnowledgeLibrarySelectionMode::Inherit => String::from("inherit"),
-            SessionKnowledgeLibrarySelectionMode::Explicit => String::from("explicit"),
+            KnowledgeLibrarySelectionModeV1::Inherit => String::from("inherit"),
+            KnowledgeLibrarySelectionModeV1::Explicit => String::from("explicit"),
         },
         library_ids: selection.library_ids,
         effective_library_ids,
-        retrieval_mode: knowledge_retrieval_mode_to_request(
-            selection
-                .retrieval_mode
-                .as_deref()
-                .and_then(|mode| match mode {
-                    "raw_bm25" => Some(KnowledgeRetrievalMode::RawBm25),
-                    "display_bm25" => Some(KnowledgeRetrievalMode::DisplayBm25),
-                    "display_hybrid" => Some(KnowledgeRetrievalMode::DisplayHybrid),
-                    _ => None,
-                }),
-        ),
+        retrieval_mode: knowledge_retrieval_mode_to_request(selection.retrieval_mode.map(|mode| {
+            match mode {
+                KnowledgeRetrievalModeV1::RawBm25 => KnowledgeRetrievalMode::RawBm25,
+                KnowledgeRetrievalModeV1::DisplayBm25 => KnowledgeRetrievalMode::DisplayBm25,
+                KnowledgeRetrievalModeV1::DisplayHybrid => KnowledgeRetrievalMode::DisplayHybrid,
+            }
+        })),
     };
     serde_json::to_value(summary)
         .map_err(|error| format!("serialize session knowledge selection: {error}"))

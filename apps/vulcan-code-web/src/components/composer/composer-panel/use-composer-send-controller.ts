@@ -56,7 +56,7 @@ export interface UseComposerSendControllerOptions {
   isConversationRunning: boolean;
   // Captures and clears the active draft before an ordinary send.
   // 在普通发送前捕获并清理当前草稿。
-  clearForSubmission: () => ComposerDraftSubmissionSnapshot;
+  clearForSubmission: () => Promise<ComposerDraftSubmissionSnapshot>;
   // Restores a failed ordinary send to its owning draft slot.
   // 将失败的普通发送恢复到所属草稿槽。
   restoreFailedSubmission: (snapshot: ComposerDraftSubmissionSnapshot) => void;
@@ -209,7 +209,13 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
       }
       // submittedDraft binds failure recovery to the exact slot consumed by this send.
       // submittedDraft 将失败恢复绑定到本次发送消费的精确草稿槽。
-      const submittedDraft = options.clearForSubmission();
+      let submittedDraft: ComposerDraftSubmissionSnapshot;
+      try {
+        submittedDraft = await options.clearForSubmission();
+      } catch {
+        toast.error(t("composer.error.draftPersistFailed"));
+        return;
+      }
       // sent records whether the workbench runtime accepted this complete submission.
       // sent 记录工作台运行时是否接受本次完整提交。
       const sent = await options.onSubmitPrompt({
@@ -221,11 +227,11 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
         ...submissionSettings,
         sessionSettings: options.captureSessionSettings(),
       });
-        if (!sent) {
-          options.restoreFailedSubmission(submittedDraft);
-        } else {
-          options.clearSessionSettings();
-        }
+      if (!sent) {
+        options.restoreFailedSubmission(submittedDraft);
+      } else {
+        options.clearSessionSettings();
+      }
     } finally {
       finishSubmission();
     }

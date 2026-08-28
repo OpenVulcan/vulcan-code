@@ -44,13 +44,14 @@ use vulcan_service_api::{
     InferenceServiceErrorEnvelope, InferenceServiceHealthSnapshot, InferenceServiceHttpError,
     InferenceServiceRequest, InferenceServiceSuccessEnvelope, OpenAiErrorEnvelope,
     OpenAiErrorObject, ResponsesCreateRequest, ServiceEvent, ServiceEventSink,
-    ServiceMediaResponse, ServiceStaticResponse, WebuiServiceDiscoverySnapshot,
-    WebuiServiceRpcHttpRequest, build_service_media_file_response, build_webui_static_response,
-    inference_service_discovery_snapshot_path, service_media_error_response,
-    service_media_path_from_encoded_route_segment, webui_service_discovery_snapshot_path,
-    webui_service_http_bind_ports_from_override, webui_service_origin_text_is_allowed,
-    webui_service_request_token_values_are_valid, webui_service_required_origin_text_is_allowed,
-    webui_service_rpc_error_envelope, webui_service_rpc_success_envelope,
+    ServiceMediaResponse, ServiceStaticResponse, SessionResourceContentV1Request,
+    WebuiServiceDiscoverySnapshot, WebuiServiceRpcHttpRequest, build_service_media_file_response,
+    build_webui_static_response, inference_service_discovery_snapshot_path,
+    service_media_error_response, service_media_path_from_encoded_route_segment,
+    webui_service_discovery_snapshot_path, webui_service_http_bind_ports_from_override,
+    webui_service_origin_text_is_allowed, webui_service_request_token_values_are_valid,
+    webui_service_required_origin_text_is_allowed, webui_service_rpc_error_envelope,
+    webui_service_rpc_success_envelope,
 };
 
 /// Boxed asynchronous result returned by a browser-facing RPC dispatcher.
@@ -62,6 +63,17 @@ pub type WebuiServiceRpcFuture =
 /// 传输无关的浏览器侧 RPC 分发器。
 pub type WebuiServiceRpcDispatcher =
     Arc<dyn Fn(String, Option<serde_json::Value>) -> WebuiServiceRpcFuture + Send + Sync + 'static>;
+
+/// Boxed asynchronous result returned by the controlled session-resource resolver.
+/// 受控会话资源解析器返回的装箱异步结果。
+pub type WebuiSessionResourceFuture =
+    Pin<Box<dyn Future<Output = Result<ServiceMediaResponse, String>> + Send + 'static>>;
+
+/// Resolves one opaque session/resource identity into browser-safe content bytes.
+/// 将一个不透明会话/资源身份解析为浏览器安全内容字节。
+pub type WebuiSessionResourceResolver = Arc<
+    dyn Fn(SessionResourceContentV1Request) -> WebuiSessionResourceFuture + Send + Sync + 'static,
+>;
 
 /// Cleans client-owned display subscriptions when one browser event socket disconnects.
 /// 在浏览器事件套接字断开时清理客户端持有的显示订阅。
@@ -493,6 +505,9 @@ pub struct WebuiServiceHttpConfig {
     /// Business RPC dispatcher supplied by the service owner.
     /// 服务所有者提供的业务 RPC 分发器。
     pub rpc_dispatcher: WebuiServiceRpcDispatcher,
+    /// Kernel-owned resolver for V1 project resource content.
+    /// 内核拥有的 V1 项目资源内容解析器。
+    pub session_resource_resolver: WebuiSessionResourceResolver,
     /// Kernel callback that releases display subscriptions owned by a disconnected browser.
     /// 内核回调，用于释放由已断开浏览器持有的显示订阅。
     pub client_disconnected: WebuiServiceClientDisconnected,
@@ -526,6 +541,9 @@ struct WebuiServiceHttpState {
     /// Business RPC dispatcher supplied by the service owner.
     /// 服务所有者提供的业务 RPC 分发器。
     rpc_dispatcher: WebuiServiceRpcDispatcher,
+    /// Kernel-owned resolver for V1 project resource content.
+    /// 内核拥有的 V1 项目资源内容解析器。
+    session_resource_resolver: WebuiSessionResourceResolver,
     /// Kernel callback that releases display subscriptions owned by a disconnected browser.
     /// 内核回调，用于释放由已断开浏览器持有的显示订阅。
     client_disconnected: WebuiServiceClientDisconnected,
@@ -581,6 +599,7 @@ pub fn build_webui_service_router(config: WebuiServiceHttpConfig) -> Router {
         event_bus: config.event_bus,
         static_root: config.static_root,
         rpc_dispatcher: config.rpc_dispatcher,
+        session_resource_resolver: config.session_resource_resolver,
         client_disconnected: config.client_disconnected,
         client_connections: Arc::new(Mutex::new(HashMap::new())),
         inference_discovery: config.inference_discovery,
@@ -636,6 +655,11 @@ pub fn build_webui_service_router(config: WebuiServiceHttpConfig) -> Router {
         .route(
             "/asset/{encoded_path}",
             get(webui_service_asset_http_handler).head(webui_service_asset_head_http_handler),
+        )
+        .route(
+            "/v1/session-resources/{session_id}/{resource_id}",
+            get(webui_service_session_resource_http_handler)
+                .head(webui_service_session_resource_head_http_handler),
         )
         .route("/", get(webui_service_index_http_handler))
         .route("/index.html", get(webui_service_index_http_handler))
@@ -2310,12 +2334,107 @@ fn axum_response_from_service_media_response(response: ServiceMediaResponse) -> 
         .unwrap_or_else(|_| AxumStatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
+/// Serves one V1 project resource through its opaque session/resource identity.
+/// 通过不透明的会话/资源身份提供一个 V1 项目资源。
+async fn webui_service_session_resource_http_handler(
+    AxumState(server_state): AxumState<WebuiServiceHttpState>,
+    AxumPath((session_id, resource_id)): AxumPath<(String, String)>,
+    headers: AxumHeaderMap,
+    uri: AxumOriginalUri,
+) -> AxumResponse {
+    webui_service_session_resource_http_response(
+        server_state,
+        session_id,
+        resource_id,
+        headers,
+        uri,
+        false,
+    )
+    .await
+}
+
+/// Serves only V1 project-resource response headers.
+/// 仅提供 V1 项目资源响应头。
+async fn webui_service_session_resource_head_http_handler(
+    AxumState(server_state): AxumState<WebuiServiceHttpState>,
+    AxumPath((session_id, resource_id)): AxumPath<(String, String)>,
+    headers: AxumHeaderMap,
+    uri: AxumOriginalUri,
+) -> AxumResponse {
+    webui_service_session_resource_http_response(
+        server_state,
+        session_id,
+        resource_id,
+        headers,
+        uri,
+        true,
+    )
+    .await
+}
+
+/// Builds one authenticated V1 project-resource response without decoding a host path.
+/// 构建一个经过鉴权且不解码宿主路径的 V1 项目资源响应。
+///
+/// # Parameters
+/// 参数
+/// `server_state` owns authentication and the kernel resolver, the two route segments identify
+/// the logical resource, `headers` and `uri` carry authentication/range metadata, and `is_head`
+/// selects metadata-only delivery.
+/// `server_state` 拥有鉴权与内核解析器，两个路由片段标识逻辑资源，`headers` 与 `uri` 携带鉴权/范围元数据，
+/// `is_head` 选择仅元数据传输。
+///
+/// # Returns
+/// 返回值
+/// Returns controlled bytes, a normalized client error, or an explicit resolver failure.
+/// 返回受控字节、规范化客户端错误或显式解析失败。
+async fn webui_service_session_resource_http_response(
+    server_state: WebuiServiceHttpState,
+    session_id: String,
+    resource_id: String,
+    headers: AxumHeaderMap,
+    uri: AxumOriginalUri,
+    is_head: bool,
+) -> AxumResponse {
+    if !webui_service_request_token_is_valid(&headers, uri.0.query(), &server_state.service_token) {
+        return axum_response_from_service_media_response(service_media_error_response(
+            AxumStatusCode::UNAUTHORIZED.as_u16(),
+            "Browser service token is missing or invalid.",
+        ));
+    }
+    let resource_id = match resource_id.parse::<u64>() {
+        Ok(resource_id) => resource_id,
+        Err(error) => {
+            return axum_response_from_service_media_response(service_media_error_response(
+                AxumStatusCode::BAD_REQUEST.as_u16(),
+                &format!("Project resource id is invalid: {error}"),
+            ));
+        }
+    };
+    let request = SessionResourceContentV1Request {
+        session_id,
+        resource_id,
+        is_head,
+        range_header: headers
+            .get("range")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string),
+    };
+    let response = match (server_state.session_resource_resolver)(request).await {
+        Ok(response) => response,
+        Err(error) => {
+            service_media_error_response(AxumStatusCode::INTERNAL_SERVER_ERROR.as_u16(), &error)
+        }
+    };
+    axum_response_from_service_media_response(response)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum::body::{Body, to_bytes};
     use serde_json::json;
     use tower::ServiceExt;
+    use vulcan_service_api::build_service_project_resource_response;
     use vulcan_service_api::{WEBUI_SERVICE_HTTP_PORT, webui_service_ready_discovery_snapshot};
 
     /// Verifies the event socket accepts only one exact well-formed client UUID query value.
@@ -2604,6 +2723,16 @@ mod tests {
             event_bus,
             static_root: None,
             rpc_dispatcher: dispatcher,
+            session_resource_resolver: Arc::new(|request| {
+                Box::pin(async move {
+                    build_service_project_resource_response(
+                        format!("{}:{}", request.session_id, request.resource_id).as_bytes(),
+                        Some("text/plain"),
+                        request.is_head,
+                        request.range_header.as_deref(),
+                    )
+                })
+            }),
             client_disconnected: Arc::new(|_client_id| {}),
             inference_discovery: Arc::new(Mutex::new(InferenceServiceDiscoverySnapshot {
                 api_version: INFERENCE_SERVICE_API_VERSION,
@@ -2668,6 +2797,47 @@ mod tests {
         assert_eq!(payload["ok"], true);
         assert_eq!(payload["result"]["method"], "workbench.snapshot");
         assert_eq!(payload["result"]["params"]["projectId"], "p1");
+    }
+
+    /// Verifies the session-resource route authenticates and forwards only logical identities.
+    /// 验证会话资源路由会进行鉴权且仅转发逻辑身份。
+    #[tokio::test]
+    async fn session_resource_route_forwards_opaque_identity() {
+        let response = test_router()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/v1/session-resources/session-a/17")
+                    .header("x-vulcan-service-token", "test-token")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), AxumStatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024)
+            .await
+            .expect("resource body should read");
+        assert_eq!(body.as_ref(), b"session-a:17");
+    }
+
+    /// Verifies the session-resource route rejects requests without the service token.
+    /// 验证会话资源路由会拒绝缺少服务令牌的请求。
+    #[tokio::test]
+    async fn session_resource_route_rejects_missing_token() {
+        let response = test_router()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/v1/session-resources/session-a/17")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), AxumStatusCode::UNAUTHORIZED);
     }
 
     /// Verifies malformed standard request fields produce an OpenAI-compatible parameter error.

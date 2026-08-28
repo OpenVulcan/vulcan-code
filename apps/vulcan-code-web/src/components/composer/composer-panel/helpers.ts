@@ -65,6 +65,7 @@ function composerSessionPersistableAttachment(
     kind: attachment.kind,
     fileName: attachment.fileName,
     localPath: attachment.localPath,
+    projectResourceId: attachment.projectResourceId,
     resourcePath: attachment.resourcePath,
     sourcePath: attachment.sourcePath,
     assetId: attachment.assetId,
@@ -91,6 +92,7 @@ function composerSessionAttachmentFromStorage(value: unknown): ComposerAttachmen
     || typeof candidate.fileName !== "string"
     || typeof candidate.localPath !== "string"
     || typeof candidate.mimeType !== "string"
+    || !isOptionalNullableSafeInteger(candidate.projectResourceId)
     || !isOptionalNullableString(candidate.resourcePath)
     || !isOptionalNullableString(candidate.sourcePath)
     || !isOptionalNullableString(candidate.assetId)
@@ -104,6 +106,7 @@ function composerSessionAttachmentFromStorage(value: unknown): ComposerAttachmen
     kind: candidate.kind,
     fileName: candidate.fileName,
     localPath: candidate.localPath,
+    projectResourceId: candidate.projectResourceId,
     resourcePath: candidate.resourcePath,
     sourcePath: candidate.sourcePath,
     assetId: candidate.assetId,

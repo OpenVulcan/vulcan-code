@@ -26,24 +26,8 @@ export function mergePendingWorkbenchDeltaSignal(
 // Returns: true when global React workbench state must consume the event.
 // 返回值：全局 React 工作台状态必须消费该事件时返回 true。
 export function workbenchEnvelopeRequiresReactProjection(envelope: WorkbenchDeltaEnvelope): boolean {
-  if (
-    envelope.delta.kind === "transientReasoningStatusChanged"
-    || envelope.delta.kind === "toolRequestProgressChanged"
-  ) {
-    return false;
-  }
-  if (envelope.delta.kind !== "appendMessageBody") {
-    return true;
-  }
-  // payload is the exact streamed message update classified by the backend lifecycle.
-  // payload 是由后端生命周期分类的精确流式消息更新。
-  const payload = envelope.delta.payload;
-  if (payload.streamState !== "active") {
-    return true;
-  }
-  return Boolean(payload.initialMessage)
-    || typeof payload.currentBody === "string"
-    || payload.bodyDelta.length === 0;
+  return envelope.delta.kind !== "transientReasoningStatusChanged"
+    && envelope.delta.kind !== "toolRequestProgressChanged";
 }
 
 // workbenchEnvelopeRequiresImmediateLiveFlush identifies request lifecycle boundaries that must bypass hot-delta batching.
@@ -62,16 +46,5 @@ export function workbenchEnvelopeRequiresImmediateLiveFlush(
     // 工具请求进度已经由后端协调器节流；若此处再次延迟通知，终态清除可能在同一批次中抹掉全部接收快照。
     return true;
   }
-  if (envelope.delta.kind !== "conversationMessagesPatched") {
-    return false;
-  }
-  // runPhase is attached only by the backend runtime-event projection, so these exact phases identify
-  // request-ready, request-aborted, tool-started, and tool-finished transcript boundaries without guessing
-  // from presentation metadata.
-  // runPhase 仅由后端运行时事件投影附加，因此这些精确阶段能够识别请求就绪、请求中止、工具开始和
-  // 工具完成的转录边界，无需根据展示元数据猜测。
-  const runPhase = envelope.delta.payload.runPhase;
-  return runPhase === "ToolCalling"
-    || runPhase === "ToolRunning"
-    || runPhase === "Requesting";
+  return false;
 }

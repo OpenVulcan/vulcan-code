@@ -1,22 +1,4 @@
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
-import type { ConversationMessage } from "@/types";
-
-// clientSubmissionIdFromMetadata reads the one declared correlation field from structured transcript metadata.
-// clientSubmissionIdFromMetadata 从结构化转录元数据读取唯一声明的关联字段。
-//
-// Metadata is the JSON-shaped service payload attached to one projected transcript message.
-// Metadata 是附着到单条投影转录消息上的 JSON 形服务载荷。
-//
-// Returns the non-empty exact field value, or null when the metadata is not an object carrying that field.
-// 返回非空的精确字段值；当元数据不是携带该字段的对象时返回 null。
-function clientSubmissionIdFromMetadata(metadata: unknown): string | null {
-  if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) {
-    return null;
-  }
-  const value = (metadata as Record<string, unknown>).client_submission_id;
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
 // materializeAcknowledgedDraftSubmission keeps the optimistic first prompt visible until the authoritative conversation row arrives.
 // materializeAcknowledgedDraftSubmission 在权威会话行到达前保持乐观首条提示词可见。
 //
@@ -66,19 +48,4 @@ export function retireMaterializedDraftSubmission(
   conversationId: string,
 ): DraftConversationSelection | null {
   return current?.id === conversationId && current.pendingSubmission ? null : current;
-}
-
-// hasAuthoritativeSubmissionCorrelation detects whether the service-projected user message already replaced one optimistic draft message.
-// hasAuthoritativeSubmissionCorrelation 判断服务投影的用户消息是否已经替代某条乐观草稿消息。
-//
-// Messages contains only the active conversation transcript and clientSubmissionId is the exact UI/service correlation identity.
-// Messages 仅包含当前会话转录，clientSubmissionId 是界面与服务共享的精确关联身份。
-//
-// Returns true only when one authoritative message carries the exact correlation metadata.
-// 仅当一条权威消息携带精确关联元数据时返回 true。
-export function hasAuthoritativeSubmissionCorrelation(
-  messages: ConversationMessage[],
-  clientSubmissionId: string,
-): boolean {
-  return messages.some((message) => clientSubmissionIdFromMetadata(message.metadata) === clientSubmissionId);
 }

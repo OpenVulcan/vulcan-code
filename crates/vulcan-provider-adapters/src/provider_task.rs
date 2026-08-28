@@ -1357,7 +1357,7 @@ fn load_provider_task_snapshot_file(
             path.display()
         ));
     }
-    let file = fs::File::open(&path).map_err(|error| {
+    let file = fs::File::open(path).map_err(|error| {
         format!(
             "Provider task recovery snapshot `{}` could not be opened: {error}",
             path.display()

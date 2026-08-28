@@ -1,4 +1,5 @@
 use super::*;
+use std::path::PathBuf;
 
 /// Builds one minimal catalog definition for orchestration-info tests.
 /// 为调度信息测试构建一个最小目录定义。

@@ -37,6 +37,76 @@ pub enum PromptNodeKind {
     ToolMetadata,
 }
 
+/// Stable kind of one mutable prompt baseline that is locked for a context generation.
+/// 为一个上下文代际锁定的可变提示词基线稳定类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PromptBaselineKind {
+    /// Memory profile baseline.
+    /// 记忆画像基线。
+    MemoryProfile,
+    /// One participating `AGENTS.md` layer.
+    /// 一层实际参与组合的 `AGENTS.md`。
+    AgentsMd,
+    /// One participating `Vulcan.md` project prompt layer.
+    /// 一层实际参与组合的 `Vulcan.md` 项目提示词。
+    VulcanMd,
+    /// Active agent persona.
+    /// 当前代理人格。
+    AgentPersona,
+    /// Active output style.
+    /// 当前输出风格。
+    OutputStyle,
+    /// Fixed injection produced by the enabled prompt-skill set.
+    /// 已启用提示词技能集合产生的固定注入。
+    PromptSkillInjection,
+    /// Long-lived plugin instructions.
+    /// 长期插件指令。
+    PluginInstructions,
+    /// Long-lived baseline hook body.
+    /// 长期基线 Hook 正文。
+    BaselineHooks,
+}
+
+impl PromptBaselineKind {
+    /// Returns the stable cache-identity label for this producer-declared kind.
+    /// 返回当前生产者声明类型的稳定缓存身份标签。
+    pub const fn cache_identity(self) -> &'static str {
+        match self {
+            Self::MemoryProfile => "memory-profile",
+            Self::AgentsMd => "agents-md",
+            Self::VulcanMd => "vulcan-md",
+            Self::AgentPersona => "agent-persona",
+            Self::OutputStyle => "output-style",
+            Self::PromptSkillInjection => "prompt-skill-injection",
+            Self::PluginInstructions => "plugin-instructions",
+            Self::BaselineHooks => "baseline-hooks",
+        }
+    }
+}
+
+/// Typed provenance attached by the authoritative prompt source producer.
+/// 由权威提示词来源生产者附加的强类型来源信息。
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PromptBaselineProvenance {
+    /// Stable baseline kind declared by the producer.
+    /// 由生产者声明的稳定基线类型。
+    pub kind: PromptBaselineKind,
+    /// Stable producer-owned source identity.
+    /// 由生产者持有的稳定来源身份。
+    pub source_id: String,
+}
+
+impl PromptBaselineProvenance {
+    /// Builds one explicit producer-owned baseline provenance value.
+    /// 构建一条显式且由生产者持有的基线来源信息。
+    pub fn new(kind: PromptBaselineKind, source_id: impl Into<String>) -> Self {
+        Self {
+            kind,
+            source_id: source_id.into(),
+        }
+    }
+}
+
 /// Prompt assembly mode used to select one strategy.
 /// 选择策略的提示词装配模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -141,6 +211,9 @@ pub struct PromptSegment {
     /// Human-readable source label for diagnostics.
     /// 供诊断使用的人类可读来源标签。
     pub source_label: String,
+    /// Typed locked-baseline provenance, or `None` for request-dynamic content.
+    /// 强类型锁定基线来源；请求动态内容为 `None`。
+    pub baseline_provenance: Option<PromptBaselineProvenance>,
     /// Whether the segment came from cache.
     /// 片段是否来自缓存。
     pub from_cache: bool,
@@ -165,6 +238,7 @@ impl PromptSegment {
             title: title.into(),
             body: body.into(),
             source_label: String::from("unspecified"),
+            baseline_provenance: None,
             from_cache: false,
         }
     }
@@ -173,6 +247,23 @@ impl PromptSegment {
     /// 为该片段附加一个人类可读来源标签。
     pub fn with_source_label(mut self, source_label: impl Into<String>) -> Self {
         self.source_label = source_label.into();
+        self
+    }
+
+    /// Attaches producer-declared locked-baseline provenance to this segment.
+    /// 为当前片段附加由生产者声明的锁定基线来源。
+    pub fn with_baseline_provenance(mut self, provenance: PromptBaselineProvenance) -> Self {
+        self.baseline_provenance = Some(provenance);
+        self
+    }
+
+    /// Replaces the optional producer-declared locked-baseline provenance.
+    /// 替换可选的生产者声明锁定基线来源。
+    pub fn with_optional_baseline_provenance(
+        mut self,
+        provenance: Option<PromptBaselineProvenance>,
+    ) -> Self {
+        self.baseline_provenance = provenance;
         self
     }
 

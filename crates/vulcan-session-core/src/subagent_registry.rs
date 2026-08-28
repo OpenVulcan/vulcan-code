@@ -88,41 +88,6 @@ impl SubagentStatus {
     }
 }
 
-/// Summary for one segmented session JSONL file.
-/// 单个分段会话 JSONL 文件的摘要。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SessionSegmentSummary {
-    /// Segment file name relative to the owning session directory.
-    /// 相对于所属会话目录的分段文件名。
-    pub file_name: String,
-    /// Number of JSONL lines stored in this segment.
-    /// 当前分段中存储的 JSONL 行数。
-    pub line_count: u64,
-}
-
-impl SessionSegmentSummary {
-    /// Builds one segment summary.
-    /// 构建一个分段摘要。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `file_name` is the segment file name relative to the session directory.
-    /// `file_name` 是相对于会话目录的分段文件名。
-    /// `line_count` is the number of JSONL lines in the segment.
-    /// `line_count` 是分段中的 JSONL 行数。
-    ///
-    /// # Returns
-    /// 返回值
-    /// A segment summary ready for metadata serialization.
-    /// 可用于元数据序列化的分段摘要。
-    pub fn new(file_name: impl Into<String>, line_count: u64) -> Self {
-        Self {
-            file_name: file_name.into(),
-            line_count,
-        }
-    }
-}
-
 /// Registry entry for one child-agent session.
 /// 单个子代理会话的注册表条目。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -158,9 +123,6 @@ pub struct SubagentRegistryEntry {
     /// Last update timestamp in Unix milliseconds.
     /// 最近更新时间戳，单位为 Unix 毫秒。
     pub updated_at_ms: u64,
-    /// Segment summaries used to reconstruct the child transcript.
-    /// 用于重建子代理转录内容的分段摘要。
-    pub segments: Vec<SessionSegmentSummary>,
     /// Most recent task or follow-up instruction delivered to this child agent.
     /// 最近一次投递给该子代理的任务或后续指令。
     #[serde(default)]
@@ -209,7 +171,6 @@ impl SubagentRegistryEntry {
             stop_reason: None,
             created_at_ms: timestamp_ms,
             updated_at_ms: timestamp_ms,
-            segments: Vec::new(),
             last_task_message: None,
             result_summary: None,
         }
@@ -261,29 +222,6 @@ impl SubagentRegistryEntry {
     pub fn set_status(&mut self, status: SubagentStatus, timestamp_ms: u64) {
         self.status = status;
         self.updated_at_ms = timestamp_ms;
-    }
-
-    /// Upserts one segment line count summary.
-    /// 更新或插入一个分段行数摘要。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `file_name` is the segment file name.
-    /// `file_name` 是分段文件名。
-    /// `line_count` is the current segment line count.
-    /// `line_count` 是当前分段行数。
-    pub fn upsert_segment(&mut self, file_name: impl Into<String>, line_count: u64) {
-        let file_name = file_name.into();
-        if let Some(segment) = self
-            .segments
-            .iter_mut()
-            .find(|segment| segment.file_name == file_name)
-        {
-            segment.line_count = line_count;
-            return;
-        }
-        self.segments
-            .push(SessionSegmentSummary::new(file_name, line_count));
     }
 
     /// Sets the terminal result summary and update timestamp.
@@ -1212,10 +1150,10 @@ mod tests {
             .expect("valid registry fixture should satisfy all invariants");
     }
 
-    /// Verifies registry entries preserve agent kind and segment line counts.
-    /// 验证注册表条目会保留代理类型与分段行数。
+    /// Verifies registry entries preserve agent identity and process-local lifecycle facts.
+    /// 验证注册表条目会保留代理身份与进程内生命周期事实。
     #[test]
-    fn registry_entry_tracks_kind_and_segment_line_count() {
+    fn registry_entry_tracks_identity_and_lifecycle_facts() {
         let parent_id = SessionNodeId::new_v4();
         let child_id = SessionNodeId::new_v4();
         let mut entry =
@@ -1223,16 +1161,12 @@ mod tests {
                 .with_parent_turn_id("turn-1")
                 .with_prompt_source("agents/image.md");
 
-        entry.upsert_segment("s001.jsonl", 3000);
-        entry.upsert_segment("s001.jsonl", 3200);
         entry.set_status(SubagentStatus::Completed, 20);
         entry.set_result_summary("image.png", 21);
 
         assert_eq!(entry.agent_kind, SubagentKind::AgentMd);
         assert_eq!(entry.parent_turn_id.as_deref(), Some("turn-1"));
         assert_eq!(entry.prompt_source.as_deref(), Some("agents/image.md"));
-        assert_eq!(entry.segments.len(), 1);
-        assert_eq!(entry.segments[0].line_count, 3200);
         assert_eq!(entry.result_summary.as_deref(), Some("image.png"));
         assert!(entry.status.is_terminal());
     }

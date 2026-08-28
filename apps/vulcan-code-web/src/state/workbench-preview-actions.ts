@@ -54,7 +54,6 @@ export function applyPreviewProjectAction(
       expandedProjectIds,
       conversations,
       selectedConversationId,
-      messages: workbench.messages.filter((message) => !archivedConversationIds.has(message.conversationId)),
     },
     message: action === "remove-project"
       ? `Archived and removed project ${project.name}.`
@@ -159,7 +158,6 @@ export function applyPreviewConversationAction(
       ...workbench,
       conversations,
       selectedConversationId,
-      messages: workbench.messages.filter((message) => message.conversationId !== conversationId),
     },
   };
 }

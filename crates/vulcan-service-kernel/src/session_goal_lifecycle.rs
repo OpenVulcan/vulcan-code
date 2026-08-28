@@ -3,43 +3,25 @@
 
 use std::collections::BTreeMap;
 
-use serde_json::Value;
 use vulcan_agent_runtime::{
     ExecutionPromptPurpose, ExecutionRunReport, ExecutionSessionGoalContext,
-    agent_runtime::events::{RuntimeEvent, RuntimeEventKind},
     agent_runtime::provider_request_telemetry::ProviderRequestCompletedUsage,
 };
 use vulcan_service_api::{SessionGoalStatus, SessionGoalSummary};
-use vulcan_workbench_model::{
-    PendingPromptRuntimeOptions, PendingSessionPromptEntry, PendingSessionPromptSource, SessionId,
-    SessionRuntimeStateEntry,
-};
-use vulcan_workspace_store::{
-    data_plane::ControllerRuntimeHandle,
-    workspace_store::{
-        GoalAccountingOutcome, GoalUpdate, ThreadGoal, ThreadGoalObjectiveError,
-        ThreadGoalProviderUsage, ThreadGoalStatus, ThreadGoalTokenBudgetError, VulcanGoalStore,
-        normalize_thread_goal_objective, validate_thread_goal_token_budget,
-    },
-};
+use vulcan_workbench_model::SessionId;
+use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
 
-use super::pending_prompts::enqueue_internal_pending_prompt_entry;
 use super::{
-    SharedServiceBridgeState, current_unix_millis_text, parse_session_id,
-    selected_session_id_from_state, webui_session_has_active_run,
-    webui_session_kernel_has_active_turn, workspace_snapshot_contains_regular_session,
+    SharedServiceBridgeState, parse_session_id, selected_session_id_from_state,
+    workspace_snapshot_contains_regular_session,
 };
 
 mod accounting;
-mod budget_guidance;
 mod prompt_context;
 mod state_cache;
-mod summary_parse;
 mod validation;
 
 pub(super) use accounting::*;
-pub(super) use budget_guidance::*;
 pub(super) use prompt_context::*;
 pub(super) use state_cache::*;
-pub(super) use summary_parse::*;
 pub(super) use validation::*;

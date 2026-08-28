@@ -105,35 +105,24 @@ export function ContextUsageOrb(props: {
   // providerUsage keeps session-level accounting out of repeated process headers.
   // providerUsage 将会话级统计从重复的过程标题中移出。
   const providerUsage = props.sessionProviderUsage;
-  // activeProviderUsage is the authoritative active-branch accounting scope.
-  // activeProviderUsage 是权威的当前活动分支统计口径。
-  const activeProviderUsage = providerUsage?.activeBranch ?? null;
-  // providerUsageTotal prefers the active-branch cumulative total shown by the backend.
-  // providerUsageTotal 优先使用后端提供的活动分支累计总量。
-  const providerUsageTotal = activeProviderUsage?.usage?.totalTokens ?? providerUsage?.lastUsage?.totalTokens;
+  // providerUsageTotal uses only the cumulative total derived from canonical V1 API facts.
+  // providerUsageTotal 仅使用从规范 V1 API 事实派生的累计总量。
+  const providerUsageTotal = providerUsage?.cumulativeUsage?.totalTokens ?? providerUsage?.lastUsage?.totalTokens;
   // providerUsageUnknown keeps missing Provider usage explicit in the diagnostic row.
   // providerUsageUnknown 在 Provider 用量缺失时保持诊断行显式可见。
   const providerUsageUnknown = t("conversation.process.providerUsageUnknown");
-  // providerUsageTitle retains the detailed scope breakdown without adding more card rows.
-  // providerUsageTitle 保留详细统计口径，但不再增加更多卡片行。
+  // providerUsageTitle exposes the one canonical session scope without synthetic branch or billing scopes.
+  // providerUsageTitle 展示唯一规范会话口径，不构造分支或计费统计口径。
   const providerUsageTitle = providerUsage
-    ? [
-        t("conversation.process.providerUsageActive")
-          .replace("{calls}", formatCompactProviderCount(activeProviderUsage?.providerCallCount ?? 0, providerUsageUnknown))
-          .replace("{tokens}", formatCompactProviderCount(providerUsageTotal, providerUsageUnknown))
-          .replace("{unknown}", String(activeProviderUsage?.unknownUsageCallCount ?? 0)),
-        t("conversation.process.providerUsageLifetime")
-          .replace("{calls}", formatCompactProviderCount(providerUsage.lifetime.providerCallCount, providerUsageUnknown))
-          .replace("{tokens}", formatCompactProviderCount(providerUsage.lifetime.usage?.totalTokens, providerUsageUnknown)),
-        t("conversation.process.providerUsageInherited")
-          .replace("{calls}", formatCompactProviderCount(providerUsage.inherited.providerCallCount, providerUsageUnknown))
-          .replace("{tokens}", formatCompactProviderCount(providerUsage.inherited.usage?.totalTokens, providerUsageUnknown)),
-      ].join("\n")
+    ? t("conversation.process.providerUsageSession")
+        .replace("{calls}", formatCompactProviderCount(providerUsage.providerCallCount, providerUsageUnknown))
+        .replace("{tokens}", formatCompactProviderCount(providerUsageTotal, providerUsageUnknown))
+        .replace("{unknown}", String(providerUsage.unknownUsageCallCount))
     : undefined;
   // providerUsageAriaLabel exposes the two compact metrics through the capacity control.
   // providerUsageAriaLabel 通过上下文容量控件公开两项紧凑统计。
   const providerUsageAriaLabel = providerUsage
-    ? `${t("composer.contextUsage.totalRequests")}: ${formatCompactProviderCount(activeProviderUsage?.providerCallCount ?? 0, providerUsageUnknown)} · ${t("composer.contextUsage.totalTokens")}: ${formatCompactProviderCount(providerUsageTotal, providerUsageUnknown)}`
+    ? `${t("composer.contextUsage.totalRequests")}: ${formatCompactProviderCount(providerUsage.providerCallCount, providerUsageUnknown)} · ${t("composer.contextUsage.totalTokens")}: ${formatCompactProviderCount(providerUsageTotal, providerUsageUnknown)}`
     : null;
   // selectedNode resolves the persisted id against the current backend projection.
   // selectedNode 根据当前后端投影解析持久化标识。
@@ -233,7 +222,7 @@ export function ContextUsageOrb(props: {
             <div className="context-usage-provider-row">
               <div className="context-usage-provider-metric">
                 <span>{t("composer.contextUsage.totalRequests")}</span>
-                <strong>{formatCompactProviderCount(activeProviderUsage?.providerCallCount ?? 0, providerUsageUnknown)}</strong>
+                <strong>{formatCompactProviderCount(providerUsage.providerCallCount, providerUsageUnknown)}</strong>
               </div>
               <div className="context-usage-provider-metric">
                 <span>{t("composer.contextUsage.totalTokens")}</span>

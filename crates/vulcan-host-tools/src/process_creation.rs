@@ -1,6 +1,7 @@
 //! Shared child-process creation helpers for host-owned tools.
 //! 宿主自有工具复用的子进程创建辅助能力。
 
+use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::process::Command as StdCommand;
 use tokio::process::Command as TokioCommand;
@@ -8,6 +9,52 @@ use tokio::process::Command as TokioCommand;
 /// Windows process creation flag that prevents a child console window from being shown.
 /// 防止子进程控制台窗口显示的 Windows 进程创建标志。
 pub const WINDOWS_CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Constructs one host-owned background command with the shared Windows no-window policy.
+/// 使用共享 Windows 无窗口策略构造一个宿主自有后台命令。
+///
+/// # Parameters
+/// 参数
+/// `program` is the exact executable passed to the standard process runtime.
+/// `program` 是传递给标准进程运行时的准确可执行文件。
+///
+/// # Returns
+/// 返回值
+/// Returns a standard command that is already safe to configure and spawn as a non-visible child.
+/// 返回一个已可安全继续配置并作为不可见子进程启动的标准命令。
+pub fn new_background_std_command<S>(program: S) -> StdCommand
+where
+    S: AsRef<OsStr>,
+{
+    // command receives the process-visibility contract at construction so callers cannot omit it.
+    // command 在构造时即获得进程可见性契约，调用方无法遗漏该策略。
+    let mut command = StdCommand::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(WINDOWS_CREATE_NO_WINDOW);
+    }
+    command
+}
+
+/// Constructs one Tokio background command from the shared standard-process factory.
+/// 通过共享标准进程工厂构造一个 Tokio 后台命令。
+///
+/// # Parameters
+/// 参数
+/// `program` is the exact executable passed to the asynchronous process runtime.
+/// `program` 是传递给异步进程运行时的准确可执行文件。
+///
+/// # Returns
+/// 返回值
+/// Returns a Tokio command carrying the same non-visible Windows creation policy.
+/// 返回一个携带相同 Windows 不可见创建策略的 Tokio 命令。
+pub fn new_background_tokio_command<S>(program: S) -> TokioCommand
+where
+    S: AsRef<OsStr>,
+{
+    TokioCommand::from(new_background_std_command(program))
+}
 
 /// Hides one background Tokio child process window in every Windows build profile.
 /// 在所有 Windows 构建配置中隐藏单个后台 Tokio 子进程窗口。
@@ -104,4 +151,62 @@ pub fn apply_child_path_prefixes(
         .map_err(|error| format!("Failed to construct the host-owned child PATH: {error}"))?;
     command.env("PATH", joined_path);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WINDOWS_CREATE_NO_WINDOW;
+
+    /// Verifies every shell-tool process entrypoint constructs children through the shared factory.
+    /// 验证每个 Shell 工具进程入口都通过共享工厂构造子进程。
+    #[test]
+    fn shell_tool_process_entrypoints_use_shared_background_factories() {
+        // shellCommandSource owns the one-shot shell process entrypoint.
+        // shellCommandSource 持有一次性 Shell 进程入口。
+        let shell_command_source =
+            include_str!("../../vulcan-agent-runtime/src/tooling/native/shell_command.rs");
+        // commandSessionSource owns the pipe-backed long-lived process entrypoint.
+        // commandSessionSource 持有管道后端长生命周期进程入口。
+        let command_session_source = include_str!("command_session_runtime/runtime.rs");
+        // commandStopSource owns the Windows process-tree stop helper entrypoint.
+        // commandStopSource 持有 Windows 进程树停止辅助入口。
+        let command_stop_source = include_str!("command_session_runtime/pipe.rs");
+        // terminalHostSource owns the isolated PTY host process entrypoint.
+        // terminalHostSource 持有隔离 PTY 宿主进程入口。
+        let terminal_host_source = include_str!("terminal_host_client.rs");
+
+        assert!(shell_command_source.contains("new_background_tokio_command(&program)"));
+        assert!(
+            command_session_source
+                .contains("new_background_tokio_command(&request.launcher_program)")
+        );
+        assert!(command_stop_source.contains("new_background_std_command(\"taskkill\")"));
+        assert!(
+            terminal_host_source
+                .contains("new_background_tokio_command(crate::runtime_assets::native_host_path(")
+        );
+
+        assert!(!shell_command_source.contains("TokioCommand::new(&program)"));
+        assert!(!command_session_source.contains("TokioCommand::new(&request.launcher_program)"));
+        assert!(!command_stop_source.contains("StdCommand::new(\"taskkill\")"));
+        assert!(
+            !terminal_host_source.contains("Command::new(crate::runtime_assets::native_host_path(")
+        );
+    }
+
+    /// Verifies the shared Windows background policy uses the operating-system no-window flag.
+    /// 验证共享 Windows 后台策略使用操作系统无窗口标志。
+    #[cfg(windows)]
+    #[test]
+    fn windows_background_policy_uses_create_no_window() {
+        assert_eq!(WINDOWS_CREATE_NO_WINDOW, 0x0800_0000);
+    }
+
+    /// Keeps the platform-specific constant referenced in non-Windows test builds.
+    /// 在非 Windows 测试构建中保持平台专用常量被引用。
+    #[cfg(not(windows))]
+    #[test]
+    fn non_windows_build_keeps_windows_policy_constant_stable() {
+        assert_eq!(WINDOWS_CREATE_NO_WINDOW, 0x0800_0000);
+    }
 }

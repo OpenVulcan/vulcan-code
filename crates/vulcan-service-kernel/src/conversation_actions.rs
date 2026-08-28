@@ -2,6 +2,8 @@
 //! 会话操作服务处理器。
 
 use super::*;
+use vulcan_session_core::v1::document::ToolCompletion;
+use vulcan_session_core::v1::event::ToolCallStatus;
 
 /// Submits answers for the oldest visible ask-tool request and resumes the blocked tool call.
 /// 提交当前可见 ask 工具请求的答案，并恢复被阻塞的工具调用。
@@ -80,130 +82,6 @@ pub(crate) fn service_reject_pending_question(
         ));
     }
     Ok(true)
-}
-
-/// Loads one backend-validated draft for a user prompt edit dialog.
-/// 加载一份供用户提示词编辑弹窗使用的后端校验草稿。
-pub(crate) async fn service_get_user_prompt_edit_draft(
-    state: SharedServiceBridgeState,
-    conversation_id: String,
-    message_id: String,
-) -> Result<UserPromptEditDraftSummary, String> {
-    let session_id = parse_session_id(&conversation_id)
-        .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_INVALID_CONVERSATION"))?;
-    let (prompt, attachments) = {
-        let mut guard = state
-            .lock()
-            .map_err(|_| String::from("ERR_SERVICE_STATE_LOCK_FAILED"))?;
-        if !webui_session_allows_user_prompt_editing(&mut guard, session_id) {
-            return Err(String::from("ERR_USER_PROMPT_EDIT_SESSION_BUSY"));
-        }
-        let workspace = guard
-            .workspace_snapshot
-            .as_ref()
-            .ok_or_else(|| String::from("ERR_WORKSPACE_SNAPSHOT_NOT_READY"))?;
-        if !workspace_user_prompt_message_allows_destructive_edit(
-            workspace,
-            session_id,
-            &message_id,
-        ) {
-            return Err(String::from("ERR_USER_PROMPT_EDIT_NOT_EDITABLE"));
-        }
-        // targetMessage is the already-hydrated authoritative row shown by the edit affordance; opening the dialog must not replay disk history.
-        // targetMessage 是编辑入口已经展示的水合权威消息行；打开弹窗不得重放磁盘历史。
-        let target_message = workspace
-            .session_messages
-            .get(&session_id)
-            .and_then(|messages| messages.iter().find(|message| message.id == message_id))
-            .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_NOT_FOUND"))?;
-        (
-            target_message.body.clone(),
-            composer_message_attachments_from_metadata(target_message.metadata.as_ref()),
-        )
-    };
-    Ok(UserPromptEditDraftSummary {
-        conversation_id,
-        message_id,
-        prompt,
-        attachments,
-        running: false,
-    })
-}
-
-/// Submits one user prompt edit by rolling back the tail and immediately replaying the edited prompt.
-/// 通过回滚尾部并立即重放编辑后提示词来提交一次用户提示词编辑。
-/// Forks one persisted conversation into a new idle session and opens the clone.
-/// 将一个持久化会话分叉为新的空闲会话并打开克隆。
-pub(crate) async fn service_fork_conversation(
-    app: ServiceEventEmitter,
-    state: SharedServiceBridgeState,
-    request: ConversationForkRequest,
-) -> Result<WorkbenchSnapshot, String> {
-    let source_session_id = parse_session_id(&request.conversation_id)
-        .ok_or_else(|| String::from("ERR_SESSION_FORK_INVALID_CONVERSATION"))?;
-    // source_admission_guard atomically rejects an active source and blocks new turns until copying finishes.
-    // source_admission_guard 原子拒绝活动源会话，并在复制完成前阻止新回合启动。
-    let _source_admission_guard =
-        begin_session_turn_start_exclusion(&state, [source_session_id], "分叉")?;
-    let (controller_runtime, source_session, project_id) = {
-        let mut guard = state
-            .lock()
-            .map_err(|_| String::from("ERR_SERVICE_STATE_LOCK_FAILED"))?;
-        if !webui_session_allows_user_prompt_editing(&mut guard, source_session_id) {
-            return Err(String::from("ERR_SESSION_FORK_SESSION_BUSY"));
-        }
-        let workspace = guard
-            .workspace_snapshot
-            .as_ref()
-            .ok_or_else(|| String::from("ERR_WORKSPACE_SNAPSHOT_NOT_READY"))?;
-        let source_session = workspace
-            .sessions
-            .iter()
-            .find(|session| session.id == source_session_id)
-            .cloned()
-            .ok_or_else(|| String::from("ERR_SESSION_FORK_SOURCE_NOT_FOUND"))?;
-        let project_id = owning_project_id_for_session(workspace, source_session_id)
-            .ok_or_else(|| String::from("ERR_SESSION_FORK_PROJECT_NOT_FOUND"))?;
-        let controller_runtime = guard
-            .controller_runtime
-            .clone()
-            .ok_or_else(|| String::from("ERR_CONTROLLER_RUNTIME_NOT_READY"))?;
-        (controller_runtime, source_session, project_id)
-    };
-    let target_session_id = SessionId::new_v4();
-    let fork_title = if request.title.trim().is_empty() {
-        source_session.title.clone()
-    } else {
-        request.title.trim().to_string()
-    };
-    // persist_lock owns the process-wide serialization boundary shared by session storage writers.
-    // persist_lock 持有会话存储写入者共享的进程级串行化边界。
-    let persist_lock = webui_workspace_persist_lock();
-    // persist_guard keeps the source directory and authoritative session index at one storage version.
-    // persist_guard 使源目录与权威会话索引保持在同一个存储版本。
-    let persist_guard = persist_lock.lock().await;
-    // sourcePersistGuards exclude same-session transcript and state writers while its directory is copied.
-    // sourcePersistGuards 在复制源目录期间排除同会话转录与状态写入者。
-    let _source_persist_guards = lock_webui_session_persist_channels([source_session_id]).await;
-    let fork_result = fork_persisted_session(
-        &controller_runtime,
-        &source_session,
-        &project_id,
-        target_session_id,
-        fork_title,
-        request.anchor_message_id.as_deref(),
-    )
-    .await?;
-    drop(persist_guard);
-    let target_session_id_text = fork_result.session.id.to_string();
-    let hydrated = load_hydrated_session_workbench(
-        &app,
-        &state,
-        fork_result.session.id,
-        &target_session_id_text,
-    )
-    .await?;
-    Ok(hydrated.workbench)
 }
 
 /// Emits only the ask-modal pending question projection as a workbench delta.
@@ -286,6 +164,64 @@ pub(crate) fn install_webui_question_runtime_event_bridge(
     state: &SharedServiceBridgeState,
     question_runtime: &Arc<QuestionRuntime>,
 ) -> Result<(), String> {
+    let durability_state = Arc::clone(state);
+    // durabilityCallback is the only bridge allowed to advance an Ask tool before process-local visibility or resumption.
+    // durabilityCallback 是在进程内可见或恢复前推进 Ask 工具的唯一桥接。
+    let durability_callback: PendingQuestionDurabilityCallback = Arc::new(move |action| {
+        let session_id = match &action {
+            PendingQuestionDurabilityAction::Waiting { request }
+            | PendingQuestionDurabilityAction::Answered { request, .. }
+            | PendingQuestionDurabilityAction::Cancelled { request, .. } => request.session_id,
+        };
+        let handle = crate::session_goal_lifecycle::registered_session_v1_handle_from_state(
+            &durability_state,
+            session_id,
+        )?;
+        let now_ms = crate::session_goal_lifecycle::current_v1_goal_unix_millis()?;
+        match action {
+            PendingQuestionDurabilityAction::Waiting { request } => handle
+                .mark_tool_waiting_user(request.api_call_id, request.tool_call_id, now_ms)
+                .map(|_| ())
+                .map_err(|error| error.to_string()),
+            PendingQuestionDurabilityAction::Answered { request, result } => {
+                let output = persistent_tool_output_from_result(&result)
+                    .map_err(|error| error.to_string())?;
+                handle
+                    .answer_waiting_tool(
+                        request.api_call_id,
+                        request.tool_call_id,
+                        ToolCompletion {
+                            output: Some(output),
+                            changeset: None,
+                            status: if result.is_error {
+                                ToolCallStatus::Failed
+                            } else {
+                                ToolCallStatus::Completed
+                            },
+                            finished_at_ms: now_ms,
+                            external_refs: Vec::new(),
+                            generated_resources: Vec::new(),
+                        },
+                    )
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            }
+            PendingQuestionDurabilityAction::Cancelled { request, result } => {
+                let output = persistent_tool_output_from_result(&result)
+                    .map_err(|error| error.to_string())?;
+                handle
+                    .cancel_waiting_tool(
+                        request.api_call_id,
+                        request.tool_call_id,
+                        Some(output),
+                        now_ms,
+                    )
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            }
+        }
+    });
+    question_runtime.set_durability_callback(Some(durability_callback))?;
     let app = app.clone();
     let state = Arc::clone(state);
     // callback is the sole projection publisher for Ask registration, completion, and cancellation.
@@ -311,11 +247,6 @@ pub(crate) fn workbench_with_live_pending_question(
     guard: &ServiceBridgeState,
 ) -> Result<WorkbenchSnapshot, String> {
     let mut workbench = guard.workbench.clone();
-    refresh_selected_workbench_messages_from_runtime(guard, &mut workbench);
-    workbench.hydrated_conversation_windows = hydrated_conversation_window_summaries(
-        &guard.hydrated_conversation_windows,
-        &guard.webui_preloaded_unclosed_subagent_roots,
-    );
     workbench.pending_questions =
         pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref())?;
     workbench.pending_question =

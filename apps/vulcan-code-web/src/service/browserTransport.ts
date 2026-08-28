@@ -10,6 +10,7 @@ import type {
   WorkbenchDeltaEnvelope,
   WorkbenchSnapshot,
 } from "@/types";
+import type { ConversationEventLiveDeltaV1 } from "@/service/conversation-event-window-client";
 import type {
   ServiceEventHandler,
   ServiceParams,
@@ -62,6 +63,7 @@ type BrowserServiceEvent =
   | { kind: "workbench"; payload: WorkbenchSnapshot }
   | { kind: "workbenchDelta"; payload: WorkbenchDeltaEnvelope }
   | { kind: "conversationRunSettled"; payload: ConversationRunSettledEvent }
+  | { kind: "conversationEventDeltaV1"; payload: ConversationEventLiveDeltaV1 }
   | { kind: "sessionAddonChanged"; payload: SessionAddonChangedEvent }
   | { kind: "pluginUiInvalidated"; payload: PluginUiInvalidatedEvent }
   | { kind: "workspaceGitChanged"; payload: WorkspaceGitChangedEvent }
@@ -76,6 +78,7 @@ const EVENT_KIND_TO_TOPIC: Record<BrowserServiceEvent["kind"], string> = {
   workbench: "workbench",
   workbenchDelta: "workbench.delta",
   conversationRunSettled: "conversation.run.settled",
+  conversationEventDeltaV1: "conversation.event.delta.v1",
   sessionAddonChanged: "session.addon.changed",
   pluginUiInvalidated: "plugin.ui.invalidated",
   workspaceGitChanged: "workspace.git.changed",

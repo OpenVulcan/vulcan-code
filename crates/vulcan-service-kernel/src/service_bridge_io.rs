@@ -336,6 +336,9 @@ pub(crate) async fn run_webui_service_http_bridge(
         Arc::clone(&inference_access_registry),
         inference_consumer_profile_id.clone(),
     );
+    // session_resource_state preserves the same kernel authority for opaque content resolution.
+    // session_resource_state 为不透明内容解析保留同一内核权威。
+    let session_resource_state = state.clone();
     let inference_event_subscriber = crate::inference_service::inference_service_event_subscriber(
         state,
         inference_access_registry,
@@ -347,6 +350,15 @@ pub(crate) async fn run_webui_service_http_bridge(
         event_bus,
         static_root: webui_static_root(),
         rpc_dispatcher,
+        session_resource_resolver: Arc::new(move |request| {
+            let state = session_resource_state.clone();
+            Box::pin(async move {
+                crate::conversation_resources_v1::service_session_resource_content_v1(
+                    state, request,
+                )
+                .await
+            })
+        }),
         client_disconnected,
         inference_discovery: shared_inference_discovery,
         inference_dispatcher,
@@ -600,12 +612,6 @@ fn webui_service_discovery_snapshot_with_replaced_status(
 /// 在引导完成后将浏览器侧服务发现快照标记为 ready。
 pub(crate) fn mark_webui_service_discovery_ready(state: &SharedServiceBridgeState) {
     mark_webui_service_discovery_status(state, WEBUI_SERVICE_DISCOVERY_STATUS_READY);
-}
-
-/// Marks the browser-facing service discovery snapshot as starting before a bootstrap retry.
-/// 在引导重试前将浏览器侧服务发现快照标记为 starting。
-pub(crate) fn mark_webui_service_discovery_starting(state: &SharedServiceBridgeState) {
-    mark_webui_service_discovery_status(state, WEBUI_SERVICE_DISCOVERY_STATUS_STARTING);
 }
 
 /// Marks the browser-facing service discovery snapshot as failed after bootstrap fails.

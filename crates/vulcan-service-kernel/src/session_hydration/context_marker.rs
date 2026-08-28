@@ -2,24 +2,6 @@
 //! 会话水合 context marker 辅助逻辑。
 
 use super::*;
-
-pub(crate) fn ensure_hydrated_session_dialogue_context(
-    workspace_snapshot: &WorkspaceSnapshot,
-    session_id: SessionId,
-) -> Result<(), String> {
-    let Some(runtime_state) = workspace_snapshot.session_runtime_state.get(&session_id) else {
-        return Err(format!(
-            "ERR_SESSION_DIALOGUE_CONTEXT_NOT_READY: session {session_id} runtime state is missing after hydration"
-        ));
-    };
-    if !runtime_state_has_concrete_conversation_context(runtime_state) {
-        return Err(format!(
-            "ERR_SESSION_DIALOGUE_CONTEXT_NOT_READY: session {session_id} dialogue context is empty after hydration"
-        ));
-    }
-    Ok(())
-}
-
 /// Returns whether a retained WebUI snapshot has enough dialogue context for prompt submission.
 /// 判断保留的 WebUI 快照是否已有足够的对话层上下文可直接提交提示词。
 ///

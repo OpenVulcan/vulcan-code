@@ -3,12 +3,11 @@
 
 use vulcan_provider_config::config::ReasoningEffortLevel;
 use vulcan_workbench_model::{PendingSessionPromptSource, SessionId, SessionRuntimeStateEntry};
-use vulcan_workspace_store::{
-    data_plane::ControllerRuntimeHandle, workspace_store::WorkspaceSnapshot,
-};
+use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
 use crate::{
-    current_unix_millis_text, session_goal_lifecycle::ensure_session_can_enter_plan_mode,
+    SharedServiceBridgeState, current_unix_millis_text, persist_session_plan_mode_v1,
+    session_goal_lifecycle::ensure_session_can_enter_plan_mode,
     workspace_persistence_versions::parse_reasoning_effort,
 };
 
@@ -67,16 +66,17 @@ impl SubmissionRuntimeOptions {
 /// Strongly typed turn controls after parsing and any required Plan authorization.
 /// 返回解析并完成必要计划授权后的强类型回合控制项。
 pub(crate) async fn prepare_submission_runtime_options(
-    controller_runtime: &ControllerRuntimeHandle,
+    state: &SharedServiceBridgeState,
     workspace_snapshot: &mut WorkspaceSnapshot,
     session_id: SessionId,
     input: SubmissionRuntimeOptionsInput,
 ) -> Result<SubmissionRuntimeOptions, String> {
     let options = resolve_submission_runtime_options(input);
     if options.requests_plan_mode() {
-        // Goal exclusion is the sole authorization boundary; persistent Plan state is written only after it succeeds.
-        // 目标互斥是唯一授权边界；仅在检查成功后写入持久计划状态。
-        ensure_session_can_enter_plan_mode(controller_runtime, session_id).await?;
+        // The V1 Goal metadata is the sole authorization fact and set_plan_mode is the durable mode transition.
+        // V1 Goal metadata 是唯一授权事实，set_plan_mode 是可靠的模式转换。
+        ensure_session_can_enter_plan_mode(state, session_id).await?;
+        persist_session_plan_mode_v1(state, session_id, true).await?;
         apply_authorized_plan_mode(workspace_snapshot, session_id);
     }
     if let Some(reasoning_effort) = options.reasoning_effort {
@@ -224,10 +224,6 @@ mod tests {
             archived_task_projects: Vec::new(),
             sessions: Vec::new(),
             archived_sessions: Vec::new(),
-            session_messages: BTreeMap::new(),
-            archived_session_messages: BTreeMap::new(),
-            session_compactions: BTreeMap::new(),
-            archived_session_compactions: BTreeMap::new(),
             session_runtime_state: BTreeMap::new(),
             archived_session_runtime_state: BTreeMap::new(),
             session_run_phases: BTreeMap::new(),

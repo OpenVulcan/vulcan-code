@@ -26,29 +26,25 @@ use vulcan_agent_runtime::{
 };
 use vulcan_provider_config::config::ProviderConfigurationFile;
 use vulcan_service_api::{
-    ServiceEvent, ServiceEventEmitter, StartupRecoveryKind, StartupRecoverySnapshot,
-    StartupSnapshot, StartupStepSnapshot, StartupStepStatus, WorkbenchSnapshot,
+    ServiceEvent, ServiceEventEmitter, StartupSnapshot, StartupStepSnapshot, StartupStepStatus,
+    WorkbenchSnapshot,
 };
 use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
 
 use super::{
     AgentRuntimeBridge, SharedServiceBridgeState, WorkbenchRuntimeProjection,
-    active_surface_messages_from_workspace_and_state, build_vmm_hook_config_snapshot,
-    current_unix_millis_text, emit_service_event_with_trace, fallback_workbench_snapshot,
-    hydrated_conversation_window_summaries, install_webui_question_runtime_event_bridge,
-    mark_webui_service_discovery_failed, mark_webui_service_discovery_ready,
-    mark_webui_service_discovery_starting, native_tool_summaries_from_agent_runtime,
+    build_vmm_hook_config_snapshot, emit_service_event_with_trace, fallback_workbench_snapshot,
+    install_webui_question_runtime_event_bridge, mark_webui_service_discovery_failed,
+    mark_webui_service_discovery_ready, native_tool_summaries_from_agent_runtime,
     normalized_workspace_path_text_from_path, pending_question_snapshots_from_agent_runtime,
     subagent_navigation_snapshot_from_cached_state, workbench_from_runtime, workspace_root,
 };
 
 mod error;
-mod recovery;
 mod startup_snapshot;
 mod startup_updates;
 
 pub(super) use error::*;
-pub(crate) use recovery::service_rebuild_startup_session_vmm;
 pub(super) use startup_snapshot::*;
 pub(super) use startup_updates::*;
 
@@ -1131,16 +1127,9 @@ fn run_service_bootstrap(
             )
         })?;
         guard.agent_runtime = Some(agent_runtime.clone());
-        let surface_messages =
-            active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot)
-                .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
         let subagent_navigation =
             subagent_navigation_snapshot_from_cached_state(&mut guard, &workspace_snapshot)
                 .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
-        let hydrated_conversation_windows = hydrated_conversation_window_summaries(
-            &guard.hydrated_conversation_windows,
-            &guard.webui_preloaded_unclosed_subagent_roots,
-        );
         let mcp_server_states = agent_runtime
             .extension_generation
             .mcp_runtime()
@@ -1164,16 +1153,17 @@ fn run_service_bootstrap(
             provider_configuration: &provider_configuration,
             public_ai_runtime: Some(agent_runtime.public_ai_runtime.as_ref()),
             workspace: &workspace_snapshot,
+            pending_prompt_process_mirrors: &guard.pending_prompt_process_mirrors,
             vmm_session_states: &vmm_session_states,
             managed_vmm_runtime: None,
-            surface_messages: surface_messages.as_slice(),
             subagent_navigation,
             pending_questions: pending_question_snapshots_from_agent_runtime(Some(&agent_runtime))
                 .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?,
             logs: &logs,
             live_context_budgets: &BTreeMap::new(),
             session_goal_summaries: &BTreeMap::new(),
-            hydrated_conversation_windows: &hydrated_conversation_windows,
+            session_provider_usage_summaries: &BTreeMap::new(),
+            selected_context_usage_facts: None,
             native_tools: native_tool_summaries_from_agent_runtime(Some(&agent_runtime)),
         });
         workbench.providers = crate::public_ai_provider_rows(
@@ -1950,24 +1940,6 @@ fn prepare_vulcan_plugin_runtime(
         service_runtime.clone(),
         plugin_state_root,
     ));
-    // legacyUsageMigration copies immutable historical facts through Controller bindings before plugin hooks resume writes.
-    // legacyUsageMigration 在插件 Hook 恢复写入前，通过 Controller 绑定复制不可变历史事实。
-    let legacy_usage_migration = service_runtime
-        .block_on(
-            crate::provider_usage_migration::migrate_legacy_usage_statistics(
-                storage_service.as_ref(),
-                controller_runtime,
-            ),
-        )
-        .map_err(|error| {
-            ServiceBootstrapError::new("vldb", "VLDB", format!("迁移旧用量统计数据失败：{error}"))
-        })?;
-    if legacy_usage_migration.source_present {
-        eprintln!(
-            "[webui-service] migrated {} legacy usage rows through source rowid {}",
-            legacy_usage_migration.imported_rows, legacy_usage_migration.final_source_rowid
-        );
-    }
     // uiEventPublisher forwards revision-only invalidations through existing service event sinks.
     // uiEventPublisher 通过现有服务事件接收器转发仅含修订号的失效通知。
     let ui_event_publisher = Arc::new(crate::plugin_ui_events::ServicePluginUiEventPublisher::new(

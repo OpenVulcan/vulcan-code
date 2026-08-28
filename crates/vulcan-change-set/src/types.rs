@@ -160,7 +160,8 @@ impl ChangeSetVerificationStatus {
 
 /// Canonical `change_set` mode declared by the producing tool.
 /// 产出工具声明的 canonical `change_set` 模式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ChangeSetMode {
     /// The payload only previews edits that have not been applied yet.
     /// 当前载荷仅预览尚未落盘的编辑操作。
@@ -193,7 +194,8 @@ impl ChangeSetMode {
 
 /// Supported file-level change kinds inside one compact `change_set` summary.
 /// 单个紧凑 `change_set` 摘要中支持的文件级变更类型。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ChangeSetFileChangeKind {
     /// One newly created file.
     /// 一份新创建的文件。
@@ -236,7 +238,8 @@ impl ChangeSetFileChangeKind {
 
 /// Stable delete content mode used by canonical `change_set` delete lifecycle records.
 /// canonical `change_set` 删除生命周期记录使用的稳定删除内容模式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ChangeSetDeleteContentMode {
     /// The deleted file body stays inline as full text.
     /// 被删除文件正文以内联全文形式保留。

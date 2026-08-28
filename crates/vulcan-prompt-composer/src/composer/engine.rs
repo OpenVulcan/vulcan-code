@@ -121,7 +121,7 @@ impl PromptComposerEngine {
         }
 
         for (index, custom_segment) in input.custom_developer_segments.iter().enumerate() {
-            if custom_segment.trim().is_empty() {
+            if custom_segment.body.trim().is_empty() {
                 continue;
             }
             let segment = {
@@ -131,21 +131,22 @@ impl PromptComposerEngine {
                 };
                 build_cached_custom_segment(
                     &mut custom_segment_context,
-                    CachedCustomSegmentDescriptor::new(
-                        "custom_developer",
+                    CachedCustomSegmentDescriptor {
+                        namespace: "custom_developer",
                         index,
-                        crate::types::PromptNodeKind::Developer,
-                        PromptTarget::Developer,
-                        format!("Custom Developer Segment {index}"),
-                        custom_segment,
-                        format!("Runtime custom developer segment {index}"),
-                    ),
+                        kind: crate::types::PromptNodeKind::Developer,
+                        target: PromptTarget::Developer,
+                        title: custom_segment.title.clone(),
+                        body: custom_segment.body.clone(),
+                        source_label: custom_segment.source_label.clone(),
+                        baseline_provenance: custom_segment.baseline_provenance.clone(),
+                    },
                 )
             };
             push_segment(&mut output, segment);
         }
         for (index, custom_segment) in input.custom_user_segments.iter().enumerate() {
-            if custom_segment.trim().is_empty() {
+            if custom_segment.body.trim().is_empty() {
                 continue;
             }
             let segment = {
@@ -155,15 +156,16 @@ impl PromptComposerEngine {
                 };
                 build_cached_custom_segment(
                     &mut custom_segment_context,
-                    CachedCustomSegmentDescriptor::new(
-                        "custom_user",
+                    CachedCustomSegmentDescriptor {
+                        namespace: "custom_user",
                         index,
-                        crate::types::PromptNodeKind::User,
-                        PromptTarget::User,
-                        format!("Custom User Segment {index}"),
-                        custom_segment,
-                        format!("Runtime custom user segment {index}"),
-                    ),
+                        kind: crate::types::PromptNodeKind::User,
+                        target: PromptTarget::User,
+                        title: custom_segment.title.clone(),
+                        body: custom_segment.body.clone(),
+                        source_label: custom_segment.source_label.clone(),
+                        baseline_provenance: custom_segment.baseline_provenance.clone(),
+                    },
                 )
             };
             push_segment(&mut output, segment);
@@ -210,11 +212,37 @@ fn build_cached_custom_segment(
     context: &mut CachedCustomSegmentContext<'_>,
     descriptor: CachedCustomSegmentDescriptor,
 ) -> PromptSegment {
-    let fingerprint = stable_text_hash(&descriptor.body);
+    // cache_identity contains every producer-owned field that can change the rendered segment or its runtime-lock identity.
+    // cache_identity 包含所有会改变渲染片段或运行时锁定身份的生产者字段。
+    let provenance_identity = descriptor
+        .baseline_provenance
+        .as_ref()
+        .map(|provenance| {
+            format!(
+                "{}:{}",
+                provenance.kind.cache_identity(),
+                provenance.source_id
+            )
+        })
+        .unwrap_or_else(|| String::from("request-dynamic"));
+    let cache_identity = format!(
+        "{}:{}:{:?}:{:?}:{}:{}:{}:{}",
+        descriptor.namespace,
+        descriptor.index,
+        descriptor.kind,
+        descriptor.target,
+        descriptor.title.len(),
+        descriptor.title,
+        descriptor.source_label,
+        provenance_identity
+    );
+    let fingerprint = stable_text_hash(&format!("{cache_identity}:{}", descriptor.body));
     let cache_key = node_cache_key(descriptor.namespace, fingerprint);
     if let Some(segment) = context.cache.get_node(&cache_key) {
         context.diagnostics.record_node_cache(&cache_key, true);
-        return segment.with_source_label(descriptor.source_label);
+        return segment
+            .with_source_label(descriptor.source_label)
+            .with_optional_baseline_provenance(descriptor.baseline_provenance);
     }
     context.diagnostics.record_node_cache(&cache_key, false);
     let segment = PromptSegment::new(
@@ -225,7 +253,8 @@ fn build_cached_custom_segment(
         descriptor.title,
         descriptor.body,
     )
-    .with_source_label(descriptor.source_label);
+    .with_source_label(descriptor.source_label)
+    .with_optional_baseline_provenance(descriptor.baseline_provenance);
     context.cache.put_node(segment.clone());
     segment
 }
@@ -265,28 +294,7 @@ struct CachedCustomSegmentDescriptor {
     /// Diagnostics source label.
     /// 诊断来源标签。
     source_label: String,
-}
-
-impl CachedCustomSegmentDescriptor {
-    /// Build one cached custom segment descriptor from primitive segment fields.
-    /// 根据基础片段字段构建缓存自定义片段描述。
-    fn new(
-        namespace: &'static str,
-        index: usize,
-        kind: crate::types::PromptNodeKind,
-        target: PromptTarget,
-        title: impl Into<String>,
-        body: impl Into<String>,
-        source_label: impl Into<String>,
-    ) -> Self {
-        Self {
-            namespace,
-            index,
-            kind,
-            target,
-            title: title.into(),
-            body: body.into(),
-            source_label: source_label.into(),
-        }
-    }
+    /// Producer-declared locked-baseline provenance.
+    /// 生产者声明的锁定基线来源。
+    baseline_provenance: Option<crate::types::PromptBaselineProvenance>,
 }

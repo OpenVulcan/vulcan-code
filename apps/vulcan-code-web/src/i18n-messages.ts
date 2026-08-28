@@ -349,8 +349,6 @@ export type TranslationKey =
   | "conversation.action.forkSucceeded"
   | "conversation.action.forkInProgressTitle"
   | "conversation.action.forkInProgressMessage"
-  | "conversation.forkSource.label"
-  | "conversation.forkSource.missing"
   | "conversation.block.toolCall"
   | "conversation.block.toolResult"
   | "conversation.block.command"
@@ -385,44 +383,18 @@ export type TranslationKey =
   | "conversation.continuation.claimFailed"
   | "conversation.continuation.blocked"
   | "conversation.continuation.blocked.default"
-  | "conversation.continuation.blocked.toolSideEffect"
-  | "conversation.continuation.blocked.providerDispatchUnknown"
-  | "conversation.continuation.blocked.semanticOutput"
-  | "conversation.continuation.blocked.pendingActionExecutor"
-  | "conversation.continuation.blocked.nonRetryable"
-  | "conversation.continuation.blocked.retrySnapshotMissing"
-  | "conversation.continuation.blocked.retrySnapshotVersionUnsupported"
-  | "conversation.continuation.blocked.retrySnapshotUnsafe"
-  | "conversation.continuation.blocked.retrySnapshotBodyUnreadable"
-  | "conversation.continuation.blocked.retrySnapshotTransitionFailed"
-  | "conversation.continuation.blocked.retrySnapshotOwnerMismatch"
-  | "conversation.continuation.blocked.retrySnapshotNotFrozen"
+  | "conversation.continuation.blocked.activeApi"
+  | "conversation.continuation.blocked.missingApiStarted"
+  | "conversation.continuation.blocked.duplicateApiTerminal"
+  | "conversation.continuation.blocked.missingApiTerminal"
+  | "conversation.continuation.blocked.apiTerminalOrder"
+  | "conversation.continuation.blocked.terminalBoundarySuperseded"
+  | "conversation.continuation.blocked.terminalPolicyForbidden"
   | "conversation.continuation.blocked.routeChanged"
-  | "conversation.continuation.blocked.routeMissing"
-  | "conversation.continuation.blocked.nextProviderBoundaryMissing"
-  | "conversation.continuation.blocked.toolBoundaryMissing"
-  | "conversation.continuation.blocked.toolBindingMismatch"
-  | "conversation.continuation.blocked.toolResultMismatch"
-  | "conversation.continuation.blocked.finalAssistantBoundaryMissing"
-  | "conversation.continuation.blocked.contextGenerationChanged"
-  | "conversation.continuation.blocked.canonicalStateChanged"
-  | "conversation.continuation.blocked.logicalTurnChanged"
-  | "conversation.continuation.blocked.claimInFlight"
-  | "conversation.continuation.blocked.admissionInFlight"
-  | "conversation.continuation.blocked.terminalPersistenceInFlight"
-  | "conversation.continuation.blocked.sessionActive"
-  | "conversation.continuation.blocked.notProblemTurn"
   | "conversation.continuation.blocked.sessionBusy"
-  | "conversation.continuation.blocked.stale"
-  | "conversation.continuation.blocked.callInFlight"
-  | "conversation.continuation.blocked.tailMissing"
-  | "conversation.continuation.blocked.tailInvalid"
-  | "conversation.continuation.blocked.actionUnsupported"
   | "conversation.continuation.blocked.requestInvalid"
   | "conversation.continuation.blocked.conversationUnavailable"
   | "conversation.continuation.blocked.runtimeUnavailable"
-  | "conversation.continuation.blocked.ledgerExhausted"
-  | "conversation.continuation.blocked.timestampInvalid"
   | "conversation.continuation.blocked.unknown"
   | "conversation.continuation.timeout"
   | "conversation.continuation.stateSyncFailed"
@@ -457,9 +429,7 @@ export type TranslationKey =
   | "conversation.process.stopped"
   | "conversation.process.duration"
   | "conversation.process.providerUsageBadge"
-  | "conversation.process.providerUsageActive"
-  | "conversation.process.providerUsageLifetime"
-  | "conversation.process.providerUsageInherited"
+  | "conversation.process.providerUsageSession"
   | "conversation.process.providerUsageUnknown"
   | "conversation.toolSequence.summary"
   | "conversation.toolSequence.runningSummary"
@@ -649,6 +619,8 @@ export type TranslationKey =
   | "composer.planMode.goalConflict"
   | "composer.error.stopCurrentFailed"
   | "composer.error.promptEmpty"
+  | "composer.error.draftLoadFailed"
+  | "composer.error.draftPersistFailed"
   | "composer.modelPicker.tooltipTitle"
   | "composer.modelPicker.currentModel"
   | "composer.modelPicker.currentProvider"
@@ -3220,8 +3192,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.action.forkSucceeded": "已创建分叉会话",
     "conversation.action.forkInProgressTitle": "正在分叉会话",
     "conversation.action.forkInProgressMessage": "正在复制会话并打开新分叉，请稍候。",
-    "conversation.forkSource.label": "从对话中派生",
-    "conversation.forkSource.missing": "原会话已经不存在",
     "conversation.block.toolCall": "调用工具",
     "conversation.block.toolResult": "工具返回",
     "conversation.block.command": "命令会话",
@@ -3255,46 +3225,20 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.continuing": "继续中",
     "conversation.continuation.claimFailed": "继续失败，请查看会话状态后重试。",
     "conversation.continuation.blocked": "当前终止边界不可安全继续",
-    "conversation.continuation.blocked.default": "恢复边界未通过安全校验，当前不能继续。",
-    "conversation.continuation.blocked.toolSideEffect": "已经观察到工具副作用，但恢复快照没有可协调的逐工具边界，无法判断哪些调用可复用或必须返回中断结果。",
-    "conversation.continuation.blocked.providerDispatchUnknown": "Provider 请求是否已经发出无法确认；为避免重复请求，当前不能继续。",
-    "conversation.continuation.blocked.semanticOutput": "已经收到部分模型输出；继续可能造成重复生成，当前不能继续。",
-    "conversation.continuation.blocked.pendingActionExecutor": "当前恢复动作没有可用执行器，无法安全继续。",
-    "conversation.continuation.blocked.nonRetryable": "原始错误标记为不可重试，无法安全继续。",
-    "conversation.continuation.blocked.retrySnapshotMissing": "恢复快照不存在或已被清理，无法继续。",
-    "conversation.continuation.blocked.retrySnapshotVersionUnsupported": "恢复快照来自不受支持的旧版内部契约；系统不会猜测迁移或降级重放。",
-    "conversation.continuation.blocked.retrySnapshotUnsafe": "恢复快照未通过安全校验，无法继续。",
-    "conversation.continuation.blocked.retrySnapshotBodyUnreadable": "恢复快照实体缺失、无法读取或完整性校验失败；为避免错误重放，当前不能继续。",
-    "conversation.continuation.blocked.retrySnapshotTransitionFailed": "恢复快照无法可靠写入终态；为避免重复执行，当前不能继续。",
-    "conversation.continuation.blocked.retrySnapshotOwnerMismatch": "恢复快照不属于当前会话；为避免把其他会话状态错误重放到这里，当前不能继续。",
-    "conversation.continuation.blocked.retrySnapshotNotFrozen": "恢复快照不是冻结状态，无法继续。",
-    "conversation.continuation.blocked.routeChanged": "恢复所需的 Provider 路由已变化；为避免使用错误模型或重复请求，当前不能继续。",
-    "conversation.continuation.blocked.routeMissing": "恢复快照缺少 Provider 路由，无法安全继续。",
-    "conversation.continuation.blocked.nextProviderBoundaryMissing": "已保存的工具结果边界不存在，无法安全构建下一次 Provider 请求。",
-    "conversation.continuation.blocked.toolBoundaryMissing": "恢复快照中的工具批次与最后一条助手工具调用不完整或数量不一致。",
-    "conversation.continuation.blocked.toolBindingMismatch": "恢复快照中的工具名称、参数、调用标识或工具定义指纹与当前精确边界不一致。",
-    "conversation.continuation.blocked.toolResultMismatch": "恢复快照中的工具状态与可靠结果不一致，无法确定应复用结果还是补回中断结果。",
-    "conversation.continuation.blocked.finalAssistantBoundaryMissing": "恢复快照没有可直接提交的无工具助手终态，无法完成本地终结。",
-    "conversation.continuation.blocked.contextGenerationChanged": "会话上下文代际已变化，恢复快照不再对应当前上下文。",
-    "conversation.continuation.blocked.canonicalStateChanged": "会话的 Provider 可见状态已变化，恢复快照不再对应当前会话内容。",
-    "conversation.continuation.blocked.logicalTurnChanged": "原始逻辑回合或提示词已发生变化，无法安全恢复；请重新发送消息。",
-    "conversation.continuation.blocked.claimInFlight": "同一继续请求仍在服务端完成持久化，请稍候重试；不会创建第二次执行。",
-    "conversation.continuation.blocked.admissionInFlight": "会话正在完成停止、提交或状态切换；该操作结束前不能继续。",
-    "conversation.continuation.blocked.terminalPersistenceInFlight": "会话终止状态仍在可靠保存中；保存完成前不能继续，以避免重复执行。",
-    "conversation.continuation.blocked.sessionActive": "会话仍在运行，请等待当前执行结束后再继续。",
-    "conversation.continuation.blocked.notProblemTurn": "当前回合已正常完成，不存在需要恢复的异常中断边界。",
-    "conversation.continuation.blocked.sessionBusy": "会话仍有排队任务，当前不能继续。",
-    "conversation.continuation.blocked.stale": "恢复边界已过期，请刷新会话状态后再试。",
-    "conversation.continuation.blocked.callInFlight": "仍有 Provider 请求进行中，当前不能继续。",
-    "conversation.continuation.blocked.tailMissing": "缺少可恢复的会话尾部，无法继续。",
-    "conversation.continuation.blocked.tailInvalid": "会话尾部已发生变化，无法安全继续。",
-    "conversation.continuation.blocked.actionUnsupported": "当前恢复动作尚未实现，无法安全继续。",
-    "conversation.continuation.blocked.requestInvalid": "继续请求缺少必要身份或包含不允许的数据，服务已拒绝执行。",
-    "conversation.continuation.blocked.conversationUnavailable": "目标会话不存在或标识无效，无法继续。",
-    "conversation.continuation.blocked.runtimeUnavailable": "目标会话的恢复运行态不存在，无法继续。",
-    "conversation.continuation.blocked.ledgerExhausted": "会话恢复账本已达到修订上限，无法再安全领取。",
-    "conversation.continuation.blocked.timestampInvalid": "恢复边界时间戳无效或超出支持范围，无法继续。",
-    "conversation.continuation.blocked.unknown": "恢复边界被安全策略阻断，当前不能继续。",
+    "conversation.continuation.blocked.default": "当前开放回合未通过继续资格校验，无法继续。",
+    "conversation.continuation.blocked.activeApi": "当前仍有物理 API 请求进行中，不能重复继续。",
+    "conversation.continuation.blocked.missingApiStarted": "当前开放回合没有可关联的物理 API 起始事实，无法继续。",
+    "conversation.continuation.blocked.duplicateApiTerminal": "当前物理 API 存在重复终态事实，无法继续。",
+    "conversation.continuation.blocked.missingApiTerminal": "当前物理 API 尚无持久化终态事实，无法继续。",
+    "conversation.continuation.blocked.apiTerminalOrder": "当前物理 API 的终态顺序无效，无法继续。",
+    "conversation.continuation.blocked.terminalBoundarySuperseded": "该终态边界已被后续回合事实取代，请刷新会话状态。",
+    "conversation.continuation.blocked.terminalPolicyForbidden": "该物理 API 的持久化终态明确禁止继续。",
+    "conversation.continuation.blocked.routeChanged": "输入区选择的模型或连接与当前会话的下一请求配置不一致。",
+    "conversation.continuation.blocked.sessionBusy": "会话当前仍有其他执行占用，无法继续。",
+    "conversation.continuation.blocked.requestInvalid": "继续请求的客户端动作身份无效，服务已拒绝执行。",
+    "conversation.continuation.blocked.conversationUnavailable": "目标会话不存在、标识无效，或不是可继续的已有会话。",
+    "conversation.continuation.blocked.runtimeUnavailable": "目标会话的 V1 运行时所有者尚未就绪，无法继续。",
+    "conversation.continuation.blocked.unknown": "继续请求被当前 V1 领域契约拒绝。",
     "conversation.continuation.timeout": "继续请求超时，已解除按钮锁定；请查看会话状态。",
     "conversation.continuation.stateSyncFailed": "服务已接收继续请求，但界面状态同步失败；请重试同一按钮以重新对账，不会创建第二次执行。",
     "conversation.continuation.ackMismatch": "继续响应与本次请求身份不一致，界面已拒绝该响应并重新读取权威状态。",
@@ -3327,10 +3271,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.process.stoppedAfter": "你在 {duration} 后停止了",
     "conversation.process.stopped": "你已停止本轮工作",
     "conversation.process.duration": "持续 {duration}",
-    "conversation.process.providerUsageBadge": "当前分支 Provider API {calls} 次 · {inFlight} 进行中 · Token {tokens}",
-    "conversation.process.providerUsageActive": "当前活动分支：{calls} 次，Token {tokens}，未知 Usage {unknown} 次",
-    "conversation.process.providerUsageLifetime": "本会话实际生命周期：{calls} 次，Token {tokens}",
-    "conversation.process.providerUsageInherited": "分叉继承（未重复计费）：{calls} 次，Token {tokens}",
+    "conversation.process.providerUsageBadge": "当前会话 Provider API {calls} 次 · {inFlight} 进行中 · Token {tokens}",
+    "conversation.process.providerUsageSession": "当前会话：{calls} 次，Token {tokens}，未知 Usage {unknown} 次",
     "conversation.process.providerUsageUnknown": "未知",
     "conversation.toolSequence.summary": "已执行 {count} 次工具调用",
     "conversation.toolSequence.runningSummary": "已执行 {completed} 次调用，正在调用 {running} 个工具",
@@ -3504,6 +3446,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.planMode.goalConflict": "计划模式与目标模式不能同时开启。",
     "composer.error.stopCurrentFailed": "停止当前会话失败。",
     "composer.error.promptEmpty": "请输入任务指令。",
+    "composer.error.draftLoadFailed": "会话草稿加载失败，发送已暂停。",
+    "composer.error.draftPersistFailed": "会话草稿保存失败，请重试。",
     "composer.modelPicker.tooltipTitle": "点击选择模型",
     "composer.modelPicker.currentModel": "当前模型：{model}",
     "composer.modelPicker.currentProvider": "当前供应商：{provider}",
@@ -6089,8 +6033,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.action.forkSucceeded": "Forked conversation created",
     "conversation.action.forkInProgressTitle": "Forking conversation",
     "conversation.action.forkInProgressMessage": "Copying the conversation and opening the new fork. Please wait.",
-    "conversation.forkSource.label": "Derived from conversation",
-    "conversation.forkSource.missing": "The original conversation no longer exists",
     "conversation.block.toolCall": "Call tool",
     "conversation.block.toolResult": "Tool result",
     "conversation.block.command": "Command session",
@@ -6124,46 +6066,20 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.continuing": "Continuing",
     "conversation.continuation.claimFailed": "Continue failed. Check the session state and try again.",
     "conversation.continuation.blocked": "This terminal boundary is not safe to continue",
-    "conversation.continuation.blocked.default": "The recovery boundary did not pass the safety checks and cannot continue.",
-    "conversation.continuation.blocked.toolSideEffect": "A tool side effect was observed, but the snapshot has no reconcilable per-tool boundary, so reusable and interrupted calls cannot be distinguished.",
-    "conversation.continuation.blocked.providerDispatchUnknown": "It is unknown whether the provider request was sent; continuing is blocked to prevent a duplicate request.",
-    "conversation.continuation.blocked.semanticOutput": "Partial model output was already received; continuing could generate duplicate output and is blocked.",
-    "conversation.continuation.blocked.pendingActionExecutor": "No executor is available for the pending recovery action, so it cannot continue safely.",
-    "conversation.continuation.blocked.nonRetryable": "The original error is marked non-retryable, so it cannot continue safely.",
-    "conversation.continuation.blocked.retrySnapshotMissing": "The recovery snapshot is missing or has been cleaned up, so it cannot continue.",
-    "conversation.continuation.blocked.retrySnapshotVersionUnsupported": "The recovery snapshot uses an unsupported older internal contract; the service will not guess a migration or replay fallback.",
-    "conversation.continuation.blocked.retrySnapshotUnsafe": "The recovery snapshot did not pass the safety checks, so it cannot continue.",
-    "conversation.continuation.blocked.retrySnapshotBodyUnreadable": "The recovery snapshot body is missing, unreadable, or failed integrity validation; continuing is blocked to prevent an invalid replay.",
-    "conversation.continuation.blocked.retrySnapshotTransitionFailed": "The recovery snapshot could not reliably commit its terminal state; continuing is blocked to prevent duplicate execution.",
-    "conversation.continuation.blocked.retrySnapshotOwnerMismatch": "The recovery snapshot belongs to another session; continuing is blocked to prevent replaying that state here.",
-    "conversation.continuation.blocked.retrySnapshotNotFrozen": "The recovery snapshot is not frozen, so it cannot continue.",
-    "conversation.continuation.blocked.routeChanged": "The Provider route required by the recovery changed; continuing is blocked to avoid using the wrong model or sending a duplicate request.",
-    "conversation.continuation.blocked.routeMissing": "The recovery snapshot has no Provider route, so it cannot continue safely.",
-    "conversation.continuation.blocked.nextProviderBoundaryMissing": "The retained tool-result boundary is missing, so the next Provider request cannot be built safely.",
-    "conversation.continuation.blocked.toolBoundaryMissing": "The retained tool batch is incomplete or does not match the final assistant tool-call count.",
-    "conversation.continuation.blocked.toolBindingMismatch": "A retained tool name, argument payload, call identity, or resolved definition fingerprint does not match the exact current boundary.",
-    "conversation.continuation.blocked.toolResultMismatch": "A retained tool state conflicts with its durable result, so recovery cannot decide whether to reuse or synthesize the result.",
-    "conversation.continuation.blocked.finalAssistantBoundaryMissing": "The snapshot has no tool-free assistant terminal that can be finalized locally.",
-    "conversation.continuation.blocked.contextGenerationChanged": "The conversation context generation changed, so the recovery snapshot no longer matches the current context.",
-    "conversation.continuation.blocked.canonicalStateChanged": "The Provider-visible conversation state changed, so the recovery snapshot no longer matches the current conversation.",
-    "conversation.continuation.blocked.logicalTurnChanged": "The original logical turn or prompt changed, so it cannot be resumed safely. Send the message again.",
-    "conversation.continuation.blocked.claimInFlight": "The same Continue request is still being committed by the service. Retry shortly; a second execution will not be created.",
-    "conversation.continuation.blocked.admissionInFlight": "The session is finishing a Stop, submission, or lifecycle transition. It cannot continue until that operation completes.",
-    "conversation.continuation.blocked.terminalPersistenceInFlight": "The terminal session state is still being committed durably. Continuing is blocked until it finishes to prevent duplicate execution.",
-    "conversation.continuation.blocked.sessionActive": "The session is still running. Wait for the current execution to finish before continuing.",
-    "conversation.continuation.blocked.notProblemTurn": "The current turn completed normally and has no interrupted recovery boundary.",
-    "conversation.continuation.blocked.sessionBusy": "The session still has queued work, so it cannot continue now.",
-    "conversation.continuation.blocked.stale": "The recovery boundary is stale. Refresh the session state and try again.",
-    "conversation.continuation.blocked.callInFlight": "A provider request is still in flight, so it cannot continue now.",
-    "conversation.continuation.blocked.tailMissing": "The recoverable conversation tail is missing, so it cannot continue.",
-    "conversation.continuation.blocked.tailInvalid": "The conversation tail changed, so it cannot continue safely.",
-    "conversation.continuation.blocked.actionUnsupported": "The current recovery action is not implemented, so it cannot continue safely.",
-    "conversation.continuation.blocked.requestInvalid": "The Continue request is missing a required identity or contains disallowed data, so the service rejected it.",
-    "conversation.continuation.blocked.conversationUnavailable": "The target conversation is missing or has an invalid identity, so it cannot continue.",
-    "conversation.continuation.blocked.runtimeUnavailable": "The target conversation has no retained recovery runtime state, so it cannot continue.",
-    "conversation.continuation.blocked.ledgerExhausted": "The recovery ledger reached its revision limit and cannot be claimed safely again.",
-    "conversation.continuation.blocked.timestampInvalid": "The recovery boundary timestamp is invalid or outside the supported range, so it cannot continue.",
-    "conversation.continuation.blocked.unknown": "The recovery boundary was blocked by a safety policy and cannot continue.",
+    "conversation.continuation.blocked.default": "The open turn did not pass the continuation eligibility checks.",
+    "conversation.continuation.blocked.activeApi": "A physical API request is still active, so Continue cannot be admitted again.",
+    "conversation.continuation.blocked.missingApiStarted": "The open turn has no related physical API start fact and cannot continue.",
+    "conversation.continuation.blocked.duplicateApiTerminal": "The physical API has duplicate terminal facts and cannot continue.",
+    "conversation.continuation.blocked.missingApiTerminal": "The physical API has no durable terminal fact yet and cannot continue.",
+    "conversation.continuation.blocked.apiTerminalOrder": "The physical API terminal order is invalid and cannot continue.",
+    "conversation.continuation.blocked.terminalBoundarySuperseded": "A later turn fact superseded this terminal boundary. Refresh the conversation state.",
+    "conversation.continuation.blocked.terminalPolicyForbidden": "The durable terminal fact for this physical API explicitly forbids continuation.",
+    "conversation.continuation.blocked.routeChanged": "The composer model or connection does not match the session's next-request configuration.",
+    "conversation.continuation.blocked.sessionBusy": "Another execution currently owns this session, so it cannot continue.",
+    "conversation.continuation.blocked.requestInvalid": "The Continue request has an invalid client action identity and was rejected.",
+    "conversation.continuation.blocked.conversationUnavailable": "The target conversation is missing, invalid, or is not an existing continuable session.",
+    "conversation.continuation.blocked.runtimeUnavailable": "The V1 runtime owner for the target conversation is not ready.",
+    "conversation.continuation.blocked.unknown": "The current V1 domain contract rejected the Continue request.",
     "conversation.continuation.timeout": "Continue timed out. The button was unlocked; check the session state.",
     "conversation.continuation.stateSyncFailed": "The service accepted Continue, but the UI state did not synchronize. Retry the same button to reconcile; it will not create a second execution.",
     "conversation.continuation.ackMismatch": "The Continue response did not match this request identity. The UI rejected it and reloaded authoritative state.",
@@ -6196,10 +6112,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.process.stoppedAfter": "You stopped after {duration}",
     "conversation.process.stopped": "You stopped this turn",
     "conversation.process.duration": "Duration {duration}",
-    "conversation.process.providerUsageBadge": "Current branch Provider API {calls} · {inFlight} in progress · Tokens {tokens}",
-    "conversation.process.providerUsageActive": "Active branch: {calls} calls, tokens {tokens}, unknown Usage {unknown}",
-    "conversation.process.providerUsageLifetime": "Calls made in this session: {calls}, tokens {tokens}",
-    "conversation.process.providerUsageInherited": "Inherited by fork (not billed again): {calls}, tokens {tokens}",
+    "conversation.process.providerUsageBadge": "Current session Provider API {calls} · {inFlight} in progress · Tokens {tokens}",
+    "conversation.process.providerUsageSession": "Current session: {calls} calls, tokens {tokens}, unknown Usage {unknown}",
     "conversation.process.providerUsageUnknown": "unknown",
     "conversation.toolSequence.summary": "Ran {count} tool calls",
     "conversation.toolSequence.runningSummary": "Ran {completed} calls, running {running} tools",
@@ -6373,6 +6287,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.planMode.goalConflict": "Plan mode and Goal mode cannot both be enabled.",
     "composer.error.stopCurrentFailed": "Failed to stop the current conversation.",
     "composer.error.promptEmpty": "Enter a task instruction.",
+    "composer.error.draftLoadFailed": "Failed to load the conversation draft. Sending is paused.",
+    "composer.error.draftPersistFailed": "Failed to save the conversation draft. Try again.",
     "composer.modelPicker.tooltipTitle": "Select model",
     "composer.modelPicker.currentModel": "Current model: {model}",
     "composer.modelPicker.currentProvider": "Current provider: {provider}",

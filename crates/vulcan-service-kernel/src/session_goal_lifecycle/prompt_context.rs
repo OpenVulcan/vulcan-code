@@ -17,8 +17,8 @@ use vulcan_agent_runtime::{
 ///
 /// # Parameters
 /// 参数
-/// `state` owns the cached session goal summaries.
-/// `state` 持有缓存的会话目标摘要。
+/// `state` owns the already-hydrated V1 session registry.
+/// `state` 持有已完成 hydration 的 V1 会话注册表。
 /// `session_id` identifies the session whose execution is being prepared.
 /// `session_id` 标识正在准备执行的会话。
 ///
@@ -30,12 +30,8 @@ pub(crate) fn session_goal_prompt_parts_from_state(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
 ) -> Result<(Option<ExecutionSessionGoalContext>, Option<String>), String> {
-    let goal = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?
-        .session_goal_summaries
-        .get(&session_id)
-        .cloned();
+    let handle = registered_session_v1_handle_from_state(state, session_id)?;
+    let goal = session_goal_summary_from_v1_handle(handle.as_ref(), session_id)?;
     Ok((
         goal.as_ref().and_then(session_goal_execution_context),
         goal.as_ref().and_then(render_goal_turn_usage_context),
@@ -306,6 +302,7 @@ fn undelivered_goal_context_text<'a>(
 
 /// Renders the budget-limited wrap-up template copied from Codex semantics.
 /// 渲染沿用 Codex 语义的预算耗尽收束模板。
+#[cfg(test)]
 pub(crate) fn render_goal_budget_limited_context(goal: &SessionGoalSummary) -> String {
     let objective = escape_goal_xml_text(&goal.objective);
     let token_budget = goal
@@ -327,6 +324,7 @@ Do not call update_goal unless the goal is actually complete.",
     )
 }
 
+#[cfg(test)]
 pub(crate) fn render_goal_objective_updated_context(goal: &SessionGoalSummary) -> String {
     let objective = escape_goal_xml_text(&goal.objective);
     let token_budget = goal
@@ -362,6 +360,7 @@ Do not call update_goal unless the updated goal is actually complete."#;
 
 /// Escapes XML-sensitive characters inside user-provided goal objectives.
 /// 转义用户提供目标内容中的 XML 敏感字符。
+#[cfg(test)]
 pub(crate) fn escape_goal_xml_text(input: &str) -> String {
     input
         .replace('&', "&amp;")

@@ -1,10 +1,10 @@
 use super::{
     RuntimeEventProjectionBarrierRegistry, VulcanManagedToolRuntimeBridge,
     acknowledge_runtime_event_projection_barrier_from_event,
-    attach_runtime_event_projection_barrier, cancel_runtime_event_projection_barrier,
-    clear_runtime_event_projection_barriers, insert_runtime_event_projection_barrier,
-    reject_runtime_event_projection_barrier_from_event, remove_runtime_event_projection_barrier,
-    runtime_event_projection_barriers_enabled,
+    acknowledge_tool_batch_projection_barrier_from_event, attach_runtime_event_projection_barrier,
+    cancel_runtime_event_projection_barrier, clear_runtime_event_projection_barriers,
+    insert_runtime_event_projection_barrier, reject_runtime_event_projection_barrier_from_event,
+    remove_runtime_event_projection_barrier, runtime_event_projection_barriers_enabled,
     runtime_event_requires_tool_execution_safety_barrier,
     set_runtime_event_projection_barriers_test_override,
 };
@@ -27,10 +27,37 @@ use vulcan_core::types::{
     CoreError as VulcanCoreError, ProviderRequestSnapshot, ProviderTurnResponse,
     ToolInvocationRequest,
 };
+use vulcan_session_core::v1::document::PreparedToolReceipt;
+use vulcan_session_core::v1::ids::{ApiCallId, RequestStreamId, Seq, ToolCallId};
 use vulcan_tools_manager::{
     VULCAN_TOOL_ERROR_DETAIL_KIND, VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor,
     VulcanToolHostResult, VulcanToolInvocationResult, VulcanToolSourceKind, VulcanToolsManager,
 };
+
+/// Installs one exact durable local identity before a bridge test dispatches the tool body.
+/// 在桥接测试分派工具主体前安装一条精确的持久化本地身份。
+fn install_test_invocation_identity(
+    runtime_bridge: &VulcanManagedToolRuntimeBridge,
+    request: &ToolInvocationRequest,
+    api_call_id: u64,
+    tool_call_id: u64,
+    tool_seq: u64,
+) -> PreparedToolReceipt {
+    let receipt = PreparedToolReceipt {
+        api_call_id: ApiCallId::try_new(api_call_id).expect("test API id should be valid"),
+        tool_call_id: ToolCallId::try_new(tool_call_id).expect("test tool id should be valid"),
+        request_stream_id: RequestStreamId::try_new(request.request_stream_id.clone())
+            .expect("test request stream id should be valid"),
+        tool_seq: Seq::try_new(tool_seq).expect("test tool seq should be valid"),
+    };
+    runtime_bridge
+        .install_prepared_invocation_identities(
+            std::slice::from_ref(request),
+            vec![receipt.clone()],
+        )
+        .expect("durable test identity should install");
+    receipt
+}
 
 /// Returns one demo tools manager plus the resolved tool definitions used by the bridge tests.
 /// 返回一份供桥接测试复用的演示工具管理器及其已解析工具定义集合。
@@ -57,11 +84,14 @@ fn build_demo_manager() -> (
             ai_visible: true,
             plan_policy: VulcanPlanToolPolicy::Visible,
             request_streaming: None,
-            invoke: Arc::new(|args, session_id| {
+            invoke: Arc::new(|args, context| {
                 Box::pin(async move {
                     Ok(VulcanToolInvocationResult::from_model_output(json!({
                         "args": args,
-                        "session_id": session_id,
+                        "session_id": context.session_id,
+                        "api_call_id": context.api_call_id.value(),
+                        "tool_call_id": context.tool_call_id.value(),
+                        "provider_tool_call_id": context.provider_tool_call_id,
                     }))
                     .with_host_result(VulcanToolHostResult {
                         kind: String::from("change_set"),
@@ -526,6 +556,7 @@ fn managed_tool_runtime_bridge_executes_core_tool_request() {
     let runtime_bridge =
         VulcanManagedToolRuntimeBridge::new(Arc::new(manager), &definitions, Uuid::nil(), "Build");
     let request = ToolInvocationRequest {
+        request_stream_id: String::from("request-stream-call-1"),
         tool_call_id: String::from("call-1"),
         tool_name: String::from("demo_tool"),
         arguments: json!({ "path": "src/main.rs" }),
@@ -535,6 +566,7 @@ fn managed_tool_runtime_bridge_executes_core_tool_request() {
         .enable_all()
         .build()
         .expect("runtime should build");
+    let identity = install_test_invocation_identity(&runtime_bridge, &request, 101, 102, 103);
 
     let result = runtime
         .block_on(runtime_bridge.execute_tool(&request))
@@ -542,7 +574,13 @@ fn managed_tool_runtime_bridge_executes_core_tool_request() {
 
     assert_eq!(result.tool_call_id, "call-1");
     assert_eq!(result.tool_name, "demo_tool");
-    assert!(result.model_output.contains("\"src/main.rs\""));
+    let model_output: serde_json::Value =
+        serde_json::from_str(&result.model_output).expect("model output should be JSON");
+    assert_eq!(model_output["args"]["path"], "src/main.rs");
+    assert_eq!(model_output["session_id"], Uuid::nil().to_string());
+    assert_eq!(model_output["api_call_id"], identity.api_call_id.value());
+    assert_eq!(model_output["tool_call_id"], identity.tool_call_id.value());
+    assert_eq!(model_output["provider_tool_call_id"], "call-1");
     assert_eq!(
         result.host_result,
         Some(json!({
@@ -550,6 +588,199 @@ fn managed_tool_runtime_bridge_executes_core_tool_request() {
             "payload": { "path": "src/main.rs", "op": "read" }
         }))
     );
+}
+
+/// Verifies parallel tool bodies receive their own exact Provider identity without cross-talk.
+/// 验证并行工具主体各自收到精确 Provider 身份且不会串线。
+#[test]
+fn parallel_managed_tools_receive_exact_invocation_identity() {
+    let (manager, definitions) = build_demo_manager();
+    let session_id = Uuid::from_u128(0xA11CE);
+    let runtime_bridge = Arc::new(VulcanManagedToolRuntimeBridge::new(
+        Arc::new(manager),
+        &definitions,
+        session_id,
+        "Build",
+    ));
+    let first = ToolInvocationRequest {
+        request_stream_id: String::from("request-stream-parallel-call-a"),
+        tool_call_id: String::from("parallel-call-a"),
+        tool_name: String::from("demo_tool"),
+        arguments: json!({ "path": "a.txt" }),
+        argument_parse_error: None,
+    };
+    let second = ToolInvocationRequest {
+        request_stream_id: String::from("request-stream-parallel-call-b"),
+        tool_call_id: String::from("parallel-call-b"),
+        tool_name: String::from("demo_tool"),
+        arguments: json!({ "path": "b.txt" }),
+        argument_parse_error: None,
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+    let first_identity = PreparedToolReceipt {
+        api_call_id: ApiCallId::try_new(201).expect("first API id should be valid"),
+        tool_call_id: ToolCallId::try_new(202).expect("first tool id should be valid"),
+        request_stream_id: RequestStreamId::try_new(first.request_stream_id.clone())
+            .expect("first request stream id should be valid"),
+        tool_seq: Seq::try_new(203).expect("first tool seq should be valid"),
+    };
+    let second_identity = PreparedToolReceipt {
+        api_call_id: ApiCallId::try_new(201).expect("second API id should be valid"),
+        tool_call_id: ToolCallId::try_new(204).expect("second tool id should be valid"),
+        request_stream_id: RequestStreamId::try_new(second.request_stream_id.clone())
+            .expect("second request stream id should be valid"),
+        tool_seq: Seq::try_new(205).expect("second tool seq should be valid"),
+    };
+    runtime_bridge
+        .install_prepared_invocation_identities(
+            &[first.clone(), second.clone()],
+            vec![first_identity.clone(), second_identity.clone()],
+        )
+        .expect("parallel durable identities should install");
+
+    let (first_result, second_result) = runtime.block_on(async {
+        tokio::join!(
+            runtime_bridge.execute_tool(&first),
+            runtime_bridge.execute_tool(&second)
+        )
+    });
+    let first_result = first_result.expect("first parallel tool should execute");
+    let second_result = second_result.expect("second parallel tool should execute");
+    for (result, expected_call_id, expected_path, expected_identity) in [
+        (first_result, "parallel-call-a", "a.txt", first_identity),
+        (second_result, "parallel-call-b", "b.txt", second_identity),
+    ] {
+        let output: serde_json::Value =
+            serde_json::from_str(&result.model_output).expect("parallel output should be JSON");
+        assert_eq!(output["session_id"], session_id.to_string());
+        assert_eq!(output["api_call_id"], expected_identity.api_call_id.value());
+        assert_eq!(
+            output["tool_call_id"],
+            expected_identity.tool_call_id.value()
+        );
+        assert_eq!(output["provider_tool_call_id"], expected_call_id);
+        assert_eq!(output["args"]["path"], expected_path);
+    }
+}
+
+/// Verifies the production ToolBatchPrepared barrier installs the exact durable identities before parallel bodies start.
+/// 验证生产 ToolBatchPrepared 屏障会在并行工具主体启动前安装精确的持久化身份。
+#[test]
+fn prepared_tool_batch_barrier_installs_exact_parallel_invocation_identities() {
+    let (manager, definitions) = build_demo_manager();
+    let session_id = Uuid::from_u128(0xB47C4);
+    let runtime_bridge = Arc::new(VulcanManagedToolRuntimeBridge::new(
+        Arc::new(manager),
+        &definitions,
+        session_id,
+        "Build",
+    ));
+    let (sender, mut receiver): (
+        ProviderLiveDeltaSender,
+        tokio::sync::mpsc::UnboundedReceiver<Result<ProviderStreamDelta, String>>,
+    ) = tokio::sync::mpsc::unbounded_channel();
+    let executor = StreamingRuntimeToolExecutor::new(
+        Arc::clone(&runtime_bridge),
+        sender,
+        None,
+        false,
+        Vec::new(),
+    );
+    let requests = vec![
+        ToolInvocationRequest {
+            request_stream_id: String::from("request-stream-prepared-a"),
+            tool_call_id: String::from("provider-call-prepared-a"),
+            tool_name: String::from("demo_tool"),
+            arguments: json!({ "path": "prepared-a.txt" }),
+            argument_parse_error: None,
+        },
+        ToolInvocationRequest {
+            request_stream_id: String::from("request-stream-prepared-b"),
+            tool_call_id: String::from("provider-call-prepared-b"),
+            tool_name: String::from("demo_tool"),
+            arguments: json!({ "path": "prepared-b.txt" }),
+            argument_parse_error: None,
+        },
+    ];
+    let identities = vec![
+        PreparedToolReceipt {
+            api_call_id: ApiCallId::try_new(211).expect("prepared API id should be valid"),
+            tool_call_id: ToolCallId::try_new(212).expect("first prepared tool id should be valid"),
+            request_stream_id: RequestStreamId::try_new(requests[0].request_stream_id.clone())
+                .expect("first prepared request stream should be valid"),
+            tool_seq: Seq::try_new(213).expect("first prepared tool seq should be valid"),
+        },
+        PreparedToolReceipt {
+            api_call_id: ApiCallId::try_new(211).expect("prepared API id should be valid"),
+            tool_call_id: ToolCallId::try_new(214)
+                .expect("second prepared tool id should be valid"),
+            request_stream_id: RequestStreamId::try_new(requests[1].request_stream_id.clone())
+                .expect("second prepared request stream should be valid"),
+            tool_seq: Seq::try_new(215).expect("second prepared tool seq should be valid"),
+        },
+    ];
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+
+    runtime.block_on(async {
+        let barrier_override = RuntimeProjectionBarrierTestOverrideGuard::enabled();
+        let prepare_executor = executor.clone();
+        let prepare_requests = requests.clone();
+        let prepare_task =
+            tokio::spawn(
+                async move { prepare_executor.prepare_tool_batch(&prepare_requests).await },
+            );
+        let prepared_event = receiver
+            .recv()
+            .await
+            .expect("prepared batch event should be sent")
+            .expect("prepared batch event should be valid");
+        let ProviderStreamDelta::RuntimeEvent(prepared_event) = prepared_event else {
+            panic!("prepared batch delta should be a runtime event");
+        };
+        assert_eq!(prepared_event.kind, RuntimeEventKind::ToolBatchPrepared);
+        assert!(
+            acknowledge_tool_batch_projection_barrier_from_event(
+                &prepared_event,
+                identities.clone(),
+            )
+            .expect("prepared batch barrier registry should remain available")
+        );
+        prepare_task
+            .await
+            .expect("prepared batch task should join")
+            .expect("prepared batch should accept its durable identities");
+        drop(barrier_override);
+
+        let (first_result, second_result) = tokio::join!(
+            executor.execute_tool(&requests[0]),
+            executor.execute_tool(&requests[1]),
+        );
+        for (result, identity, provider_call_id) in [
+            (
+                first_result.expect("first prepared tool should execute"),
+                &identities[0],
+                "provider-call-prepared-a",
+            ),
+            (
+                second_result.expect("second prepared tool should execute"),
+                &identities[1],
+                "provider-call-prepared-b",
+            ),
+        ] {
+            let output: serde_json::Value = serde_json::from_str(&result.model_output)
+                .expect("prepared tool output should be JSON");
+            assert_eq!(output["session_id"], session_id.to_string());
+            assert_eq!(output["api_call_id"], identity.api_call_id.value());
+            assert_eq!(output["tool_call_id"], identity.tool_call_id.value());
+            assert_eq!(output["provider_tool_call_id"], provider_call_id);
+        }
+    });
 }
 
 /// Verifies an unregistered provider tool receives a stable recovery binding and remains a normal model-visible tool error.
@@ -560,18 +791,21 @@ fn managed_tool_runtime_bridge_preserves_unregistered_tool_error_path() {
     let runtime_bridge =
         VulcanManagedToolRuntimeBridge::new(Arc::new(manager), &definitions, Uuid::nil(), "Build");
     let request = ToolInvocationRequest {
+        request_stream_id: String::from("request-stream-call-unknown-1"),
         tool_call_id: String::from("call-unknown-1"),
         tool_name: String::from("invented_tool"),
         arguments: json!({ "query": "README" }),
         argument_parse_error: None,
     };
     let same_binding_request = ToolInvocationRequest {
+        request_stream_id: String::from("request-stream-call-unknown-2"),
         tool_call_id: String::from("call-unknown-2"),
         tool_name: request.tool_name.clone(),
         arguments: json!({ "query": "Cargo.toml" }),
         argument_parse_error: None,
     };
     let other_binding_request = ToolInvocationRequest {
+        request_stream_id: String::from("request-stream-call-unknown-3"),
         tool_call_id: String::from("call-unknown-3"),
         tool_name: String::from("other_invented_tool"),
         arguments: json!({}),
@@ -598,6 +832,7 @@ fn managed_tool_runtime_bridge_preserves_unregistered_tool_error_path() {
         .enable_all()
         .build()
         .expect("runtime should build");
+    install_test_invocation_identity(&runtime_bridge, &request, 301, 302, 303);
     let result = runtime
         .block_on(runtime_bridge.execute_tool(&request))
         .expect("unregistered tool should return one controller-visible result");
@@ -614,6 +849,7 @@ fn managed_tool_runtime_bridge_converts_tool_failures_into_error_results() {
     let runtime_bridge =
         VulcanManagedToolRuntimeBridge::new(Arc::new(manager), &definitions, Uuid::nil(), "Build");
     let request = ToolInvocationRequest {
+        request_stream_id: String::from("request-stream-call-error-1"),
         tool_call_id: String::from("call-error-1"),
         tool_name: String::from("failing_tool"),
         arguments: json!({ "query": "README" }),
@@ -623,6 +859,7 @@ fn managed_tool_runtime_bridge_converts_tool_failures_into_error_results() {
         .enable_all()
         .build()
         .expect("runtime should build");
+    install_test_invocation_identity(&runtime_bridge, &request, 401, 402, 403);
 
     let result = runtime
         .block_on(runtime_bridge.execute_tool(&request))
@@ -660,6 +897,7 @@ fn managed_tool_runtime_bridge_preserves_structured_tool_error_results() {
     let runtime_bridge =
         VulcanManagedToolRuntimeBridge::new(Arc::new(manager), &definitions, Uuid::nil(), "Build");
     let request = ToolInvocationRequest {
+        request_stream_id: String::from("request-stream-call-structured-error-1"),
         tool_call_id: String::from("call-structured-error-1"),
         tool_name: String::from("structured_failure_tool"),
         arguments: json!({}),
@@ -669,6 +907,7 @@ fn managed_tool_runtime_bridge_preserves_structured_tool_error_results() {
         .enable_all()
         .build()
         .expect("runtime should build");
+    install_test_invocation_identity(&runtime_bridge, &request, 501, 502, 503);
 
     let result = runtime
         .block_on(runtime_bridge.execute_tool(&request))
@@ -702,6 +941,7 @@ fn managed_tool_runtime_bridge_rejects_structured_error_without_error_text() {
     let runtime_bridge =
         VulcanManagedToolRuntimeBridge::new(Arc::new(manager), &definitions, Uuid::nil(), "Build");
     let request = ToolInvocationRequest {
+        request_stream_id: String::from("request-stream-call-invalid-structured-error-1"),
         tool_call_id: String::from("call-invalid-structured-error-1"),
         tool_name: String::from("invalid_structured_failure_tool"),
         arguments: json!({}),
@@ -711,6 +951,7 @@ fn managed_tool_runtime_bridge_rejects_structured_error_without_error_text() {
         .enable_all()
         .build()
         .expect("runtime should build");
+    install_test_invocation_identity(&runtime_bridge, &request, 601, 602, 603);
 
     let result = runtime
         .block_on(runtime_bridge.execute_tool(&request))
@@ -749,6 +990,7 @@ fn managed_tool_runtime_bridge_blocks_disallowed_plan_tool_invocation() {
     let runtime_bridge =
         VulcanManagedToolRuntimeBridge::new(Arc::new(manager), &definitions, Uuid::nil(), "Plan");
     let request = ToolInvocationRequest {
+        request_stream_id: String::from("request-stream-call-plan-blocked-1"),
         tool_call_id: String::from("call-plan-blocked-1"),
         tool_name: String::from("failing_tool"),
         arguments: json!({ "query": "README" }),
@@ -758,6 +1000,7 @@ fn managed_tool_runtime_bridge_blocks_disallowed_plan_tool_invocation() {
         .enable_all()
         .build()
         .expect("runtime should build");
+    install_test_invocation_identity(&runtime_bridge, &request, 701, 702, 703);
 
     let result = runtime
         .block_on(runtime_bridge.execute_tool(&request))
@@ -824,6 +1067,14 @@ fn managed_tool_runtime_bridge_integrates_with_core_controller_loop() {
         .enable_all()
         .build()
         .expect("runtime should build");
+    let prepared_request = ToolInvocationRequest {
+        request_stream_id: String::from("tool-item-1"),
+        tool_call_id: String::from("tool-call-1"),
+        tool_name: String::from("demo_tool"),
+        arguments: json!({ "path": "src/main.rs" }),
+        argument_parse_error: None,
+    };
+    install_test_invocation_identity(&runtime_bridge, &prepared_request, 801, 802, 803);
 
     let result = runtime
         .block_on(controller.run_user_turn(
@@ -905,6 +1156,14 @@ fn managed_tool_runtime_bridge_keeps_controller_loop_alive_after_tool_failure() 
         .enable_all()
         .build()
         .expect("runtime should build");
+    let prepared_request = ToolInvocationRequest {
+        request_stream_id: String::from("tool-item-1"),
+        tool_call_id: String::from("tool-call-1"),
+        tool_name: String::from("failing_tool"),
+        arguments: json!({ "query": "README" }),
+        argument_parse_error: None,
+    };
+    install_test_invocation_identity(&runtime_bridge, &prepared_request, 901, 902, 903);
 
     let result = runtime
         .block_on(controller.run_user_turn(
@@ -949,14 +1208,21 @@ fn streaming_tool_executor_converts_tool_panics_into_error_results() {
         ProviderLiveDeltaSender,
         tokio::sync::mpsc::UnboundedReceiver<Result<ProviderStreamDelta, String>>,
     ) = tokio::sync::mpsc::unbounded_channel();
-    let executor =
-        StreamingRuntimeToolExecutor::new(runtime_bridge, sender, None, false, Vec::new());
+    let executor = StreamingRuntimeToolExecutor::new(
+        Arc::clone(&runtime_bridge),
+        sender,
+        None,
+        false,
+        Vec::new(),
+    );
     let request = ToolInvocationRequest {
+        request_stream_id: String::from("request-stream-panic-call-1"),
         tool_call_id: String::from("panic-call-1"),
         tool_name: String::from("panic_tool"),
         arguments: json!({ "query": "山姆零食" }),
         argument_parse_error: None,
     };
+    install_test_invocation_identity(runtime_bridge.as_ref(), &request, 1001, 1002, 1003);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1012,14 +1278,21 @@ fn streaming_tool_executor_marks_controller_error_results_failed() {
         ProviderLiveDeltaSender,
         tokio::sync::mpsc::UnboundedReceiver<Result<ProviderStreamDelta, String>>,
     ) = tokio::sync::mpsc::unbounded_channel();
-    let executor =
-        StreamingRuntimeToolExecutor::new(runtime_bridge, sender, None, false, Vec::new());
+    let executor = StreamingRuntimeToolExecutor::new(
+        Arc::clone(&runtime_bridge),
+        sender,
+        None,
+        false,
+        Vec::new(),
+    );
     let request = ToolInvocationRequest {
+        request_stream_id: String::from("request-stream-failing-call-1"),
         tool_call_id: String::from("failing-call-1"),
         tool_name: String::from("failing_tool"),
         arguments: json!({ "query": "演示错误" }),
         argument_parse_error: None,
     };
+    install_test_invocation_identity(runtime_bridge.as_ref(), &request, 1101, 1102, 1103);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1065,7 +1338,7 @@ fn streaming_tool_executor_rejects_tool_requests_before_host_execution() {
         tokio::sync::mpsc::UnboundedReceiver<Result<ProviderStreamDelta, String>>,
     ) = tokio::sync::mpsc::unbounded_channel();
     let executor = StreamingRuntimeToolExecutor::new(
-        runtime_bridge,
+        Arc::clone(&runtime_bridge),
         sender,
         Some(String::from(
             "Tool calls are not allowed during context compaction.",
@@ -1074,11 +1347,13 @@ fn streaming_tool_executor_rejects_tool_requests_before_host_execution() {
         Vec::new(),
     );
     let request = ToolInvocationRequest {
+        request_stream_id: String::from("request-stream-rejected-call-1"),
         tool_call_id: String::from("rejected-call-1"),
         tool_name: String::from("gated_tool"),
         arguments: json!({ "query": "must not run" }),
         argument_parse_error: None,
     };
+    install_test_invocation_identity(runtime_bridge.as_ref(), &request, 1201, 1202, 1203);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1155,18 +1430,20 @@ fn streaming_tool_executor_does_not_reject_when_scope_is_empty() {
         tokio::sync::mpsc::UnboundedReceiver<Result<ProviderStreamDelta, String>>,
     ) = tokio::sync::mpsc::unbounded_channel();
     let executor = StreamingRuntimeToolExecutor::new(
-        runtime_bridge,
+        Arc::clone(&runtime_bridge),
         sender,
         Some(String::from("Scoped rejection is not active.")),
         false,
         Vec::new(),
     );
     let request = ToolInvocationRequest {
+        request_stream_id: String::from("request-stream-empty-scope-call-1"),
         tool_call_id: String::from("empty-scope-call-1"),
         tool_name: String::from("failing_tool"),
         arguments: json!({ "query": "scope empty should still run" }),
         argument_parse_error: None,
     };
+    install_test_invocation_identity(runtime_bridge.as_ref(), &request, 1301, 1302, 1303);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1201,7 +1478,7 @@ fn streaming_tool_executor_rejects_only_scoped_tool_ids() {
         tokio::sync::mpsc::UnboundedReceiver<Result<ProviderStreamDelta, String>>,
     ) = tokio::sync::mpsc::unbounded_channel();
     let executor = StreamingRuntimeToolExecutor::new(
-        runtime_bridge,
+        Arc::clone(&runtime_bridge),
         sender,
         Some(String::from(
             "This tool is reserved for the parent session.",
@@ -1210,17 +1487,46 @@ fn streaming_tool_executor_rejects_only_scoped_tool_ids() {
         vec![String::from("failing_tool")],
     );
     let rejected_request = ToolInvocationRequest {
+        request_stream_id: String::from("request-stream-scoped-rejected-call-1"),
         tool_call_id: String::from("scoped-rejected-call-1"),
         tool_name: String::from("failing_tool"),
         arguments: json!({ "query": "must be rejected before the failing body runs" }),
         argument_parse_error: None,
     };
     let allowed_request = ToolInvocationRequest {
+        request_stream_id: String::from("request-stream-scoped-allowed-call-1"),
         tool_call_id: String::from("scoped-allowed-call-1"),
         tool_name: String::from("demo_tool"),
         arguments: json!({ "path": "src/main.rs" }),
         argument_parse_error: None,
     };
+    runtime_bridge
+        .install_prepared_invocation_identities(
+            &[rejected_request.clone(), allowed_request.clone()],
+            vec![
+                PreparedToolReceipt {
+                    api_call_id: ApiCallId::try_new(1401).expect("batch API id should be valid"),
+                    tool_call_id: ToolCallId::try_new(1402)
+                        .expect("rejected tool id should be valid"),
+                    request_stream_id: RequestStreamId::try_new(
+                        rejected_request.request_stream_id.clone(),
+                    )
+                    .expect("rejected request stream id should be valid"),
+                    tool_seq: Seq::try_new(1403).expect("rejected tool seq should be valid"),
+                },
+                PreparedToolReceipt {
+                    api_call_id: ApiCallId::try_new(1401).expect("batch API id should be valid"),
+                    tool_call_id: ToolCallId::try_new(1404)
+                        .expect("allowed tool id should be valid"),
+                    request_stream_id: RequestStreamId::try_new(
+                        allowed_request.request_stream_id.clone(),
+                    )
+                    .expect("allowed request stream id should be valid"),
+                    tool_seq: Seq::try_new(1405).expect("allowed tool seq should be valid"),
+                },
+            ],
+        )
+        .expect("scoped batch durable identities should install");
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1314,14 +1620,21 @@ fn streaming_tool_executor_yields_tool_started_before_tool_body_runs() {
         ProviderLiveDeltaSender,
         tokio::sync::mpsc::UnboundedReceiver<Result<ProviderStreamDelta, String>>,
     ) = tokio::sync::mpsc::unbounded_channel();
-    let executor =
-        StreamingRuntimeToolExecutor::new(runtime_bridge, sender, None, false, Vec::new());
+    let executor = StreamingRuntimeToolExecutor::new(
+        Arc::clone(&runtime_bridge),
+        sender,
+        None,
+        false,
+        Vec::new(),
+    );
     let request = ToolInvocationRequest {
+        request_stream_id: String::from("request-stream-gated-call-1"),
         tool_call_id: String::from("gated-call-1"),
         tool_name: String::from("gated_tool"),
         arguments: json!({ "query": "先显示工具调用" }),
         argument_parse_error: None,
     };
+    install_test_invocation_identity(runtime_bridge.as_ref(), &request, 1501, 1502, 1503);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1411,14 +1724,21 @@ fn streaming_tool_executor_rejects_tool_body_when_safety_barrier_fails() {
         ProviderLiveDeltaSender,
         tokio::sync::mpsc::UnboundedReceiver<Result<ProviderStreamDelta, String>>,
     ) = tokio::sync::mpsc::unbounded_channel();
-    let executor =
-        StreamingRuntimeToolExecutor::new(runtime_bridge, sender, None, false, Vec::new());
+    let executor = StreamingRuntimeToolExecutor::new(
+        Arc::clone(&runtime_bridge),
+        sender,
+        None,
+        false,
+        Vec::new(),
+    );
     let request = ToolInvocationRequest {
+        request_stream_id: String::from("request-stream-gated-rejected-call-1"),
         tool_call_id: String::from("gated-rejected-call-1"),
         tool_name: String::from("gated_tool"),
         arguments: json!({ "query": "拒绝不安全工具边界" }),
         argument_parse_error: None,
     };
+    install_test_invocation_identity(runtime_bridge.as_ref(), &request, 1601, 1602, 1603);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1478,14 +1798,21 @@ fn streaming_tool_executor_waits_for_tool_finished_projection_before_returning()
         ProviderLiveDeltaSender,
         tokio::sync::mpsc::UnboundedReceiver<Result<ProviderStreamDelta, String>>,
     ) = tokio::sync::mpsc::unbounded_channel();
-    let executor =
-        StreamingRuntimeToolExecutor::new(runtime_bridge, sender, None, false, Vec::new());
+    let executor = StreamingRuntimeToolExecutor::new(
+        Arc::clone(&runtime_bridge),
+        sender,
+        None,
+        false,
+        Vec::new(),
+    );
     let request = ToolInvocationRequest {
+        request_stream_id: String::from("request-stream-barrier-call-1"),
         tool_call_id: String::from("barrier-call-1"),
         tool_name: String::from("demo_tool"),
         arguments: json!({ "path": "src/main.rs" }),
         argument_parse_error: None,
     };
+    install_test_invocation_identity(runtime_bridge.as_ref(), &request, 1701, 1702, 1703);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

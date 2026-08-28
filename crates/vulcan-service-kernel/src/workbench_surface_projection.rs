@@ -2,17 +2,11 @@
 //! 工作台界面与子代理导航投影辅助逻辑。
 
 use super::{
-    ServiceBridgeState, display_messages_from_task_conversation_state,
-    display_session_messages_from_workspace, stable_display_session_messages_from_workspace,
-    subagent_navigation_surface_is_visible, subagent_navigation_task_label,
-    subagent_task_panel_is_openable, subagent_task_panel_state_has_recoverable_conversation,
-    task_scoped_display_session_messages,
+    ServiceBridgeState, subagent_navigation_surface_is_visible, subagent_navigation_task_label,
 };
 use vulcan_service_api::{SubagentNavigationSnapshot, SubagentTaskSummary};
 use vulcan_session_core::{SubagentRegistryEntry, SubagentStatus};
-use vulcan_workbench_model::{
-    SessionId, SessionMessageEntry, SubagentTaskPanelState, SubagentTaskRunState,
-};
+use vulcan_workbench_model::{SessionId, SubagentTaskPanelState, SubagentTaskRunState};
 use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
 /// Combined subagent navigation row projected from the authoritative runtime registry.
@@ -26,192 +20,6 @@ struct SubagentTaskNavigationProjection {
     /// 仅从 agent.md 提示词来源派生的可选目录智能体标识。
     agent_profile_id: Option<String>,
 }
-
-/// Returns the currently active transcript surface session id for the WebUI.
-/// 返回 WebUI 当前活动转录界面的会话标识。
-pub(super) fn active_surface_session_id_from_state(
-    guard: &mut ServiceBridgeState,
-    workspace_snapshot: &WorkspaceSnapshot,
-) -> Result<SessionId, String> {
-    let root_session_id = workspace_snapshot.selected_session;
-    let has_visible_round = guard
-        .session_subagent_navigation_rounds
-        .contains(&root_session_id);
-    let normalized_states =
-        authoritative_subagent_tree_states_from_registry(guard, root_session_id)?;
-    let active_panel_belongs_to_root = guard.active_subagent_panel.is_some_and(|selection| {
-        normalized_states
-            .iter()
-            .any(|state| state.task_id == selection.task_id)
-    });
-    if guard.active_subagent_panel.is_some() && !active_panel_belongs_to_root {
-        guard.active_subagent_panel = None;
-    }
-    if !has_visible_round && !active_panel_belongs_to_root {
-        return Ok(root_session_id);
-    }
-    if let Some(selection) = guard.active_subagent_panel
-        && active_panel_belongs_to_root
-        && let Some(normalized) = normalized_states
-            .iter()
-            .find(|state| state.task_id == selection.task_id)
-        && subagent_task_panel_is_openable(
-            normalized,
-            webui_subagent_panel_has_recoverable_detail(workspace_snapshot, normalized),
-        )
-    {
-        return Ok(selection.task_id);
-    }
-    guard.active_subagent_panel = None;
-    Ok(root_session_id)
-}
-
-/// Returns transcript messages for the currently active WebUI surface.
-/// 返回 WebUI 当前活动界面的转录消息。
-pub(super) fn active_surface_messages_from_workspace_and_state(
-    guard: &mut ServiceBridgeState,
-    workspace_snapshot: &WorkspaceSnapshot,
-) -> Result<Vec<SessionMessageEntry>, String> {
-    let active_session_id = active_surface_session_id_from_state(guard, workspace_snapshot)?;
-    Ok(surface_messages_for_resolved_session(
-        guard,
-        workspace_snapshot,
-        active_session_id,
-    ))
-}
-
-/// Returns the active surface id from preserved navigation without recomputing task lists.
-/// 不重算任务列表，直接从已保留导航中返回活动界面标识。
-pub(super) fn preserved_active_surface_session_id(
-    workspace_snapshot: &WorkspaceSnapshot,
-    subagent_navigation: Option<&SubagentNavigationSnapshot>,
-) -> SessionId {
-    subagent_navigation
-        .and_then(|navigation| navigation.active_conversation_id.parse::<SessionId>().ok())
-        .unwrap_or(workspace_snapshot.selected_session)
-}
-
-/// Returns messages for one active surface without refreshing subagent navigation.
-/// 不刷新子代理导航，返回指定活动界面的消息。
-pub(super) fn surface_messages_for_session_without_subagent_navigation_refresh(
-    guard: &ServiceBridgeState,
-    workspace_snapshot: &WorkspaceSnapshot,
-    active_session_id: SessionId,
-) -> Vec<SessionMessageEntry> {
-    surface_messages_for_resolved_session(guard, workspace_snapshot, active_session_id)
-}
-
-/// Returns messages for an already resolved active surface session id.
-/// 返回已经解析出的活动界面会话标识对应的消息。
-///
-/// # Parameters
-/// 参数
-/// `guard` owns render-only subagent detail caches.
-/// `guard` 持有仅用于渲染的子代理详情缓存。
-/// `workspace_snapshot` provides persisted display windows for root and child sessions.
-/// `workspace_snapshot` 提供根会话与子会话的持久显示窗口。
-/// `active_session_id` identifies the root session or active child task surface.
-/// `active_session_id` 标识根会话或当前活动子任务界面。
-///
-/// # Returns
-/// 返回值
-/// Display messages for the active surface with child detail-cache fallback applied.
-/// 返回已应用子任务详情缓存回退的活动界面显示消息。
-fn surface_messages_for_resolved_session(
-    guard: &ServiceBridgeState,
-    workspace_snapshot: &WorkspaceSnapshot,
-    active_session_id: SessionId,
-) -> Vec<SessionMessageEntry> {
-    if active_session_id != workspace_snapshot.selected_session {
-        let task_prompt_anchor = webui_subagent_detail_state_by_task_id(guard, active_session_id)
-            .and_then(|state| state.description.as_deref());
-        if let Some(messages) =
-            stable_display_session_messages_from_workspace(workspace_snapshot, active_session_id)
-        {
-            let messages = task_scoped_display_session_messages(messages, task_prompt_anchor);
-            if !messages.is_empty() {
-                return messages;
-            }
-        }
-        if let Some(runtime_state) = workspace_snapshot
-            .session_runtime_state
-            .get(&active_session_id)
-        {
-            let messages = display_messages_from_task_conversation_state(
-                &runtime_state.conversation_state,
-                task_prompt_anchor,
-            );
-            if !messages.is_empty() {
-                return messages;
-            }
-        }
-        if let Some(messages) =
-            webui_subagent_detail_cached_messages_by_task_id(guard, active_session_id)
-            && !messages.is_empty()
-        {
-            return messages.clone();
-        }
-        if let Some(state) = webui_subagent_detail_state_by_task_id(guard, active_session_id)
-            && let Some(conversation_state) = state.conversation_state.as_ref()
-        {
-            return display_messages_from_task_conversation_state(
-                conversation_state,
-                state.description.as_deref(),
-            );
-        }
-        return Vec::new();
-    }
-    display_session_messages_from_workspace(workspace_snapshot, active_session_id)
-        .unwrap_or_default()
-}
-
-/// Returns the cached, already scoped child transcript messages for one subagent task.
-/// 返回单个子智能体任务已缓存且已裁剪范围的子转录消息。
-///
-/// # Parameters
-/// 参数
-/// `guard` owns the render-only subagent detail cache.
-/// `guard` 持有仅用于渲染的子智能体详情缓存。
-/// `task_id` selects the child task surface.
-/// `task_id` 选择子任务界面。
-///
-/// # Returns
-/// 返回值
-/// Cached display messages when the task detail has been loaded.
-/// 当任务详情已加载时返回缓存显示消息。
-fn webui_subagent_detail_cached_messages_by_task_id(
-    guard: &ServiceBridgeState,
-    task_id: SessionId,
-) -> Option<&Vec<SessionMessageEntry>> {
-    guard
-        .subagent_surface_detail_cache
-        .get(&task_id)
-        .map(|entry| &entry.messages)
-}
-
-/// Returns cached render detail for one subagent task without affecting membership.
-/// 返回单个子代理任务的渲染详情缓存，不影响成员关系判断。
-fn webui_subagent_detail_state_by_task_id(
-    guard: &ServiceBridgeState,
-    task_id: SessionId,
-) -> Option<&SubagentTaskPanelState> {
-    guard
-        .subagent_surface_detail_cache
-        .get(&task_id)
-        .map(|entry| &entry.task_state)
-}
-
-/// Returns whether one WebUI subagent panel has enough persisted transcript detail for review.
-/// 返回 WebUI 子代理面板是否拥有足够的持久转录详情可供复看。
-pub(super) fn webui_subagent_panel_has_recoverable_detail(
-    workspace_snapshot: &WorkspaceSnapshot,
-    state: &SubagentTaskPanelState,
-) -> bool {
-    display_session_messages_from_workspace(workspace_snapshot, state.task_id)
-        .is_some_and(|messages| !messages.is_empty())
-        || subagent_task_panel_state_has_recoverable_conversation(state)
-}
-
 /// Builds the subagent navigation snapshot for the selected parent conversation.
 /// 为当前选中父会话构建子代理导航快照。
 ///
@@ -334,21 +142,6 @@ pub(super) fn open_subagent_registry_entry_for_task(
         .into_iter()
         .find(|entry| entry.session_id.as_uuid() == task_id))
 }
-
-/// Builds panel states from the authoritative runtime registry for every open task in the selected tree.
-/// 从权威运行时注册表为当前选中树中的每个未关闭任务构建面板状态。
-fn authoritative_subagent_tree_states_from_registry(
-    guard: &ServiceBridgeState,
-    root_parent_session_id: SessionId,
-) -> Result<Vec<SubagentTaskPanelState>, String> {
-    Ok(
-        authoritative_subagent_tree_projection_from_registry(guard, root_parent_session_id)?
-            .into_iter()
-            .map(|projection| projection.state)
-            .collect(),
-    )
-}
-
 /// Builds panel projections from the authoritative runtime registry for every open task.
 /// 从权威运行时注册表为每个未关闭任务构建面板投影。
 fn authoritative_subagent_tree_projection_from_registry(

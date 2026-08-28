@@ -58,47 +58,6 @@ pub(crate) struct AgentRuntimeBridge {
     pub(crate) vmm_hook_runtime: VmmHookRuntimeHandle,
 }
 
-/// User prompt edit submit request sent by the WebUI transcript action.
-/// WebUI 转录操作发送的用户提示词编辑提交请求。
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct UserPromptEditSubmitRequest {
-    /// Conversation id that owns the user prompt.
-    /// 拥有该用户提示词的会话标识。
-    pub(crate) conversation_id: String,
-    /// Stable user prompt message id.
-    /// 稳定用户提示词消息标识。
-    pub(crate) message_id: String,
-    /// Replacement prompt text.
-    /// 替换后的提示词文本。
-    pub(crate) prompt: String,
-    /// Attachments replayed with the edited prompt.
-    /// 随编辑后提示词重放的附件。
-    #[serde(default)]
-    pub(crate) attachments: Vec<ComposerAttachmentSummary>,
-    /// Whether the backend may stop an active run before editing.
-    /// 后端是否可以先停止当前运行再执行编辑。
-    #[serde(default)]
-    pub(crate) stop_running: bool,
-}
-
-/// Conversation fork request sent by the WebUI final-turn action.
-/// WebUI 最终回合操作发送的会话分叉请求。
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ConversationForkRequest {
-    /// Conversation id that should be copied into a new session.
-    /// 需要复制为新会话的会话标识。
-    pub(crate) conversation_id: String,
-    /// Localized title assigned to the forked session.
-    /// 分配给分叉会话的本地化标题。
-    pub(crate) title: String,
-    /// Optional retained message anchor for a message-scoped fork.
-    /// 消息级分叉时可选保留的消息锚点。
-    #[serde(default)]
-    pub(crate) anchor_message_id: Option<String>,
-}
-
 /// Session-scoped AI capability configuration save request sent by the WebUI composer dialog.
 /// WebUI 输入区控制项发送的会话计划模式更新请求。
 #[derive(Debug, Clone, Deserialize)]
@@ -128,23 +87,6 @@ pub(crate) struct SessionVmmPolicyUpdateRequest {
     pub(crate) mode: String,
 }
 
-/// Empty session lifecycle hook used by the WebUI external stream lifecycle runner.
-/// WebUI 外部流生命周期 runner 使用的空会话生命周期 hook。
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct WebuiSessionLifecycleHook;
-
-impl SessionLifecycleHook for WebuiSessionLifecycleHook {
-    /// Ignores session lifecycle events after durable append.
-    /// 在持久化追加后忽略 会话生命周期事件。
-    fn after_event_appended(&self, _event: &SessionBoundaryEvent) -> Result<(), String> {
-        Ok(())
-    }
-}
-
-/// Number of recent turns loaded for the selected conversation.
-/// 为当前选中会话加载的最近轮次数量。
-pub(crate) const SELECTED_SESSION_TURN_LOAD_LIMIT: usize = 30;
-
 /// Maximum loaded subagent transcript surfaces retained by the Tauri service.
 /// Tauri 服务保留的已加载子代理转录界面最大数量。
 pub(crate) const SUBAGENT_SURFACE_DETAIL_CACHE_LIMIT: usize = 128;
@@ -152,21 +94,6 @@ pub(crate) const SUBAGENT_SURFACE_DETAIL_CACHE_LIMIT: usize = 128;
 /// Milliseconds before an unused loaded subagent transcript surface can be evicted.
 /// 已加载但未使用的子代理转录界面允许被清理前的毫秒数。
 pub(crate) const SUBAGENT_SURFACE_DETAIL_CACHE_TTL_MS: i128 = 30 * 60 * 1000;
-
-/// Parent-turn binding captured when a detached WebUI subagent starts.
-/// WebUI 分离子代理启动时捕获的父回合绑定。
-#[derive(Debug, Clone)]
-pub(crate) struct WebuiSubagentParentTurnBinding {
-    /// Parent session that spawned the detached child task.
-    /// 派生分离子任务的父会话。
-    pub(crate) parent_session_id: SessionId,
-    /// Parent kernel generation that was current at child creation time.
-    /// 子任务创建时父级内核的当前代际。
-    pub(crate) source_generation: u64,
-    /// Parent turn id that was active at child creation time.
-    /// 子任务创建时处于活动状态的父级回合标识。
-    pub(crate) parent_turn_id: Option<String>,
-}
 
 /// Exact child execution identity used by parent-turn bindings and terminal delivery.
 /// 父回合绑定与终态投递使用的精确子执行身份。
@@ -198,9 +125,6 @@ pub(crate) struct WebuiSubagentSurfaceDetailCacheEntry {
     /// Cached task panel state including durable child conversation detail when available.
     /// 缓存的任务面板状态，包含可用的持久子会话详情。
     pub(crate) task_state: SubagentTaskPanelState,
-    /// Cached projected child transcript messages for direct WebUI surface rendering.
-    /// 用于 WebUI 界面直接渲染的子转录消息缓存。
-    pub(crate) messages: Vec<SessionMessageEntry>,
     /// Last access timestamp in Unix milliseconds.
     /// 最近访问时间戳，单位为 Unix 毫秒。
     pub(crate) last_access_ms: i128,
@@ -314,6 +238,20 @@ pub(crate) struct ProjectAdmissionReservation {
     pub(crate) kind: ProjectAdmissionReservationKind,
 }
 
+/// Process-local compatibility owner for one session's pending-prompt UI and Hook queue.
+/// 单个会话待发送提示词界面与 Hook 队列的进程内兼容 owner。
+///
+/// This owner is intentionally outside `WorkspaceSnapshot` and has no serialization contract.
+/// Durable queue authority lives only in Session Persistence V1 metadata.
+/// 该 owner 有意位于 `WorkspaceSnapshot` 之外，且没有序列化契约；可靠队列权威只存在于
+/// Session Persistence V1 metadata。
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PendingPromptProcessMirror {
+    /// Queue-only transcript UI state consumed by legacy process-local adapters.
+    /// 仅供旧进程内适配器消费的队列转录界面状态。
+    pub(crate) ui_state: vulcan_workbench_model::SessionTranscriptUiState,
+}
+
 /// Shared service state exposed to Tauri commands.
 /// 暴露给 Tauri 命令的共享服务状态。
 pub struct ServiceBridgeState {
@@ -332,9 +270,9 @@ pub struct ServiceBridgeState {
     /// Latest workspace snapshot retained for streaming turn updates.
     /// 为流式会话轮次更新保留的最近工作区快照。
     pub(crate) workspace_snapshot: Option<WorkspaceSnapshot>,
-    /// Retained lazy conversation body windows keyed by session id.
-    /// 按会话标识索引的懒加载会话正文保留窗口。
-    pub(crate) hydrated_conversation_windows: BTreeMap<SessionId, HydratedConversationWindowState>,
+    /// Process-local pending-prompt compatibility mirrors keyed by session id.
+    /// 按会话标识索引的进程内待发送提示词兼容镜像。
+    pub(crate) pending_prompt_process_mirrors: BTreeMap<SessionId, PendingPromptProcessMirror>,
     /// Long-lived shared agent runtime bridge.
     /// 长生命周期共享 Agent 运行时桥接。
     pub(crate) agent_runtime: Option<AgentRuntimeBridge>,
@@ -386,15 +324,6 @@ pub struct ServiceBridgeState {
     /// Latest goal summaries keyed by session id for synchronous workbench projection.
     /// 按会话标识索引的最近目标摘要，用于同步构建工作台投影。
     pub(crate) session_goal_summaries: BTreeMap<SessionId, SessionGoalSummary>,
-    /// Monotonic Goal dispatch-authority version keyed by session id.
-    /// 按会话标识索引的 Goal 分发权威单调版本号。
-    pub(crate) session_goal_dispatch_versions: BTreeMap<SessionId, u64>,
-    /// Goal ids that already received one budget-limit wrap-up guidance in this process.
-    /// 本进程内已经收到预算耗尽收尾引导的目标标识集合。
-    pub(crate) budget_limit_reported_goal_ids: BTreeSet<String>,
-    /// Root sessions whose unclosed subagent metadata has already been loaded from disk.
-    /// 已经从磁盘加载过未关闭子智能体元数据的根会话集合。
-    pub(crate) webui_preloaded_unclosed_subagent_roots: BTreeSet<SessionId>,
     /// Long-lived loaded child transcript details keyed by child task id.
     /// 按子任务标识索引的长生命周期已加载子转录详情。
     pub(crate) subagent_surface_detail_cache:
@@ -408,10 +337,6 @@ pub struct ServiceBridgeState {
     /// Current detached child execution owned by each WebUI listener task id.
     /// 每个 WebUI 监听任务标识当前拥有的分离子执行。
     pub(crate) detached_subagent_task_listeners: BTreeMap<SessionId, String>,
-    /// Parent-turn bindings keyed by exact detached child execution.
-    /// 按精确分离子执行索引的父回合绑定。
-    pub(crate) subagent_parent_turn_bindings:
-        BTreeMap<SubagentExecutionKey, WebuiSubagentParentTurnBinding>,
     /// Exact child executions that should not block the parent turn completion gate.
     /// 不应阻塞父回合完成闸门的精确子执行集合。
     pub(crate) subagent_completion_gate_ignored_tasks: BTreeSet<SubagentExecutionKey>,
@@ -428,6 +353,14 @@ pub struct ServiceBridgeState {
     /// Session runtime kernels keyed by root WebUI session id.
     /// 按 WebUI 根会话标识索引的会话运行时内核。
     pub(crate) session_runtime_kernels: BTreeMap<SessionId, SessionRuntimeKernel>,
+    /// Unique V1 mutable session owners keyed by root WebUI session id.
+    /// 按 WebUI 根会话标识索引的唯一 V1 可变会话所有者。
+    pub(crate) session_runtime_registry:
+        Arc<crate::session_runtime_registry_v1::SessionRuntimeRegistry>,
+    /// Unique project-level resource catalog owners keyed by exact storage partition path.
+    /// 按精确存储分区路径索引的唯一项目级资源目录 owner。
+    pub(crate) project_resource_catalog_registry:
+        Arc<vulcan_workspace_store::workspace_store::ProjectResourceCatalogRegistry>,
     /// Owned turn-admission reservations keyed by exact session id.
     /// 按精确会话标识索引的有所有权回合准入预留。
     pub(crate) session_turn_admission_reservations:
@@ -436,15 +369,6 @@ pub struct ServiceBridgeState {
     /// 按精确或未解析作用域索引的有所有权项目准入预留。
     pub(crate) project_admission_reservations:
         BTreeMap<ProjectAdmissionScope, ProjectAdmissionReservation>,
-    /// Latest background persistence version keyed by session id.
-    /// 按会话标识索引的最新后台持久化版本。
-    pub(crate) session_persist_versions: BTreeMap<SessionId, u64>,
-    /// Latest live transcript persistence version keyed by session id.
-    /// 按会话标识索引的最新运行中转录持久化版本。
-    pub(crate) session_transcript_persist_versions: BTreeMap<SessionId, u64>,
-    /// Latest addon persistence version keyed by session id and addon namespace.
-    /// 按会话标识与附属状态命名空间索引的最新附属状态持久化版本。
-    pub(crate) session_addon_persist_versions: BTreeMap<(SessionId, SessionAddonNamespace), u64>,
 }
 
 /// Thread-safe service state handle.
@@ -670,9 +594,6 @@ pub(crate) struct ActiveStreamTask {
     /// Goal identifier currently bound to this provider execution.
     /// 当前绑定到该 Provider 执行的目标标识。
     session_goal_id: Option<String>,
-    /// Latest exact physical Provider call identity observed for this stream owner.
-    /// 为当前流所有者观测到的最近一个精确物理 Provider 调用身份。
-    provider_call_id: Option<String>,
 }
 
 impl ActiveStreamTask {
@@ -701,7 +622,6 @@ impl ActiveStreamTask {
             task_id,
             handle,
             session_goal_id,
-            provider_call_id: None,
         }
     }
 
@@ -722,17 +642,6 @@ impl ActiveStreamTask {
         self.task_id
     }
 
-    /// Returns the latest exact physical Provider call identity bound to this task.
-    /// 返回绑定到当前任务的最近一个精确物理 Provider 调用身份。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The borrowed physical call id, or `None` before the first Started boundary.
-    /// 返回借用的物理调用标识；首个 Started 边界前返回 `None`。
-    pub(crate) fn provider_call_id(&self) -> Option<&str> {
-        self.provider_call_id.as_deref()
-    }
-
     /// Rebinds this execution to the Goal that owns its next physical Provider request.
     /// 将当前执行重新绑定到拥有其下一次物理 Provider 请求的目标。
     ///
@@ -747,22 +656,6 @@ impl ActiveStreamTask {
     /// 替换执行绑定后此方法不返回值。
     fn bind_session_goal(&mut self, session_goal_id: String) {
         self.session_goal_id = Some(session_goal_id);
-    }
-
-    /// Binds the latest exact physical Provider call to this retained stream owner.
-    /// 将最近一个精确物理 Provider 调用绑定到当前保留流所有者。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `provider_call_id` is the non-empty host-generated identity from a Started event.
-    /// `provider_call_id` 是 Started 事件携带的非空宿主生成身份。
-    ///
-    /// # Returns
-    /// 返回值
-    /// This method returns no value after replacing the previous physical-attempt binding.
-    /// 替换前一个物理尝试绑定后不返回值。
-    fn bind_provider_call(&mut self, provider_call_id: String) {
-        self.provider_call_id = Some(provider_call_id);
     }
 
     /// Aborts the retained asynchronous task and waits until its owned guards are dropped.
@@ -852,43 +745,6 @@ pub(crate) fn bind_active_stream_task_goal_if_id(
         return false;
     }
     entry.bind_session_goal(session_goal_id);
-    true
-}
-
-/// Binds one physical Provider call only when the caller still owns the retained stream task.
-/// 仅当调用方仍拥有保留流任务时绑定一个物理 Provider 调用。
-///
-/// # Parameters
-/// 参数
-/// `state` owns the active stream task map.
-/// `state` 持有活动流任务映射。
-/// `session_id` identifies the session slot being updated.
-/// `session_id` 标识正在更新的会话槽位。
-/// `task_id` is the unique identity captured by the active task.
-/// `task_id` 是活动任务捕获的唯一身份。
-/// `provider_call_id` is the exact non-empty identity emitted by Provider telemetry.
-/// `provider_call_id` 是 Provider 遥测发出的精确非空身份。
-///
-/// # Returns
-/// 返回值
-/// `true` when the exact task was rebound, otherwise `false` without changing another owner.
-/// 精确任务完成重新绑定时返回 `true`，否则返回 `false` 且不修改其他所有者。
-pub(crate) fn bind_active_stream_task_provider_call_if_id(
-    state: &mut ServiceBridgeState,
-    session_id: SessionId,
-    task_id: Uuid,
-    provider_call_id: String,
-) -> bool {
-    if provider_call_id.trim().is_empty() {
-        return false;
-    }
-    let Some(entry) = state.active_stream_tasks.get_mut(&session_id) else {
-        return false;
-    };
-    if entry.task_id != task_id {
-        return false;
-    }
-    entry.bind_provider_call(provider_call_id);
     true
 }
 
@@ -1347,107 +1203,4 @@ pub(crate) fn webui_workspace_persist_lock() -> Arc<tokio::sync::Mutex<()>> {
     WEBUI_WORKSPACE_PERSIST_LOCK
         .get_or_init(|| Arc::new(tokio::sync::Mutex::new(())))
         .clone()
-}
-
-/// Fixed number of session-persistence channels used to avoid one process-wide hot-path gate.
-/// 用于避免单一进程级热路径闸门的固定会话持久化通道数量。
-const WEBUI_SESSION_PERSIST_LOCK_SHARDS: usize = 256;
-
-/// Fixed session-keyed persistence channels with no directory scan or unbounded lock registry.
-/// 不进行目录扫描且不存在无界锁注册表的固定会话键持久化通道。
-static WEBUI_SESSION_PERSIST_LOCKS: OnceLock<
-    [Arc<tokio::sync::Mutex<()>>; WEBUI_SESSION_PERSIST_LOCK_SHARDS],
-> = OnceLock::new();
-
-/// Returns the deterministic persistence channel for one exact session.
-/// 返回单个精确会话使用的确定性持久化通道。
-///
-/// # Parameters
-/// 参数
-/// `session_id` is the exact session whose state, transcript, or addon file will be written.
-/// `session_id` 是将写入状态、转录或附属文件的精确会话。
-///
-/// # Returns
-/// 返回值
-/// A stable sharded mutex that serializes same-session writes while allowing unrelated channels to proceed.
-/// 返回稳定的分片互斥锁；同会话写入保持串行，而无关通道可以并行推进。
-pub(crate) fn webui_session_persist_lock(session_id: SessionId) -> Arc<tokio::sync::Mutex<()>> {
-    // shardHash consumes every UUID byte so ordinary adjacent session ids distribute across channels.
-    // shardHash 消费 UUID 的每个字节，使普通相邻会话标识分布到不同通道。
-    let shard_hash = session_id.as_bytes().iter().fold(0usize, |hash, byte| {
-        hash.wrapping_mul(16777619) ^ usize::from(*byte)
-    });
-    WEBUI_SESSION_PERSIST_LOCKS
-        .get_or_init(|| std::array::from_fn(|_| Arc::new(tokio::sync::Mutex::new(()))))
-        [shard_hash % WEBUI_SESSION_PERSIST_LOCK_SHARDS]
-        .clone()
-}
-
-/// Acquires every distinct persistence channel selected by an exact session set in shard order.
-/// 按分片顺序取得一组精确会话选择的全部不同持久化通道。
-///
-/// # Parameters
-/// 参数
-/// `session_ids` contains the exact lifecycle members whose files may move or disappear.
-/// `session_ids` 包含其文件可能移动或消失的精确生命周期成员。
-///
-/// # Returns
-/// 返回值
-/// Owned guards for unique shards, held until the lifecycle caller drops the returned vector.
-/// 返回不同分片的自有守卫；生命周期调用方丢弃该向量前会持续持有这些守卫。
-pub(crate) async fn lock_webui_session_persist_channels(
-    session_ids: impl IntoIterator<Item = SessionId>,
-) -> Vec<tokio::sync::OwnedMutexGuard<()>> {
-    // shardIndices are deduplicated so two sessions sharing one fixed channel cannot self-deadlock.
-    // shardIndices 会去重，避免共享固定通道的两个会话发生自死锁。
-    let shard_indices = session_ids
-        .into_iter()
-        .map(|session_id| {
-            session_id.as_bytes().iter().fold(0usize, |hash, byte| {
-                hash.wrapping_mul(16777619) ^ usize::from(*byte)
-            }) % WEBUI_SESSION_PERSIST_LOCK_SHARDS
-        })
-        .collect::<BTreeSet<_>>();
-    let locks = WEBUI_SESSION_PERSIST_LOCKS
-        .get_or_init(|| std::array::from_fn(|_| Arc::new(tokio::sync::Mutex::new(()))));
-    let mut guards = Vec::with_capacity(shard_indices.len());
-    for shard_index in shard_indices {
-        guards.push(locks[shard_index].clone().lock_owned().await);
-    }
-    guards
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Verifies session persistence channels are stable per session and separate ordinary peers.
-    /// 验证会话持久化通道对同一会话保持稳定，并分离普通不同会话。
-    #[test]
-    fn session_persistence_channels_are_deterministic_and_sharded() {
-        // firstSession and secondSession use distinct complete UUID values for shard selection.
-        // firstSession 与 secondSession 使用不同的完整 UUID 值进行分片选择。
-        let first_session = SessionId::from_u128(1);
-        let second_session = SessionId::from_u128(2);
-        let first_lock = webui_session_persist_lock(first_session);
-        let repeated_first_lock = webui_session_persist_lock(first_session);
-        let second_lock = webui_session_persist_lock(second_session);
-
-        assert!(Arc::ptr_eq(&first_lock, &repeated_first_lock));
-        assert!(!Arc::ptr_eq(&first_lock, &second_lock));
-    }
-
-    /// Verifies fork requests accept the explicit retained message anchor.
-    /// 验证 fork 请求接受显式保留消息锚点。
-    #[test]
-    fn conversation_fork_request_accepts_anchor_message_id() {
-        let request = serde_json::from_value::<ConversationForkRequest>(serde_json::json!({
-            "conversationId": "conversation-a",
-            "title": "Conversation A fork",
-            "anchorMessageId": "message-a"
-        }))
-        .expect("fork request should accept explicit anchor");
-
-        assert_eq!(request.anchor_message_id.as_deref(), Some("message-a"));
-    }
 }

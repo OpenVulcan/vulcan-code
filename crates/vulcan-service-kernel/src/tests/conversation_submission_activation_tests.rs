@@ -87,20 +87,6 @@ fn created_session_activation_emits_one_full_workbench_snapshot() {
     let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
     commit_created_submission_workspace_slice(&state, &workspace_snapshot, &materialized_session)
         .expect("created conversation slice should commit");
-    {
-        // retained_state proves new-session persistence owns an explicit absolute index-zero window.
-        // retained_state 证明新会话持久化持有显式的绝对零起点窗口。
-        let retained_state = state
-            .lock()
-            .expect("created conversation state should lock");
-        assert_eq!(
-            retained_state
-                .hydrated_conversation_windows
-                .get(&materialized_session.session_id)
-                .and_then(|window| window.message_start_index),
-            Some(0)
-        );
-    }
     // events records whether activation used an atomic full snapshot or a stale partial delta.
     // events 记录激活阶段使用了原子完整快照还是过期的局部增量。
     let events = Arc::new(Mutex::new(Vec::new()));

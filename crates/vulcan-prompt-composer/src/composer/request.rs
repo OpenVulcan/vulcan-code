@@ -3,7 +3,60 @@ use crate::source::snapshot::{
     AgentPromptSnapshot, EnvironmentContextSnapshot, ProjectRulesSnapshot, ProviderPromptSnapshot,
     SubagentSnapshot, TaskGoalSnapshot, ToolCatalogSnapshot,
 };
-use crate::types::{ModelDescriptor, PersonalitySelection, PromptAssemblyMode};
+use crate::types::{
+    ModelDescriptor, PersonalitySelection, PromptAssemblyMode, PromptBaselineProvenance,
+};
+
+/// One explicitly classified runtime-provided prompt segment.
+/// 一条已显式分类的运行时提示词片段。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdditionalPromptSegment {
+    /// Human-readable segment title.
+    /// 人类可读的片段标题。
+    pub title: String,
+    /// Exact provider-visible body.
+    /// 精确的 Provider 可见正文。
+    pub body: String,
+    /// Human-readable source label used only for diagnostics.
+    /// 仅用于诊断的人类可读来源标签。
+    pub source_label: String,
+    /// Producer-declared baseline provenance, or `None` for request-dynamic content.
+    /// 生产者声明的基线来源；请求动态内容为 `None`。
+    pub baseline_provenance: Option<PromptBaselineProvenance>,
+}
+
+impl AdditionalPromptSegment {
+    /// Builds one request-dynamic segment that must not enter the runtime lock.
+    /// 构建一条不得进入运行时锁定的请求动态片段。
+    pub fn dynamic(
+        title: impl Into<String>,
+        body: impl Into<String>,
+        source_label: impl Into<String>,
+    ) -> Self {
+        Self {
+            title: title.into(),
+            body: body.into(),
+            source_label: source_label.into(),
+            baseline_provenance: None,
+        }
+    }
+
+    /// Builds one producer-declared mutable baseline segment.
+    /// 构建一条由生产者声明的可变基线片段。
+    pub fn locked(
+        title: impl Into<String>,
+        body: impl Into<String>,
+        source_label: impl Into<String>,
+        baseline_provenance: PromptBaselineProvenance,
+    ) -> Self {
+        Self {
+            title: title.into(),
+            body: body.into(),
+            source_label: source_label.into(),
+            baseline_provenance: Some(baseline_provenance),
+        }
+    }
+}
 
 /// Complete prompt assembly input payload.
 /// 完整提示词装配输入载荷。
@@ -42,10 +95,10 @@ pub struct PromptAssemblyInput {
     /// Optional subagent snapshot.
     /// 可选子代理快照。
     pub subagent: Option<SubagentSnapshot>,
-    /// Additional developer-side raw segments.
-    /// 额外的开发者侧原始片段。
-    pub custom_developer_segments: Vec<String>,
-    /// Additional user-side raw segments.
-    /// 额外的用户侧原始片段。
-    pub custom_user_segments: Vec<String>,
+    /// Additional explicitly classified developer-side segments.
+    /// 额外的已显式分类开发者侧片段。
+    pub custom_developer_segments: Vec<AdditionalPromptSegment>,
+    /// Additional explicitly classified user-side segments.
+    /// 额外的已显式分类用户侧片段。
+    pub custom_user_segments: Vec<AdditionalPromptSegment>,
 }

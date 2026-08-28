@@ -1701,6 +1701,7 @@ mod tests {
                     authorization: None,
                     billing_kind: CredentialBillingKind::ProviderManaged,
                     account_usage_query: AccountUsageQueryKind::Unsupported,
+                    account_model_access: None,
                     authentication: None,
                     key_prefix: None,
                     credential_role: None,
@@ -1797,6 +1798,7 @@ mod tests {
             enabled: true,
             capabilities: vulcan_provider_adapters::ModelCapabilities::default(),
             request_projection: vulcan_provider_adapters::CustomModelRequestProjection::default(),
+            tool_schema_projection: vulcan_provider_adapters::ToolSchemaProjectionMode::default(),
         }
     }
 

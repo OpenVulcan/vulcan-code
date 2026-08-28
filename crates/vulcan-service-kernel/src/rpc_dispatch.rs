@@ -4,10 +4,12 @@
 use super::*;
 
 mod configuration;
+mod conversation_events_v1;
 mod conversation_runtime;
 mod extensibility;
 mod knowledge_base;
 mod project_conversation;
+mod session_resources_v1;
 mod workspace_io;
 
 /// Typed ownership result returned by one domain RPC router.
@@ -63,6 +65,15 @@ async fn dispatch_known_service_rpc(
         return Ok(outcome);
     }
     let outcome = extensibility::dispatch(app.clone(), state.clone(), method, params).await?;
+    if outcome.is_handled() {
+        return Ok(outcome);
+    }
+    let outcome =
+        conversation_events_v1::dispatch(app.clone(), state.clone(), method, params).await?;
+    if outcome.is_handled() {
+        return Ok(outcome);
+    }
+    let outcome = session_resources_v1::dispatch(state.clone(), method, params).await?;
     if outcome.is_handled() {
         return Ok(outcome);
     }
@@ -188,6 +199,8 @@ pub(crate) fn service_rpc_method_names() -> BTreeSet<&'static str> {
     [
         workspace_io::RPC_METHODS,
         extensibility::RPC_METHODS,
+        conversation_events_v1::RPC_METHODS,
+        session_resources_v1::RPC_METHODS,
         conversation_runtime::RPC_METHODS,
         configuration::RPC_METHODS,
         project_conversation::RPC_METHODS,
@@ -213,6 +226,8 @@ mod tests {
         // unique_methods 证明前置路由不会遮蔽后续领域分支。
         let declared_method_count = workspace_io::RPC_METHODS.len()
             + extensibility::RPC_METHODS.len()
+            + conversation_events_v1::RPC_METHODS.len()
+            + session_resources_v1::RPC_METHODS.len()
             + conversation_runtime::RPC_METHODS.len()
             + configuration::RPC_METHODS.len()
             + project_conversation::RPC_METHODS.len();

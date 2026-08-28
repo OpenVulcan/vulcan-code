@@ -1,7 +1,7 @@
 //! Shared prompt-turn reducers used by workbench and service shells.
 //! 工作台与服务外壳共用的提示词轮次归约器。
 
-use std::{fmt, sync::Arc};
+use std::fmt;
 
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -14,10 +14,10 @@ use vulcan_session_boundary::{
     SessionBoundaryEvent, SessionBoundaryEventKind, SessionEventScope, SessionEventVisibility,
 };
 use vulcan_session_core::SessionNodeId;
+use vulcan_session_core::v1::ClientActionId;
 use vulcan_vmm::{VmmConfigDiagnostic, VmmEffectiveConfig};
 use vulcan_workbench_model::{
-    ExecutionRetryPreparationInput, PendingSessionPromptSource, SessionId, SessionMessageEntry,
-    SessionRunPhase, SessionRuntimeStateEntry,
+    PendingSessionPromptSource, SessionId, SessionRunPhase, SessionRuntimeStateEntry,
 };
 use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
@@ -34,17 +34,13 @@ use crate::{
             vmm_profile_sync_effect_from_report, vmm_recall_batch_effect_from_report,
             vmm_session_status_effect_from_report,
         },
-        events::{RuntimeEvent, RuntimeEventKind},
         execution_models::ExecutionTurnStartMode,
         vmm_hooks::{
             VMM_PRECHECK_HOOK_ID, stabilize_vmm_profile_system_prompt_blocks,
             vmm_profile_placement_phase,
         },
     },
-    conversation_protocol::{
-        append_user_text_message, merge_session_messages_with_conversation_state_records,
-    },
-    session_event_runtime::append_runtime_event_projection_to_state,
+    conversation_protocol::append_user_text_message,
 };
 
 mod transcript;
@@ -145,6 +141,9 @@ pub struct SharedPromptTurnStart {
     /// Shared immutable identity used to correlate both preparation lines and the provider turn.
     /// 用于关联两条准备线路及 Provider 回合的共享不可变标识。
     pub preparation_turn_id: String,
+    /// Optional durable client action that owns a V1 Continue execution.
+    /// 可选的可靠客户端动作，用于标识一项 V1 Continue 执行。
+    pub continuation_action_id: Option<ClientActionId>,
     /// Human-readable session title used by diagnostics.
     /// 诊断信息使用的人类可读会话标题。
     pub session_title: String,
@@ -190,9 +189,6 @@ pub struct SharedPromptTurnStart {
     /// Exact canonical user-message id appended before both preparation lines, when persisted.
     /// 当该来源会持久化规范消息时，在两条准备线路前追加的精确规范用户消息标识。
     pub canonical_user_message_id: Option<String>,
-    /// Exact claimed execution snapshot attached only by the dedicated manual retry service.
-    /// 仅由专用手动重试服务附加的精确已领取执行快照。
-    pub execution_retry_snapshot: Option<Arc<vulcan_workbench_model::ExecutionRetrySnapshot>>,
 }
 
 impl fmt::Debug for SharedPromptTurnStart {
@@ -201,6 +197,7 @@ impl fmt::Debug for SharedPromptTurnStart {
             .debug_struct("SharedPromptTurnStart")
             .field("session_id", &self.session_id)
             .field("preparation_turn_id", &self.preparation_turn_id)
+            .field("continuation_action_id", &self.continuation_action_id)
             .field("session_title", &self.session_title)
             .field("workspace_path", &self.workspace_path)
             .field("source", &self.source)
@@ -221,125 +218,6 @@ impl fmt::Debug for SharedPromptTurnStart {
             .field("canonical_user_message_id", &self.canonical_user_message_id)
             .finish_non_exhaustive()
     }
-}
-
-impl SharedPromptTurnStart {
-    /// Captures the exact immutable preparation input for an accepted prompt turn.
-    /// 捕获已接纳提示词回合的精确不可变准备输入。
-    ///
-    /// # Returns
-    /// 返回值
-    /// A serializable retry input that can resume preparation without reading the composer.
-    /// 一份可序列化的重试输入，可在不读取输入框的情况下恢复准备。
-    pub fn execution_retry_preparation_input(
-        &self,
-        runtime_state: &SessionRuntimeStateEntry,
-    ) -> Result<ExecutionRetryPreparationInput, String> {
-        let provider_visible_agent_messages = self
-            .provider_visible_agent_messages
-            .iter()
-            .map(|message| {
-                serde_json::to_value(message).map_err(|error| {
-                    format!("Failed to freeze provider-visible retry message: {error}")
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let boundary_events = self
-            .boundary_events
-            .iter()
-            .map(|event| {
-                serde_json::to_value(event)
-                    .map_err(|error| format!("Failed to freeze retry boundary event: {error}"))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(ExecutionRetryPreparationInput {
-            preparation_turn_id: self.preparation_turn_id.clone(),
-            session_title: self.session_title.clone(),
-            workspace_path: self.workspace_path.clone(),
-            active_provider_id: runtime_state.active_provider_id.clone(),
-            active_connection_id: runtime_state.active_connection_id.clone(),
-            active_model_id: runtime_state.active_model_id.clone(),
-            original_source: self.source,
-            prompt: self.prompt.clone(),
-            hidden_model_guidance: self.hidden_model_guidance.clone(),
-            provider_visible_agent_messages,
-            attachments: self.attachments.clone(),
-            provider_attachments: self.provider_attachments.clone(),
-            execution_mode: self.execution_mode.clone(),
-            reasoning_effort: self.reasoning_effort,
-            boundary_events,
-            canonical_user_message_id: self.canonical_user_message_id.clone(),
-            precheck_payload: self.precheck_request.payload_snapshot(),
-            profile_payload: self.profile_request.payload_snapshot(),
-        })
-    }
-}
-
-/// Restores one accepted prompt turn from its durable pre-provider retry input.
-/// 从持久化的 Provider 调用前重试输入恢复一条已接纳提示词回合。
-///
-/// # Parameters
-/// 参数
-/// - `session_id`: Session that owns the frozen input.
-/// - `session_id`：拥有冻结输入的会话。
-/// - `conversation_hook_runtime`: Shared Hook runtime used to restore prepared requests.
-/// - `conversation_hook_runtime`：用于恢复已准备请求的共享 Hook 运行时。
-/// - `input`: Exact immutable accepted-submission input.
-/// - `input`：精确不可变的已接纳提交输入。
-///
-/// # Returns
-/// 返回值
-/// The restored prompt-turn start without appending another canonical or visible user message.
-/// 不追加另一条规范或可见用户消息的已恢复提示词回合起点。
-pub fn restore_shared_prompt_turn_from_execution_retry(
-    session_id: SessionId,
-    conversation_hook_runtime: &mut ConversationHookRuntime,
-    input: ExecutionRetryPreparationInput,
-) -> Result<SharedPromptTurnStart, String> {
-    let provider_visible_agent_messages = input
-        .provider_visible_agent_messages
-        .into_iter()
-        .map(|message| {
-            serde_json::from_value(message).map_err(|error| {
-                format!("Failed to restore provider-visible retry message: {error}")
-            })
-        })
-        .collect::<Result<Vec<ExecutionProviderVisibleAgentMessage>, _>>()?;
-    let boundary_events = input
-        .boundary_events
-        .into_iter()
-        .map(|event| {
-            serde_json::from_value(event)
-                .map_err(|error| format!("Failed to restore retry boundary event: {error}"))
-        })
-        .collect::<Result<Vec<SessionBoundaryEvent>, _>>()?;
-    let hook_requests = conversation_hook_runtime.restore_user_prompt_hook_requests(
-        session_id,
-        input.preparation_turn_id.clone(),
-        &input.prompt,
-        input.precheck_payload,
-        input.profile_payload,
-    )?;
-    Ok(SharedPromptTurnStart {
-        session_id,
-        preparation_turn_id: input.preparation_turn_id,
-        session_title: input.session_title,
-        workspace_path: input.workspace_path,
-        source: input.original_source,
-        precheck_request: hook_requests.precheck,
-        profile_request: hook_requests.profile,
-        prompt: input.prompt,
-        hidden_model_guidance: input.hidden_model_guidance,
-        provider_visible_agent_messages,
-        provider_attachments: input.provider_attachments,
-        attachments: input.attachments,
-        execution_mode: input.execution_mode,
-        reasoning_effort: input.reasoning_effort,
-        boundary_events,
-        visible_user_prompt_record_id: None,
-        canonical_user_message_id: input.canonical_user_message_id,
-        execution_retry_snapshot: None,
-    })
 }
 
 /// Result of applying a completed precheck to one shared prompt turn.
@@ -371,6 +249,9 @@ pub struct SharedPromptTurnBeginInput<'a> {
     /// Prompt entry identifier passed into hook routing.
     /// 传递给 hook 路由的提示词条目标识。
     pub prompt_entry_id: String,
+    /// Optional durable client action that owns a V1 Continue execution.
+    /// 可选的可靠客户端动作，用于标识一项 V1 Continue 执行。
+    pub continuation_action_id: Option<ClientActionId>,
     /// Raw prompt text submitted by the user or queue.
     /// 用户或队列提交的原始提示词文本。
     pub prompt: &'a str,
@@ -418,6 +299,9 @@ pub struct SharedPromptTurnRuntimeBeginInput<'a> {
     /// Prompt entry identifier passed into hook routing.
     /// 传递给 hook 路由的提示词条目标识。
     pub prompt_entry_id: String,
+    /// Optional durable client action that owns a V1 Continue execution.
+    /// 可选的可靠客户端动作，用于标识一项 V1 Continue 执行。
+    pub continuation_action_id: Option<ClientActionId>,
     /// Raw prompt text submitted by the user or queue.
     /// 用户或队列提交的原始提示词文本。
     pub prompt: &'a str,
@@ -451,9 +335,6 @@ pub struct SharedPromptTurnRuntimeBeginInput<'a> {
     /// Owning project id used by hook routing.
     /// hook 路由使用的所属项目标识。
     pub owning_project_id: Option<String>,
-    /// Persisted session messages used when runtime state has not been hydrated yet.
-    /// 运行态尚未水合时用于恢复会话状态的持久化消息。
-    pub prior_session_messages: Option<&'a [SessionMessageEntry]>,
 }
 
 /// Input required to continue one shared prompt turn after independent preparation lines finish.
@@ -504,16 +385,6 @@ pub fn begin_shared_prompt_turn(
     conversation_hook_runtime: &mut ConversationHookRuntime,
     input: SharedPromptTurnBeginInput<'_>,
 ) -> Result<SharedPromptTurnStart, String> {
-    let prior_dialogue_messages = workspace_snapshot
-        .session_runtime_state
-        .get(&input.session_id)
-        .map(|runtime_state| {
-            merge_session_messages_with_conversation_state_records(
-                &[],
-                &runtime_state.conversation_state,
-            )
-        })
-        .filter(|messages| !messages.is_empty());
     let owning_project_id = workspace_snapshot
         .sessions
         .iter()
@@ -537,6 +408,7 @@ pub fn begin_shared_prompt_turn(
                 session_title: input.session_title,
                 workspace_path: input.workspace_path,
                 prompt_entry_id: input.prompt_entry_id,
+                continuation_action_id: input.continuation_action_id,
                 prompt: input.prompt,
                 hidden_model_guidance: input.hidden_model_guidance,
                 provider_visible_agent_messages: input.provider_visible_agent_messages,
@@ -548,26 +420,9 @@ pub fn begin_shared_prompt_turn(
                 execution_mode: input.execution_mode,
                 reasoning_effort: input.reasoning_effort,
                 owning_project_id,
-                prior_session_messages: prior_dialogue_messages.as_deref(),
             },
         )?
     };
-    if let Some(runtime_state) = workspace_snapshot
-        .session_runtime_state
-        .get(&input.session_id)
-    {
-        let merged_messages = merge_session_messages_with_conversation_state_records(
-            workspace_snapshot
-                .session_messages
-                .get(&input.session_id)
-                .map(Vec::as_slice)
-                .unwrap_or(&[]),
-            &runtime_state.conversation_state,
-        );
-        workspace_snapshot
-            .session_messages
-            .insert(input.session_id, merged_messages);
-    }
     let initial_phase = if input.source.runs_user_prompt_precheck() {
         SessionRunPhase::MemoryRecall
     } else {
@@ -636,16 +491,6 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
         .provider_attachments
         .clone()
         .unwrap_or_else(|| start_attachments.clone());
-    // hydrated_conversation_state remains detached until the candidate prompt identity is proven valid.
-    // hydrated_conversation_state 会保持分离，直到候选提示词身份被证明有效。
-    let hydrated_conversation_state = if runtime_state.conversation_state.messages.is_empty()
-        && runtime_state.conversation_state.records.is_empty()
-        && let Some(messages) = input.prior_session_messages
-    {
-        Some(crate::conversation_protocol::conversation_state_from_session_messages(messages)?)
-    } else {
-        None
-    };
     let append_canonical_user_message =
         input.append_canonical_user_message && input.source.persists_canonical_user_message();
     let append_visible_user_prompt_record = input.append_visible_user_prompt_record
@@ -655,26 +500,6 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
     let canonical_user_message_id =
         append_canonical_user_message.then(|| new_canonical_user_message_id(input.session_id));
     let mut visible_user_prompt_record_id = None;
-    if append_canonical_user_message
-        && let Some(hydrated_conversation_state) = hydrated_conversation_state.as_ref()
-    {
-        // validation_state proves the detached hydrated window can accept the generated prompt identity before assignment.
-        // validation_state 在赋值前证明分离的水合窗口能够接收生成的提示词身份。
-        let mut validation_state = hydrated_conversation_state.clone();
-        append_user_text_message(
-            &mut validation_state,
-            canonical_user_message_id
-                .as_ref()
-                .expect("canonical id exists when canonical append is enabled")
-                .clone(),
-            sanitized_prompt.clone(),
-            input.attachments.clone(),
-        )
-        .map_err(|error| format!("Invalid canonical user message identity: {error}"))?;
-    }
-    if let Some(hydrated_conversation_state) = hydrated_conversation_state {
-        runtime_state.conversation_state = hydrated_conversation_state;
-    }
     if append_canonical_user_message && append_visible_user_prompt_record {
         visible_user_prompt_record_id = Some(append_shared_user_prompt_record_with_attachments(
             runtime_state,
@@ -742,6 +567,7 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
     Ok(SharedPromptTurnStart {
         session_id: input.session_id,
         preparation_turn_id,
+        continuation_action_id: input.continuation_action_id,
         session_title: input.session_title.to_string(),
         workspace_path: input.workspace_path.to_string(),
         source: input.source,
@@ -761,7 +587,6 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
         boundary_events,
         visible_user_prompt_record_id,
         canonical_user_message_id,
-        execution_retry_snapshot: None,
     })
 }
 
@@ -915,17 +740,6 @@ pub fn continue_shared_prompt_turn_after_preparation(
             input,
         )?
     };
-    let merged_messages = merge_session_messages_with_conversation_state_records(
-        workspace_snapshot
-            .session_messages
-            .get(&session_id)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]),
-        &continuation.request.conversation_state,
-    );
-    workspace_snapshot
-        .session_messages
-        .insert(session_id, merged_messages);
     Ok(continuation)
 }
 
@@ -1045,16 +859,6 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
                 "会话 `{}` 的画像准备未能完成，已继续复用持久化画像基线：{error}",
                 input.start.session_title
             );
-            append_runtime_event_projection_to_state(
-                runtime_state,
-                session_id,
-                &current_unix_millis_text(),
-                &RuntimeEvent::new(
-                    RuntimeEventKind::Failed,
-                    "画像准备 Hook 执行失败",
-                    detail.clone(),
-                ),
-            )?;
             profile_failure_detail = Some(detail);
         }
     }
@@ -1125,16 +929,6 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
                 "会话 `{}` 的 precheck 未能完成，已继续真实请求：{error}",
                 input.start.session_title
             );
-            append_runtime_event_projection_to_state(
-                runtime_state,
-                session_id,
-                &current_unix_millis_text(),
-                &RuntimeEvent::new(
-                    RuntimeEventKind::Failed,
-                    "Precheck hook 执行失败",
-                    detail.clone(),
-                ),
-            )?;
             precheck_failure_detail = Some(detail);
         }
     }
@@ -1149,19 +943,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         input.start.hidden_model_guidance.as_deref(),
     );
     let is_restored_provider_checkpoint =
-        input.start.source == PendingSessionPromptSource::ExecutionRetry
-            || input
-                .start
-                .execution_retry_snapshot
-                .as_ref()
-                .is_some_and(|snapshot| {
-                    matches!(
-                    &snapshot.pending_action,
-                    vulcan_workbench_model::ExecutionRetryPendingAction::DispatchProviderRequest {
-                        ..
-                    }
-                )
-                });
+        input.start.source == PendingSessionPromptSource::ExecutionRetry;
     // promptPurpose uses retry semantics only after an exact Provider checkpoint exists; resumed preparation preserves the original user-turn semantics without appending another message.
     // promptPurpose 仅在精确 Provider checkpoint 已存在后使用重试语义；恢复准备会保留原用户回合语义但不追加另一条消息。
     let prompt_purpose = if is_restored_provider_checkpoint {
@@ -1176,21 +958,6 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         Some(&expected_turn_id),
     );
     validate_session_provider_tool_target_completeness(runtime_state)?;
-    let provider_usage_budget_baseline = runtime_state
-        .provider_route_lease
-        .as_ref()
-        .and_then(|lease| {
-            runtime_state
-                .provider_call_ledger
-                .latest_budget_baseline_for_route(
-                    lease.provider_id.as_str(),
-                    lease.model_id.as_str(),
-                    lease.connection_id.as_str(),
-                    lease.protocol_profile_id.as_str(),
-                    lease.route_revision.as_str(),
-                )
-        })
-        .cloned();
     // providerConversationState is a request-owned copy; canonical history keeps original attachments unchanged.
     // providerConversationState 是请求持有的副本；规范历史保持原始附件不变。
     let mut provider_conversation_state = runtime_state.conversation_state.clone();
@@ -1225,7 +992,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         // Every shared preparation creates or restores this exact Hook turn, including process-only retries and Goal continuations.
         // 每次共享准备都会创建或恢复这个精确 Hook 回合，包括仅过程恢复与目标续轮。
         conversation_hook_turn_id: Some(expected_turn_id),
-        execution_retry_snapshot: input.start.execution_retry_snapshot,
+        continuation_action_id: input.start.continuation_action_id,
         provider_request_continuation: None,
         execution_agent_id: None,
         agent_prompt_snapshot: None,
@@ -1233,11 +1000,6 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         model_id_override: None,
         connection_id_override: None,
         provider_route_lease_identity: runtime_state.provider_route_lease.clone(),
-        provider_usage_budget_baseline,
-        provider_usage_context_generation_id: runtime_state
-            .provider_call_ledger
-            .active_context_generation_id
-            .clone(),
         provider_tool_selections_override: runtime_state.provider_tool_settings_initialized.then(
             || {
                 runtime_state
@@ -1262,7 +1024,6 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
             .provider_tool_settings_initialized
             .then(|| runtime_state.provider_extension_target_sets.clone()),
         subagent_prompt_context: None,
-        task_session_store_root: None,
         session_storage_directory: None,
         session_title: input.start.session_title,
         workspace_path: input.start.workspace_path,
@@ -1301,6 +1062,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         boundary_events: input.start.boundary_events.clone(),
         runtime_system_updates: Vec::new(),
         controller_runtime: None,
+        native_goal_runtime: None,
         knowledge_access: None,
         session_goal_context: None,
         session_plan_context: None,

@@ -179,9 +179,6 @@ export function WorkspaceResizableBody(props: {
   // Runs one VMM memory action for the right context panel.
   // 为右侧上下文面板执行单个 VMM 记忆动作。
   onRunVmmAction: WorkspaceContextPanelProps["onRunVmmAction"];
-  // Parses conversation messages into display blocks for the right context panel.
-  // 为右侧上下文面板将会话消息解析为展示块。
-  parseConversationBlocks: WorkspaceContextPanelProps["parseConversationBlocks"];
   // Loads one workspace diff snapshot for the right context panel.
   // 为右侧上下文面板载入单个工作区 diff 快照。
   loadWorkspaceDiffSnapshot: WorkspaceContextPanelProps["loadWorkspaceDiffSnapshot"];
@@ -223,7 +220,6 @@ export function WorkspaceResizableBody(props: {
   loadWorkspaceFilePreview: WorkspaceContextPanelProps["loadWorkspaceFilePreview"];
   // Loads one hidden tool detail record for the right context panel.
   // 为右侧上下文面板加载单条隐藏工具详情记录。
-  onLoadToolDetail: WorkspaceContextPanelProps["onLoadToolDetail"];
   // Emits WebUI click traces from nested console controls.
   // 从嵌套控制台控件发出 WebUI 点击追踪。
   onTrace: (action: string, detail?: Record<string, unknown>) => void;
@@ -471,8 +467,6 @@ export function WorkspaceResizableBody(props: {
               onStopCommandSession={props.onStopCommandSession}
               onStopSubagentTask={props.onStopSubagentTask}
               onRunVmmAction={props.onRunVmmAction}
-              onLoadToolDetail={props.onLoadToolDetail}
-              parseConversationBlocks={props.parseConversationBlocks}
               resolveMediaSourceUrl={props.resolveMediaSourceUrl}
               loadWorkspaceFileDirectory={props.loadWorkspaceFileDirectory}
               loadWorkspaceFilePreview={props.loadWorkspaceFilePreview}

@@ -61,15 +61,9 @@ pub(super) fn build_task_runtime_preparation_request(
     }
     request.subagent_prompt_context =
         build_task_subagent_prompt_context(invocation, resolved_config);
-    request.task_session_store_root = context.request_template.task_session_store_root.clone();
-    // session_storage_directory carries only a deterministic published locator; an in-memory-only
-    // execution remains None and trace persistence will reject it explicitly if tracing is enabled.
-    // session_storage_directory 仅携带确定性的已发布定位；纯内存执行保持为 None，若启用追踪，
-    // 追踪持久化边界会显式拒绝该状态。
-    request.session_storage_directory = context
-        .foundation
-        .task_runtime()
-        .task_session_directory_for_task(invocation.task_id)?;
+    // Child persistence is owned by the registered V1 SessionHandle, never by a legacy task directory.
+    // 子会话持久化由已注册的 V1 SessionHandle 拥有，绝不再使用旧任务目录。
+    request.session_storage_directory = None;
     request.session_title = invocation.display_title.clone();
     request.prompt = invocation.prompt.clone();
     request.conversation_state = core_snapshot_to_session_conversation_state(&invocation.snapshot)?;
@@ -81,19 +75,6 @@ pub(super) fn build_task_runtime_preparation_request(
     );
     request.tool_exposure_override = resolved_config.effective_config.tool_exposure.clone();
     clear_parent_request_runtime_state_for_task_session(&mut request);
-    if let Some(provider_call_ledger) = context
-        .foundation
-        .task_runtime()
-        .task_provider_call_ledger(invocation.task_id)?
-    {
-        request.provider_usage_budget_baseline = provider_call_ledger
-            .last_stable_context_baseline
-            .as_ref()
-            .and_then(|baseline| provider_call_ledger.calls.get(&baseline.provider_call_id))
-            .cloned();
-        request.provider_usage_context_generation_id =
-            provider_call_ledger.active_context_generation_id;
-    }
     let mirror_subagent =
         resolved_config.effective_config.subagent_mode.as_deref() == Some(SUBAGENT_MODE_MIRROR);
     apply_child_tool_policy(&mut request, mirror_subagent);
@@ -135,8 +116,6 @@ fn clear_parent_request_runtime_state_for_task_session(request: &mut ExecutionPr
     // TaskSession 是独立租约所有者。即使子任务继承相同供应商与模型，父级持久化身份也只
     // 作用于另一个会话 ID。
     request.provider_route_lease_identity = None;
-    request.provider_usage_budget_baseline = None;
-    request.provider_usage_context_generation_id = None;
     request.tool_request_rejection_reason = None;
     request.tool_request_rejection_all_tools = false;
     request.tool_request_rejection_tool_ids.clear();
@@ -415,35 +394,14 @@ pub(crate) async fn prepare_task_runtime_stream_launch(
     build_runtime_stream_launch_payload(&request, bootstrap, Some(child_context))
 }
 
-/// Builds one child runtime-stream launch and performs a persisted preflight compaction when the first preparation already exceeds the budget.
-/// 构建子代理运行时流启动载荷，并在首次准备已超过预算时执行一次持久化前置压缩。
+/// Builds one child runtime-stream launch and performs an in-process preflight compaction when the first preparation exceeds the budget.
+/// 构建子代理运行时流启动载荷，并在首次准备超过预算时执行进程内前置压缩。
 pub(crate) async fn prepare_task_runtime_stream_launch_with_preflight_compaction(
     task_runtime: Arc<TaskRuntime>,
     context: &TaskExecutionRuntimeContext,
     invocation: &mut TaskExecutionRequest,
     resolved_config: &TaskSessionResolvedConfig,
 ) -> Result<crate::agent_runtime::runtime_stream_launch_payload::RuntimeStreamLaunch, String> {
-    let context_compaction = &resolved_config.effective_config.context_compaction;
-    if task_provider_request_limit_is_enabled(context_compaction)
-        && task_provider_request_limit_reached(
-            context_compaction,
-            task_provider_requests_since_latest_compaction(
-                &task_runtime,
-                invocation.root_session_id,
-                invocation.task_id,
-            )?,
-        )
-        && let Some(compacted_snapshot) = run_task_session_context_compaction(
-            Arc::clone(&task_runtime),
-            context.clone(),
-            invocation.clone(),
-            resolved_config.clone(),
-        )
-        .await?
-    {
-        invocation.snapshot = compacted_snapshot;
-    }
-
     let launch = prepare_task_runtime_stream_launch(context, invocation, resolved_config).await?;
     if !resolved_config
         .effective_config

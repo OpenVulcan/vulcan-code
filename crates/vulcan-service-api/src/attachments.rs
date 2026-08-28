@@ -28,7 +28,7 @@ pub struct ComposerAttachmentCapabilitySummary {
 /// Describes one staged composer attachment shared by the service and WebUI.
 /// 描述一条由 service 与 WebUI 共享的已暂存输入区附件。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ComposerAttachmentSummary {
     /// Stable attachment kind key such as image, audio, video, or pdf.
     /// 稳定附件类型键，例如 image、audio、video 或 pdf。
@@ -39,6 +39,10 @@ pub struct ComposerAttachmentSummary {
     /// Canonical managed local file path used for provider replay.
     /// Provider 回放使用的规范托管本地文件路径。
     pub local_path: String,
+    /// Optional project-scoped resource identity used by persisted V1 drafts.
+    /// V1 持久化草稿使用的可选项目级资源身份。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_resource_id: Option<u64>,
     /// Project-relative canonical resource path safe for model and host-tool projection.
     /// 可安全投影给模型与宿主工具的项目相对规范资源路径。
     #[serde(default, skip_serializing_if = "Option::is_none")]

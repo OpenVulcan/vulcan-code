@@ -1,0 +1,199 @@
+{
+  "session_id": "session-golden",
+  "window_generation": 7,
+  "events": [
+    {
+      "seq": 1,
+      "turn_id": 2,
+      "created_at_ms": 1,
+      "updated_at_ms": 1,
+      "event_revision": 1,
+      "visibility": "provider",
+      "event": {
+        "kind": "user_input",
+        "client_action_id": "golden-root-input",
+        "input_id": 1,
+        "input_source": "root",
+        "text": "hello"
+      }
+    },
+    {
+      "seq": 2,
+      "turn_id": null,
+      "created_at_ms": 3,
+      "updated_at_ms": 3,
+      "event_revision": 1,
+      "visibility": "ui_only",
+      "event": {
+        "kind": "queued_input_resolution",
+        "client_action_id": "golden-queued-input",
+        "input_id": 3,
+        "resolution": "removed",
+        "text": "queued then removed"
+      }
+    },
+    {
+      "seq": 3,
+      "turn_id": 2,
+      "created_at_ms": 5,
+      "updated_at_ms": 5,
+      "event_revision": 1,
+      "visibility": "ui_only",
+      "event": {
+        "kind": "request_config_changed",
+        "previous": {
+          "provider": "openai",
+          "connection_id": "conn-1",
+          "model": "gpt-5",
+          "thinking_level": "high",
+          "temperature": 0.3
+        },
+        "current": {
+          "provider": "anthropic",
+          "connection_id": "conn-2",
+          "model": "claude-4",
+          "thinking_level": "max",
+          "temperature": 0.2
+        }
+      }
+    },
+    {
+      "seq": 4,
+      "turn_id": 2,
+      "created_at_ms": 6,
+      "updated_at_ms": 6,
+      "event_revision": 1,
+      "visibility": "host_only",
+      "event": {
+        "kind": "api_started",
+        "api_call_id": 4,
+        "purpose": "main_generation",
+        "request": {
+          "provider": "anthropic",
+          "model": "claude-4",
+          "connection_id": "conn-2",
+          "thinking_level": "max",
+          "temperature": 0.2
+        },
+        "projection": {
+          "segment_generation": 1,
+          "document_revision": 5,
+          "retained_from_seq": 1,
+          "through_seq": 3,
+          "fingerprint_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "request_budget_evidence": {
+          "request_assembly_fingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "model_route_fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "toolset_fingerprint": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+          "system_prompt_fingerprint": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "request_text_measurement": {
+            "character_count": 0,
+            "utf8_byte_count": 0,
+            "structural_units": 0,
+            "history_message_count": 0,
+            "prompt_in_history": false,
+            "history_fingerprint": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+            "prefix_invariant_fingerprint": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+            "context_breakdown": {
+              "message_units": 0,
+              "system_tool_units": 0,
+              "mcp_tool_units": 0,
+              "skill_units": 0,
+              "system_prompt_units": 0,
+              "other_units": 0
+            }
+          }
+        }
+      }
+    },
+    {
+      "seq": 5,
+      "turn_id": 2,
+      "created_at_ms": 7,
+      "updated_at_ms": 7,
+      "event_revision": 1,
+      "visibility": "host_only",
+      "event": {
+        "kind": "execution_control",
+        "control_kind": "api_transport_observed",
+        "api_call_id": 4
+      }
+    },
+    {
+      "seq": 6,
+      "turn_id": 2,
+      "created_at_ms": 8,
+      "updated_at_ms": 10,
+      "event_revision": 3,
+      "visibility": "provider",
+      "event": {
+        "kind": "tool_call",
+        "api_call_id": 4,
+        "tool_call_id": 5,
+        "request_stream_id": "golden-generated-resource",
+        "tool_name": "image_generate",
+        "input": {
+          "prompt": "golden image"
+        },
+        "output": {
+          "ok": true
+        },
+        "status": "completed",
+        "started_at_ms": 9,
+        "finished_at_ms": 10,
+        "generated_resources": [
+          {
+            "resource_id": 501,
+            "kind": "image",
+            "preview_resource_id": 502
+          }
+        ]
+      }
+    },
+    {
+      "seq": 7,
+      "turn_id": 2,
+      "created_at_ms": 11,
+      "updated_at_ms": 11,
+      "event_revision": 1,
+      "visibility": "ui_only",
+      "event": {
+        "kind": "api_stats",
+        "api_call_id": 4,
+        "purpose": "main_generation",
+        "provider": "anthropic",
+        "model": "claude-4",
+        "connection_id": "conn-2",
+        "thinking_level": "max",
+        "temperature": 0.2,
+        "usage": {},
+        "status": "interrupted",
+        "end_reason": "process_interrupted",
+        "continuation_eligibility": "allowed",
+        "timing": {
+          "completed_at_ms": 11
+        }
+      }
+    }
+  ],
+  "older_before_seq": null,
+  "has_more": false,
+  "open_turn_id": 2,
+  "open_turn_start_seq": 1,
+  "session_config": {
+    "current_request": {
+      "provider": "anthropic",
+      "connection_id": "conn-2",
+      "model": "claude-4",
+      "thinking_level": "max",
+      "temperature": 0.2,
+      "set_at_ms": null
+    },
+    "next_request": null,
+    "context_compaction_window_node_id": null
+  },
+  "service_epoch": "test-service-epoch",
+  "memory_revision": 11,
+  "durable_revision": 0
+}

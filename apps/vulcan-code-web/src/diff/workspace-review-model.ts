@@ -1,4 +1,3 @@
-import { hasRenderableDiff } from "@/diff/parseDiff";
 import { parseUnifiedDiffAsync } from "@/diff/diff-parse-worker-client";
 import { diffFileLargeReasons, diffStatsLargeReasons } from "@/diff/limits";
 import type {
@@ -14,7 +13,6 @@ import type {
   WorkspaceDiffSnapshotResponse,
 } from "@/diff/types";
 import type {
-  ConversationMessage,
   ConversationSummary,
   ProjectSummary,
   WorkbenchSnapshot,
@@ -29,31 +27,6 @@ export interface WorkspaceReviewDraftConversation {
   // Project id that owns the draft conversation.
   // 草稿会话所属的项目标识。
   projectId: string;
-}
-
-// WorkspaceReviewConversationBlock is the minimal conversation block shape needed by diff extraction.
-// WorkspaceReviewConversationBlock 是 diff 提取所需的最小会话块结构。
-export interface WorkspaceReviewConversationBlock {
-  // Block kind projected from a transcript message.
-  // 从转录消息投影出的块类型。
-  kind: string;
-  // Block body text.
-  // 块正文文本。
-  body: string;
-}
-
-// WorkspaceReviewConversationDiffSource stores a raw conversation diff before worker parsing.
-// WorkspaceReviewConversationDiffSource 保存 Worker 解析前的会话原始 diff。
-export interface WorkspaceReviewConversationDiffSource {
-  // Stable source key used to reject stale async parse results.
-  // 用于拒绝过期异步解析结果的稳定来源键。
-  key: string;
-  // Raw unified diff body extracted from the conversation timeline.
-  // 从会话时间线提取的原始 unified diff 正文。
-  rawDiff: string;
-  // Review panel source derived from message metadata.
-  // 从消息元数据推导出的审核面板来源。
-  source: DiffPanelSnapshot["source"];
 }
 
 // activeWorkbenchSurfaceId returns the selected parent conversation id used by workspace tools.
@@ -708,70 +681,4 @@ export function diffReviewSelectionStableKey(selection: DiffReviewSelection): st
     selection.compareBranch?.trim() ?? "",
     selection.commitHash?.trim() ?? "",
   ].join("\u001f");
-}
-
-// latestConversationDiffSource resolves the newest raw diff from the selected conversation cache.
-// latestConversationDiffSource 从当前选中会话缓存中解析最新的原始 diff 来源。
-export function latestConversationDiffSource(
-  workbench: WorkbenchSnapshot,
-  selectedConversationId: string | null | undefined,
-  parseBlocks: (message: ConversationMessage) => WorkspaceReviewConversationBlock[],
-): WorkspaceReviewConversationDiffSource | null {
-  const activeSurfaceId = activeWorkbenchSurfaceId(workbench, selectedConversationId);
-  if (!activeSurfaceId) {
-    return null;
-  }
-  for (let messageIndex = workbench.messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
-    const message = workbench.messages[messageIndex];
-    if (message.conversationId !== activeSurfaceId) {
-      continue;
-    }
-    const blocks = parseBlocks(message);
-    for (let blockIndex = blocks.length - 1; blockIndex >= 0; blockIndex -= 1) {
-      const block = blocks[blockIndex];
-      if (block.kind === "diff" && hasRenderableDiff(block.body)) {
-        return {
-          key: `${activeSurfaceId}\u0000${message.id}\u0000${blockIndex}\u0000${block.body.length}`,
-          rawDiff: block.body,
-          source: diffPanelSourceForMessage(message),
-        };
-      }
-    }
-  }
-  return null;
-}
-
-// diffPanelSourceForMessage derives a display source from structured message metadata.
-// diffPanelSourceForMessage 从结构化消息元数据中推导展示来源。
-function diffPanelSourceForMessage(message: ConversationMessage): DiffPanelSnapshot["source"] {
-  const hostKind = metadataString(message.metadata, ["kind", "host_result.kind", "hostResult.kind"]);
-  if (hostKind === "change_set") {
-    return "change_set";
-  }
-  return "message";
-}
-
-// metadataString reads one nested metadata string by candidate paths.
-// metadataString 按候选路径读取单个嵌套元数据字符串。
-function metadataString(metadata: unknown, paths: string[]): string | null {
-  for (const path of paths) {
-    const value = metadataValue(metadata, path.split("."));
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return null;
-}
-
-// metadataValue reads one nested metadata value by path parts.
-// metadataValue 按路径片段读取单个嵌套元数据值。
-function metadataValue(metadata: unknown, paths: string[]): unknown {
-  let current = metadata;
-  for (const path of paths) {
-    if (!current || typeof current !== "object" || !(path in current)) {
-      return null;
-    }
-    current = (current as Record<string, unknown>)[path];
-  }
-  return current;
 }

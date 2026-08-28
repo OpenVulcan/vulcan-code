@@ -294,6 +294,7 @@ fn restored_malformed_provider_arguments_never_dispatch_executor() {
         // request is the exact restored placeholder plus its non-execution proof.
         // request 是精确恢复的占位参数及其未执行证明。
         let request = ToolInvocationRequest {
+            request_stream_id: String::from("stream-restored-invalid"),
             tool_call_id: String::from("call-restored-invalid"),
             tool_name: String::from("file_edit"),
             arguments: Value::Null,
@@ -442,6 +443,7 @@ fn restored_tool_batch_reuses_results_and_synthesizes_unknown_outcomes_in_order(
         let restored_tools = vec![
             crate::types::RestoredToolInvocation {
                 request: ToolInvocationRequest {
+                    request_stream_id: String::from("stream-execute"),
                     tool_call_id: String::from("call-execute"),
                     tool_name: String::from("fresh_tool"),
                     arguments: json!({"index": 1}),
@@ -451,6 +453,7 @@ fn restored_tool_batch_reuses_results_and_synthesizes_unknown_outcomes_in_order(
             },
             crate::types::RestoredToolInvocation {
                 request: ToolInvocationRequest {
+                    request_stream_id: String::from("stream-reuse"),
                     tool_call_id: String::from("call-reuse"),
                     tool_name: String::from("retained_tool"),
                     arguments: json!({"index": 2}),
@@ -468,6 +471,7 @@ fn restored_tool_batch_reuses_results_and_synthesizes_unknown_outcomes_in_order(
             },
             crate::types::RestoredToolInvocation {
                 request: ToolInvocationRequest {
+                    request_stream_id: String::from("stream-unknown"),
                     tool_call_id: String::from("call-unknown"),
                     tool_name: String::from("uncertain_tool"),
                     arguments: json!({"index": 3}),
@@ -562,6 +566,7 @@ fn restored_tool_batch_without_executable_calls_skips_empty_execution_boundary()
         // request is the exact original invocation whose result became unknown after interruption.
         // request 是中断后结果变为未知的精确原始调用。
         let request = ToolInvocationRequest {
+            request_stream_id: String::from("stream-unknown-only"),
             tool_call_id: String::from("call-unknown-only"),
             tool_name: String::from("uncertain_tool"),
             arguments: json!({"index": 1}),
@@ -690,6 +695,7 @@ fn restored_user_followup_pairs_not_started_tool_before_real_user_text() {
         // request is the exact original tool call that never entered host execution.
         // request 是从未进入宿主执行的精确原始工具调用。
         let request = ToolInvocationRequest {
+            request_stream_id: String::from("stream-not-started"),
             tool_call_id: String::from("call-not-started"),
             tool_name: String::from("write_file"),
             arguments: json!({"path": "safe.txt"}),

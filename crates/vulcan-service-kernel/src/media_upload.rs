@@ -222,10 +222,8 @@ impl PreparedSubmissionMediaReference {
             expires_at_unix_millis: self.expires_at_unix_millis,
             owner_message_ids,
         };
-        if attach_current_owner {
-            if let Some(owner_message_id) = owner_message_id {
-                entry.owner_message_ids.insert(owner_message_id.to_string());
-            }
+        if attach_current_owner && let Some(owner_message_id) = owner_message_id {
+            entry.owner_message_ids.insert(owner_message_id.to_string());
         }
         entry
     }
@@ -503,44 +501,42 @@ fn composer_attachment_delivery_plan(
             ));
         }
     }
-    if attachment.kind == ConversationAttachmentKind::Image {
-        if let Some(preview_path) = attachment
+    if attachment.kind == ConversationAttachmentKind::Image
+        && let Some(preview_path) = attachment
             .preview_local_path
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
+        && let Ok(preview_metadata) = std::fs::metadata(preview_path)
+    {
+        let mut preview = attachment.clone();
+        preview.local_path = preview_path.to_string();
+        preview.mime_type = String::from("image/jpeg");
+        preview.byte_len = Some(preview_metadata.len());
+        let preview_is_native = submission_attachment_is_native(
+            execution.route.protocol_route.protocol_profile_id.as_str(),
+            &execution.model.capabilities,
+            &preview,
+        );
+        let preview_fits_constraint = constraint.is_none_or(|constraint| {
+            constraint.reference_policy != ResourceReferencePolicy::RemoteOnly
+                && (constraint.accepted_mime_types.is_empty()
+                    || constraint
+                        .accepted_mime_types
+                        .iter()
+                        .any(|mime_type| mime_type.eq_ignore_ascii_case("image/jpeg")))
+                && constraint
+                    .max_bytes
+                    .is_none_or(|max_bytes| preview_metadata.len() <= max_bytes)
+        });
+        if preview_is_native
+            && preview_fits_constraint
+            && preview_metadata.len() <= COMPOSER_INLINE_ORIGINAL_MAX_BYTES
         {
-            if let Ok(preview_metadata) = std::fs::metadata(preview_path) {
-                let mut preview = attachment.clone();
-                preview.local_path = preview_path.to_string();
-                preview.mime_type = String::from("image/jpeg");
-                preview.byte_len = Some(preview_metadata.len());
-                let preview_is_native = submission_attachment_is_native(
-                    execution.route.protocol_route.protocol_profile_id.as_str(),
-                    &execution.model.capabilities,
-                    &preview,
-                );
-                let preview_fits_constraint = constraint.is_none_or(|constraint| {
-                    constraint.reference_policy != ResourceReferencePolicy::RemoteOnly
-                        && (constraint.accepted_mime_types.is_empty()
-                            || constraint
-                                .accepted_mime_types
-                                .iter()
-                                .any(|mime_type| mime_type.eq_ignore_ascii_case("image/jpeg")))
-                        && constraint
-                            .max_bytes
-                            .is_none_or(|max_bytes| preview_metadata.len() <= max_bytes)
-                });
-                if preview_is_native
-                    && preview_fits_constraint
-                    && preview_metadata.len() <= COMPOSER_INLINE_ORIGINAL_MAX_BYTES
-                {
-                    return Ok((
-                        ComposerAttachmentDeliveryPlan::InlineDerivedPreview,
-                        "derived_image_preview_fits_inline_budget",
-                    ));
-                }
-            }
+            return Ok((
+                ComposerAttachmentDeliveryPlan::InlineDerivedPreview,
+                "derived_image_preview_fits_inline_budget",
+            ));
         }
     }
     Ok((
@@ -573,9 +569,7 @@ fn apply_composer_direct_resource_limits(
         *direct_count = direct_count.saturating_sub(1);
         return Some("frozen_route_resource_count_exceeded");
     }
-    let Some(inline_raw_bytes) = inline_raw_bytes else {
-        return None;
-    };
+    let inline_raw_bytes = inline_raw_bytes?;
     // encodedBytes computes exact padded Base64 length without allocating the payload.
     // encodedBytes 在不分配负载的情况下计算精确的带填充 Base64 长度。
     let encoded_bytes = inline_raw_bytes
@@ -1888,11 +1882,13 @@ async fn prepare_submission_media_inner(
             attachment_kind(attachment.kind.clone()),
             attachment.mime_type.as_str(),
             prepared,
-            session_scope_id.as_deref(),
-            Some((
-                prepared_created_at_unix_millis,
-                prepared_expires_at_unix_millis,
-            )),
+            vulcan_provider_adapters::ConversationPreparedMediaRetention {
+                session_scope_id: session_scope_id.as_deref(),
+                wall_clock_lifetime: Some((
+                    prepared_created_at_unix_millis,
+                    prepared_expires_at_unix_millis,
+                )),
+            },
         );
         prepared_submission_media.push_reference(prepared_media_reference_from_source(
             &execution,

@@ -270,3 +270,243 @@ fn compact_change_set_preserves_native_file_tools_v2_extension() {
             .is_none()
     );
 }
+
+/// Verifies the canonical persistent change-set round-trips and derives hunk
+/// statistics without re-parsing any other text.
+/// 验证 canonical 持久化 change-set 可以往返序列化，并直接从 hunk 推导统计，
+/// 不再解析其他任何文本。
+#[test]
+fn persistent_change_set_round_trip_and_stats() {
+    let changeset = PersistentChangeSet {
+        mode: ChangeSetMode::Applied,
+        summary: Some("one exact edit".to_string()),
+        files: vec![PersistentChangeSetFile {
+            resource_id: None,
+            change: ChangeSetFileChangeKind::Modify,
+            path: Some("a.txt".to_string()),
+            old_path: None,
+            new_path: None,
+            hunks: vec![PersistentChangeSetHunk {
+                before: String::new(),
+                after: String::new(),
+                deleted: vec![
+                    PersistentChangeSetLine {
+                        line: 1,
+                        content: "old".to_string(),
+                    },
+                    PersistentChangeSetLine {
+                        line: 2,
+                        content: "gone".to_string(),
+                    },
+                ],
+                inserted: vec![PersistentChangeSetLine {
+                    line: 1,
+                    content: "new".to_string(),
+                }],
+            }],
+            lifecycle_content: None,
+            before_text_format: Some(PersistentTextFormat {
+                encoding: Some("utf-8".to_string()),
+                encoding_source: Some("bom".to_string()),
+                encoding_certain: Some(true),
+                bom: Some(false),
+                line_ending: Some("LF".to_string()),
+                preferred_line_ending: Some("LF".to_string()),
+                mixed_line_endings: Some(false),
+                final_newline: Some(true),
+            }),
+            after_text_format: None,
+        }],
+        diagnostics: Vec::new(),
+    };
+    let encoded = serde_json::to_value(&changeset).expect("persistent change-set should serialize");
+    let decoded: PersistentChangeSet =
+        serde_json::from_value(encoded).expect("persistent change-set should deserialize");
+    assert_eq!(decoded, changeset);
+    let stats = persistent_change_set_stats(&changeset);
+    assert_eq!(stats.file_count, 1);
+    assert_eq!(stats.modify_count, 1);
+    assert_eq!(stats.inserted_line_count, 1);
+    assert_eq!(stats.deleted_line_count, 2);
+    assert_eq!(stats.create_count, 0);
+}
+
+/// Verifies an empty persistent change-set yields zero counters.
+/// 验证空 persistent change-set 产生零计数。
+#[test]
+fn persistent_change_set_empty_stats() {
+    let changeset = PersistentChangeSet {
+        mode: ChangeSetMode::Preview,
+        summary: None,
+        files: Vec::new(),
+        diagnostics: Vec::new(),
+    };
+    let stats = persistent_change_set_stats(&changeset);
+    assert_eq!(stats.file_count, 0);
+    assert_eq!(stats.inserted_line_count, 0);
+    assert_eq!(stats.deleted_line_count, 0);
+}
+
+/// Verifies lifecycle files derive `+/-` counters from the same persisted body metadata shown by the card.
+/// 验证生命周期文件从卡片展示所用的同一份持久化正文元数据推导 `+/-` 计数。
+#[test]
+fn persistent_lifecycle_stats_use_declared_complete_line_counts() {
+    let changeset = PersistentChangeSet {
+        mode: ChangeSetMode::Applied,
+        summary: None,
+        files: vec![
+            PersistentChangeSetFile {
+                resource_id: Some("created".to_string()),
+                change: ChangeSetFileChangeKind::Create,
+                path: Some("README.md".to_string()),
+                old_path: None,
+                new_path: None,
+                hunks: Vec::new(),
+                lifecycle_content: Some(PersistentLifecycleContent::Truncated {
+                    head: "first\nsecond".to_string(),
+                    tail: "penultimate\nlast".to_string(),
+                    total_line_count: 140,
+                }),
+                before_text_format: None,
+                after_text_format: None,
+            },
+            PersistentChangeSetFile {
+                resource_id: Some("deleted".to_string()),
+                change: ChangeSetFileChangeKind::Delete,
+                path: Some("README.old.md".to_string()),
+                old_path: None,
+                new_path: None,
+                hunks: Vec::new(),
+                lifecycle_content: Some(PersistentLifecycleContent::Truncated {
+                    head: "deleted 1\ndeleted 2".to_string(),
+                    tail: "deleted 207\ndeleted 208".to_string(),
+                    total_line_count: 208,
+                }),
+                before_text_format: None,
+                after_text_format: None,
+            },
+        ],
+        diagnostics: Vec::new(),
+    };
+
+    let stats = persistent_change_set_stats(&changeset);
+    assert_eq!(stats.inserted_line_count, 140);
+    assert_eq!(stats.deleted_line_count, 208);
+}
+
+/// Verifies strict host-result conversion preserves truncated deleted rows and exact file formats.
+/// 验证严格宿主结果转换会保留截断删除行与精确文件格式。
+#[test]
+fn persistent_host_result_preserves_truncated_delete_and_formats() {
+    let host_result = json!({
+        "kind": "change_set",
+        "payload": {
+            "mode": "applied",
+            "summary": "deleted one file",
+            "files": [{
+                "resource_id": "resource-1",
+                "change": "delete",
+                "path": "README.md",
+                "content_mode": "truncated",
+                "total_line_count": 208,
+                "content_head": "deleted 1\ndeleted 2",
+                "content_tail": "deleted 207\ndeleted 208"
+            }],
+            "extensions": {
+                "vulcan.file_tools.v2": {
+                    "resources": [{
+                        "resource_id": "resource-1",
+                        "before_text_format": {
+                            "encoding": "utf-8",
+                            "encoding_source": "bom",
+                            "encoding_certain": true,
+                            "bom": false,
+                            "line_ending": "LF",
+                            "preferred_line_ending": "LF",
+                            "mixed_line_endings": false,
+                            "final_newline": true
+                        },
+                        "after_text_format": null
+                    }]
+                }
+            },
+            "diagnostics": [{"level": "warning", "message": "example"}]
+        }
+    });
+
+    let changeset = persistent_change_set_from_host_result(&host_result)
+        .expect("canonical host result should parse")
+        .expect("change-set kind should be recognized");
+    assert_eq!(changeset.summary.as_deref(), Some("deleted one file"));
+    assert_eq!(changeset.diagnostics.len(), 1);
+    assert!(matches!(
+        changeset.files[0].lifecycle_content,
+        Some(PersistentLifecycleContent::Truncated {
+            ref head,
+            ref tail,
+            total_line_count: 208,
+        }) if head.contains("deleted 1") && tail.contains("deleted 208")
+    ));
+    assert_eq!(
+        changeset.files[0]
+            .before_text_format
+            .as_ref()
+            .and_then(|format| format.encoding.as_deref()),
+        Some("utf-8")
+    );
+    assert_eq!(
+        persistent_change_set_stats(&changeset).deleted_line_count,
+        208
+    );
+}
+
+/// Verifies one malformed file fails the declared change-set instead of being silently filtered out.
+/// 验证单条畸形文件会使已声明的 change-set 失败，而不是被静默过滤。
+#[test]
+fn persistent_host_result_rejects_one_malformed_file_without_partial_output() {
+    let host_result = json!({
+        "kind": "change_set",
+        "payload": {
+            "mode": "applied",
+            "files": [
+                {"change": "modify", "path": "good.txt", "hunks": []},
+                {"change": "modify", "path": "bad.txt", "hunks": "not-an-array"}
+            ]
+        }
+    });
+
+    let error = persistent_change_set_from_host_result(&host_result)
+        .expect_err("malformed declared file should fail the exact conversion");
+    assert_eq!(error.location, "payload.files[1].hunks");
+}
+
+/// Verifies the negative golden rejects structurally inconsistent producer contracts at exact locations.
+/// 验证负向 golden 会在精确位置拒绝结构不一致的产出方契约。
+#[test]
+fn persistent_change_set_negative_golden_rejects_root_contract_violations() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../tests/fixtures/persistent_change_set_invalid.golden.json"
+    ))
+    .expect("negative change-set golden should parse");
+    let cases = fixture
+        .as_array()
+        .expect("negative change-set golden must be one array");
+
+    for case in cases {
+        let name = case["name"].as_str().expect("case name");
+        let error = persistent_change_set_from_host_result(&case["host_result"])
+            .expect_err("negative golden must fail");
+        assert_eq!(
+            error.location,
+            case["expected_location"]
+                .as_str()
+                .expect("expected location"),
+            "case {name} returned another location"
+        );
+        assert_eq!(
+            error.detail,
+            case["expected_detail"].as_str().expect("expected detail"),
+            "case {name} returned another detail"
+        );
+    }
+}

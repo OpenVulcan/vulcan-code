@@ -21,7 +21,8 @@ pub use types::{
     HookActor, HookCapability, HookCapabilitySet, HookContext, HookDecision, HookDiagnostic,
     HookDiagnosticSeverity, HookFailurePolicy, HookId, HookListenerId, HookMode, HookPayload,
     HookPoint, HookPointDescriptor, HookProjectId, HookRegistration, HookRegistrationSnapshot,
-    HookResult, HookScope, HookSessionId, SystemPromptHookBlock, SystemPromptHookPhase,
+    HookResult, HookScope, HookSessionId, SystemPromptHookBaselineKind,
+    SystemPromptHookBaselineProvenance, SystemPromptHookBlock, SystemPromptHookPhase,
 };
 
 /// Returns the current Unix timestamp in milliseconds.

@@ -249,40 +249,6 @@ fn finalize_owned_stream_task_launch_failure(
                     None
                 }
             };
-            // terminal_at closes the continuation ledger before the exact kernel generation is released.
-            // terminal_at 在释放精确 kernel 代际前闭合 Continue 账本。
-            let terminal_at = current_unix_millis_text();
-            let continuation_result = guard
-                .workspace_snapshot
-                .as_mut()
-                .and_then(|workspace| workspace.session_runtime_state.get_mut(&session_id))
-                .ok_or_else(|| {
-                    String::from("Execution stream launch failure runtime state is unavailable.")
-                })
-                .and_then(|runtime_state| {
-                    refresh_terminal_continuation_state(runtime_state, false, &terminal_at)?;
-                    runtime_state.updated_at = terminal_at;
-                    Ok(())
-                });
-            if let Err(error) = continuation_result {
-                // retry_invalidated prevents a broken ledger revision from leaving the claimed token apparently resumable.
-                // retry_invalidated 防止损坏的账本修订让已领取令牌看似仍可恢复。
-                let retry_invalidated = guard
-                    .workspace_snapshot
-                    .as_mut()
-                    .and_then(|workspace| workspace.session_runtime_state.get_mut(&session_id))
-                    .is_some_and(|runtime_state| {
-                        super::conversation_checkpoint::invalidate_execution_retry_runtime_state(
-                            runtime_state,
-                            "retry_snapshot_transition_failed",
-                            "The failed stream launch continuation could not advance and was invalidated.",
-                            current_unix_millis_text(),
-                        )
-                    });
-                eprintln!(
-                    "[webui-service] execution stream launch failure continuation terminalization failed: session={session_id} generation={expected_kernel_generation} retry_invalidated={retry_invalidated} error={error}"
-                );
-            }
             finish_webui_session_kernel_turn(&mut guard, session_id, TurnTerminalStatus::Failed);
             phase_event
         };

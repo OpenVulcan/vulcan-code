@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::{
-    applied_output_style_snapshot, require_segmented_session_directory_for_retained_session,
+    applied_output_style_snapshot, vmm_session_controller::open_registered_session_vmm_controller,
 };
 
 /// Runs budget-triggered context compaction before one exact active Provider stream continues.
@@ -92,21 +92,10 @@ async fn maybe_auto_compact_webui_session_with_mode(
     };
     // vmm_controller_registry is cloned without retaining the shared service lock.
     // vmm_controller_registry 在不保留共享服务锁的情况下完成克隆。
-    let (vmm_controller_registry, session_directory) = {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let session_directory = require_segmented_session_directory_for_retained_session(
-            &guard,
-            &controller_runtime.data_root,
-            request.session_id,
-        )?;
-        (guard.vmm_controller_registry.clone(), session_directory)
-    };
     // vmm_controller is the sole owner used for pressure and refreshed injection projections.
     // vmm_controller 是压力与刷新注入投影使用的唯一所有者。
-    let vmm_controller = vmm_controller_registry.get_or_open(
-        &session_directory,
+    let vmm_controller = open_registered_session_vmm_controller(
+        state,
         request.session_id,
         &current_unix_millis_text(),
     )?;
@@ -137,14 +126,6 @@ async fn maybe_auto_compact_webui_session_with_mode(
         ),
     );
 
-    let full_context_state = request.conversation_state.clone();
-    let context_start_message_id = state.lock().ok().and_then(|guard| {
-        guard
-            .workspace_snapshot
-            .as_ref()
-            .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
-            .and_then(|runtime_state| runtime_state.context_start_message_id.clone())
-    });
     // preparation_commit carries the previous phase, status id, and aligned delta from one exact-owner mutation.
     // preparation_commit 携带由一次精确所有者变更生成的前序阶段、状态标识与对齐增量。
     let (previous_phase, status_message_id, phase_event) = {
@@ -218,7 +199,8 @@ async fn maybe_auto_compact_webui_session_with_mode(
             &budget_note,
             AUTO_CONTEXT_COMPACTION_TRIGGER,
             &error,
-        )?;
+        )
+        .await?;
         return Err(error);
     }
 
@@ -245,10 +227,9 @@ async fn maybe_auto_compact_webui_session_with_mode(
             "Automatic context compaction context window does not match the frozen model target.",
         ));
     }
-    let plan = match webui_context_compaction_plan_from_conversation_state(
+    let compaction_plan = match webui_context_compaction_plan_from_v1(
+        state,
         session_id,
-        &full_context_state,
-        context_start_message_id.as_deref(),
         prepared_policy,
         "自动上下文压缩未找到可压缩的历史上下文，已停止本次请求以避免预算溢出。",
     ) {
@@ -265,7 +246,8 @@ async fn maybe_auto_compact_webui_session_with_mode(
                 &budget_note,
                 AUTO_CONTEXT_COMPACTION_TRIGGER,
                 &error,
-            )?;
+            )
+            .await?;
             return Err(error);
         }
     };
@@ -273,8 +255,8 @@ async fn maybe_auto_compact_webui_session_with_mode(
         state,
         agent_runtime,
         session_id,
-        plan,
-        full_context_state,
+        compaction_plan.plan,
+        compaction_plan.full_context_state,
         Some((request, preparation)),
         model_target,
     ) {
@@ -291,7 +273,8 @@ async fn maybe_auto_compact_webui_session_with_mode(
                 &budget_note,
                 AUTO_CONTEXT_COMPACTION_TRIGGER,
                 &error,
-            )?;
+            )
+            .await?;
             return Err(error);
         }
     };
@@ -301,6 +284,7 @@ async fn maybe_auto_compact_webui_session_with_mode(
         controller_runtime,
         job_request,
         session_id,
+        compaction_plan.retained_from_seq,
         &status_message_id,
         &budget_note,
         AUTO_CONTEXT_COMPACTION_TRIGGER,
@@ -310,7 +294,7 @@ async fn maybe_auto_compact_webui_session_with_mode(
         Ok(execution) => {
             let compaction_usage_segment = context_compaction_usage_segment_from_execution(
                 AUTO_CONTEXT_COMPACTION_TRIGGER,
-                &execution,
+                &execution.execution,
             );
             // finish_outcome distinguishes a committed compaction from a persisted rejection.
             // finish_outcome 区分已提交压缩与已持久化拒绝。
@@ -378,7 +362,8 @@ async fn maybe_auto_compact_webui_session_with_mode(
                 &budget_note,
                 AUTO_CONTEXT_COMPACTION_TRIGGER,
                 &error,
-            )?;
+            )
+            .await?;
             Err(error)
         }
     }
@@ -434,42 +419,223 @@ pub(crate) fn webui_auto_context_compaction_failure_count(
         .unwrap_or_default()
 }
 
-/// Builds a compaction plan from a specific pre-status conversation snapshot.
-/// 从指定的状态节点插入前会话快照构建压缩计划。
-///
-/// # Parameters
-/// # 参数
-/// `session_id` supplies the stable plan label, `conversation_state` is the exact pre-status snapshot,
-/// `context_start_message_id` optionally bounds the active context, `policy` is already frozen,
-/// and `empty_error` is returned when the snapshot has no model-facing messages.
-/// `session_id` 提供稳定规划标签，`conversation_state` 是精确的状态节点插入前快照，
-/// `context_start_message_id` 可选限制活动上下文，`policy` 已冻结，`empty_error` 用于空模型侧消息快照。
-///
-/// # Returns
-/// # 返回值
-/// The exact frozen plan, or an explicit empty/not-needed planning error.
-/// 返回精确冻结计划；为空或无需规划时返回显式错误。
-pub(crate) fn webui_context_compaction_plan_from_conversation_state(
+/// Carries one compaction plan derived exclusively from a durable V1 Provider projection.
+/// 承载一份仅从可靠 V1 Provider 投影派生的上下文压缩计划。
+#[derive(Debug, Clone)]
+pub(crate) struct WebuiContextCompactionPlan {
+    /// Frozen compaction source and retained-tail policy.
+    /// 冻结的压缩来源与保留尾部策略。
+    pub(crate) plan: CompactionPlan,
+    /// Provider-visible V1 dialogue projected into the compaction runtime input shape.
+    /// 投影到压缩运行时输入形态的 Provider 可见 V1 对话。
+    pub(crate) full_context_state: SessionConversationState,
+    /// Inclusive durable event boundary retained by the next context generation.
+    /// 下一上下文代际保留的可靠事件包含式边界。
+    pub(crate) retained_from_seq: Seq,
+}
+
+/// Plans context compaction exclusively from the durable V1 Provider projection.
+/// 仅从可靠 V1 Provider 投影规划上下文压缩。
+pub(crate) fn webui_context_compaction_plan_from_v1(
+    state: &SharedServiceBridgeState,
     session_id: SessionId,
-    conversation_state: &SessionConversationState,
-    context_start_message_id: Option<&str>,
     policy: ContextCompactionPolicy,
     empty_error: &str,
-) -> Result<CompactionPlan, String> {
-    let full_session_messages =
-        conversation_state_to_compaction_source_messages(conversation_state);
+) -> Result<WebuiContextCompactionPlan, String> {
+    let handle =
+        crate::session_goal_lifecycle::registered_session_v1_handle_from_state(state, session_id)?;
+    let snapshot = handle
+        .capture_context_compaction_planning_snapshot()
+        .map_err(|error| format!("failed to capture V1 compaction projection: {error}"))?;
+    let projected_messages = snapshot
+        .sourced_items
+        .iter()
+        .filter_map(compaction_message_from_v1_projection)
+        .collect::<Result<Vec<_>, _>>()?;
+    let full_session_messages = projected_messages
+        .iter()
+        .map(|(message, _)| message.clone())
+        .collect::<Vec<_>>();
     if full_session_messages.is_empty() {
         return Err(empty_error.to_string());
     }
-    plan_context_compaction(CompactionPlanInput {
+    let plan = plan_context_compaction(CompactionPlanInput {
         session_label: &session_id.to_string(),
         messages: &full_session_messages,
         all_messages: &full_session_messages,
-        context_start_message_id,
+        context_start_message_id: None,
         source_until_message_id: None,
         policy,
     })
-    .ok_or_else(|| empty_error.to_string())
+    .ok_or_else(|| empty_error.to_string())?;
+    let retained_message_id = plan
+        .tail_selection
+        .retained_message_ids
+        .first()
+        .ok_or_else(|| String::from("V1 compaction plan has no retained tail boundary"))?;
+    let retained_from_seq = projected_messages
+        .iter()
+        .find(|(message, _)| message.id == *retained_message_id)
+        .map(|(_, source_seq)| *source_seq)
+        .ok_or_else(|| {
+            format!(
+                "V1 compaction retained message `{retained_message_id}` has no durable source seq"
+            )
+        })?;
+    let full_context_state = conversation_state_from_session_messages(&full_session_messages)
+        .map_err(|error| format!("failed to build V1 compaction conversation state: {error}"))?;
+    Ok(WebuiContextCompactionPlan {
+        plan,
+        full_context_state,
+        retained_from_seq,
+    })
+}
+
+/// Converts one sourced V1 Provider item into the planner's transcript-only shape.
+/// 把一条带来源的 V1 Provider 投影项转换为规划器的仅转录形态。
+fn compaction_message_from_v1_projection(
+    projected: &SourcedProjectedItem,
+) -> Option<Result<(SessionMessageEntry, Seq), String>> {
+    let created_at = String::new();
+    match &projected.item {
+        ProjectedItem::SystemText { .. } => None,
+        ProjectedItem::UserInput { text, resource_ids } => {
+            let mut body = text.clone();
+            if !resource_ids.is_empty() {
+                let resources = resource_ids
+                    .iter()
+                    .map(|resource_id| format!("- resource_id={}", resource_id.value()))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !body.is_empty() {
+                    body.push_str("\n\n");
+                }
+                body.push_str("[Project resources]\n");
+                body.push_str(&resources);
+            }
+            Some(Ok((
+                SessionMessageEntry {
+                    id: format!("v1-user-{}", projected.source_from_seq.value()),
+                    kind: SessionMessageKind::User,
+                    record_kind: SessionMessageRecordKind::Transcript,
+                    visible: true,
+                    title: String::from("USER"),
+                    body,
+                    metadata: None,
+                    created_at,
+                },
+                projected.source_from_seq,
+            )))
+        }
+        ProjectedItem::AssistantText {
+            text,
+            reasoning,
+            tool_calls,
+            ..
+        } => Some(
+            compaction_assistant_message_from_v1_projection(
+                projected,
+                text,
+                reasoning.as_deref(),
+                tool_calls,
+                created_at,
+            )
+            .map(|message| (message, projected.source_from_seq)),
+        ),
+        ProjectedItem::ToolResult {
+            tool_call_id,
+            status,
+            output,
+            ..
+        } => Some(
+            serde_json::to_string(output)
+                .map_err(|error| format!("failed to serialize V1 tool result for compaction: {error}"))
+                .map(|body| {
+                    let metadata = json!({
+                        "tool_call_id": tool_call_id.value().to_string(),
+                        "is_error": *status != vulcan_session_core::v1::event::ToolCallStatus::Completed,
+                    });
+                    (
+                        SessionMessageEntry {
+                            id: format!("v1-tool-result-{}", tool_call_id.value()),
+                            kind: SessionMessageKind::Assistant,
+                            record_kind: SessionMessageRecordKind::ToolResultOutput,
+                            visible: true,
+                            title: String::from("TOOL RESULT"),
+                            body,
+                            metadata: Some(metadata),
+                            created_at,
+                        },
+                        projected.source_from_seq,
+                    )
+                }),
+        ),
+        ProjectedItem::SubagentReturnText { text } => Some(Ok((
+            SessionMessageEntry {
+                id: format!("v1-subagent-return-{}", projected.source_from_seq.value()),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("SUBAGENT RETURN"),
+                body: text.clone(),
+                metadata: None,
+                created_at,
+            },
+            projected.source_from_seq,
+        ))),
+    }
+}
+
+/// Builds one assistant compaction message without losing local tool identity.
+/// 构建一条不丢失本地工具身份的 assistant 压缩消息。
+fn compaction_assistant_message_from_v1_projection(
+    projected: &SourcedProjectedItem,
+    text: &str,
+    reasoning: Option<&str>,
+    tool_calls: &[vulcan_session_core::v1::projection::ProjectedToolCall],
+    created_at: String,
+) -> Result<SessionMessageEntry, String> {
+    let mut body_parts = Vec::new();
+    if !text.is_empty() {
+        body_parts.push(text.to_string());
+    }
+    if let Some(reasoning) = reasoning.filter(|value| !value.is_empty()) {
+        body_parts.push(format!("reasoning: {reasoning}"));
+    }
+    for tool_call in tool_calls {
+        let arguments = serde_json::to_string(&tool_call.input).map_err(|error| {
+            format!("failed to serialize V1 tool arguments for compaction: {error}")
+        })?;
+        let mut header = format!(
+            "tool: {} (local_tool_call_id={})",
+            tool_call.tool_name,
+            tool_call.tool_call_id.value()
+        );
+        if let Some(provider_id) = tool_call.provider_tool_call_id.as_deref() {
+            header.push_str(&format!(", provider_tool_call_id={provider_id}"));
+        }
+        body_parts.push(format!("{header}\narguments: {arguments}"));
+    }
+    Ok(SessionMessageEntry {
+        id: format!(
+            "v1-assistant-{}-{}",
+            projected.source_from_seq.value(),
+            projected.source_to_seq.value()
+        ),
+        kind: SessionMessageKind::Assistant,
+        record_kind: SessionMessageRecordKind::AssistantOutput,
+        visible: true,
+        title: String::from("AI"),
+        body: body_parts.join("\n\n"),
+        metadata: Some(json!({
+            "provider_message_id": format!(
+                "v1-api-range-{}-{}",
+                projected.source_from_seq.value(),
+                projected.source_to_seq.value()
+            ),
+        })),
+        created_at,
+    })
 }
 
 /// Resolves one exact WebUI compaction target before planning or job construction.
@@ -497,7 +663,7 @@ pub(crate) fn resolve_webui_context_compaction_model_target(
         active_provider_id,
         active_connection_id,
         active_model_id,
-        context_compaction_window_node_id,
+        session_runtime_registry,
     ) = {
         let guard = state
             .lock()
@@ -511,9 +677,14 @@ pub(crate) fn resolve_webui_context_compaction_model_target(
             runtime_state.and_then(|state| state.active_provider_id.clone()),
             runtime_state.and_then(|state| state.active_connection_id.clone()),
             runtime_state.and_then(|state| state.active_model_id.clone()),
-            runtime_state.and_then(|state| state.context_compaction_window_node_id),
+            Arc::clone(&guard.session_runtime_registry),
         )
     };
+    let context_compaction_window_node_id = session_runtime_registry
+        .get(session_id)
+        .map_err(|error| format!("Context compaction has no V1 session owner: {error}"))?
+        .read(|document| document.metadata.config.context_compaction_window_node_id)
+        .map_err(|error| format!("Context compaction cannot read V1 metadata: {error}"))?;
     let route_lease_identity = source_execution
         .and_then(|(_, preparation)| {
             preparation
@@ -601,10 +772,10 @@ pub(crate) fn refreshed_execution_request_after_context_compaction(
 /// 返回值
 /// Returns success after scheduling persistence, or an ownership/state error before persistence.
 /// 持久化任务排队后返回成功；持久化前所有权或状态异常时返回错误。
-pub(crate) fn persist_failed_webui_context_compaction(
+pub(crate) async fn persist_failed_webui_context_compaction(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
+    _controller_runtime: &ControllerRuntimeHandle,
     active_stream_task_id: Uuid,
     session_id: SessionId,
     previous_phase: SessionRunPhase,
@@ -626,13 +797,8 @@ pub(crate) fn persist_failed_webui_context_compaction(
         },
         error,
     )?;
-    spawn_workspace_session_persist_task(
-        state.clone(),
-        controller_runtime.clone(),
-        session_id,
-        Some(String::from("context_compaction_failed")),
-    );
-    Ok(())
+    crate::persist_v1_execution_failure_boundary(state, session_id, "context_compaction_failed")
+        .await
 }
 
 /// Builds one WebUI compaction job from an already frozen plan and exact model target.

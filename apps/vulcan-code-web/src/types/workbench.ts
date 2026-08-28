@@ -8,7 +8,6 @@ import type {
   ToolCallSummary,
 } from "./composer-skills";
 import type {
-  ConversationMessage,
   ConversationSummary,
   ContextInjectionChangedDelta,
   PendingPromptsChangedDelta,
@@ -151,15 +150,6 @@ export interface WorkbenchSnapshot {
   // Currently selected conversation id.
   // 当前选中的会话标识。
   selectedConversationId?: string | null;
-  // Conversation messages.
-  // 会话消息。
-  messages: ConversationMessage[];
-  // Hydrated conversation body windows retained by the service.
-  // 服务端已保留的会话正文窗口。
-  hydratedConversationWindows?: HydratedConversationWindowSummary[];
-  // Current lazy conversation body hydration progress.
-  // 当前懒加载会话正文水合进度。
-  conversationHydration?: ConversationHydrationProgress | null;
   // Backend-routed subagent navigation state for the selected parent conversation.
   // 当前选中父会话的后端路由子代理导航状态。
   subagentNavigation?: SubagentNavigationSnapshot | null;
@@ -370,84 +360,3 @@ export type GitCommitSummaryModelSelectionSummary =
     // 稳定模型标识。
     modelId: string;
   };
-
-// HydratedConversationWindowSummary describes one retained lazy conversation body window.
-// HydratedConversationWindowSummary 描述一个已保留的懒加载会话正文窗口。
-export interface HydratedConversationWindowSummary {
-  // Conversation identifier owning this retained body window.
-  // 拥有该保留正文窗口的会话标识。
-  sessionId: string;
-  // Whether session-scoped subagent metadata has been loaded for this retained body window.
-  // 该保留正文窗口对应会话的子智能体元数据是否已经完成加载。
-  subagentMetadataLoaded: boolean;
-  // Earliest loaded transcript ordinal used to request older history.
-  // 用于继续请求更早历史的已加载最早转录序号。
-  earliestOrdinal?: number | null;
-  // Whether older transcript turns still exist before this window.
-  // 当前窗口之前是否仍存在更早的转录轮次。
-  hasMoreHistory: boolean;
-}
-
-// ConversationHydrationStatus describes lazy conversation body loading state.
-// ConversationHydrationStatus 描述懒加载会话正文的加载状态。
-export type ConversationHydrationStatus = "loading" | "ready" | "error";
-
-// ConversationHydrationProgress describes one lazy conversation body loading update.
-// ConversationHydrationProgress 描述单个懒加载会话正文的加载进度更新。
-export interface ConversationHydrationProgress {
-  // Conversation identifier being loaded.
-  // 正在加载的会话标识。
-  sessionId: string;
-  // Current loading status.
-  // 当前加载状态。
-  status: ConversationHydrationStatus;
-  // Current phase key used for localization.
-  // 用于本地化的当前阶段键。
-  phase: string;
-  // Human-readable fallback message.
-  // 面向用户的回退消息。
-  message: string;
-  // Completed progress percentage from 0 to 100.
-  // 0 到 100 的已完成百分比。
-  percent: number;
-}
-
-// ConversationMessagesLoadResponse contains one lazily loaded conversation body.
-// ConversationMessagesLoadResponse 包含单个懒加载完成的会话正文。
-export interface ConversationMessagesLoadResponse {
-  // Complete workbench snapshot rebuilt with the hydrated selected conversation.
-  // 使用已水合选中会话重建出的完整工作台快照。
-  workbench: WorkbenchSnapshot;
-  // Loaded conversation messages.
-  // 已加载的会话消息。
-  messages: ConversationMessage[];
-  // Earliest loaded transcript ordinal used to request older history.
-  // 用于继续请求更早历史的已加载最早转录序号。
-  earliestOrdinal?: number | null;
-  // Whether older transcript turns still exist before this window.
-  // 当前窗口之前是否仍存在更早的转录轮次。
-  hasMoreHistory: boolean;
-  // Final loading progress.
-  // 最终加载进度。
-  progress: ConversationHydrationProgress;
-}
-
-// ConversationHistoryPageResponse contains one older conversation history page.
-// ConversationHistoryPageResponse 包含单页更早会话历史。
-export interface ConversationHistoryPageResponse {
-  // Conversation identifier owning this page.
-  // 拥有该页历史的会话标识。
-  sessionId: string;
-  // Complete workbench snapshot after merging this older page.
-  // 合并该页更早历史后的完整工作台快照。
-  workbench: WorkbenchSnapshot;
-  // Older conversation messages in ascending display order.
-  // 按展示正序排列的更早会话消息。
-  messages: ConversationMessage[];
-  // Earliest loaded transcript ordinal after this page.
-  // 加载该页后已加载的最早转录序号。
-  earliestOrdinal?: number | null;
-  // Whether more older transcript turns still exist.
-  // 是否仍存在更多更早的转录轮次。
-  hasMoreHistory: boolean;
-}

@@ -3,6 +3,17 @@
 
 use super::*;
 use crate::context_compaction::resolve_webui_context_compaction_model_target;
+use crate::session_goal_lifecycle::{
+    current_v1_goal_unix_millis, session_goal_summary_from_v1_handle, session_v1_handle_from_state,
+};
+use crate::session_request_config_v1::{VmmSessionPolicyField, set_vmm_session_policy_value_v1};
+use crate::session_runtime_registry_v1::{
+    SessionFlushReason, SessionMutationAdmission, SessionMutationChange,
+};
+
+/// Provider-visible semantic recorded when user Stop pauses autonomous Goal execution.
+/// 用户停止操作暂停目标自动执行时记录的 Provider 可见语义。
+const GOAL_STOPPED_PROVIDER_CONTEXT: &str = "The session goal was paused because the user stopped the run. Do not continue autonomous goal work until it is resumed.";
 
 /// Requested stop behavior for a WebUI conversation run.
 /// WebUI 会话运行请求的停止行为。
@@ -54,79 +65,6 @@ pub(crate) struct StopConversationRunSubagentSummary {
     /// User-facing child agent label.
     /// 面向用户的智能体标签。
     pub(crate) label: String,
-}
-
-/// Emits the authoritative Continue summary when a service-owned Stop settlement exits with an error.
-/// 当服务持有的 Stop 结算因错误退出时发送权威 Continue 摘要。
-struct ConversationStopFailureFeedbackGuard {
-    /// Event emitter used to publish the final blocker summary.
-    /// 用于发布最终阻断摘要的事件发送器。
-    app: ServiceEventEmitter,
-    /// Shared state containing the stopped phase, retry reference, and live terminal owner.
-    /// 包含停止阶段、重试引用与实时终态所有者的共享状态。
-    state: SharedServiceBridgeState,
-    /// Exact session whose continuation projection must be refreshed.
-    /// 必须刷新 Continue 投影的精确会话。
-    session_id: SessionId,
-    /// Whether an error exit still requires fail-closed feedback.
-    /// 错误退出是否仍需要失败关闭反馈。
-    armed: bool,
-}
-
-impl ConversationStopFailureFeedbackGuard {
-    /// Creates one armed Stop failure feedback guard.
-    /// 创建一个已启用的 Stop 失败反馈守卫。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `app` emits feedback, `state` owns authoritative blockers, and `session_id` fixes the target.
-    /// `app` 发送反馈，`state` 持有权威阻断条件，`session_id` 固定目标。
-    ///
-    /// # Returns
-    /// 返回值
-    /// An armed guard that emits on every early return or panic.
-    /// 返回一个会在任何提前返回或 panic 时发送反馈的已启用守卫。
-    fn new(
-        app: ServiceEventEmitter,
-        state: SharedServiceBridgeState,
-        session_id: SessionId,
-    ) -> Self {
-        Self {
-            app,
-            state,
-            session_id,
-            armed: true,
-        }
-    }
-
-    /// Disarms failure feedback after the final unblocked workbench projection succeeds.
-    /// 在最终无阻断工作台投影成功后停用失败反馈。
-    ///
-    /// # Returns
-    /// 返回值
-    /// This method returns no value and only changes the local guard state.
-    /// 此方法不返回值，仅变更本地守卫状态。
-    fn disarm(&mut self) {
-        self.armed = false;
-    }
-}
-
-impl Drop for ConversationStopFailureFeedbackGuard {
-    /// Publishes one best-effort authoritative blocker summary on an incomplete Stop settlement.
-    /// 在 Stop 结算未完成时尽力发布一次权威阻断摘要。
-    fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        if let Err(error) =
-            emit_conversation_continuation_summary_changed(&self.app, &self.state, self.session_id)
-        {
-            eprintln!(
-                "[webui-service] Stop failure continuation feedback failed for session {}: {error}",
-                self.session_id
-            );
-        }
-    }
 }
 
 /// Terminates the exact active conversation Hook turn retained by a stopped execution.
@@ -212,11 +150,6 @@ pub(crate) async fn service_compact_selected_conversation_context(
     )
     .await?;
     ensure_webui_session_runtime_state(&mut workspace_snapshot, selected_session_id, None)?;
-    let runtime_state_snapshot = workspace_snapshot
-        .session_runtime_state
-        .get(&selected_session_id)
-        .cloned()
-        .unwrap_or_default();
     // modelTarget freezes the exact session route and adaptive tail policy before manual planning.
     // modelTarget 在手动规划前冻结精确会话路由与自适应尾部策略。
     let model_target = resolve_webui_context_compaction_model_target(
@@ -225,10 +158,9 @@ pub(crate) async fn service_compact_selected_conversation_context(
         selected_session_id,
         None,
     )?;
-    let plan = webui_context_compaction_plan_from_conversation_state(
+    let compaction_plan = webui_context_compaction_plan_from_v1(
+        &state,
         selected_session_id,
-        &runtime_state_snapshot.conversation_state,
-        runtime_state_snapshot.context_start_message_id.as_deref(),
         model_target.context_compaction_policy,
         "当前会话暂时没有可压缩的历史上下文。",
     )?;
@@ -321,8 +253,9 @@ pub(crate) async fn service_compact_selected_conversation_context(
         status_message_id,
         budget_note,
         MANUAL_CONTEXT_COMPACTION_TRIGGER.to_string(),
-        plan,
-        runtime_state_snapshot.conversation_state.clone(),
+        compaction_plan.plan,
+        compaction_plan.full_context_state,
+        compaction_plan.retained_from_seq,
         model_target,
     )?;
     Ok(workbench)
@@ -395,18 +328,6 @@ async fn service_stop_conversation_run_owned(
             ),
         });
     }
-    // sessionDirectory is resolved before teardown so manual interruption can close the exact durable boundary owner.
-    // sessionDirectory 在拆除前完成解析，使手动中断能够关闭精确的可靠边界所有者。
-    let session_directory = {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        require_segmented_session_directory_for_retained_session(
-            &guard,
-            &controller_runtime.data_root,
-            target_session_id,
-        )?
-    };
     // stopAdmissionGuard closes replacement-turn admission before the active stream registry is dismantled.
     // stopAdmissionGuard 在拆除活动流注册表前关闭替代回合准入。
     let stop_admission_guard = begin_session_run_stop_exclusion(&state, target_session_id)?;
@@ -442,10 +363,6 @@ async fn service_stop_conversation_run_owned(
         )?;
         (active_task, had_active_kernel_turn)
     };
-    // failureFeedbackGuard is armed before any wait or secondary teardown can fail.
-    // failureFeedbackGuard 在任何等待或后续拆除可能失败前启用。
-    let mut failure_feedback_guard =
-        ConversationStopFailureFeedbackGuard::new(app.clone(), state.clone(), target_session_id);
     // terminalPersistenceGuard deliberately retains an unreleased marker on every early error or panic.
     // terminalPersistenceGuard 会在任何提前错误或 panic 时有意保留未释放标记。
     let terminal_persistence_guard = SessionTerminalPersistenceOwnerGuard::adopt_registered(
@@ -453,48 +370,40 @@ async fn service_stop_conversation_run_owned(
         target_session_id,
         terminal_persistence_owner,
     )?;
-    let goal_before_stop = active_task
-        .as_ref()
-        .and_then(ActiveStreamTask::session_goal_id)
-        .map(str::to_string);
-    // providerCallBinding freezes the exact stream-to-call relation before task cancellation drops telemetry guards.
-    // providerCallBinding 在任务取消析构遥测守卫前冻结精确的流到调用关系。
-    let provider_call_binding = active_task.as_ref().and_then(|active_task| {
-        active_task
-            .provider_call_id()
-            .map(|provider_call_id| (active_task.task_id(), provider_call_id.to_string()))
-    });
     let had_active_stream_task = active_task.is_some();
     let active_task_join_error = if let Some(active_task) = active_task {
         active_task.abort_and_wait().await.err()
     } else {
         None
     };
-    // The aborted stream cannot publish its normal Finished event, so Stop owns the external lifecycle terminal write.
-    // 被中止的流无法发布正常 Finished 事件，因此 Stop 负责写入外部生命周期终态。
-    let interrupted_external_turn =
-        interrupt_session_external_turn_lifecycle(&session_directory, target_session_id)?;
+    // The aborted stream cannot publish its normal Finished event, so Stop owns the V1 API interruption.
+    // 被中止的流无法发布正常 Finished 事件，因此 Stop 负责 V1 API 中断事实。
+    let goal_handle = session_v1_handle_from_state(&state, target_session_id).await?;
+    let stop_interruption_at_ms = current_v1_goal_unix_millis()?;
+    let interruption_receipt = goal_handle
+        .mutate_durable_if_changed(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::ApiCompleted,
+            move |document| {
+                Ok(
+                    match document.interrupt_active_api(stop_interruption_at_ms) {
+                        Ok(stats_seq) => SessionMutationChange::Changed(Some(stats_seq)),
+                        Err(vulcan_session_core::v1::DomainError::NoActiveApi) => {
+                            SessionMutationChange::Unchanged(None)
+                        }
+                        Err(error) => return Err(error),
+                    },
+                )
+            },
+        )
+        .map_err(|error| format!("停止后持久化 V1 API 中断失败：{error}"))?;
     webui_trace(
-        "stop_conversation_external_boundary",
+        "stop_conversation_v1_boundary",
         format!(
-            "session={target_session_id} interrupted_external_turn={interrupted_external_turn}"
+            "session={target_session_id} interrupted_api_stats_seq={:?}",
+            interruption_receipt.value.map(|seq| seq.value())
         ),
     );
-    // Active provider drafts were produced by the aborted physical request and must disappear before Continue can retry it.
-    // 活跃 Provider 草稿由已中止的物理请求产生，必须在 Continue 重试前移除。
-    let active_stream_drafts_discarded = match discard_active_stream_content_records(
-        &app,
-        &state,
-        target_session_id,
-    ) {
-        Ok(_) => true,
-        Err(error) => {
-            eprintln!(
-                "[webui-service] stopped conversation draft cleanup failed; sealing fallback will run: {error}"
-            );
-            false
-        }
-    };
     // The immediate stopped phase removes the stale running affordance before slower settlement can fail.
     // 即时停止阶段会在较慢结算可能失败前移除过期的运行中操作入口。
     commit_retained_workspace_session_phase_mutation_and_emit_delta(
@@ -503,14 +412,6 @@ async fn service_stop_conversation_run_owned(
         target_session_id,
         SessionRunPhase::Stopped,
         |workspace_snapshot| {
-            let now = current_unix_millis_text();
-            if let Some(runtime_state) = workspace_snapshot
-                .session_runtime_state
-                .get_mut(&target_session_id)
-                && !active_stream_drafts_discarded
-            {
-                seal_active_streaming_records_in_state(runtime_state, &now);
-            }
             mark_webui_session_stop_requested_in_workspace(workspace_snapshot, target_session_id);
             Ok(())
         },
@@ -545,35 +446,27 @@ async fn service_stop_conversation_run_owned(
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         mark_webui_subagent_tasks_stopped_in_state(&mut guard, &running_subagent_task_ids);
     }
-    if let Some(expected_goal_id) = goal_before_stop {
-        match VulcanGoalStore::new(controller_runtime.clone())
-            .pause_thread_goal(target_session_id, &expected_goal_id)
-            .await?
-        {
-            Some(paused_goal)
-                if paused_goal.goal_id == expected_goal_id
-                    && paused_goal.status == ThreadGoalStatus::Paused =>
-            {
-                advance_session_goal_dispatch_version(&state, target_session_id)?;
-                clear_session_goal_stage_runtime_state(
-                    &state,
-                    target_session_id,
-                    &paused_goal.goal_id,
-                )?;
-                cache_session_goal_summary(&state, target_session_id, Some(paused_goal))?;
-            }
-            Some(_) => {
-                return Err(String::from(
-                    "停止运行后的目标状态结果与请求不一致，请刷新后重试。",
-                ));
-            }
-            None => {
-                webui_trace(
-                    "stop_conversation_goal_changed",
-                    format!("session={target_session_id} expected_goal_id={expected_goal_id}"),
-                );
-            }
-        }
+    let now_ms = current_v1_goal_unix_millis()?;
+    let goal_pause = goal_handle
+        .mutate_durable_if_changed(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::MetadataChanged,
+            move |document| {
+                if document.metadata.mode.goal.enabled
+                    && document.metadata.mode.goal.state
+                        == vulcan_session_core::v1::config::GoalState::Active
+                {
+                    document.pause_goal(GOAL_STOPPED_PROVIDER_CONTEXT, now_ms)?;
+                    Ok(SessionMutationChange::Changed(()))
+                } else {
+                    Ok(SessionMutationChange::Unchanged(()))
+                }
+            },
+        )
+        .map_err(|error| format!("停止后持久化 V1 Goal 状态失败：{error}"))?;
+    if goal_pause.changed {
+        let summary = session_goal_summary_from_v1_handle(goal_handle.as_ref(), target_session_id)?;
+        cache_session_goal_summary(&state, target_session_id, summary)?;
     }
     // stopSettlement mutates the latest retained workspace only after every awaited pre-settlement step has finished.
     // stopSettlement 仅在所有结算前异步步骤结束后修改最新保留工作区。
@@ -584,14 +477,6 @@ async fn service_stop_conversation_run_owned(
         let retained_workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
-        for (direct_parent_session_id, task_state) in &running_subagent_task_states {
-            mark_webui_subagent_task_stopped_in_workspace(
-                retained_workspace,
-                *direct_parent_session_id,
-                task_state.task_id,
-                Some(task_state),
-            );
-        }
         let did_stop_work = stop_webui_session_work(
             retained_workspace,
             target_session_id,
@@ -602,18 +487,12 @@ async fn service_stop_conversation_run_owned(
         if did_stop_work {
             let owning_project_id =
                 owning_project_id_for_session(retained_workspace, target_session_id);
-            let stopped_conversation_state = retained_workspace
-                .session_runtime_state
-                .get(&target_session_id)
-                .ok_or_else(|| String::from("停止后未找到会话运行时状态。"))?
-                .conversation_state
-                .clone();
-            Some((owning_project_id, stopped_conversation_state))
+            Some(owning_project_id)
         } else {
             None
         }
     };
-    if let Some((owning_project_id, stopped_conversation_state)) = stop_settlement {
+    if let Some(owning_project_id) = stop_settlement {
         // A stop closes the retained Hook turn before a later Continue restores the same logical input.
         // 停止操作会在后续 Continue 恢复同一逻辑输入前关闭保留的 Hook 回合。
         terminate_active_conversation_hook_turn_after_stop(
@@ -623,42 +502,9 @@ async fn service_stop_conversation_run_owned(
             stopped_hook_turn_id.as_deref(),
             "The user stopped the active conversation execution.",
         )?;
-        if let Err(error) = refreeze_claimed_execution_retry_snapshot_with_canonical_state(
-            &state,
-            &controller_runtime,
-            target_session_id,
-            &stopped_conversation_state,
-            provider_call_binding,
-            "The user stopped the claimed retry execution.",
-        ) {
-            // A damaged sidecar must not roll back an already-completed Stop teardown or leave a silently executable token.
-            // 损坏的 sidecar 不得回滚已经完成的 Stop 拆除，也不得留下可被静默执行的令牌。
-            eprintln!(
-                "[webui-service] refreeze stopped execution retry failed; invalidating token: {error}"
-            );
-            invalidate_execution_retry_reference(
-                &state,
-                target_session_id,
-                error.blocked_reason(),
-                error.error_summary(),
-            )?;
-        }
     }
-    // Accepted immutable thinking and tool rows must reach disk before the stop snapshot advances the same checkpoint.
-    // 已接纳的不可变思考与工具记录必须先落盘，停止快照才能推进同一个检查点。
-    await_session_transcript_writer_durable(target_session_id)
-        .await
-        .map_err(|error| format!("停止前排空会话转录写入器失败：{error}"))?;
-    // The write gate captures the exact retained settlement after the refrozen reference is published.
-    // 写入闸门会在重冻引用发布后捕获精确保留结算状态。
-    persist_latest_retained_workspace_session_update(
-        &state,
-        controller_runtime.clone(),
-        target_session_id,
-    )
-    .await?;
-    // Release precedes final projection so the successful response is built from an unblocked live-owner revision.
-    // 释放必须先于最终投影，使成功响应基于已解除阻断的实时所有者修订构建。
+    // Both the user interruption and optional Goal pause are durable before admission reopens.
+    // 用户中断与可选 Goal 暂停都已可靠落盘后，才重新开放准入。
     terminal_persistence_guard.release()?;
     // The Stop admission reservation is equally live state and must not contaminate the successful Continue summary.
     // Stop 准入预留同样属于实时状态，不得污染成功响应中的 Continue 摘要。
@@ -676,7 +522,6 @@ async fn service_stop_conversation_run_owned(
             logs: &logs,
             subagent_navigation_mode: SubagentNavigationRefreshMode::Rebuild,
         })?;
-    failure_feedback_guard.disarm();
     if let Some(error) = active_task_join_error {
         eprintln!("[webui-service] stopped conversation task teardown warning: {error}");
     }
@@ -714,62 +559,34 @@ pub(crate) async fn service_set_session_plan_mode(
         .as_deref()
         .and_then(parse_session_id)
         .ok_or_else(|| String::from("当前草稿会话尚未创建，暂时不能切换计划模式。"))?;
-    let (controller_runtime, existing_plan_mode) = {
+    {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
-            String::from("service is still starting; controller runtime is not ready")
-        })?;
         let workspace_snapshot = guard.workspace_snapshot.as_ref().ok_or_else(|| {
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
         if !workspace_snapshot_contains_regular_session(workspace_snapshot, session_id) {
             return Err(format!("未找到要切换计划模式的会话：{session_id}"));
         }
-        let existing_plan_mode = workspace_snapshot
-            .session_runtime_state
-            .get(&session_id)
-            .map(|runtime_state| runtime_state.plan_mode.clone())
-            .unwrap_or_default();
-        (controller_runtime, existing_plan_mode)
-    };
-    let updated_at = current_unix_millis_text();
-    let mut next_plan_mode = existing_plan_mode;
-    if request.enabled {
-        ensure_session_can_enter_plan_mode(&controller_runtime, session_id).await?;
-        next_plan_mode.pending_execution_notice = false;
     }
-    if !request.enabled {
-        next_plan_mode.pending_execution_notice = next_plan_mode.prompt_injected;
-        next_plan_mode.prompt_injected = false;
-    }
-    next_plan_mode.artifact = None;
-    let work_mode = SessionWorkMode {
-        execution_mode: if request.enabled {
-            String::from("plan")
-        } else {
-            String::from("build")
-        },
-        plan_mode: next_plan_mode.clone(),
-    };
-    let mut addon_state = SessionAddonState::new(session_id);
-    let _ = addon_state.set_work_mode(&work_mode, updated_at.clone());
-    invalidate_webui_session_addon_persist_version(
-        &state,
-        session_id,
-        SessionAddonNamespace::WorkMode,
-    )?;
-    let addon_persist_lock = webui_session_persist_lock(session_id);
-    let _addon_persist_guard = addon_persist_lock.lock().await;
-    let persisted_addon_state = persist_workspace_session_addon_state_update(
-        &state,
-        controller_runtime,
-        session_id,
-        addon_state,
-    )
-    .await?;
-    {
+    let enabled = request.enabled;
+    let changed = persist_session_plan_mode_v1(&state, session_id, enabled).await?;
+    if changed {
+        let updated_at = current_unix_millis_text();
+        let next_plan_mode = SessionPlanModeState {
+            prompt_injected: enabled,
+            pending_execution_notice: false,
+            artifact: None,
+        };
+        let work_mode = SessionWorkMode {
+            execution_mode: if enabled {
+                String::from("plan")
+            } else {
+                String::from("build")
+            },
+            plan_mode: next_plan_mode,
+        };
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -784,15 +601,8 @@ pub(crate) async fn service_set_session_plan_mode(
                 ..SessionRuntimeStateEntry::default()
             });
         work_mode.apply_to_runtime_state(runtime_state);
-        runtime_state.updated_at = updated_at.clone();
+        runtime_state.updated_at = updated_at;
     }
-    emit_session_addon_changed_event(
-        &app,
-        session_id,
-        &[SessionAddonNamespace::WorkMode],
-        persisted_addon_state.revision,
-        latest_session_addon_updated_at(&persisted_addon_state),
-    );
     emit_session_addons_changed_delta(&app, &state, session_id)
 }
 
@@ -823,49 +633,33 @@ pub(crate) async fn service_set_session_vmm_policy(
         .and_then(parse_session_id)
         .ok_or_else(|| String::from("当前草稿会话尚未创建，暂时不能切换 VMM 记忆策略。"))?;
     let policy_value = session_vmm_policy_mode_from_request(&request.mode)?;
-    let (controller_runtime, mut next_vmm) = {
+    let policy_field = match request.policy.trim().to_ascii_lowercase().as_str() {
+        "precheck" | "precheck_enabled" | "precheck-injection" | "precheck_injection" => {
+            VmmSessionPolicyField::Precheck
+        }
+        "writeback" | "memory_writeback" | "memory_writeback_enabled" | "post_action" => {
+            VmmSessionPolicyField::MemoryWriteback
+        }
+        other => return Err(format!("不支持的 VMM 记忆策略：{other}")),
+    };
+    {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
-            String::from("service is still starting; controller runtime is not ready")
-        })?;
         let workspace_snapshot = guard.workspace_snapshot.as_ref().ok_or_else(|| {
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
         if !workspace_snapshot_contains_regular_session(workspace_snapshot, session_id) {
             return Err(format!("未找到要切换 VMM 记忆策略的会话：{session_id}"));
         }
-        let next_vmm = workspace_snapshot
-            .session_runtime_state
-            .get(&session_id)
-            .map(|runtime_state| runtime_state.vmm.clone())
-            .unwrap_or_default();
-        (controller_runtime, next_vmm)
-    };
-    match request.policy.trim().to_ascii_lowercase().as_str() {
-        "precheck" | "precheck_enabled" | "precheck-injection" | "precheck_injection" => {
-            next_vmm.precheck_enabled = policy_value;
-        }
-        "writeback" | "memory_writeback" | "memory_writeback_enabled" | "post_action" => {
-            next_vmm.memory_writeback_enabled = policy_value;
-        }
-        other => return Err(format!("不支持的 VMM 记忆策略：{other}")),
     }
-    let updated_at = current_unix_millis_text();
-    let mut addon_state = SessionAddonState::new(session_id);
-    let _ =
-        addon_state.set_typed_namespace(SessionAddonNamespace::Vmm, &next_vmm, updated_at.clone());
-    invalidate_webui_session_addon_persist_version(&state, session_id, SessionAddonNamespace::Vmm)?;
-    let addon_persist_lock = webui_session_persist_lock(session_id);
-    let _addon_persist_guard = addon_persist_lock.lock().await;
-    persist_workspace_session_addon_state_update(
-        &state,
-        controller_runtime,
-        session_id,
-        addon_state,
-    )
-    .await?;
+    let updated_at_ms = current_v1_goal_unix_millis()?;
+    let handle = session_v1_handle_from_state(&state, session_id).await?;
+    set_vmm_session_policy_value_v1(handle.as_ref(), policy_field, policy_value, updated_at_ms)?;
+    let persisted_policy = handle
+        .read(|document| document.metadata.config.selection.vmm.clone())
+        .map_err(|error| format!("读取 V1 VMM 会话策略失败：{error}"))?;
+    let updated_at = updated_at_ms.to_string();
     {
         let mut guard = state
             .lock()
@@ -885,7 +679,8 @@ pub(crate) async fn service_set_session_vmm_policy(
                     updated_at: updated_at.clone(),
                     ..SessionRuntimeStateEntry::default()
                 });
-            runtime_state.vmm = next_vmm;
+            runtime_state.vmm.precheck_enabled = persisted_policy.precheck_enabled;
+            runtime_state.vmm.memory_writeback_enabled = persisted_policy.memory_writeback_enabled;
             runtime_state.updated_at = updated_at.clone();
             if let Some(vmm_hook_runtime) = vmm_hook_runtime {
                 refresh_exact_vmm_hook_session_projection(
@@ -928,20 +723,16 @@ pub(crate) async fn service_set_session_context_compaction_window(
         .map(str::parse::<vulcan_context::ContextCompactionWindowNodeId>)
         .transpose()?;
     let updated_at = current_unix_millis_text();
+    let updated_at_ms = updated_at
+        .parse::<i64>()
+        .map_err(|error| format!("failed to parse current unix millis: {error}"))?;
     // configurationTransaction serializes this session node against every model-selection mutation.
     // configurationTransaction 将本次会话节点修改与全部模型选择变更串行化。
     let configuration_transaction = begin_public_ai_configuration_transaction().await;
-    // addonPersistGuard makes the runtime-controls snapshot authoritative after older queued writes.
-    // addonPersistGuard 使运行控制快照在旧排队写入之后保持权威。
-    let addon_persist_lock = webui_session_persist_lock(session_id);
-    let _addon_persist_guard = addon_persist_lock.lock().await;
-    let (controller_runtime, addon_state) = {
+    {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
-            String::from("service is still starting; controller runtime is not ready")
-        })?;
         let workspace_snapshot = guard.workspace_snapshot.as_ref().ok_or_else(|| {
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
@@ -978,38 +769,24 @@ pub(crate) async fn service_set_session_context_compaction_window(
                 ));
             }
         }
-        let mut next_runtime_state =
-            runtime_state
-                .cloned()
-                .unwrap_or_else(|| SessionRuntimeStateEntry {
-                    updated_at: updated_at.clone(),
-                    ..SessionRuntimeStateEntry::default()
-                });
-        next_runtime_state.context_compaction_window_node_id = node_id;
-        next_runtime_state.updated_at = updated_at.clone();
-        let runtime_controls = SessionRuntimeControls::from_runtime_state(&next_runtime_state)
-            .ok_or_else(|| String::from("当前会话没有可持久化的运行控制状态。"))?;
-        let mut addon_state = SessionAddonState::new(session_id);
-        let _ = addon_state.set_typed_namespace(
-            SessionAddonNamespace::RuntimeControls,
-            &runtime_controls,
-            updated_at.clone(),
-        );
-        (controller_runtime, addon_state)
-    };
-    invalidate_webui_session_addon_persist_version(
-        &state,
-        session_id,
-        SessionAddonNamespace::RuntimeControls,
-    )?;
-    let persisted_addon_state = persist_workspace_session_addon_state_update(
-        &state,
-        controller_runtime,
-        session_id,
-        addon_state,
-    )
-    .await?;
-    {
+    }
+    let handle = session_v1_handle_from_state(&state, session_id).await?;
+    let mutation = handle
+        .mutate_durable_if_changed(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            move |document| {
+                let changed =
+                    document.set_context_compaction_window_node_id(node_id, updated_at_ms);
+                Ok(if changed {
+                    SessionMutationChange::Changed(())
+                } else {
+                    SessionMutationChange::Unchanged(())
+                })
+            },
+        )
+        .map_err(|error| format!("持久化 V1 上下文压缩窗口失败：{error}"))?;
+    if mutation.changed {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -1032,13 +809,6 @@ pub(crate) async fn service_set_session_context_compaction_window(
         guard.live_context_budgets.remove(&session_id);
     }
     drop(configuration_transaction);
-    emit_session_addon_changed_event(
-        &app,
-        session_id,
-        &[SessionAddonNamespace::RuntimeControls],
-        persisted_addon_state.revision,
-        latest_session_addon_updated_at(&persisted_addon_state),
-    );
     emit_session_addons_changed_delta(&app, &state, session_id)
 }
 
@@ -1051,27 +821,23 @@ pub(crate) async fn service_set_session_output_style(
 ) -> Result<SessionAddonsChangedResponse, String> {
     let session_id = parse_session_id(&request.conversation_id)
         .ok_or_else(|| String::from("当前草稿会话尚未创建，暂时不能切换输出风格。"))?;
-    let (controller_runtime, global_selection) = {
+    let global_selection = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
-            String::from("service is still starting; controller runtime is not ready")
-        })?;
         let workspace_snapshot = guard.workspace_snapshot.as_ref().ok_or_else(|| {
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
         if !workspace_snapshot_contains_regular_session(workspace_snapshot, session_id) {
             return Err(format!("未找到要切换输出风格的会话：{session_id}"));
         }
-        let global_selection = guard
+        guard
             .agent_runtime
             .as_ref()
             .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?
             .provider_configuration
             .prompt
-            .output_style;
-        (controller_runtime, global_selection)
+            .output_style
     };
     let normalized_style_id = request
         .style_id
@@ -1081,42 +847,30 @@ pub(crate) async fn service_set_session_output_style(
         .map(str::to_string);
     resolve_output_style_snapshot(normalized_style_id.as_deref(), global_selection)?;
     let updated_at = current_unix_millis_text();
-    invalidate_webui_session_addon_persist_version(
-        &state,
-        session_id,
-        SessionAddonNamespace::OutputStyle,
-    )?;
-    let addon_persist_lock = webui_session_persist_lock(session_id);
-    let _addon_persist_guard = addon_persist_lock.lock().await;
-    let addon_state = {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let workspace_snapshot = guard.workspace_snapshot.as_ref().ok_or_else(|| {
-            String::from("service is still starting; workspace snapshot is not ready")
-        })?;
-        let mut next_output_style = workspace_snapshot
-            .session_runtime_state
-            .get(&session_id)
-            .map(|runtime_state| runtime_state.output_style.clone())
-            .unwrap_or_default();
-        next_output_style.override_style_id = normalized_style_id.clone();
-        let mut addon_state = SessionAddonState::new(session_id);
-        let _ = addon_state.set_typed_namespace(
-            SessionAddonNamespace::OutputStyle,
-            &next_output_style,
-            updated_at.clone(),
-        );
-        addon_state
-    };
-    let persisted_addon_state = persist_workspace_session_addon_state_update(
-        &state,
-        controller_runtime,
-        session_id,
-        addon_state,
-    )
-    .await?;
-    {
+    let updated_at_ms = updated_at
+        .parse::<i64>()
+        .map_err(|error| format!("failed to parse current unix millis: {error}"))?;
+    let handle = session_v1_handle_from_state(&state, session_id).await?;
+    let mutation = handle
+        .mutate_durable_if_changed(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            {
+                let normalized_style_id = normalized_style_id.clone();
+                move |document| {
+                    let changed = document.set_output_style(normalized_style_id, updated_at_ms)?;
+                    Ok(if changed {
+                        SessionMutationChange::Changed(())
+                    } else {
+                        SessionMutationChange::Unchanged(())
+                    })
+                }
+            },
+        )
+        .map_err(|error| format!("持久化 V1 输出风格失败：{error}"))?;
+    if mutation.changed {
+        // The legacy runtime field is a temporary WebUI projection only; V1 metadata is the sole durable authority.
+        // 旧运行态字段仅是阶段内 WebUI 投影；V1 metadata 是唯一持久化权威。
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -1130,16 +884,17 @@ pub(crate) async fn service_set_session_output_style(
                 updated_at: updated_at.clone(),
                 ..SessionRuntimeStateEntry::default()
             });
-        runtime_state.output_style.override_style_id = normalized_style_id.clone();
+        runtime_state.output_style.override_style_id = normalized_style_id;
         runtime_state.updated_at = updated_at.clone();
+        drop(guard);
+        emit_session_addon_changed_event(
+            &app,
+            session_id,
+            &[SessionAddonNamespace::OutputStyle],
+            mutation.revision,
+            updated_at.clone(),
+        );
     }
-    emit_session_addon_changed_event(
-        &app,
-        session_id,
-        &[SessionAddonNamespace::OutputStyle],
-        persisted_addon_state.revision,
-        latest_session_addon_updated_at(&persisted_addon_state),
-    );
     emit_session_addons_changed_delta(&app, &state, session_id)
 }
 
@@ -1162,49 +917,6 @@ fn session_vmm_policy_mode_from_request(mode: &str) -> Result<Option<bool>, Stri
         "disabled" | "off" | "false" => Ok(Some(false)),
         other => Err(format!("不支持的 VMM 记忆策略模式：{other}")),
     }
-}
-
-/// Builds one context-window-scoped model notice for session AI capability changes.
-/// 为会话 AI 能力变化构建一条仅在当前上下文窗口内生效的模型通知。
-///
-/// # Parameters
-/// 参数
-/// `previous_configuration` is the session configuration before the save operation.
-/// `previous_configuration` 是保存操作前的会话配置。
-/// `next_configuration` is the session configuration after the save operation.
-/// `next_configuration` 是保存操作后的会话配置。
-/// `model_capabilities` describes native capability support for the active model.
-/// `model_capabilities` 描述当前模型的原生能力支持。
-///
-/// # Returns
-/// 返回值
-/// A persistent hidden-user injection that clears on context compaction, or `None` when nothing model-visible changed.
-/// 调用方进入附属状态写入队列后，持久化单个完整会话附属状态文档。
-pub(crate) async fn persist_workspace_session_addon_state_update(
-    state: &SharedServiceBridgeState,
-    controller_runtime: ControllerRuntimeHandle,
-    session_id: SessionId,
-    addon_state: SessionAddonState,
-) -> Result<SessionAddonState, String> {
-    // sessionDirectory comes only from retained exact locator fields while the service state is borrowed.
-    // sessionDirectory 仅在借用服务状态期间从保留的精确定位字段获得。
-    let session_directory = {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        require_segmented_session_directory_for_retained_session(
-            &guard,
-            &controller_runtime.data_root,
-            session_id,
-        )?
-    };
-    vulcan_workspace_store::workspace_store::persist_single_session_addon_state_update_in_directory(
-        session_directory,
-        session_id,
-        &addon_state,
-    )
-    .await
-    .map_err(|error| format!("会话附属状态保存失败：{error}"))
 }
 
 #[cfg(test)]

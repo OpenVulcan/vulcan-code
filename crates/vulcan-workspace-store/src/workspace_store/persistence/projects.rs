@@ -1,5 +1,78 @@
 use super::*;
 
+/// Inserts or refreshes one active project row in the application index.
+/// 在应用索引中插入或刷新一条活动项目记录。
+///
+/// # Parameters / 参数
+///
+/// - `controller`: Controller runtime owning the application SQLite binding.
+///   `controller`：持有应用 SQLite 绑定的 Controller 运行时。
+/// - `project`: Complete active project projection to persist.
+///   `project`：需要持久化的完整活动项目投影。
+///
+/// # Returns / 返回值
+///
+/// Success after the exact project row is committed, or an explicit storage error.
+/// 精确项目记录提交后返回成功，否则返回显式存储错误。
+async fn upsert_active_project(
+    controller: &ControllerRuntimeHandle,
+    project: &TaskProjectSummary,
+) -> Result<(), String> {
+    // now is shared by created_at and updated_at for a newly inserted project row.
+    // now 由新插入项目行的 created_at 与 updated_at 共享。
+    let now = current_unix_millis_text();
+    // sort_order uses a checked conversion so project order cannot truncate on wide usize hosts.
+    // sort_order 使用受检查转换，避免项目顺序在宽 usize 宿主上发生截断。
+    let sort_order = i64::try_from(project.order)
+        .map_err(|_| String::from("写入活动项目失败：项目顺序超出 SQLite 整数范围。"))?;
+    controller
+        .client
+        .execute_sqlite_batch_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            r#"
+INSERT INTO projects (
+    id,
+    name,
+    root_path,
+    pinned,
+    archived,
+    sort_order,
+    icon_pack,
+    icon_key,
+    codebase_memory_enabled,
+    created_at,
+    updated_at
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+ON CONFLICT(id) DO UPDATE SET
+    name = excluded.name,
+    root_path = excluded.root_path,
+    pinned = excluded.pinned,
+    archived = excluded.archived,
+    sort_order = excluded.sort_order,
+    codebase_memory_enabled = excluded.codebase_memory_enabled,
+    updated_at = excluded.updated_at;
+"#,
+            vec![vec![
+                ControllerSqliteValue::String(project.id.clone()),
+                ControllerSqliteValue::String(project.title.clone()),
+                ControllerSqliteValue::String(project.path.clone()),
+                ControllerSqliteValue::Int64(i64::from(project.pinned)),
+                ControllerSqliteValue::Int64(0),
+                ControllerSqliteValue::Int64(sort_order),
+                optional_sqlite_string(&project.icon_pack),
+                optional_sqlite_string(&project.icon_key),
+                ControllerSqliteValue::Int64(i64::from(project.codebase_memory_enabled)),
+                ControllerSqliteValue::String(now.clone()),
+                ControllerSqliteValue::String(now),
+            ]],
+        )
+        .await
+        .map_err(|error| format!("写入活动项目失败：{error}"))?;
+
+    Ok(())
+}
+
 /// Identity row returned by one guarded project mutation.
 /// 单次受保护项目变更返回的身份行。
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -516,58 +589,6 @@ RETURNING id;
     validate_project_mutation_identity_rows(project_id, &rows, "更新项目归档状态")
 }
 
-/// Returns whether one exact project row currently exists in the requested archive state.
-/// 返回一个精确项目行当前是否以指定归档状态存在。
-///
-/// # Parameters
-/// 参数
-/// `controller` owns the authoritative SQLite binding.
-/// `controller` 持有权威 SQLite 绑定。
-/// `project_id` is the exact persisted project identifier to verify.
-/// `project_id` 是需要验证的精确持久化项目标识。
-/// `archived` is the exact lifecycle state required by the caller.
-/// `archived` 是调用方要求的精确生命周期状态。
-///
-/// # Returns
-/// 返回值
-/// Returns `true` only for one project row in the requested state, or an explicit query/decoding error.
-/// 仅在存在一条指定状态的项目行时返回 `true`，否则返回 `false` 或显式查询/解码错误。
-pub(super) async fn project_archive_state_exists(
-    controller: &ControllerRuntimeHandle,
-    project_id: &str,
-    archived: bool,
-) -> Result<bool, String> {
-    /// Aggregate row returned by the project lifecycle-state existence query.
-    /// 项目生命周期状态存在性查询返回的聚合行。
-    #[derive(Debug, Clone, Deserialize)]
-    struct ProjectArchiveStateCountRow {
-        /// Number of project rows matching the requested archive state.
-        /// 匹配指定归档状态的项目行数量。
-        count: i64,
-    }
-
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            "SELECT COUNT(*) AS count FROM projects WHERE id = ?1 AND archived = ?2;",
-            vec![
-                ControllerSqliteValue::String(project_id.to_string()),
-                ControllerSqliteValue::Int64(i64::from(archived)),
-            ],
-        )
-        .await
-        .map_err(|error| format!("查询项目生命周期状态失败：{error}"))?;
-    // count_row must exist because SQLite aggregate queries always return exactly one row.
-    // count_row 必须存在，因为 SQLite 聚合查询始终返回且仅返回一行。
-    let count_row = decode_query_rows::<ProjectArchiveStateCountRow>(&result.json_data)?
-        .into_iter()
-        .next()
-        .ok_or_else(|| String::from("查询项目生命周期状态未返回聚合结果。"))?;
-    Ok(count_row.count == 1)
-}
-
 /// Deletes one active project row while preserving archived session directories.
 /// 删除单个活动项目记录，同时保留归档会话目录。
 ///
@@ -603,6 +624,48 @@ pub(super) async fn delete_active_project_row(
     // rows 必须包含 SQLite 删除的唯一活动身份。
     let rows = decode_query_rows::<ProjectMutationIdentityRow>(&result.json_data)?;
     validate_project_mutation_identity_rows(project_id, &rows, "移除项目记录")
+}
+
+/// Reactivates one exact archived project row after every child V1 session has been restored.
+/// 在每个子 V1 会话均已恢复后重新激活一条精确的归档项目行。
+///
+/// # Parameters / 参数
+///
+/// - `controller`: Authoritative APP SQLite runtime.
+///   `controller`：权威 APP SQLite 运行时。
+/// - `project_id`: Exact archived project identity.
+///   `project_id`：精确的归档项目身份。
+///
+/// # Returns / 返回值
+///
+/// Success only when the guarded archived-to-active transition returns the exact row.
+/// 仅在受保护的归档到活动转换返回精确行时成功。
+pub async fn restore_archived_project_row_v1(
+    controller: &ControllerRuntimeHandle,
+    project_id: &str,
+) -> Result<(), String> {
+    update_project_archive_flag(controller, project_id, true, false).await
+}
+
+/// Deletes one exact active project row after every child V1 session has been archived.
+/// 在每个子 V1 会话均已归档后删除一条精确的活动项目行。
+///
+/// # Parameters / 参数
+///
+/// - `controller`: Authoritative APP SQLite runtime.
+///   `controller`：权威 APP SQLite 运行时。
+/// - `project_id`: Exact active project identity.
+///   `project_id`：精确的活动项目身份。
+///
+/// # Returns / 返回值
+///
+/// Success only when SQLite deletes and returns the exact active row.
+/// 仅在 SQLite 删除并返回精确活动行时成功。
+pub async fn delete_active_project_row_v1(
+    controller: &ControllerRuntimeHandle,
+    project_id: &str,
+) -> Result<(), String> {
+    delete_active_project_row(controller, project_id).await
 }
 
 /// Atomically persists one pin transition and both complete project-section orders.

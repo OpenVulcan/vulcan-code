@@ -1,20 +1,20 @@
 import React from "react";
 import { toast } from "sonner";
 import { DiffReviewPanel } from "@/diff/DiffReviewPanel";
-import { parseUnifiedDiffAsync } from "@/diff/diff-parse-worker-client";
 import {
   activeWorkbenchSurfaceId,
   diffFileFromWorkspaceDetailAsync,
   diffReviewSelectionStableKey,
   diffSnapshotFromWorkspaceResponseAsync,
   diffSnapshotWithWorkspaceDetailFile,
-  latestConversationDiffSource,
   selectedConversationProjectId,
   selectedConversationWorkspacePath,
-  type WorkspaceReviewConversationBlock,
-  type WorkspaceReviewConversationDiffSource,
   type WorkspaceReviewDraftConversation,
 } from "@/diff/workspace-review-model";
+import {
+  selectLatestWorkspaceReviewChangeSetV1,
+  workspaceReviewSnapshotFromChangeSetV1,
+} from "@/diff/workspace-review-v1-selector";
 import type {
   DiffFile,
   DiffHunkExpansionRequest,
@@ -34,11 +34,9 @@ import type {
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
 import { loadWorkspaceGitCatalog } from "@/service/workbench-snapshot-service";
+import { useSelectedConversationEventWindowSnapshot } from "@/state/conversation-event-window-react";
 import { useWorkspaceReviewRequestOwnership } from "@/components/workspace/workspace-review-panel-request-ownership";
-import type {
-  ConversationMessage,
-  WorkbenchSnapshot,
-} from "@/types";
+import type { WorkbenchSnapshot } from "@/types";
 
 // WorkspaceReviewPanelCacheEntry stores one mounted review panel state across close and reopen cycles.
 // WorkspaceReviewPanelCacheEntry 保存一次右侧审核面板在关闭与重开之间需要复用的状态。
@@ -98,9 +96,6 @@ export function WorkspaceReviewPanelHost(props: {
   // Copies raw diff text using the host-aware clipboard implementation.
   // 使用宿主感知的剪贴板实现复制原始 diff 文本。
   onCopyRawDiff: (rawDiff: string) => void;
-  // Parses one conversation message into render blocks.
-  // 将单条会话消息解析为渲染块。
-  parseConversationBlocks: (message: ConversationMessage) => WorkspaceReviewConversationBlock[];
   // Loads one live workspace Git diff snapshot.
   // 加载一次实时工作区 Git diff 快照。
   loadWorkspaceDiffSnapshot: (
@@ -171,11 +166,24 @@ export function WorkspaceReviewPanelHost(props: {
   // t translates the review panel shell labels.
   // t 翻译审核面板外壳标签。
   const { t } = useI18n();
-  // conversationDiffSource stores the newest raw diff block for the selected conversation.
-  // conversationDiffSource 保存当前选中会话中最新的原始 diff 块。
-  const conversationDiffSource = React.useMemo(
-    () => latestConversationDiffSource(props.workbench, props.selectedConversationId, props.parseConversationBlocks),
-    [props.selectedConversationId, props.workbench, props.parseConversationBlocks],
+  // conversationEventWindowSnapshot is the atomically published selected-session V1 authority.
+  // conversationEventWindowSnapshot 是原子发布的选中会话 V1 权威快照。
+  const conversationEventWindowSnapshot = useSelectedConversationEventWindowSnapshot();
+  // conversationChangeSetSelection is empty while the external-store owner belongs to another route.
+  // conversationChangeSetSelection 在 external-store owner 属于其他路由时为空。
+  const conversationChangeSetSelection = React.useMemo(() => {
+    if (conversationEventWindowSnapshot.owner?.session_id !== props.selectedConversationId) {
+      return null;
+    }
+    return selectLatestWorkspaceReviewChangeSetV1(conversationEventWindowSnapshot);
+  }, [conversationEventWindowSnapshot, props.selectedConversationId]);
+  // conversationReviewSnapshot projects the typed persistent ChangeSet without raw-diff parsing.
+  // conversationReviewSnapshot 无需解析 raw diff，直接投影强类型持久化 ChangeSet。
+  const conversationReviewSnapshot = React.useMemo(
+    () => conversationChangeSetSelection === null
+      ? null
+      : workspaceReviewSnapshotFromChangeSetV1(conversationChangeSetSelection),
+    [conversationChangeSetSelection],
   );
   // activeSurfaceId stores the conversation or subagent surface currently represented by the panel.
   // activeSurfaceId 保存当前面板代表的会话或子代理界面标识。
@@ -259,18 +267,6 @@ export function WorkspaceReviewPanelHost(props: {
   // workspaceGitActionPending tracks one in-flight Git mutation from the review panel.
   // workspaceGitActionPending 跟踪审核面板发起的一次进行中的 Git 变更操作。
   const [workspaceGitActionPending, setWorkspaceGitActionPending] = React.useState(false);
-  // conversationReviewSnapshot stores the asynchronously parsed conversation diff snapshot.
-  // conversationReviewSnapshot 保存异步解析后的会话 diff 快照。
-  const [conversationReviewSnapshot, setConversationReviewSnapshot] = React.useState<DiffPanelSnapshot | null>(null);
-  // conversationReviewLoading tracks async parsing of conversation diff blocks.
-  // conversationReviewLoading 跟踪会话 diff 块的异步解析状态。
-  const [conversationReviewLoading, setConversationReviewLoading] = React.useState(false);
-  // conversationReviewError stores the latest conversation diff parse error.
-  // conversationReviewError 保存最近一次会话 diff 解析错误。
-  const [conversationReviewError, setConversationReviewError] = React.useState<string | null>(null);
-  // conversationReviewParseSeqRef prevents stale async message diff parses from replacing current state.
-  // conversationReviewParseSeqRef 防止过期会话 diff 异步解析结果覆盖当前状态。
-  const conversationReviewParseSeqRef = React.useRef(0);
   // lastHydratedReviewPanelCacheKeyRef limits cache hydration to actual project or repository changes.
   // lastHydratedReviewPanelCacheKeyRef 将缓存水合限制为真实项目或仓库变化。
   const lastHydratedReviewPanelCacheKeyRef = React.useRef<string | null>(null);
@@ -354,46 +350,6 @@ export function WorkspaceReviewPanelHost(props: {
   React.useEffect(() => {
     props.onSelectGitRepository?.(diffReviewSelection.repositoryKey ?? null);
   }, [diffReviewSelection.repositoryKey, props.onSelectGitRepository]);
-
-  React.useEffect(() => {
-    const requestSeq = conversationReviewParseSeqRef.current + 1;
-    conversationReviewParseSeqRef.current = requestSeq;
-    if (!conversationDiffSource) {
-      setConversationReviewSnapshot(null);
-      setConversationReviewLoading(false);
-      setConversationReviewError(null);
-      return undefined;
-    }
-    let cancelled = false;
-    setConversationReviewSnapshot(null);
-    setConversationReviewLoading(true);
-    setConversationReviewError(null);
-    void parseConversationDiffSourceAsync(conversationDiffSource)
-      .then((snapshot) => {
-        if (!cancelled && conversationReviewParseSeqRef.current === requestSeq) {
-          setConversationReviewSnapshot(snapshot);
-          setConversationReviewError(null);
-        }
-      })
-      .catch((error) => {
-        if (!cancelled && conversationReviewParseSeqRef.current === requestSeq) {
-          setConversationReviewSnapshot(null);
-          setConversationReviewError(error instanceof Error ? error.message : String(error));
-        }
-      })
-      .finally(() => {
-        if (!cancelled && conversationReviewParseSeqRef.current === requestSeq) {
-          setConversationReviewLoading(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    conversationDiffSource?.key,
-    conversationDiffSource?.rawDiff,
-    conversationDiffSource?.source,
-  ]);
 
   // handleRefreshWorkspaceDiff refreshes the current project Git diff through the local service.
   // handleRefreshWorkspaceDiff 通过本地服务刷新当前项目 Git diff。
@@ -840,9 +796,9 @@ export function WorkspaceReviewPanelHost(props: {
 
   return (
     <DiffReviewPanel
-      emptyBody={workspaceReviewError ?? conversationReviewError ?? gitRepositoryCatalogError ?? t("contextPanel.reviewEmpty")}
+      emptyBody={workspaceReviewError ?? gitRepositoryCatalogError ?? t("contextPanel.reviewEmpty")}
       emptyTitle={t("contextPanel.review")}
-      loading={workspaceReviewLoading || (!activeWorkspaceReviewSnapshot && conversationReviewLoading)}
+      loading={workspaceReviewLoading}
       selection={diffReviewSelection}
       repositories={enabledGitRepositories}
       snapshot={activeReviewSnapshot}
@@ -884,12 +840,6 @@ function rememberWorkspaceReviewPanelCache(key: string, entry: WorkspaceReviewPa
     }
     workspaceReviewPanelCache.delete(oldestKey);
   }
-}
-
-// parseConversationDiffSourceAsync parses one conversation diff through the worker-only pipeline.
-// parseConversationDiffSourceAsync 通过 Worker 单轨流水线解析单个会话 diff。
-function parseConversationDiffSourceAsync(source: WorkspaceReviewConversationDiffSource): Promise<DiffPanelSnapshot> {
-  return parseUnifiedDiffAsync(source.rawDiff, source.source, "");
 }
 
 // diffHunkExpansionLoadingMessage formats the pending text for targeted hunk expansion.

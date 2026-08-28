@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use vulcan_session_core::v1::ids::{ApiCallId, RequestStreamId, Seq, ToolCallId};
 
 /// Maximum public tool-name length kept compatible with strict provider validators.
 /// 与严格 Provider 校验器兼容的公开工具名最大长度。
@@ -31,8 +32,8 @@ pub use request_streaming::{
 pub use schema_projection::project_tool_parameters_schema;
 pub use types::{
     ResolvedToolDefinition, ResolvedToolSet, VULCAN_TOOL_ERROR_DETAIL_KIND, VulcanPlanToolPolicy,
-    VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult, VulcanToolInvocationResult,
-    VulcanToolInvokeFuture, VulcanToolInvokeHandler, VulcanToolMode,
+    VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult, VulcanToolInvocationContext,
+    VulcanToolInvocationResult, VulcanToolInvokeFuture, VulcanToolInvokeHandler, VulcanToolMode,
     VulcanToolSchemaProjectionProfile, VulcanToolSourceKind,
 };
 

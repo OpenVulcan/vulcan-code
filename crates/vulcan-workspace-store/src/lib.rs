@@ -10,13 +10,10 @@ pub(crate) mod conversation_protocol {
     //! Thin crate-local alias for canonical conversation protocol types and rebuild helpers.
     //! 规范会话协议类型与重建辅助函数的 crate 内薄别名。
 
-    pub use vulcan_context::{
-        SessionConversationPayload, SessionConversationState,
-        conversation_state_from_session_messages, conversation_state_to_session_messages,
-    };
+    pub use vulcan_context::{SessionConversationPayload, SessionConversationState};
 
     #[cfg(test)]
-    pub use vulcan_context::{SessionConversationMessage, SessionProviderContinuationState};
+    pub use vulcan_context::SessionConversationMessage;
 }
 
 pub(crate) use vulcan_provider_config::config as provider_config;

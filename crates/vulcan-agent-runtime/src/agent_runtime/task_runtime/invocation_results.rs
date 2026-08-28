@@ -85,12 +85,6 @@ pub(super) fn task_session_record_has_cached_status(record: &TaskSessionRecord) 
     }
 }
 
-/// Returns whether persisted task metadata can be read without launching another backend execution.
-/// 返回持久化任务元数据是否可直接读取而无需再次启动后端执行。
-pub(super) fn task_session_metadata_has_cached_status(status: TaskSessionStatus) -> bool {
-    status.is_terminal()
-}
-
 /// Builds one cached task result from the in-memory task registry.
 /// 从内存任务注册表构建一条缓存任务结果。
 pub(super) fn build_cached_task_invocation_result_from_record(
@@ -110,42 +104,6 @@ pub(super) fn build_cached_task_invocation_result_from_record(
         subagent: record.subagent.clone(),
         result_text: record.last_result_text.clone(),
         updated_at: record.updated_at.clone(),
-    })
-}
-
-/// Builds one cached task result from persisted task metadata.
-/// 从持久化任务元数据构建一条缓存任务结果。
-pub(super) fn build_cached_task_invocation_result_from_metadata(
-    current_session_id: SessionId,
-    resolved_identifier: &ResolvedTaskSessionIdentifier,
-    metadata: &TaskSessionMetadata,
-    incoming_prompt: &str,
-) -> VulcanToolInvocationResult {
-    let parent_task_id = match metadata.parent {
-        ParentSessionRef::TaskSession {
-            parent_task_session_id,
-            ..
-        } => Some(Uuid::from(parent_task_session_id)),
-        ParentSessionRef::MainSession { .. } | ParentSessionRef::None => None,
-    };
-    let result_text = metadata
-        .last_result_summary
-        .clone()
-        .or_else(|| metadata.last_error.clone())
-        .unwrap_or_default();
-    build_cached_task_invocation_result(TaskCachedInvocationResultInput {
-        current_session_id,
-        task_id: resolved_identifier.task_id,
-        public_task_id: metadata.public_task_id.clone(),
-        display_title: metadata.display_title.clone(),
-        execution_status: status_name_for_task_session_status(metadata.status).to_string(),
-        parent_task_id,
-        depth: usize::from(metadata.depth),
-        prompt: incoming_prompt.to_string(),
-        description: metadata.description.clone(),
-        subagent: task_metadata_subagent_label(metadata),
-        result_text,
-        updated_at: metadata.updated_at.to_string(),
     })
 }
 

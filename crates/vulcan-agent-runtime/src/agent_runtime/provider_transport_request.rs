@@ -6,39 +6,14 @@ use crate::agent_runtime::provider_transport_retry::ProviderRetryPolicy;
 use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::model::SessionId;
-use std::{path::PathBuf, sync::Arc};
-use vulcan_ai_contract::AiExecutionRequest;
+use std::sync::Arc;
 use vulcan_core::types::{
     ConversationSnapshot as CoreConversationSnapshot,
     ProviderContextInjection as CoreProviderContextInjection,
+    ProviderPromptLayers as CoreProviderPromptLayers,
 };
+use vulcan_session_core::v1::context::LockedBaselineProjection;
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
-
-/// Exact recovery action selected from one claimed execution-retry snapshot.
-/// 从一份已认领执行重试快照中选出的精确恢复动作。
-#[derive(Debug, Clone)]
-pub(crate) enum ProviderTransportRecoveryAction {
-    /// Reconcile the retained per-tool batch before the next Provider request.
-    /// 在下一次 Provider 请求前协调已保留的逐工具批次。
-    ExecuteToolBatch {
-        /// Stable tool-call progress in original Provider order.
-        /// 按 Provider 原始顺序保存的稳定工具调用进度。
-        tools: Vec<vulcan_workbench_model::ExecutionRetryToolProgress>,
-        /// Optional user follow-up appended after every tool result is paired.
-        /// 在全部工具结果完成配对后追加的可选用户补充消息。
-        user_followup: Option<vulcan_workbench_model::ExecutionRetryUserFollowup>,
-    },
-    /// Resume the Provider loop from a retained canonical boundary.
-    /// 从保留的规范边界恢复 Provider 循环。
-    ResumeProviderLoop {
-        /// Optional user follow-up appended before the replacement Provider request.
-        /// 在替代 Provider 请求前追加的可选用户补充消息。
-        user_followup: Option<vulcan_workbench_model::ExecutionRetryUserFollowup>,
-    },
-    /// Finalize the retained tool-free assistant tail without a Provider request.
-    /// 不发起 Provider 请求，直接完成已保留的无工具助手尾部。
-    FinalizeAssistant,
-}
 
 /// Provider transport turn-start mode selected by the launch layer.
 /// 启动层选择的 Provider 传输回合启动模式。
@@ -99,9 +74,6 @@ pub(crate) struct ProviderTransportExecutionRequest {
     /// Whether this real dispatch writes complete session-local request traces.
     /// 本次真实分派是否写入完整的会话本地请求追踪。
     pub(crate) provider_request_trace_enabled: bool,
-    /// Exact session directory used for trace persistence without directory discovery.
-    /// 用于无需目录发现即可持久化追踪的精确会话目录。
-    pub(crate) session_storage_directory: Option<PathBuf>,
     /// Canonical provider API family used to group transport routing and shared protocol behavior.
     /// 用于归并传输路由与共享协议行为的规范 Provider 接口族。
     /// Runtime family used to select the concrete transport adapter implementation.
@@ -127,6 +99,12 @@ pub(crate) struct ProviderTransportExecutionRequest {
     /// Exact system preamble that should be visible to the outgoing provider request.
     /// 需要暴露给出站 Provider 请求的精确系统前导提示词。
     pub(crate) system_preamble: String,
+    /// Canonical typed prompt baseline proposed by the prompt owner.
+    /// 由提示词 owner 提出的规范强类型提示词基线。
+    pub(crate) locked_baseline: LockedBaselineProjection,
+    /// Request-dynamic prompt layers kept separate from the locked baseline.
+    /// 与锁定基线分离保存的请求动态提示词层。
+    pub(crate) dynamic_prompt_layers: CoreProviderPromptLayers,
     /// Exact outgoing prompt text for the current controller turn.
     /// 当前控制器回合的精确出站提示词文本。
     pub(crate) prompt: String,
@@ -136,15 +114,6 @@ pub(crate) struct ProviderTransportExecutionRequest {
     /// Canonical conversation snapshot consumed by the host-owned controller loop.
     /// 供宿主自有控制器循环消费的规范会话快照。
     pub(crate) core_snapshot: CoreConversationSnapshot,
-    /// Exact first public request used only by a claimed execution retry.
-    /// 仅由已认领执行重试使用的精确首个公共请求。
-    pub(crate) initial_provider_request: Option<AiExecutionRequest>,
-    /// Exact controller configuration restored by a claimed execution retry.
-    /// 由已认领执行重试恢复的精确控制器配置。
-    pub(crate) controller_config_override: Option<vulcan_core::types::ControllerConfig>,
-    /// Optional exact recovery action executed before normal Provider-loop startup.
-    /// 常规 Provider 循环启动前执行的可选精确恢复动作。
-    pub(crate) recovery_action: Option<ProviderTransportRecoveryAction>,
     /// Optional temperature override already normalized by the executor.
     /// 已由执行器归一化后的可选 temperature 覆盖值。
     pub(crate) temperature: Option<f64>,
@@ -205,18 +174,16 @@ pub(crate) struct ProviderTransportExecutionRequest {
 /// 返回一份可直接进入协议专用流准备阶段的完整自有请求。
 pub(crate) fn build_provider_transport_execution_request(
     provider_request_trace_enabled: bool,
-    session_storage_directory: Option<PathBuf>,
     provider_id: String,
     model_id: &str,
     workspace_path: &str,
     execution_mode: &str,
     system_preamble: &str,
+    dynamic_prompt_layers: CoreProviderPromptLayers,
+    locked_baseline: LockedBaselineProjection,
     prompt: &str,
     turn_start_mode: ProviderTransportTurnStartMode,
     core_snapshot: CoreConversationSnapshot,
-    initial_provider_request: Option<AiExecutionRequest>,
-    controller_config_override: Option<vulcan_core::types::ControllerConfig>,
-    recovery_action: Option<ProviderTransportRecoveryAction>,
     temperature: Option<f64>,
     max_turns: usize,
     task_runtime: Arc<TaskRuntime>,
@@ -234,18 +201,16 @@ pub(crate) fn build_provider_transport_execution_request(
 ) -> ProviderTransportExecutionRequest {
     ProviderTransportExecutionRequest {
         provider_request_trace_enabled,
-        session_storage_directory,
         provider_id,
         model_id: model_id.to_string(),
         workspace_path: workspace_path.to_string(),
         execution_mode: execution_mode.to_string(),
         system_preamble: system_preamble.to_string(),
+        dynamic_prompt_layers,
+        locked_baseline,
         prompt: prompt.to_string(),
         turn_start_mode,
         core_snapshot,
-        initial_provider_request,
-        controller_config_override,
-        recovery_action,
         temperature,
         max_turns,
         task_runtime,

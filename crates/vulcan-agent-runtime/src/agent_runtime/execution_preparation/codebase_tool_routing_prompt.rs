@@ -85,19 +85,21 @@ Select tools by the information required:
 - Do not use sequential text searches to explore related concepts when `vulcan_codebase_memory_search_graph` is available.
 - Do not use AST directory trees as a substitute for project architecture analysis."#;
 
-/// Appends request-scoped codebase tool-selection guidance only for a complete visible CBM contract.
-/// 仅在完整 CBM 契约真实可见时追加请求级 Codebase 工具选择说明。
+/// Builds request-scoped codebase tool-selection guidance only for a complete visible CBM contract.
+/// 仅在完整 CBM 契约真实可见时构建请求级 Codebase 工具选择说明。
 ///
 /// # Parameters
 /// 参数
-/// - `developer_segment`: Mutable Developer Prompt segment assembled for the current request.
-/// - `developer_segment`：为当前请求装配的可变 Developer Prompt 片段。
 /// - `visible_tools`: Final provider-visible tool descriptors after every host and model filter.
 /// - `visible_tools`：经过全部宿主与模型过滤后的最终 Provider 可见工具描述。
-pub(super) fn append_codebase_tool_routing_prompt(
-    developer_segment: &mut Option<String>,
+///
+/// # Returns
+/// 返回值
+/// Request-dynamic routing guidance, or `None` when the complete contract is unavailable.
+/// 请求动态路由说明；完整工具契约不可用时返回 `None`。
+pub(super) fn codebase_tool_routing_prompt(
     visible_tools: &[VulcanToolDescriptor],
-) {
+) -> Option<String> {
     // visibleManagedIds is the exact post-filter Vulcan-managed public tool-name set sent to the provider.
     // visibleManagedIds 是发送给 Provider 的精确过滤后 Vulcan 托管公开工具名集合。
     let visible_managed_ids = visible_tools
@@ -109,7 +111,7 @@ pub(super) fn append_codebase_tool_routing_prompt(
         .iter()
         .all(|tool_id| visible_managed_ids.contains(tool_id))
     {
-        return;
+        return None;
     }
 
     // visibleLuaSkillsIds is the exact post-filter LuaSkills public tool-name set sent to the provider.
@@ -130,14 +132,7 @@ pub(super) fn append_codebase_tool_routing_prompt(
         CODEBASE_MEMORY_ROUTING_PROMPT
     };
 
-    match developer_segment {
-        Some(segment) if !segment.trim().is_empty() => {
-            segment.push_str("\n\n");
-            segment.push_str(routing_prompt);
-        }
-        Some(segment) => *segment = routing_prompt.to_string(),
-        None => *developer_segment = Some(routing_prompt.to_string()),
-    }
+    Some(routing_prompt.to_string())
 }
 
 #[cfg(test)]
@@ -218,15 +213,10 @@ mod tests {
                 .iter()
                 .map(|tool_id| test_tool_descriptor(tool_id)),
         );
-        // developerSegment captures the conditional runtime contribution.
-        // developerSegment 捕获条件化运行时提示贡献。
-        let mut developer_segment = None;
-
-        append_codebase_tool_routing_prompt(&mut developer_segment, &visible_tools);
-
         // prompt is the final cross-family Developer Prompt contribution.
         // prompt 是最终的跨工具家族 Developer Prompt 贡献。
-        let prompt = developer_segment.expect("routing prompt should be appended");
+        let prompt = codebase_tool_routing_prompt(&visible_tools)
+            .expect("routing prompt should be produced");
         assert!(prompt.contains("## Codebase Tool Selection"));
         assert!(prompt.contains("`vulcan_codekit_rg`"));
         assert!(prompt.contains("`vulcan_codebase_memory_search_graph`"));
@@ -236,18 +226,10 @@ mod tests {
     /// 验证纯图谱提示词绝不引用缺失的 CodeKit 工具。
     #[test]
     fn appends_cbm_only_prompt_when_codekit_tools_are_absent() {
-        // developerSegment captures the CBM-only fallback contribution.
-        // developerSegment 捕获仅包含 CBM 的回退提示贡献。
-        let mut developer_segment = None;
-
-        append_codebase_tool_routing_prompt(
-            &mut developer_segment,
-            &codebase_memory_tool_descriptors(),
-        );
-
         // prompt is the final CBM-only Developer Prompt contribution.
         // prompt 是最终仅包含 CBM 的 Developer Prompt 贡献。
-        let prompt = developer_segment.expect("CBM-only routing prompt should be appended");
+        let prompt = codebase_tool_routing_prompt(&codebase_memory_tool_descriptors())
+            .expect("CBM-only routing prompt should be produced");
         assert!(prompt.contains("## Codebase Memory Tool Selection"));
         assert!(!prompt.contains("vulcan_codekit"));
     }
@@ -260,13 +242,7 @@ mod tests {
         // visibleTools 故意从必需 CBM 契约中省略 detect_changes。
         let mut visible_tools = codebase_memory_tool_descriptors();
         visible_tools.retain(|tool| tool.id != "vulcan_codebase_memory_detect_changes");
-        // developerSegment remains absent when the contract is incomplete.
-        // developerSegment 在契约不完整时保持缺失。
-        let mut developer_segment = None;
-
-        append_codebase_tool_routing_prompt(&mut developer_segment, &visible_tools);
-
-        assert!(developer_segment.is_none());
+        assert!(codebase_tool_routing_prompt(&visible_tools).is_none());
     }
 
     /// Verifies non-MCP tools cannot impersonate the CBM contract by occupying its public identifiers.
@@ -285,45 +261,13 @@ mod tests {
                 descriptor
             })
             .collect::<Vec<_>>();
-        // developerSegment must remain absent for an impersonated contract.
-        // developerSegment 对冒充契约必须保持缺失。
-        let mut developer_segment = None;
-
-        append_codebase_tool_routing_prompt(&mut developer_segment, &visible_tools);
-
-        assert!(developer_segment.is_none());
-    }
-
-    /// Verifies routing guidance is appended after an existing Developer Prompt segment.
-    /// 验证路由说明追加在既有 Developer Prompt 片段之后。
-    #[test]
-    fn appends_prompt_after_existing_developer_guidance() {
-        // developerSegment represents existing Prompt Skills and LuaSkills guidance.
-        // developerSegment 表示既有 Prompt Skills 与 LuaSkills 指导。
-        let mut developer_segment = Some(String::from("Existing developer guidance."));
-
-        append_codebase_tool_routing_prompt(
-            &mut developer_segment,
-            &codebase_memory_tool_descriptors(),
-        );
-
-        // prompt is the merged existing and CBM Developer Prompt text.
-        // prompt 是合并既有说明与 CBM 路由后的 Developer Prompt 文本。
-        let prompt = developer_segment.expect("combined developer prompt should exist");
-        assert!(prompt.starts_with("Existing developer guidance.\n\n"));
-        assert!(prompt.contains("## Codebase Memory Tool Selection"));
+        assert!(codebase_tool_routing_prompt(&visible_tools).is_none());
     }
 
     /// Verifies an empty final tool set never produces routing guidance.
     /// 验证最终工具集合为空时绝不产生路由说明。
     #[test]
     fn skips_prompt_for_empty_final_tool_set() {
-        // developerSegment starts absent and must remain absent.
-        // developerSegment 初始缺失且必须保持缺失。
-        let mut developer_segment = None;
-
-        append_codebase_tool_routing_prompt(&mut developer_segment, &[]);
-
-        assert!(developer_segment.is_none());
+        assert!(codebase_tool_routing_prompt(&[]).is_none());
     }
 }

@@ -23,11 +23,12 @@ use vulcan_core::types::{
 };
 use vulcan_hooks::SystemPromptHookBlock;
 use vulcan_luaskills_prompt::LuaSkillPromptEntry;
-use vulcan_prompt_composer::PromptOutputStyleSnapshot;
+use vulcan_prompt_composer::{AdditionalPromptSegment, PromptOutputStyleSnapshot};
 use vulcan_prompt_skills::ResolvedPromptSkill;
 use vulcan_session_boundary::{
     SessionBoundaryEvent, SessionBoundaryEventKind, SessionEventScope, SessionEventVisibility,
 };
+use vulcan_session_core::v1::ClientActionId;
 use vulcan_session_core::{
     CapabilityPolicySnapshot, ExecutionRuntimePolicy, ExecutionScope, ToolExposureSnapshot,
 };
@@ -291,9 +292,9 @@ pub struct ExecutionPreparationRequest {
     /// Optional immutable conversation Hook turn identifier captured by a Hook-enabled main-session request.
     /// 启用 Hook 的主会话请求捕获的可选不可变会话 Hook 回合标识。
     pub conversation_hook_turn_id: Option<String>,
-    /// Exact claimed execution snapshot that replaces prompt reconstruction for manual retry.
-    /// 在手动重试时替代提示词重构的精确已领取执行快照。
-    pub execution_retry_snapshot: Option<Arc<vulcan_workbench_model::ExecutionRetrySnapshot>>,
+    /// Optional durable client action that owns a V1 Continue execution.
+    /// 可选的可靠客户端动作，用于标识一项 V1 Continue 执行。
+    pub continuation_action_id: Option<ClientActionId>,
     /// Exact logical Provider-request continuation installed after a replay-safe host restart.
     /// 在可安全回放的宿主重启后安装的精确逻辑 Provider 请求延续身份。
     pub provider_request_continuation: Option<ExecutionProviderRequestContinuation>,
@@ -316,12 +317,6 @@ pub struct ExecutionPreparationRequest {
     /// 当前会话供应商路由租约预期的持久化非秘密身份。
     pub provider_route_lease_identity:
         Option<vulcan_workbench_model::SessionProviderRouteLeaseIdentity>,
-    /// Latest session-ledger Provider usage baseline matching the frozen route.
-    /// 与冻结路由匹配的最近会话账本 Provider 用量基线。
-    pub provider_usage_budget_baseline: Option<vulcan_workbench_model::SessionProviderCallRecord>,
-    /// Active session context generation used to reject stale usage anchors.
-    /// 用于拒绝过期用量锚点的活动会话上下文代际。
-    pub provider_usage_context_generation_id: Option<String>,
     /// Optional session-selected provider tool targets keyed by semantic capability.
     /// 按语义能力索引的可选会话级供应商工具目标选择。
     pub provider_tool_selections_override: Option<
@@ -349,9 +344,6 @@ pub struct ExecutionPreparationRequest {
     /// Optional child-agent prompt context routed through the shared prompt composer.
     /// 通过共享提示词组合器路由的可选子智能体提示词上下文。
     pub subagent_prompt_context: Option<ExecutionSubagentPromptContext>,
-    /// Optional file-domain root for task-session artifacts owned by this execution.
-    /// 本次执行拥有的可选子代理会话文件域根目录。
-    pub task_session_store_root: Option<PathBuf>,
     /// Exact storage directory for the session that owns this physical execution.
     /// 拥有本次物理执行的会话对应精确存储目录。
     pub session_storage_directory: Option<PathBuf>,
@@ -449,6 +441,9 @@ pub struct ExecutionPreparationRequest {
     /// Optional controller runtime used by host-owned tools that need durable workspace state.
     /// 需要持久工作区状态的宿主工具使用的可选控制器运行时。
     pub controller_runtime: Option<ControllerRuntimeHandle>,
+    /// Optional host-injected V1 Goal domain port used by native Goal tools.
+    /// 原生 Goal 工具使用的可选宿主注入 V1 Goal 领域端口。
+    pub native_goal_runtime: Option<Arc<dyn crate::tooling::native::NativeGoalRuntime>>,
     /// Optional project-authorized knowledge-library access snapshot for native tools.
     /// 原生工具使用的可选项目授权知识库访问快照。
     pub knowledge_access: Option<ExecutionKnowledgeAccessContext>,
@@ -474,13 +469,12 @@ impl ExecutionPreparationRequest {
     ///
     /// # Returns
     /// 返回值
-    /// Returns no value; the request becomes mutually exclusive between replay and stream continuation.
-    /// 不返回值；该请求会在重放动作与流延续身份之间保持互斥。
+    /// Returns no value; the request adopts the exact Provider continuation identity.
+    /// 不返回值；该请求采用精确的 Provider 延续身份。
     pub fn replace_retry_replay_with_provider_request_continuation(
         &mut self,
         continuation: ExecutionProviderRequestContinuation,
     ) {
-        self.execution_retry_snapshot = None;
         self.provider_request_continuation = Some(continuation);
     }
 }
@@ -582,6 +576,9 @@ pub struct ExecutionPreparation {
     /// Immutable conversation turn identifier when this execution owns one user-visible turn.
     /// 当本次执行拥有一个用户可见回合时使用的不可变会话回合标识。
     pub conversation_hook_turn_id: Option<String>,
+    /// Optional durable client action that owns a V1 Continue execution.
+    /// 可选的可靠客户端动作，用于标识一项 V1 Continue 执行。
+    pub continuation_action_id: Option<ClientActionId>,
     /// Active session title.
     /// 当前激活会话标题。
     pub session_title: String,
@@ -609,9 +606,6 @@ pub struct ExecutionPreparation {
     /// Workspace path captured for the run.
     /// 为本次运行捕获的工作区路径。
     pub workspace_path: String,
-    /// Optional file-domain root for task-session artifacts owned by this run.
-    /// 本次运行拥有的可选子代理会话文件域根目录。
-    pub task_session_store_root: Option<PathBuf>,
     /// Exact storage directory for session-local runtime artifacts emitted by this run.
     /// 本次运行发出的会话本地运行时工件所使用的精确存储目录。
     pub session_storage_directory: Option<PathBuf>,
@@ -645,9 +639,9 @@ pub struct ExecutionPreparation {
     /// Prompt entries for LuaSkills enabled through implicit host dispatch in this run.
     /// 本次运行中通过隐式宿主调度启用的 LuaSkills 提示词入口集合。
     pub implicit_luaskill_prompt_entries: Vec<LuaSkillPromptEntry>,
-    /// Optional developer prompt segment advertising the enabled prompt skills.
-    /// 向模型说明已启用提示词技能与隐式 LuaSkills 的可选开发者提示词片段。
-    pub prompt_skill_developer_segment: Option<String>,
+    /// Producer-typed developer prompt segments frozen for this prepared request.
+    /// 为当前已准备请求冻结、并由生产者强类型标注的开发者提示词片段。
+    pub additional_developer_segments: Vec<AdditionalPromptSegment>,
     /// Resolved skill names attached to the active agent.
     /// 附着在当前代理上的技能名称集合。
     pub skill_names: Vec<String>,
@@ -690,12 +684,6 @@ pub struct ExecutionPreparation {
     /// Request-level input-token budget limit used when building request budgets and budget guards.
     /// 构建请求预算与预算守卫时使用的请求级输入 Token 预算上限。
     pub context_budget_override: Option<usize>,
-    /// Latest session-ledger Provider usage baseline matching the frozen route.
-    /// 与冻结路由匹配的最近会话账本 Provider 用量基线。
-    pub provider_usage_budget_baseline: Option<vulcan_workbench_model::SessionProviderCallRecord>,
-    /// Active session context generation used to reject stale usage anchors.
-    /// 用于拒绝过期用量锚点的活动会话上下文代际。
-    pub provider_usage_context_generation_id: Option<String>,
     /// Optional layered context assembly captured from the final provider-facing request shape.
     /// 从最终面向 Provider 的请求形态捕获到的可选分层上下文装配结果。
     pub context_assembly: Option<ContextAssembly>,

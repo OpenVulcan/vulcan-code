@@ -2,6 +2,25 @@
 //! 会话列表服务处理器。
 
 use super::*;
+use crate::session_v1_lifecycle::{
+    archive_session_lifecycle_v1, delete_session_lifecycle_v1, rename_session_lifecycle_v1,
+    restore_session_lifecycle_v1,
+};
+use vulcan_workspace_store::workspace_store::{
+    SessionV1StoragePreflightOutcome, preflight_session_v1_storage, set_session_unread_v1,
+};
+
+/// Returns the current Unix millisecond timestamp within the V1 signed contract.
+/// 返回符合 V1 有符号契约的当前 Unix 毫秒时间戳。
+///
+/// # Returns / 返回值
+///
+/// A checked signed timestamp, or an explicit range failure.
+/// 返回受检的有符号时间戳，超出范围时返回显式错误。
+fn current_session_lifecycle_unix_millis() -> Result<i64, String> {
+    i64::try_from(current_unix_millis_value())
+        .map_err(|_| String::from("当前时间超出 V1 会话生命周期毫秒范围。"))
+}
 
 /// Renames one authoritative active conversation and reloads the workbench from persistence.
 /// 重命名一个权威活动会话，并从持久化层重新加载工作台。
@@ -34,20 +53,24 @@ pub(crate) async fn service_rename_conversation(
     let session_id = conversation_id
         .parse::<SessionId>()
         .map_err(|error| format!("invalid session id '{conversation_id}': {error}"))?;
-    // updated_at is the single commit timestamp written to metadata and SQLite.
-    // updated_at 是写入元数据与 SQLite 的单一提交时间戳。
-    let updated_at = current_unix_millis_text();
+    // updated_at_ms is the single semantic timestamp committed to durable V1 metadata.
+    // updated_at_ms 是提交到可靠 V1 metadata 的唯一语义时间戳。
+    let updated_at_ms = current_session_lifecycle_unix_millis()?;
     // controller_runtime is returned only after the selected session is still proven visible.
     // controller_runtime 仅在所选会话仍被证明可见后返回。
     let controller_runtime = controller_runtime_for_visible_session_from_state(&state, session_id)?;
-    // sessionPersistGuard serializes exact metadata and index title updates with same-session writers.
-    // sessionPersistGuard 将精确元数据及索引标题更新与同会话写入者串行化。
-    let _session_persist_guard = webui_session_persist_lock(session_id).lock_owned().await;
-    vulcan_workspace_store::workspace_store::rename_single_session(
-        controller_runtime,
+    let session_runtime_registry = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        Arc::clone(&guard.session_runtime_registry)
+    };
+    rename_session_lifecycle_v1(
+        &controller_runtime,
+        session_runtime_registry.as_ref(),
         session_id,
-        &normalized_name,
-        &updated_at,
+        normalized_name,
+        updated_at_ms,
     )
     .await
     .map_err(|error| format!("重命名会话失败：{error}"))?;
@@ -84,16 +107,12 @@ pub(crate) async fn service_archive_conversation(
     // controller_runtime deliberately does not revalidate the mutable active snapshot before the authoritative lookup.
     // controller_runtime 刻意不在权威查询前重复校验可变活动快照。
     let controller_runtime = controller_runtime_from_state(&state)?;
-    invalidate_webui_session_lifecycle_persist_versions(&state, session_id)?;
-    // persist_lock serializes the directory/index transition with every background session writer.
-    // persist_lock 将目录/索引转换与每个后台会话写入者串行化。
-    let persist_lock = webui_workspace_persist_lock();
-    // persist_guard remains held until the authoritative lifecycle mutation finishes.
-    // persist_guard 持有至权威生命周期变更完成。
-    let persist_guard = persist_lock.lock().await;
-    // sessionPersistGuards bridge the global lifecycle gate to the session-keyed hot writer channel.
-    // sessionPersistGuards 将全局生命周期闸门与会话键热写入通道衔接起来。
-    let _session_persist_guards = lock_webui_session_persist_channels([session_id]).await;
+    let session_runtime_registry = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        Arc::clone(&guard.session_runtime_registry)
+    };
     // vmm_lifecycle_fence blocks both stale references and replacement controllers until refresh commits.
     // vmm_lifecycle_fence 在刷新提交前同时阻止旧引用与替代控制器。
     let vmm_controller_registry = state
@@ -102,15 +121,14 @@ pub(crate) async fn service_archive_conversation(
         .vmm_controller_registry
         .clone();
     let vmm_lifecycle_fence = vmm_controller_registry.begin_lifecycle_transition([session_id])?;
-    // archive_result is inspected only after writers queued during the storage attempt are invalidated.
-    // archive_result 仅在存储尝试期间排队的写入者失效后才进行检查。
-    let archive_result = vulcan_workspace_store::workspace_store::archive_single_session(
-        controller_runtime,
+    archive_session_lifecycle_v1(
+        &controller_runtime,
+        session_runtime_registry.as_ref(),
         session_id,
+        current_session_lifecycle_unix_millis()?,
     )
-    .await;
-    invalidate_webui_session_lifecycle_persist_versions(&state, session_id)?;
-    archive_result?;
+    .await
+    .map_err(|error| format!("归档会话失败：{error}"))?;
     if let Some(runtime) = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?
@@ -123,12 +141,10 @@ pub(crate) async fn service_archive_conversation(
     // refresh_result updates retained lifecycle state while stale writers remain behind the gate.
     // refresh_result 在过期写入者仍被闸门阻挡时更新保留生命周期状态。
     let refresh_result = refresh_workbench_snapshot(state.clone()).await;
-    invalidate_webui_session_lifecycle_persist_versions(&state, session_id)?;
     // workbench is the authoritative retained projection committed by the refresh inside the persistence gate.
     // workbench 是持久化闸门内刷新所提交的权威保留投影。
     let workbench = refresh_result?;
     vmm_lifecycle_fence.release()?;
-    drop(persist_guard);
     let plugin_cleanup_failures =
         drain_vulcan_plugin_sessions_for_owners(&state, &[session_id]).await;
     if !plugin_cleanup_failures.is_empty() {
@@ -208,15 +224,12 @@ async fn apply_archived_conversation_batch(
     let _lifecycle_guard =
         begin_session_lifecycle_transition(&state, session_ids.iter().copied(), action_label)?;
     let controller_runtime = controller_runtime_from_state(&state)?;
-    for session_id in &session_ids {
-        invalidate_webui_session_lifecycle_persist_versions(&state, *session_id)?;
-    }
-    let persist_lock = webui_workspace_persist_lock();
-    let persist_guard = persist_lock.lock().await;
-    // sessionPersistGuards exclude all exact child writers in deterministic shard order.
-    // sessionPersistGuards 按确定性分片顺序排除全部精确子会话写入者。
-    let _session_persist_guards =
-        lock_webui_session_persist_channels(session_ids.iter().copied()).await;
+    let session_runtime_registry = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        Arc::clone(&guard.session_runtime_registry)
+    };
     let vmm_controller_registry = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?
@@ -245,31 +258,32 @@ async fn apply_archived_conversation_batch(
             }
         }
     }
+    let restore_now_ms = current_session_lifecycle_unix_millis()?;
     for session_id in &session_ids {
         match action {
             ArchivedConversationAction::Restore => {
-                vulcan_workspace_store::workspace_store::restore_archived_session(
-                    controller_runtime.clone(),
+                restore_session_lifecycle_v1(
+                    &controller_runtime,
+                    session_runtime_registry.as_ref(),
                     *session_id,
+                    restore_now_ms,
                 )
-                .await?;
+                .await
+                .map_err(|error| format!("恢复会话 `{session_id}` 失败：{error}"))?;
             }
             ArchivedConversationAction::Delete => {
-                vulcan_workspace_store::workspace_store::delete_archived_session(
-                    controller_runtime.clone(),
+                delete_session_lifecycle_v1(
+                    &controller_runtime,
+                    session_runtime_registry.as_ref(),
                     *session_id,
                 )
-                .await?;
+                .await
+                .map_err(|error| format!("删除会话 `{session_id}` 失败：{error}"))?;
             }
         }
-        invalidate_webui_session_lifecycle_persist_versions(&state, *session_id)?;
     }
     let workbench = refresh_workbench_snapshot(state.clone()).await?;
-    for session_id in &session_ids {
-        invalidate_webui_session_lifecycle_persist_versions(&state, *session_id)?;
-    }
     vmm_lifecycle_fence.release()?;
-    drop(persist_guard);
     Ok(workbench)
 }
 
@@ -428,14 +442,13 @@ pub(crate) async fn service_mark_conversation_read(
     let session_id = conversation_id
         .parse::<SessionId>()
         .map_err(|error| format!("invalid session id '{conversation_id}': {error}"))?;
-    let (controller_runtime, runtime_state_changed, workbench) = {
+    let (controller_runtime, workbench) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
             String::from("service is still starting; controller runtime is not ready")
         })?;
-        let mut runtime_state_changed = false;
         if let Some(runtime_state) =
             guard
                 .workspace_snapshot
@@ -448,7 +461,6 @@ pub(crate) async fn service_mark_conversation_read(
         {
             runtime_state.ui_state.unread = false;
             runtime_state.updated_at = current_unix_millis_text();
-            runtime_state_changed = true;
         }
         for conversation in guard
             .workbench
@@ -460,21 +472,15 @@ pub(crate) async fn service_mark_conversation_read(
         }
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         guard.workbench.revision = guard.workbench_generation;
-        let mut workbench = guard.workbench.clone();
-        refresh_selected_workbench_messages_from_runtime(&guard, &mut workbench);
-        (controller_runtime, runtime_state_changed, workbench)
+        let workbench = guard.workbench.clone();
+        (controller_runtime, workbench)
     };
 
-    if runtime_state_changed {
-        // The synchronous metadata writer captures the newest unread state without cloning workspace history.
-        // 同步元数据写入器捕获最新未读状态，且不克隆工作区历史。
-        persist_latest_retained_session_runtime_state_update(
-            &state,
-            &controller_runtime,
-            session_id,
-        )
-        .await?;
-    }
+    // The V1 SQLite row is the sole durable owner of the lightweight list unread projection.
+    // V1 SQLite 记录是轻量列表未读投影的唯一持久化所有者。
+    set_session_unread_v1(&controller_runtime, &session_id.to_string(), false)
+        .await
+        .map_err(|error| format!("标记会话已读失败：{error}"))?;
     Ok(workbench)
 }
 
@@ -496,20 +502,16 @@ pub(crate) async fn service_select_conversation(
         guard.controller_runtime.clone()
     };
     let cleanup_result = if let Some(controller_runtime) = controller_runtime {
-        // persist_guard serializes this authoritative check and exact index deletion with execution writes.
-        // persist_guard 将本次权威检查与精确索引删除同执行写入串行化。
-        let persist_lock = webui_workspace_persist_lock();
-        let _persist_guard = persist_lock.lock().await;
-        // sessionPersistGuards excludes a same-session writer while the stale exact index is removed.
-        // sessionPersistGuards 在删除过期精确索引期间排除同会话写入者。
-        let _session_persist_guards = lock_webui_session_persist_channels([session_id]).await;
-        // cleanup_result is true only when both lifecycle directories are absent and the exact stale index row is removed.
-        // cleanup_result 仅在两个生命周期目录均缺失且精确陈旧索引行已删除时为 true。
-        vulcan_workspace_store::workspace_store::cleanup_missing_session_index(
-            controller_runtime,
-            session_id,
-        )
-        .await?
+        // The admission guard prevents a concurrent lifecycle mutation while the exact V1 row is checked.
+        // 准入护栏用于在检查精确 V1 记录时阻止并发生命周期变更。
+        let _lifecycle_guard = begin_session_lifecycle_transition(&state, [session_id], "检查")?;
+        match preflight_session_v1_storage(&controller_runtime, &session_id.to_string())
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            SessionV1StoragePreflightOutcome::Ready { .. } => false,
+            SessionV1StoragePreflightOutcome::MissingStorageIndexRemoved { .. } => true,
+        }
     } else {
         false
     };
@@ -574,10 +576,6 @@ fn select_conversation_in_retained_state(
 
     workspace_snapshot.selected_session = session_id;
     guard.active_subagent_panel = None;
-    retain_hydrated_conversation_windows_for_workspace(
-        &mut guard.hydrated_conversation_windows,
-        &workspace_snapshot,
-    );
     let selected_runtime_state = workspace_snapshot.session_runtime_state.get(&session_id);
     if let Some(agent_runtime) = guard.agent_runtime.as_mut() {
         restore_webui_runtime_controls_for_session(
@@ -585,30 +583,15 @@ fn select_conversation_in_retained_state(
             selected_runtime_state,
         );
     }
-    // provider_configuration is the restored session-scoped reasoning preference used by the fast projection.
-    // provider_configuration 是快速投影使用的已恢复会话级思考偏好。
     let provider_configuration = guard
         .agent_runtime
         .as_ref()
         .map(|agent_runtime| agent_runtime.provider_configuration.clone());
-    let messages =
-        retained_selected_conversation_messages(&workspace_snapshot, session_id, conversation_id);
     let subagent_navigation =
         subagent_navigation_snapshot_from_cached_state(&mut guard, &workspace_snapshot)?;
-    let hydrated_windows = hydrated_conversation_window_summaries(
-        &guard.hydrated_conversation_windows,
-        &guard.webui_preloaded_unclosed_subagent_roots,
-    );
 
     guard.workbench.selected_conversation_id = Some(conversation_id.to_string());
-    guard.workbench.messages = messages;
     guard.workbench.subagent_navigation = subagent_navigation;
-    guard.workbench.hydrated_conversation_windows = hydrated_windows;
-    guard.workbench.conversation_hydration = guard
-        .workbench
-        .conversation_hydration
-        .take()
-        .filter(|progress| progress.session_id == conversation_id);
     sync_selected_conversation_fields_for_retained_workbench(&mut guard.workbench, conversation_id);
     guard.workspace_snapshot = Some(workspace_snapshot);
     if let Some(provider_configuration) = provider_configuration.as_ref() {
@@ -617,159 +600,6 @@ fn select_conversation_in_retained_state(
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
     Ok(Some(guard.workbench.clone()))
-}
-
-/// Projects retained transcript rows together with authoritative live runtime records.
-/// 将已保留转录行与权威实时运行时记录共同投影。
-///
-/// # Parameters
-/// 参数
-/// `workspace_snapshot` contains retained hydrated rows and live runtime records.
-/// `workspace_snapshot` 包含已保留水合行与实时运行时记录。
-/// `session_id` identifies the selected root conversation.
-/// `session_id` 标识选中的根会话。
-/// `conversation_id` is the string identifier used by WebUI messages.
-/// `conversation_id` 是 WebUI 消息使用的字符串标识。
-///
-/// # Returns
-/// 返回值
-/// A stable-id merged message list whose live stream bodies come from runtime state.
-/// 返回按稳定标识合并的消息列表，其中实时流正文来自运行时状态。
-fn retained_selected_conversation_messages(
-    workspace_snapshot: &WorkspaceSnapshot,
-    session_id: SessionId,
-    conversation_id: &str,
-) -> Vec<ConversationMessage> {
-    // retained_messages is the durable or hydrated transcript window for this session.
-    // retained_messages 是当前会话的持久化或已水合转录窗口。
-    let retained_messages = workspace_snapshot
-        .session_messages
-        .get(&session_id)
-        .map(Vec::as_slice)
-        .unwrap_or_default();
-    // runtime_entries projects the exact records that continue changing while the session is not selected.
-    // runtime_entries 投影会话未选中期间仍持续变化的精确记录。
-    let runtime_entries = workspace_snapshot
-        .session_runtime_state
-        .get(&session_id)
-        .map(|runtime_state| {
-            runtime_state
-                .conversation_state
-                .records
-                .iter()
-                .map(session_message_entry_from_conversation_record)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    // merged_messages preserves retained order and replaces matching ids with authoritative runtime bodies.
-    // merged_messages 保留既有顺序，并使用权威运行时正文替换相同标识的记录。
-    let merged_messages = merge_session_messages_with_runtime_event_entries(
-        retained_messages,
-        runtime_entries.as_slice(),
-    );
-    conversation_messages_from_session(
-        conversation_id,
-        merged_messages.as_slice(),
-        workspace_surface_allows_user_prompt_editing(workspace_snapshot, session_id, None),
-    )
-}
-
-/// Replaces one workbench snapshot's selected messages from an explicit workspace candidate.
-/// 从一份显式工作区候选替换工作台快照的当前会话消息。
-///
-/// # Parameters
-/// # 参数
-/// `workspace_snapshot` owns the retained transcript and runtime records at one consistent revision.
-/// `workspace_snapshot` 在同一一致 revision 下持有保留转录与运行时记录。
-/// `workbench` is the snapshot being prepared for publication.
-/// `workbench` 是正在准备发布的快照。
-///
-/// # Returns
-/// # 返回值
-/// Nothing; invalid draft selections leave the snapshot unchanged.
-/// 无返回值；草稿选择无效时保持快照不变。
-pub(crate) fn refresh_selected_workbench_messages_from_workspace(
-    workspace_snapshot: &WorkspaceSnapshot,
-    workbench: &mut WorkbenchSnapshot,
-) {
-    let Some(conversation_id) = workbench.selected_conversation_id.as_deref() else {
-        return;
-    };
-    let Ok(session_id) = conversation_id.parse::<SessionId>() else {
-        return;
-    };
-    if !workspace_snapshot
-        .sessions
-        .iter()
-        .any(|session| session.id == session_id)
-    {
-        return;
-    }
-    if workspace_snapshot
-        .session_messages
-        .contains_key(&session_id)
-    {
-        workbench.messages = retained_selected_conversation_messages(
-            workspace_snapshot,
-            session_id,
-            conversation_id,
-        );
-        return;
-    }
-    // runtimeMessages overlays exact live rows when the full workbench owns the only stable message window.
-    // runtimeMessages 在全量工作台持有唯一稳定消息窗口时叠加精确实时行。
-    let runtime_entries = workspace_snapshot
-        .session_runtime_state
-        .get(&session_id)
-        .map(|runtime_state| {
-            runtime_state
-                .conversation_state
-                .records
-                .iter()
-                .map(session_message_entry_from_conversation_record)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let runtime_messages = conversation_messages_from_session(
-        conversation_id,
-        runtime_entries.as_slice(),
-        workspace_surface_allows_user_prompt_editing(workspace_snapshot, session_id, None),
-    );
-    for runtime_message in runtime_messages {
-        if let Some(existing_message) = workbench
-            .messages
-            .iter_mut()
-            .find(|message| message.id == runtime_message.id)
-        {
-            *existing_message = runtime_message;
-        } else {
-            workbench.messages.push(runtime_message);
-        }
-    }
-}
-
-/// Replaces one workbench snapshot's selected messages with same-lock authoritative runtime projection.
-/// 使用同一锁内的权威运行时投影替换工作台快照的当前会话消息。
-///
-/// # Parameters
-/// # 参数
-/// `guard` owns the retained workspace and runtime records at one consistent revision.
-/// `guard` 在同一一致 revision 下持有保留工作区与运行时记录。
-/// `workbench` is the snapshot being prepared for a full-response or recovery boundary.
-/// `workbench` 是正在为全量响应或恢复边界准备的快照。
-///
-/// # Returns
-/// # 返回值
-/// Nothing; invalid draft selections or unavailable workspaces leave the snapshot unchanged.
-/// 无返回值；草稿选择无效或工作区不可用时保持快照不变。
-pub(crate) fn refresh_selected_workbench_messages_from_runtime(
-    guard: &ServiceBridgeState,
-    workbench: &mut WorkbenchSnapshot,
-) {
-    let Some(workspace_snapshot) = guard.workspace_snapshot.as_ref() else {
-        return;
-    };
-    refresh_selected_workbench_messages_from_workspace(workspace_snapshot, workbench);
 }
 
 /// Reprojects selected-only workbench fields from retained per-conversation caches.
@@ -841,8 +671,6 @@ mod tests {
             unread: false,
             attention: None,
             project_id: Some(String::from("project-a")),
-            fork_source: None,
-            continuation: None,
         };
         // workbench supplies the authoritative lifecycle domain after refresh commit.
         // workbench 提供刷新提交后的权威生命周期领域。

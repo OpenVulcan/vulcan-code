@@ -1,9 +1,7 @@
 //! Finished stream event orchestration.
 //! 流终态事件编排。
 
-use super::conversation_checkpoint::{
-    clear_execution_retry_snapshot_after_success, refreeze_claimed_execution_retry_snapshot,
-};
+use super::super::provider_v1_sink::ProviderV1FinishedDurability;
 use super::*;
 
 /// Outcome of handling one finished stream report.
@@ -41,6 +39,8 @@ pub(super) enum FinishedStreamEventOutcome {
 /// `execution_goal_id` 是在物理 Provider 边界绑定的最新目标身份。
 /// `retry_evidence` proves either a pre-dispatch failure or the latest exact physical Provider call bound to this stream owner.
 /// `retry_evidence` 证明分派前失败，或标识绑定到当前流所有者的最近一个精确物理 Provider 调用。
+/// `v1_finished_durability` carries the exact durable physical-API terminal and optional logical-Turn completion.
+/// `v1_finished_durability` 携带精确可靠的物理 API 终态与可选逻辑回合完成事实。
 /// `report` is the authoritative terminal report emitted by the Agent runtime.
 /// `report` 是 Agent 运行时发送的权威终态报告。
 ///
@@ -56,13 +56,26 @@ pub(super) async fn handle_finished_stream_event(
     active_stream_task_id: Uuid,
     stream_task_started_at: i128,
     execution_goal_id: Option<&str>,
-    retry_evidence: FailedExecutionStreamRetryEvidence,
+    v1_finished_durability: ProviderV1FinishedDurability,
     report: ExecutionRunReport,
 ) -> FinishedStreamEventOutcome {
+    let ProviderV1FinishedDurability {
+        api_terminal: v1_api_terminal_receipt,
+        turn_completion: turn_completion_receipt,
+        ..
+    } = v1_finished_durability;
+    // A nonempty promoted-input receipt keeps the logical Turn open and authorizes one exact physical continuation.
+    // 非空晋升输入回执会保持逻辑回合开放，并授权一次精确物理续跑。
+    let pending_in_turn_receipt = v1_api_terminal_receipt
+        .as_ref()
+        .filter(|receipt| !receipt.value.promoted_input_seqs.is_empty())
+        .map(|receipt| receipt.value.clone());
+    // Only the durable V1 Turn-completion receipt authorizes settlement and completed-Turn hooks.
+    // 只有可靠 V1 回合完成回执可以授权结束事件与已完成回合 Hook。
+    let logical_turn_completed = turn_completion_receipt.is_some();
     // The report session is the sole owner key for all terminal mutations.
     // 报告会话是全部终态变更的唯一所有权键。
     let finished_session_id = report.session_id;
-    let terminal_error = report.error.clone();
     webui_trace(
         "stream_finished",
         format!(
@@ -162,17 +175,6 @@ pub(super) async fn handle_finished_stream_event(
     // terminalGoalId 优先使用流内物理请求绑定，并回退到原子保留的任务绑定。
     let terminal_goal_id = execution_goal_id.or(retained_goal_id.as_deref());
 
-    let response_checkpoint_result = require_segmented_session_directory_from_state(
-        task_state,
-        &controller_runtime.data_root,
-        finished_session_id,
-    )
-    .and_then(|session_directory| {
-        record_webui_provider_response_checkpoint(&session_directory, &report)
-    });
-    if let Err(error) = response_checkpoint_result {
-        eprintln!("[webui-service] provider response checkpoint write failed: {error}");
-    }
     // Goal elapsed time uses whole seconds and saturates invalid platform conversions to zero.
     // 目标耗时使用整秒，并将无效的平台转换饱和为零。
     let goal_elapsed_seconds = current_unix_millis_value()
@@ -213,34 +215,6 @@ pub(super) async fn handle_finished_stream_event(
         format!("session={finished_session_id}"),
     );
 
-    // Boundary events are captured before report ownership moves into the in-memory projection.
-    // 边界事件在报告所有权移入内存投影前完成捕获。
-    let terminal_lifecycle = report
-        .turn_completed_boundary_event(
-            u64::try_from(current_unix_millis_value()).unwrap_or_default(),
-        )
-        .map(|terminal_boundary_event| {
-            // Final assistant boundaries precede the hidden terminal boundary in lifecycle storage.
-            // 最终助手边界在生命周期存储中位于隐藏终态边界之前。
-            let final_boundary_events = report
-                .final_assistant_boundary_event(
-                    u64::try_from(current_unix_millis_value()).unwrap_or_default(),
-                )
-                .into_iter()
-                .collect::<Vec<_>>();
-            // The preparation title is authoritative; missing failure preparation uses the established placeholder.
-            // 准备阶段标题是权威来源；失败报告缺失准备信息时使用既定占位标题。
-            let session_title = report
-                .preparation
-                .as_ref()
-                .map(|preparation| preparation.session_title.clone())
-                .unwrap_or_else(|| String::from("Untitled"));
-            (
-                final_boundary_events,
-                terminal_boundary_event,
-                session_title,
-            )
-        });
     // Measures terminal report projection, including turn stats and final session state.
     // 衡量终态报告投影耗时，包括统计行与最终会话状态。
     let final_report_apply_started_at = current_unix_millis_value();
@@ -248,34 +222,32 @@ pub(super) async fn handle_finished_stream_event(
         "stream_final_report_apply_start",
         format!("session={finished_session_id}"),
     );
-    // The optional apply result gates lifecycle, hook, and persistence work after projection failure.
-    // 可选应用结果在投影失败后阻止生命周期、Hook 与持久化工作。
-    // terminalProjectionFallbackRequired records whether the fail-closed phase must be persisted after retry invalidation finishes.
-    // terminalProjectionFallbackRequired 记录重试失效完成后是否必须持久化失败关闭阶段。
-    let (final_report_apply, terminal_projection_fallback_required) =
-        match apply_execution_report_to_memory(app, task_state, agent_runtime, report) {
-            Ok(apply) => (Some(apply), false),
-            Err(error) => {
-                eprintln!("[webui-service] apply final report failed: {error}");
-                // A terminal report projection error must never leave the visible conversation running after ownership is released.
-                // 终态报告投影错误绝不能在所有权释放后仍让可见会话保持运行中。
-                let fallback_required = match apply_session_phase(
-                    app,
-                    task_state,
-                    finished_session_id,
-                    SessionRunPhase::Failed,
-                ) {
-                    Ok(()) => true,
-                    Err(projection_error) => {
-                        eprintln!(
-                            "[webui-service] apply final report fallback phase failed: {projection_error}"
-                        );
-                        false
-                    }
-                };
-                (None, fallback_required)
+    // The optional apply result owns only process-local UI state and completion-hook inputs.
+    // 可选应用结果只负责进程内 UI 状态与完成 Hook 输入。
+    let final_report_apply = match apply_execution_report_to_memory(
+        app,
+        task_state,
+        agent_runtime,
+        report,
+    ) {
+        Ok(apply) => Some(apply),
+        Err(error) => {
+            eprintln!("[webui-service] apply final report failed: {error}");
+            // A terminal report projection error must never leave the visible conversation running after ownership is released.
+            // 终态报告投影错误绝不能在所有权释放后仍让可见会话保持运行中。
+            if let Err(projection_error) = apply_session_phase(
+                app,
+                task_state,
+                finished_session_id,
+                SessionRunPhase::Failed,
+            ) {
+                eprintln!(
+                    "[webui-service] apply final report fallback phase failed: {projection_error}"
+                );
             }
-        };
+            None
+        }
+    };
     webui_trace_if_slow(
         "stream_final_report_apply_slow",
         final_report_apply_started_at,
@@ -284,221 +256,16 @@ pub(super) async fn handle_finished_stream_event(
             final_report_apply.is_some()
         ),
     );
-    if let Some(apply) = final_report_apply.as_ref()
-        && !apply.terminal_transcript_entries.is_empty()
-        && let Err(error) = spawn_exact_session_transcript_entries_persist_task(
-            task_state.clone(),
-            controller_runtime.clone(),
-            finished_session_id,
-            apply.terminal_transcript_entries.clone(),
-            Some(String::from("terminal_report_immutable_suffix")),
-        )
-    {
-        eprintln!(
-            "[webui-service] persist terminal report immutable suffix failed: session={finished_session_id} error={error}"
-        );
-    }
-    // clearedRetrySnapshotId is eligible for physical cleanup only after the cleared main reference is durably committed.
-    // clearedRetrySnapshotId 仅在主引用清除状态可靠提交后才允许执行物理清理。
-    let mut cleared_retry_snapshot_reference = None;
-    let retry_lifecycle_result = match (terminal_error.as_deref(), final_report_apply.is_some()) {
-        (Some(error), _) => match retry_evidence {
-            FailedExecutionStreamRetryEvidence::ProvenNotDispatchedBeforeProviderDispatch => {
-                refreeze_claimed_execution_retry_snapshot_before_provider_dispatch(
-                    task_state,
-                    controller_runtime,
-                    finished_session_id,
-                    error,
-                )
-            }
-            FailedExecutionStreamRetryEvidence::RuntimeBoundary(provider_call_binding) => {
-                refreeze_claimed_execution_retry_snapshot(
-                    task_state,
-                    controller_runtime,
-                    finished_session_id,
-                    provider_call_binding,
-                    error,
-                )
-            }
-        }
-        .map_err(|error| error.to_string()),
-        (None, true) => {
-            clear_execution_retry_snapshot_after_success(task_state, finished_session_id).map(
-                |reference| {
-                    cleared_retry_snapshot_reference = reference;
-                },
-            )
-        }
-        (None, false) => invalidate_execution_retry_reference(
-            task_state,
-            finished_session_id,
-            "semantic_output_observed",
-            "The provider completed, but the terminal projection failed; replay is unsafe.",
-        ),
-    };
-    if let Err(error) = retry_lifecycle_result {
-        eprintln!("[webui-service] execution retry terminal transition failed: {error}");
-        if let Err(invalidation_error) = invalidate_execution_retry_reference(
-            task_state,
-            finished_session_id,
-            "retry_snapshot_transition_failed",
-            "The execution retry sidecar failed its terminal transition and was invalidated.",
-        ) {
-            eprintln!(
-                "[webui-service] execution retry reference invalidation failed: {invalidation_error}"
-            );
-        }
-    }
-    // terminalStatePersistenceRequired covers both an accepted report and its explicit failed-phase fallback.
-    // terminalStatePersistenceRequired 同时覆盖已接纳报告及其显式失败阶段回退。
-    let terminal_state_persistence_required =
-        final_report_apply.is_some() || terminal_projection_fallback_required;
-    // expectedRetryReference binds persistence compensation to the exact terminal retry identity.
-    // expectedRetryReference 将持久化补偿绑定到精确终态重试身份。
-    let expected_retry_reference =
-        retained_execution_retry_reference(task_state, finished_session_id);
-    if let Err(error) = expected_retry_reference.as_ref() {
-        eprintln!(
-            "[webui-service] read terminal retry reference before persistence failed: {error}"
-        );
-    }
-    // terminalStatePersisted is the sole authority for follow-up turns, hooks, and lifecycle publication.
-    // terminalStatePersisted 是后续回合、Hook 与生命周期发布的唯一权威依据。
-    let mut terminal_state_persisted = false;
-    if terminal_state_persistence_required {
-        // finalPersistStartedAt measures both the primary write and any fail-closed replacement write.
-        // finalPersistStartedAt 衡量主写入以及可能发生的失败关闭替代写入。
-        let final_persist_started_at = current_unix_millis_value();
-        // Drain accepted immutable suffixes before the terminal snapshot can advance the same disk checkpoint.
-        // 在终态快照推进同一磁盘检查点之前，先排空已经接纳的不可变后缀。
-        if let Err(error) = await_session_transcript_writer_durable(finished_session_id).await {
-            eprintln!(
-                "[webui-service] live transcript writer drain before terminal persistence failed: session={finished_session_id} error={error}"
-            );
-        }
-        // primaryPersistenceResult captures only the exact retained session after write admission.
-        // primaryPersistenceResult 在取得写入许可后只捕获精确保留会话。
-        let primary_persistence_result = persist_latest_retained_workspace_session_update(
-            task_state,
-            controller_runtime.clone(),
-            finished_session_id,
-        )
-        .await;
-        match primary_persistence_result {
-            Ok(()) => terminal_state_persisted = true,
-            Err(error) => {
-                eprintln!("[webui-service] persist final report failed: {error}");
-                // fallbackAllowed remains true for a successful turn with no retry token, or after exact token invalidation.
-                // fallbackAllowed 在成功回合没有重试令牌，或精确令牌已失效后保持为 true。
-                let fallback_allowed = match expected_retry_reference.as_ref() {
-                    Ok(Some(expected_reference)) => {
-                        match invalidate_execution_retry_reference_if_matches(
-                            task_state,
-                            finished_session_id,
-                            expected_reference,
-                            "retry_snapshot_transition_failed",
-                            "The terminal conversation state could not be persisted and its retry token was invalidated.",
-                        ) {
-                            Ok(invalidated) => invalidated,
-                            Err(invalidation_error) => {
-                                eprintln!(
-                                    "[webui-service] invalidate unpersisted terminal retry reference failed: {invalidation_error}"
-                                );
-                                false
-                            }
-                        }
-                    }
-                    Ok(None) => true,
-                    Err(_) => false,
-                };
-                if fallback_allowed {
-                    // blockedPersistenceResult retries only the latest in-memory revision after fail-closed invalidation.
-                    // blockedPersistenceResult 仅在失败关闭失效后重试最新内存修订。
-                    let blocked_persistence_result =
-                        persist_latest_retained_workspace_session_update(
-                            task_state,
-                            controller_runtime.clone(),
-                            finished_session_id,
-                        )
-                        .await;
-                    match blocked_persistence_result {
-                        Ok(()) => terminal_state_persisted = true,
-                        Err(fallback_error) => eprintln!(
-                            "[webui-service] persist blocked final report fallback failed: {fallback_error}"
-                        ),
-                    }
-                }
-            }
-        }
-        webui_trace_if_slow(
-            "stream_final_persist_slow",
-            final_persist_started_at,
-            format!("session={finished_session_id} persisted={terminal_state_persisted}"),
-        );
-    }
-    // terminalSessionDirectory is resolved once from the exact retained locator and reused by terminal side effects.
-    // terminalSessionDirectory 从精确保留定位信息解析一次，并由终态副作用复用。
-    let terminal_session_directory = if terminal_state_persisted {
-        match require_segmented_session_directory_from_state(
-            task_state,
-            &controller_runtime.data_root,
-            finished_session_id,
-        ) {
-            Ok(session_directory) => Some(session_directory),
-            Err(error) => {
-                webui_trace(
-                    "stream_terminal_exact_locator_failed",
-                    format!("session={finished_session_id} error={error}"),
-                );
-                None
-            }
-        }
-    } else {
-        None
-    };
-    if terminal_state_persisted {
-        // Writer ownership and runtime-cache ownership are independent: a text-only turn may
-        // populate RuntimeSystemUpdate cache without ever creating a transcript writer.
-        // 写入器所有权与运行时缓存所有权彼此独立：纯文本回合可能建立 RuntimeSystemUpdate
-        // 缓存，却从未创建转录写入器。
-        let _ = release_session_transcript_writer_after_terminal_persist(finished_session_id);
-        if let Some(session_directory) = terminal_session_directory.as_ref()
-            && let Err(error) =
-                vulcan_workspace_store::workspace_store::release_session_runtime_system_update_cache(
-                    session_directory,
-                )
-        {
-            eprintln!(
-                "[webui-service] release terminal runtime SystemUpdate cache failed: session={finished_session_id} error={error}"
-            );
-        }
-    }
-    if terminal_state_persisted {
-        // Physical cleanup occurs only after the durable main document no longer references this immutable body.
-        // 只有在可靠主文档不再引用该不可变正文后，才执行物理清理。
-        if let Some(reference) = cleared_retry_snapshot_reference.as_ref() {
-            let cleanup_result = terminal_session_directory
-                .as_ref()
-                .ok_or_else(|| {
-                    String::from("Exact terminal session storage locator is unavailable.")
-                })
-                .and_then(|session_directory| {
-                    vulcan_workspace_store::workspace_store::delete_execution_retry_snapshot(
-                        session_directory,
-                        finished_session_id,
-                        reference,
-                    )
-                });
-            if let Err(error) = cleanup_result {
-                eprintln!(
-                    "[webui-service] post-persistence execution retry garbage collection failed: {error}"
-                );
-            }
-        }
-    }
-    // The exact marker opens admission only after the latest terminal or fail-closed replacement revision is durable.
-    // 仅在最新终态或失败关闭替代修订可靠落盘后，精确标记才开放准入。
-    if terminal_state_persisted {
+    // The durable V1 ApiStats receipt is the only terminal authority allowed to reopen admission.
+    // 可靠 V1 ApiStats 回执是唯一允许重新开放准入的终态权威。
+    let terminal_authority_persisted = v1_api_terminal_receipt.is_some();
+    webui_trace(
+        "stream_terminal_authority",
+        format!("session={finished_session_id} v1_api_terminal={terminal_authority_persisted}"),
+    );
+    // The exact marker opens admission only after the authoritative V1 terminal is durable.
+    // 精确标记只在权威 V1 终态可靠落盘后开放准入。
+    if terminal_authority_persisted {
         if let Err(error) = terminal_persistence_owner.release() {
             eprintln!(
                 "[webui-service] finished stream terminal-persistence owner release failed: session={finished_session_id} error={error}"
@@ -509,89 +276,43 @@ pub(super) async fn handle_finished_stream_event(
         // 未释放即丢弃会有意保留权威进程内准入阻塞。
         drop(terminal_persistence_owner);
     }
-    if let Err(error) =
-        emit_conversation_continuation_summary_changed(app, task_state, finished_session_id)
-    {
-        eprintln!(
-            "[webui-service] continuation summary refresh after terminal persistence failed: {error}"
-        );
-    }
 
-    if terminal_state_persisted
-        && let Some(apply) = final_report_apply.as_ref()
-        && !apply.vmm_lifecycle_events.is_empty()
-    {
-        // vmm_lifecycle_events contain only stable identities, hashes, counters, and byte totals.
-        // vmm_lifecycle_events 仅包含稳定身份、哈希、计数与字节总量。
-        let vmm_lifecycle_events = apply.vmm_lifecycle_events.clone();
-        if let Some(vmm_audit_session_directory) = terminal_session_directory.clone() {
-            spawn_service_task(async move {
-                let timestamp = current_unix_millis_text();
-                if let Err(error) = crate::vmm_runtime_audit::record_vmm_lifecycle_events(
-                    &vmm_audit_session_directory,
-                    finished_session_id,
-                    &timestamp,
-                    vmm_lifecycle_events,
-                ) {
-                    webui_trace(
-                        "runtime_vmm_terminal_audit_failed",
-                        format!("session={finished_session_id} error={error}"),
-                    );
-                }
-            });
-        } else {
-            webui_trace(
-                "runtime_vmm_terminal_audit_failed",
-                format!(
-                    "session={finished_session_id} error=exact session storage locator is unavailable"
-                ),
-            );
-        }
-    }
-
-    if terminal_state_persisted
-        && final_report_apply.is_some()
-        && let Some((final_boundary_events, terminal_boundary_event, _session_title)) =
-            terminal_lifecycle
-        && let Some(session_directory) = terminal_session_directory.clone()
-    {
-        // The cloned runtime moves into the non-blocking external lifecycle task.
-        // 克隆后的运行时移入非阻塞外部生命周期任务。
-        spawn_service_task(async move {
-            // Lifecycle latency is measured inside the spawned task to exclude scheduling delay ambiguity.
-            // 生命周期延迟在生成任务内部测量，以排除调度延迟歧义。
-            let lifecycle_started_at = current_unix_millis_value();
-            if let Err(error) = finish_session_external_turn_lifecycle(
-                &session_directory,
-                finished_session_id,
-                final_boundary_events,
-                terminal_boundary_event,
-            ) {
-                eprintln!("[webui-service] append session terminal boundary failed: {error}");
-            }
-            webui_trace_if_slow(
-                "stream_terminal_lifecycle_finish_slow",
-                lifecycle_started_at,
-                format!("session={finished_session_id}"),
-            );
-        });
-    }
-
-    // Chained turns start only after the accepted terminal state and detached retry reference are durable.
-    // 链式回合仅在已接纳终态与已分离重试引用可靠落盘后启动。
-    let started_next_prompt = if terminal_state_persisted {
+    // The durable V1 Turn receipt alone selects and authorizes a successor; legacy persistence cannot veto it.
+    // 可靠 V1 回合回执独自选择并授权后继；旧持久化不得否决该事实。
+    let started_next_prompt = if let Some(receipt) = turn_completion_receipt {
         maybe_start_webui_turn_chain_after_finished(
             app,
             task_state,
             controller_runtime,
             agent_runtime,
             finished_session_id,
+            receipt,
         )
         .await
+    } else if let Some(receipt) = pending_in_turn_receipt {
+        match start_exact_v1_pending_in_turn(
+            app,
+            task_state,
+            controller_runtime,
+            agent_runtime,
+            finished_session_id,
+            receipt,
+        )
+        .await
+        {
+            Ok(started) => started,
+            Err(error) => {
+                eprintln!(
+                    "[webui-service] dispatch exact V1 in-turn continuation failed: session={finished_session_id} error={error}"
+                );
+                false
+            }
+        }
     } else {
         false
     };
-    if terminal_state_persisted
+    if terminal_authority_persisted
+        && logical_turn_completed
         && let Some(apply) = final_report_apply.as_ref()
         && let Some(event) = conversation_run_settled_event_from_terminal_facts(
             finished_session_id,
@@ -606,7 +327,9 @@ pub(super) async fn handle_finished_stream_event(
     }
     // A completion request exists only when terminal memory projection opened a completed-turn hook.
     // 仅当终态内存投影打开完成回合 Hook 时才存在完成请求。
-    if terminal_state_persisted
+    if terminal_authority_persisted
+        && logical_turn_completed
+        && !started_next_prompt
         && let Some(completion_request) = final_report_apply
             .as_ref()
             .and_then(|apply| apply.completion_request.clone())
@@ -614,7 +337,6 @@ pub(super) async fn handle_finished_stream_event(
         spawn_conversation_completion_hook_task(
             app.clone(),
             task_state.clone(),
-            controller_runtime.clone(),
             agent_runtime.clone(),
             completion_request,
         );
@@ -635,8 +357,8 @@ pub(super) async fn handle_finished_stream_event(
 /// `active_stream_task_id` 是持有终态副作用的精确流身份。
 /// `outcome` exists only when the completion gate declared the logical turn final.
 /// `outcome` 仅在完成闸门声明逻辑回合最终结束时存在。
-/// `started_next_prompt` indicates whether mailbox, queue, or goal continuation started another turn.
-/// `started_next_prompt` 表示 mailbox、队列或目标续跑是否启动了另一回合。
+/// `started_next_prompt` indicates whether an exact logical successor or same-Turn physical continuation started.
+/// `started_next_prompt` 表示精确逻辑后继或同一回合的物理续跑是否已启动。
 /// `occurred_at` is the service timestamp captured for the emitted event.
 /// `occurred_at` 是为发出事件捕获的服务时间戳。
 ///

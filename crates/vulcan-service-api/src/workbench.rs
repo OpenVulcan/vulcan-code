@@ -73,17 +73,6 @@ pub struct WorkbenchSnapshot {
     /// Currently selected conversation identifier.
     /// 当前选中的会话标识。
     pub selected_conversation_id: Option<String>,
-    /// Conversation messages shown in the main timeline.
-    /// 主时间线展示的会话消息。
-    pub messages: Vec<ConversationMessage>,
-    /// Hydrated conversation body windows retained by the service.
-    /// 服务端已保留的会话正文窗口。
-    #[serde(default)]
-    pub hydrated_conversation_windows: Vec<HydratedConversationWindowSummary>,
-    /// Current lazy conversation body hydration progress.
-    /// 当前懒加载会话正文水合进度。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub conversation_hydration: Option<ConversationHydrationProgress>,
     /// Subagent navigation projected for the currently selected parent conversation.
     /// 为当前选中父会话投影出的子代理导航状态。
     #[serde(default, skip_serializing_if = "Option::is_none")]

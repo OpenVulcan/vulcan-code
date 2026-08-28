@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
+use vulcan_core::types::ConversationAttachment;
 use vulcan_provider_adapters::{
     AvailableProviderToolTarget, ManifestSourceLayer, MediaUnderstandingBackendMode,
     MediaUnderstandingBackendSelection, PersistedAiConfiguration, ProviderToolCapabilityKind,
@@ -40,6 +41,9 @@ const PROVIDER_TOOL_VIDEO_OUTPUT_BYTE_LIMIT: usize = 512 * 1024 * 1024;
 /// Maximum wall-clock time allowed for one provider resource download.
 /// 单个供应商资源下载允许的最大墙钟时间。
 const PROVIDER_TOOL_RESOURCE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+/// Stable host-result kind carrying exact managed generated attachments.
+/// 携带精确托管生成附件的稳定宿主结果类型。
+pub(crate) const GENERATED_ATTACHMENTS_HOST_RESULT_KIND: &str = "generated_attachments";
 
 /// Stable model-extension capabilities exposed independently from selected targets.
 /// 独立于已选目标稳定暴露的模型扩展能力。
@@ -475,12 +479,13 @@ fn build_model_extension_executor_candidate(
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Visible,
         request_streaming: None,
-        invoke: Arc::new(move |arguments, owner_session_id| {
+        invoke: Arc::new(move |arguments, context| {
             let runtime = Arc::clone(&runtime);
             let configuration = configuration.clone();
             let workspace_root = workspace_root.clone();
             let catalog = Arc::clone(&catalog);
             Box::pin(async move {
+                let owner_session_id = Some(context.session_id);
                 let (model, provider_arguments) = parse_model_extension_invocation(arguments)?;
                 let selected = catalog
                     .get(&capability)
@@ -727,12 +732,12 @@ fn render_model_extension_parameters(
             "args_schema": target.target.contract.input_schema
         }));
     }
-    if let Some(requested_model) = requested_model.as_deref() {
-        if models.is_empty() {
-            return Err(format!(
-                "Model `{requested_model}` is not currently enabled for capability `{capability_name}`."
-            ));
-        }
+    if let Some(requested_model) = requested_model.as_deref()
+        && models.is_empty()
+    {
+        return Err(format!(
+            "Model `{requested_model}` is not currently enabled for capability `{capability_name}`."
+        ));
     }
     let payload = json!({
         "kind": "model_extension_parameters",
@@ -993,13 +998,14 @@ fn build_direct_provider_tool_candidate(
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Visible,
         request_streaming: None,
-        invoke: Arc::new(move |arguments, owner_session_id| {
+        invoke: Arc::new(move |arguments, context| {
             let runtime = Arc::clone(&runtime);
             let configuration = configuration.clone();
             let workspace_root = workspace_root.clone();
             let target_selection = target_selection.clone();
             let media_input_projection = media_input_projection.clone();
             Box::pin(async move {
+                let owner_session_id = Some(context.session_id);
                 let mut cancellation_guard = ProviderTaskCancellationOnDrop::new(
                     Arc::clone(&runtime),
                     owner_session_id.clone(),
@@ -1156,6 +1162,7 @@ async fn render_provider_tool_result(
         }
         ProviderToolNormalizedOutput::Composite(composite) => {
             let resources = stage_provider_resources(workspace_root, composite.resources).await?;
+            let has_generated_resources = !resources.host_resources.is_empty();
             let model_payload = json!({
                 "kind": "composite",
                 "composite": {
@@ -1168,26 +1175,33 @@ async fn render_provider_tool_result(
                 },
                 "upstream_response_id": result.upstream_response_id.clone()
             });
-            let host_payload = json!({
-                "kind": "composite",
-                "composite": {
-                    "text": composite.text,
-                    "resources": resources.host_resources,
-                    "embeddings": composite.embeddings,
-                    "reranks": composite.reranks,
-                    "searches": composite.searches,
-                    "extracts": composite.extracts
-                },
-                "upstream_response_id": result.upstream_response_id
-            });
-            Ok(
-                VulcanToolInvocationResult::from_model_output(model_payload).with_host_result(
-                    VulcanToolHostResult {
-                        kind: String::from("provider_tool_output"),
-                        payload: host_payload,
-                    },
-                ),
-            )
+            let host_result = if has_generated_resources {
+                VulcanToolHostResult {
+                    kind: String::from(GENERATED_ATTACHMENTS_HOST_RESULT_KIND),
+                    payload: json!({
+                        "outputs": resources.host_resources,
+                        "upstream_response_id": result.upstream_response_id
+                    }),
+                }
+            } else {
+                VulcanToolHostResult {
+                    kind: String::from("provider_tool_output"),
+                    payload: json!({
+                        "kind": "composite",
+                        "composite": {
+                            "text": composite.text,
+                            "resources": resources.host_resources,
+                            "embeddings": composite.embeddings,
+                            "reranks": composite.reranks,
+                            "searches": composite.searches,
+                            "extracts": composite.extracts
+                        },
+                        "upstream_response_id": result.upstream_response_id
+                    }),
+                }
+            };
+            Ok(VulcanToolInvocationResult::from_model_output(model_payload)
+                .with_host_result(host_result))
         }
     }
 }
@@ -1201,7 +1215,7 @@ struct StagedProviderResources {
     model_resources: Vec<Value>,
     /// Full canonical attachment descriptors retained only by the host.
     /// 仅由宿主保留的完整规范附件描述。
-    host_resources: Vec<Value>,
+    host_resources: Vec<ConversationAttachment>,
 }
 
 /// Stages unified provider resources and builds model/card output.
@@ -1230,7 +1244,7 @@ async fn render_provider_resource_result(
         "resources": resources.model_resources
     }))
     .with_host_result(VulcanToolHostResult {
-        kind: String::from("generated_attachments"),
+        kind: String::from(GENERATED_ATTACHMENTS_HOST_RESULT_KIND),
         payload,
     }))
 }
@@ -1319,11 +1333,7 @@ async fn stage_provider_resources(
             "mime_type": attachment.mime_type.as_str(),
             "byte_len": attachment.byte_len
         }));
-        host_resources.push(
-            serde_json::to_value(&attachment).map_err(|error| {
-                format!("Failed to serialize staged provider resource: {error}")
-            })?,
-        );
+        host_resources.push(attachment);
     }
     Ok(StagedProviderResources {
         model_resources,

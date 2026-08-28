@@ -75,6 +75,7 @@ pub fn build_vulcan_tools_manager(
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     workspace_root: Option<PathBuf>,
     controller_runtime: Option<ControllerRuntimeHandle>,
+    native_goal_runtime: Option<Arc<dyn crate::tooling::native::NativeGoalRuntime>>,
     knowledge_access: Option<crate::agent_runtime::ExecutionKnowledgeAccessContext>,
     candidate_native_tool_ids: Vec<String>,
     candidate_luaskills_tools: Vec<RuntimeEntryDescriptor>,
@@ -130,6 +131,7 @@ pub fn build_vulcan_tools_manager(
         let tool_id = definition.descriptor.id.clone();
         let workspace_root_for_context = workspace_root.clone();
         let controller_runtime_for_context = controller_runtime.clone();
+        let native_goal_runtime_for_context = native_goal_runtime.clone();
         let knowledge_access_for_context = knowledge_access.clone();
         let enabled_prompt_skill_names_for_context = enabled_prompt_skill_names.clone();
         let prepared_prompt_skills_for_context = prepared_prompt_skills.clone();
@@ -142,11 +144,12 @@ pub fn build_vulcan_tools_manager(
             ai_visible: definition.descriptor.ai_visible,
             plan_policy: native_plan_policy(&definition.descriptor),
             request_streaming: definition.request_streaming.clone(),
-            invoke: std::sync::Arc::new(move |args, session_id| {
+            invoke: std::sync::Arc::new(move |args, context| {
                 let catalog = catalog.clone();
                 let tool_id = tool_id.clone();
                 let workspace_root = workspace_root_for_context.clone();
                 let controller_runtime = controller_runtime_for_context.clone();
+                let goal_runtime = native_goal_runtime_for_context.clone();
                 let knowledge_access = knowledge_access_for_context.clone();
                 let prompt_skill_user_root = prompt_skill_user_root_for_context.clone();
                 let enabled_prompt_skill_names = enabled_prompt_skill_names_for_context.clone();
@@ -159,12 +162,11 @@ pub fn build_vulcan_tools_manager(
                             &tool_id,
                             NativeToolExecutionRequest {
                                 arguments: args,
-                                session_id: session_id
-                                    .as_deref()
-                                    .and_then(|value| Uuid::parse_str(value).ok()),
+                                session_id: Uuid::parse_str(&context.session_id).ok(),
                                 spill_root: None,
                                 workspace_root,
                                 controller_runtime,
+                                goal_runtime,
                                 knowledge_access,
                                 enabled_prompt_skill_names,
                                 prepared_prompt_skills,
@@ -240,7 +242,7 @@ pub fn build_vulcan_tools_manager(
                     VulcanPlanToolPolicy::Hidden
                 },
                 request_streaming: None,
-                invoke: Arc::new(move |arguments, owner_session_id| {
+                invoke: Arc::new(move |arguments, context| {
                     let runtime = runtime.clone();
                     let tool_id = tool_id.clone();
                     let workspace_root = workspace_root.clone();
@@ -248,9 +250,7 @@ pub fn build_vulcan_tools_manager(
                         let runtime = runtime.ok_or_else(|| {
                             format!("Vulcan Plugin runtime is unavailable for tool `{tool_id}`.")
                         })?;
-                        let owner_session_id = owner_session_id.ok_or_else(|| {
-                            format!("Vulcan Plugin tool `{tool_id}` requires a conversation owner.")
-                        })?;
+                        let owner_session_id = context.session_id;
                         let workspace_root = workspace_root.ok_or_else(|| {
                             format!("Vulcan Plugin tool `{tool_id}` requires a workspace root.")
                         })?;
@@ -306,7 +306,7 @@ pub fn build_vulcan_tools_manager(
             ai_visible: true,
             plan_policy: VulcanPlanToolPolicy::HeuristicText(canonical_name.clone()),
             request_streaming: None,
-            invoke: std::sync::Arc::new(move |args, session_id| {
+            invoke: std::sync::Arc::new(move |args, context| {
                 let runtime = runtime.clone();
                 let canonical_name = canonical_name.clone();
                 let skill_id = skill_id.clone();
@@ -321,7 +321,7 @@ pub fn build_vulcan_tools_manager(
                     let args = inject_host_managed_luaskill_sid_if_needed(
                         args,
                         entry_declares_luaskill_sid,
-                        session_id.as_deref(),
+                        Some(context.session_id.as_str()),
                         &canonical_name,
                     )?;
                     let args = inject_host_managed_pwd_if_needed(
@@ -330,9 +330,7 @@ pub fn build_vulcan_tools_manager(
                         workspace_root.as_deref(),
                         &canonical_name,
                     )?;
-                    let parsed_session_id = session_id
-                        .as_deref()
-                        .and_then(|value| Uuid::parse_str(value).ok());
+                    let parsed_session_id = Uuid::parse_str(&context.session_id).ok();
                     let invocation_context = build_luaskills_tool_invocation_context(
                         parsed_session_id,
                         "host-tool",
@@ -415,7 +413,7 @@ pub fn build_vulcan_tools_manager(
             ai_visible: true,
             plan_policy: VulcanPlanToolPolicy::HeuristicText(tool_name.clone()),
             request_streaming: None,
-            invoke: std::sync::Arc::new(move |args, session_id| {
+            invoke: std::sync::Arc::new(move |args, invocation_context| {
                 let tool = tool.clone();
                 let managed_context = managed_context.clone();
                 Box::pin(async move {
@@ -425,13 +423,8 @@ pub fn build_vulcan_tools_manager(
                                 "Codebase Memory authorization is unavailable for this execution.",
                             )
                         })?;
-                        let session_id = session_id
-                            .as_deref()
-                            .ok_or_else(|| {
-                                String::from(
-                                    "Codebase Memory requires a host execution session identifier.",
-                                )
-                            })?
+                        let session_id = invocation_context
+                            .session_id
                             .parse()
                             .map_err(|error| {
                                 format!(

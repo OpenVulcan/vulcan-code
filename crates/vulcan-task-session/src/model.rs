@@ -1,45 +1,36 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use vulcan_session_core::{
-    ExecutionRuntimePolicy, ParentSessionRef, RootSessionId, SessionEffectiveConfig, SessionNodeId,
-    SessionRequestedConfig,
-};
 
-/// Stable task-session identifier.
-/// 稳定子代理会话标识符。
-pub type TaskSessionId = SessionNodeId;
-
-/// Runtime status for a segmented task session.
-/// 分段子代理会话的运行状态。
+/// Process-local lifecycle status for one subagent execution.
+/// 单次子代理执行的进程内生命周期状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskSessionStatus {
-    /// Task session has been created but not started.
-    /// 子代理会话已创建但尚未启动。
+    /// The child execution has been created but not started.
+    /// 子代理执行已创建但尚未启动。
     Created,
-    /// Task session is currently running.
-    /// 子代理会话正在运行。
+    /// The child execution is currently running.
+    /// 子代理执行正在运行。
     Running,
-    /// Task session is waiting for nested child tasks.
-    /// 子代理会话正在等待嵌套子任务。
+    /// The child execution is waiting for nested child tasks.
+    /// 子代理执行正在等待嵌套子任务。
     WaitingChildren,
-    /// Task session is waiting for a follow-up prompt.
-    /// 子代理会话正在等待后续提示词。
+    /// The child execution is waiting for a follow-up prompt.
+    /// 子代理执行正在等待后续提示词。
     WaitingFollowup,
-    /// Task session completed successfully.
-    /// 子代理会话已成功完成。
+    /// The child execution completed successfully.
+    /// 子代理执行已成功完成。
     Completed,
-    /// Task session failed.
-    /// 子代理会话已失败。
+    /// The child execution failed.
+    /// 子代理执行已失败。
     Failed,
-    /// Task session was stopped.
-    /// 子代理会话已停止。
+    /// The child execution was stopped.
+    /// 子代理执行已停止。
     Stopped,
-    /// Task session is compacting its context.
-    /// 子代理会话正在压缩上下文。
+    /// The child execution is compacting its request context.
+    /// 子代理执行正在压缩请求上下文。
     Compacting,
-    /// Task session has been archived with its parent.
-    /// 子代理会话已随父级归档。
+    /// The process-local child record was archived from the active registry.
+    /// 进程内子代理记录已从活动注册表归档。
     Archived,
 }
 
@@ -88,313 +79,4 @@ mod tests {
         assert!(!TaskSessionStatus::Compacting.is_terminal());
         assert!(!TaskSessionStatus::Archived.is_terminal());
     }
-}
-
-/// Compact task-session summary used by routers and parent indexes.
-/// 路由器和父级索引使用的紧凑子代理会话摘要。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TaskSessionSummary {
-    /// Root main session identifier.
-    /// 根主会话标识符。
-    pub root_session_id: RootSessionId,
-    /// Task session identifier.
-    /// 子代理会话标识符。
-    pub task_session_id: TaskSessionId,
-    /// Public task identifier shown to users and parent nodes.
-    /// 显示给用户和父节点的公开任务标识符。
-    pub public_task_id: String,
-    /// Display title for the task session.
-    /// 子代理会话显示标题。
-    pub display_title: String,
-    /// Current task-session status.
-    /// 当前子代理会话状态。
-    pub status: TaskSessionStatus,
-    /// Direct parent reference.
-    /// 直接父级引用。
-    pub parent: ParentSessionRef,
-    /// Last update timestamp in milliseconds.
-    /// 最近更新时间毫秒值。
-    pub updated_at: u64,
-    /// Optional last result summary.
-    /// 可选的最近结果摘要。
-    pub last_result_summary: Option<String>,
-}
-
-/// Compact task-session mirror loaded from the root main session metadata index.
-/// 从根主会话元数据索引加载的紧凑子代理会话镜像。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TaskSessionMirrorSummary {
-    /// Root main session identifier.
-    /// 根主会话标识符。
-    pub root_session_id: RootSessionId,
-    /// Task session identifier.
-    /// 子代理会话标识符。
-    pub task_session_id: TaskSessionId,
-    /// Public task identifier used by parent-facing orchestration tools.
-    /// 父级编排工具使用的公开任务标识符。
-    pub public_task_id: String,
-    /// Direct parent reference for this task session.
-    /// 当前子代理会话的直接父级引用。
-    pub parent: ParentSessionRef,
-    /// Display title for the task session.
-    /// 子代理会话显示标题。
-    pub display_title: String,
-    /// Optional human-readable task description.
-    /// 可选的面向人的任务描述。
-    pub description: Option<String>,
-    /// Subagent profile payload preserved for display and audit.
-    /// 为显示与审计保留的子代理配置载荷。
-    pub subagent: Value,
-    /// Current task-session status.
-    /// 当前子代理会话状态。
-    pub status: TaskSessionStatus,
-    /// Agent source kind recorded by the task metadata mirror.
-    /// 子任务元数据镜像记录的代理来源类型。
-    pub agent_kind: String,
-    /// Agent profile audit payload recorded by the task metadata mirror.
-    /// 子任务元数据镜像记录的代理画像审计载荷。
-    pub agent_profile: Value,
-    /// Task metadata file path relative to the root session directory.
-    /// 相对根会话目录的子任务元数据文件路径。
-    pub metadata_file: Option<String>,
-    /// Active task segment path relative to the root session directory.
-    /// 相对根会话目录的活动子任务分段路径。
-    pub active_segment: Option<String>,
-    /// Total child task JSONL line count recorded in the mirror.
-    /// 镜像中记录的子任务 JSONL 总行数。
-    pub line_count: u64,
-    /// Creation timestamp in milliseconds.
-    /// 创建时间毫秒值。
-    pub created_at: u64,
-    /// Last update timestamp in milliseconds.
-    /// 最近更新时间毫秒值。
-    pub updated_at: u64,
-    /// Optional last result summary.
-    /// 可选的最近结果摘要。
-    pub last_result_summary: Option<String>,
-    /// Optional last error message.
-    /// 可选的最近错误信息。
-    pub last_error: Option<String>,
-}
-
-/// Persistent metadata stored in the segmented task session metadata.json file.
-/// 保存在分段子代理会话 metadata.json 文件中的持久元数据。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TaskSessionMetadata {
-    /// Schema version for task-session metadata.
-    /// 子代理会话元数据结构版本。
-    pub schema_version: u32,
-    /// Root main session identifier.
-    /// 根主会话标识符。
-    pub root_session_id: RootSessionId,
-    /// Task session identifier.
-    /// 子代理会话标识符。
-    pub task_session_id: TaskSessionId,
-    /// Public task identifier chosen by the caller or profile.
-    /// 调用方或配置选择的公开任务标识符。
-    pub public_task_id: String,
-    /// Direct parent session reference.
-    /// 直接父级会话引用。
-    pub parent: ParentSessionRef,
-    /// Nesting depth under the root main session.
-    /// 根主会话下的嵌套深度。
-    pub depth: u16,
-    /// Display title for the task session.
-    /// 子代理会话显示标题。
-    pub display_title: String,
-    /// Optional human-readable task description.
-    /// 可选的面向人的任务描述。
-    pub description: Option<String>,
-    /// Resolved subagent profile identifier.
-    /// 已解析的子代理配置标识符。
-    pub subagent_profile_id: Option<String>,
-    /// Whether parent configuration participated in resolution.
-    /// 父级配置是否参与解析。
-    pub inherit_parent_config: bool,
-    /// Current task-session status.
-    /// 当前子代理会话状态。
-    pub status: TaskSessionStatus,
-    /// Optional reason for the most recent stopped or archived state.
-    /// 最近一次停止或归档状态的可选原因。
-    #[serde(default)]
-    pub stop_reason: Option<String>,
-    /// Runtime policy frozen for this task session.
-    /// 为该子代理会话固化的运行时策略。
-    pub runtime_policy: ExecutionRuntimePolicy,
-    /// Fixed agent prompt captured when the task session was created.
-    /// 创建子代理会话时捕获的固定代理提示词。
-    #[serde(default)]
-    pub agent_prompt_snapshot: Option<String>,
-    /// Requested configuration stored for audit.
-    /// 为审计保存的请求配置。
-    pub requested_config: SessionRequestedConfig,
-    /// Effective configuration stored for replay and recovery.
-    /// 为重放和恢复保存的有效配置。
-    pub effective_config: SessionEffectiveConfig,
-    /// Creation timestamp in milliseconds.
-    /// 创建时间毫秒值。
-    pub created_at: u64,
-    /// Last update timestamp in milliseconds.
-    /// 最近更新时间毫秒值。
-    pub updated_at: u64,
-    /// Optional last result summary.
-    /// 可选的最近结果摘要。
-    pub last_result_summary: Option<String>,
-    /// Optional last error message.
-    /// 可选的最近错误信息。
-    pub last_error: Option<String>,
-}
-
-/// Initialization payload for a newly created task session metadata document.
-/// 新建子代理会话元数据文档的初始化载荷。
-pub struct TaskSessionMetadataInit {
-    /// Root conversation session identifier.
-    /// 根对话会话标识。
-    pub root_session_id: RootSessionId,
-    /// Durable task session identifier.
-    /// 持久化子任务会话标识。
-    pub task_session_id: TaskSessionId,
-    /// Parent session reference.
-    /// 父级会话引用。
-    pub parent: ParentSessionRef,
-    /// Public model-visible task identifier.
-    /// 模型可见的公开任务标识。
-    pub public_task_id: String,
-    /// User-facing display title.
-    /// 面向用户的显示标题。
-    pub display_title: String,
-    /// Requested configuration stored for audit.
-    /// 为审计保存的请求配置。
-    pub requested_config: SessionRequestedConfig,
-    /// Effective configuration stored for replay and recovery.
-    /// 为重放和恢复保存的有效配置。
-    pub effective_config: SessionEffectiveConfig,
-    /// Depth from root session.
-    /// 相对根会话的深度。
-    pub depth: u16,
-    /// Creation timestamp in milliseconds.
-    /// 创建时间毫秒值。
-    pub timestamp_ms: u64,
-}
-
-impl TaskSessionMetadata {
-    /// Builds metadata for a newly created task session.
-    /// 构建新建子代理会话的元数据。
-    pub fn new(init: TaskSessionMetadataInit) -> Self {
-        let TaskSessionMetadataInit {
-            root_session_id,
-            task_session_id,
-            parent,
-            public_task_id,
-            display_title,
-            requested_config,
-            effective_config,
-            depth,
-            timestamp_ms,
-        } = init;
-        Self {
-            schema_version: 1,
-            root_session_id,
-            task_session_id,
-            public_task_id,
-            parent,
-            depth,
-            display_title,
-            description: None,
-            subagent_profile_id: effective_config.subagent_profile_id.clone(),
-            inherit_parent_config: effective_config.inherit_parent_config,
-            status: TaskSessionStatus::Created,
-            stop_reason: None,
-            runtime_policy: ExecutionRuntimePolicy::task_session(),
-            agent_prompt_snapshot: None,
-            requested_config,
-            effective_config,
-            created_at: timestamp_ms,
-            updated_at: timestamp_ms,
-            last_result_summary: None,
-            last_error: None,
-        }
-    }
-
-    /// Creates a compact summary from this metadata.
-    /// 从该元数据创建紧凑摘要。
-    pub fn to_summary(&self) -> TaskSessionSummary {
-        TaskSessionSummary {
-            root_session_id: self.root_session_id,
-            task_session_id: self.task_session_id,
-            public_task_id: self.public_task_id.clone(),
-            display_title: self.display_title.clone(),
-            status: self.status,
-            parent: self.parent.clone(),
-            updated_at: self.updated_at,
-            last_result_summary: self.last_result_summary.clone(),
-        }
-    }
-}
-
-/// Parent-side task invocation event kind.
-/// 父级侧子代理调用事件类型。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TaskInvocationEventKind {
-    /// Task session was created.
-    /// 子代理会话已创建。
-    TaskCreated,
-    /// Task session was started.
-    /// 子代理会话已启动。
-    TaskStarted,
-    /// Task session checkpoint was saved.
-    /// 子代理会话检查点已保存。
-    TaskCheckpoint,
-    /// Task session completed.
-    /// 子代理会话已完成。
-    TaskCompleted,
-    /// Task session failed.
-    /// 子代理会话已失败。
-    TaskFailed,
-    /// Task session was stopped.
-    /// 子代理会话已停止。
-    TaskStopped,
-    /// Task context was compacted.
-    /// 子代理上下文已压缩。
-    TaskCompacted,
-    /// Task session was resumed.
-    /// 子代理会话已恢复。
-    TaskResumed,
-}
-
-/// Parent-side append-only invocation event.
-/// 父级侧追加式调用事件。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TaskInvocationEvent {
-    /// Stable event identifier.
-    /// 稳定事件标识符。
-    pub event_id: String,
-    /// Root main session identifier.
-    /// 根主会话标识符。
-    pub root_session_id: RootSessionId,
-    /// Direct parent session reference.
-    /// 直接父级会话引用。
-    pub parent: ParentSessionRef,
-    /// Task session identifier.
-    /// 子代理会话标识符。
-    pub task_session_id: TaskSessionId,
-    /// Monotonic sequence inside the parent task log.
-    /// 父级任务日志内的单调序号。
-    pub sequence: u64,
-    /// Invocation event kind.
-    /// 调用事件类型。
-    pub kind: TaskInvocationEventKind,
-    /// Task-session status carried by the event.
-    /// 该事件携带的子代理会话状态。
-    pub status: TaskSessionStatus,
-    /// Optional task prompt recorded for indexing and audit.
-    /// 可选的任务提示词记录，用于索引和审计。
-    pub prompt: Option<String>,
-    /// Unix timestamp in milliseconds.
-    /// Unix 毫秒时间戳。
-    pub timestamp_ms: u64,
-    /// Event payload owned by the task-session layer.
-    /// 由子代理会话层拥有的事件载荷。
-    pub payload: Value,
 }

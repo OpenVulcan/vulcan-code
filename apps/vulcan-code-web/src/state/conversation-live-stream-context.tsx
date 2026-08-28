@@ -1,7 +1,6 @@
 import React from "react";
 import {
   ConversationLiveStreamStore,
-  type ConversationLiveStreamRevision,
   toolRequestProgressKey,
   transientReasoningStatusKey,
 } from "./conversation-live-stream-store";
@@ -44,33 +43,6 @@ export function useConversationLiveStreamStore(): ConversationLiveStreamStore {
     throw new Error("ConversationLiveStreamProvider is missing");
   }
   return store;
-}
-
-// useConversationLiveStreamRevision subscribes one component to one exact streamed message.
-// useConversationLiveStreamRevision 让单个组件订阅一条精确流式消息。
-// Parameters: key is the exact compound stream identity, or null to disable the subscription.
-// 参数：key 是精确复合流身份；为 null 时禁用订阅。
-// Returns: the latest immutable revision, or null when the keyed stream does not exist.
-// 返回值：最新不可变 revision；对应流不存在时返回 null。
-export function useConversationLiveStreamRevision(
-  key: string | null,
-): ConversationLiveStreamRevision | null {
-  // store is stable for the complete Workbench mount.
-  // store 在整个 Workbench 挂载周期保持稳定。
-  const store = useConversationLiveStreamStore();
-  // subscribe binds React only to the selected stream key.
-  // subscribe 只把 React 绑定到选定流身份。
-  const subscribe = React.useCallback(
-    (listener: () => void) => (key ? store.subscribe(key, listener) : () => {}),
-    [key, store],
-  );
-  // getSnapshot returns an immutable revision object and never materializes the full body.
-  // getSnapshot 返回不可变版本对象，且绝不物化完整正文。
-  const getSnapshot = React.useCallback(
-    () => (key ? store.getRevision(key) : null),
-    [key, store],
-  );
-  return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 // useConversationTransientReasoningStatus subscribes to one ephemeral reasoning status collection.

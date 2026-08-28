@@ -108,6 +108,7 @@ async fn dispatcher_collects_system_prompt_hook_blocks() {
                         content: String::from("User prefers concise answers."),
                         source: Some(String::from("test")),
                         phase: SystemPromptHookPhase::FirstSession,
+                        baseline_provenance: None,
                     }],
                     ..HookResult::default()
                 })

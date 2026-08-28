@@ -143,18 +143,6 @@ pub enum PendingPromptPanelEntryState {
     Inserted,
 }
 
-/// Drop target used to reorder one visible pending-prompt panel entry.
-/// 用于重排单条可见待发送提示词面板项的落点。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PendingPromptPanelDropTarget {
-    /// Insert the dragged entry before one concrete visible row.
-    /// 将正在拖拽的条目插入到某个具体可见行之前。
-    Before(String),
-    /// Insert the dragged entry at the tail of the visible queue.
-    /// 将正在拖拽的条目插入到可见队列尾部。
-    End,
-}
-
 impl Default for PendingPromptPanelEntryState {
     /// Returns the default visible prompt-panel entry state used for older persisted snapshots.
     /// 返回旧持久化快照恢复时使用的默认可见队列项状态。
@@ -165,7 +153,7 @@ impl Default for PendingPromptPanelEntryState {
 
 /// One visible user-authored prompt retained inside the dedicated insertion panel above the composer.
 /// 保留在提示词输入框上方独立插入面板中的一条用户可见提示词项。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PendingPromptPanelEntry {
     /// Stable panel-entry identifier used for reordering, editing, and insertion tracking.
     /// 用于重排、编辑与插入跟踪的稳定面板项标识。
@@ -235,12 +223,8 @@ pub struct SessionTranscriptUiState {
     /// 跨重启持久化保存的可见消息折叠标识集合。
     #[serde(default)]
     pub collapsed_message_ids: BTreeSet<String>,
-    /// Pending prompt queue persisted with the session so queued follow-ups survive reloads.
-    /// 随会话一起持久化保存的待发送提示词队列，用于让排队跟进跨重载保留。
-    #[serde(default)]
-    pub pending_prompt_queue: Vec<PendingSessionPromptEntry>,
-    /// Visible prompt-panel queue persisted with the session so user-authored staged inserts survive reloads independently from the internal system queue.
-    /// 随会话一起持久化保存的可见提示词面板队列，使用户分批插入项可以独立于内部系统队列跨重载保留。
+    /// Visible prompt-panel projection rebuilt from authoritative V1 queued inputs.
+    /// 从权威 V1 排队输入重建的可见提示词面板投影。
     #[serde(default)]
     pub pending_prompt_panel_queue: Vec<PendingPromptPanelEntry>,
     /// Composer draft state persisted per session so switching sessions restores independent input text and attachments.
@@ -258,7 +242,6 @@ impl SessionTranscriptUiState {
     /// 返回该转录界面状态是否不包含任何需要持久化的用户可见状态。
     pub fn is_empty(&self) -> bool {
         self.collapsed_message_ids.is_empty()
-            && self.pending_prompt_queue.is_empty()
             && self.pending_prompt_panel_queue.is_empty()
             && self.composer_draft.is_empty()
             && !self.unread

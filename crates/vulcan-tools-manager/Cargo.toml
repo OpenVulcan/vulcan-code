@@ -12,4 +12,5 @@ workspace = true
 
 [dependencies]
 serde_json.workspace = true
+vulcan-session-core.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }

@@ -1,26 +1,164 @@
 use super::*;
 use crate::tooling::native::NativeToolRuntimeSnapshot;
 use crate::tooling::native::{goal_created_response_value, goal_status_allows_terminal_update};
+use std::sync::Mutex;
+
+/// Deterministic in-memory V1 Goal port used to verify the native tool boundary.
+/// 用于验证 native 工具边界的确定性内存 V1 Goal 端口。
+#[derive(Debug, Default)]
+struct NativeGoalRuntimeFixture {
+    /// Current authoritative Goal snapshot for the fixture session.
+    /// 夹具会话当前的权威 Goal 快照。
+    goal: Mutex<Option<NativeGoalSnapshot>>,
+}
+
+impl NativeGoalRuntimeFixture {
+    /// Builds one native-tool request bound to this exact fixture and session.
+    /// 构建一条绑定到当前精确夹具与会话的 native 工具请求。
+    fn request(
+        self: &Arc<Self>,
+        session_id: SessionId,
+        arguments: serde_json::Value,
+    ) -> NativeToolExecutionRequest {
+        NativeToolExecutionRequest {
+            session_id: Some(session_id),
+            goal_runtime: Some(self.clone()),
+            ..test_native_request(arguments)
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl NativeGoalRuntime for NativeGoalRuntimeFixture {
+    /// Reads the exact current fixture Goal.
+    /// 读取夹具当前的精确 Goal。
+    async fn get_goal(&self, session_id: SessionId) -> Result<Option<NativeGoalSnapshot>, String> {
+        Ok(self
+            .goal
+            .lock()
+            .map_err(|error| error.to_string())?
+            .clone()
+            .filter(|goal| goal.session_id == session_id))
+    }
+
+    /// Creates the first active Goal for the exact fixture session.
+    /// 为精确夹具会话创建首个活动 Goal。
+    async fn create_goal(
+        &self,
+        session_id: SessionId,
+        objective: String,
+        token_budget: Option<u64>,
+    ) -> Result<NativeGoalSnapshot, String> {
+        let mut guard = self.goal.lock().map_err(|error| error.to_string())?;
+        if guard.is_some() {
+            return Err(String::from("fixture Goal already exists"));
+        }
+        let token_budget = token_budget
+            .map(i64::try_from)
+            .transpose()
+            .map_err(|error| format!("fixture Goal budget is out of range: {error}"))?;
+        let goal = NativeGoalSnapshot {
+            session_id,
+            goal_id: String::from("v1-goal-1"),
+            objective,
+            status: NativeGoalStatus::Active,
+            token_budget,
+            tokens_used: 0,
+            uncached_input_tokens: 0,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_tokens: 0,
+            total_tokens: 0,
+            time_used_seconds: 0,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        };
+        *guard = Some(goal.clone());
+        Ok(goal)
+    }
+
+    /// Applies one terminal state to the exact fixture Goal.
+    /// 向精确夹具 Goal 应用一个终态。
+    async fn update_goal_status(
+        &self,
+        session_id: SessionId,
+        status: NativeGoalTerminalStatus,
+    ) -> Result<NativeGoalSnapshot, String> {
+        let mut guard = self.goal.lock().map_err(|error| error.to_string())?;
+        let goal = guard
+            .as_mut()
+            .filter(|goal| goal.session_id == session_id)
+            .ok_or_else(|| String::from("fixture Goal is missing"))?;
+        goal.status = match status {
+            NativeGoalTerminalStatus::Complete => NativeGoalStatus::Complete,
+            NativeGoalTerminalStatus::Blocked => NativeGoalStatus::Blocked,
+        };
+        goal.updated_at_ms += 1;
+        Ok(goal.clone())
+    }
+}
+
+/// Verifies native get/create/block/complete route only through the injected V1 Goal port.
+/// 验证 native get/create/block/complete 只通过注入的 V1 Goal 端口路由。
+#[tokio::test]
+async fn native_goal_tools_execute_complete_v1_port_lifecycle() {
+    let session_id = SessionId::from_u128(0x7301);
+    let runtime = Arc::new(NativeGoalRuntimeFixture::default());
+    let empty = build_get_goal_tool()
+        .invoke(runtime.request(session_id, json!({})))
+        .await
+        .expect("empty get_goal should execute");
+    assert_eq!(empty.model_output["goal"], serde_json::Value::Null);
+
+    let created = build_create_goal_tool()
+        .invoke(runtime.request(
+            session_id,
+            json!({"objective": "finish native cutover", "token_budget": 3000}),
+        ))
+        .await
+        .expect("create_goal should execute through V1 port");
+    assert_eq!(created.model_output["goal"]["status"], "active");
+    assert_eq!(created.model_output["goal"]["tokenBudget"], 3000);
+    let loaded = build_get_goal_tool()
+        .invoke(runtime.request(session_id, json!({})))
+        .await
+        .expect("created get_goal should execute");
+    assert_eq!(
+        loaded.model_output["goal"]["objective"],
+        "finish native cutover"
+    );
+
+    let blocked = build_update_goal_tool()
+        .invoke(runtime.request(session_id, json!({"status": "blocked"})))
+        .await
+        .expect("update_goal blocked should execute through V1 port");
+    assert_eq!(blocked.model_output["goal"]["status"], "blocked");
+    let completed = build_update_goal_tool()
+        .invoke(runtime.request(session_id, json!({"status": "complete"})))
+        .await
+        .expect("update_goal complete should execute through V1 port");
+    assert_eq!(completed.model_output["goal"]["status"], "complete");
+}
 
 /// Verifies model-owned terminal transitions reject incompatible lifecycle states.
 /// 验证模型拥有的终态转换会拒绝不兼容的生命周期状态。
 #[test]
 fn goal_terminal_update_filters_persisted_statuses() {
     assert!(goal_status_allows_terminal_update(
-        ThreadGoalStatus::Active,
-        ThreadGoalStatus::Complete
+        NativeGoalStatus::Active,
+        NativeGoalTerminalStatus::Complete
     ));
     assert!(!goal_status_allows_terminal_update(
-        ThreadGoalStatus::Paused,
-        ThreadGoalStatus::Complete
+        NativeGoalStatus::Paused,
+        NativeGoalTerminalStatus::Complete
     ));
     assert!(goal_status_allows_terminal_update(
-        ThreadGoalStatus::BudgetLimited,
-        ThreadGoalStatus::Blocked
+        NativeGoalStatus::BudgetLimited,
+        NativeGoalTerminalStatus::Blocked
     ));
     assert!(!goal_status_allows_terminal_update(
-        ThreadGoalStatus::Complete,
-        ThreadGoalStatus::Blocked
+        NativeGoalStatus::Complete,
+        NativeGoalTerminalStatus::Blocked
     ));
 }
 
@@ -239,11 +377,11 @@ fn submit_plan_feedback_path_hides_windows_extended_prefix() {
 /// 验证已完成目标会返回与 Codex 兼容的结构化用量汇报指令。
 #[test]
 fn completed_goal_response_reports_structured_usage_instruction() {
-    let goal = ThreadGoal {
-        thread_id: Uuid::new_v4(),
+    let goal = NativeGoalSnapshot {
+        session_id: Uuid::new_v4(),
         goal_id: String::from("goal-1"),
         objective: String::from("完成目标模式"),
-        status: ThreadGoalStatus::Complete,
+        status: NativeGoalStatus::Complete,
         token_budget: Some(10_000),
         tokens_used: 1_234,
         uncached_input_tokens: 900,
@@ -273,11 +411,11 @@ fn completed_goal_response_reports_structured_usage_instruction() {
 /// 验证 AI 创建的目标会直接在创建工具结果中返回稳定引导。
 #[test]
 fn created_goal_response_includes_immediate_active_context() {
-    let goal = ThreadGoal {
-        thread_id: Uuid::new_v4(),
+    let goal = NativeGoalSnapshot {
+        session_id: Uuid::new_v4(),
         goal_id: String::from("goal-created-by-ai"),
         objective: String::from("连续执行并保持缓存"),
-        status: ThreadGoalStatus::Active,
+        status: NativeGoalStatus::Active,
         token_budget: Some(20_000),
         tokens_used: 0,
         uncached_input_tokens: 0,
@@ -359,6 +497,7 @@ async fn agent_registry_tool_exposes_extended_runtime_fields() {
             session_id: None,
             workspace_root: None,
             controller_runtime: None,
+            goal_runtime: None,
             knowledge_access: None,
             spill_root: None,
             enabled_prompt_skill_names: Vec::new(),
@@ -460,6 +599,7 @@ async fn skill_registry_tool_exposes_extended_runtime_fields() {
             session_id: None,
             workspace_root: None,
             controller_runtime: None,
+            goal_runtime: None,
             knowledge_access: None,
             spill_root: None,
             enabled_prompt_skill_names: Vec::new(),

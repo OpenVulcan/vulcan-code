@@ -3,370 +3,6 @@
 
 use super::*;
 
-/// Calculates one strictly newer persistence generation without silent saturation.
-/// 计算一个严格更新的持久化代际，且不允许静默饱和。
-///
-/// # Parameters
-/// 参数
-/// `current` is the currently allocated generation, or zero for a new lineage.
-/// `current` 是当前已分配代际；新谱系使用零。
-/// `channel` is the stable diagnostic label for the exhausted persistence lane.
-/// `channel` 是耗尽持久化通道使用的稳定诊断标签。
-///
-/// # Returns
-/// 返回值
-/// The next generation, or an explicit exhaustion error.
-/// 返回下一代际；若已耗尽则返回明确错误。
-fn next_persistence_version(current: u64, channel: &str) -> Result<u64, String> {
-    current
-        .checked_add(1)
-        .ok_or_else(|| format!("{channel} persistence version exhausted"))
-}
-
-/// Allocates one session-wide persistence ticket shared by runtime and transcript writers.
-/// 为运行态与转录写入者分配共享的会话级持久化票据。
-///
-/// The legacy maps remain compatibility indexes, but every allocation advances both so an older
-/// transcript snapshot cannot overtake a newer full-session or runtime snapshot.
-/// 旧映射仍作为兼容索引保留，但每次分配都会同步推进二者，避免旧转录快照越过更新的整会话或运行态快照。
-fn next_webui_session_persist_ticket_locked(
-    guard: &mut ServiceBridgeState,
-    session_id: SessionId,
-) -> Result<u64, String> {
-    let current = guard
-        .session_persist_versions
-        .get(&session_id)
-        .copied()
-        .into_iter()
-        .chain(
-            guard
-                .session_transcript_persist_versions
-                .get(&session_id)
-                .copied(),
-        )
-        .max()
-        .unwrap_or_default();
-    let next = if current == 0 {
-        1
-    } else {
-        next_persistence_version(current, "session")?
-    };
-    guard.session_persist_versions.insert(session_id, next);
-    guard
-        .session_transcript_persist_versions
-        .insert(session_id, next);
-    Ok(next)
-}
-
-/// Allocates the next ordinary whole-session persistence version.
-/// 分配下一个普通整会话持久化版本。
-///
-/// # Parameters
-/// 参数
-/// `state` owns the ordinary per-session persistence version table.
-/// `state` 持有普通的按会话持久化版本表。
-/// `session_id` selects the session being persisted.
-/// `session_id` 选择正在持久化的会话。
-///
-/// # Returns
-/// 返回值
-/// The version assigned to the ordinary runtime snapshot.
-/// 返回分配给普通运行时快照的版本。
-pub(crate) fn next_webui_session_runtime_persist_version(
-    state: &SharedServiceBridgeState,
-    session_id: SessionId,
-) -> Result<u64, String> {
-    // guard serializes allocation for the ordinary runtime persistence lane.
-    // guard 将普通运行时持久化通道的分配串行化。
-    let mut guard = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    next_webui_session_persist_ticket_locked(&mut guard, session_id)
-}
-
-/// Returns whether one ordinary runtime snapshot is current for its session.
-/// 判断一份普通运行态快照是否仍是其会话的最新版本。
-///
-/// # Parameters
-/// 参数
-/// `state` owns the ordinary per-session persistence version table.
-/// `state` 持有普通的按会话持久化版本表。
-/// `session_id` selects the session being persisted.
-/// `session_id` 选择正在持久化的会话。
-/// `session_version` is the task-local whole-session version.
-/// `session_version` 是任务本地整会话版本。
-/// # Returns
-/// 返回值
-/// `true` only when the ordinary runtime persistence lane has not advanced.
-/// 仅当普通运行时持久化通道尚未推进时返回 `true`。
-pub(crate) fn webui_session_runtime_persist_version_is_current(
-    state: &SharedServiceBridgeState,
-    session_id: SessionId,
-    session_version: u64,
-) -> bool {
-    let Ok(guard) = state.lock() else {
-        return false;
-    };
-    guard.session_persist_versions.get(&session_id).copied() == Some(session_version)
-}
-
-/// Invalidates older background persistence snapshots for one WebUI session.
-/// 使某个 WebUI 会话上较旧的后台持久化快照失效。
-///
-/// # Parameters
-/// 参数
-/// `state` owns the per-session persistence version table.
-/// `state` 持有按会话归属的持久化版本表。
-/// `session_id` selects the session whose pending background writes should be invalidated.
-/// `session_id` 选择需要使待处理后台写入失效的会话。
-pub(crate) fn invalidate_webui_session_persist_version(
-    state: &SharedServiceBridgeState,
-    session_id: SessionId,
-) -> Result<(), String> {
-    let _ = next_webui_session_runtime_persist_version(state, session_id)?;
-    Ok(())
-}
-
-/// Invalidates only whole-session/runtime-state writers without cancelling transcript-only work.
-/// 仅使整会话与运行态写入者失效，不取消仅转录写入任务。
-///
-/// # Parameters
-/// 参数
-/// `state` owns both persistence lanes and `session_id` selects the exact runtime-state owner.
-/// `state` 持有两条持久化通道，`session_id` 选择精确的运行态归属。
-///
-/// # Returns
-/// 返回值
-/// The runtime-only fence version, or an explicit version-exhaustion/lock error.
-/// 返回仅运行态隔离版本，或明确的版本耗尽/锁错误。
-pub(crate) fn invalidate_webui_session_runtime_only_persist_version(
-    state: &SharedServiceBridgeState,
-    session_id: SessionId,
-) -> Result<u64, String> {
-    let mut guard = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    let current = guard
-        .session_persist_versions
-        .get(&session_id)
-        .copied()
-        .into_iter()
-        .chain(
-            guard
-                .session_transcript_persist_versions
-                .get(&session_id)
-                .copied(),
-        )
-        .max()
-        .unwrap_or_default();
-    let next = if current == 0 {
-        1
-    } else {
-        next_persistence_version(current, "session runtime")?
-    };
-    guard.session_persist_versions.insert(session_id, next);
-    Ok(next)
-}
-
-/// Invalidates every pending persistence channel before or after a session lifecycle transition.
-/// 在会话生命周期转换前后使全部待处理持久化通道失效。
-///
-/// # Parameters
-/// 参数
-/// `state` owns whole-session, transcript, and addon persistence version tables.
-/// `state` 持有整会话、转录与附属状态持久化版本表。
-/// `session_id` selects the session whose stale background writes must be fenced out.
-/// `session_id` 选择必须隔离过期后台写入的会话。
-///
-/// # Returns
-/// 返回值
-/// Returns success after all currently allocated persistence channels advance atomically under one state lock.
-/// 全部当前已分配持久化通道在同一状态锁下原子推进后返回成功。
-pub(crate) fn invalidate_webui_session_lifecycle_persist_versions(
-    state: &SharedServiceBridgeState,
-    session_id: SessionId,
-) -> Result<(), String> {
-    // guard advances every persistence domain in one coherent critical section.
-    // guard 在一个一致临界区内推进每个持久化领域。
-    let mut guard = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    // addon_keys capture every namespace that already has a pending or completed version lineage.
-    // addon_keys 捕获已经具有待处理或已完成版本谱系的每个命名空间。
-    let addon_keys = guard
-        .session_addon_persist_versions
-        .keys()
-        .filter(|(candidate_session_id, _namespace)| *candidate_session_id == session_id)
-        .copied()
-        .collect::<Vec<_>>();
-    // next_addon_versions preflights every namespace before any persistence lane is changed.
-    // next_addon_versions 在任何持久化通道发生变化前预检全部命名空间。
-    let next_addon_versions = addon_keys
-        .into_iter()
-        .map(|addon_key| {
-            let current = guard
-                .session_addon_persist_versions
-                .get(&addon_key)
-                .copied()
-                .unwrap_or_default();
-            next_persistence_version(current, "addon").map(|version| (addon_key, version))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    // next_session_ticket invalidates runtime and transcript tasks atomically after all lanes pass preflight.
-    // next_session_ticket 在所有通道预检通过后以原子方式使运行态与转录任务失效。
-    next_webui_session_persist_ticket_locked(&mut guard, session_id)?;
-    for (addon_key, next_addon_version) in next_addon_versions {
-        guard
-            .session_addon_persist_versions
-            .insert(addon_key, next_addon_version);
-    }
-    Ok(())
-}
-
-/// Allocates the next live transcript persistence version for one WebUI session.
-/// 为一个 WebUI 会话分配下一次运行中转录持久化版本。
-///
-/// # Parameters
-/// # 参数
-/// `state` owns the per-session live transcript persistence version table.
-/// `state` 持有按会话归属的运行中转录持久化版本表。
-/// `session_id` selects the session whose transcript is being persisted.
-/// `session_id` 选择正在持久化转录的会话。
-///
-/// # Returns
-/// # 返回值
-/// The version assigned to the new live transcript persistence task.
-/// 返回分配给新运行中转录持久化任务的版本。
-#[cfg(test)]
-pub(crate) fn next_webui_session_transcript_persist_version(
-    state: &SharedServiceBridgeState,
-    session_id: SessionId,
-) -> Result<u64, String> {
-    let mut guard = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    next_webui_session_persist_ticket_locked(&mut guard, session_id)
-}
-
-/// Returns whether a live transcript persistence task is still current for its session.
-/// 判断某个运行中转录持久化任务是否仍是其会话的最新任务。
-///
-/// # Parameters
-/// # 参数
-/// `state` owns the per-session live transcript persistence version table.
-/// `state` 持有按会话归属的运行中转录持久化版本表。
-/// `session_id` selects the session being persisted.
-/// `session_id` 选择正在持久化的会话。
-/// `persist_version` is the task-local transcript persistence version.
-/// `persist_version` 是任务本地转录持久化版本。
-///
-/// # Returns
-/// # 返回值
-/// `true` when the transcript task may write to disk.
-/// 当该转录任务可以写入磁盘时返回 `true`。
-#[cfg(test)]
-pub(crate) fn webui_session_transcript_persist_version_is_current(
-    state: &SharedServiceBridgeState,
-    session_id: SessionId,
-    persist_version: u64,
-) -> bool {
-    state.lock().ok().and_then(|guard| {
-        guard
-            .session_transcript_persist_versions
-            .get(&session_id)
-            .copied()
-    }) == Some(persist_version)
-}
-
-/// Allocates the next background addon persistence version for one session namespace.
-/// 为一个会话命名空间分配下一次后台附属状态持久化版本。
-///
-/// # Parameters
-/// 参数
-/// `state` owns the per-session addon persistence version table.
-/// `state` 持有按会话划分的附属状态持久化版本表。
-/// `session_id` selects the session whose addon namespace is being persisted.
-/// `session_id` 选择正在持久化附属状态命名空间的会话。
-/// `namespace` selects the addon namespace being persisted.
-/// `namespace` 选择正在持久化的附属状态命名空间。
-///
-/// # Returns
-/// 返回值
-/// The version assigned to the new background addon persistence task for that namespace.
-/// 返回分配给该命名空间的新后台附属状态持久化任务版本。
-pub(crate) fn next_webui_session_addon_persist_version(
-    state: &SharedServiceBridgeState,
-    session_id: SessionId,
-    namespace: SessionAddonNamespace,
-) -> Result<u64, String> {
-    let mut guard = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    let key = (session_id, namespace);
-    let next_version = guard
-        .session_addon_persist_versions
-        .get(&key)
-        .copied()
-        .map_or(Ok(1), |current| next_persistence_version(current, "addon"))?;
-    guard
-        .session_addon_persist_versions
-        .insert(key, next_version);
-    Ok(next_version)
-}
-
-/// Returns whether a background addon persistence task is still latest for every namespace it writes.
-/// 判断某个后台附属状态持久化任务是否仍是其写入的所有命名空间的最新任务。
-///
-/// # Parameters
-/// 参数
-/// `state` owns the per-session addon persistence version table.
-/// `state` 持有按会话划分的附属状态持久化版本表。
-/// `session_id` selects the session whose addon namespaces are being persisted.
-/// `session_id` 选择正在持久化附属状态命名空间的会话。
-/// `persist_versions` are the task-local addon persistence versions keyed by namespace.
-/// `persist_versions` 是按命名空间记录的任务本地附属状态持久化版本。
-///
-/// # Returns
-/// 返回值
-/// `true` when the task may write the addon document.
-/// 当该任务可以写入附属状态文档时返回 `true`。
-pub(crate) fn webui_session_addon_persist_versions_are_current(
-    state: &SharedServiceBridgeState,
-    session_id: SessionId,
-    persist_versions: &[(SessionAddonNamespace, u64)],
-) -> bool {
-    let Ok(guard) = state.lock() else {
-        return false;
-    };
-    persist_versions.iter().all(|(namespace, version)| {
-        guard
-            .session_addon_persist_versions
-            .get(&(session_id, *namespace))
-            .copied()
-            == Some(*version)
-    })
-}
-
-/// Invalidates older background addon persistence snapshots for one session namespace.
-/// 使某个会话命名空间上较旧的后台附属状态持久化快照失效。
-///
-/// # Parameters
-/// 参数
-/// `state` owns the per-session addon persistence version table.
-/// `state` 持有按会话划分的附属状态持久化版本表。
-/// `session_id` selects the session whose pending addon namespace writes should be invalidated.
-/// `session_id` 选择需要使待处理附属状态命名空间写入失效的会话。
-/// `namespace` selects the addon namespace whose pending writes should be invalidated.
-/// `namespace` 选择需要使待处理写入失效的附属状态命名空间。
-pub(crate) fn invalidate_webui_session_addon_persist_version(
-    state: &SharedServiceBridgeState,
-    session_id: SessionId,
-    namespace: SessionAddonNamespace,
-) -> Result<(), String> {
-    let _ = next_webui_session_addon_persist_version(state, session_id, namespace)?;
-    Ok(())
-}
-
 /// Builds an empty LuaSkills catalog for degraded snapshot rendering.
 /// 为降级快照渲染构建空 LuaSkills 目录。
 pub(crate) fn empty_luaskills_catalog() -> TauriLuaSkillsCatalog {
@@ -692,43 +328,6 @@ pub(crate) enum FullWorkbenchColdRefreshWorkspaceSource {
     Retained,
 }
 
-/// Stores the canonical workspace snapshot without rebuilding or emitting a full workbench snapshot.
-/// 存储规范工作区快照，但不重建或发送全量工作台快照。
-///
-/// # Parameters
-/// 参数
-/// `state` owns the retained workspace and hydrated conversation window caches.
-/// `state` 持有保留工作区与已水合会话窗口缓存。
-/// `workspace_snapshot` is the canonical workspace snapshot to make visible to later service steps.
-/// `workspace_snapshot` 是需要对后续服务步骤可见的规范工作区快照。
-///
-/// # Returns
-/// 返回值
-/// `Ok(())` after the snapshot is committed, or a lock diagnostic when service state cannot be acquired.
-/// 快照提交后返回 `Ok(())`，若无法取得服务状态锁则返回诊断信息。
-pub(crate) fn store_workspace_snapshot_without_workbench_rebuild(
-    state: &SharedServiceBridgeState,
-    workspace_snapshot: WorkspaceSnapshot,
-) -> Result<(), String> {
-    let trace_started_at = current_unix_millis_value();
-    let mut guard = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    retain_hydrated_conversation_windows_for_workspace(
-        &mut guard.hydrated_conversation_windows,
-        &workspace_snapshot,
-    );
-    guard.workspace_snapshot = Some(workspace_snapshot);
-    webui_submit_trace(
-        "store_workspace_snapshot_committed",
-        format!(
-            "elapsed_ms={}",
-            current_unix_millis_value().saturating_sub(trace_started_at)
-        ),
-    );
-    Ok(())
-}
-
 /// Commits one cold-path workspace and workbench projection under the caller's state lock.
 /// 在调用方持有的状态锁下提交一次冷路径工作区与工作台投影。
 ///
@@ -824,21 +423,15 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
     )?;
     let (
         live_context_budgets,
-        surface_messages,
         subagent_navigation,
         pending_questions,
         session_goal_summaries,
         command_session_runtime,
         native_tools,
-        hydrated_window_summaries,
         vulcan_plugin_catalog,
         mcp_server_states,
         subagent_catalog,
     ) = {
-        retain_hydrated_conversation_windows_for_workspace(
-            &mut guard.hydrated_conversation_windows,
-            &workspace_snapshot,
-        );
         webui_trace(
             "store_workbench_lock_wait",
             format!(
@@ -855,17 +448,15 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         );
         let trace_surface_started_at = current_unix_millis_value();
         let live_context_budgets = guard.live_context_budgets.clone();
-        let (surface_messages, subagent_navigation) = match subagent_navigation_mode {
-            SubagentNavigationRefreshMode::Rebuild => (
-                active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot)?,
-                subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot)?,
-            ),
+        let subagent_navigation = match subagent_navigation_mode {
+            SubagentNavigationRefreshMode::Rebuild => {
+                subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot)?
+            }
         };
         webui_trace(
             "store_workbench_surface_ready",
             format!(
-                "mode={subagent_navigation_mode:?} messages={} has_subagent_navigation={} elapsed_ms={}",
-                surface_messages.len(),
+                "mode={subagent_navigation_mode:?} has_subagent_navigation={} elapsed_ms={}",
                 subagent_navigation.is_some(),
                 current_unix_millis_value().saturating_sub(trace_surface_started_at)
             ),
@@ -873,8 +464,7 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         webui_submit_trace(
             "store_workbench_surface_ready",
             format!(
-                "mode={subagent_navigation_mode:?} messages={} has_subagent_navigation={} elapsed_ms={}",
-                surface_messages.len(),
+                "mode={subagent_navigation_mode:?} has_subagent_navigation={} elapsed_ms={}",
                 subagent_navigation.is_some(),
                 current_unix_millis_value().saturating_sub(trace_surface_started_at)
             ),
@@ -905,16 +495,11 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
             .unwrap_or_else(|| Arc::new(vulcan_task_session::SubagentCatalog::default()));
         (
             live_context_budgets,
-            surface_messages,
             subagent_navigation,
             pending_questions,
             session_goal_summaries,
             command_session_runtime,
             native_tools,
-            hydrated_conversation_window_summaries(
-                &guard.hydrated_conversation_windows,
-                &guard.webui_preloaded_unclosed_subagent_roots,
-            ),
             vulcan_plugin_catalog,
             mcp_server_states,
             subagent_catalog,
@@ -923,6 +508,14 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
     // vmm_session_states are immutable controller projections captured for this cold refresh.
     // vmm_session_states 是为本次冷刷新捕获的不可变控制器投影。
     let vmm_session_states = guard.vmm_controller_registry.snapshots()?;
+    let session_provider_usage_summaries = session_provider_usage_summaries_from_v1_registry(
+        guard.session_runtime_registry.as_ref(),
+        workspace_snapshot.sessions.iter().map(|session| session.id),
+    )?;
+    let selected_context_usage_facts = session_context_usage_facts_from_v1_registry(
+        guard.session_runtime_registry.as_ref(),
+        workspace_snapshot.selected_session,
+    )?;
     let trace_workbench_started_at = current_unix_millis_value();
     let mut workbench = workbench_from_runtime(WorkbenchRuntimeProjection {
         controller: controller_runtime,
@@ -935,15 +528,16 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         provider_configuration,
         public_ai_runtime,
         workspace: &workspace_snapshot,
+        pending_prompt_process_mirrors: &guard.pending_prompt_process_mirrors,
         vmm_session_states: &vmm_session_states,
         managed_vmm_runtime: None,
-        surface_messages: surface_messages.as_slice(),
         subagent_navigation,
         pending_questions,
         logs,
         live_context_budgets: &live_context_budgets,
         session_goal_summaries: &session_goal_summaries,
-        hydrated_conversation_windows: &hydrated_window_summaries,
+        session_provider_usage_summaries: &session_provider_usage_summaries,
+        selected_context_usage_facts: selected_context_usage_facts.as_ref(),
         native_tools,
     });
     reconcile_workbench_conversation_lifecycle_projection(
@@ -954,18 +548,16 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
     webui_trace(
         "store_workbench_built",
         format!(
-            "mode={subagent_navigation_mode:?} conversations={} messages={} elapsed_ms={}",
+            "mode={subagent_navigation_mode:?} conversations={} elapsed_ms={}",
             workbench.conversations.len(),
-            workbench.messages.len(),
             current_unix_millis_value().saturating_sub(trace_workbench_started_at)
         ),
     );
     webui_submit_trace(
         "store_workbench_built",
         format!(
-            "mode={subagent_navigation_mode:?} conversations={} messages={} elapsed_ms={}",
+            "mode={subagent_navigation_mode:?} conversations={} elapsed_ms={}",
             workbench.conversations.len(),
-            workbench.messages.len(),
             current_unix_millis_value().saturating_sub(trace_workbench_started_at)
         ),
     );
@@ -1288,10 +880,6 @@ mod tests {
             archived_task_projects: Vec::new(),
             sessions: Vec::new(),
             archived_sessions: Vec::new(),
-            session_messages: BTreeMap::new(),
-            archived_session_messages: BTreeMap::new(),
-            session_compactions: BTreeMap::new(),
-            archived_session_compactions: BTreeMap::new(),
             session_runtime_state: BTreeMap::new(),
             archived_session_runtime_state: BTreeMap::new(),
             session_run_phases: BTreeMap::new(),
@@ -1368,144 +956,6 @@ mod tests {
         assert_eq!(
             retained_workspace.sessions.len(),
             workspace_snapshot.sessions.len()
-        );
-    }
-
-    /// Verifies one lifecycle fence invalidates ordinary runtime, transcript, and addon writers only for its target session.
-    /// 验证一次生命周期隔离只对目标会话的普通运行时、转录与附属写入者生效。
-    #[test]
-    fn lifecycle_persistence_fence_invalidates_every_target_channel() {
-        // state owns isolated version maps for this test.
-        // state 持有本测试使用的隔离版本表。
-        let state =
-            create_service_bridge_state(std::sync::Arc::new(PersistenceVersionTestShellHost));
-        // session_id is the lifecycle transition target.
-        // session_id 是生命周期转换目标。
-        let session_id = SessionId::from_u128(0x71);
-        // other_session_id proves unrelated session versions remain current.
-        // other_session_id 证明无关会话版本保持当前状态。
-        let other_session_id = SessionId::from_u128(0x72);
-        // runtime_version represents one queued ordinary runtime writer.
-        // runtime_version 表示一名排队中的普通运行时写入者。
-        let runtime_version = next_webui_session_runtime_persist_version(&state, session_id)
-            .expect("runtime persistence version should allocate");
-        // transcript_version represents a queued transcript-only writer.
-        // transcript_version 表示排队中的仅转录写入者。
-        let transcript_version = next_webui_session_transcript_persist_version(&state, session_id)
-            .expect("transcript version should allocate");
-        // addon_versions represent queued writers for two independent addon namespaces.
-        // addon_versions 表示两个独立附属命名空间的排队写入者。
-        let addon_versions = vec![
-            (
-                SessionAddonNamespace::WorkMode,
-                next_webui_session_addon_persist_version(
-                    &state,
-                    session_id,
-                    SessionAddonNamespace::WorkMode,
-                )
-                .expect("work-mode addon version should allocate"),
-            ),
-            (
-                SessionAddonNamespace::RuntimeControls,
-                next_webui_session_addon_persist_version(
-                    &state,
-                    session_id,
-                    SessionAddonNamespace::RuntimeControls,
-                )
-                .expect("runtime-controls addon version should allocate"),
-            ),
-        ];
-        // other_versions remain valid because the fence is session-scoped.
-        // other_versions 保持有效，因为隔离按会话划分。
-        let other_version = next_webui_session_runtime_persist_version(&state, other_session_id)
-            .expect("unrelated runtime version should allocate");
-
-        invalidate_webui_session_lifecycle_persist_versions(&state, session_id)
-            .expect("lifecycle fence should advance every target channel");
-
-        assert!(!webui_session_runtime_persist_version_is_current(
-            &state,
-            session_id,
-            runtime_version,
-        ));
-        assert!(!webui_session_transcript_persist_version_is_current(
-            &state,
-            session_id,
-            transcript_version
-        ));
-        assert!(!webui_session_addon_persist_versions_are_current(
-            &state,
-            session_id,
-            &addon_versions
-        ));
-        assert!(webui_session_runtime_persist_version_is_current(
-            &state,
-            other_session_id,
-            other_version,
-        ));
-    }
-
-    /// Verifies ordinary runtime version exhaustion leaves the current generation unchanged.
-    /// 验证普通运行时版本耗尽时当前代际保持不变。
-    #[test]
-    fn runtime_persistence_version_exhaustion_has_no_partial_advance() {
-        let state =
-            create_service_bridge_state(std::sync::Arc::new(PersistenceVersionTestShellHost));
-        // session_id owns the exhausted ordinary runtime version lane.
-        // session_id 拥有耗尽的普通运行时版本通道。
-        let session_id = SessionId::from_u128(0x74);
-        {
-            let mut guard = state.lock().expect("lock isolated service state");
-            guard.session_persist_versions.insert(session_id, u64::MAX);
-        }
-
-        let error = next_webui_session_runtime_persist_version(&state, session_id)
-            .expect_err("exhausted runtime lineage must reject allocation");
-
-        assert!(error.contains("session persistence version exhausted"));
-        let guard = state.lock().expect("lock isolated service state");
-        assert_eq!(
-            guard.session_persist_versions.get(&session_id),
-            Some(&u64::MAX)
-        );
-    }
-
-    /// Verifies lifecycle fencing preflights every lane before changing any generation.
-    /// 验证生命周期隔离会在改变任何代际前预检全部通道。
-    #[test]
-    fn lifecycle_version_exhaustion_has_no_partial_advance() {
-        let state =
-            create_service_bridge_state(std::sync::Arc::new(PersistenceVersionTestShellHost));
-        // session_id is the lifecycle owner whose addon lane is intentionally exhausted.
-        // session_id 是附属通道被刻意耗尽的生命周期所有者。
-        let session_id = SessionId::from_u128(0x75);
-        // addon_key identifies the exact exhausted namespace lineage.
-        // addon_key 标识精确的耗尽命名空间谱系。
-        let addon_key = (session_id, SessionAddonNamespace::WorkMode);
-        {
-            let mut guard = state.lock().expect("lock isolated service state");
-            guard.session_persist_versions.insert(session_id, 2);
-            guard
-                .session_transcript_persist_versions
-                .insert(session_id, 4);
-            guard
-                .session_addon_persist_versions
-                .insert(addon_key, u64::MAX);
-        }
-
-        let error = invalidate_webui_session_lifecycle_persist_versions(&state, session_id)
-            .expect_err("exhausted addon lineage must reject lifecycle fencing");
-
-        assert!(error.contains("addon persistence version exhausted"));
-        let guard = state.lock().expect("lock isolated service state");
-        assert_eq!(guard.session_persist_versions.get(&session_id), Some(&2));
-        assert_eq!(
-            guard.session_transcript_persist_versions.get(&session_id),
-            Some(&4)
-        );
-        assert_eq!(
-            guard.session_addon_persist_versions.get(&addon_key),
-            Some(&u64::MAX)
         );
     }
 }

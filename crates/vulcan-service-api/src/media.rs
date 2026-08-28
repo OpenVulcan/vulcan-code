@@ -100,6 +100,156 @@ pub fn build_service_media_file_response(
     })
 }
 
+/// Builds one controlled immutable project-resource response from validated bytes.
+/// 从已校验字节构建一个受控的不可变项目资源响应。
+///
+/// # Parameters
+/// 参数
+/// `bytes` is the complete digest-validated entity, `mime_type` is catalog metadata,
+/// `is_head` selects header-only delivery, and `range_header` carries one optional byte range.
+/// `bytes` 是完整且已通过摘要校验的实体，`mime_type` 是目录元数据，`is_head` 选择仅响应头传输，
+/// `range_header` 携带一个可选字节范围。
+///
+/// # Returns
+/// 返回值
+/// Returns a no-store response that never exposes a host filesystem path.
+/// 返回一个不缓存且绝不暴露宿主文件系统路径的响应。
+pub fn build_service_project_resource_response(
+    bytes: &[u8],
+    mime_type: Option<&str>,
+    is_head: bool,
+    range_header: Option<&str>,
+) -> Result<ServiceMediaResponse, String> {
+    let file_len = u64::try_from(bytes.len())
+        .map_err(|_| String::from("project resource byte length exceeds the supported range"))?;
+    let content_type = safe_project_resource_mime_type(mime_type);
+    let mut headers = service_media_base_headers(content_type.clone());
+    headers.push((
+        String::from("content-disposition"),
+        if is_inline_project_resource_mime_type(&content_type) {
+            String::from("inline")
+        } else {
+            String::from("attachment")
+        },
+    ));
+    headers.push((
+        String::from("x-content-type-options"),
+        String::from("nosniff"),
+    ));
+    headers.push((
+        String::from("content-security-policy"),
+        String::from("sandbox; default-src 'none'"),
+    ));
+
+    if is_head {
+        headers.push((String::from("content-length"), file_len.to_string()));
+        return Ok(ServiceMediaResponse {
+            status: 200,
+            headers,
+            body: Vec::new(),
+        });
+    }
+
+    if let Some(range_header) = range_header {
+        let range = single_service_media_http_range(range_header, file_len)?;
+        let range_start = usize::try_from(range.start)
+            .map_err(|_| String::from("project resource range start exceeds host limits"))?;
+        let range_end_exclusive_u64 = range
+            .start
+            .checked_add(range.length)
+            .ok_or_else(|| String::from("project resource range end overflowed"))?;
+        let range_end_exclusive = usize::try_from(range_end_exclusive_u64)
+            .map_err(|_| String::from("project resource range end exceeds host limits"))?;
+        let body = bytes
+            .get(range_start..range_end_exclusive)
+            .ok_or_else(|| String::from("project resource range is outside validated bytes"))?
+            .to_vec();
+        let range_end = range_end_exclusive_u64 - 1;
+        headers.push((
+            String::from("content-range"),
+            format!("bytes {}-{range_end}/{file_len}", range.start),
+        ));
+        headers.push((String::from("content-length"), body.len().to_string()));
+        return Ok(ServiceMediaResponse {
+            status: 206,
+            headers,
+            body,
+        });
+    }
+
+    headers.push((String::from("content-length"), file_len.to_string()));
+    Ok(ServiceMediaResponse {
+        status: 200,
+        headers,
+        body: bytes.to_vec(),
+    })
+}
+
+/// Normalizes one catalog MIME value without trusting malformed header content.
+/// 规范化一个目录 MIME 值，且不信任格式错误的响应头内容。
+fn safe_project_resource_mime_type(mime_type: Option<&str>) -> String {
+    let Some(mime_type) = mime_type else {
+        return String::from("application/octet-stream");
+    };
+    if mime_type.is_empty()
+        || mime_type.len() > 127
+        || mime_type.trim() != mime_type
+        || mime_type.chars().any(char::is_control)
+        || mime_type.contains(';')
+    {
+        return String::from("application/octet-stream");
+    }
+    let Some((kind, subtype)) = mime_type.split_once('/') else {
+        return String::from("application/octet-stream");
+    };
+    if kind.is_empty()
+        || subtype.is_empty()
+        || mime_type.matches('/').count() != 1
+        || !mime_type.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'/' | b'!' | b'#' | b'$' | b'&' | b'+' | b'-' | b'.' | b'^' | b'_'
+                )
+        })
+    {
+        return String::from("application/octet-stream");
+    }
+    mime_type.to_ascii_lowercase()
+}
+
+/// Returns whether one normalized resource MIME is safe for inline browser rendering.
+/// 返回一个规范化资源 MIME 是否可安全用于浏览器内联渲染。
+fn is_inline_project_resource_mime_type(mime_type: &str) -> bool {
+    matches!(
+        mime_type,
+        "image/png"
+            | "image/jpeg"
+            | "image/webp"
+            | "image/gif"
+            | "image/bmp"
+            | "audio/mpeg"
+            | "audio/wav"
+            | "audio/mp4"
+            | "audio/aac"
+            | "audio/flac"
+            | "audio/ogg"
+            | "audio/opus"
+            | "video/mp4"
+            | "video/mpeg"
+            | "video/webm"
+            | "video/quicktime"
+            | "video/x-m4v"
+            | "video/x-matroska"
+            | "video/x-msvideo"
+            | "video/x-flv"
+            | "video/x-ms-wmv"
+            | "video/3gpp"
+            | "video/3gpp2"
+            | "application/pdf"
+    )
+}
+
 /// Returns whether a media path belongs to the generated attachment storage tree.
 /// 返回媒体路径是否属于生成附件存储树。
 fn is_allowed_generated_service_media_path(path: &Path) -> bool {
@@ -132,6 +282,109 @@ fn is_allowed_service_media_asset_path(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Returns one response header value for exact assertions.
+    /// 返回一个响应头值以进行精确断言。
+    fn response_header<'response>(
+        response: &'response ServiceMediaResponse,
+        name: &str,
+    ) -> Option<&'response str> {
+        response
+            .headers
+            .iter()
+            .find_map(|(candidate, value)| (candidate == name).then_some(value.as_str()))
+    }
+
+    /// Verifies validated raster resources are served inline without exposing storage paths.
+    /// 验证已校验的光栅资源以内联方式提供且不暴露存储路径。
+    #[test]
+    fn project_resource_response_serves_safe_inline_content() {
+        let response = build_service_project_resource_response(
+            b"validated-image",
+            Some("image/png"),
+            false,
+            None,
+        )
+        .expect("safe resource should build");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, b"validated-image");
+        assert_eq!(
+            response_header(&response, "content-type"),
+            Some("image/png")
+        );
+        assert_eq!(
+            response_header(&response, "content-disposition"),
+            Some("inline")
+        );
+        assert_eq!(
+            response_header(&response, "cache-control"),
+            Some("no-store")
+        );
+        assert_eq!(
+            response_header(&response, "x-content-type-options"),
+            Some("nosniff")
+        );
+        assert!(
+            response
+                .headers
+                .iter()
+                .all(|(_, value)| !value.contains('\\') && !value.contains(':'))
+        );
+    }
+
+    /// Verifies unsafe catalog MIME values become opaque attachment downloads.
+    /// 验证不安全的目录 MIME 值会转为不透明附件下载。
+    #[test]
+    fn project_resource_response_normalizes_unsafe_mime() {
+        let response = build_service_project_resource_response(
+            b"payload",
+            Some("text/html; charset=utf-8\r\nx-injected: yes"),
+            false,
+            None,
+        )
+        .expect("unsafe MIME should be normalized instead of copied");
+
+        assert_eq!(
+            response_header(&response, "content-type"),
+            Some("application/octet-stream")
+        );
+        assert_eq!(
+            response_header(&response, "content-disposition"),
+            Some("attachment")
+        );
+    }
+
+    /// Verifies one bounded byte range and HEAD response share validated entity length facts.
+    /// 验证单一有界字节范围与 HEAD 响应共享已校验实体长度事实。
+    #[test]
+    fn project_resource_response_supports_range_and_head() {
+        let ranged = build_service_project_resource_response(
+            b"0123456789",
+            Some("video/mp4"),
+            false,
+            Some("bytes=2-5"),
+        )
+        .expect("bounded range should build");
+        let head = build_service_project_resource_response(
+            b"0123456789",
+            Some("video/mp4"),
+            true,
+            Some("bytes=2-5"),
+        )
+        .expect("HEAD should build from the full entity");
+
+        assert_eq!(ranged.status, 206);
+        assert_eq!(ranged.body, b"2345");
+        assert_eq!(
+            response_header(&ranged, "content-range"),
+            Some("bytes 2-5/10")
+        );
+        assert_eq!(response_header(&ranged, "content-length"), Some("4"));
+        assert_eq!(head.status, 200);
+        assert!(head.body.is_empty());
+        assert_eq!(response_header(&head, "content-length"), Some("10"));
+    }
 
     /// Verifies generated JSON attachments remain servable from both authoritative attachment roots.
     /// 验证生成的 JSON 附件可从两个权威附件根目录提供。

@@ -94,23 +94,9 @@ fn apply_terminal_execution_report_to_draft(
     if let Some(conversation_state) = report.conversation_state.clone() {
         apply_checkpoint_conversation_state(runtime_state, conversation_state, now)?;
     }
-    if is_success {
-        complete_open_tool_records(
-            runtime_state,
-            session_id,
-            now,
-            "failed",
-            "Tool call ended before returning a result.",
-        )?;
-    } else {
-        complete_open_tool_records(
-            runtime_state,
-            session_id,
-            now,
-            "failed",
-            "Tool call failed or was interrupted before returning a result.",
-        )?;
-    }
+    // Open tool correlations are process-local execution state and end at every terminal boundary.
+    // 开放工具关联属于进程内执行状态，在任何终态边界都必须结束。
+    clear_open_tool_correlations(runtime_state);
     let closing_record_id = if is_success {
         ensure_terminal_success_records(runtime_state, session_id, now, report)?;
         ensure_terminal_success_assistant_message(runtime_state, session_id, now, report)?;
@@ -132,11 +118,6 @@ fn apply_terminal_execution_report_to_draft(
     } else {
         SessionTurnStatsStatus::Failed
     };
-    // The terminal transcript boundary closes every retry attempt in the latest logical execution.
-    // 终态转录边界会闭合最近一次逻辑执行中的所有重试 attempt。
-    let _ = runtime_state
-        .provider_call_ledger
-        .assign_closing_record_id_to_latest_execution(closing_record_id.clone());
     append_terminal_turn_stats_record(
         runtime_state,
         session_id,
@@ -485,23 +466,21 @@ fn append_terminal_turn_stats_record(
     provider_usage_fallback: Option<&vulcan_core::types::ProviderUsageSnapshot>,
     usage_segments: Vec<SessionTurnUsageSegment>,
 ) -> Result<Option<String>, String> {
-    let Some(mut turn_stats) = build_session_turn_stats_from_state_with_ledger_and_segments(
+    let Some(mut turn_stats) = build_session_turn_stats_from_state_with_segments(
         &runtime_state.conversation_state,
-        &runtime_state.provider_call_ledger,
         closing_record_id,
         status,
+        provider_request_count_override,
         turn_kind,
         usage_segments,
     ) else {
         return Ok(None);
     };
-    if turn_stats.source_ledger_revision == 0 {
-        merge_terminal_provider_usage_fallback(
-            &mut turn_stats,
-            provider_request_count_override,
-            provider_usage_fallback,
-        );
-    }
+    merge_terminal_provider_usage_fallback(
+        &mut turn_stats,
+        provider_request_count_override,
+        provider_usage_fallback,
+    );
     let record_id = build_session_record_message_id(
         session_id,
         now,
@@ -544,15 +523,18 @@ fn merge_terminal_provider_usage_fallback(
     let provider_call_count = provider_request_count_override
         .filter(|count| *count > 0)
         .unwrap_or(1);
-    let mut segment = SessionTurnUsageSegment::from_provider_usage(
+    let segment = SessionTurnUsageSegment::from_provider_usage(
         SessionTurnUsageSegmentKind::AssistantResponse,
         provider_call_count,
         Some(provider_usage),
     );
-    if turn_stats.provider_call_count > 0 {
-        segment.provider_call_count = 0;
-    }
+    // providerCallCountBeforeMerge preserves the already-counted physical calls while the
+    // replacement segment restores complete per-segment accounting and its Regular group.
+    // providerCallCountBeforeMerge 保留已计入的物理调用次数，同时让替换分段恢复完整的
+    // 分段统计及其 Regular 分组。
+    let provider_call_count_before_merge = turn_stats.provider_call_count;
     merge_usage_segment_into_turn_stats(turn_stats, &segment);
+    turn_stats.provider_call_count = provider_call_count_before_merge.max(provider_call_count);
     turn_stats.usage_segments.push(segment);
 }
 
@@ -568,6 +550,16 @@ fn remove_empty_assistant_usage_segments(turn_stats: &mut SessionTurnStats) {
             && segment.tool_call_count == 0
             && segment.cached_input_tokens.is_none()
             && segment.cache_creation_input_tokens.is_none())
+    });
+    turn_stats.usage_groups.retain(|group| {
+        !(group.kind == SessionTurnUsageGroupKind::Regular
+            && group.input_tokens == 0
+            && group.output_tokens == 0
+            && group.reasoning_tokens == 0
+            && group.total_tokens == 0
+            && group.tool_call_count == 0
+            && group.cached_input_tokens.is_none()
+            && group.cache_creation_input_tokens.is_none())
     });
 }
 

@@ -12,7 +12,7 @@ use crate::agent_runtime::provider_tool_event_format::{
 use crate::agent_runtime::tool_runtime_bridge::{
     VulcanManagedToolRuntimeBridge, attach_runtime_event_projection_barrier,
     build_tool_failure_invocation_result, build_tool_rejection_invocation_result,
-    wait_runtime_event_projection_barrier,
+    wait_runtime_event_projection_barrier, wait_tool_batch_projection_barrier,
 };
 use async_trait::async_trait;
 use futures_util::FutureExt;
@@ -105,9 +105,11 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
         let recovery_requests = requests
             .iter()
             .map(|request| {
+                let request_stream_id = request.request_stream_id.clone();
                 self.runtime_bridge
                     .binding_fingerprint_for_request(request)
                     .map(|binding_fingerprint| ToolExecutionRecoveryRequest {
+                        request_stream_id,
                         request: request.clone(),
                         binding_fingerprint,
                     })
@@ -128,8 +130,11 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
         let _ = self
             .live_sender
             .send(Ok(ProviderStreamDelta::RuntimeEvent(batch_event)));
-        wait_runtime_event_projection_barrier(projection_barrier)
+        let identities = wait_tool_batch_projection_barrier(projection_barrier)
             .await
+            .map_err(|message| VulcanCoreError::InvalidState { message })?;
+        self.runtime_bridge
+            .install_prepared_invocation_identities(requests, identities)
             .map_err(|message| VulcanCoreError::InvalidState { message })
     }
 

@@ -7,44 +7,25 @@ impl TaskRuntime {
         &self,
         current_session_id: SessionId,
         resolved_identifier: &ResolvedTaskSessionIdentifier,
-        incoming_prompt: &str,
     ) -> Result<Option<VulcanToolInvocationResult>, String> {
         if !resolved_identifier.is_resumed {
             return Ok(None);
         }
 
-        if let Some(record) = self
-            .sessions
-            .read()
-            .map_err(|_| {
-                String::from(
-                    "The task session registry is locked and cannot inspect the cached task result.",
-                )
-            })?
-            .get(&resolved_identifier.task_id)
-            .cloned()
-            .filter(task_session_record_has_cached_status)
-        {
-            return Ok(Some(build_cached_task_invocation_result_from_record(
-                current_session_id,
-                &record,
-            )));
-        }
-
-        if let Some(metadata) = resolved_identifier
-            .persisted_metadata
-            .as_ref()
-            .filter(|metadata| task_session_metadata_has_cached_status(metadata.status))
-        {
-            return Ok(Some(build_cached_task_invocation_result_from_metadata(
-                current_session_id,
-                resolved_identifier,
-                metadata,
-                incoming_prompt,
-            )));
-        }
-
-        Ok(None)
+        let record = self
+                .sessions
+                .read()
+                .map_err(|_| {
+                    String::from(
+                        "The task session registry is locked and cannot inspect the cached task result.",
+                    )
+                })?
+                .get(&resolved_identifier.task_id)
+                .cloned()
+                .filter(task_session_record_has_cached_status);
+        Ok(record.map(|record| {
+            build_cached_task_invocation_result_from_record(current_session_id, &record)
+        }))
     }
 
     /// Stops one reserved or running child task by its stable task identifier.
@@ -142,8 +123,8 @@ impl TaskRuntime {
         Ok(stopped_task_ids)
     }
 
-    /// Stops every active child-agent run during application shutdown and persists stopped metadata.
-    /// 在应用关闭期间停止所有活动子代理运行，并持久化停止元数据。
+    /// Stops every active child-agent run during application shutdown and updates process-local projections.
+    /// 在应用关闭期间停止所有活动子代理运行，并更新进程内投影。
     pub fn stop_active_tasks_for_app_shutdown(&self) -> Result<Vec<SessionId>, String> {
         let reserved_runs = {
             let mut active_task_runs = self.active_task_runs.write().map_err(|_| {
@@ -169,7 +150,6 @@ impl TaskRuntime {
             .map(|(stopped_task_id, _)| stopped_task_id)
             .collect::<Vec<_>>();
         self.mark_stopped_tasks_in_registry(&stopped_task_ids, "app_shutdown")?;
-        self.persist_app_shutdown_stopped_task_records(&stopped_task_ids)?;
         Ok(stopped_task_ids)
     }
 
@@ -564,10 +544,8 @@ impl TaskRuntime {
     ///
     /// # Parameters
     /// 参数
-    /// `task_id` identifies the stable task being claimed.
-    /// `task_id` 标识正在被认领的稳定任务。
-    /// `execution_id` identifies the prepared concrete execution.
-    /// `execution_id` 标识已准备的具体执行。
+    /// `request` carries the stable task, concrete execution, and immutable V1 admission facts.
+    /// `request` 携带稳定任务、具体执行与不可变 V1 准入事实。
     ///
     /// # Returns
     /// 返回值
@@ -575,9 +553,10 @@ impl TaskRuntime {
     /// 返回活动运行守卫；执行已被取代或锁失败时返回错误。
     pub(super) fn claim_and_reserve_active_task_run(
         self: &Arc<Self>,
-        task_id: SessionId,
-        execution_id: &str,
+        request: &TaskExecutionRequest,
     ) -> Result<ActiveTaskRunGuard, String> {
+        let task_id = request.task_id;
+        let execution_id = request.execution_id.as_str();
         let transaction_lock = self.task_execution_state_lock(task_id)?;
         let _transaction = transaction_lock.lock().map_err(|_| {
             String::from(
@@ -585,7 +564,24 @@ impl TaskRuntime {
             )
         })?;
         self.claim_task_execution_record_owner(task_id, execution_id)?;
-        self.reserve_active_task_run(task_id, execution_id)
+        let guard = self.reserve_active_task_run(task_id, execution_id)?;
+        let mut active_task_runs = self.active_task_runs.write().map_err(|_| {
+            String::from("The active task registry is locked and cannot retain V1 execution facts.")
+        })?;
+        let entry = active_task_runs.get_mut(&task_id).ok_or_else(|| {
+            format!("Task `{task_id}` lost its active execution before V1 facts were retained.")
+        })?;
+        if entry.run_id != guard.run_id || entry.execution_id != execution_id {
+            return Err(format!(
+                "Task `{task_id}` active execution changed before V1 facts were retained."
+            ));
+        }
+        entry.v1_execution_facts = Some(TaskV1ExecutionFacts::from_request(
+            request,
+            current_unix_millis_u64(),
+        ));
+        drop(active_task_runs);
+        Ok(guard)
     }
 
     /// Reserves one exact child execution before DelegateStarted is published.
@@ -617,6 +613,7 @@ impl TaskRuntime {
                 ActiveTaskRunEntry {
                     run_id,
                     execution_id: execution_id.to_string(),
+                    v1_execution_facts: None,
                     abort_handle: None,
                     stop_requested: false,
                 },
@@ -813,6 +810,44 @@ impl TaskRuntime {
             })?
             .get(&task_id)
             .is_some_and(|entry| entry.execution_id == execution_id))
+    }
+
+    /// Returns immutable V1 admission facts for one exact current child execution.
+    /// 返回一次精确当前子执行的不可变 V1 准入事实。
+    ///
+    /// # Parameters / 参数
+    ///
+    /// - `task_id`: Stable child TaskSession identity.
+    ///   `task_id`：稳定子 TaskSession 身份。
+    /// - `execution_id`: Concrete execution identity that must still own the run.
+    ///   `execution_id`：必须仍拥有运行权的具体执行身份。
+    ///
+    /// # Returns / 返回值
+    ///
+    /// The exact facts retained before `DelegateStarted`, or an explicit stale/missing error.
+    /// 在 `DelegateStarted` 前保留的精确事实；执行过期或事实缺失时返回显式错误。
+    pub fn active_task_v1_execution_facts(
+        &self,
+        task_id: SessionId,
+        execution_id: &str,
+    ) -> Result<TaskV1ExecutionFacts, String> {
+        let active_task_runs = self.active_task_runs.read().map_err(|_| {
+            String::from("The active task registry is locked and cannot read V1 execution facts.")
+        })?;
+        let entry = active_task_runs
+            .get(&task_id)
+            .ok_or_else(|| format!("Task `{task_id}` has no active execution for V1 admission."))?;
+        if entry.execution_id != execution_id {
+            return Err(format!(
+                "Task `{task_id}` active execution is `{}`, not requested `{execution_id}`.",
+                entry.execution_id
+            ));
+        }
+        entry.v1_execution_facts.clone().ok_or_else(|| {
+            format!(
+                "Task `{task_id}` execution `{execution_id}` has no retained V1 admission facts."
+            )
+        })
     }
 
     /// Removes one active child-task run only when the caller owns the current reservation generation.

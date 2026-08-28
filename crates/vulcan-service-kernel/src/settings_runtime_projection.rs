@@ -385,82 +385,6 @@ pub(crate) fn emit_session_addon_changed_event(
     );
 }
 
-/// Builds a session addon document from a workspace snapshot and legacy runtime state.
-/// 从工作区快照与旧运行态构建会话附属状态文档。
-///
-/// # Parameters
-/// 参数
-/// `workspace_snapshot` supplies the legacy runtime state.
-/// `workspace_snapshot` 提供旧运行态。
-/// `session_id` selects the session being exported.
-/// `session_id` 选择正在导出的会话。
-/// `namespaces` limits the addon namespaces exported from the runtime snapshot.
-/// `namespaces` 限定从运行态快照导出的附属状态命名空间。
-///
-/// # Returns
-/// 返回值
-/// The derived addon state when the session runtime state exists.
-/// 当会话运行态存在时返回派生附属状态。
-pub(crate) fn session_addon_state_from_workspace_snapshot(
-    workspace_snapshot: &WorkspaceSnapshot,
-    session_id: SessionId,
-    namespaces: &[SessionAddonNamespace],
-) -> Option<SessionAddonState> {
-    let runtime_state = workspace_snapshot
-        .session_runtime_state
-        .get(&session_id)
-        .or_else(|| {
-            workspace_snapshot
-                .archived_session_runtime_state
-                .get(&session_id)
-        })?;
-    let updated_at = current_unix_millis_text();
-    let mut addon_state = SessionAddonState::new(session_id);
-    for namespace in namespaces {
-        match namespace {
-            SessionAddonNamespace::RuntimeControls => {
-                if let Some(controls) = SessionRuntimeControls::from_runtime_state(runtime_state) {
-                    let _ = addon_state.set_runtime_controls(&controls, updated_at.clone());
-                }
-            }
-            SessionAddonNamespace::Todolist if !runtime_state.todolist.is_empty() => {
-                let _ = addon_state.set_todolist(&runtime_state.todolist, updated_at.clone());
-            }
-            SessionAddonNamespace::OutputStyle if !runtime_state.output_style.is_empty() => {
-                let _ = addon_state.set_typed_namespace(
-                    SessionAddonNamespace::OutputStyle,
-                    &runtime_state.output_style,
-                    updated_at.clone(),
-                );
-            }
-            _ => {}
-        }
-    }
-    (!addon_state.namespaces.is_empty()).then_some(addon_state)
-}
-
-/// Returns the latest update timestamp recorded in one addon document.
-/// 返回一个附属状态文档中记录的最近更新时间。
-///
-/// # Parameters
-/// 参数
-/// `addon_state` is the addon document to inspect.
-/// `addon_state` 是要检查的附属状态文档。
-///
-/// # Returns
-/// 返回值
-/// The latest namespace update timestamp, or the current timestamp when the document is empty.
-/// 最新命名空间更新时间；文档为空时返回当前时间戳。
-pub(crate) fn latest_session_addon_updated_at(addon_state: &SessionAddonState) -> String {
-    addon_state
-        .namespaces
-        .values()
-        .map(|entry| entry.updated_at.as_str())
-        .max()
-        .map(str::to_string)
-        .unwrap_or_else(current_unix_millis_text)
-}
-
 /// Emits one service event and traces the serialized payload size when diagnostics are enabled.
 /// 发送单条服务事件，并在诊断开启时记录序列化载荷大小。
 pub(crate) fn emit_service_event_with_trace(
@@ -614,12 +538,21 @@ pub(crate) fn sync_workbench_runtime_control_fields_locked(
     let public_model_capabilities = effective_public_ai_selection
         .as_ref()
         .map(|selection| selection.model.capabilities.clone());
+    let selected_context_usage_facts = guard.workspace_snapshot.as_ref().and_then(|workspace| {
+        session_context_usage_facts_from_v1_registry(
+            guard.session_runtime_registry.as_ref(),
+            workspace.selected_session,
+        )
+        .ok()
+        .flatten()
+    });
     let context_usage = guard.workspace_snapshot.as_ref().and_then(|workspace| {
         context_usage_snapshot_from_runtime_state(
             workspace.selected_session,
             workspace
                 .session_runtime_state
                 .get(&workspace.selected_session),
+            selected_context_usage_facts.as_ref(),
             &guard.live_context_budgets,
             public_model_capabilities.as_ref(),
             None,

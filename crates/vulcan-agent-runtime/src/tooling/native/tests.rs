@@ -1,23 +1,25 @@
 use super::{
     CommandSessionBackend, CommandSessionOutputChunk, CommandSessionSnapshot,
     DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS, MAX_COMMAND_SESSION_READ_CHUNKS,
-    MAX_COMMAND_SESSION_READ_WAIT_MS, NativeToolDefinition, NativeToolExecutionRequest,
-    SUBMIT_PLAN_MARKER, TerminalSessionInput, TerminalSessionToolAction, TerminalSessionToolArgs,
-    TerminalSessionWaitPolicy, ThreadGoal, ThreadGoalStatus, build_agent_list_tool,
+    MAX_COMMAND_SESSION_READ_WAIT_MS, NativeGoalRuntime, NativeGoalSnapshot, NativeGoalStatus,
+    NativeGoalTerminalStatus, NativeToolDefinition, NativeToolExecutionRequest, SUBMIT_PLAN_MARKER,
+    TerminalSessionInput, TerminalSessionToolAction, TerminalSessionToolArgs,
+    TerminalSessionWaitPolicy, build_agent_list_tool, build_create_goal_tool, build_get_goal_tool,
     build_knowledge_browse_tool, build_knowledge_read_tool, build_knowledge_search_tool,
     build_mcp_server_list_tool, build_prompt_skill_detail_tool, build_shell_command_tool,
     build_shell_session_tool, build_skill_list_tool, build_submit_plan_tool,
     build_terminal_session_host_payload, build_terminal_session_render_input,
-    build_terminal_session_tool, build_todolist_tool, build_workspace_describe_tool,
-    coalesce_terminal_output_chunks, default_terminal_session_backend, display_submit_plan_path,
-    effective_start_append_newline, goal_response_value, knowledge_document_lines,
-    normalize_terminal_session_name, resolve_session_shell_behavior,
-    resolve_shell_command_launcher, resolve_shell_command_working_directory,
-    shell_command_args_schema, shell_session_args_schema, shell_specific_newline,
-    terminal_inputs_request_interrupt, terminal_interrupt_drain_chunk_is_visible,
-    terminal_output_chunks_contain_pattern, terminal_read_chunk_budget,
-    terminal_screen_text_from_chunks, terminal_session_args_schema, terminal_wait_budget_ms,
-    validate_shell_session_start_stdin_policy, validate_terminal_session_start_shell_policy,
+    build_terminal_session_tool, build_todolist_tool, build_update_goal_tool,
+    build_workspace_describe_tool, coalesce_terminal_output_chunks,
+    default_terminal_session_backend, display_submit_plan_path, effective_start_append_newline,
+    goal_response_value, knowledge_document_lines, normalize_terminal_session_name,
+    resolve_session_shell_behavior, resolve_shell_command_launcher,
+    resolve_shell_command_working_directory, shell_command_args_schema, shell_session_args_schema,
+    shell_specific_newline, terminal_inputs_request_interrupt,
+    terminal_interrupt_drain_chunk_is_visible, terminal_output_chunks_contain_pattern,
+    terminal_read_chunk_budget, terminal_screen_text_from_chunks, terminal_session_args_schema,
+    terminal_wait_budget_ms, validate_shell_session_start_stdin_policy,
+    validate_terminal_session_start_shell_policy,
 };
 use crate::agent_runtime::config::{
     AgentRuntimeConfig, RuntimeAgentDefinition, RuntimeAgentKind, RuntimeAgentRoute,
@@ -35,6 +37,7 @@ use std::sync::Arc;
 use tokio::fs as tokio_fs;
 use uuid::Uuid;
 use vulcan_vmm::VmmConfigLayer;
+use vulcan_workbench_model::SessionId;
 
 /// Builds one compact detected-shell record for tests that only care about shell identity and dynamic schema exposure.
 /// 为仅关注 shell 身份与动态 schema 暴露的测试构建一条紧凑检测记录。
@@ -86,6 +89,7 @@ fn test_native_request(arguments: serde_json::Value) -> NativeToolExecutionReque
         session_id: None,
         workspace_root: None,
         controller_runtime: None,
+        goal_runtime: None,
         knowledge_access: None,
         spill_root: None,
         enabled_prompt_skill_names: Vec::new(),

@@ -11,10 +11,6 @@ fn conversation_hot_paths_do_not_reintroduce_global_scans() {
             include_str!("../conversation_submission.rs"),
         ),
         (
-            "conversation_submission/edit.rs",
-            include_str!("../conversation_submission/edit.rs"),
-        ),
-        (
             "conversation_actions.rs",
             include_str!("../conversation_actions.rs"),
         ),
@@ -29,10 +25,6 @@ fn conversation_hot_paths_do_not_reintroduce_global_scans() {
         (
             "agent_stream/provider_telemetry.rs",
             include_str!("../agent_stream/provider_telemetry.rs"),
-        ),
-        (
-            "agent_stream/stream_task/conversation_checkpoint.rs",
-            include_str!("../agent_stream/stream_task/conversation_checkpoint.rs"),
         ),
         (
             "agent_stream/stream_task.rs",
@@ -51,10 +43,6 @@ fn conversation_hot_paths_do_not_reintroduce_global_scans() {
             include_str!("../execution_report_memory.rs"),
         ),
         (
-            "workspace_session_persistence.rs",
-            include_str!("../workspace_session_persistence.rs"),
-        ),
-        (
             "webui_prompt_lifecycle/precheck_continue.rs",
             include_str!("../webui_prompt_lifecycle/precheck_continue.rs"),
         ),
@@ -65,34 +53,10 @@ fn conversation_hot_paths_do_not_reintroduce_global_scans() {
             ),
         ),
         (
-            "workspace_store/persistence/runtime_tail.rs",
+            "workspace_store/session_v1/writer.rs",
             include_str!(
-                "../../../vulcan-workspace-store/src/workspace_store/persistence/runtime_tail.rs"
+                "../../../vulcan-workspace-store/src/workspace_store/session_v1/writer.rs"
             ),
-        ),
-        (
-            "workspace_store/execution_retry_store.rs",
-            include_str!(
-                "../../../vulcan-workspace-store/src/workspace_store/execution_retry_store.rs"
-            ),
-        ),
-        (
-            "workspace_store/segmented_session_store/message_events.rs",
-            include_str!(
-                "../../../vulcan-workspace-store/src/workspace_store/segmented_session_store/message_events.rs"
-            ),
-        ),
-        (
-            "task_session/segmented_store/store_impl.rs",
-            include_str!("../../../vulcan-task-session/src/segmented_store/store_impl.rs"),
-        ),
-        (
-            "task_session/segmented_store/mirror.rs",
-            include_str!("../../../vulcan-task-session/src/segmented_store/mirror.rs"),
-        ),
-        (
-            "task_session/segmented_store/invocations.rs",
-            include_str!("../../../vulcan-task-session/src/segmented_store/invocations.rs"),
         ),
         (
             "service_bootstrap.rs",
@@ -132,112 +96,38 @@ fn conversation_hot_paths_do_not_reintroduce_global_scans() {
     );
 }
 
-/// Verifies retry persistence never creates a second sibling snapshot or content-addressed body.
-/// 验证重试持久化绝不创建第二个同级快照或内容寻址正文。
+/// Verifies V1 persistence writes only the typed ledger and never reintroduces legacy runtime envelopes.
+/// 验证 V1 持久化只写入强类型账本，且不会重新引入旧运行态信封。
 #[test]
-fn retry_storage_uses_only_the_exact_session_root_file() {
-    // source is the complete retry-store implementation guarded by this assertion.
-    // source 是由当前断言保护的完整重试存储实现。
-    let source = include_str!(
-        "../../../vulcan-workspace-store/src/workspace_store/execution_retry_store.rs"
-    );
-    // forbidden contains every publication primitive that can leave a sibling retry body.
-    // forbidden 包含所有可能遗留同级重试正文的发布原语。
-    let forbidden = [
-        "write_file_bytes_atomic(",
-        "create_unique_staging_file(",
-        "execution_retry/",
-        "snapshot.previous",
-    ];
-    // violations records only exact textual regressions in the retry-store source.
-    // violations 只记录重试存储源码中的精确文本回归。
-    let violations = forbidden
-        .iter()
-        .filter(|needle| source.contains(**needle))
-        .copied()
-        .collect::<Vec<_>>();
+fn v1_session_writer_never_serializes_legacy_runtime_envelopes() {
+    // source owns the only V1 session flush implementation.
+    // source 持有唯一的 V1 会话刷新实现。
+    let source =
+        include_str!("../../../vulcan-workspace-store/src/workspace_store/session_v1/writer.rs");
     assert!(
-        violations.is_empty(),
-        "retry persistence reintroduced sibling snapshots: {violations:?}"
+        source.contains("FlushCandidate"),
+        "V1 persistence must consume the Core durable flush candidate"
+    );
+    assert!(
+        !source.contains("SessionRuntimeStateEntry"),
+        "V1 persistence must not serialize the retired runtime-state envelope"
+    );
+    assert!(
+        !source.contains("state.json"),
+        "V1 persistence must not write the retired segmented state document"
     );
 }
 
-/// Verifies live Provider and tool checkpoints remain memory-only until a terminal interruption.
-/// 验证实时 Provider 与工具检查点在终态中断前始终仅保留于内存。
+/// Verifies Provider accounting uses telemetry ownership without legacy runtime persistence.
+/// 验证 Provider 记账使用遥测归属且不再持久化旧运行态。
 #[test]
-fn live_retry_checkpoints_never_write_interrupted_retry_json() {
-    // source owns both normal Provider checkpoint publication and incremental tool transitions.
-    // source 同时持有普通 Provider 检查点发布与增量工具迁移。
-    let source = include_str!("../agent_stream/stream_task/conversation_checkpoint.rs");
-    // providerCheckpoint isolates the normal pre-dispatch checkpoint body from terminal handlers.
-    // providerCheckpoint 将普通分派前检查点正文与终态处理器隔离。
-    let provider_checkpoint = source
-        .split_once("pub(super) fn retain_prepared_execution_retry_checkpoint(")
-        .and_then(|(_, tail)| tail.split_once("/// Clears the live retry reference"))
-        .map(|(body, _)| body)
-        .expect("normal Provider retry checkpoint source should remain identifiable");
-    assert!(
-        provider_checkpoint.contains("project_execution_retry_snapshot("),
-        "normal Provider checkpoints must publish an in-memory reference"
-    );
-    assert!(
-        !provider_checkpoint.contains("persist_interrupted_execution_retry_snapshot("),
-        "normal Provider checkpoints must not write retry.json"
-    );
-    // toolCheckpoint isolates BatchPrepared, Started, and Finished transitions from interruption persistence.
-    // toolCheckpoint 将 BatchPrepared、Started 与 Finished 迁移同中断持久化隔离。
-    let tool_checkpoint = source
-        .split_once("pub(crate) async fn persist_execution_retry_tool_recovery_boundary(")
-        .and_then(|(_, tail)| tail.split_once("/// Builds structured interruption evidence"))
-        .map(|(body, _)| body)
-        .expect("live tool recovery checkpoint source should remain identifiable");
-    assert!(
-        tool_checkpoint.contains("project_execution_retry_snapshot("),
-        "live tool checkpoints must publish an in-memory reference"
-    );
-    assert!(
-        !tool_checkpoint.contains("persist_interrupted_execution_retry_snapshot("),
-        "live tool checkpoints must not write retry.json"
-    );
-}
-
-/// Verifies state persistence excludes canonical conversation history before serialization starts.
-/// 验证状态持久化在序列化开始前就排除规范会话历史。
-#[test]
-fn runtime_state_persistence_never_serializes_then_removes_conversation_history() {
-    // source owns the lightweight state-document projection used by every runtime checkpoint.
-    // source 持有每个运行态检查点使用的轻量状态文档投影。
-    let source = include_str!(
-        "../../../vulcan-workspace-store/src/workspace_store/segmented_session_store/state_documents.rs"
-    );
-    assert!(
-        !source.contains("serialize_session_runtime_state_entry("),
-        "state persistence must not serialize the complete runtime entry"
-    );
-    assert!(
-        !source.contains("remove(\"conversation_state\")"),
-        "state persistence must not remove conversation history after JSON allocation"
-    );
-    assert!(
-        !source.contains("runtime_state.conversation_state"),
-        "state metadata persistence must not traverse canonical conversation history"
-    );
-    assert!(
-        source.contains("conversation_state: _"),
-        "state persistence must classify conversation history explicitly in exhaustive destructuring"
-    );
-}
-
-/// Verifies Provider boundaries use telemetry ownership and history-free state projections.
-/// 验证 Provider 边界使用遥测归属与无历史状态投影。
-#[test]
-fn provider_boundaries_use_owner_identity_and_history_free_projection() {
+fn provider_boundaries_use_owner_identity_without_legacy_runtime_persistence() {
     // source owns Provider boundary accounting and persistence routing.
     // source 持有 Provider 边界记账与持久化路由。
     let source = include_str!("../provider_usage_runtime.rs");
     assert!(
-        source.contains("provider_owner_is_regular_session(event)?"),
-        "Provider accounting must resolve ownership from the telemetry contract"
+        source.contains("telemetry_string(event, \"owner_id\")?"),
+        "Provider accounting must resolve the explicit telemetry owner identity"
     );
     assert!(
         !source.contains(".chain(workspace.archived_sessions.iter())"),
@@ -248,103 +138,12 @@ fn provider_boundaries_use_owner_identity_and_history_free_projection() {
         "Provider persistence must not clone complete runtime entries"
     );
     assert!(
-        source.contains("project_single_session_runtime_state_update("),
-        "main-session Provider persistence must use the history-free projection"
-    );
-}
-
-/// Verifies a session model selection projects only its newly appended audit row.
-/// 验证会话模型选择仅投影刚追加的审计记录。
-#[test]
-fn session_model_selection_never_clones_or_rebuilds_conversation_history() {
-    // source owns the session-scoped model picker transaction and its visible audit record.
-    // source 持有会话范围模型选择事务及其可见审计记录。
-    let source = include_str!("../public_ai_settings.rs");
-    // start and end isolate the exact hot-path function from unrelated settings operations.
-    // start 与 end 将精确热路径函数同无关设置操作隔离。
-    let start = source
-        .find("fn append_session_model_switch_record(")
-        .expect("model-switch append function must exist");
-    let end = source[start..]
-        .find("fn plan_session_model_selection_for_next_provider_request(")
-        .map(|offset| start + offset)
-        .expect("model-switch planning function must follow the append function");
-    // functionSource is the complete model-switch append implementation.
-    // functionSource 是完整的模型切换追加实现。
-    let function_source = &source[start..end];
-    assert!(
-        !function_source.contains("runtime_state.clone()"),
-        "session model selection must not clone complete runtime state"
+        !source.contains("project_single_session_runtime_state_update("),
+        "Provider accounting must not persist the retired segmented runtime state"
     );
     assert!(
-        !function_source.contains("merge_runtime_state_records_into_display_messages"),
-        "session model selection must not rebuild complete display history"
-    );
-    assert!(
-        function_source.contains("append_new_canonical_row_to_loaded_display_window"),
-        "session model selection must project only the newly canonicalized row"
-    );
-}
-
-/// Verifies runtime tool-event drafts transfer the canonical session row instead of cloning history.
-/// 验证运行时工具事件草稿会转移规范会话行，而不是复制历史。
-#[test]
-fn runtime_tool_event_projection_never_clones_complete_session_history() {
-    // source owns the Service Kernel transaction used by ready, started, and finished tool events.
-    // source 持有就绪、开始与完成工具事件使用的 Service Kernel 事务。
-    let source = include_str!("../agent_stream/projection.rs");
-    // start and end isolate the exact event-draft builder from unrelated compatibility helpers.
-    // start 与 end 将精确事件草稿构建器同无关兼容辅助逻辑隔离。
-    let start = source
-        .find("fn build_runtime_event_workspace_draft(")
-        .expect("runtime-event draft builder must exist");
-    let end = source[start..]
-        .find("fn finish_runtime_event_projection_attempt(")
-        .map(|offset| start + offset)
-        .expect("runtime-event projection attempt helper must follow the draft builder");
-    // functionSource is the complete hot-path draft construction implementation.
-    // functionSource 是完整的热路径草稿构建实现。
-    let function_source = &source[start..end];
-    assert!(
-        !function_source.contains(".cloned()"),
-        "runtime tool events must not clone the complete session runtime row"
-    );
-    assert!(
-        function_source.contains(".remove(&session_id)"),
-        "runtime tool events must transfer exact session-row ownership into the draft"
-    );
-    assert!(
-        function_source.contains("restored_runtime_state"),
-        "failed runtime tool projections must restore the exact transferred row"
-    );
-    // reducerSource owns the shared Agent Runtime entry point used outside Service Kernel streaming.
-    // reducerSource 持有 Service Kernel 流之外使用的共享 Agent Runtime 入口。
-    let reducer_source =
-        include_str!("../../../vulcan-agent-runtime/src/session_event_runtime/event_projection.rs");
-    assert!(
-        !reducer_source.contains("runtime_state.clone()"),
-        "shared runtime-event reducers must not clone complete session history"
-    );
-    assert!(
-        reducer_source.contains("std::mem::take(runtime_state)"),
-        "shared runtime-event reducers must transfer exact runtime-row ownership"
-    );
-}
-
-/// Verifies long-lived terminal sessions cannot disable recovery of an already terminated AI turn.
-/// 验证长生命周期终端会话不能禁用已经终止的 AI 回合恢复。
-#[test]
-fn long_lived_terminal_sessions_are_not_conversation_continuation_blockers() {
-    // source owns the complete live-blocker contract used by display and atomic claim paths.
-    // source 持有展示与原子领取路径共用的完整实时阻断契约。
-    let source = include_str!("../conversation_continuation.rs");
-    assert!(
-        !source.contains("has_running_command_session"),
-        "long-lived command sessions must remain independent from AI-turn continuation"
-    );
-    assert!(
-        source.contains("command_session_id"),
-        "the independence invariant must remain documented beside the blocker collector"
+        !source.contains("persist_projected_single_session_runtime_state_update("),
+        "Provider accounting must not write the retired state.json envelope"
     );
 }
 
@@ -352,66 +151,20 @@ fn long_lived_terminal_sessions_are_not_conversation_continuation_blockers() {
 /// 验证保留终态持久化避免完整工作区与运行时历史克隆。
 #[test]
 fn retained_terminal_persistence_uses_exact_history_free_payloads() {
-    // persistenceSource owns the retained-session persistence fast path before the legacy snapshot writer.
-    // persistenceSource 持有旧快照写入器之前的保留会话持久化快速路径。
-    let persistence_source = include_str!("../workspace_session_persistence.rs");
-    // retainedEnd separates the optimized retained path from the general lifecycle persistence path.
-    // retainedEnd 将优化后的保留路径与通用生命周期持久化路径分开。
-    let retained_end = persistence_source
-        .find("pub(crate) async fn persist_workspace_session_update_unlocked(")
-        .expect("general persistence function must follow retained persistence");
-    // retainedSource contains only the retained-session persistence implementation under review.
-    // retainedSource 仅包含本次审核的保留会话持久化实现。
-    let retained_source = &persistence_source[..retained_end];
+    // registrySource owns every durable V1 session mutation and flush boundary.
+    // registrySource 持有每个 V1 会话可靠变更与 flush 边界。
+    let registry_source = include_str!("../session_runtime_registry_v1.rs");
     assert!(
-        !retained_source.contains("workspace_snapshot.clone()"),
-        "retained persistence must not clone the complete workspace"
+        registry_source.contains("pub(crate) struct SessionHandle"),
+        "V1 persistence must retain one explicit per-session owner"
     );
     assert!(
-        !retained_source.contains("runtime_state.clone()"),
-        "retained persistence must not clone canonical runtime history"
+        registry_source.contains("flush_through"),
+        "V1 persistence must flush through an observed document revision"
     );
     assert!(
-        retained_source.contains("project_single_session_runtime_state_update("),
-        "retained persistence must project history-free state metadata"
-    );
-
-    // routeSwitchSource owns next-request model promotion and durable rollback.
-    // routeSwitchSource 持有下一请求模型提升与可靠回滚。
-    let route_switch_source = include_str!("../agent_stream/stream_task/provider_route_switch.rs");
-    assert!(
-        !route_switch_source.contains("workspace_snapshot.clone()"),
-        "model-route promotion must not clone the complete workspace"
-    );
-    assert!(
-        !route_switch_source.contains("persist_workspace_session_update_unlocked"),
-        "model-route promotion must persist only the exact state document"
-    );
-
-    // terminalReportSource owns the single atomic draft clone for final report application.
-    // terminalReportSource 持有应用最终报告时唯一的原子草稿克隆。
-    let terminal_report_source =
-        include_str!("../../../vulcan-agent-runtime/src/session_event_runtime/terminal_report.rs");
-    assert_eq!(
-        terminal_report_source
-            .matches("runtime_state.clone()")
-            .count(),
-        1,
-        "terminal report application must retain exactly one atomic runtime clone"
-    );
-
-    // streamSources cover early and ordinary terminal materialization callers.
-    // streamSources 覆盖提前终态与普通终态物化调用方。
-    let stream_sources = [
-        include_str!("../agent_stream/stream_task.rs"),
-        include_str!("../agent_stream/stream_task/finished.rs"),
-        include_str!("../execution_report_memory.rs"),
-    ];
-    assert!(
-        stream_sources
-            .iter()
-            .all(|source| !source.contains("current_workspace_snapshot_from_shared_state")),
-        "terminal materialization must not rebuild a complete workspace snapshot"
+        !registry_source.contains("workspace_snapshot.clone()"),
+        "V1 session persistence must not clone the global workspace snapshot"
     );
 }
 
@@ -419,32 +172,16 @@ fn retained_terminal_persistence_uses_exact_history_free_payloads() {
 /// 验证精确会话写入者绝不会等待进程级工作区生命周期闸门。
 #[test]
 fn session_hot_persistence_uses_session_keyed_channels() {
-    // sources contain only session-scoped state, transcript, addon, Provider, compaction, and route writes.
-    // sources 仅包含会话级状态、转录、附属、Provider、压缩与路由写入。
+    // sources contain the only durable session owner and lifecycle publication boundary.
+    // sources 仅包含唯一可靠会话所有者与生命周期发布边界。
     let sources = [
         (
-            "workspace_session_persistence.rs",
-            include_str!("../workspace_session_persistence.rs"),
+            "session_runtime_registry_v1.rs",
+            include_str!("../session_runtime_registry_v1.rs"),
         ),
         (
-            "provider_usage_runtime.rs",
-            include_str!("../provider_usage_runtime.rs"),
-        ),
-        (
-            "provider_route_switch.rs",
-            include_str!("../agent_stream/stream_task/provider_route_switch.rs"),
-        ),
-        (
-            "context_compaction/persist_display.rs",
-            include_str!("../context_compaction/persist_display.rs"),
-        ),
-        (
-            "conversation_run_services.rs",
-            include_str!("../conversation_run_services.rs"),
-        ),
-        (
-            "knowledge_base_services.rs",
-            include_str!("../knowledge_base_services.rs"),
+            "session_v1_lifecycle.rs",
+            include_str!("../session_v1_lifecycle.rs"),
         ),
     ];
     let global_gate_users = sources
@@ -459,8 +196,8 @@ fn session_hot_persistence_uses_session_keyed_channels() {
     assert!(
         sources
             .iter()
-            .all(|(_, source)| source.contains("webui_session_persist_lock")),
-        "every session hot persistence module must use the session-keyed channel"
+            .all(|(_, source)| !source.contains("webui_session_persist_lock")),
+        "V1 persistence must not depend on the retired versioned session channel"
     );
 }
 
@@ -468,33 +205,20 @@ fn session_hot_persistence_uses_session_keyed_channels() {
 /// 验证生命周期变更会把全局目录闸门桥接到确定性会话通道。
 #[test]
 fn session_lifecycle_mutations_bridge_global_and_session_persistence_gates() {
-    // sources own fork, archive, cleanup, project archive, and project removal transactions.
-    // sources 持有派生、归档、清理、项目归档与项目删除事务。
-    let sources = [
-        (
-            "conversation_actions.rs",
-            include_str!("../conversation_actions.rs"),
-        ),
-        (
-            "project_conversation_services/conversation_services.rs",
-            include_str!("../project_conversation_services/conversation_services.rs"),
-        ),
-        (
-            "project_conversation_services/project_services.rs",
-            include_str!("../project_conversation_services/project_services.rs"),
-        ),
-    ];
-    let missing_session_bridge = sources
-        .iter()
-        .filter(|(_, source)| {
-            source.contains("webui_workspace_persist_lock")
-                && !source.contains("lock_webui_session_persist_channels")
-        })
-        .map(|(name, _)| *name)
-        .collect::<Vec<_>>();
+    // lifecycleSource owns metadata-first publication and SQLite projection ordering.
+    // lifecycleSource 持有 metadata-first 发布与 SQLite 投影顺序。
+    let lifecycle_source = include_str!("../session_v1_lifecycle.rs");
     assert!(
-        missing_session_bridge.is_empty(),
-        "workspace lifecycle mutations must exclude exact session writers: {missing_session_bridge:?}"
+        lifecycle_source.contains("acquire_lifecycle_transition"),
+        "V1 lifecycle mutations must serialize through the per-session lifecycle gate"
+    );
+    assert!(
+        lifecycle_source.contains("project_lifecycle_metadata_or_report"),
+        "V1 lifecycle mutations must project SQLite only after metadata publication"
+    );
+    assert!(
+        !lifecycle_source.contains("lock_webui_session_persist_channels"),
+        "V1 lifecycle must not bridge the retired persistence-version channels"
     );
 }
 
@@ -543,18 +267,6 @@ fn request_time_vmm_refresh_never_rebuilds_the_global_snapshot() {
         global_rebuilds.is_empty(),
         "request-time VMM paths reintroduced global snapshot rebuilds: {global_rebuilds:?}"
     );
-    let missing_exact_projection = sources
-        .iter()
-        .filter(|(_, source)| {
-            !source.contains("refresh_exact_vmm_hook_session_projection")
-                && !source.contains("replace_session_projection")
-        })
-        .map(|(name, _)| *name)
-        .collect::<Vec<_>>();
-    assert!(
-        missing_exact_projection.is_empty(),
-        "every request-time VMM path must use the exact session projection: {missing_exact_projection:?}"
-    );
 }
 
 /// Verifies startup and index refreshes never infer body work from the selected session id.
@@ -595,69 +307,53 @@ fn startup_and_index_refresh_never_hydrate_selected_session() {
     );
 }
 
-/// Verifies execution hydration never opens presentation transcript windows.
-/// 验证执行态水合永不打开展示转录窗口。
+/// Verifies request-time restart projection uses V1 and exposes no segmented hydration entry.
+/// 验证请求时重启投影使用 V1，且不再暴露分段水合入口。
 #[test]
-fn execution_hydration_reads_only_exact_runtime_state() {
-    // storeSource owns the storage-side execution and display hydration entry points.
-    // storeSource 持有存储侧执行态与显示态水合入口。
-    let store_source = include_str!(
-        "../../../vulcan-workspace-store/src/workspace_store/session_load/hydration.rs"
-    );
-    // executionStart identifies the execution-only loader boundary.
-    // executionStart 标识纯执行加载器边界。
-    let execution_start = store_source
-        .find("pub async fn load_session_execution_hydration_snapshot_for_project_created_at(")
-        .expect("execution hydration loader");
-    // executionEnd excludes the later display hydration implementation from this assertion.
-    // executionEnd 从本次断言中排除后续显示态水合实现。
-    let execution_end = store_source[execution_start..]
-        .find("/// Lazily loads one session by its deterministic project")
-        .map(|offset| execution_start + offset)
-        .expect("display hydration loader");
-    // executionSource contains only the execution loader implementation and documentation.
-    // executionSource 仅包含执行加载器实现与文档。
-    let execution_source = &store_source[execution_start..execution_end];
-    assert!(execution_source.contains("load_segmented_runtime_state("));
-    assert!(!execution_source.contains("load_segmented_window_messages("));
-    assert!(!execution_source.contains("requested_limit"));
-
-    // serviceSource owns the three request-time runtime hydration entry points.
-    // serviceSource 持有三个请求时运行态水合入口。
+fn request_time_restart_projection_uses_v1_without_segmented_hydration() {
+    // serviceSource owns every request-time restart projection entry point.
+    // serviceSource 持有全部请求时重启投影入口。
     let service_source = include_str!("../session_hydration/loading.rs");
-    assert!(
-        service_source
-            .contains("load_session_execution_hydration_snapshot_for_project_created_at(")
-    );
-    assert!(!service_source.contains("load_session_hydration_snapshot_for_project_created_at("));
+    assert!(service_source.contains("sync_selected_session_v1_projection_from_store("));
+    assert!(!service_source.contains("load_session_execution_hydration_snapshot"));
+    assert!(!service_source.contains("load_segmented_runtime_state("));
+
+    // storeModule proves the old hydration API is not exported from workspace-store.
+    // storeModule 证明 workspace-store 不再导出旧水合 API。
+    let store_module = include_str!("../../../vulcan-workspace-store/src/workspace_store/mod.rs");
+    assert!(!store_module.contains("mod session_load;"));
+    assert!(!store_module.contains("load_session_execution_hydration_snapshot"));
+    assert!(!store_module.contains("load_session_hydration_snapshot"));
 }
 
-/// Verifies context compaction persistence transfers owned state and preserves lazy transcript authority.
-/// 验证上下文压缩持久化通过所有权转移推进并保留懒加载转录权威边界。
+/// Verifies context compaction persistence uses the registered V1 owner exclusively.
+/// 验证上下文压缩持久化只使用已注册的 V1 所有者。
 #[test]
 fn context_compaction_persistence_does_not_clone_complete_snapshots() {
-    // source owns display-message persistence and runtime-state publication after compaction.
-    // source 持有压缩后的展示消息持久化与运行态发布。
+    // source owns the final durable barrier after a compaction commit.
+    // source 持有压缩提交后的最终可靠屏障。
     let source = include_str!("../context_compaction/persist_display.rs");
     assert!(!source.contains("workspace_snapshot.clone()"));
     assert!(!source.contains("runtime_state.clone()"));
-    assert!(source.contains("let mut persistence_snapshot = workspace_snapshot;"));
-    assert!(source.contains("persist_latest_retained_workspace_session_update_unlocked("));
+    assert!(source.contains("registered_session_v1_handle_from_state"));
+    assert!(source.contains("handle.flush_all()"));
+    assert!(!source.contains("persist_latest_retained_workspace_session_update_unlocked("));
     assert!(!source.contains("persist_workspace_session_update_unlocked("));
 }
 
-/// Verifies session addon controls resolve one retained directory and avoid full workspace ownership copies.
-/// 验证会话附属控制会解析单个保留目录且不会复制完整工作区所有权。
+/// Verifies session controls persist through V1 metadata instead of the retired addon document.
+/// 验证会话控制通过 V1 元数据持久化，而不再写入已退役的附属文档。
 #[test]
-fn session_addon_controls_use_the_exact_directory_api() {
-    // source owns all WebUI session addon control persistence calls.
-    // source 持有全部 WebUI 会话附属控制持久化调用。
+fn session_controls_use_v1_metadata_without_addon_writes() {
+    // source owns all WebUI session control persistence calls.
+    // source 持有全部 WebUI 会话控制持久化调用。
     let source = include_str!("../conversation_run_services.rs");
-    assert!(source.contains("require_segmented_session_directory_for_retained_session("));
-    assert!(
-        source.contains("persist_single_session_addon_state_update_in_directory("),
-        "addon controls must write through the already-resolved exact directory"
-    );
+    assert!(source.contains("persist_session_plan_mode_v1("));
+    assert!(source.contains("set_vmm_session_policy_value_v1("));
+    assert!(source.contains("document.set_output_style("));
+    assert!(source.contains("mutate_durable_if_changed("));
+    assert!(!source.contains("persist_single_session_addon_state_update"));
+    assert!(!source.contains("write_session_addon_state"));
     assert!(!source.contains("workspace_snapshot.clone()"));
     assert!(!source.contains("workspace.clone()"));
 }
@@ -674,21 +370,12 @@ fn existing_submission_hot_path_uses_one_session_slices() {
         !preflight_source.contains("then(|| snapshot.clone())"),
         "existing-session preflight must not clone every retained session"
     );
-    assert!(
-        !preflight_source.contains("workspace_snapshot.session_messages.get(&session_id)"),
-        "existing-session preflight must not clone retained presentation history"
-    );
-    assert!(
-        !preflight_source.contains("workspace_snapshot.session_compactions.get(&session_id)"),
-        "existing-session preflight must not clone retained compaction history"
-    );
-
-    // queueSource owns busy-session queue mutation and exact merge-back.
-    // queueSource 持有忙碌会话排队变更与精确回并。
+    // queueSource owns the V1 queued-input admission.
+    // queueSource 持有 V1 排队输入准入。
     let queue_source = include_str!("../conversation_submission/queue.rs");
-    assert!(queue_source.contains("existing_submission_workspace_slice("));
-    assert!(queue_source.contains("std::mem::take(&mut runtime_state.conversation_state)"));
-    assert!(queue_source.contains("merge_existing_session_slice_into_retained_workspace("));
+    assert!(queue_source.contains(".enqueue_input("));
+    assert!(!queue_source.contains("existing_submission_workspace_slice("));
+    assert!(!queue_source.contains("std::mem::take(&mut runtime_state.conversation_state)"));
     assert!(
         !queue_source.contains("current_workspace.clone()"),
         "queue commit must not clone the complete retained workspace"
@@ -712,131 +399,15 @@ fn existing_submission_hot_path_uses_one_session_slices() {
     );
 }
 
-/// Verifies streaming, Continue checkpoints, and prompt-edit rollback never clone complete canonical history for local metadata changes.
-/// 验证流式更新、Continue checkpoint 与提示词编辑回滚不会为局部元数据变更复制完整规范历史。
+/// Verifies streaming semantic updates enter the V1 SessionHandle instead of retained presentation history.
+/// 验证流式语义更新进入 V1 SessionHandle，而不是保留的展示历史。
 #[test]
 fn conversation_mutation_hot_paths_transfer_or_borrow_canonical_history() {
-    // projectionSource owns every high-frequency thinking and assistant stream delta.
-    // projectionSource 持有每个高频思考与助手流式增量。
-    let projection_source = include_str!("../agent_stream/projection.rs");
-    // appendStart identifies the production stream append transaction.
-    // appendStart 标识生产流式追加事务。
-    let append_start = projection_source
-        .find("fn append_stream_delta_record(")
-        .expect("stream append function");
-    // appendEnd excludes sealing and test-only helpers from the guard.
-    // appendEnd 从守卫范围排除封口与仅测试辅助逻辑。
-    let append_end = projection_source[append_start..]
-        .find("fn seal_stream_delta_record(")
-        .map(|offset| append_start + offset)
-        .expect("stream seal function");
-    // appendSource is the exact high-frequency production body under review.
-    // appendSource 是接受审核的精确高频生产函数体。
-    let append_source = &projection_source[append_start..append_end];
-    assert!(append_source.contains(".session_runtime_state\n                .entry(session_id)"));
-    assert!(
-        !append_source.contains(
-            ".session_runtime_state\n                .get(&session_id)\n                .cloned()"
-        ),
-        "each stream delta must mutate the exact runtime row instead of cloning canonical history"
-    );
-
-    // submissionSource owns both exact Continue checkpoint commits.
-    // submissionSource 持有两个精确 Continue checkpoint 提交。
-    let submission_source = include_str!("../conversation_submission.rs");
-    assert!(submission_source.contains("apply_continuation_owned_runtime_fields("));
-    assert!(
-        !submission_source.contains("let mut merged = live.clone();"),
-        "Continue field merge must patch the retained row before making one necessary detached copy"
-    );
-
-    // editSource owns destructive historical prompt rollback and failure restoration.
-    // editSource 持有破坏性历史提示词回滚与失败恢复。
-    let edit_source = include_str!("../conversation_submission/edit.rs");
-    assert!(edit_source.contains("workspace.session_messages.remove(&session_id)"));
-    assert!(edit_source.contains("workspace.session_runtime_state.remove(&session_id)"));
-    assert!(edit_source.contains("take_workbench_conversation_messages("));
-    assert!(
-        !edit_source
-            .contains("session_messages: workspace.session_messages.get(&session_id).cloned()"),
-        "prompt-edit rollback must move retained transcript history into its backup"
-    );
-    assert!(
-        !edit_source
-            .contains("runtime_state: workspace.session_runtime_state.get(&session_id).cloned()"),
-        "prompt-edit rollback must move retained canonical history into its backup"
-    );
-
-    // runtimeHelperSource owns runtime entry materialization and optional display repair.
-    // runtimeHelperSource 持有运行态条目物化与可选显示修复。
-    let runtime_helper_source = include_str!("../runtime_workspace_helpers.rs");
-    // ensureStart identifies the display-repair wrapper.
-    // ensureStart 标识显示修复包装函数。
-    let ensure_start = runtime_helper_source
-        .find("pub(crate) fn ensure_webui_session_runtime_state(")
-        .expect("runtime state ensure function");
-    // ensureEnd separates the hot entry-only helper from unrelated runtime helpers.
-    // ensureEnd 将热路径仅条目辅助函数与无关运行时辅助函数分开。
-    let ensure_end = runtime_helper_source[ensure_start..]
-        .find("pub(crate) fn session_has_pending_plan_artifact(")
-        .map(|offset| ensure_start + offset)
-        .expect("pending plan helper");
-    // ensure_source contains both runtime ensure variants under review.
-    // ensure_source 包含接受审核的两种运行态确保接口。
-    let ensure_source = &runtime_helper_source[ensure_start..ensure_end];
-    assert!(ensure_source.contains(".session_runtime_state\n        .entry(session_id)"));
-    assert!(
-        !ensure_source.contains(".get(&session_id)\n        .cloned()"),
-        "runtime entry materialization must not clone canonical history"
-    );
-
-    // goalSource owns automatic chained goal continuation capture.
-    // goalSource 持有自动链式目标续跑捕获。
-    let goal_source = include_str!("../webui_turn_chaining.rs");
-    assert!(goal_source.contains("existing_submission_workspace_slice(snapshot, session_id)"));
-    assert!(
-        !goal_source.contains("then(|| snapshot.clone())"),
-        "automatic goal continuation must not clone the complete retained workspace"
-    );
-}
-
-/// Verifies an ordinary accepted turn cannot delete its prior durable retry body before replacement state persistence.
-/// 验证普通已接纳回合不能在替代状态持久化之前删除旧的可靠重试正文。
-#[test]
-fn accepted_turn_defers_consumed_retry_cleanup_until_state_persistence() {
-    // source owns retry checkpoint replacement, retained-state commit, background persistence, and cleanup.
-    // source 持有重试检查点替换、保留状态提交、后台持久化与清理。
-    let source = include_str!("../conversation_submission.rs");
-    // retentionStart identifies the memory-only checkpoint constructor.
-    // retentionStart 标识仅内存检查点构造函数。
-    let retention_start = source
-        .find("fn retain_accepted_preparation_retry_checkpoint(")
-        .expect("accepted retry retention function");
-    // retentionEnd excludes later submission orchestration from the no-filesystem-mutation guard.
-    // retentionEnd 从禁止文件系统变更的守卫中排除后续提交编排。
-    let retention_end = source[retention_start..]
-        .find("/// Freezes the exact provider, model, and credential selected")
-        .map(|offset| retention_start + offset)
-        .expect("model selection documentation boundary");
-    let retention_source = &source[retention_start..retention_end];
-    assert!(retention_source.contains("project_execution_retry_snapshot("));
-    assert!(
-        !retention_source.contains("delete_execution_retry_snapshot("),
-        "detached retry retention must never retire the still-durable crash boundary"
-    );
-
-    // cleanupMarker is deliberately adjacent to the successful state-persistence branch.
-    // cleanupMarker 被刻意放在状态持久化成功分支旁边。
-    let cleanup_marker = source
-        .find("Only a successful exact state persist may retire the consumed durable body.")
-        .expect("post-persistence retry cleanup marker");
-    let persist_before_cleanup = source[..cleanup_marker]
-        .rfind("persist_latest_retained_workspace_session_update(")
-        .expect("state persistence before retry cleanup");
-    let delete_after_cleanup = source[cleanup_marker..]
-        .find("delete_execution_retry_snapshot(")
-        .map(|offset| cleanup_marker + offset)
-        .expect("digest-bound retry deletion after persistence");
-    assert!(persist_before_cleanup < cleanup_marker);
-    assert!(cleanup_marker < delete_after_cleanup);
+    // sinkSource owns every high-frequency reasoning and assistant-text semantic update.
+    // sinkSource 持有每次高频思考与助手正文语义更新。
+    let sink_source = include_str!("../agent_stream/provider_v1_sink.rs");
+    assert!(sink_source.contains("self.handle.update_reasoning("));
+    assert!(sink_source.contains("self.handle.update_assistant_text("));
+    assert!(!sink_source.contains("session_runtime_state"));
+    assert!(!sink_source.contains("session_messages"));
 }

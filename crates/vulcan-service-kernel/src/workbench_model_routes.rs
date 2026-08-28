@@ -9,7 +9,7 @@ use vulcan_service_api::ServiceEventEmitter;
 use vulcan_service_api::{
     ProviderModelSecondaryRouteSelection, ProviderModelSecondaryRouteSummary, WorkbenchSnapshot,
 };
-use vulcan_workbench_model::{SessionAddonNamespace, SessionId, SessionRuntimeStateEntry};
+use vulcan_workbench_model::{SessionId, SessionRuntimeStateEntry};
 
 use super::{
     SharedServiceBridgeState, current_unix_millis_text, emit_workbench_event,
@@ -17,8 +17,6 @@ use super::{
     mutate_public_ai_configuration, parse_reasoning_effort, parse_thinking_display_mode,
     publish_public_ai_workbench, refresh_settings_projection_locked,
     refresh_workbench_runtime_controls_locked,
-    require_segmented_session_directory_for_retained_session,
-    session_addon_state_from_workspace_snapshot, spawn_exact_session_addon_state_persist_task,
 };
 
 mod openrouter_routes;
@@ -258,87 +256,80 @@ pub(super) async fn service_select_workbench_reasoning_effort(
 ) -> Result<WorkbenchSnapshot, String> {
     let selected_effort =
         parse_reasoning_effort(effort.trim()).ok_or_else(|| format!("未知思考档位：{effort}"))?;
-    let (session_directory, addon_state, workbench) =
-        mutate_provider_configuration_with_state_validation(
-            &state,
-            "保存思考档位失败",
-            |guard| {
-                // workspace proves the caller-owned session still exists at the serialized
-                // transaction boundary; selected_session is deliberately not consulted.
-                // workspace 在串行事务边界证明调用方持有的会话仍然存在；这里有意不读取
-                // selected_session。
-                let workspace = guard
-                    .workspace_snapshot
-                    .as_ref()
-                    .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
-                if !workspace
-                    .sessions
-                    .iter()
-                    .any(|session| session.id == conversation_id)
-                {
-                    return Err(format!(
-                        "Conversation `{conversation_id}` is not an active workspace session."
-                    ));
-                }
-                Ok(())
-            },
-            |configuration| {
-                configuration.workbench_reasoning_effort = Some(selected_effort);
-                configuration.workbench_reasoning_effort_explicit = true;
-                Ok(())
-            },
-            |guard, configuration| -> Result<_, String> {
-                let data_root = guard
-                    .controller_runtime
-                    .as_ref()
-                    .map(|runtime| runtime.data_root.clone())
-                    .ok_or_else(|| String::from("controller runtime is not ready"))?;
-                let workspace = guard
-                    .workspace_snapshot
-                    .as_mut()
-                    .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
-                // runtimeState is addressed by the immutable RPC target, so navigation while
-                // the write is queued cannot redirect the setting into another session.
-                // runtimeState 由不可变 RPC 目标寻址，因此写入排队期间的会话导航无法把设置
-                // 重定向到其他会话。
-                let runtime_state = workspace
-                    .session_runtime_state
-                    .entry(conversation_id)
-                    .or_insert_with(|| SessionRuntimeStateEntry {
-                        updated_at: current_unix_millis_text(),
-                        ..SessionRuntimeStateEntry::default()
-                    });
-                runtime_state.active_reasoning_effort = Some(selected_effort);
-                runtime_state.active_reasoning_effort_explicit = true;
-                runtime_state.updated_at = current_unix_millis_text();
-                let addon_state = session_addon_state_from_workspace_snapshot(
-                    workspace,
-                    conversation_id,
-                    &[SessionAddonNamespace::RuntimeControls],
-                )
-                .ok_or_else(|| {
-                    format!("Conversation `{conversation_id}` has no runtime-controls addon state.")
-                })?;
-                refresh_workbench_runtime_controls_locked(guard, configuration);
-                let session_directory = require_segmented_session_directory_for_retained_session(
-                    guard,
-                    &data_root,
-                    conversation_id,
-                )?;
-                Ok((session_directory, addon_state, guard.workbench.clone()))
-            },
-        )
-        .await??;
-
-    spawn_exact_session_addon_state_persist_task(
-        app.clone(),
-        state.clone(),
-        session_directory,
-        conversation_id,
-        addon_state,
-        vec![SessionAddonNamespace::RuntimeControls],
-        Some(String::from("reasoning_selection")),
-    );
+    let pending_requested_at_ms = crate::session_goal_lifecycle::current_v1_goal_unix_millis()?;
+    let handle =
+        crate::session_goal_lifecycle::session_v1_handle_from_state(&state, conversation_id)
+            .await?;
+    let workbench = mutate_provider_configuration_with_state_validation(
+        &state,
+        "保存思考档位失败",
+        |guard| {
+            // workspace proves the caller-owned session still exists at the serialized
+            // transaction boundary; selected_session is deliberately not consulted.
+            // workspace 在串行事务边界证明调用方持有的会话仍然存在；这里有意不读取
+            // selected_session。
+            let workspace = guard
+                .workspace_snapshot
+                .as_ref()
+                .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+            if !workspace
+                .sessions
+                .iter()
+                .any(|session| session.id == conversation_id)
+            {
+                return Err(format!(
+                    "Conversation `{conversation_id}` is not an active workspace session."
+                ));
+            }
+            Ok(())
+        },
+        |configuration| {
+            // The provider configuration retains the process-wide default; the session-specific
+            // next-request authority is committed separately through the V1 document below.
+            // Provider 配置保留进程级默认值；会话级下一请求权威在下方通过 V1 文档独立提交。
+            configuration.workbench_reasoning_effort = Some(selected_effort);
+            configuration.workbench_reasoning_effort_explicit = true;
+            Ok(())
+        },
+        |guard, configuration| -> Result<WorkbenchSnapshot, String> {
+            let workspace = guard
+                .workspace_snapshot
+                .as_mut()
+                .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+            let runtime_state = workspace
+                .session_runtime_state
+                .get_mut(&conversation_id)
+                .ok_or_else(|| format!("Conversation `{conversation_id}` has no runtime state."))?;
+            let pending_route = runtime_state.pending_model_selection.as_ref();
+            let fallback = crate::session_request_config_v1::SessionRequestFallback {
+                provider: pending_route
+                    .map(|selection| selection.provider_id.clone())
+                    .or_else(|| runtime_state.active_provider_id.clone()),
+                connection_id: pending_route
+                    .map(|selection| selection.connection_id.clone())
+                    .or_else(|| runtime_state.active_connection_id.clone()),
+                model: pending_route
+                    .map(|selection| selection.model_id.clone())
+                    .or_else(|| runtime_state.active_model_id.clone()),
+                thinking_level: runtime_state.active_reasoning_effort,
+                temperature: runtime_state.active_temperature,
+            };
+            crate::session_request_config_v1::set_pending_reasoning_request_v1(
+                handle.as_ref(),
+                selected_effort,
+                fallback,
+                pending_requested_at_ms,
+            )?;
+            // Legacy runtime controls remain an in-memory WebUI adapter only and are not persisted.
+            // 旧运行控制项仅保留为内存 WebUI 适配器，不再持久化。
+            runtime_state.active_reasoning_effort = Some(selected_effort);
+            runtime_state.active_reasoning_effort_explicit = true;
+            runtime_state.updated_at = current_unix_millis_text();
+            refresh_workbench_runtime_controls_locked(guard, configuration);
+            Ok(guard.workbench.clone())
+        },
+    )
+    .await??;
 
     emit_workbench_event(&app, &workbench);
     Ok(workbench)

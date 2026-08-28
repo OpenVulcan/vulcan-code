@@ -5,8 +5,11 @@ use crate::agent_runtime::execution_models::{
     ExecutionPreparation, ExecutionPromptPurpose, ExecutionProviderRequestContinuation,
 };
 use crate::agent_runtime::provider_transport_request_budget::{
-    ProviderRequestBudgetEvidence, ProviderUsageBudgetBaselineHandle,
-    build_provider_request_budget_evidence,
+    ProviderRequestBudgetEvidence, build_provider_request_budget_evidence,
+};
+use crate::agent_runtime::provider_v1_bridge::{
+    ProviderV1ApiTerminalFacts, ProviderV1LifecycleFacts, ProviderV1RequestFacts,
+    ProviderV1RequestTemplate, provider_failure_continuation_eligibility,
 };
 use crate::context_budget::ContextBudgetSnapshot;
 use crate::model::SessionId;
@@ -16,7 +19,7 @@ use time::{OffsetDateTime, UtcOffset};
 use uuid::Uuid;
 use vulcan_ai_contract::{AiExecutionError, AiTransportKind, DispatchOutcome, RetryAfterHint};
 use vulcan_core::types::{ProviderRequestSnapshot, ProviderUsageSnapshot};
-use vulcan_workbench_model::SessionProviderCallRecord;
+use vulcan_session_core::v1::event::{ApiTimings, ProviderSourceInput};
 
 /// Hook point fired after one physical Provider request starts.
 /// 一次真实 Provider 请求开始后触发的 Hook 点。
@@ -42,6 +45,9 @@ pub const HOOK_PROVIDER_REQUEST_RETRYING: &str = "provider.request.retrying";
 /// 从唯一执行准备来源捕获的不可变运行元数据。
 #[derive(Debug, Clone)]
 pub(crate) struct ProviderRequestTelemetryContext {
+    /// Frozen typed V1 request template derived from execution preparation.
+    /// 从执行准备派生的冻结强类型 V1 请求模板。
+    pub(crate) v1_request_template: ProviderV1RequestTemplate,
     /// Stable logical execution identity shared across restored physical streams.
     /// 跨恢复物理流共享的稳定逻辑执行身份。
     execution_id: String,
@@ -117,9 +123,6 @@ pub(crate) struct ProviderRequestTelemetryContext {
     /// Active context generation frozen for this execution.
     /// 为本次执行冻结的活动上下文代际。
     context_generation_id: Option<String>,
-    /// Shared durable Usage baseline used by the next logical Provider request.
-    /// 下一次逻辑 Provider 请求使用的共享持久化用量基线。
-    provider_usage_budget_baseline: ProviderUsageBudgetBaselineHandle,
 }
 
 impl ProviderRequestTelemetryContext {
@@ -137,10 +140,14 @@ impl ProviderRequestTelemetryContext {
     /// 返回不可变上下文，并且精确保留重试身份或宿主重启身份中的唯一一个。
     pub(crate) fn from_preparation(
         preparation: &ExecutionPreparation,
-        execution_retry_snapshot: Option<&vulcan_workbench_model::ExecutionRetrySnapshot>,
         provider_request_continuation: Option<&ExecutionProviderRequestContinuation>,
-        provider_usage_budget_baseline: ProviderUsageBudgetBaselineHandle,
     ) -> Result<Self, String> {
+        // v1RequestTemplate is derived before preparation fields are projected into telemetry strings.
+        // v1RequestTemplate 在执行准备字段投影为遥测字符串之前完成派生。
+        let v1_request_template = ProviderV1RequestTemplate::from_preparation(
+            preparation,
+            provider_request_continuation.is_some(),
+        );
         // ownerKind is derived from explicit purpose and subagent context, never from names.
         // ownerKind 从显式用途与子代理上下文派生，绝不根据名称猜测。
         let owner_kind = match preparation.prompt_purpose {
@@ -233,16 +240,11 @@ impl ProviderRequestTelemetryContext {
         // telemetrySeed 在手动 Continue 与宿主拥有的路由重启中都保留逻辑身份。
         let (execution_id, turn_id, initial_attempt_index) = provider_request_telemetry_seed(
             preparation.conversation_hook_turn_id.as_deref(),
-            execution_retry_snapshot.map(|snapshot| {
-                (
-                    snapshot.logical_execution_id.as_str(),
-                    snapshot.logical_turn_id.as_deref(),
-                    snapshot.next_provider_attempt_index,
-                )
-            }),
+            None,
             provider_request_continuation,
         )?;
         Ok(Self {
+            v1_request_template,
             execution_id,
             initial_attempt_index,
             session_id: preparation.session_id,
@@ -269,8 +271,7 @@ impl ProviderRequestTelemetryContext {
             owner_id: preparation.agent_id.clone(),
             owner_name: preparation.agent_name.clone(),
             turn_id,
-            context_generation_id: preparation.provider_usage_context_generation_id.clone(),
-            provider_usage_budget_baseline,
+            context_generation_id: None,
         })
     }
 
@@ -279,6 +280,13 @@ impl ProviderRequestTelemetryContext {
     #[cfg(test)]
     pub(crate) fn for_test() -> Self {
         Self {
+            v1_request_template: ProviderV1RequestTemplate {
+                base_purpose: Some(vulcan_session_core::v1::event::ApiPurposeKind::MainGeneration),
+                continuation_action_id: None,
+                profile: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+                connection_id: String::from("connection-1"),
+                thinking_level: Some(String::from("medium")),
+            },
             execution_id: String::from("execution-1"),
             initial_attempt_index: 0,
             session_id: SessionId::nil(),
@@ -314,7 +322,6 @@ impl ProviderRequestTelemetryContext {
             owner_name: String::from("Agent One"),
             turn_id: Some(String::from("turn-1")),
             context_generation_id: Some(String::from("context-1")),
-            provider_usage_budget_baseline: ProviderUsageBudgetBaselineHandle::new(None),
         }
     }
 }
@@ -424,9 +431,9 @@ pub struct ProviderRequestTelemetryEvent {
     /// Exact normalized usage carried by a terminal request when the provider reported any usage.
     /// 当供应商报告了任意用量时，由终态请求携带的精确标准化用量。
     pub completed_usage: Option<ProviderRequestCompletedUsage>,
-    /// Shared budget baseline handle excluded from the plugin-facing JSON payload.
-    /// 从面向插件的 JSON 载荷中排除的共享预算基线句柄。
-    provider_usage_budget_baseline: ProviderUsageBudgetBaselineHandle,
+    /// Typed V1 lifecycle fact carried independently from plugin telemetry JSON.
+    /// 与插件遥测 JSON 相互独立携带的强类型 V1 生命周期事实。
+    pub v1_lifecycle: Option<ProviderV1LifecycleFacts>,
 }
 
 impl ProviderRequestTelemetryEvent {
@@ -443,7 +450,7 @@ impl ProviderRequestTelemetryEvent {
             session_id,
             payload,
             completed_usage,
-            provider_usage_budget_baseline: ProviderUsageBudgetBaselineHandle::new(None),
+            v1_lifecycle: None,
         }
     }
 
@@ -460,15 +467,6 @@ impl ProviderRequestTelemetryEvent {
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| String::from("Provider telemetry event is missing request_id."))
-    }
-
-    /// Replaces the next-request baseline after the owning ledger boundary is durable.
-    /// 在所属账本边界持久化后替换下一请求基线。
-    pub fn replace_durable_budget_baseline(
-        &self,
-        baseline: Option<SessionProviderCallRecord>,
-    ) -> Result<(), String> {
-        self.provider_usage_budget_baseline.replace(baseline)
     }
 }
 
@@ -539,9 +537,12 @@ pub struct ProviderRequestTelemetryCancellationTracker {
     /// Session identity copied from the active started event.
     /// 从活动开始事件复制的会话身份。
     active_session_id: Option<SessionId>,
-    /// Shared baseline handle copied from the active started event.
-    /// 从活动开始事件复制的共享基线句柄。
-    active_budget_baseline: Option<ProviderUsageBudgetBaselineHandle>,
+    /// Typed V1 start facts retained independently from plugin telemetry JSON.
+    /// 与插件遥测 JSON 相互独立保留的强类型 V1 起始事实。
+    active_v1_request_facts: Option<ProviderV1RequestFacts>,
+    /// Whether the active typed request is explicitly outside the V1 session stream.
+    /// 当前强类型请求是否被显式排除在 V1 会话流之外。
+    active_v1_excluded: bool,
 }
 
 impl ProviderRequestTelemetryCancellationTracker {
@@ -562,7 +563,14 @@ impl ProviderRequestTelemetryCancellationTracker {
             ProviderRequestTelemetryEventKind::Started => {
                 self.active_started_payload = Some(event.payload.clone());
                 self.active_session_id = Some(event.session_id);
-                self.active_budget_baseline = Some(event.provider_usage_budget_baseline.clone());
+                self.active_v1_request_facts = match event.v1_lifecycle.as_ref() {
+                    Some(ProviderV1LifecycleFacts::RequestPrepared(facts)) => Some(facts.clone()),
+                    _ => None,
+                };
+                self.active_v1_excluded = matches!(
+                    event.v1_lifecycle.as_ref(),
+                    Some(ProviderV1LifecycleFacts::ExcludedNonSession)
+                );
             }
             ProviderRequestTelemetryEventKind::Dispatched => {
                 // Cancellation recovery keeps the exact dispatch boundary only for the active request.
@@ -631,7 +639,8 @@ impl ProviderRequestTelemetryCancellationTracker {
                 {
                     self.active_started_payload = None;
                     self.active_session_id = None;
-                    self.active_budget_baseline = None;
+                    self.active_v1_request_facts = None;
+                    self.active_v1_excluded = false;
                 }
             }
             ProviderRequestTelemetryEventKind::Retrying => {}
@@ -673,9 +682,10 @@ impl ProviderRequestTelemetryCancellationTracker {
         // sessionId was captured from the same started event.
         // sessionId 从同一开始事件捕获。
         let session_id = self.active_session_id.take()?;
-        // budgetBaseline belongs to the same active started event.
-        // budgetBaseline 属于同一条活动开始事件。
-        let provider_usage_budget_baseline = self.active_budget_baseline.take()?;
+        // v1RequestFacts is consumed without parsing the retained telemetry payload.
+        // v1RequestFacts 在不解析保留遥测载荷的情况下被消费。
+        let v1_request_facts = self.active_v1_request_facts.take();
+        let v1_excluded = std::mem::take(&mut self.active_v1_excluded);
         // completedAt is captured once for every derived duration field.
         // completedAt 为全部派生时长字段捕获一次。
         let completed_at_ms = current_unix_millis();
@@ -766,7 +776,14 @@ impl ProviderRequestTelemetryCancellationTracker {
             session_id,
             payload,
             completed_usage: None,
-            provider_usage_budget_baseline,
+            v1_lifecycle: v1_request_facts
+                .map(|facts| {
+                    ProviderV1LifecycleFacts::ApiTerminal(ProviderV1ApiTerminalFacts::cancelled(
+                        facts,
+                        completed_at_ms,
+                    ))
+                })
+                .or_else(|| v1_excluded.then_some(ProviderV1LifecycleFacts::ExcludedNonSession)),
         })
     }
 }
@@ -781,6 +798,9 @@ pub(crate) struct ProviderRequestTelemetryTracker {
     /// Currently active physical request.
     /// 当前活动真实请求。
     active_request: Option<ActiveProviderRequestTelemetry>,
+    /// Prepared request identity that has not crossed the durable Provider permit yet.
+    /// 已准备但尚未越过可靠 Provider 许可的请求身份。
+    pending_request: Option<ActiveProviderRequestTelemetry>,
     /// Zero-based physical request index within the execution stream.
     /// 执行流内从零开始的真实请求索引。
     next_attempt_index: u32,
@@ -834,9 +854,9 @@ impl ProviderRequestTelemetryTracker {
     pub(crate) fn next_request_continuation_identity(
         &self,
     ) -> Result<ExecutionProviderRequestContinuation, String> {
-        if self.active_request.is_some() {
+        if self.active_request.is_some() || self.pending_request.is_some() {
             return Err(String::from(
-                "Provider request continuation cannot be captured while a physical request is active.",
+                "Provider request continuation cannot be captured while a physical request is active or awaiting its durable permit.",
             ));
         }
         let context = self.context.as_ref().ok_or_else(|| {
@@ -847,14 +867,6 @@ impl ProviderRequestTelemetryTracker {
             logical_turn_id: context.turn_id.clone(),
             next_provider_attempt_index: self.next_attempt_index,
         })
-    }
-
-    /// Returns the baseline handle shared with Provider request budgeting.
-    /// 返回与 Provider 请求预算共享的基线句柄。
-    pub(crate) fn budget_baseline_handle(&self) -> Option<ProviderUsageBudgetBaselineHandle> {
-        self.context
-            .as_ref()
-            .map(|context| context.provider_usage_budget_baseline.clone())
     }
 
     /// Starts one physical request and closes any impossible overlapping request explicitly.
@@ -874,6 +886,11 @@ impl ProviderRequestTelemetryTracker {
         snapshot: &ProviderRequestSnapshot,
         context_budget: Option<&ContextBudgetSnapshot>,
     ) -> Result<Vec<ProviderRequestTelemetryEvent>, String> {
+        if self.pending_request.is_some() {
+            return Err(String::from(
+                "A legacy Provider request cannot start while a prepared request is awaiting its durable permit.",
+            ));
+        }
         let Some(context) = self.context.clone() else {
             return Ok(Vec::new());
         };
@@ -894,6 +911,9 @@ impl ProviderRequestTelemetryTracker {
                 Some("telemetry_invariant"),
                 Some("overlapping_request"),
                 None,
+                None,
+                0,
+                false,
             ));
         }
         // startedAt captures one timestamp for both state and payload.
@@ -901,8 +921,17 @@ impl ProviderRequestTelemetryTracker {
         let started_at = telemetry_clock_snapshot();
         // activeRequest is the sole mutable owner of terminal emission state.
         // activeRequest 是终态发射状态的唯一可变持有者。
+        let request_id = Uuid::new_v4().to_string();
+        // v1RequestFacts is derived from typed request state before any telemetry JSON exists.
+        // v1RequestFacts 在任何遥测 JSON 产生前从强类型请求状态派生。
+        let v1_request_facts = context.v1_request_template.request_facts(
+            request_id.clone(),
+            snapshot,
+            self.retry_count,
+            started_at.timestamp_ms,
+        );
         let active_request = ActiveProviderRequestTelemetry {
-            request_id: Uuid::new_v4().to_string(),
+            request_id,
             provider_key: snapshot.provider_id.clone(),
             model_key: snapshot.model_id.clone(),
             attempt_index: self.next_attempt_index,
@@ -921,11 +950,140 @@ impl ProviderRequestTelemetryTracker {
             timezone_offset_minutes: started_at.timezone_offset_minutes,
             budget_evidence,
             context_budget: context_budget.cloned(),
+            v1_request_facts,
         };
         self.next_attempt_index = self.next_attempt_index.saturating_add(1);
         events.push(build_started_event(&context, &active_request));
         self.active_request = Some(active_request);
         Ok(events)
+    }
+
+    /// Reserves one physical request identity without publishing a started fact.
+    /// 预留一次物理请求身份，但不发布已开始事实。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `snapshot` and `context_budget` are pre-permit candidate facts used only to create the
+    /// typed V1 preparation identity.
+    /// `snapshot` 与 `context_budget` 是仅用于创建强类型 V1 准备身份的许可前候选事实。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns an unpublished Started-shaped event consumed only by the durable preparation owner.
+    /// 返回一条尚未发布的 Started 形状事件，仅由可靠准备所有者消费。
+    pub(crate) fn prepare_request(
+        &mut self,
+        snapshot: &ProviderRequestSnapshot,
+        context_budget: Option<&ContextBudgetSnapshot>,
+    ) -> Result<ProviderRequestTelemetryEvent, String> {
+        if self.active_request.is_some() || self.pending_request.is_some() {
+            return Err(String::from(
+                "Provider request preparation overlaps an active or already prepared physical request.",
+            ));
+        }
+        let context = self.context.clone().ok_or_else(|| {
+            String::from("Provider request preparation has no initialized telemetry context.")
+        })?;
+        let budget_evidence = build_provider_request_budget_evidence(
+            snapshot,
+            context.protocol_profile_id.as_str(),
+            context.route_revision.as_str(),
+        )?;
+        let started_at = telemetry_clock_snapshot();
+        let request_id = Uuid::new_v4().to_string();
+        let v1_request_facts = context.v1_request_template.request_facts(
+            request_id.clone(),
+            snapshot,
+            self.retry_count,
+            started_at.timestamp_ms,
+        );
+        let pending_request = ActiveProviderRequestTelemetry {
+            request_id,
+            provider_key: snapshot.provider_id.clone(),
+            model_key: snapshot.model_id.clone(),
+            attempt_index: self.next_attempt_index,
+            retry_count: self.retry_count,
+            started_at_ms: started_at.timestamp_ms,
+            first_event_at_ms: None,
+            first_token_at_ms: None,
+            transport: None,
+            dispatched_at_ms: None,
+            headers_at_ms: None,
+            http_status: None,
+            provider_request_id: None,
+            rate_limit_headers: std::collections::BTreeMap::new(),
+            semantic_output_observed: false,
+            calendar_date: started_at.calendar_date,
+            timezone_offset_minutes: started_at.timezone_offset_minutes,
+            budget_evidence,
+            context_budget: context_budget.cloned(),
+            v1_request_facts,
+        };
+        let event = build_started_event(&context, &pending_request);
+        self.pending_request = Some(pending_request);
+        Ok(event)
+    }
+
+    /// Promotes the prepared identity with exact post-permit request facts.
+    /// 使用许可后的精确请求事实提升已准备身份。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `snapshot` and `context_budget` come from the only durable transport permit.
+    /// `snapshot` 与 `context_budget` 来自唯一可靠传输许可。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the sole publishable Started event for the exact permitted request.
+    /// 返回精确已许可请求的唯一可发布 Started 事件。
+    pub(crate) fn confirm_prepared_request(
+        &mut self,
+        snapshot: &ProviderRequestSnapshot,
+        context_budget: Option<&ContextBudgetSnapshot>,
+    ) -> Result<ProviderRequestTelemetryEvent, String> {
+        if self.active_request.is_some() {
+            return Err(String::from(
+                "Provider request confirmation overlaps an active physical request.",
+            ));
+        }
+        let context = self.context.clone().ok_or_else(|| {
+            String::from("Provider request confirmation has no initialized telemetry context.")
+        })?;
+        let pending_request = self.pending_request.as_ref().ok_or_else(|| {
+            String::from("Provider request confirmation has no prepared request identity.")
+        })?;
+        let budget_evidence = build_provider_request_budget_evidence(
+            snapshot,
+            context.protocol_profile_id.as_str(),
+            context.route_revision.as_str(),
+        )?;
+        let v1_request_facts = context.v1_request_template.request_facts(
+            pending_request.request_id.clone(),
+            snapshot,
+            pending_request.retry_count,
+            pending_request.started_at_ms,
+        );
+        let mut active_request = self
+            .pending_request
+            .take()
+            .expect("prepared request was verified immediately before promotion");
+        active_request
+            .provider_key
+            .clone_from(&snapshot.provider_id);
+        active_request.model_key.clone_from(&snapshot.model_id);
+        active_request.budget_evidence = budget_evidence;
+        active_request.context_budget = context_budget.cloned();
+        active_request.v1_request_facts = v1_request_facts;
+        let event = build_started_event(&context, &active_request);
+        self.active_request = Some(active_request);
+        self.next_attempt_index = self.next_attempt_index.saturating_add(1);
+        Ok(event)
+    }
+
+    /// Discards one pre-permit identity after preparation is rejected.
+    /// 在准备被拒绝后丢弃一个许可前身份。
+    pub(crate) fn reject_prepared_request(&mut self) {
+        self.pending_request = None;
     }
 
     /// Records the first Provider event timestamp without emitting a high-frequency Hook.
@@ -1017,7 +1175,10 @@ impl ProviderRequestTelemetryTracker {
     pub(crate) fn complete_success(
         &mut self,
         usage: Option<&ProviderUsageSnapshot>,
+        provider_source: ProviderSourceInput,
+        tool_call_count: usize,
     ) -> Option<ProviderRequestTelemetryEvent> {
+        self.reject_prepared_request();
         let context = self.context.as_ref()?;
         let active_request = self.active_request.take()?;
         Some(build_completed_event(
@@ -1028,6 +1189,9 @@ impl ProviderRequestTelemetryTracker {
             None,
             None,
             None,
+            Some(provider_source),
+            tool_call_count,
+            false,
         ))
     }
 
@@ -1053,6 +1217,7 @@ impl ProviderRequestTelemetryTracker {
         error: Option<&AiExecutionError>,
         usage: Option<&ProviderUsageSnapshot>,
     ) -> Vec<ProviderRequestTelemetryEvent> {
+        self.reject_prepared_request();
         let Some(context) = self.context.as_ref() else {
             return Vec::new();
         };
@@ -1063,6 +1228,9 @@ impl ProviderRequestTelemetryTracker {
             // completedRequestId links the retry event to the exact failed request.
             // completedRequestId 将重试事件关联到精确失败请求。
             let completed_request_id = active_request.request_id.clone();
+            // retryExhausted is fixed before the active request moves into its terminal event.
+            // retryExhausted 在活动请求移入终态事件前完成冻结。
+            let retry_exhausted = !will_retry && active_request.retry_count > 0;
             events.push(build_completed_event(
                 context,
                 active_request,
@@ -1071,6 +1239,9 @@ impl ProviderRequestTelemetryTracker {
                 Some(error_category),
                 error.and_then(|value| value.upstream_code.as_deref()),
                 error,
+                None,
+                0,
+                retry_exhausted,
             ));
             if will_retry {
                 events.push(build_retrying_event(
@@ -1151,6 +1322,9 @@ struct ActiveProviderRequestTelemetry {
     /// Request-aligned context-budget decision made before dispatch.
     /// 分派前作出的请求对齐上下文预算决策。
     context_budget: Option<ContextBudgetSnapshot>,
+    /// Typed V1 request facts that never depend on plugin telemetry serialization.
+    /// 绝不依赖插件遥测序列化的强类型 V1 请求事实。
+    v1_request_facts: Option<ProviderV1RequestFacts>,
 }
 
 /// Terminal state stored by the statistics fact table.
@@ -1324,11 +1498,10 @@ fn build_started_event(
 ) -> ProviderRequestTelemetryEvent {
     // contextBreakdown carries only non-sensitive request-category weights.
     // contextBreakdown 仅携带非敏感请求分类权重。
-    let context_breakdown = request
+    let context_breakdown = &request
         .budget_evidence
         .request_text_measurement
-        .context_breakdown
-        .as_ref();
+        .context_breakdown;
     ProviderRequestTelemetryEvent {
         kind: ProviderRequestTelemetryEventKind::Started,
         session_id: context.session_id,
@@ -1366,18 +1539,18 @@ fn build_started_event(
                 .budget_evidence
                 .request_text_measurement
                 .history_fingerprint
-                .as_deref(),
+                .as_str(),
             request_prefix_invariant_fingerprint: request
                 .budget_evidence
                 .request_text_measurement
                 .prefix_invariant_fingerprint
-                .as_deref(),
-            request_message_units: context_breakdown.map(|value| value.message_units),
-            request_system_tool_units: context_breakdown.map(|value| value.system_tool_units),
-            request_mcp_tool_units: context_breakdown.map(|value| value.mcp_tool_units),
-            request_skill_units: context_breakdown.map(|value| value.skill_units),
-            request_system_prompt_units: context_breakdown.map(|value| value.system_prompt_units),
-            request_other_units: context_breakdown.map(|value| value.other_units),
+                .as_str(),
+            request_message_units: context_breakdown.message_units,
+            request_system_tool_units: context_breakdown.system_tool_units,
+            request_mcp_tool_units: context_breakdown.mcp_tool_units,
+            request_skill_units: context_breakdown.skill_units,
+            request_system_prompt_units: context_breakdown.system_prompt_units,
+            request_other_units: context_breakdown.other_units,
             budget_accounting_source: request
                 .context_budget
                 .as_ref()
@@ -1396,7 +1569,13 @@ fn build_started_event(
                 .and_then(|budget| budget.accounting_warning_code.as_deref()),
         }),
         completed_usage: None,
-        provider_usage_budget_baseline: context.provider_usage_budget_baseline.clone(),
+        v1_lifecycle: Some(
+            request
+                .v1_request_facts
+                .clone()
+                .map(ProviderV1LifecycleFacts::RequestPrepared)
+                .unwrap_or(ProviderV1LifecycleFacts::ExcludedNonSession),
+        ),
     }
 }
 
@@ -1406,20 +1585,34 @@ fn build_dispatched_event(
     context: &ProviderRequestTelemetryContext,
     request: &ActiveProviderRequestTelemetry,
 ) -> ProviderRequestTelemetryEvent {
+    let dispatched_at_ms = request
+        .dispatched_at_ms
+        .expect("dispatched event requires an observed dispatch timestamp");
     ProviderRequestTelemetryEvent {
         kind: ProviderRequestTelemetryEventKind::Dispatched,
         session_id: context.session_id,
         payload: serialize_payload(DispatchedPayload {
             identity: identity_payload(context, request),
             started_at_ms: request.started_at_ms,
-            dispatched_at_ms: request
-                .dispatched_at_ms
-                .expect("dispatched event requires an observed dispatch timestamp"),
+            dispatched_at_ms,
             transport: request.transport,
             provider_request_id: request.provider_request_id.as_deref(),
         }),
         completed_usage: None,
-        provider_usage_budget_baseline: context.provider_usage_budget_baseline.clone(),
+        v1_lifecycle: Some(
+            request
+                .v1_request_facts
+                .clone()
+                .map(|request_facts| {
+                    ProviderV1LifecycleFacts::TransportObserved(
+                        crate::agent_runtime::provider_v1_bridge::ProviderV1TransportObservedFacts {
+                            request_facts,
+                            dispatched_at_ms,
+                        },
+                    )
+                })
+                .unwrap_or(ProviderV1LifecycleFacts::ExcludedNonSession),
+        ),
     }
 }
 
@@ -1440,7 +1633,7 @@ fn build_first_token_event(
             time_to_first_token_ms: elapsed_millis(request.started_at_ms, first_token_at_ms),
         }),
         completed_usage: None,
-        provider_usage_budget_baseline: context.provider_usage_budget_baseline.clone(),
+        v1_lifecycle: None,
     }
 }
 
@@ -1454,6 +1647,9 @@ fn build_completed_event(
     error_category: Option<&str>,
     error_code: Option<&str>,
     error: Option<&AiExecutionError>,
+    provider_source: Option<ProviderSourceInput>,
+    tool_call_count: usize,
+    retry_exhausted: bool,
 ) -> ProviderRequestTelemetryEvent {
     // completedAt is captured once for all terminal durations.
     // completedAt 为全部终态时长捕获同一时间戳。
@@ -1498,6 +1694,38 @@ fn build_completed_event(
         response_id: normalized_usage.response_id.clone(),
         billing_details: normalized_usage.billing_details.clone(),
     });
+    // v1Lifecycle is assembled only from the typed request state and structured terminal facts.
+    // v1Lifecycle 仅从强类型请求状态与结构化终态事实组装。
+    let v1_lifecycle = request.v1_request_facts.clone().map(|request_facts| {
+        let timing = ApiTimings {
+            prepared_at_ms: Some(request.started_at_ms),
+            dispatched_at_ms: request.dispatched_at_ms,
+            first_event_at_ms: request.first_event_at_ms,
+            first_token_at_ms: request.first_token_at_ms,
+            completed_at_ms: Some(completed_at_ms),
+        };
+        let terminal = match status {
+            ProviderRequestTerminalStatus::Succeeded => ProviderV1ApiTerminalFacts::succeeded(
+                request_facts,
+                &normalized_usage,
+                timing,
+                provider_source.expect("successful terminal requires typed Provider source"),
+                tool_call_count,
+                completed_at_ms,
+            ),
+            ProviderRequestTerminalStatus::Failed => ProviderV1ApiTerminalFacts::failed(
+                request_facts,
+                &normalized_usage,
+                timing,
+                error,
+                retry_exhausted,
+                provider_failure_continuation_eligibility(error, retry_exhausted),
+                completed_at_ms,
+            ),
+        };
+        ProviderV1LifecycleFacts::ApiTerminal(terminal)
+    });
+    let v1_lifecycle = Some(v1_lifecycle.unwrap_or(ProviderV1LifecycleFacts::ExcludedNonSession));
     ProviderRequestTelemetryEvent {
         kind: ProviderRequestTelemetryEventKind::Completed,
         session_id: context.session_id,
@@ -1552,7 +1780,7 @@ fn build_completed_event(
             timezone_offset_minutes: request.timezone_offset_minutes,
         }),
         completed_usage,
-        provider_usage_budget_baseline: context.provider_usage_budget_baseline.clone(),
+        v1_lifecycle,
     }
 }
 
@@ -1662,7 +1890,7 @@ fn build_retrying_event(
             retrying_at_ms: current_unix_millis(),
         }),
         completed_usage: None,
-        provider_usage_budget_baseline: context.provider_usage_budget_baseline.clone(),
+        v1_lifecycle: None,
     }
 }
 
@@ -1700,49 +1928,43 @@ struct StartedPayload<'a> {
     system_prompt_fingerprint: &'a str,
     /// Unicode scalar count of the canonical request.
     /// 规范请求的 Unicode 标量数量。
-    request_character_count: usize,
+    request_character_count: u64,
     /// UTF-8 byte count of the canonical request.
     /// 规范请求的 UTF-8 字节数量。
-    request_utf8_byte_count: usize,
+    request_utf8_byte_count: u64,
     /// Structural estimation units of the canonical request.
     /// 规范请求的结构估算单位。
-    request_structural_units: usize,
+    request_structural_units: u64,
     /// Canonical history message count.
     /// 规范历史消息数量。
-    request_history_message_count: usize,
+    request_history_message_count: u64,
     /// Whether canonical history already contains the latest prompt.
     /// 规范历史是否已经包含最新提示。
     request_prompt_in_history: bool,
     /// Canonical history digest.
     /// 规范历史摘要。
-    request_history_fingerprint: Option<&'a str>,
+    request_history_fingerprint: &'a str,
     /// Digest of request components that must remain stable for history-prefix reuse.
     /// 规范历史前缀复用时必须保持稳定的请求组件摘要。
-    request_prefix_invariant_fingerprint: Option<&'a str>,
+    request_prefix_invariant_fingerprint: &'a str,
     /// Character-level weight of canonical messages.
     /// 规范消息的字符级权重。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    request_message_units: Option<usize>,
+    request_message_units: u64,
     /// Character-level weight of host and bundled tools.
     /// 宿主及随包工具的字符级权重。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    request_system_tool_units: Option<usize>,
+    request_system_tool_units: u64,
     /// Character-level weight of MCP tools.
     /// MCP 工具的字符级权重。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    request_mcp_tool_units: Option<usize>,
+    request_mcp_tool_units: u64,
     /// Character-level weight of LuaSkills tools.
     /// LuaSkills 工具的字符级权重。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    request_skill_units: Option<usize>,
+    request_skill_units: u64,
     /// Character-level weight of system instructions.
     /// 系统指令的字符级权重。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    request_system_prompt_units: Option<usize>,
+    request_system_prompt_units: u64,
     /// Character-level weight of remaining request context.
     /// 其余请求上下文的字符级权重。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    request_other_units: Option<usize>,
+    request_other_units: u64,
     /// Stable budget-accounting source.
     /// 稳定预算记账来源。
     budget_accounting_source: Option<&'a str>,
@@ -2041,7 +2263,13 @@ mod tests {
             owner_id: String::from("agent-1"),
             owner_name: String::from("Agent One"),
             context_generation_id: None,
-            provider_usage_budget_baseline: ProviderUsageBudgetBaselineHandle::new(None),
+            v1_request_template: ProviderV1RequestTemplate {
+                base_purpose: Some(vulcan_session_core::v1::event::ApiPurposeKind::MainGeneration),
+                continuation_action_id: None,
+                profile: String::from(vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID),
+                connection_id: String::from("connection-1"),
+                thinking_level: None,
+            },
         });
         tracker
     }
@@ -2108,6 +2336,15 @@ mod tests {
         );
         assert_eq!(started[0].payload["model_key"], "model-key");
         assert_eq!(started[0].payload["request_prompt_in_history"], false);
+        let v1_request_facts = match started[0].v1_lifecycle.as_ref() {
+            Some(ProviderV1LifecycleFacts::RequestPrepared(facts)) => facts.clone(),
+            other => panic!("expected typed V1 request facts, got {other:?}"),
+        };
+        assert_eq!(
+            v1_request_facts.purpose,
+            vulcan_session_core::v1::event::ApiPurposeKind::MainGeneration
+        );
+        assert_eq!(v1_request_facts.request.provider, "provider-key");
         let dispatched = tracker
             .observe_transport(
                 AiTransportKind::Http,
@@ -2131,16 +2368,20 @@ mod tests {
         assert!(tracker.observe_first_token().is_some());
         assert!(tracker.observe_first_token().is_none());
         let completed = tracker
-            .complete_success(Some(&ProviderUsageSnapshot {
-                input_tokens: Some(10),
-                uncached_input_tokens: Some(10),
-                output_tokens: Some(5),
-                reasoning_tokens: Some(2),
-                total_tokens: Some(18),
-                cached_input_tokens: Some(3),
-                cache_creation_input_tokens: None,
-                ..ProviderUsageSnapshot::default()
-            }))
+            .complete_success(
+                Some(&ProviderUsageSnapshot {
+                    input_tokens: Some(10),
+                    uncached_input_tokens: Some(10),
+                    output_tokens: Some(5),
+                    reasoning_tokens: Some(2),
+                    total_tokens: Some(18),
+                    cached_input_tokens: Some(3),
+                    cache_creation_input_tokens: None,
+                    ..ProviderUsageSnapshot::default()
+                }),
+                crate::agent_runtime::provider_v1_bridge::test_provider_v1_source_input(),
+                0,
+            )
             .expect("active request should complete");
         assert_eq!(completed.kind, ProviderRequestTelemetryEventKind::Completed);
         assert_eq!(completed.payload["status"], "succeeded");
@@ -2148,6 +2389,18 @@ mod tests {
         assert_eq!(completed.payload["uncached_input_tokens"], 10);
         assert_eq!(completed.payload["accounted_total_tokens"], 18);
         assert_eq!(completed.payload["accounted_total_source"], "reported");
+        match completed.v1_lifecycle.as_ref() {
+            Some(ProviderV1LifecycleFacts::ApiTerminal(terminal)) => {
+                assert_eq!(terminal.request_facts, v1_request_facts);
+                assert_eq!(
+                    terminal.status,
+                    vulcan_session_core::v1::event::ApiCallStatus::Completed
+                );
+                assert_eq!(terminal.usage.total_tokens, Some(18));
+                assert_eq!(terminal.tool_call_count, 0);
+            }
+            other => panic!("expected typed V1 terminal facts, got {other:?}"),
+        }
         assert_eq!(
             completed.completed_usage,
             Some(ProviderRequestCompletedUsage {
@@ -2161,7 +2414,110 @@ mod tests {
                 ..ProviderRequestCompletedUsage::default()
             })
         );
-        assert!(tracker.complete_success(None).is_none());
+        assert!(
+            tracker
+                .complete_success(
+                    None,
+                    crate::agent_runtime::provider_v1_bridge::test_provider_v1_source_input(),
+                    0,
+                )
+                .is_none()
+        );
+    }
+
+    /// Verifies a prepared request is not active until the exact durable permit is confirmed.
+    /// 验证已准备请求在精确可靠许可确认前不会成为活动请求。
+    #[test]
+    fn prepared_request_publishes_started_only_after_durable_confirmation() {
+        let mut tracker = test_tracker();
+        let candidate = test_request_snapshot();
+        let prepared = tracker
+            .prepare_request(&candidate, None)
+            .expect("candidate preparation identity should build");
+        let prepared_request_id = prepared.payload["request_id"]
+            .as_str()
+            .expect("prepared request id must be a string")
+            .to_owned();
+        let prepared_character_count = prepared.payload["request_character_count"]
+            .as_u64()
+            .expect("prepared character count must be numeric");
+
+        assert!(tracker.active_checkpoint_identity().is_none());
+        assert!(
+            tracker
+                .next_request_continuation_identity()
+                .expect_err("pending preparation must block a safe continuation boundary")
+                .contains("awaiting its durable permit")
+        );
+        assert!(
+            tracker
+                .observe_transport(
+                    AiTransportKind::Http,
+                    100,
+                    None,
+                    None,
+                    None,
+                    std::collections::BTreeMap::new(),
+                )
+                .is_none()
+        );
+
+        let mut exact = candidate;
+        exact.prompt = String::from("permit exact request");
+        let started = tracker
+            .confirm_prepared_request(&exact, None)
+            .expect("durable permit should promote the prepared identity");
+
+        assert_eq!(started.kind, ProviderRequestTelemetryEventKind::Started);
+        assert_eq!(started.payload["request_id"], prepared_request_id);
+        assert!(
+            started.payload["request_character_count"]
+                .as_u64()
+                .expect("confirmed character count must be numeric")
+                > prepared_character_count
+        );
+        assert_eq!(
+            tracker
+                .active_checkpoint_identity()
+                .expect("confirmed request must become active")
+                .2,
+            0
+        );
+        assert!(tracker.confirm_prepared_request(&exact, None).is_err());
+    }
+
+    /// Verifies a rejected preparation publishes nothing and does not consume a physical attempt.
+    /// 验证被拒绝的准备不会发布事实，也不会消耗物理尝试编号。
+    #[test]
+    fn rejected_preparation_releases_identity_without_consuming_attempt() {
+        let mut tracker = test_tracker();
+        let snapshot = test_request_snapshot();
+        tracker
+            .prepare_request(&snapshot, None)
+            .expect("first preparation should reserve one identity");
+        tracker.reject_prepared_request();
+
+        assert_eq!(
+            tracker
+                .next_request_continuation_identity()
+                .expect("rejected preparation must restore the safe boundary")
+                .next_provider_attempt_index,
+            0
+        );
+
+        tracker
+            .prepare_request(&snapshot, None)
+            .expect("replacement preparation should be accepted");
+        tracker
+            .confirm_prepared_request(&snapshot, None)
+            .expect("replacement permit should be confirmed");
+        assert_eq!(
+            tracker
+                .active_checkpoint_identity()
+                .expect("confirmed replacement must become active")
+                .2,
+            0
+        );
     }
 
     /// Verifies Started telemetry preserves the canonical prompt-ownership fact used by Provider anchor deltas.
@@ -2236,7 +2592,11 @@ mod tests {
             .start_request(&test_request_snapshot(), None)
             .expect("request evidence should build");
         let completed = tracker
-            .complete_success(Some(&ProviderUsageSnapshot::default()))
+            .complete_success(
+                Some(&ProviderUsageSnapshot::default()),
+                crate::agent_runtime::provider_v1_bridge::test_provider_v1_source_input(),
+                0,
+            )
             .expect("active request should complete");
 
         assert!(completed.payload["uncached_input_tokens"].is_null());
@@ -2484,7 +2844,11 @@ mod tests {
             .start_request(&test_request_snapshot(), None)
             .expect("request evidence should build");
         tracker
-            .complete_success(None)
+            .complete_success(
+                None,
+                crate::agent_runtime::provider_v1_bridge::test_provider_v1_source_input(),
+                0,
+            )
             .expect("active request should complete");
 
         assert_eq!(

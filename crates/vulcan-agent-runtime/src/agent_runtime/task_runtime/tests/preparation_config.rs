@@ -1,7 +1,7 @@
 use super::*;
 use crate::{ExecutionKnowledgeAccessContext, ExecutionSessionGoalContext};
 use vldb_controller_client::{ClientRegistration, ControllerClient, ControllerClientConfig};
-use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
+use vulcan_workspace_store::data_plane::{ControllerRuntimeHandle, ControllerRuntimeMetadata};
 
 /// Builds a resolved TaskSession configuration for controller-config tests.
 /// 为控制器配置测试构建已解析 TaskSession 配置。
@@ -29,7 +29,7 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
         },
         runtime_policy: vulcan_session_core::ExecutionRuntimePolicy::main_session(),
         conversation_hook_turn_id: Some(String::from("test-hook-turn")),
-        execution_retry_snapshot: None,
+        continuation_action_id: None,
         provider_request_continuation: None,
         execution_agent_id: Some(String::from("main")),
         agent_prompt_snapshot: None,
@@ -42,7 +42,6 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
         provider_tool_enabled_capabilities_override: Default::default(),
         provider_extension_target_sets_override: None,
         subagent_prompt_context: None,
-        task_session_store_root: None,
         session_title: String::from("Parent session"),
         workspace_path: String::from("D:\\openvulcan\\test-project"),
         prompt: String::from("parent prompt"),
@@ -53,8 +52,6 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
         context_compaction_policy: None,
         context_compaction_window_node_id: None,
         context_budget_override: None,
-        provider_usage_budget_baseline: None,
-        provider_usage_context_generation_id: None,
         context_window_prefill_input_tokens: None,
         execution_mode: String::from("build"),
         temperature: None,
@@ -76,6 +73,7 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
         boundary_events: Vec::new(),
         runtime_system_updates: Vec::new(),
         controller_runtime: None,
+        native_goal_runtime: None,
         knowledge_access: None,
         session_goal_context: None,
         session_plan_context: None,
@@ -746,7 +744,6 @@ fn spawn_agent_mirror_uses_cloned_runtime_without_status_prompt() {
         task_id,
         public_task_id: String::from("mirror-review"),
         is_resumed: false,
-        persisted_metadata: None,
     };
 
     let request =
@@ -792,7 +789,6 @@ fn spawn_agent_record_captures_parent_agent_prompt_snapshot() {
         task_id,
         public_task_id: String::from("fixed-prompt-child"),
         is_resumed: false,
-        persisted_metadata: None,
     };
 
     let request =
@@ -867,7 +863,6 @@ fn spawn_agent_expert_forces_empty_initial_snapshot() {
         task_id,
         public_task_id: String::from("expert-review"),
         is_resumed: false,
-        persisted_metadata: None,
     };
 
     let request =
@@ -908,7 +903,6 @@ fn spawn_agent_custom_debug_reports_creation_mode() {
         task_id,
         public_task_id: String::from("git-storyteller"),
         is_resumed: false,
-        persisted_metadata: None,
     };
 
     let request =
@@ -1316,13 +1310,17 @@ fn task_runtime_preparation_request_preserves_enabled_knowledge_access() {
     );
     parent_request.controller_runtime = Some(ControllerRuntimeHandle::new(
         controller_client,
-        String::from("http://127.0.0.1:1"),
-        String::from("unused"),
-        std::env::temp_dir(),
-        std::env::temp_dir().join("unused.sqlite3"),
-        String::from("knowledge-child-test-binding"),
-        std::env::temp_dir().join("unused-statistics.sqlite3"),
-        String::from("knowledge-child-test-statistics-binding"),
+        ControllerRuntimeMetadata {
+            endpoint: String::from("http://127.0.0.1:1"),
+            executable: String::from("unused"),
+            data_root: std::env::temp_dir(),
+            sqlite_path: std::env::temp_dir().join("unused.sqlite3"),
+            sqlite_binding_id: String::from("knowledge-child-test-binding"),
+            system_statistics_sqlite_path: std::env::temp_dir().join("unused-statistics.sqlite3"),
+            system_statistics_sqlite_binding_id: String::from(
+                "knowledge-child-test-statistics-binding",
+            ),
+        },
     ));
     parent_request.knowledge_access = Some(ExecutionKnowledgeAccessContext {
         project_id: String::from("project-a"),
@@ -1602,55 +1600,6 @@ fn task_context_compaction_policy_follows_resolved_toggle() {
     assert_eq!(
         enabled_policy.tail_turns,
         ContextCompactionPolicy::default().tail_turns
-    );
-}
-
-/// Verifies provider-request counting starts after the latest completed task compaction marker.
-/// 验证 Provider 请求计数会从最近一次已完成的子任务压缩标记之后开始。
-#[test]
-fn task_provider_request_counter_uses_latest_compaction_boundary() {
-    let node_id = SessionNodeId::from(Uuid::new_v4());
-    let events = vec![
-        SessionEventRecord::new(
-            "before-compaction",
-            node_id,
-            0,
-            SessionEventKind::TaskTerminal,
-            100,
-            json!({ "provider_turns_executed": 2 }),
-        ),
-        SessionEventRecord::new(
-            "compaction",
-            node_id,
-            1,
-            SessionEventKind::RuntimeMarker,
-            101,
-            json!({
-                "context_compaction_status": "completed",
-                "provider_request_count": 99
-            }),
-        ),
-        SessionEventRecord::new(
-            "after-compaction-a",
-            node_id,
-            1,
-            SessionEventKind::TaskTerminal,
-            102,
-            json!({ "provider_turns_executed": 3 }),
-        ),
-        SessionEventRecord::new(
-            "after-compaction-b",
-            node_id,
-            2,
-            SessionEventKind::TaskTerminal,
-            103,
-            json!({ "provider_turns_executed": 4 }),
-        ),
-    ];
-
-    assert_eq!(
-        task_provider_requests_since_latest_compaction_event(&events),
-        7
     );
 }
 

@@ -344,6 +344,7 @@ impl VulcanCoreController {
                 .tool_calls
                 .iter()
                 .map(|tool_call| ToolInvocationRequest {
+                    request_stream_id: tool_call.id.clone(),
                     tool_call_id: resolved_tool_call_id(tool_call),
                     tool_name: tool_call.tool_name.clone(),
                     arguments: tool_call.arguments.clone(),
@@ -589,6 +590,7 @@ impl VulcanCoreController {
                 .tool_calls
                 .iter()
                 .map(|tool_call| ToolInvocationRequest {
+                    request_stream_id: tool_call.id.clone(),
                     tool_call_id: resolved_tool_call_id(tool_call),
                     tool_name: tool_call.tool_name.clone(),
                     arguments: tool_call.arguments.clone(),

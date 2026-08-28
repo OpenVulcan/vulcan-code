@@ -608,10 +608,6 @@ VALUES ('schema_revision', '0', 0);
 INSERT OR IGNORE INTO provider_usage_meta(meta_key, meta_value, updated_at_ms)
 VALUES ('aggregate_revision', '0', 0);
 INSERT OR IGNORE INTO provider_usage_meta(meta_key, meta_value, updated_at_ms)
-VALUES ('migration_cursor', '', 0);
-INSERT OR IGNORE INTO provider_usage_meta(meta_key, meta_value, updated_at_ms)
-VALUES ('legacy_migration_completed', '0', 0);
-INSERT OR IGNORE INTO provider_usage_meta(meta_key, meta_value, updated_at_ms)
 VALUES ('health_status', 'ready', 0);
 INSERT OR IGNORE INTO provider_usage_meta(meta_key, meta_value, updated_at_ms)
 VALUES ('application_database_migration_completed', '0', 0);
@@ -1164,15 +1160,6 @@ fn quote_sqlite_identifier(identifier: &str) -> Result<String, String> {
     Ok(format!("\"{identifier}\""))
 }
 
-/// One persisted native provider-usage migration cursor row.
-/// 一条已持久化的原生供应商用量迁移游标行。
-#[derive(Debug, Deserialize)]
-struct ProviderUsageMigrationCursorRow {
-    /// Opaque source-owned cursor value.
-    /// 来源自有的不透明游标值。
-    meta_value: String,
-}
-
 /// One persisted legacy-migration completion row.
 /// 一条持久化的旧迁移完成状态行。
 #[derive(Debug, Deserialize)]
@@ -1180,176 +1167,6 @@ struct ProviderUsageMigrationCompletedRow {
     /// Exact zero-or-one completion flag.
     /// 精确的零或一完成标记。
     completed: i64,
-}
-
-/// Loads the legacy usage-plugin migration cursor from the system-statistics binding.
-/// 从系统统计绑定加载旧用量插件迁移游标。
-///
-/// # Parameters
-/// 参数
-/// `controller` owns the existing system-statistics SQLite binding.
-/// `controller` 持有既有系统统计 SQLite 绑定。
-///
-/// # Returns
-/// 返回值
-/// The persisted cursor, or an empty string before the first migration page.
-/// 返回已持久化游标；首个迁移分页前返回空字符串。
-pub async fn load_provider_usage_migration_cursor(
-    controller: &ControllerRuntimeHandle,
-) -> Result<String, String> {
-    ensure_provider_usage_schema(controller).await?;
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            SYSTEM_STATISTICS_SPACE_ID,
-            system_statistics_sqlite_binding_id(controller),
-            "SELECT meta_value FROM provider_usage_meta WHERE meta_key = 'migration_cursor';",
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("读取供应商用量迁移游标失败：{error}"))?;
-    Ok(
-        decode_query_rows::<ProviderUsageMigrationCursorRow>(&result.json_data)?
-            .into_iter()
-            .next()
-            .map(|row| row.meta_value)
-            .unwrap_or_default(),
-    )
-}
-
-/// Loads whether the one-way legacy usage migration has crossed its durable cutover boundary.
-/// 读取一次性旧用量迁移是否已经跨过持久化切换边界。
-pub async fn load_provider_usage_migration_completed(
-    controller: &ControllerRuntimeHandle,
-) -> Result<bool, String> {
-    ensure_provider_usage_schema(controller).await?;
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            SYSTEM_STATISTICS_SPACE_ID,
-            system_statistics_sqlite_binding_id(controller),
-            "SELECT CAST(meta_value AS INTEGER) AS completed FROM provider_usage_meta WHERE meta_key = 'legacy_migration_completed';",
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("读取旧用量迁移完成状态失败：{error}"))?;
-    let completed = decode_query_rows::<ProviderUsageMigrationCompletedRow>(&result.json_data)?
-        .into_iter()
-        .next()
-        .map(|row| row.completed)
-        .unwrap_or_default();
-    match completed {
-        0 => Ok(false),
-        1 => Ok(true),
-        value => Err(format!("旧用量迁移完成状态 `{value}` 无效。")),
-    }
-}
-
-/// Stores the legacy usage-plugin migration cursor after one durable target batch.
-/// 在目标批次持久化后保存旧用量插件迁移游标。
-///
-/// # Parameters
-/// 参数
-/// `controller` owns the system-statistics binding, `cursor` is source-owned, and `updated_at_ms` is the durable write time.
-/// `controller` 持有系统统计绑定，`cursor` 由来源持有，`updated_at_ms` 是持久化写入时间。
-///
-/// # Returns
-/// 返回值
-/// Success after the cursor upsert completes.
-/// 游标更新完成后返回成功。
-pub async fn persist_provider_usage_migration_cursor(
-    controller: &ControllerRuntimeHandle,
-    cursor: &str,
-    updated_at_ms: i64,
-) -> Result<(), String> {
-    ensure_provider_usage_schema(controller).await?;
-    controller
-        .client
-        .execute_sqlite_batch_typed(
-            SYSTEM_STATISTICS_SPACE_ID,
-            system_statistics_sqlite_binding_id(controller),
-            r#"
-INSERT INTO provider_usage_meta(meta_key, meta_value, updated_at_ms)
-VALUES ('migration_cursor', ?1, ?2)
-ON CONFLICT(meta_key) DO UPDATE SET
-    meta_value = excluded.meta_value,
-    updated_at_ms = excluded.updated_at_ms;
-"#,
-            vec![vec![text(cursor.to_string()), integer(updated_at_ms)]],
-        )
-        .await
-        .map_err(|error| format!("保存供应商用量迁移游标失败：{error}"))?;
-    Ok(())
-}
-
-/// Seals the one-way legacy usage migration after its frozen source boundary is durable.
-/// 在冻结来源边界持久化后封存一次性旧用量迁移。
-pub async fn persist_provider_usage_migration_completed(
-    controller: &ControllerRuntimeHandle,
-    updated_at_ms: i64,
-) -> Result<(), String> {
-    ensure_provider_usage_schema(controller).await?;
-    controller
-        .client
-        .execute_sqlite_batch_typed(
-            SYSTEM_STATISTICS_SPACE_ID,
-            system_statistics_sqlite_binding_id(controller),
-            r#"
-INSERT INTO provider_usage_meta(meta_key, meta_value, updated_at_ms)
-VALUES ('legacy_migration_completed', '1', ?1)
-ON CONFLICT(meta_key) DO UPDATE SET
-    meta_value = excluded.meta_value,
-    updated_at_ms = excluded.updated_at_ms;
-"#,
-            vec![vec![integer(updated_at_ms)]],
-        )
-        .await
-        .map_err(|error| format!("保存旧用量迁移完成状态失败：{error}"))?;
-    Ok(())
-}
-
-/// Removes legacy-plugin copies when an authoritative native attempt owns the same identity.
-/// 当权威原生尝试持有同一身份时，删除旧插件产生的重复副本。
-///
-/// # Parameters
-/// 参数
-/// `controller` owns the sole system-statistics SQLite writer and `updated_at_ms` timestamps the rebuilt aggregate.
-/// `controller` 持有唯一系统统计 SQLite 写入器，`updated_at_ms` 标记重建聚合时间。
-///
-/// # Returns
-/// 返回值
-/// Success after one transactional repair and exact daily aggregate rebuild.
-/// 在一次事务修复及精确每日聚合重建完成后返回成功。
-pub async fn remove_duplicate_legacy_provider_usage_attempts_and_rebuild_daily(
-    controller: &ControllerRuntimeHandle,
-    updated_at_ms: i64,
-) -> Result<(), String> {
-    let _guard = lock_provider_usage_writes().await;
-    ensure_provider_usage_schema(controller).await?;
-    controller
-        .client
-        .execute_sqlite_script_typed(
-            SYSTEM_STATISTICS_SPACE_ID,
-            system_statistics_sqlite_binding_id(controller),
-            r#"
-BEGIN IMMEDIATE;
-DELETE FROM provider_usage_attempts_v3 AS legacy
-WHERE legacy.attempt_id LIKE 'legacy-plugin:%'
-  AND EXISTS (
-      SELECT 1
-      FROM provider_usage_attempts_v3 AS native
-      WHERE native.attempt_id NOT LIKE 'legacy-plugin:%'
-        AND native.logical_request_id = legacy.logical_request_id
-        AND native.attempt_index = legacy.attempt_index
-        AND COALESCE(native.failover_index, -1) = COALESCE(legacy.failover_index, -1)
-  );
-COMMIT;
-"#,
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("清理重复旧用量 attempt 失败：{error}"))?;
-    rebuild_provider_usage_daily(controller, updated_at_ms).await
 }
 
 /// Loads the bounded native provider usage dashboard from the application VLDB binding.

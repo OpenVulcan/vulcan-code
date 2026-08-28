@@ -4,7 +4,7 @@ use crate::agent_runtime::vulcan_plugin_hooks::dispatch_vulcan_plugin_hook;
 use std::collections::BTreeMap;
 use vulcan_hooks::{HookActor, HookCapabilitySet, HookContext, HookScope};
 use vulcan_host_tools::process_creation::{
-    apply_child_path_prefixes, apply_windows_release_no_window,
+    apply_child_path_prefixes, new_background_tokio_command,
 };
 
 /// Builds the one-shot shell-command host-owned native tool.
@@ -341,17 +341,15 @@ fn apply_shell_command_process_options(
     command: &mut TokioCommand,
     process_options: &ShellCommandProcessOptions,
 ) -> Result<(), NativeToolError> {
-    apply_windows_release_no_window(command);
-
     // VULCAN_HOME gives bundled skill scripts the same profile-specific user root as the Rust host.
     // VULCAN_HOME 让内置技能脚本与 Rust 宿主使用相同的按构建配置区分的用户根目录。
-    if std::env::var_os("VULCAN_HOME").is_none() {
-        if let Some(user_vulcan_root) = crate::runtime_assets::resolve_user_vulcan_root() {
-            command.env(
-                "VULCAN_HOME",
-                crate::runtime_assets::native_host_path(&user_vulcan_root),
-            );
-        }
+    if std::env::var_os("VULCAN_HOME").is_none()
+        && let Some(user_vulcan_root) = crate::runtime_assets::resolve_user_vulcan_root()
+    {
+        command.env(
+            "VULCAN_HOME",
+            crate::runtime_assets::native_host_path(&user_vulcan_root),
+        );
     }
 
     for (name, value) in &process_options.environment {
@@ -606,7 +604,7 @@ pub(crate) async fn execute_shell_command_process(
         }
     };
 
-    let mut command = TokioCommand::new(&program);
+    let mut command = new_background_tokio_command(&program);
     command.args(&program_args);
     command.current_dir(effective_cwd);
     command.stdout(Stdio::piped());

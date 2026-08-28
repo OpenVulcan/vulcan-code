@@ -62,7 +62,7 @@ pub(super) fn build_luaskills_dispatch_candidate(
             "call_luaskill LuaSkills implicit entry dispatcher",
         )),
         request_streaming: None,
-        invoke: Arc::new(move |args, session_id| {
+        invoke: Arc::new(move |args, context| {
             let runtime = luaskills_runtime.clone();
             let workspace_root = workspace_root.clone();
             let dispatch_entries = Arc::clone(&dispatch_entries);
@@ -72,7 +72,7 @@ pub(super) fn build_luaskills_dispatch_candidate(
                     workspace_root,
                     dispatch_entries,
                     args,
-                    session_id,
+                    Some(context.session_id),
                 )
                 .await
             })

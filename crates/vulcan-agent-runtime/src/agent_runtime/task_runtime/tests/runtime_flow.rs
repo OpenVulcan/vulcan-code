@@ -40,7 +40,7 @@ fn build_task_start_test_runtime_context(
             },
             runtime_policy: vulcan_session_core::ExecutionRuntimePolicy::main_session(),
             conversation_hook_turn_id: Some(String::from("test-hook-turn")),
-            execution_retry_snapshot: None,
+            continuation_action_id: None,
             provider_request_continuation: None,
             execution_agent_id: Some(String::from("main")),
             agent_prompt_snapshot: None,
@@ -53,7 +53,6 @@ fn build_task_start_test_runtime_context(
             provider_tool_enabled_capabilities_override: Default::default(),
             provider_extension_target_sets_override: None,
             subagent_prompt_context: None,
-            task_session_store_root: None,
             session_title: String::from("Parent session"),
             workspace_path: String::from("D:\\openvulcan\\test-project"),
             prompt: String::from("parent prompt"),
@@ -64,8 +63,6 @@ fn build_task_start_test_runtime_context(
             context_compaction_policy: None,
             context_compaction_window_node_id: None,
             context_budget_override: None,
-            provider_usage_budget_baseline: None,
-            provider_usage_context_generation_id: None,
             context_window_prefill_input_tokens: None,
             execution_mode: String::from("build"),
             temperature: None,
@@ -87,6 +84,7 @@ fn build_task_start_test_runtime_context(
             boundary_events: Vec::new(),
             runtime_system_updates: Vec::new(),
             controller_runtime: None,
+            native_goal_runtime: None,
             knowledge_access: None,
             session_goal_context: None,
             session_plan_context: None,
@@ -222,87 +220,6 @@ async fn build_task_execution_handler_rejects_closed_parent_live_stream_without_
             .expect("task session registry should be readable")
             .contains_key(&task_id),
         "closed parent stream must not store a synthetic task session"
-    );
-}
-
-/// Verifies running-state persistence failure closes the production detached stream startup scope.
-/// 验证运行中状态持久化失败会关闭生产分离事件流的启动作用域。
-#[tokio::test]
-async fn task_start_persistence_failure_closes_detached_stream() {
-    // tempDir owns an invalid file-shaped persistence root used to force the post-open failure.
-    // tempDir 持有用于触发打开后失败的文件形态无效持久化根目录。
-    let temp_dir = tempfile::tempdir().expect("temp task-session root");
-    // taskRuntime owns every lifecycle registry inspected by this integration test.
-    // taskRuntime 持有本集成测试检查的全部生命周期注册表。
-    let task_runtime = Arc::new(TaskRuntime::new());
-    // parentSessionId identifies the parent runtime context and persistence root.
-    // parentSessionId 标识父运行时上下文与持久化根目录。
-    let parent_session_id = Uuid::new_v4();
-    // taskId identifies the child whose startup must roll back completely.
-    // taskId 标识启动过程必须完整回滚的子任务。
-    let task_id = Uuid::new_v4();
-    // invalidStoreRoot is a regular file, so segmented task persistence cannot create records beneath it.
-    // invalidStoreRoot 是普通文件，因此分段任务持久化无法在其下创建记录。
-    let invalid_store_root = temp_dir.path().join("session-file");
-    std::fs::write(&invalid_store_root, "not a directory").expect("write invalid store root");
-    task_runtime
-        .configure_task_session_store_root(parent_session_id, invalid_store_root)
-        .expect("invalid-shaped store root should still configure");
-    // contextGuard keeps the parent shared execution context available during task startup.
-    // contextGuard 在子任务启动期间保持父共享执行上下文可用。
-    let _context_guard = task_runtime
-        .install_execution_context(
-            parent_session_id,
-            build_task_start_test_runtime_context(parent_session_id),
-        )
-        .expect("shared execution context should install");
-    // sender and receiver keep the parent live channel open so execution reaches persistence.
-    // sender 与 receiver 保持父实时通道打开，使执行能够到达持久化阶段。
-    let (sender, _receiver) = unbounded_channel::<Result<ProviderStreamDelta, String>>();
-    // handler is the production shared-runtime task entry under test.
-    // handler 是待测试的生产共享运行时任务入口。
-    let handler = build_task_execution_handler(
-        Arc::clone(&task_runtime),
-        build_test_controller_config("Base prompt"),
-        sender,
-    );
-    // invocation identifies the concrete execution whose detached stream opens before persistence.
-    // invocation 标识在持久化前打开分离事件流的具体执行。
-    let invocation = build_task_start_test_invocation(
-        parent_session_id,
-        task_id,
-        "persistence-failure-execution",
-    );
-
-    // error is the authoritative persistence failure returned after startup cleanup.
-    // error 是启动清理后返回的权威持久化失败。
-    let error = handler(invocation)
-        .await
-        .expect_err("invalid persistence root should reject task start");
-
-    assert!(!error.trim().is_empty());
-    assert!(
-        !task_runtime
-            .task_has_active_or_starting_run(task_id)
-            .expect("active task registry should be readable"),
-        "persistence failure must release the active child run"
-    );
-    assert!(
-        !task_runtime
-            .detached_task_event_streams
-            .read()
-            .expect("detached stream registry should be readable")
-            .keys()
-            .any(|stream_key| stream_key.task_id == task_id),
-        "persistence failure must close and remove the empty detached stream"
-    );
-    assert!(
-        !task_runtime
-            .sessions
-            .read()
-            .expect("task session registry should be readable")
-            .contains_key(&task_id),
-        "persistence failure must not commit a task session"
     );
 }
 
@@ -644,7 +561,6 @@ fn superseded_task_preparation_cannot_claim_or_fail_newer_execution() {
             task_id,
             public_task_id: String::from("transaction-worker"),
             is_resumed: true,
-            persisted_metadata: None,
         },
         parse_task_tool_arguments(json!({
             "task_id": "transaction-worker",
@@ -662,7 +578,6 @@ fn superseded_task_preparation_cannot_claim_or_fail_newer_execution() {
             task_id,
             public_task_id: String::from("transaction-worker"),
             is_resumed: true,
-            persisted_metadata: None,
         },
         parse_task_tool_arguments(json!({
             "task_id": "transaction-worker",
@@ -672,8 +587,7 @@ fn superseded_task_preparation_cannot_claim_or_fail_newer_execution() {
     )
     .expect("second preparation should succeed");
 
-    let stale_claim = task_runtime
-        .claim_and_reserve_active_task_run(task_id, first_invocation.execution_id.as_str());
+    let stale_claim = task_runtime.claim_and_reserve_active_task_run(&first_invocation);
     let stale_error = match stale_claim {
         Ok(_) => panic!("superseded preparation should not claim the backend"),
         Err(error) => error,
@@ -682,8 +596,18 @@ fn superseded_task_preparation_cannot_claim_or_fail_newer_execution() {
     // current_guard proves the newer preparation can claim the runtime owner.
     // current_guard 证明更新的准备可以认领运行时所有者。
     let current_guard = task_runtime
-        .claim_and_reserve_active_task_run(task_id, second_invocation.execution_id.as_str())
+        .claim_and_reserve_active_task_run(&second_invocation)
         .expect("newer preparation should claim the backend");
+    let v1_facts = task_runtime
+        .active_task_v1_execution_facts(task_id, second_invocation.execution_id.as_str())
+        .expect("current execution exposes exact V1 admission facts");
+    assert_eq!(v1_facts.root_session_id, root_session_id);
+    assert_eq!(v1_facts.parent_session_id, root_session_id);
+    assert_eq!(v1_facts.task_id, task_id);
+    assert_eq!(v1_facts.execution_id, second_invocation.execution_id);
+    assert_eq!(v1_facts.prompt, "second concurrent prompt");
+    assert_eq!(v1_facts.display_title, second_invocation.display_title);
+    assert!(v1_facts.is_resumed);
 
     task_runtime
         .mark_task_failure(root_session_id, &first_invocation, "stale failure")
@@ -736,7 +660,6 @@ fn competing_same_parent_task_preparations_roll_back_rejected_session_record() {
                     task_id,
                     public_task_id: String::from("shared-parent-slot"),
                     is_resumed: false,
-                    persisted_metadata: None,
                 },
                 args,
             )
@@ -1460,75 +1383,6 @@ fn resolve_task_session_id_reuses_existing_public_task_identifier() {
     assert_eq!(resumed.task_id, first.task_id);
     assert_eq!(resumed.public_task_id, first.public_task_id);
     assert!(resumed.is_resumed);
-}
-
-/// Verifies persisted metadata keeps description and subagent profile identity separate when restored.
-/// 验证持久化元数据恢复时会区分描述与子代理配置身份。
-#[test]
-fn persisted_metadata_restore_uses_profile_id_as_subagent_label() {
-    let root_session_id = Uuid::new_v4();
-    let task_id = Uuid::new_v4();
-    let requested_config = SessionRequestedConfig {
-        subagent_profile_id: Some(String::from("engineering/code-reviewer")),
-        ..Default::default()
-    };
-    let effective_config = SessionEffectiveConfig {
-        subagent_profile_id: Some(String::from("engineering/code-reviewer")),
-        ..Default::default()
-    };
-    let mut metadata = TaskSessionMetadata::new(vulcan_task_session::TaskSessionMetadataInit {
-        root_session_id: SessionNodeId::from(root_session_id),
-        task_session_id: SessionNodeId::from(task_id),
-        parent: ParentSessionRef::MainSession {
-            root_session_id: SessionNodeId::from(root_session_id),
-        },
-        public_task_id: String::from("review-worker"),
-        display_title: String::from("Review code"),
-        requested_config,
-        effective_config,
-        depth: 1,
-        timestamp_ms: 100,
-    });
-    metadata.description = Some(String::from("Review the changed Rust files"));
-    metadata.last_result_summary = Some(String::from("Review complete"));
-
-    let record = task_session_record_from_persisted_metadata(
-        &metadata,
-        None,
-        String::from("resume review"),
-        TaskInvocationConfig::main("resume review"),
-        None,
-        None,
-    )
-    .expect("persisted metadata should restore");
-    assert_eq!(
-        record.description.as_deref(),
-        Some("Review the changed Rust files")
-    );
-    assert_eq!(
-        record.subagent.as_deref(),
-        Some("engineering/code-reviewer")
-    );
-
-    let cached_result = build_cached_task_invocation_result_from_metadata(
-        root_session_id,
-        &ResolvedTaskSessionIdentifier {
-            task_id,
-            public_task_id: String::from("review-worker"),
-            is_resumed: true,
-            persisted_metadata: None,
-        },
-        &metadata,
-        "resume review",
-    );
-    assert_eq!(
-        cached_result.model_output["description"],
-        "Review the changed Rust files"
-    );
-    assert_eq!(
-        cached_result.model_output["subagent"],
-        "engineering/code-reviewer"
-    );
 }
 
 /// Verifies completed task ids return cached results without restarting the backend.

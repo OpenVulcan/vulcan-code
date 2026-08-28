@@ -28,9 +28,6 @@ struct PreservedSessionRunState {
     /// Runtime state retained from memory when it contains live context.
     /// 包含实时上下文时从内存保留的运行态。
     runtime_state: Option<SessionRuntimeStateEntry>,
-    /// Visible messages retained from memory for hydrated or not-yet-persisted sessions.
-    /// 为已水合或尚未持久化的会话从内存保留的可见消息。
-    messages: Option<Vec<SessionMessageEntry>>,
 }
 
 /// Minimal retained workspace state used after a database-backed refresh.
@@ -43,44 +40,6 @@ pub(crate) struct PreservedWorkspaceRunState {
     /// Session-scoped state rows that must be restored after refresh.
     /// 刷新后必须恢复的会话级状态行。
     sessions: Vec<PreservedSessionRunState>,
-}
-
-/// Controls which retained transcript windows are copied into a refreshed workspace.
-/// 控制哪些已保留转录窗口会复制进刷新后的工作区。
-#[derive(Debug, Clone, Copy)]
-enum PreservedSessionMessageScope {
-    /// Preserve every already-hydrated transcript window.
-    /// 保留全部已经水合的转录窗口。
-    AllHydrated,
-    /// Preserve only the transcript window for the session currently being hydrated.
-    /// 仅保留当前正在水合的会话转录窗口。
-    HydratingSessionOnly(SessionId),
-}
-
-impl PreservedSessionMessageScope {
-    /// Returns whether a session should stay marked as hydrated under this scope.
-    /// 返回该范围下某个会话是否应该继续标记为已水合。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `session_id` identifies the candidate session row.
-    /// `session_id` 标识候选会话行。
-    /// `had_hydrated_window` reports whether the previous workspace held a hydrated window.
-    /// `had_hydrated_window` 表示旧工作区是否持有已水合窗口。
-    ///
-    /// # Returns
-    /// 返回值
-    /// `true` when the refreshed workspace should preserve the hydrated-window marker.
-    /// 当刷新后的工作区应该保留已水合窗口标记时返回 `true`。
-    fn preserves_hydrated_window(self, session_id: SessionId, had_hydrated_window: bool) -> bool {
-        if !had_hydrated_window {
-            return false;
-        }
-        match self {
-            Self::AllHydrated => true,
-            Self::HydratingSessionOnly(hydrating_session_id) => session_id == hydrating_session_id,
-        }
-    }
 }
 
 impl PreservedWorkspaceRunState {
@@ -98,45 +57,15 @@ pub(crate) fn capture_preserved_workspace_run_state(
     active_kernel_session_ids: &BTreeSet<SessionId>,
     submitted_session_id: Option<SessionId>,
 ) -> Option<PreservedWorkspaceRunState> {
-    capture_preserved_workspace_run_state_with_message_scope(
+    capture_preserved_workspace_run_state_inner(
         previous_snapshot,
         active_kernel_session_ids,
         submitted_session_id,
-        PreservedSessionMessageScope::AllHydrated,
     )
 }
 
-/// Captures retained state for display hydration without copying unrelated hydrated transcripts.
-/// 为显示水合捕获保留状态，但不复制无关的已水合转录正文。
-///
-/// # Parameters
-/// 参数
-/// `previous_snapshot` is the in-memory workspace snapshot before the display refresh.
-/// `previous_snapshot` 是显示刷新前的内存工作区快照。
-/// `active_kernel_session_ids` identifies sessions that still have live kernel work.
-/// `active_kernel_session_ids` 标识仍有实时内核任务的会话。
-/// `hydrating_session_id` identifies the session whose transcript window is being opened.
-/// `hydrating_session_id` 标识正在打开转录窗口的会话。
-///
-/// # Returns
-/// 返回值
-/// The minimal retained state needed to repair the refreshed workspace.
-/// 返回修复刷新后工作区所需的最小保留状态。
-pub(crate) fn capture_preserved_workspace_run_state_for_session_hydration(
-    previous_snapshot: Option<&WorkspaceSnapshot>,
-    active_kernel_session_ids: &BTreeSet<SessionId>,
-    hydrating_session_id: SessionId,
-) -> Option<PreservedWorkspaceRunState> {
-    capture_preserved_workspace_run_state_with_message_scope(
-        previous_snapshot,
-        active_kernel_session_ids,
-        None,
-        PreservedSessionMessageScope::HydratingSessionOnly(hydrating_session_id),
-    )
-}
-
-/// Captures retained in-memory state using an explicit transcript retention scope.
-/// 使用显式转录保留范围捕获内存保留状态。
+/// Captures retained in-memory state for the current workspace refresh.
+/// 为当前工作区刷新捕获保留的内存状态。
 ///
 /// # Parameters
 /// 参数
@@ -146,18 +75,14 @@ pub(crate) fn capture_preserved_workspace_run_state_for_session_hydration(
 /// `active_kernel_session_ids` 标识仍有活动运行时工作的会话。
 /// `submitted_session_id` optionally forces one recently submitted session to be preserved.
 /// `submitted_session_id` 可选地强制保留一个刚提交的会话。
-/// `message_scope` defines which hydrated transcript messages may be cloned.
-/// `message_scope` 定义允许克隆哪些已水合转录正文。
-///
 /// # Returns
 /// 返回值
 /// The retained workspace repair state, or `None` when no state needs preservation.
 /// 返回工作区修复保留状态；没有需要保留的状态时返回 `None`。
-fn capture_preserved_workspace_run_state_with_message_scope(
+fn capture_preserved_workspace_run_state_inner(
     previous_snapshot: Option<&WorkspaceSnapshot>,
     active_kernel_session_ids: &BTreeSet<SessionId>,
     submitted_session_id: Option<SessionId>,
-    message_scope: PreservedSessionMessageScope,
 ) -> Option<PreservedWorkspaceRunState> {
     let previous_snapshot = previous_snapshot?;
     let mut sessions = Vec::new();
@@ -165,22 +90,14 @@ fn capture_preserved_workspace_run_state_with_message_scope(
         let runtime_state = previous_snapshot
             .session_runtime_state
             .get(&previous_session.id);
-        let has_pending_prompt =
-            runtime_state.is_some_and(runtime_state_has_queued_pending_prompt_work);
         let had_runtime_context =
             runtime_state.is_some_and(runtime_state_has_concrete_conversation_context);
         let is_submitted_session = submitted_session_id == Some(previous_session.id);
         let had_active_run = active_kernel_session_ids.contains(&previous_session.id);
-        let had_hydrated_window_before_scope = previous_snapshot
+        let had_hydrated_window = previous_snapshot
             .hydrated_session_ids
             .contains(&previous_session.id);
-        let had_hydrated_window = message_scope
-            .preserves_hydrated_window(previous_session.id, had_hydrated_window_before_scope);
-        if !had_active_run
-            && !has_pending_prompt
-            && !is_submitted_session
-            && !had_hydrated_window
-            && !had_runtime_context
+        if !had_active_run && !is_submitted_session && !had_hydrated_window && !had_runtime_context
         {
             continue;
         }
@@ -207,14 +124,6 @@ fn capture_preserved_workspace_run_state_with_message_scope(
             had_active_run,
             had_hydrated_window,
             runtime_state: runtime_state.cloned(),
-            messages: had_hydrated_window
-                .then(|| {
-                    previous_snapshot
-                        .session_messages
-                        .get(&previous_session.id)
-                        .cloned()
-                })
-                .flatten(),
         });
     }
     let selected_session = selected_workspace_session_id(previous_snapshot);
@@ -317,11 +226,6 @@ pub(crate) fn preserve_active_session_run_state(
                 .session_runtime_state
                 .insert(previous_session.id, runtime_state);
         }
-        if let Some(messages) = preserved_session.messages.clone() {
-            refreshed_snapshot
-                .session_messages
-                .insert(previous_session.id, messages);
-        }
         if preserved_session.had_hydrated_window || inserted_runtime_context {
             refreshed_snapshot
                 .hydrated_session_ids
@@ -388,19 +292,4 @@ fn preserve_visible_project_session_membership(
             .session_ids
             .insert(insert_index, previous_session.id);
     }
-}
-
-/// Returns whether a hydration failure is caused by missing segmented session files.
-/// 判断水合失败是否源自缺失分段会话文件。
-pub(crate) fn is_missing_segmented_session_file_error(error: &str) -> bool {
-    (error.contains("metadata.json")
-        || error.contains("state.json")
-        || error.contains("s001.jsonl")
-        || error.contains("s000001.jsonl"))
-        && (error.contains("os error 3")
-            || error.contains("os error 2")
-            || error.contains("Required JSON file does not exist")
-            || error.contains("系统找不到指定的路径")
-            || error.contains("The system cannot find the path specified")
-            || error.contains("No such file or directory"))
 }

@@ -2,8 +2,6 @@
 //! 上下文压缩 completion 辅助逻辑。
 
 use super::*;
-use crate::require_segmented_session_directory_for_retained_session;
-
 /// Exact active-stream ownership behavior required by one context-compaction commit.
 /// 单次上下文压缩提交所需的精确活动流所有权行为。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -263,22 +261,25 @@ pub(crate) fn finish_webui_context_compaction_execution(
     budget_note: &str,
     trigger: &str,
     commit_mode: ContextCompactionCommitMode,
-    execution: PromptCompactionExecution,
+    execution: WebuiContextCompactionExecution,
 ) -> Result<ContextCompactionFinishOutcome, String> {
+    let WebuiContextCompactionExecution {
+        execution,
+        retained_from_seq,
+        durability,
+    } = execution;
     if execution.fallback_used {
         let retry_hint = if trigger == AUTO_CONTEXT_COMPACTION_TRIGGER {
             "自动压缩未完成，已停止本次请求以避免预算溢出。"
         } else {
             "请重新触发 /compact。"
         };
-        // rejection_error is retained with the failure snapshot and stops automatic continuation.
-        // rejection_error 与失败快照共同保留，并阻止自动续接。
+        // rejectionError is retained with the failure snapshot and stops automatic continuation.
+        // rejectionError 与失败快照共同保留，并阻止自动续接。
         let rejection_error = format!(
             "API 未返回可用压缩结果，本次上下文压缩已失败。Provider 请求：{}。{retry_hint}",
             execution.provider_request_count,
         );
-        // workspace_snapshot contains the committed failed-attempt record that still requires persistence.
-        // workspace_snapshot 包含仍需持久化的已提交失败尝试记录。
         let workspace_snapshot = fail_webui_context_compaction_execution(
             app,
             state,
@@ -295,321 +296,123 @@ pub(crate) fn finish_webui_context_compaction_execution(
             error: rejection_error,
         });
     }
-    let summary_body = execution.compaction_result.summary_record.body.clone();
-    let provider_request_count = execution.provider_request_count;
-    let runtime_backup_controller = state
-        .lock()
-        .ok()
-        .and_then(|guard| guard.controller_runtime.clone());
-    // controller_runtime is required because compaction must durably advance the VMM cache epoch.
-    // controller_runtime 是必需的，因为压缩必须持久推进 VMM 缓存纪元。
-    let controller_runtime = runtime_backup_controller.as_ref().ok_or_else(|| {
-        String::from("Core VMM controller runtime is unavailable during context compaction.")
-    })?;
-    // vmm_controller_registry is cloned together with the exact session locator.
-    // vmm_controller_registry 与精确会话定位一起克隆。
-    let (vmm_controller_registry, session_directory) = {
+
+    // Owner validation happens before the durable context publication so a stale
+    // stream can never advance the authoritative context generation.
+    // 在可靠上下文发布前验证 owner，避免过期流推进权威上下文代次。
+    {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let session_directory = require_segmented_session_directory_for_retained_session(
-            &guard,
-            &controller_runtime.data_root,
-            session_id,
-        )?;
-        (guard.vmm_controller_registry.clone(), session_directory)
-    };
-    match vulcan_workspace_store::workspace_store::backup_session_runtime_log_before_compaction(
-        &session_directory,
-        session_id,
-        &execution.compaction_result.compaction_id,
-        &execution.compaction_result.created_at,
-    ) {
-        Ok(copied_files) if !copied_files.is_empty() => {
-            webui_trace(
-                "context_compaction_runtime_backup",
-                format!("session={session_id} files={}", copied_files.len()),
-            );
-        }
-        Ok(_) => {}
-        Err(error) => {
-            webui_trace(
-                "context_compaction_runtime_backup_failed",
-                format!("session={session_id} error={error}"),
-            );
-        }
+        ensure_context_compaction_commit_owner(&guard, session_id, commit_mode)?;
     }
-    // vmm_controller is the sole state owner for this session's cache epoch.
-    // vmm_controller 是该会话缓存纪元的唯一状态所有者。
-    let vmm_controller = vmm_controller_registry.get_or_open(
-        &session_directory,
-        session_id,
-        &execution.compaction_result.created_at,
-    )?;
-    let mut injection_merge_event = None;
-    let mut injection_merge_timestamp = String::new();
-    let mut ttl_prune_report = InjectionPruneReport::default();
-    // vmm_lifecycle_events remain empty unless the compaction draft commits atomically.
-    // vmm_lifecycle_events 仅在压缩草稿原子提交后才会包含事件。
-    let mut vmm_lifecycle_events = Vec::new();
-    let mut draft_error: Option<String> = None;
-    // invariant_error distinguishes cross-domain corruption from a rejectable compaction draft.
-    // invariant_error 区分跨领域损坏与可拒绝的压缩候选。
-    let mut invariant_error: Option<String> = None;
-    // committed_phase_event preserves the delta generated by the atomic retained-state mutation.
-    // committed_phase_event 保留由原子保留状态变更生成的增量。
-    let mut committed_phase_event: Option<WorkbenchDeltaEnvelope> = None;
-    let workspace = {
+
+    let summary_body = execution.compaction_result.summary_record.body.clone();
+    let provider_request_count = execution.provider_request_count;
+    let completed_assistant = durability.completed_assistant_text.ok_or_else(|| {
+        String::from(
+            "Context compaction finished without an exact durable assistant semantic receipt.",
+        )
+    })?;
+    let api_terminal = durability.api_terminal.ok_or_else(|| {
+        String::from("Context compaction finished without an exact durable API terminal receipt.")
+    })?;
+    let locked_baseline = durability.locked_baseline.ok_or_else(|| {
+        String::from("Context compaction finished without its exact locked baseline projection.")
+    })?;
+    if completed_assistant.text != summary_body {
+        return Err(String::from(
+            "Context compaction summary differs from the exact durable assistant semantic.",
+        ));
+    }
+    if completed_assistant.seq.value() >= api_terminal.value.stats_seq.value() {
+        return Err(String::from(
+            "Context compaction assistant semantic must precede its durable API terminal.",
+        ));
+    }
+    let now_ms = i64::try_from(current_unix_millis_value()).map_err(|_| {
+        String::from("Current Unix millisecond timestamp exceeds the V1 i64 contract.")
+    })?;
+    let handle =
+        crate::session_goal_lifecycle::registered_session_v1_handle_from_state(state, session_id)?;
+    let compaction_receipt = match handle.record_compaction(
+        vulcan_session_core::v1::document::CompactionCommitInput::new(
+            completed_assistant.api_call_id,
+            completed_assistant.seq,
+            retained_from_seq,
+            summary_body.clone(),
+            locked_baseline,
+        ),
+        now_ms,
+    ) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            let rejection_error =
+                format!("Context compaction V1 context publication failed: {error}");
+            let workspace_snapshot = fail_webui_context_compaction_execution(
+                app,
+                state,
+                session_id,
+                previous_phase,
+                section_id,
+                budget_note,
+                trigger,
+                commit_mode,
+                &rejection_error,
+            )?;
+            return Ok(ContextCompactionFinishOutcome::Rejected {
+                workspace_snapshot,
+                error: rejection_error,
+            });
+        }
+    };
+
+    // The retained workspace is now display-only projection. It must not retain
+    // another compaction checkpoint or runtime anchor.
+    // 此后的保留工作区仅是显示投影，不得再保存另一份压缩检查点或 runtime 锚点。
+    let (workspace, phase_event) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         ensure_context_compaction_commit_owner(&guard, session_id, commit_mode)?;
         {
-            // workspace is scoped to the domain mutation so phase and kernel state can commit afterward under the same guard.
-            // workspace 的作用域仅覆盖领域变更，以便阶段与内核状态随后在同一 guard 下提交。
             let workspace = guard
                 .workspace_snapshot
                 .as_mut()
                 .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
-            // checkpoint_already_committed proves the durable compaction identity is present in ordinary retained state.
-            // checkpoint_already_committed 证明普通保留状态中已经存在该持久压缩身份。
-            let checkpoint_already_committed = workspace
-                .session_compactions
-                .get(&session_id)
-                .is_some_and(|checkpoints| {
-                    checkpoints.iter().any(|checkpoint| {
-                        checkpoint.id == execution.compaction_result.compaction_id
-                    })
-                });
-            let now = current_unix_millis_text();
-            let runtime_state = workspace
-                .session_runtime_state
-                .entry(session_id)
-                .or_insert_with(|| SessionRuntimeStateEntry {
-                    updated_at: now.clone(),
-                    ..SessionRuntimeStateEntry::default()
-                });
-            // vmm_command_id makes one exact compaction epoch transition durably idempotent.
-            // vmm_command_id 使一个精确压缩纪元转换具备持久幂等性。
-            let vmm_command_id = format!(
-                "context_compaction:{}",
-                execution.compaction_result.compaction_id
-            );
-            // runtime_already_committed must agree with the checkpoint collection before duplicate recovery is allowed.
-            // runtime_already_committed 在允许重复恢复前必须与检查点集合保持一致。
-            let runtime_already_committed = runtime_state.last_compaction_id.as_deref()
-                == Some(execution.compaction_result.compaction_id.as_str());
-            if checkpoint_already_committed != runtime_already_committed {
-                // error preserves the exact partial ordinary-domain identity for fail-stop diagnostics.
-                // error 为故障停止诊断保留精确的普通领域部分提交身份。
-                let error = format!(
-                    "Context compaction `{}` has a partial ordinary-state commit; automatic compatibility recovery is disabled.",
-                    execution.compaction_result.compaction_id
-                );
-                invariant_error = Some(error.clone());
-                draft_error = Some(error);
+            workspace
+                .session_run_phases
+                .insert(session_id, previous_phase);
+            if let Some(session) = workspace
+                .sessions
+                .iter_mut()
+                .find(|session| session.id == session_id)
+            {
+                session.status = SessionState::Completed;
+                session.last_updated_label = String::from("刚刚");
+                session.updated_at = current_unix_millis_text();
             }
-            // ordinary_state_already_committed identifies a fully installed idempotent retry.
-            // ordinary_state_already_committed 标识普通状态已经完整安装的幂等重试。
-            let ordinary_state_already_committed =
-                checkpoint_already_committed && runtime_already_committed;
-            if ordinary_state_already_committed {
-                // committed_vmm_state must prove the matching controller receipt and cache epoch.
-                // committed_vmm_state 必须证明匹配的控制器回执与缓存纪元。
-                let committed_vmm_state = vmm_controller.snapshot()?;
-                if !committed_vmm_state.has_committed_controller_command(&vmm_command_id)
-                    || committed_vmm_state
-                        .cache_epoch
-                        .covered_compaction_id
-                        .as_deref()
-                        != Some(execution.compaction_result.compaction_id.as_str())
-                {
-                    // error identifies a current-format cross-domain invariant violation without fallback.
-                    // error 标识当前格式的跨领域约束违规，且不提供回退。
-                    let error = format!(
-                        "Context compaction `{}` ordinary state is committed without the matching Core VMM command and cache epoch.",
-                        execution.compaction_result.compaction_id
-                    );
-                    invariant_error = Some(error.clone());
-                    draft_error = Some(error);
-                }
-            }
-            if draft_error.is_none() && !ordinary_state_already_committed {
-                // built_draft crosses the controller closure without exposing mutable VMM ownership.
-                // built_draft 跨越控制器闭包传递，且不暴露可变 VMM 所有权。
-                let mut built_draft = None;
-                // command_result returns either the first committed draft or a reconstruction from the same committed state.
-                // command_result 返回首次提交候选，或从同一已提交状态重建的候选。
-                let command_result = vmm_controller
-                    .execute_command(
-                        &vmm_command_id,
-                        &execution.compaction_result.created_at,
-                        |candidate| {
-                            // draft is built against the exact serialized controller candidate.
-                            // draft 基于精确的串行控制器候选状态构建。
-                            let draft = build_webui_context_compaction_draft(
-                                runtime_state,
-                                candidate,
-                                session_id,
-                                section_id,
-                                budget_note,
-                                trigger,
-                                provider_request_count,
-                                &summary_body,
-                                &execution,
-                                agent_runtime.provider_configuration.prompt.output_style,
-                            )?;
-                            if !draft.baseline.matches(runtime_state) {
-                                return Err(String::from(
-                                    "上下文压缩候选状态基线失配，已保留当前会话状态并取消提交。",
-                                ));
-                            }
-                            built_draft = Some(draft);
-                            Ok(())
-                        },
-                    )
-                    .and_then(|vmm_commit| {
-                        // lifecycle_events exist only for the first domain transition, never for a duplicate reconstruction.
-                        // lifecycle_events 仅由首次领域转换生成，重复重建绝不重复生成。
-                        let lifecycle_events = if vmm_commit.applied {
-                            crate::vmm_runtime_audit::build_vmm_lifecycle_events_for_state_diff(
-                                &vmm_commit.previous_state,
-                                &vmm_commit.state,
-                                None,
-                                crate::vmm_runtime_audit::VmmRemovedLeaseAuditAction::Expired,
-                            )
-                        } else {
-                            Vec::new()
-                        };
-                        // draft is either the closure result or a deterministic ordinary-state repair.
-                        // draft 为闭包结果或确定性的普通状态修复候选。
-                        let draft = if vmm_commit.applied {
-                            built_draft.take().ok_or_else(|| {
-                                String::from(
-                                    "VMM context compaction committed without a runtime draft.",
-                                )
-                            })?
-                        } else {
-                            // replay_candidate proves rebuilding ordinary state does not mutate the committed VMM revision.
-                            // replay_candidate 证明重建普通状态不会修改已提交的 VMM 修订。
-                            let mut replay_candidate = vmm_commit.state.clone();
-                            // replay_draft deterministically reconstructs only the missing ordinary projection.
-                            // replay_draft 仅确定性重建缺失的普通投影。
-                            let replay_draft = build_webui_context_compaction_draft(
-                                runtime_state,
-                                &mut replay_candidate,
-                                session_id,
-                                section_id,
-                                budget_note,
-                                trigger,
-                                provider_request_count,
-                                &summary_body,
-                                &execution,
-                                agent_runtime.provider_configuration.prompt.output_style,
-                            )?;
-                            if replay_candidate != vmm_commit.state {
-                                return Err(format!(
-                                    "Duplicate context compaction `{}` attempted to mutate its committed Core VMM state.",
-                                    execution.compaction_result.compaction_id
-                                ));
-                            }
-                            replay_draft
-                        };
-                        Ok((draft, lifecycle_events))
-                    });
-                match command_result {
-                    Ok((draft, lifecycle_events)) => {
-                        injection_merge_event = draft.injection_merge_event.clone();
-                        injection_merge_timestamp = draft.injection_merge_timestamp.clone();
-                        ttl_prune_report = draft.ttl_prune_report;
-                        vmm_lifecycle_events = lifecycle_events;
-                        // checkpoint is the single ordinary-state identity installed for this compaction.
-                        // checkpoint 是为本次压缩安装的唯一普通状态身份。
-                        let checkpoint = draft.checkpoint;
-                        *runtime_state = draft.runtime_state;
-                        workspace
-                            .session_compactions
-                            .entry(session_id)
-                            .or_default()
-                            .push(checkpoint);
-                        // runtime_state_snapshot feeds display projection from the just-installed state.
-                        // runtime_state_snapshot 从刚安装的状态生成显示投影。
-                        let runtime_state_snapshot = runtime_state.clone();
-                        merge_runtime_state_records_into_display_messages(
-                            workspace,
-                            session_id,
-                            &runtime_state_snapshot,
-                        );
-                        workspace
-                            .session_run_phases
-                            .insert(session_id, previous_phase);
-                        if let Some(session) = workspace
-                            .sessions
-                            .iter_mut()
-                            .find(|session| session.id == session_id)
-                        {
-                            session.status = SessionState::Completed;
-                            session.last_updated_label = String::from("刚刚");
-                            session.updated_at = current_unix_millis_text();
-                        }
-                        sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
-                    }
-                    Err(error) => {
-                        draft_error = Some(error);
-                    }
-                }
-            }
+            sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
         }
-        if draft_error.is_none() {
-            // phase_event is generated while exact task ownership is still protected by the transaction guard.
-            // phase_event 在精确任务所有权仍受事务 guard 保护时生成。
-            let phase_event = apply_session_phase_to_state(&mut guard, session_id, previous_phase)?;
-            finish_context_compaction_stream_owner_if_needed(
-                &mut guard,
-                session_id,
-                commit_mode,
-                TurnTerminalStatus::Completed,
-            )?;
-            committed_phase_event = Some(phase_event);
-        }
-        // workspace_snapshot includes kernel terminalization synchronized by the same retained-state transaction.
-        // workspace_snapshot 包含由同一保留状态事务同步的内核终结结果。
-        guard
+        let phase_event = apply_session_phase_to_state(&mut guard, session_id, previous_phase)?;
+        finish_context_compaction_stream_owner_if_needed(
+            &mut guard,
+            session_id,
+            commit_mode,
+            TurnTerminalStatus::Completed,
+        )?;
+        let workspace = guard
             .workspace_snapshot
             .as_ref()
             .ok_or_else(|| String::from("workspace snapshot is not ready"))?
-            .clone()
+            .clone();
+        (workspace, phase_event)
     };
-    if let Some(error) = invariant_error {
-        return Err(error);
-    }
-    if let Some(error) = draft_error {
-        // workspace_snapshot retains the rejected draft diagnostic for persistence and display.
-        // workspace_snapshot 为持久化与展示保留被拒绝草稿的诊断。
-        let workspace_snapshot = fail_webui_context_compaction_execution(
-            app,
-            state,
-            session_id,
-            previous_phase,
-            section_id,
-            budget_note,
-            trigger,
-            commit_mode,
-            &error,
-        )?;
-        return Ok(ContextCompactionFinishOutcome::Rejected {
-            workspace_snapshot,
-            error,
-        });
-    }
-    // phase_event must exist for every accepted draft because it is created in the same success branch.
-    // 每个已接受草稿都必须存在 phase_event，因为它与成功分支在同一事务中创建。
-    let phase_event = committed_phase_event.ok_or_else(|| {
-        String::from("context compaction committed without an aligned phase delta")
-    })?;
+
     project_committed_context_compaction_surfaces(app, state, session_id, phase_event);
-    // VMM Hook state is a derived projection and cannot invalidate an already-committed compaction epoch.
-    // VMM Hook 状态是派生投影，不得使已提交的压缩纪元失效。
+    // VMM Hook state is a derived projection and cannot invalidate the already
+    // durable V1 context generation.
+    // VMM Hook 状态是派生投影，不得使已经可靠发布的 V1 上下文代次失效。
     if let Err(error) = refresh_exact_vmm_hook_session_projection(
         &agent_runtime.vmm_hook_runtime,
         &workspace,
@@ -617,41 +420,6 @@ pub(crate) fn finish_webui_context_compaction_execution(
     ) {
         webui_trace(
             "context_compaction_vmm_snapshot_refresh_failed_after_commit",
-            format!("session={session_id} error={error}"),
-        );
-    }
-    if ttl_prune_report.removed_item_count > 0 || ttl_prune_report.removed_group_count > 0 {
-        webui_trace(
-            "context_compaction_pruned_expired_injections",
-            format!(
-                "session={session_id} items={} groups={}",
-                ttl_prune_report.removed_item_count, ttl_prune_report.removed_group_count
-            ),
-        );
-    }
-    if let Some(event) = injection_merge_event
-        && let Err(error) = record_webui_runtime_injection_merged(
-            &session_directory,
-            session_id,
-            event,
-            &injection_merge_timestamp,
-        )
-    {
-        webui_trace(
-            "runtime_injection_merged_audit_failed",
-            format!("session={session_id} error={error}"),
-        );
-    }
-    if !vmm_lifecycle_events.is_empty()
-        && let Err(error) = crate::vmm_runtime_audit::record_vmm_lifecycle_events(
-            &session_directory,
-            session_id,
-            &execution.compaction_result.created_at,
-            vmm_lifecycle_events,
-        )
-    {
-        webui_trace(
-            "runtime_vmm_compaction_audit_failed",
             format!("session={session_id} error={error}"),
         );
     }
@@ -668,6 +436,15 @@ pub(crate) fn finish_webui_context_compaction_execution(
             format!("session={session_id} error={error}"),
         );
     }
+    webui_trace(
+        "context_compaction_v1_committed",
+        format!(
+            "session={session_id} compaction_id={} revision={} changed={}",
+            compaction_receipt.value.value(),
+            compaction_receipt.revision,
+            compaction_receipt.changed
+        ),
+    );
     Ok(ContextCompactionFinishOutcome::Committed {
         workspace_snapshot: workspace,
     })
@@ -790,15 +567,9 @@ pub(crate) fn apply_webui_context_compaction_failure_to_workspace(
             .saturating_add(1);
     }
     runtime_state.updated_at = now;
-    let runtime_state_snapshot = runtime_state.clone();
     workspace
         .session_runtime_state
         .insert(session_id, runtime_state);
-    merge_runtime_state_records_into_display_messages(
-        workspace,
-        session_id,
-        &runtime_state_snapshot,
-    );
     workspace
         .session_run_phases
         .insert(session_id, previous_phase);

@@ -17,7 +17,6 @@ pub(crate) mod test_support;
 use test_support::*;
 
 mod active_session_state_tests;
-mod conversation_selection_tests;
 
 /// Verifies application shutdown drains tasks before VMM and releases MCP last.
 /// 验证应用关闭会先排空任务、再关闭 VMM，并最后释放 MCP。
@@ -54,12 +53,9 @@ fn runtime_shutdown_order_is_tasks_then_managed_memory_then_mcp() {
 mod conversation_submission_activation_tests;
 mod conversation_submission_preflight_tests;
 mod conversation_submission_queue_tests;
-mod conversation_tool_detail_tests;
 mod detached_subagent_tests;
-mod execution_retry_tests;
 mod goal_todolist_tests;
 mod hot_path_scan_guard_tests;
-mod mailbox_tests;
 mod mcp_settings_tests;
 mod pending_question_projection_tests;
 mod prompt_runtime_state_tests;
@@ -69,4 +65,3 @@ mod settings_projection_tests;
 mod stop_task_mirror_tests;
 mod subagent_fixed_model_tests;
 mod subagent_navigation_tests;
-mod thinking_completion_tests;

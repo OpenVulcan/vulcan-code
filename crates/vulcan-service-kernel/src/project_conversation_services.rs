@@ -7,11 +7,9 @@ mod conversation_services;
 mod project_services;
 
 pub(super) use conversation_services::{
-    refresh_selected_workbench_messages_from_runtime,
-    refresh_selected_workbench_messages_from_workspace, service_archive_conversation,
-    service_delete_archived_conversations, service_mark_conversation_read,
-    service_rename_conversation, service_restore_archived_conversations,
-    service_select_conversation,
+    service_archive_conversation, service_delete_archived_conversations,
+    service_mark_conversation_read, service_rename_conversation,
+    service_restore_archived_conversations, service_select_conversation,
 };
 pub use project_services::service_add_project_initial_directory;
 pub(super) use project_services::{
@@ -222,57 +220,6 @@ pub(super) fn begin_session_run_stop_exclusion(
         project_scopes: BTreeSet::new(),
     })
 }
-
-/// Atomically reserves one idle existing session for a nested prompt submission transaction.
-/// 原子预留一个空闲已有会话，用于嵌套提示词提交事务。
-///
-/// # Parameters
-/// 参数
-/// `state` owns runtime kernels and typed admission reservations.
-/// `state` 持有运行时内核与类型化准入预留。
-/// `session_id` is the exact existing session being rewritten and resubmitted.
-/// `session_id` 是正在重写并重新提交的精确已有会话。
-/// `action_label` labels diagnostics for conflicting mutations.
-/// `action_label` 标记冲突变更的诊断文案。
-///
-/// # Returns
-/// 返回值
-/// A guard whose exact owner may pass normal submission preflight and kernel admission.
-/// 返回一个精确所有者可通过普通提交预检与内核准入的守卫。
-pub(super) fn begin_existing_prompt_submission_exclusion(
-    state: &SharedServiceBridgeState,
-    session_id: SessionId,
-    action_label: &str,
-) -> Result<SessionTurnAdmissionGuard, String> {
-    // reservation_id is shared by the outer edit transaction and nested prompt submission.
-    // reservation_id 由外层编辑事务与嵌套提示词提交共享。
-    let reservation_id = Uuid::new_v4();
-    let mut guard = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    if webui_session_kernel_has_active_turn(&guard, session_id)
-        || webui_session_has_active_run(&guard, session_id)
-    {
-        return Err(format!(
-            "会话 `{session_id}` 正在运行，请先停止后再{action_label}。"
-        ));
-    }
-    reserve_session_turn_admission(
-        &mut guard,
-        &BTreeSet::from([session_id]),
-        reservation_id,
-        SessionTurnAdmissionReservationKind::PromptSubmission,
-        action_label,
-    )?;
-    drop(guard);
-    Ok(SessionTurnAdmissionGuard {
-        state: state.clone(),
-        reservation_id,
-        session_ids: BTreeSet::from([session_id]),
-        project_scopes: BTreeSet::new(),
-    })
-}
-
 /// Tries to reserve one idle session for exactly one queued user-prompt preparation.
 /// 尝试为一次排队用户提示词准备预留一个空闲会话。
 ///

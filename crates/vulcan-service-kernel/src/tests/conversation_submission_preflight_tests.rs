@@ -1,7 +1,6 @@
 use super::*;
 use crate::conversation_submission::{
-    attach_client_submission_id_to_visible_user_record, commit_created_submission_workspace_slice,
-    commit_existing_submission_workspace_slice, continuation_submission_runtime_blockers,
+    commit_created_submission_workspace_slice, commit_existing_submission_workspace_slice,
     prepare_materialized_submission_session, prepare_retained_submission_preflight,
 };
 
@@ -193,141 +192,6 @@ fn session_admission_reservation_rejects_retained_submission_preflight() {
 /// 返回值
 /// This test returns no value and fails when a competitor can enter or the owner cannot start.
 /// 此测试无返回值；若竞争者能够进入或所有者无法启动则失败。
-#[test]
-fn existing_submission_admission_blocks_competitor_and_authorizes_owner() {
-    // session_id identifies the exact existing session protected across submission preparation.
-    // session_id 标识在提交准备期间受到保护的精确已有会话。
-    let session_id = SessionId::new_v4();
-    // service_state supplies one idle retained parent session.
-    // service_state 提供一个空闲的保留父会话。
-    let service_state = initialized_project_a_service_state(session_id);
-    // state exposes reservation and kernel ownership under one shared lock.
-    // state 在同一个共享锁下提供预留与 kernel 所有权。
-    let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
-    // preflight owns the PromptSubmission reservation until explicitly dropped.
-    // preflight 持有 PromptSubmission 预留，直到被显式释放。
-    let preflight = prepare_retained_submission_preflight(
-        &state,
-        None,
-        PromptSessionTarget::Existing(session_id),
-        None,
-    )
-    .expect("first existing submission should reserve admission");
-    {
-        // guard proves the owner can distinguish its own exact row from an external admission blocker.
-        // guard 证明所有者能够把自身精确行与外部准入阻断区分开来。
-        let guard = state.lock().expect("service state lock");
-        assert!(
-            preflight
-                .turn_admission
-                .owns_current_prompt_submission_reservation(&guard, session_id)
-        );
-        let retained_workspace = guard
-            .workspace_snapshot
-            .as_ref()
-            .expect("test workspace should remain available");
-        let blockers = continuation_submission_runtime_blockers(
-            &guard,
-            retained_workspace,
-            session_id,
-            &preflight.turn_admission,
-        )
-        .expect("Continue should exclude only its exact admission reservation");
-        assert!(!blockers.has_turn_admission_reservation);
-    }
-
-    // competitor_error proves the reservation closes the second-submit race.
-    // competitor_error 证明该预留关闭第二次提交竞态。
-    let competitor_error = prepare_retained_submission_preflight(
-        &state,
-        None,
-        PromptSessionTarget::Existing(session_id),
-        None,
-    )
-    .err()
-    .expect("competing submission should be rejected");
-    assert!(competitor_error.contains("user prompt submission"));
-    // materialized_session represents the authoritative existing-session result later in the same request.
-    // materialized_session 表示同一请求后续产生的权威已有会话结果。
-    let materialized_session = MaterializedPromptSession {
-        session_id,
-        project_id: Some(String::from("project-a")),
-        session_title: String::from("父会话"),
-        workspace_path: String::new(),
-        kind: PromptSessionMaterializationKind::Existing,
-    };
-    // reservation_id is the exact owner token accepted by kernel registration.
-    // reservation_id 是 kernel 登记接受的精确所有者令牌。
-    let reservation_id = preflight
-        .turn_admission
-        .kernel_reservation_id(&materialized_session)
-        .expect("materialized session should match admission")
-        .expect("existing session should have a reservation");
-    {
-        // guard simulates a replacement row and proves stale ownership never receives the exemption.
-        // guard 模拟替代预留行，并证明陈旧所有权绝不会获得排除资格。
-        let mut guard = state.lock().expect("service state lock");
-        let original_reservation = *guard
-            .session_turn_admission_reservations
-            .get(&session_id)
-            .expect("owner reservation should exist");
-        guard.session_turn_admission_reservations.insert(
-            session_id,
-            SessionTurnAdmissionReservation {
-                reservation_id: Uuid::new_v4(),
-                kind: SessionTurnAdmissionReservationKind::PromptSubmission,
-            },
-        );
-        assert!(
-            !preflight
-                .turn_admission
-                .owns_current_prompt_submission_reservation(&guard, session_id)
-        );
-        let retained_workspace = guard
-            .workspace_snapshot
-            .as_ref()
-            .expect("test workspace should remain available");
-        let replacement_error = continuation_submission_runtime_blockers(
-            &guard,
-            retained_workspace,
-            session_id,
-            &preflight.turn_admission,
-        )
-        .expect_err("a replacement reservation must remain an external blocker");
-        assert_eq!(
-            replacement_error,
-            "ERR_CONVERSATION_CONTINUE_ADMISSION_IN_FLIGHT"
-        );
-        guard
-            .session_turn_admission_reservations
-            .insert(session_id, original_reservation);
-    }
-    {
-        // guard commits the kernel turn while the exact reservation remains current.
-        // guard 在精确预留仍为当前所有者时提交 kernel 回合。
-        let mut guard = state.lock().expect("service state lock");
-        start_reserved_webui_session_kernel_user_turn(
-            &mut guard,
-            session_id,
-            "turn-owner",
-            reservation_id,
-        )
-        .expect("reservation owner should start kernel turn");
-    }
-
-    drop(preflight);
-
-    // guard verifies dropping the preflight releases only admission, not the committed kernel turn.
-    // guard 验证释放预检只会移除准入预留，不会移除已提交的 kernel 回合。
-    let guard = state.lock().expect("service state lock");
-    assert!(
-        !guard
-            .session_turn_admission_reservations
-            .contains_key(&session_id)
-    );
-    assert!(webui_session_kernel_has_active_turn(&guard, session_id));
-}
-
 /// Verifies concurrent queued-prompt preparation receives one admission owner and can retry after release.
 /// 验证并发排队提示词准备只会获得一个准入所有者，并可在释放后重新领取。
 #[test]
@@ -366,82 +230,6 @@ fn pending_prompt_dispatch_admission_is_single_owner_and_reusable() {
 /// 返回值
 /// This test returns no value and fails if preauthorization leaks, rejects its owner, or admits a competitor.
 /// 此测试无返回值；若预授权泄漏、拒绝所有者或放行竞争者则失败。
-#[test]
-fn preauthorized_existing_submission_preserves_outer_admission_ownership() {
-    // session_id identifies the exact idle session owned across destructive rewrite and replay.
-    // session_id 标识跨破坏性重写与重放持有的精确空闲会话。
-    let session_id = SessionId::new_v4();
-    // state owns retained workspace, admission rows, and the simulated runtime kernel.
-    // state 持有保留工作区、准入行与模拟运行时内核。
-    let state: SharedServiceBridgeState =
-        Arc::new(Mutex::new(initialized_project_a_service_state(session_id)));
-    // outer_guard retains the PromptSubmission row for the complete edit transaction.
-    // outer_guard 在完整编辑事务期间保留 PromptSubmission 行。
-    let outer_guard = begin_existing_prompt_submission_exclusion(&state, session_id, "编辑提示词")
-        .expect("outer edit should reserve idle session");
-    // authorization is a non-owning exact token whose lifetime remains bounded by outer_guard.
-    // authorization 是一个无所有权的精确令牌，其生命周期仍受 outer_guard 约束。
-    let authorization = outer_guard
-        .existing_submission_authorization(session_id)
-        .expect("outer guard should expose exact authorization");
-    // preflight must accept only the already-current exact owner instead of inserting a second row.
-    // preflight 必须只接受已经生效的精确所有者，而不是插入第二行。
-    let preflight = prepare_retained_submission_preflight(
-        &state,
-        None,
-        PromptSessionTarget::Existing(session_id),
-        Some(authorization),
-    )
-    .expect("nested replay should accept outer authorization");
-
-    // competitor_error proves an ordinary submission cannot reuse the outer transaction's reservation.
-    // competitor_error 证明普通提交不能复用外层事务的预留。
-    let competitor_error = prepare_retained_submission_preflight(
-        &state,
-        None,
-        PromptSessionTarget::Existing(session_id),
-        None,
-    )
-    .err()
-    .expect("ordinary competitor must remain blocked");
-    assert!(competitor_error.contains("user prompt submission"));
-    // materialized_session represents the exact existing target authorized by the edit transaction.
-    // materialized_session 表示编辑事务授权的精确已有目标。
-    let materialized_session = MaterializedPromptSession {
-        session_id,
-        project_id: Some(String::from("project-a")),
-        session_title: String::from("父会话"),
-        workspace_path: String::new(),
-        kind: PromptSessionMaterializationKind::Existing,
-    };
-    assert_eq!(
-        preflight
-            .turn_admission
-            .kernel_reservation_id(&materialized_session)
-            .expect("nested replay should match exact target"),
-        Some(authorization.reservation_id)
-    );
-
-    drop(preflight);
-    assert_eq!(
-        state
-            .lock()
-            .expect("service state lock")
-            .session_turn_admission_reservations
-            .get(&session_id)
-            .map(|reservation| reservation.reservation_id),
-        Some(authorization.reservation_id)
-    );
-    drop(outer_guard);
-    assert!(
-        !state
-            .lock()
-            .expect("service state lock after outer release")
-            .session_turn_admission_reservations
-            .contains_key(&session_id)
-    );
-}
-
 /// Verifies a stale submission owner cannot bypass or delete a replacement admission row.
 /// 验证过期提交所有者无法绕过或删除替代准入行。
 ///
@@ -761,7 +549,6 @@ fn implicit_new_session_admission_pins_retained_default_project() {
     assert_eq!(submission_slice.task_projects[0].id, "project-a");
     assert!(submission_slice.task_projects[0].session_ids.is_empty());
     assert!(submission_slice.sessions.is_empty());
-    assert!(submission_slice.session_messages.is_empty());
     assert!(submission_slice.session_runtime_state.is_empty());
 }
 
@@ -831,8 +618,8 @@ fn created_submission_slice_commit_preserves_retained_history() {
     assert_eq!(workspace.sessions.len(), 2);
 }
 
-/// Verifies an existing-session commit moves runtime ownership and merges only new transcript records.
-/// 验证已有会话提交会移动运行态所有权，并且只合并新增转录记录。
+/// Verifies an existing-session commit moves only the process-local runtime ownership.
+/// 验证已有会话提交只移动进程内运行态所有权。
 ///
 /// # Parameters
 /// 参数
@@ -844,24 +631,11 @@ fn created_submission_slice_commit_preserves_retained_history() {
 /// This test returns no value and fails if the detached commit clones or replaces retained transcript history.
 /// 此测试无返回值；若分离提交复制或替换保留转录历史则失败。
 #[test]
-fn existing_submission_commit_preserves_history_and_merges_only_new_records() {
+fn existing_submission_commit_moves_runtime_state_without_transcript_projection() {
     // session_id identifies the sole retained existing session under test.
     // session_id 标识测试中的唯一保留已有会话。
     let session_id = SessionId::new_v4();
-    // service_state owns the authoritative history that the detached transaction must preserve.
-    // service_state 持有分离事务必须保留的权威历史。
     let mut service_state = initialized_project_a_service_state(session_id);
-    // retained_message is the pre-existing transcript row that must remain first.
-    // retained_message 是必须保持首位的既有转录记录。
-    let mut retained_message =
-        SessionMessageEntry::new(SessionMessageKind::Assistant, "历史输出", "retained");
-    retained_message.id = String::from("retained-message");
-    service_state
-        .workspace_snapshot
-        .as_mut()
-        .expect("retained workspace")
-        .session_messages
-        .insert(session_id, vec![retained_message]);
     service_state
         .workspace_snapshot
         .as_mut()
@@ -885,18 +659,6 @@ fn existing_submission_commit_preserves_history_and_merges_only_new_records() {
     let mut candidate = preflight
         .retained_workspace_snapshot
         .expect("exact existing-session slice");
-    assert!(
-        candidate.session_messages.is_empty(),
-        "preflight must not clone presentation history"
-    );
-    // incoming_message is the only transcript delta created by the detached submission.
-    // incoming_message 是分离提交新建的唯一转录增量。
-    let mut incoming_message =
-        SessionMessageEntry::new(SessionMessageKind::User, "用户补充", "incoming");
-    incoming_message.id = String::from("incoming-message");
-    candidate
-        .session_messages
-        .insert(session_id, vec![incoming_message]);
     candidate
         .session_runtime_state
         .get_mut(&session_id)
@@ -918,22 +680,12 @@ fn existing_submission_commit_preserves_history_and_merges_only_new_records() {
     // guard observes the final authoritative retained revision.
     // guard 观察最终权威保留版本。
     let guard = state.lock().expect("retained state lock");
-    // workspace contains the merged transcript delta and transferred runtime metadata.
-    // workspace 包含已合并的转录增量与已转移的运行态元数据。
+    // workspace contains the transferred process-local runtime metadata.
+    // workspace 包含已转移的进程内运行态元数据。
     let workspace = guard
         .workspace_snapshot
         .as_ref()
         .expect("retained workspace after commit");
-    assert_eq!(
-        workspace
-            .session_messages
-            .get(&session_id)
-            .expect("retained messages")
-            .iter()
-            .map(|message| message.id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["retained-message", "incoming-message"]
-    );
     assert_eq!(
         workspace
             .session_runtime_state
@@ -944,91 +696,6 @@ fn existing_submission_commit_preserves_history_and_merges_only_new_records() {
     assert!(
         candidate.session_runtime_state.get(&session_id).is_none(),
         "runtime state should transfer instead of cloning at commit"
-    );
-}
-
-/// Verifies one browser submission identifier reaches visible and canonical user records together.
-/// 验证一个浏览器提交标识会同时到达可见与规范用户记录。
-///
-/// # Parameters
-/// 参数
-/// This test has no parameters.
-/// 此测试没有参数。
-///
-/// # Returns
-/// 返回值
-/// This test returns no value and fails if either retained projection loses correlation metadata.
-/// 此测试无返回值；若任一保留投影丢失关联元数据则失败。
-#[test]
-fn client_submission_identifier_is_attached_to_both_user_record_projections() {
-    // session_id and message_id select the exact mirrored user record pair.
-    // session_id 与 message_id 选择精确的镜像用户记录对。
-    let session_id = SessionId::new_v4();
-    let message_id = "visible-user-message";
-    let mut service_state = test_service_state_with_parent_session(session_id);
-    let workspace = service_state
-        .workspace_snapshot
-        .as_mut()
-        .expect("test workspace should exist");
-    workspace.session_messages.insert(
-        session_id,
-        vec![
-            SessionMessageEntry::new(SessionMessageKind::User, "", "hello")
-                .with_runtime_metadata(message_id, "1000"),
-        ],
-    );
-    let mut runtime_state = SessionRuntimeStateEntry::default();
-    runtime_state
-        .conversation_state
-        .records
-        .push(vulcan_context::SessionConversationRecord {
-            id: message_id.to_string(),
-            kind: SessionMessageKind::User,
-            record_kind: SessionMessageRecordKind::Transcript,
-            visible: true,
-            title: String::new(),
-            body: String::from("hello"),
-            metadata: None,
-            created_at: String::from("1000"),
-        });
-    workspace
-        .session_runtime_state
-        .insert(session_id, runtime_state);
-
-    attach_client_submission_id_to_visible_user_record(
-        workspace,
-        session_id,
-        Some(message_id),
-        "submission-123",
-        "new",
-        1000,
-    )
-    .expect("both user projections should accept correlation metadata");
-
-    let visible_identifier = workspace.session_messages[&session_id][0]
-        .metadata
-        .as_ref()
-        .and_then(serde_json::Value::as_object)
-        .and_then(|metadata| metadata.get("client_submission_id"))
-        .and_then(serde_json::Value::as_str);
-    let canonical_identifier = workspace.session_runtime_state[&session_id]
-        .conversation_state
-        .records[0]
-        .metadata
-        .as_ref()
-        .and_then(serde_json::Value::as_object)
-        .and_then(|metadata| metadata.get("client_submission_id"))
-        .and_then(serde_json::Value::as_str);
-    assert_eq!(visible_identifier, Some("submission-123"));
-    assert_eq!(canonical_identifier, Some("submission-123"));
-    assert_eq!(
-        workspace.session_messages[&session_id][0]
-            .metadata
-            .as_ref()
-            .and_then(serde_json::Value::as_object)
-            .and_then(|metadata| metadata.get("client_submission_accepted_at_ms"))
-            .and_then(serde_json::Value::as_str),
-        Some("1000")
     );
 }
 

@@ -1,0 +1,123 @@
+[
+  {
+    "name": "create_rejects_rename_source",
+    "host_result": {
+      "kind": "change_set",
+      "payload": {
+        "mode": "applied",
+        "files": [
+          {
+            "change": "create",
+            "path": "created.txt",
+            "old_path": "old.txt",
+            "content_mode": "full",
+            "content": "created\n",
+            "total_line_count": 1
+          }
+        ]
+      }
+    },
+    "expected_location": "payload.files[0].old_path",
+    "expected_detail": "field is not allowed for this change kind"
+  },
+  {
+    "name": "delete_lines_must_increase",
+    "host_result": {
+      "kind": "change_set",
+      "payload": {
+        "mode": "applied",
+        "files": [
+          {
+            "change": "modify",
+            "path": "ordered.txt",
+            "hunks": [
+              {
+                "delete": [
+                  { "line": 2, "content": "second" },
+                  { "line": 1, "content": "first" }
+                ],
+                "insert": []
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expected_location": "payload.files[0].hunks[0].deleted[1].line",
+    "expected_detail": "line numbers must be strictly increasing without duplicates"
+  },
+  {
+    "name": "insert_lines_must_be_unique",
+    "host_result": {
+      "kind": "change_set",
+      "payload": {
+        "mode": "applied",
+        "files": [
+          {
+            "change": "modify",
+            "path": "unique.txt",
+            "hunks": [
+              {
+                "delete": [],
+                "insert": [
+                  { "line": 3, "content": "first" },
+                  { "line": 3, "content": "duplicate" }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expected_location": "payload.files[0].hunks[0].inserted[1].line",
+    "expected_detail": "line numbers must be strictly increasing without duplicates"
+  },
+  {
+    "name": "full_content_line_count_must_match",
+    "host_result": {
+      "kind": "change_set",
+      "payload": {
+        "mode": "applied",
+        "files": [
+          {
+            "change": "create",
+            "path": "counted.txt",
+            "content_mode": "full",
+            "content": "first\r\nsecond\r\n",
+            "total_line_count": 3
+          }
+        ]
+      }
+    },
+    "expected_location": "payload.files[0].lifecycle_content.total_line_count",
+    "expected_detail": "declared 3 lines but complete content contains 2"
+  },
+  {
+    "name": "rename_cannot_mix_lifecycle_and_hunks",
+    "host_result": {
+      "kind": "change_set",
+      "payload": {
+        "mode": "applied",
+        "files": [
+          {
+            "change": "rename",
+            "path": "new.txt",
+            "old_path": "old.txt",
+            "new_path": "new.txt",
+            "hunks": [
+              {
+                "delete": [{ "line": 1, "content": "old" }],
+                "insert": [{ "line": 1, "content": "new" }]
+              }
+            ],
+            "content_mode": "full",
+            "content": "new\n",
+            "total_line_count": 1
+          }
+        ]
+      }
+    },
+    "expected_location": "payload.files[0].lifecycle_content",
+    "expected_detail": "a rename with modify hunks must not contain lifecycle content"
+  }
+]

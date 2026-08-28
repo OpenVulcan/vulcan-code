@@ -78,6 +78,8 @@ pub async fn capture_runtime_provider_wire_request(
         &launch.preparation,
         launch.active_agent.as_ref(),
         &launch.system_preamble,
+        launch.dynamic_prompt_layers,
+        launch.locked_baseline,
         &launch.effective_prompt,
         match launch.turn_start_mode {
             crate::agent_runtime::runtime_stream_launch_payload::RuntimeStreamTurnStartMode::UserPrompt => {

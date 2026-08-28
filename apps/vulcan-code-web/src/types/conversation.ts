@@ -17,7 +17,6 @@ import type {
 import type { CommandSessionSummary, ContextInjectionSnapshot, ContextUsageSnapshot } from "./runtime-context";
 import type { ProjectSummary } from "./projects-files";
 import type { ContextCompactionWindowNodeId } from "./public-ai";
-import type { ConversationHydrationProgress } from "./workbench";
 
 // ConversationRunOutcome identifies the strict terminal result of a settled run.
 // ConversationRunOutcome 标识已结束运行的严格终态结果。
@@ -74,32 +73,6 @@ export interface ConversationSummary {
   // Optional owning project identifier.
   // 可选所属项目标识。
   projectId?: string | null;
-  // Display-only fork source marker.
-  // 纯展示用分叉来源标记。
-  forkSource?: ConversationForkSourceSummary | null;
-  // Revisioned problem-turn recovery admission state.
-  // 带修订的问题回合恢复准入状态。
-  continuation?: ConversationContinuationSummary | null;
-}
-
-// ConversationContinuationSummary is the exact backend claim token for Continue.
-// ConversationContinuationSummary 是 Continue 使用的精确后端领取令牌。
-export interface ConversationContinuationSummary {
-  // Whether the canonical terminal boundary may be claimed for recovery.
-  // 规范终止边界是否允许被领取并恢复。
-  eligible: boolean;
-  // Exact continuation generation.
-  // 精确 Continue 代际。
-  generation: number;
-  // Exact session Provider ledger revision.
-  // 精确会话 Provider 账本修订号。
-  expectedLedgerRevision: number;
-  // Stable reason recorded by the terminal continuation boundary.
-  // 终止 Continue 边界记录的稳定原因。
-  reason?: string | null;
-  // Stable safety reason when the terminal boundary cannot be continued.
-  // 终止边界无法继续时的稳定安全原因。
-  blockedReason?: string | null;
 }
 
 // ConversationAttentionSummary describes one conversation-level action marker.
@@ -120,91 +93,6 @@ export interface ConversationAttentionSummary {
   // Unix-millisecond timestamp text for ordering diagnostics.
   // 用于排序诊断的 Unix 毫秒时间戳文本。
   updatedAt?: string | null;
-}
-
-// ConversationForkSourceSummary describes where a forked conversation was derived from.
-// ConversationForkSourceSummary 描述分叉会话从哪里派生。
-export interface ConversationForkSourceSummary {
-  // Source project tag used to locate the original conversation.
-  // 用于定位原始会话的源项目标签。
-  sourceProjectTag: string;
-  // Source conversation identifier for navigation.
-  // 用于导航的源会话标识。
-  sourceConversationId: string;
-  // Source conversation title captured at fork time.
-  // 分叉时捕获的源会话标题。
-  sourceTitle: string;
-  // Last retained message id at the fork boundary.
-  // 分叉边界处最后保留的消息标识。
-  anchorMessageId?: string | null;
-  // Fork creation timestamp.
-  // 分叉创建时间戳。
-  createdAt: string;
-}
-
-// ConversationMessage describes one rendered message in the timeline.
-// ConversationMessage 描述时间线中的单条渲染消息。
-export interface ConversationMessage {
-  // Stable message identifier.
-  // 稳定消息标识。
-  id: string;
-  // Stable conversation identifier that owns this message.
-  // 拥有该消息的稳定会话标识。
-  conversationId: string;
-  // Unix-millisecond creation timestamp used for turn duration labels.
-  // 用于轮次耗时标签的 Unix 毫秒创建时间戳。
-  createdAt?: string;
-  // Message role.
-  // 消息角色。
-  role: "user" | "assistant" | "system";
-  // Optional transcript title from the persisted session entry.
-  // 来自持久化会话项的可选转录标题。
-  title?: string | null;
-  // Optional durable transcript record kind.
-  // 可选持久化转录记录类型。
-  recordKind?: string | null;
-  // Message body.
-  // 消息正文。
-  body: string;
-  // Optional structured transcript metadata.
-  // 可选结构化转录元数据。
-  metadata?: unknown;
-  // Structured user attachments projected from transcript metadata.
-  // 从转录元数据投影出的结构化用户附件。
-  attachments?: ComposerAttachmentSummary[];
-  // Whether the backend allows editing and replaying this user prompt.
-  // 后端是否允许编辑并重新执行该用户提示词。
-  editableUserPrompt?: boolean;
-}
-
-// ConversationMessageStreamState describes whether a streamed message can still grow.
-// ConversationMessageStreamState 描述流式消息是否仍可继续增长。
-export type ConversationMessageStreamState = "active" | "sealed";
-
-// AppendMessageBodyDelta appends streamed text to one visible conversation message.
-// AppendMessageBodyDelta 向单条可见会话消息追加流式文本。
-export interface AppendMessageBodyDelta {
-  // Stable conversation identifier that owns the message.
-  // 拥有该消息的稳定会话标识。
-  conversationId: string;
-  // Stable message identifier receiving the appended text.
-  // 接收追加文本的稳定消息标识。
-  messageId: string;
-  // Text appended by this event only.
-  // 本事件单独追加的文本片段。
-  bodyDelta: string;
-  // Full message body after this delta, preferred over local append reconstruction.
-  // 本次增量后的完整消息正文，优先于本地追加复原。
-  currentBody?: string | null;
-  // Initial full message metadata when the row does not exist yet.
-  // 当消息行尚不存在时使用的初始完整消息元数据。
-  initialMessage?: ConversationMessage | null;
-  // Current backend run phase after this delta.
-  // 本次增量后的后端运行阶段。
-  runPhase?: string | null;
-  // Explicit lifecycle for a streamed thinking or assistant-output message.
-  // 流式思考或助手输出消息的显式生命周期。
-  streamState?: ConversationMessageStreamState | null;
 }
 
 // TransientReasoningSummaryItem is one provider-owned readable summary node.
@@ -354,21 +242,18 @@ export interface SubagentNavigationChangedDelta {
   subagentNavigation?: SubagentNavigationSnapshot | null;
 }
 
-// SubagentPanelRouteResponse carries the focused route state after a subagent panel action.
-// SubagentPanelRouteResponse 携带子代理面板动作后的聚焦路由状态。
+// SubagentPanelRouteResponse carries navigation after a subagent panel action; transcript data uses the V1 event window.
+// SubagentPanelRouteResponse 携带子代理面板动作后的导航；转录数据使用 V1 事件窗口。
 export interface SubagentPanelRouteResponse {
   // Parent conversation id that owns this route response.
   // 拥有本次路由响应的父会话标识。
   parentConversationId?: string | null;
-  // Conversation id that owns the returned message window.
-  // 拥有返回消息窗口的会话标识。
+  // Conversation id whose V1 event window should be displayed.
+  // 应展示其 V1 事件窗口的会话标识。
   activeConversationId?: string | null;
   // Current subagent navigation, or null when no subagent panel is active.
   // 当前子代理导航；没有活动子代理面板时为空。
   subagentNavigation?: SubagentNavigationSnapshot | null;
-  // Messages for the active surface only.
-  // 仅当前活动界面的消息列表。
-  messages: ConversationMessage[];
   // Latest workbench revision after applying the route update.
   // 应用路由更新后的最新工作台版本。
   revision: number;
@@ -391,37 +276,6 @@ export interface ContextInjectionChangedDelta {
   // Current context injection projection, or null when runtime state is unavailable.
   // 当前上下文注入投影；运行态不可用时为空。
   contextInjection?: ContextInjectionSnapshot | null;
-}
-
-// ConversationMessagesChangedDelta replaces one focused conversation message window.
-// ConversationMessagesChangedDelta 替换单个聚焦会话的消息窗口。
-export interface ConversationMessagesChangedDelta {
-  // Stable conversation identifier receiving the message window.
-  // 接收消息窗口的稳定会话标识。
-  conversationId: string;
-  // Current visible messages for the conversation.
-  // 当前会话的可见消息列表。
-  messages: ConversationMessage[];
-}
-
-// ConversationMessagesPatchedDelta patches visible message nodes without replacing the whole window.
-// ConversationMessagesPatchedDelta 在不替换整个窗口的情况下修补可见消息节点。
-export interface ConversationMessagesPatchedDelta {
-  // Stable conversation identifier receiving the message patch.
-  // 接收消息补丁的稳定会话标识。
-  conversationId: string;
-  // Full message nodes to insert or replace by id.
-  // 需要按标识插入或替换的完整消息节点。
-  upsertMessages: ConversationMessage[];
-  // Message ids that should be removed from the visible window.
-  // 需要从可见窗口移除的消息标识。
-  removeMessageIds: string[];
-  // Optional authoritative order for visible nodes in this conversation.
-  // 当前会话可见节点的可选权威顺序。
-  messageOrder?: string[] | null;
-  // Optional run phase that should be applied atomically with this message patch.
-  // 需要与本次消息补丁原子应用的可选运行阶段。
-  runPhase?: string | null;
 }
 
 // SessionAddonsChangedDelta replaces goal, todolist, and Plan mode projections.
@@ -562,20 +416,6 @@ export interface SessionProviderUsageCallSummary {
   errorCode?: string | null;
 }
 
-// SessionProviderUsageAggregateSummary preserves one exact branch or billing scope.
-// SessionProviderUsageAggregateSummary 保留一个精确的分支或账单统计口径。
-export interface SessionProviderUsageAggregateSummary {
-  // Number of physical calls in this scope.
-  // 当前口径内的物理调用数量。
-  providerCallCount: number;
-  // Number of terminal calls without usable Provider usage.
-  // 当前口径内没有可用 Provider 用量的终态调用数量。
-  unknownUsageCallCount: number;
-  // Provider-reported cumulative usage in this scope.
-  // 当前口径内 Provider 实测累计用量。
-  usage?: SessionProviderUsageTokenSummary | null;
-}
-
 // SessionProviderUsageSummary carries live physical Provider accounting for one conversation.
 // SessionProviderUsageSummary 携带单个会话的实时物理 Provider 统计。
 export interface SessionProviderUsageSummary {
@@ -594,15 +434,6 @@ export interface SessionProviderUsageSummary {
   // Cumulative usable usage across terminal requests.
   // 全部终态请求的可用用量累计值。
   cumulativeUsage?: SessionProviderUsageTokenSummary | null;
-  // Current active branch, including inherited context calls.
-  // 当前活动分支，包含继承的上下文调用。
-  activeBranch: SessionProviderUsageAggregateSummary;
-  // Calls physically produced in this session, including superseded edit branches.
-  // 此会话真实产生的调用，包含编辑后被取代的分支。
-  lifetime: SessionProviderUsageAggregateSummary;
-  // Calls inherited by a fork and not billed again in this session.
-  // 分叉继承且未在当前会话重复计费的调用。
-  inherited: SessionProviderUsageAggregateSummary;
   // Latest physical request lifecycle.
   // 最近一次物理请求生命周期。
   latestCall?: SessionProviderUsageCallSummary | null;
@@ -648,7 +479,6 @@ export interface SubmitConversationPromptAck {
 // WorkbenchDelta describes one partial workbench update emitted on hot paths.
 // WorkbenchDelta 描述热路径上发出的单条局部工作台更新。
 export type WorkbenchDelta =
-  | { kind: "appendMessageBody"; payload: AppendMessageBodyDelta }
   | { kind: "updateConversationRunPhase"; payload: UpdateConversationRunPhaseDelta }
   | { kind: "pendingPromptsChanged"; payload: PendingPromptsChangedDelta }
   | { kind: "conversationSummaryChanged"; payload: ConversationSummaryChangedDelta }
@@ -660,10 +490,7 @@ export type WorkbenchDelta =
   | { kind: "subagentNavigationChanged"; payload: SubagentNavigationChangedDelta }
   | { kind: "contextUsageChanged"; payload: ContextUsageChangedDelta }
   | { kind: "contextInjectionChanged"; payload: ContextInjectionChangedDelta }
-  | { kind: "conversationMessagesChanged"; payload: ConversationMessagesChangedDelta }
-  | { kind: "conversationMessagesPatched"; payload: ConversationMessagesPatchedDelta }
   | { kind: "sessionAddonsChanged"; payload: SessionAddonsChangedDelta }
-  | { kind: "conversationHydrationChanged"; payload: ConversationHydrationChangedDelta }
   | { kind: "agentSkillsCatalogChanged"; payload: AgentSkillsCatalogChangedDelta }
   | { kind: "luaSkillsCatalogChanged"; payload: LuaSkillsCatalogChangedDelta }
   | { kind: "subagentCatalogChanged"; payload: SubagentCatalogChangedDelta }
@@ -826,14 +653,6 @@ export interface ToolRequestProgressChangedDelta {
   // Latest safe snapshot, or null when validation fails or the request is aborted.
   // 最新安全快照；校验失败或请求中止后为空。
   progress: ToolRequestProgressSnapshot | null;
-}
-
-// ConversationHydrationChangedDelta replaces conversation hydration progress without a full snapshot.
-// ConversationHydrationChangedDelta 在不发送完整快照的情况下替换会话水合进度。
-export interface ConversationHydrationChangedDelta {
-  // Latest hydration progress payload.
-  // 最新水合进度载荷。
-  progress: ConversationHydrationProgress;
 }
 
 // WorkbenchDeltaEnvelope carries one ordered partial workbench update.

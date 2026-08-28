@@ -99,6 +99,7 @@ pub(crate) fn composer_attachment_summary_from_core(
         kind: attachment.kind.modality_name().to_string(),
         file_name: attachment.file_name.clone(),
         local_path: attachment.local_path.clone(),
+        project_resource_id: None,
         resource_path: attachment.resource_path.clone(),
         source_path: attachment.source_path.clone(),
         asset_id: attachment.asset_id.clone(),
@@ -158,6 +159,11 @@ pub(crate) fn resolve_composer_attachment_summary_for_workspace(
     workspace_path: &str,
     summary: ComposerAttachmentSummary,
 ) -> Result<ComposerAttachmentSummary, String> {
+    if summary.project_resource_id.is_some() {
+        return Err(String::from(
+            "Project ResourceId attachments require the V1 session resource authority.",
+        ));
+    }
     let expected_kind = parse_composer_attachment_kind(&summary.kind)?;
     let asset_id = summary
         .asset_id
@@ -213,24 +219,6 @@ fn core_delivery_mode_to_service_plan(
         CoreMode::InlineDerivedPreview => ComposerAttachmentDeliveryPlan::InlineDerivedPreview,
         CoreMode::MetadataOnly => ComposerAttachmentDeliveryPlan::MetadataOnly,
     }
-}
-
-/// Validates one WebUI attachment summary without cloning its payload fields.
-/// 在不克隆载荷字段的情况下校验单个 WebUI 附件摘要。
-///
-/// # Parameters
-/// 参数
-/// `summary` is the WebUI service attachment summary to validate.
-/// `summary` 是需要校验的 WebUI 服务附件摘要。
-///
-/// # Returns
-/// 返回值
-/// `Ok(())` when the summary can be converted by the submit path.
-/// 当摘要可被提交流程转换时返回 `Ok(())`。
-pub(crate) fn validate_composer_attachment_summary(
-    summary: &ComposerAttachmentSummary,
-) -> Result<(), String> {
-    parse_composer_attachment_kind(&summary.kind).map(|_| ())
 }
 
 /// Parses one stable composer attachment kind key.
@@ -308,37 +296,6 @@ pub(crate) fn composer_attachment_kind_accept(kind: &ConversationAttachmentKind)
     composer_attachment_kind_metadata(kind).accept
 }
 
-/// Extracts composer attachments from durable transcript metadata.
-/// 从持久转录元数据中提取输入区附件。
-///
-/// # Parameters
-/// 参数
-/// `metadata` is the durable transcript metadata JSON object when available.
-/// `metadata` 是可用时的持久转录元数据 JSON 对象。
-///
-/// # Returns
-/// 返回值
-/// Composer attachment summaries extracted from supported metadata fields.
-/// 从受支持元数据字段中提取的输入区附件摘要。
-pub(crate) fn composer_message_attachments_from_metadata(
-    metadata: Option<&serde_json::Value>,
-) -> Vec<ComposerAttachmentSummary> {
-    let Some(metadata) = metadata else {
-        return Vec::new();
-    };
-    let Some(attachment_value) = metadata
-        .get("attachments")
-        .or_else(|| metadata.get("transcript_attachments"))
-    else {
-        return Vec::new();
-    };
-    serde_json::from_value::<Vec<ConversationAttachment>>(attachment_value.clone())
-        .unwrap_or_default()
-        .iter()
-        .map(composer_attachment_summary_from_core)
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,32 +335,6 @@ mod tests {
         );
     }
 
-    /// Verifies borrowed summary validation rejects unknown attachment kinds.
-    /// 验证借用式摘要校验会拒绝未知附件类型。
-    #[test]
-    fn validate_composer_attachment_summary_rejects_unknown_kind() {
-        let summary = ComposerAttachmentSummary {
-            kind: String::from("spreadsheet"),
-            file_name: String::from("data.xlsx"),
-            local_path: String::from("C:/tmp/data.xlsx"),
-            resource_path: None,
-            source_path: None,
-            asset_id: Some(String::from("asset")),
-            byte_len: Some(4),
-            source_sha256: None,
-            delivery_plan: None,
-            preview_local_path: None,
-            mime_type: String::from(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            ),
-        };
-
-        let error = validate_composer_attachment_summary(&summary)
-            .expect_err("unknown attachment kind should be rejected");
-
-        assert!(error.contains("spreadsheet"));
-    }
-
     /// Verifies browser-controlled attachment fields are replaced by project-index authority before planning or submission.
     /// 验证在规划或提交前，浏览器可控附件字段会被项目索引权威状态替换。
     #[test]
@@ -426,6 +357,7 @@ mod tests {
             kind: String::from("image"),
             file_name: String::from("forged.jpg"),
             local_path: String::from("C:/forged/source.jpg"),
+            project_resource_id: None,
             resource_path: Some(String::from("../forged")),
             source_path: Some(String::from("C:/forged/original.jpg")),
             asset_id: attachment.asset_id.clone(),
@@ -464,6 +396,7 @@ mod tests {
             kind: String::from("image"),
             file_name: String::from("canonical.png"),
             local_path: String::from("D:/workspace/.vulcan/attachments/canonical.png"),
+            project_resource_id: None,
             resource_path: Some(String::from(".vulcan/attachments/canonical.png")),
             source_path: None,
             asset_id: Some(String::from("asset-image")),
@@ -495,6 +428,7 @@ mod tests {
             kind: String::from("video"),
             file_name: String::from("clip.mp4"),
             local_path: String::from("D:/workspace/.vulcan/attachments/clip.mp4"),
+            project_resource_id: None,
             resource_path: Some(String::from(".vulcan/attachments/clip.mp4")),
             source_path: None,
             asset_id: Some(String::from("asset-video")),

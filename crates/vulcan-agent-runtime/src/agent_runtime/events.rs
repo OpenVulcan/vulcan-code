@@ -5,6 +5,8 @@ use crate::agent_runtime::execution_models::{
     ExecutionPreparation, ExecutionProviderRequestContinuation, ExecutionRunReport,
 };
 use crate::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryEvent;
+use crate::agent_runtime::provider_transport_request_budget::ProviderRequestBudgetGuard;
+use crate::context_budget::ContextBudgetSnapshot;
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
 use serde_json::Value;
@@ -13,14 +15,204 @@ use tokio::sync::oneshot;
 use vulcan_ai_contract::AiExecutionRequest;
 use vulcan_context::RuntimeProviderLoweringRepairEvent;
 use vulcan_core::types::{
+    ControllerConfig, ConversationSnapshot, ProviderPromptLayers,
     ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     ProviderUsageSnapshot as CoreProviderUsageSnapshot,
 };
+use vulcan_session_core::v1::context::LockedBaselineProjection;
+use vulcan_session_core::v1::document::PreparedApiStart;
+use vulcan_session_core::v1::{
+    ProviderProjectionProof, ProviderRequestBudgetEvidence, ProviderUsageBudgetAnchor,
+};
+use vulcan_workspace_store::workspace_store::ProviderApiTraceStore;
 
 /// Shared single-use sender backing one Provider durability completion handle.
 /// 支撑单个 Provider 可靠完成句柄的共享一次性发送端。
 type SharedProviderRequestDurabilitySender =
     Arc<Mutex<Option<oneshot::Sender<Result<(), String>>>>>;
+
+/// Shared single-use sender backing one typed Provider preparation permit.
+/// 支撑单个强类型 Provider 准备许可的共享一次性发送端。
+type SharedProviderRequestPreparationSender =
+    Arc<Mutex<Option<oneshot::Sender<Result<PreparedPhysicalApi, String>>>>>;
+
+/// Immutable transport candidate produced before the V1 session owner rebuilds the request.
+/// V1 会话所有者重建请求前产生的不可变传输候选。
+#[derive(Debug, Clone)]
+pub struct ProviderRequestPreparationCandidate {
+    /// Candidate request assembled from pre-gate controller state; it is never dispatched directly.
+    /// 从闸门前控制器状态组装的候选请求；该对象绝不被直接分派。
+    pub exact_request: AiExecutionRequest,
+    /// Candidate controller configuration used only as validated non-ledger transport input.
+    /// 仅作为经过校验的非账本传输输入使用的候选控制器配置。
+    pub controller_config: ControllerConfig,
+    /// Candidate controller snapshot retained only until the V1 owner creates the final permit.
+    /// 仅保留到 V1 所有者创建最终许可为止的候选控制器快照。
+    pub controller_snapshot: ConversationSnapshot,
+    /// Candidate request snapshot containing route and budget facts.
+    /// 包含路由与预算事实的候选请求快照。
+    pub request_snapshot: CoreProviderRequestSnapshot,
+    /// Candidate context-budget decision to be replaced or validated by the permit owner.
+    /// 由许可所有者替换或校验的候选上下文预算判定。
+    pub context_budget: Option<ContextBudgetSnapshot>,
+    /// Exact request-budget guard frozen with the route before the V1 owner rebuilds history.
+    /// 在 V1 owner 重建历史前随路由冻结的精确请求预算守卫。
+    pub request_budget_guard: Option<ProviderRequestBudgetGuard>,
+    /// Typed locked baseline provenance assembled by the unique prompt composer.
+    /// 由唯一提示词组装器生成的强类型锁定基线来源。
+    pub locked_baseline: LockedBaselineProjection,
+    /// Request-dynamic prompt layers emitted by the same unique prompt composer.
+    /// 由同一个唯一提示词组合器生成的请求动态提示词层。
+    pub dynamic_prompt_layers: ProviderPromptLayers,
+}
+
+impl ProviderRequestPreparationCandidate {
+    /// Recomputes and validates budget facts against the exact V1-rebuilt request.
+    /// 针对精确 V1 重建请求重新计算并校验预算事实。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `projection` is the exact V1 source frontier and `anchor` is the latest durable usage pair.
+    /// `projection` 是精确 V1 来源前沿，`anchor` 是最近的可靠用量事实对。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the evidence that must be committed with api_started after storing the final budget.
+    /// 保存最终预算后，返回必须与 api_started 同时提交的证据。
+    pub fn finalize_v1_request_budget(
+        &mut self,
+        projection: &ProviderProjectionProof,
+        anchor: Option<&ProviderUsageBudgetAnchor>,
+    ) -> Result<ProviderRequestBudgetEvidence, String> {
+        let guard = self.request_budget_guard.as_ref().ok_or_else(|| {
+            String::from("The V1 Provider permit is missing its frozen request-budget guard.")
+        })?;
+        let decision =
+            guard.build_v1_budget_decision(&self.request_snapshot, projection, anchor)?;
+        self.context_budget = Some(decision.context_budget);
+        Ok(decision.evidence)
+    }
+
+    /// Converts an explicitly excluded non-session candidate into its transport permit.
+    /// 把一份明确排除的非会话候选转换为传输许可。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns an excluded permit with the candidate fields moved without reconstruction.
+    /// 返回一份排除许可，并原样移动候选字段且不执行重建。
+    pub fn into_excluded_non_session(self) -> PreparedPhysicalApi {
+        PreparedPhysicalApi::ExcludedNonSession {
+            exact_request: self.exact_request,
+            controller_config: self.controller_config,
+            controller_snapshot: self.controller_snapshot,
+            request_snapshot: self.request_snapshot,
+            context_budget: self.context_budget,
+        }
+    }
+}
+
+/// Exact physical Provider request released by the unique preparation owner.
+/// 由唯一准备所有者放行的精确物理 Provider 请求。
+#[derive(Debug, Clone)]
+pub enum PreparedPhysicalApi {
+    /// A V1 session request rebuilt from the durable event ledger and committed before dispatch.
+    /// 从可靠事件账本重建并在分派前完成提交的 V1 会话请求。
+    SessionV1 {
+        /// Exact request that is allowed to reach the transport.
+        /// 允许进入传输层的精确请求。
+        exact_request: AiExecutionRequest,
+        /// Canonical controller configuration derived for subsequent tool-result turns.
+        /// 为后续工具结果回合派生的规范控制器配置。
+        controller_config: ControllerConfig,
+        /// Canonical controller snapshot projected from the same V1 source.
+        /// 从同一 V1 来源投影出的规范控制器快照。
+        controller_snapshot: ConversationSnapshot,
+        /// Exact request snapshot used by telemetry and budget accounting.
+        /// 遥测与预算记账使用的精确请求快照。
+        request_snapshot: CoreProviderRequestSnapshot,
+        /// Context-budget decision computed from the exact permitted request.
+        /// 根据精确许可请求计算的上下文预算判定。
+        context_budget: Option<ContextBudgetSnapshot>,
+        /// Durable Core receipt proving api_started was committed before dispatch.
+        /// 证明 api_started 已在分派前可靠提交的 Core 回执。
+        core_start: PreparedApiStart,
+        /// Unique session-scoped diagnostic trace owner; absent only for non-production fixtures.
+        /// 唯一的会话级诊断追踪 owner；仅非生产测试夹具允许为空。
+        provider_api_trace_store: Option<ProviderApiTraceStore>,
+    },
+    /// A typed non-session request that is intentionally outside the V1 event ledger.
+    /// 明确位于 V1 事件账本之外的强类型非会话请求。
+    ExcludedNonSession {
+        /// Exact request that is allowed to reach the transport.
+        /// 允许进入传输层的精确请求。
+        exact_request: AiExecutionRequest,
+        /// Exact controller configuration retained for the physical run.
+        /// 为物理运行保留的精确控制器配置。
+        controller_config: ControllerConfig,
+        /// Exact controller snapshot retained for the physical run.
+        /// 为物理运行保留的精确控制器快照。
+        controller_snapshot: ConversationSnapshot,
+        /// Exact request snapshot used by telemetry and budget accounting.
+        /// 遥测与预算记账使用的精确请求快照。
+        request_snapshot: CoreProviderRequestSnapshot,
+        /// Context-budget decision associated with the excluded request.
+        /// 与排除请求关联的上下文预算判定。
+        context_budget: Option<ContextBudgetSnapshot>,
+    },
+}
+
+/// Cloneable completion half of one typed Provider preparation barrier.
+/// 单次强类型 Provider 准备屏障的可克隆完成端。
+#[derive(Debug, Clone)]
+pub struct ProviderRequestPreparationCompletion {
+    /// Single-use completion sender shared across cloned stream events.
+    /// 在克隆流事件之间共享的一次性完成发送端。
+    sender: SharedProviderRequestPreparationSender,
+}
+
+impl ProviderRequestPreparationCompletion {
+    /// Completes the preparation barrier exactly once with the permit-owner result.
+    /// 使用许可所有者的结果恰好一次完成准备屏障。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `result` is successful only when the returned request is allowed to reach the wire.
+    /// `result` 仅在返回请求获准进入线路时才成功。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns `true` for the first completion and `false` for duplicates or poisoned state.
+    /// 首次完成返回 `true`，重复完成或锁中毒时返回 `false`。
+    pub fn complete(&self, result: Result<PreparedPhysicalApi, String>) -> bool {
+        let Ok(mut guard) = self.sender.lock() else {
+            return false;
+        };
+        let Some(sender) = guard.take() else {
+            return false;
+        };
+        sender.send(result).is_ok()
+    }
+}
+
+/// Builds the completion and wait halves of one typed Provider preparation barrier.
+/// 构建单次强类型 Provider 准备屏障的完成端与等待端。
+///
+/// # Returns
+/// 返回值
+/// Returns one cloneable host completion handle and the single Provider-side permit receiver.
+/// 返回一个可克隆的宿主完成句柄与单个 Provider 侧许可接收端。
+pub(crate) fn provider_request_preparation_barrier() -> (
+    ProviderRequestPreparationCompletion,
+    oneshot::Receiver<Result<PreparedPhysicalApi, String>>,
+) {
+    let (sender, receiver) = oneshot::channel();
+    (
+        ProviderRequestPreparationCompletion {
+            sender: Arc::new(Mutex::new(Some(sender))),
+        },
+        receiver,
+    )
+}
 
 /// Classifies one non-persistent reasoning status line.
 /// 对单条非持久化推理状态行进行分类。
@@ -172,6 +364,9 @@ pub enum RuntimeEventKind {
 /// 将一条精确工具请求绑定到其原始批次使用的已解析定义指纹。
 #[derive(Debug, Clone)]
 pub struct ToolExecutionRecoveryRequest {
+    /// Exact Provider stream-item identity used by live draft projection.
+    /// 实时草稿投影使用的精确 Provider 流 item 身份。
+    pub request_stream_id: String,
     /// Exact original tool invocation request.
     /// 精确原始工具调用请求。
     pub request: vulcan_core::types::ToolInvocationRequest,
@@ -326,6 +521,19 @@ pub enum ExecutionStreamEvent {
         /// Completion handle released by the service only after durable persistence.
         /// 仅在可靠持久化后由服务释放的完成句柄。
         completion: ProviderRequestDurabilityCompletion,
+    },
+    /// Candidate request boundary that only the unique session owner may turn into a dispatch permit.
+    /// 仅允许唯一会话所有者把候选请求转换为分派许可的边界。
+    ProviderRequestPreparationBoundary {
+        /// Started telemetry carrying the immutable physical request identity.
+        /// 携带不可变物理请求身份的 Started 遥测。
+        event: ProviderRequestTelemetryEvent,
+        /// Pre-gate candidate that must never be dispatched directly for a V1 session.
+        /// 对 V1 会话绝不能直接分派的闸门前候选。
+        candidate: ProviderRequestPreparationCandidate,
+        /// Typed completion released with the exact permitted physical request.
+        /// 使用精确获准物理请求释放的强类型完成句柄。
+        completion: ProviderRequestPreparationCompletion,
     },
     /// Visible assistant thinking delta that should stay outside future context.
     /// 应保持在未来上下文之外的可见思考增量。

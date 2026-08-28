@@ -7,19 +7,18 @@ use crate::agent_runtime::execution_models::{
     ExecutionPreparation, ExecutionPreparationRequest, ExecutionTurnStartMode,
 };
 use crate::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryContext;
-use crate::agent_runtime::provider_transport_request::ProviderTransportRecoveryAction;
-use crate::agent_runtime::provider_transport_request_budget::ProviderUsageBudgetBaselineHandle;
 use crate::agent_runtime::runtime_stream_bootstrap::RuntimeStreamBootstrap;
 use crate::agent_runtime::runtime_stream_delta::RuntimeStreamDeltaState;
 use crate::agent_runtime::task_runtime::{TaskExecutionRuntimeContext, TaskRuntime};
 use crate::model::SessionId;
 use std::sync::Arc;
-use vulcan_ai_contract::AiExecutionRequest;
 use vulcan_context::RuntimeProviderLoweringRepairEvent;
 use vulcan_core::types::{
     ConversationPayload as CoreConversationPayload,
     ConversationSnapshot as CoreConversationSnapshot,
+    ProviderPromptLayers as CoreProviderPromptLayers,
 };
+use vulcan_session_core::v1::context::LockedBaselineProjection;
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
 /// Turn-start mode used by the host-controlled provider loop.
@@ -79,18 +78,15 @@ pub struct RuntimeStreamLaunch {
     /// Effective system preamble sent to the provider transport layer.
     /// 发送给 Provider 传输层的生效系统前导语。
     pub(crate) system_preamble: String,
+    /// Canonical typed prompt baseline proposed for the physical request boundary.
+    /// 为物理请求边界提出的规范强类型提示词基线。
+    pub(crate) locked_baseline: LockedBaselineProjection,
+    /// Request-dynamic prompt layers preserved for the physical Provider permit.
+    /// 为物理 Provider 许可保留的请求动态提示词层。
+    pub(crate) dynamic_prompt_layers: CoreProviderPromptLayers,
     /// Canonical conversation snapshot handed to `vulcan-core`.
     /// 交给 `vulcan-core` 的规范会话快照。
     pub(crate) core_snapshot: CoreConversationSnapshot,
-    /// Exact first provider request restored from a claimed retry snapshot.
-    /// 从已认领重试快照恢复的精确首个 Provider 请求。
-    pub(crate) initial_provider_request: Option<AiExecutionRequest>,
-    /// Exact controller configuration restored with the retry snapshot.
-    /// 随重试快照一并恢复的精确控制器配置。
-    pub(crate) controller_config_override: Option<vulcan_core::types::ControllerConfig>,
-    /// Optional claimed recovery action that must run before normal Provider-loop startup.
-    /// 常规 Provider 循环启动前必须执行的可选已认领恢复动作。
-    pub(crate) recovery_action: Option<ProviderTransportRecoveryAction>,
     /// Mutable streaming-loop state seeded from the bootstrapped core controller.
     /// 由已启动核心控制器播种得到的可变流式循环状态。
     pub(crate) stream_state: RuntimeStreamDeltaState,
@@ -126,14 +122,9 @@ pub(crate) fn build_runtime_stream_launch_payload(
         controller_effective_prompt_for_launch(request, &bootstrap.core_snapshot);
     // providerTelemetryContext captures model and owner facts before preparation moves into the launch payload.
     // providerTelemetryContext 在执行准备移入启动载荷前捕获模型与归属事实。
-    let provider_usage_budget_baseline = ProviderUsageBudgetBaselineHandle::new(
-        bootstrap.preparation.provider_usage_budget_baseline.clone(),
-    );
     let provider_telemetry_context = ProviderRequestTelemetryContext::from_preparation(
         &bootstrap.preparation,
-        request.execution_retry_snapshot.as_deref(),
         request.provider_request_continuation.as_ref(),
-        provider_usage_budget_baseline,
     )?;
     // provider_api_family preserves the canonical typed API family before preparation moves into the launch payload.
     // provider_api_family 在执行准备移入启动载荷前保留规范强类型 API 协议族。
@@ -160,59 +151,9 @@ pub(crate) fn build_runtime_stream_launch_payload(
         discovery_errors: bootstrap.discovery_errors,
         warnings: bootstrap.warnings,
         system_preamble: bootstrap.system_preamble,
-        core_snapshot: request
-            .execution_retry_snapshot
-            .as_ref()
-            .filter(|snapshot| {
-                !matches!(
-                    &snapshot.pending_action,
-                    vulcan_workbench_model::ExecutionRetryPendingAction::ResumePreparation { .. }
-                )
-            })
-            .map(|snapshot| snapshot.controller_snapshot.clone())
-            .unwrap_or(bootstrap.core_snapshot),
-        initial_provider_request: request
-            .execution_retry_snapshot
-            .as_ref()
-            .filter(|snapshot| snapshot.user_followup.is_none())
-            .and_then(|snapshot| match &snapshot.pending_action {
-                vulcan_workbench_model::ExecutionRetryPendingAction::DispatchProviderRequest {
-                    request,
-                } => Some(request.as_ref().clone()),
-                _ => None,
-            }),
-        controller_config_override: request
-            .execution_retry_snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.controller_config.clone()),
-        recovery_action: request
-            .execution_retry_snapshot
-            .as_ref()
-            .map(|snapshot| match &snapshot.pending_action {
-                vulcan_workbench_model::ExecutionRetryPendingAction::ExecuteToolBatch { tools } => {
-                    ProviderTransportRecoveryAction::ExecuteToolBatch {
-                        tools: tools.clone(),
-                        user_followup: snapshot.user_followup.clone(),
-                    }
-                }
-                vulcan_workbench_model::ExecutionRetryPendingAction::FinalizeAssistant
-                    if snapshot.user_followup.is_none() =>
-                {
-                    ProviderTransportRecoveryAction::FinalizeAssistant
-                }
-                vulcan_workbench_model::ExecutionRetryPendingAction::ResumePreparation {
-                    ..
-                }
-                | vulcan_workbench_model::ExecutionRetryPendingAction::DispatchProviderRequest {
-                    ..
-                }
-                | vulcan_workbench_model::ExecutionRetryPendingAction::PrepareNextProviderRequest
-                | vulcan_workbench_model::ExecutionRetryPendingAction::FinalizeAssistant => {
-                    ProviderTransportRecoveryAction::ResumeProviderLoop {
-                        user_followup: snapshot.user_followup.clone(),
-                    }
-                }
-            }),
+        dynamic_prompt_layers: bootstrap.dynamic_prompt_layers,
+        locked_baseline: bootstrap.locked_baseline,
+        core_snapshot: bootstrap.core_snapshot,
         stream_state: RuntimeStreamDeltaState::new(bootstrap.core_controller, protocol_profile_id)
             .with_tool_request_stream(&stream_resolved_tools)
             .with_provider_request_telemetry_context(provider_telemetry_context),
@@ -342,6 +283,7 @@ mod tests {
             session_id: Uuid::nil(),
             session_storage_directory: None,
             conversation_hook_turn_id: None,
+            continuation_action_id: None,
             session_title: String::from("测试会话"),
             agent_id: String::from("default-agent"),
             agent_name: String::from("默认代理"),
@@ -369,7 +311,6 @@ mod tests {
             },
             prompt_preview: String::from("请分析代码"),
             workspace_path: String::from(r"D:\workspace"),
-            task_session_store_root: None,
             conversation_attachments: Vec::new(),
             context_history_count: 1,
             execution_mode: String::from("Build"),
@@ -380,7 +321,7 @@ mod tests {
             prompt_skills: Vec::new(),
             prompt_skill_user_root: None,
             implicit_luaskill_prompt_entries: Vec::new(),
-            prompt_skill_developer_segment: None,
+            additional_developer_segments: Vec::new(),
             skill_names: Vec::new(),
             tool_descriptors: Vec::new(),
             tool_request_rejection_reason: None,
@@ -395,8 +336,6 @@ mod tests {
             context_budget: None,
             context_compaction_policy: None,
             context_budget_override: None,
-            provider_usage_budget_baseline: None,
-            provider_usage_context_generation_id: None,
             context_assembly: None,
             context_baseline: None,
             context_request_mode: None,
@@ -424,7 +363,7 @@ mod tests {
             },
             runtime_policy: vulcan_session_core::ExecutionRuntimePolicy::main_session(),
             conversation_hook_turn_id: Some(String::from("test-hook-turn")),
-            execution_retry_snapshot: None,
+            continuation_action_id: None,
             provider_request_continuation: None,
             execution_agent_id: None,
             agent_prompt_snapshot: None,
@@ -437,7 +376,6 @@ mod tests {
             provider_tool_enabled_capabilities_override: Default::default(),
             provider_extension_target_sets_override: None,
             subagent_prompt_context: None,
-            task_session_store_root: None,
             session_title: String::from("测试会话"),
             workspace_path: String::from(r"D:\workspace"),
             prompt: String::from("  请分析主入口文件  "),
@@ -448,8 +386,6 @@ mod tests {
             context_compaction_policy: None,
             context_compaction_window_node_id: None,
             context_budget_override: None,
-            provider_usage_budget_baseline: None,
-            provider_usage_context_generation_id: None,
             context_window_prefill_input_tokens: None,
             execution_mode: String::from("Build"),
             temperature: Some(0.2),
@@ -471,6 +407,7 @@ mod tests {
             boundary_events: Vec::new(),
             runtime_system_updates: Vec::new(),
             controller_runtime: None,
+            native_goal_runtime: None,
             knowledge_access: None,
             session_goal_context: None,
             session_plan_context: None,
@@ -526,6 +463,8 @@ mod tests {
             discovery_errors: vec![String::from("mcp-error")],
             warnings: vec![String::from("warning")],
             system_preamble: String::from("system preamble"),
+            dynamic_prompt_layers: CoreProviderPromptLayers::default(),
+            locked_baseline: LockedBaselineProjection::empty(),
             core_snapshot,
             core_controller,
             lowering_repair_events: Vec::new(),
@@ -583,6 +522,8 @@ mod tests {
         ));
         let crate::agent_runtime::runtime_stream_bootstrap_core::RuntimeBootstrapCore {
             system_preamble,
+            dynamic_prompt_layers,
+            locked_baseline,
             core_snapshot,
             core_controller,
             ..
@@ -599,6 +540,8 @@ mod tests {
             discovery_errors: Vec::new(),
             warnings: Vec::new(),
             system_preamble,
+            dynamic_prompt_layers,
+            locked_baseline,
             core_snapshot,
             core_controller,
             lowering_repair_events: Vec::new(),
@@ -742,6 +685,7 @@ mod tests {
                 session_title: "测试会话",
                 workspace_path: r"D:\workspace",
                 prompt_entry_id: String::from("prompt-entry-1"),
+                continuation_action_id: None,
                 prompt,
                 hidden_model_guidance: None,
                 provider_visible_agent_messages: Vec::new(),
@@ -753,7 +697,6 @@ mod tests {
                 execution_mode: String::from("Build"),
                 reasoning_effort: None,
                 owning_project_id: None,
-                prior_session_messages: None,
             },
         )
         .expect("begin shared prompt turn");
@@ -803,6 +746,8 @@ mod tests {
         let crate::agent_runtime::runtime_stream_bootstrap_core::RuntimeBootstrapCore {
             system_preamble,
             prompt_layers: _,
+            dynamic_prompt_layers,
+            locked_baseline,
             core_snapshot,
             core_controller,
             lowering_repair_events: _,
@@ -835,6 +780,8 @@ mod tests {
             discovery_errors: Vec::new(),
             warnings: Vec::new(),
             system_preamble,
+            dynamic_prompt_layers,
+            locked_baseline,
             core_snapshot,
             core_controller,
             lowering_repair_events: Vec::new(),

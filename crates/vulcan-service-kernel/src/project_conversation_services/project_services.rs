@@ -7,6 +7,18 @@ use super::conversation_services::{
 use super::*;
 use crate::project_terminals::{cancel_project_terminal_displays, project_terminal_runtime};
 
+/// Returns the current Unix millisecond timestamp within the signed V1 lifecycle contract.
+/// 返回符合有符号 V1 生命周期契约的当前 Unix 毫秒时间戳。
+///
+/// # Returns / 返回值
+///
+/// Returns the exact signed timestamp or an explicit range failure.
+/// 返回精确的有符号时间戳，或显式的范围错误。
+fn current_project_lifecycle_unix_millis() -> Result<i64, String> {
+    i64::try_from(current_unix_millis_value())
+        .map_err(|_| String::from("Project lifecycle timestamp exceeds the signed V1 range."))
+}
+
 /// Minimal retained project state needed to validate and persist one layout mutation.
 /// 校验并持久化单次布局变更所需的最小保留项目状态。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -163,16 +175,6 @@ fn project_layout_after_section_reorder(
 /// 返回值
 /// Returns success after every project session receives a lifecycle persistence fence.
 /// 每个项目会话都获得生命周期持久化隔离后返回成功。
-fn invalidate_project_session_lifecycle_persist_versions(
-    state: &SharedServiceBridgeState,
-    project: &TaskProjectSummary,
-) -> Result<(), String> {
-    for session_id in &project.session_ids {
-        invalidate_webui_session_lifecycle_persist_versions(state, *session_id)?;
-    }
-    Ok(())
-}
-
 /// Begins one VMM lifecycle fence for every session owned by a transitioning project.
 /// 为正在转换的项目所拥有的每个会话启动 VMM 生命周期栅栏。
 ///
@@ -452,48 +454,39 @@ pub(crate) async fn service_archive_project_conversations(
 ) -> Result<WorkbenchSnapshot, String> {
     let (controller_runtime, project) =
         controller_runtime_and_active_project_from_state(&state, &project_id, "归档")?;
-    // archived_session_ids is the exact pre-transaction child lifecycle set used by the emitted delta.
-    // archived_session_ids 是发送增量使用的精确事务前子生命周期集合。
-    let archived_session_ids = project.session_ids.clone();
+    // reserved_session_ids is the retained admission set used only while acquiring the project gate.
+    // reserved_session_ids 仅是在获取项目准入闸门时使用的保留准入集合。
+    let reserved_session_ids = project.session_ids.clone();
     // lifecycle_guard atomically rejects active children and blocks new turns through commit.
     // lifecycle_guard 原子拒绝活动子会话，并在提交期间阻止新回合。
     let _lifecycle_guard = begin_project_lifecycle_transition(
         &state,
         &project_id,
-        archived_session_ids.iter().copied(),
+        reserved_session_ids.iter().copied(),
         "归档",
     )?;
-
-    invalidate_project_session_lifecycle_persist_versions(&state, &project)?;
-    // persist_lock serializes every child directory/index transition with background session writers.
-    // persist_lock 将每个子目录/索引转换与后台会话写入者串行化。
-    let persist_lock = webui_workspace_persist_lock();
-    // persist_guard remains held until all authoritative child transitions finish.
-    // persist_guard 持有至全部权威子转换完成。
-    let persist_guard = persist_lock.lock().await;
-    // sessionPersistGuards exclude every exact child writer while project sessions move lifecycle trees.
-    // sessionPersistGuards 在项目会话移动生命周期目录树期间排除每个精确子写入者。
-    let _session_persist_guards =
-        lock_webui_session_persist_channels(project.session_ids.iter().copied()).await;
+    // session_registry is the unique mutable owner used by every child lifecycle transaction.
+    // session_registry 是每个子生命周期事务使用的唯一可变 owner。
+    let session_registry = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .session_runtime_registry
+        .clone();
     let vmm_lifecycle_fence = begin_project_session_vmm_lifecycle_transition(&state, &project)?;
-    // archive_result is inspected only after writers queued during child transitions are invalidated.
-    // archive_result 仅在子转换期间排队的写入者失效后才进行检查。
-    let archive_result = vulcan_workspace_store::workspace_store::archive_project_sessions(
-        controller_runtime,
+    // archived_session_ids comes from the post-transition V1 SQLite projection, not retained UI state.
+    // archived_session_ids 来自转换后的 V1 SQLite 投影，而不是保留的 UI 状态。
+    let archived_session_ids = crate::session_v1_lifecycle::archive_project_sessions_lifecycle_v1(
+        &controller_runtime,
+        session_registry.as_ref(),
         &project_id,
+        current_project_lifecycle_unix_millis()?,
     )
-    .await;
-    invalidate_project_session_lifecycle_persist_versions(&state, &project)?;
-    archive_result?;
-    // refresh_result updates retained lifecycle state while stale project writers remain gated.
-    // refresh_result 在过期项目写入者仍被闸门阻挡时更新保留生命周期状态。
-    let refresh_result = refresh_workbench_snapshot(state.clone()).await;
-    invalidate_project_session_lifecycle_persist_versions(&state, &project)?;
-    // workbench is the authoritative retained projection committed by the batch refresh.
-    // workbench 是批量刷新提交的权威保留投影。
-    let workbench = refresh_result?;
+    .await
+    .map_err(|error| error.to_string())?;
+    // workbench is the authoritative retained projection committed after every metadata/index pair.
+    // workbench 是每个 metadata/索引对提交后形成的权威保留投影。
+    let workbench = refresh_workbench_snapshot(state.clone()).await?;
     vmm_lifecycle_fence.release()?;
-    drop(persist_guard);
     let plugin_cleanup_failures =
         drain_vulcan_plugin_sessions_for_owners(&state, &archived_session_ids).await;
     if !plugin_cleanup_failures.is_empty() {
@@ -535,15 +528,15 @@ pub(crate) async fn service_remove_project(
     let (controller_runtime, project) =
         controller_runtime_and_active_project_from_state(&state, &project_id, "移除")?;
     let removal_effect = project_removal_default_project_effect(&state, &project_id, &project)?;
-    // archived_session_ids is the exact pre-removal child lifecycle set committed with the project.
-    // archived_session_ids 是与项目一同提交的精确移除前子生命周期集合。
-    let archived_session_ids = project.session_ids.clone();
+    // reserved_session_ids is the retained admission set used only while acquiring the project gate.
+    // reserved_session_ids 仅是在获取项目准入闸门时使用的保留准入集合。
+    let reserved_session_ids = project.session_ids.clone();
     // lifecycle_guard atomically rejects active children and blocks new turns through removal commit.
     // lifecycle_guard 原子拒绝活动子会话，并在移除提交期间阻止新回合。
     let _lifecycle_guard = begin_project_lifecycle_transition(
         &state,
         &project_id,
-        archived_session_ids.iter().copied(),
+        reserved_session_ids.iter().copied(),
         "移除",
     )?;
 
@@ -564,46 +557,39 @@ pub(crate) async fn service_remove_project(
         cancel_project_terminal_displays(&project_id, terminal_id)?;
     }
 
-    invalidate_project_session_lifecycle_persist_versions(&state, &project)?;
-    // persist_lock serializes child archival and project removal with background session writers.
-    // persist_lock 将子会话归档及项目移除与后台会话写入者串行化。
-    let persist_lock = webui_workspace_persist_lock();
-    // persist_guard covers the complete storage mutation including default-project repair.
-    // persist_guard 覆盖包括默认项目修复在内的完整存储变更。
-    let persist_guard = persist_lock.lock().await;
-    // sessionPersistGuards exclude every exact child writer before project removal mutates directories.
-    // sessionPersistGuards 在项目删除修改目录前排除每个精确子写入者。
-    let _session_persist_guards =
-        lock_webui_session_persist_channels(project.session_ids.iter().copied()).await;
+    // session_registry is the unique mutable owner used by every child lifecycle transaction.
+    // session_registry 是每个子生命周期事务使用的唯一可变 owner。
+    let session_registry = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .session_runtime_registry
+        .clone();
     let vmm_lifecycle_fence = begin_project_session_vmm_lifecycle_transition(&state, &project)?;
-    // removal_result covers child archival, row removal, and any required default-project repair.
-    // removal_result 覆盖子会话归档、项目行移除及所需默认项目修复。
-    let removal_result = async {
-        vulcan_workspace_store::workspace_store::remove_project_after_archiving_sessions(
-            controller_runtime.clone(),
-            &project_id,
+    // archived_session_ids comes from the post-transition V1 SQLite projection, not retained UI state.
+    // archived_session_ids 来自转换后的 V1 SQLite 投影，而不是保留的 UI 状态。
+    let archived_session_ids = crate::session_v1_lifecycle::archive_project_sessions_lifecycle_v1(
+        &controller_runtime,
+        session_registry.as_ref(),
+        &project_id,
+        current_project_lifecycle_unix_millis()?,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    vulcan_workspace_store::workspace_store::delete_active_project_row_v1(
+        &controller_runtime,
+        &project_id,
+    )
+    .await?;
+    if removal_effect == ProjectRemovalDefaultProjectEffect::RestoreDefault {
+        vulcan_workspace_store::workspace_store::ensure_default_workspace_project(
+            controller_runtime,
         )
         .await?;
-        if removal_effect == ProjectRemovalDefaultProjectEffect::RestoreDefault {
-            vulcan_workspace_store::workspace_store::ensure_default_workspace_project(
-                controller_runtime,
-            )
-            .await?;
-        }
-        Ok::<(), String>(())
     }
-    .await;
-    invalidate_project_session_lifecycle_persist_versions(&state, &project)?;
-    removal_result?;
-    // refresh_result removes the project from retained state before pending writers may continue.
-    // refresh_result 在待处理写入者继续前从保留状态中移除项目。
-    let refresh_result = refresh_workbench_snapshot(state.clone()).await;
-    invalidate_project_session_lifecycle_persist_versions(&state, &project)?;
     // workbench is the authoritative retained projection after child archival and project removal.
     // workbench 是子会话归档与项目移除后的权威保留投影。
-    let workbench = refresh_result?;
+    let workbench = refresh_workbench_snapshot(state.clone()).await?;
     vmm_lifecycle_fence.release()?;
-    drop(persist_guard);
     // Project removal synchronizes the remaining enabled set without deleting the removed project's index.
     // 项目移除只同步剩余启用集合，不删除已移除项目的索引。
     if let Err(error) = reconcile_codebase_memory_runtime(&state).await {
@@ -881,10 +867,6 @@ mod tests {
             archived_task_projects: Vec::new(),
             sessions: Vec::new(),
             archived_sessions: Vec::new(),
-            session_messages: BTreeMap::new(),
-            archived_session_messages: BTreeMap::new(),
-            session_compactions: BTreeMap::new(),
-            archived_session_compactions: BTreeMap::new(),
             session_runtime_state: BTreeMap::new(),
             archived_session_runtime_state: BTreeMap::new(),
             session_run_phases: BTreeMap::new(),

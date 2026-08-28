@@ -15,7 +15,6 @@ use crate::agent_runtime::provider_stream_projection::{
     reset_current_thinking_phase_tracking, runtime_event_to_core_event,
     take_current_thinking_phase_completed_event,
 };
-use crate::agent_runtime::provider_transport_request_budget::ProviderUsageBudgetBaselineHandle;
 use crate::agent_runtime::tool_request_stream::ToolRequestStreamCoordinator;
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
@@ -187,14 +186,6 @@ impl RuntimeStreamDeltaState {
     ) -> Self {
         self.provider_request_telemetry.install_context(context);
         self
-    }
-
-    /// Returns the durable Usage baseline handle shared by telemetry and request budgeting.
-    /// 返回遥测与请求预算共享的持久化用量基线句柄。
-    pub(crate) fn provider_usage_budget_baseline_handle(
-        &self,
-    ) -> Option<ProviderUsageBudgetBaselineHandle> {
-        self.provider_request_telemetry.budget_baseline_handle()
     }
 
     /// Returns the immutable host-owned controller captured by the loop state.
@@ -548,67 +539,53 @@ pub(crate) fn process_provider_stream_delta(
             events
         }
         Ok(ProviderStreamDelta::RequestPrepared {
-            snapshot,
-            exact_request,
-            controller_config,
-            controller_snapshot,
-            context_budget,
+            candidate,
             completion,
         }) => {
-            state.active_provider_usage = None;
-            state.latest_request_snapshot = Some(snapshot.clone());
-            state.provider_request_count = state.provider_request_count.saturating_add(1);
-            let telemetry_events = match state
-                .provider_request_telemetry
-                .start_request(&snapshot, context_budget.as_ref())
-            {
-                Ok(events) => events,
+            let event = match state.provider_request_telemetry.prepare_request(
+                &candidate.request_snapshot,
+                candidate.context_budget.as_ref(),
+            ) {
+                Ok(event) => event,
                 Err(error) => {
-                    let error = format!(
-                        "Provider request evidence validation failed before dispatch: {error}"
-                    );
-                    let _ = completion.complete(Err(error.clone()));
-                    state.terminal_error = Some(error);
+                    state.terminal_error = Some(format!(
+                        "Provider request preparation identity failed before the durable permit: {error}"
+                    ));
+                    let _ = completion.complete(Err(error));
                     return Vec::new();
                 }
             };
-            // checkpointIdentity is the same typed identity that will be emitted by the durable Started boundary.
-            // checkpointIdentity 与可靠 Started 边界随后发出的强类型身份完全一致。
-            let Some((logical_request_id, logical_turn_id, provider_attempt_index)) = state
-                .provider_request_telemetry
-                .active_checkpoint_identity()
-            else {
-                let error = String::from(
-                    "Provider request checkpoint identity was unavailable after request start.",
-                );
-                let _ = completion.complete(Err(error.clone()));
-                state.terminal_error = Some(error);
-                return Vec::new();
-            };
-            // checkpoint must reach the host before the telemetry boundary can release network dispatch.
-            // checkpoint 必须先到达宿主，随后遥测屏障才可放行网络分派。
-            let mut events = vec![ExecutionStreamEvent::ProviderRequestCheckpoint {
-                session_id,
-                logical_request_id: Some(logical_request_id),
-                logical_turn_id,
-                provider_attempt_index: Some(provider_attempt_index),
-                provider_family: state.protocol_profile_id.clone(),
-                snapshot,
-                exact_request: Some(exact_request),
-                controller_config: Some(controller_config),
-                controller_snapshot: Some(controller_snapshot),
-            }];
-            events.extend(provider_request_events_with_durability_boundary(
-                telemetry_events,
+            vec![ExecutionStreamEvent::ProviderRequestPreparationBoundary {
+                event,
+                candidate,
                 completion,
-            ));
-            events.extend([
+            }]
+        }
+        Ok(ProviderStreamDelta::RequestStartDurabilityConfirmed {
+            request_snapshot,
+            context_budget,
+        }) => {
+            state.active_provider_usage = None;
+            state.latest_request_snapshot = Some(request_snapshot.clone());
+            state.provider_request_count = state.provider_request_count.saturating_add(1);
+            let event = match state
+                .provider_request_telemetry
+                .confirm_prepared_request(&request_snapshot, context_budget.as_ref())
+            {
+                Ok(event) => event,
+                Err(error) => {
+                    state.terminal_error = Some(format!(
+                        "Durable Provider request evidence validation failed: {error}"
+                    ));
+                    return Vec::new();
+                }
+            };
+            vec![
+                ExecutionStreamEvent::ProviderRequestTelemetry(event),
                 ExecutionStreamEvent::RequestReady { session_id },
                 ExecutionStreamEvent::RequestStarted { session_id },
-            ]);
-            events
+            ]
         }
-        Ok(ProviderStreamDelta::RequestStartDurabilityConfirmed) => Vec::new(),
         Ok(ProviderStreamDelta::TransportObserved {
             transport,
             dispatched_at_ms,
@@ -662,11 +639,20 @@ pub(crate) fn process_provider_stream_delta(
             state.active_provider_usage = Some(usage);
             Vec::new()
         }
-        Ok(ProviderStreamDelta::RequestSucceeded { usage, completion }) => {
+        Ok(ProviderStreamDelta::RequestSucceeded {
+            usage,
+            provider_source,
+            tool_call_count,
+            completion,
+        }) => {
             state.active_provider_usage = usage;
             let events = state
                 .provider_request_telemetry
-                .complete_success(state.active_provider_usage.as_ref())
+                .complete_success(
+                    state.active_provider_usage.as_ref(),
+                    provider_source,
+                    tool_call_count,
+                )
                 .into_iter()
                 .collect::<Vec<_>>();
             let mut events = provider_request_events_with_durability_boundary(events, completion);
@@ -1124,6 +1110,94 @@ mod tests {
         );
     }
 
+    /// Verifies the durable permit is the only boundary that publishes Started and increments usage accounting.
+    /// 验证可靠许可是唯一发布 Started 并递增用量计数的边界。
+    #[test]
+    fn durable_permit_promotes_prepared_identity_once() {
+        let session_id = Uuid::nil();
+        let mut state = build_delta_state_with_telemetry();
+        let candidate_snapshot = build_request_snapshot();
+        let preparation_events = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(build_request_prepared_delta(candidate_snapshot.clone())),
+        );
+
+        assert_eq!(preparation_events.len(), 1);
+        assert!(matches!(
+            preparation_events.as_slice(),
+            [ExecutionStreamEvent::ProviderRequestPreparationBoundary { event, .. }]
+                if event.kind == ProviderRequestTelemetryEventKind::Started
+        ));
+        assert_eq!(state.provider_request_count(), 0);
+        assert!(state.latest_request_snapshot().is_none());
+
+        let mut exact_snapshot = candidate_snapshot;
+        exact_snapshot.prompt = String::from("durable-ledger-request");
+        let confirmed_events = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::RequestStartDurabilityConfirmed {
+                request_snapshot: exact_snapshot.clone(),
+                context_budget: None,
+            }),
+        );
+
+        assert_eq!(state.provider_request_count(), 1);
+        let latest_snapshot = state
+            .latest_request_snapshot()
+            .expect("confirmed permit must publish the exact request snapshot");
+        assert_eq!(latest_snapshot.provider_id, exact_snapshot.provider_id);
+        assert_eq!(latest_snapshot.model_id, exact_snapshot.model_id);
+        assert_eq!(latest_snapshot.prompt, exact_snapshot.prompt);
+        assert!(matches!(
+            confirmed_events.as_slice(),
+            [
+                ExecutionStreamEvent::ProviderRequestTelemetry(event),
+                ExecutionStreamEvent::RequestReady { .. },
+                ExecutionStreamEvent::RequestStarted { .. }
+            ] if event.kind == ProviderRequestTelemetryEventKind::Started
+        ));
+    }
+
+    /// Verifies a rejected preparation creates no telemetry terminal and leaves the next attempt reusable.
+    /// 验证被拒绝的准备不会创建遥测终态，并保留下一尝试编号可复用。
+    #[test]
+    fn rejected_preparation_creates_no_started_or_terminal_fact() {
+        let session_id = Uuid::nil();
+        let mut state = build_delta_state_with_telemetry();
+        let snapshot = build_request_snapshot();
+        let preparation_events = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(build_request_prepared_delta(snapshot.clone())),
+        );
+        assert_eq!(preparation_events.len(), 1);
+
+        let rejected_events = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Err(String::from("durable permit rejected")),
+        );
+        assert!(
+            rejected_events
+                .iter()
+                .all(|event| !matches!(event, ExecutionStreamEvent::ProviderRequestTelemetry(_)))
+        );
+        assert_eq!(state.provider_request_count(), 0);
+
+        let retry_events = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(build_request_prepared_delta(snapshot)),
+        );
+        assert!(matches!(
+            retry_events.as_slice(),
+            [ExecutionStreamEvent::ProviderRequestPreparationBoundary { event, .. }]
+                if event.payload["attempt_index"] == 0
+        ));
+    }
+
     /// Verifies an accumulated usage update survives a later physical request failure.
     /// 验证累计用量更新会在后续真实请求失败时保留下来。
     #[test]
@@ -1207,6 +1281,9 @@ mod tests {
             &mut state,
             Ok(ProviderStreamDelta::RequestSucceeded {
                 usage: Some(build_usage_snapshot(200, 20, 5, 225, 100)),
+                provider_source:
+                    crate::agent_runtime::provider_v1_bridge::test_provider_v1_source_input(),
+                tool_call_count: 0,
                 completion,
             }),
         );
@@ -1236,6 +1313,43 @@ mod tests {
             additional_params: None,
             request_headers: None,
             continuation: vulcan_core::types::ProviderContinuation::default(),
+        }
+    }
+
+    /// Builds one pre-permit request delta with a valid single-use completion handle.
+    /// 构建一条带有效一次性完成句柄的许可前请求增量。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `request_snapshot` is the candidate request state observed before V1 reconstruction.
+    /// `request_snapshot` 是 V1 重建前观测到的候选请求状态。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns one immutable preparation candidate that cannot be dispatched directly.
+    /// 返回一份不可直接分派的不可变准备候选。
+    fn build_request_prepared_delta(
+        request_snapshot: CoreProviderRequestSnapshot,
+    ) -> ProviderStreamDelta {
+        let (completion, _receiver) =
+            crate::agent_runtime::events::provider_request_preparation_barrier();
+        ProviderStreamDelta::RequestPrepared {
+            candidate: crate::agent_runtime::events::ProviderRequestPreparationCandidate {
+                exact_request: serde_json::from_value(json!({
+                    "operation": "conversation_respond",
+                    "model_id": "mock-model"
+                }))
+                .expect("minimal Provider request candidate must be valid"),
+                controller_config: ControllerConfig::default(),
+                controller_snapshot: ConversationSnapshot::default(),
+                request_snapshot,
+                context_budget: None,
+                request_budget_guard: None,
+                locked_baseline: vulcan_session_core::v1::context::LockedBaselineProjection::empty(
+                ),
+                dynamic_prompt_layers: vulcan_core::types::ProviderPromptLayers::default(),
+            },
+            completion,
         }
     }
 
@@ -1583,6 +1697,9 @@ mod tests {
             &mut state,
             Ok(ProviderStreamDelta::RequestSucceeded {
                 usage: None,
+                provider_source:
+                    crate::agent_runtime::provider_v1_bridge::test_provider_v1_source_input(),
+                tool_call_count: 0,
                 completion,
             }),
         );

@@ -43,12 +43,14 @@ pub(super) fn build_spawn_agent_tool_candidate(
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
         request_streaming: None,
-        invoke: Arc::new(move |args, session_id| {
+        invoke: Arc::new(move |args, context| {
             let task_runtime = Arc::clone(&task_runtime);
             Box::pin(async move {
                 let trace_started_at = current_unix_millis_u64();
-                let session_id =
-                    parse_subagent_tool_session_id(session_id.as_deref(), SPAWN_AGENT_TOOL)?;
+                let session_id = parse_subagent_tool_session_id(
+                    Some(context.session_id.as_str()),
+                    SPAWN_AGENT_TOOL,
+                )?;
                 task_runtime_trace(
                     "subagent_spawn_agent_start",
                     format!(
@@ -99,11 +101,11 @@ pub(super) fn build_agent_orchestration_info_tool_candidate(
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
         request_streaming: None,
-        invoke: Arc::new(move |args, session_id| {
+        invoke: Arc::new(move |args, context| {
             let task_runtime = Arc::clone(&task_runtime);
             Box::pin(async move {
                 let session_id = parse_subagent_tool_session_id(
-                    session_id.as_deref(),
+                    Some(context.session_id.as_str()),
                     AGENT_ORCHESTRATION_INFO_TOOL,
                 )?;
                 task_runtime
@@ -133,11 +135,13 @@ pub(super) fn build_send_message_tool_candidate(
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
         request_streaming: None,
-        invoke: Arc::new(move |args, session_id| {
+        invoke: Arc::new(move |args, context| {
             let task_runtime = Arc::clone(&task_runtime);
             Box::pin(async move {
-                let session_id =
-                    parse_subagent_tool_session_id(session_id.as_deref(), SEND_MESSAGE_TOOL)?;
+                let session_id = parse_subagent_tool_session_id(
+                    Some(context.session_id.as_str()),
+                    SEND_MESSAGE_TOOL,
+                )?;
                 task_runtime.invoke_send_message(session_id, args).await
             })
         }),
@@ -163,11 +167,13 @@ pub(super) fn build_wait_agent_tool_candidate(
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
         request_streaming: None,
-        invoke: Arc::new(move |args, session_id| {
+        invoke: Arc::new(move |args, context| {
             let task_runtime = Arc::clone(&task_runtime);
             Box::pin(async move {
-                let session_id =
-                    parse_subagent_tool_session_id(session_id.as_deref(), WAIT_AGENT_TOOL)?;
+                let session_id = parse_subagent_tool_session_id(
+                    Some(context.session_id.as_str()),
+                    WAIT_AGENT_TOOL,
+                )?;
                 task_runtime.invoke_wait_agent(session_id, args).await
             })
         }),
@@ -193,11 +199,13 @@ pub(super) fn build_list_agents_tool_candidate(
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
         request_streaming: None,
-        invoke: Arc::new(move |args, session_id| {
+        invoke: Arc::new(move |args, context| {
             let task_runtime = Arc::clone(&task_runtime);
             Box::pin(async move {
-                let session_id =
-                    parse_subagent_tool_session_id(session_id.as_deref(), LIST_AGENTS_TOOL)?;
+                let session_id = parse_subagent_tool_session_id(
+                    Some(context.session_id.as_str()),
+                    LIST_AGENTS_TOOL,
+                )?;
                 task_runtime.invoke_list_agents(session_id, args).await
             })
         }),
@@ -223,11 +231,13 @@ pub(super) fn build_interrupt_agent_tool_candidate(
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
         request_streaming: None,
-        invoke: Arc::new(move |args, session_id| {
+        invoke: Arc::new(move |args, context| {
             let task_runtime = Arc::clone(&task_runtime);
             Box::pin(async move {
-                let session_id =
-                    parse_subagent_tool_session_id(session_id.as_deref(), INTERRUPT_AGENT_TOOL)?;
+                let session_id = parse_subagent_tool_session_id(
+                    Some(context.session_id.as_str()),
+                    INTERRUPT_AGENT_TOOL,
+                )?;
                 task_runtime.invoke_interrupt_agent(session_id, args).await
             })
         }),
@@ -251,11 +261,13 @@ pub(super) fn build_close_agent_tool_candidate(
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
         request_streaming: None,
-        invoke: Arc::new(move |args, session_id| {
+        invoke: Arc::new(move |args, context| {
             let task_runtime = Arc::clone(&task_runtime);
             Box::pin(async move {
-                let session_id =
-                    parse_subagent_tool_session_id(session_id.as_deref(), CLOSE_AGENT_TOOL)?;
+                let session_id = parse_subagent_tool_session_id(
+                    Some(context.session_id.as_str()),
+                    CLOSE_AGENT_TOOL,
+                )?;
                 task_runtime.invoke_close_agent(session_id, args).await
             })
         }),
@@ -889,7 +901,6 @@ pub(super) fn subagent_registry_entry_host_status_payload(
         "parent_session_id": entry.parent_session_id.to_string(),
         "prompt_source": entry.prompt_source.clone(),
         "updated_at": entry.updated_at_ms.to_string(),
-        "segments": entry.segments.clone(),
     })
 }
 

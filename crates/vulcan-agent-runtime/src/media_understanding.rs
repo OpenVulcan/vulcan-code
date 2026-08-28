@@ -235,7 +235,7 @@ pub(crate) fn build_model_replacement_media_candidate(
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Visible,
         request_streaming: None,
-        invoke: Arc::new(move |arguments, owner_session_id| {
+        invoke: Arc::new(move |arguments, context| {
             // invocationRuntime owns one isolated physical model execution.
             // invocationRuntime 持有一次隔离的真实模型执行。
             let invocation_runtime = Arc::clone(&runtime);
@@ -253,7 +253,7 @@ pub(crate) fn build_model_replacement_media_candidate(
                     invocation_selection,
                     reasoning_effort,
                     arguments,
-                    owner_session_id,
+                    Some(context.session_id),
                 )
                 .await
             })
@@ -356,16 +356,16 @@ async fn execute_model_replacement_media_understanding(
     // preparedReference is immutable request-owned content, so protocol encoding never reopens the path.
     // preparedReference 是不可变的请求自有内容，因此协议编码绝不重新打开该路径。
     let prepared_media = runtime
-        .prepare_and_remember_local_media(
-            &resolved_selection,
-            owner_session_id.as_deref(),
-            upload_operation_id.as_str(),
-            &media_path,
-            resource_kind,
+        .prepare_and_remember_local_media(vulcan_provider_adapters::PrepareLocalMediaRequest {
+            selection: &resolved_selection,
+            owner_session_id: owner_session_id.as_deref(),
+            operation_id: upload_operation_id.as_str(),
+            local_path: &media_path,
+            kind: resource_kind,
             mime_type,
-            None,
-            &cancellation,
-        )
+            progress: None,
+            cancellation: &cancellation,
+        })
         .await?;
     // mediaId is stable only for this physical execution and never leaks a local path.
     // mediaId 仅在本次真实执行内稳定，绝不泄露本地路径。

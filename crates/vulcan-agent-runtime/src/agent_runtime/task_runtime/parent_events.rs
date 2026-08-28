@@ -8,26 +8,9 @@ pub(super) fn publish_task_finished_to_parent(
     outcome: &TaskExecutionOutcome,
     detail: &str,
 ) {
-    let persisted_turn_stats = match task_runtime
-        .persisted_task_turn_stats(request.task_id, request.execution_id.as_str())
-    {
-        Ok(turn_stats) => turn_stats,
-        Err(error) => {
-            eprintln!(
-                "[task-runtime] failed to load persisted Turn Stats for task {} execution {}: {error}",
-                request.task_id, request.execution_id
-            );
-            None
-        }
-    };
-    let event = build_task_finished_parent_runtime_event_with_turn_stats(
-        request,
-        outcome,
-        detail,
-        persisted_turn_stats.as_ref(),
-    );
-    // error is the terminal delivery failure that cannot propagate beyond the detached background owner.
-    // error 是无法越过分离后台所有者继续传播的终态投递失败。
+    let event = build_task_finished_parent_runtime_event_with_turn_stats(request, outcome, detail);
+    // A detached parent-event failure cannot propagate beyond the background owner.
+    // 分离的父级事件失败无法越过后台所有者继续传播。
     if let Err(error) = task_runtime.publish_detached_task_event(
         request.task_id,
         &request.execution_id,
@@ -65,9 +48,8 @@ fn build_task_finished_parent_runtime_event_with_turn_stats(
     request: &TaskExecutionRequest,
     outcome: &TaskExecutionOutcome,
     detail: &str,
-    turn_stats: Option<&PersistedTaskTurnStats>,
 ) -> RuntimeEvent {
-    let mut finished_payload = build_task_host_payload(
+    let finished_payload = build_task_host_payload(
         request,
         outcome.execution_status.as_str(),
         outcome.provider_turns_executed,
@@ -77,15 +59,6 @@ fn build_task_finished_parent_runtime_event_with_turn_stats(
         outcome.usage_segments.as_slice(),
         current_unix_millis_text(),
     );
-    if let Some(turn_stats) = turn_stats
-        && let Some(payload) = finished_payload.as_object_mut()
-    {
-        payload.insert(String::from("turn_stats"), json!(&turn_stats.stats));
-        payload.insert(
-            String::from("source_turn_stats_record_id"),
-            Value::from(turn_stats.record_id.clone()),
-        );
-    }
     build_task_delegate_runtime_event(
         RuntimeEventKind::DelegateFinished,
         request,
@@ -101,25 +74,9 @@ pub(super) fn publish_task_failure_to_parent(
     request: &TaskExecutionRequest,
     error: &str,
 ) {
-    let persisted_turn_stats = match task_runtime
-        .persisted_task_turn_stats(request.task_id, request.execution_id.as_str())
-    {
-        Ok(turn_stats) => turn_stats,
-        Err(load_error) => {
-            eprintln!(
-                "[task-runtime] failed to load failed Turn Stats for task {} execution {}: {load_error}",
-                request.task_id, request.execution_id
-            );
-            None
-        }
-    };
-    let event = build_task_failure_parent_runtime_event_with_turn_stats(
-        request,
-        error,
-        persisted_turn_stats.as_ref(),
-    );
-    // publish_error is the failed terminal delivery that cannot propagate beyond the detached background owner.
-    // publish_error 是无法越过分离后台所有者继续传播的失败终态投递错误。
+    let event = build_task_failure_parent_runtime_event_with_turn_stats(request, error);
+    // A detached parent-event failure cannot propagate beyond the background owner.
+    // 分离的父级事件失败无法越过后台所有者继续传播。
     if let Err(publish_error) = task_runtime.publish_detached_task_event(
         request.task_id,
         &request.execution_id,
@@ -154,9 +111,8 @@ pub(super) fn publish_task_failure_to_parent(
 fn build_task_failure_parent_runtime_event_with_turn_stats(
     request: &TaskExecutionRequest,
     error: &str,
-    turn_stats: Option<&PersistedTaskTurnStats>,
 ) -> RuntimeEvent {
-    let mut finished_payload = build_task_host_payload(
+    let finished_payload = build_task_host_payload(
         request,
         "failed",
         0,
@@ -166,15 +122,6 @@ fn build_task_failure_parent_runtime_event_with_turn_stats(
         &[],
         current_unix_millis_text(),
     );
-    if let Some(turn_stats) = turn_stats
-        && let Some(payload) = finished_payload.as_object_mut()
-    {
-        payload.insert(String::from("turn_stats"), json!(&turn_stats.stats));
-        payload.insert(
-            String::from("source_turn_stats_record_id"),
-            Value::from(turn_stats.record_id.clone()),
-        );
-    }
     build_task_delegate_runtime_event(
         RuntimeEventKind::DelegateFinished,
         request,

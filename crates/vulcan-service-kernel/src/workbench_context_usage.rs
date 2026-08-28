@@ -2,12 +2,148 @@
 //! workbench context usage 辅助逻辑。
 
 use super::*;
+use crate::session_runtime_registry_v1::{SessionRuntimeError, SessionRuntimeRegistry};
+use vulcan_session_core::v1::event::ApiStartedEvent;
+use vulcan_session_core::v1::{
+    AggregatedUsage, ApiStatsEvent, ConversationEvent, EventBody, ProviderRequestContextBreakdown,
+    ProviderRequestTextMeasurement, ProviderUsageBudgetAnchor, SessionDocument, UsageSnapshot,
+};
+
+/// Canonical V1 Provider facts required by the context-usage projection.
+/// 上下文用量投影所需的规范 V1 Provider 事实。
+#[derive(Debug, Clone)]
+pub(crate) struct SessionContextUsageFacts {
+    /// Latest completed API that matches the current active request route and reports input usage.
+    /// 与当前生效请求路由一致且上报输入用量的最近一次已完成 API。
+    latest_anchor: ProviderUsageBudgetAnchor,
+    /// Poison-preserving aggregate over every terminal physical API in the V1 stream.
+    /// 对 V1 流中每次终态物理 API 进行保留未知传播语义的聚合。
+    cumulative_usage: AggregatedUsage,
+    /// Latest request measurement eligible for the current route, including an in-flight request.
+    /// 当前路由可用的最近请求测量，包含在途请求。
+    latest_request_measurement: ProviderRequestTextMeasurement,
+    /// Whether the current V1 runtime points at a committed compaction node.
+    /// 当前 V1 runtime 是否指向一个已提交压缩节点。
+    has_compaction: bool,
+}
+
+/// Projects context-usage facts from one authoritative V1 session document.
+/// 从一个权威 V1 会话文档投影上下文用量事实。
+pub(crate) fn session_context_usage_facts_from_v1_document(
+    document: &SessionDocument,
+) -> Option<SessionContextUsageFacts> {
+    let events = document.events();
+    let active_request = &document.metadata.config.active_request;
+    let terminal_usages = events.iter().filter_map(|event| match &event.event {
+        EventBody::ApiStats(stats) => Some(&stats.usage),
+        _ => None,
+    });
+    let cumulative_usage = AggregatedUsage::aggregate(terminal_usages);
+    let latest_anchor = events.iter().rev().find_map(|event| {
+        let EventBody::ApiStats(stats) = &event.event else {
+            return None;
+        };
+        if stats.usage.input_tokens.is_none() && stats.usage.total_tokens.is_none() {
+            return None;
+        }
+        let started = matching_v1_api_started(events, stats)?;
+        if !v1_request_matches_active_route(started, active_request) {
+            return None;
+        }
+        Some(ProviderUsageBudgetAnchor {
+            api_call_id: started.api_call_id,
+            projection: started.projection.clone(),
+            evidence: started.request_budget_evidence.clone(),
+            usage: stats.usage.clone(),
+        })
+    })?;
+    let latest_request_measurement = events
+        .iter()
+        .rev()
+        .filter_map(|event| match &event.event {
+            EventBody::ApiStarted(started)
+                if v1_request_matches_active_route(started, active_request) =>
+            {
+                Some(started)
+            }
+            _ => None,
+        })
+        .find(|started| {
+            events.iter().find_map(|event| match &event.event {
+                EventBody::ApiStats(stats) if stats.api_call_id == started.api_call_id => {
+                    Some(!stats.usage.has_no_usage())
+                }
+                _ => None,
+            }) != Some(false)
+        })
+        .map(|started| {
+            started
+                .request_budget_evidence
+                .request_text_measurement
+                .clone()
+        })
+        .unwrap_or_else(|| latest_anchor.evidence.request_text_measurement.clone());
+    Some(SessionContextUsageFacts {
+        latest_anchor,
+        cumulative_usage,
+        latest_request_measurement,
+        has_compaction: document.runtime_lock.current_compaction_id.is_some(),
+    })
+}
+
+/// Reads context-usage facts only from an already registered V1 session owner.
+/// 仅从已经注册的 V1 会话 owner 读取上下文用量事实。
+pub(crate) fn session_context_usage_facts_from_v1_registry(
+    registry: &SessionRuntimeRegistry,
+    session_id: SessionId,
+) -> Result<Option<SessionContextUsageFacts>, String> {
+    let handle = match registry.get(session_id) {
+        Ok(handle) => handle,
+        Err(SessionRuntimeError::SessionNotRegistered(_)) => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "failed to resolve registered V1 context usage for session {session_id}: {error}"
+            ));
+        }
+    };
+    handle
+        .read(session_context_usage_facts_from_v1_document)
+        .map_err(|error| {
+            format!("failed to read V1 context usage for session {session_id}: {error}")
+        })
+}
+
+/// Finds the immutable V1 API-start fact paired with one terminal stats event.
+/// 查找与一条终态统计事件配对的不可变 V1 API 起始事实。
+fn matching_v1_api_started<'a>(
+    events: &'a [ConversationEvent],
+    stats: &ApiStatsEvent,
+) -> Option<&'a ApiStartedEvent> {
+    events.iter().find_map(|event| match &event.event {
+        EventBody::ApiStarted(started) if started.api_call_id == stats.api_call_id => Some(started),
+        _ => None,
+    })
+}
+
+/// Checks whether one persisted request belongs to the current active request route.
+/// 检查一条持久化请求是否属于当前生效请求路由。
+fn v1_request_matches_active_route(
+    started: &ApiStartedEvent,
+    active: &vulcan_session_core::v1::config::ActiveRequestConfig,
+) -> bool {
+    active.provider.as_deref() == Some(started.request.provider.as_str())
+        && started.request.connection_id == active.connection_id
+        && active.model.as_deref() == Some(started.request.model.as_str())
+        && started.request.thinking_level == active.thinking_level
+        && started.request.temperature == active.temperature
+}
 
 /// Builds the selected-session context usage orb snapshot.
 /// 构建当前选中会话的上下文占用圆盘快照。
 pub(crate) fn context_usage_snapshot_from_runtime_state(
     session_id: SessionId,
     runtime_state: Option<&SessionRuntimeStateEntry>,
+    v1_usage_facts: Option<&SessionContextUsageFacts>,
     live_context_budgets: &BTreeMap<SessionId, ContextBudgetSnapshot>,
     model_capabilities: Option<&vulcan_ai_contract::ModelCapabilities>,
     compression_window_limit: Option<usize>,
@@ -15,16 +151,14 @@ pub(crate) fn context_usage_snapshot_from_runtime_state(
     let runtime_state = runtime_state?;
     // providerUsage gates the surface on a completed usable Provider observation, not on a draft or optimistic user message.
     // providerUsage 依据已完成且可用的 Provider 观测控制界面，而不是草稿或乐观用户消息。
-    let _provider_usage = runtime_state
-        .provider_call_ledger
-        .last_usage()
-        .filter(|usage| usage.has_any_tokens())?;
+    let v1_usage_facts = v1_usage_facts?;
     let historical_context_budget;
     let context_budget = if let Some(context_budget) = live_context_budgets.get(&session_id) {
         Some(context_budget)
     } else {
         historical_context_budget = historical_context_budget_snapshot_from_runtime_state(
             runtime_state,
+            v1_usage_facts,
             model_capabilities,
             compression_window_limit,
         );
@@ -70,7 +204,7 @@ pub(crate) fn context_usage_snapshot_from_runtime_state(
         ));
     }
 
-    tooltip_rows.push(if runtime_state.last_compaction_id.is_some() {
+    tooltip_rows.push(if v1_usage_facts.has_compaction {
         String::from("压缩状态：已使用摘要前文")
     } else {
         String::from("压缩状态：尚未触发")
@@ -90,8 +224,8 @@ pub(crate) fn context_usage_snapshot_from_runtime_state(
         usage_basis_points,
         used_tokens,
         max_tokens: context_budget.and_then(|budget| budget.effective_context_window),
-        cache_hit_basis_points: context_usage_cache_hit_basis_points(runtime_state),
-        breakdown: context_usage_breakdown(runtime_state, used_tokens),
+        cache_hit_basis_points: context_usage_cache_hit_basis_points(v1_usage_facts),
+        breakdown: context_usage_breakdown(v1_usage_facts, used_tokens),
         severity: context_budget
             .map(context_budget_severity_key)
             .unwrap_or_else(|| String::from("unknown")),
@@ -111,8 +245,8 @@ fn context_usage_basis_points(usage_ratio: f32) -> u16 {
 
 /// Calculates cumulative active-branch cache-hit rate from Provider facts only.
 /// 仅根据 Provider 事实计算活动分支累计缓存命中率。
-fn context_usage_cache_hit_basis_points(runtime_state: &SessionRuntimeStateEntry) -> Option<u16> {
-    let usage = runtime_state.provider_call_ledger.cumulative_usage()?;
+fn context_usage_cache_hit_basis_points(facts: &SessionContextUsageFacts) -> Option<u16> {
+    let usage = aggregated_v1_usage_to_core(&facts.cumulative_usage)?;
     let cached_input_tokens = usage.cached_input_tokens?;
     let input_tokens = vulcan_context::observed_input_tokens_from_usage(Some(&usage))?;
     if input_tokens == 0 {
@@ -127,45 +261,44 @@ fn context_usage_cache_hit_basis_points(runtime_state: &SessionRuntimeStateEntry
 /// Builds calibrated context rows from the latest active request measurement.
 /// 根据最近一次活动请求测量构建校准后的上下文分类行。
 fn context_usage_breakdown(
-    runtime_state: &SessionRuntimeStateEntry,
+    facts: &SessionContextUsageFacts,
     used_tokens: usize,
 ) -> Vec<ContextUsageBreakdownItem> {
-    let Some(measurement) = runtime_state
-        .provider_call_ledger
-        .active_calls_in_sequence()
-        .into_iter()
-        .rev()
-        .filter(|record| {
-            !record.status.is_terminal()
-                || record
-                    .provider_usage_evidence
-                    .provider_usage
-                    .as_ref()
-                    .is_some_and(|usage| usage.has_any_tokens())
-        })
-        .find_map(|record| record.request_text_measurement.as_ref())
-    else {
-        return Vec::new();
-    };
-    let Some(breakdown) = measurement.context_breakdown.as_ref() else {
-        return Vec::new();
-    };
+    let breakdown = &facts.latest_request_measurement.context_breakdown;
     context_usage_breakdown_items(breakdown, used_tokens)
 }
 
 /// Converts one persisted request measurement into ordered calibrated display rows.
 /// 将一份持久化请求测量转换为有序校准展示行。
 fn context_usage_breakdown_items(
-    breakdown: &vulcan_workbench_model::SessionProviderRequestContextBreakdown,
+    breakdown: &ProviderRequestContextBreakdown,
     used_tokens: usize,
 ) -> Vec<ContextUsageBreakdownItem> {
+    let Ok(message_units) = usize::try_from(breakdown.message_units) else {
+        return Vec::new();
+    };
+    let Ok(system_tool_units) = usize::try_from(breakdown.system_tool_units) else {
+        return Vec::new();
+    };
+    let Ok(mcp_tool_units) = usize::try_from(breakdown.mcp_tool_units) else {
+        return Vec::new();
+    };
+    let Ok(skill_units) = usize::try_from(breakdown.skill_units) else {
+        return Vec::new();
+    };
+    let Ok(system_prompt_units) = usize::try_from(breakdown.system_prompt_units) else {
+        return Vec::new();
+    };
+    let Ok(other_units) = usize::try_from(breakdown.other_units) else {
+        return Vec::new();
+    };
     let categories = [
-        ("messages", "消息", breakdown.message_units),
-        ("system-tools", "系统工具", breakdown.system_tool_units),
-        ("mcp-tools", "MCP 工具", breakdown.mcp_tool_units),
-        ("other", "其他", breakdown.other_units),
-        ("skills", "技能", breakdown.skill_units),
-        ("system-prompt", "系统提示词", breakdown.system_prompt_units),
+        ("messages", "消息", message_units),
+        ("system-tools", "系统工具", system_tool_units),
+        ("mcp-tools", "MCP 工具", mcp_tool_units),
+        ("other", "其他", other_units),
+        ("skills", "技能", skill_units),
+        ("system-prompt", "系统提示词", system_prompt_units),
     ];
     let non_zero_categories = categories
         .into_iter()
@@ -242,13 +375,11 @@ fn proportional_integer_shares(total: usize, weights: &[usize]) -> Vec<usize> {
 /// 当存在历史用量时返回尽力而为的上下文预算快照。
 pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
     runtime_state: &SessionRuntimeStateEntry,
+    v1_usage_facts: &SessionContextUsageFacts,
     model_capabilities: Option<&vulcan_ai_contract::ModelCapabilities>,
     compression_window_limit: Option<usize>,
 ) -> Option<ContextBudgetSnapshot> {
-    let observed_usage = runtime_state
-        .provider_call_ledger
-        .last_usage()
-        .filter(|usage| usage.has_any_tokens())?;
+    let observed_usage = v1_usage_to_core(&v1_usage_facts.latest_anchor.usage)?;
     let provider_id = runtime_state.active_provider_id.as_deref()?;
     let model_id = runtime_state.active_model_id.as_deref()?;
     let context_limit = model_capabilities
@@ -338,11 +469,7 @@ pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
         observed_usage: Some(observed_usage.clone()),
         accounting_source: vulcan_context::ContextBudgetAccountingSource::ProviderReported,
         accounting_warning_code: None,
-        provider_anchor_call_id: runtime_state
-            .provider_call_ledger
-            .last_stable_context_baseline
-            .as_ref()
-            .map(|baseline| baseline.provider_call_id.clone()),
+        provider_anchor_call_id: Some(v1_usage_facts.latest_anchor.api_call_id.value().to_string()),
         severity: effective_context_window
             .zip(auto_compact_limit)
             .map(|(hard_limit, auto_limit)| {
@@ -454,6 +581,58 @@ pub(crate) fn context_budget_severity_key(context_budget: &ContextBudgetSnapshot
     context_budget.severity.stable_key().to_string()
 }
 
+/// Converts one V1 usage snapshot into the existing context-budget value type without estimates.
+/// 将一份 V1 用量快照无估算地转换为现有上下文预算值类型。
+fn v1_usage_to_core(usage: &UsageSnapshot) -> Option<vulcan_core::types::ProviderUsageSnapshot> {
+    Some(vulcan_core::types::ProviderUsageSnapshot {
+        update_kind: None,
+        input_tokens: checked_v1_token_dimension(usage.input_tokens)?,
+        uncached_input_tokens: checked_v1_token_dimension(usage.uncached_input_tokens)?,
+        output_tokens: checked_v1_token_dimension(usage.output_tokens)?,
+        reasoning_tokens: checked_v1_token_dimension(usage.reasoning_tokens)?,
+        total_tokens: checked_v1_token_dimension(usage.total_tokens)?,
+        cached_input_tokens: checked_v1_token_dimension(usage.cache_read_tokens)?,
+        cache_creation_input_tokens: checked_v1_token_dimension(usage.cache_write_tokens)?,
+        audio_input_tokens: checked_v1_token_dimension(usage.audio_input_tokens)?,
+        audio_output_tokens: checked_v1_token_dimension(usage.audio_output_tokens)?,
+        extraction_profile_id: None,
+        extraction_profile_revision: None,
+        source_paths: BTreeMap::new(),
+        validation_flags: Vec::new(),
+        response_model: None,
+        response_id: None,
+        billing_details: Vec::new(),
+    })
+}
+
+/// Converts one poison-preserving V1 aggregate into the existing context-budget value type.
+/// 将一份保留未知传播语义的 V1 聚合转换为现有上下文预算值类型。
+fn aggregated_v1_usage_to_core(
+    usage: &AggregatedUsage,
+) -> Option<vulcan_core::types::ProviderUsageSnapshot> {
+    v1_usage_to_core(&UsageSnapshot {
+        input_tokens: usage.input_tokens,
+        uncached_input_tokens: usage.uncached_input_tokens,
+        output_tokens: usage.output_tokens,
+        reasoning_tokens: usage.reasoning_tokens,
+        total_tokens: usage.total_tokens,
+        cache_read_tokens: usage.cache_read_tokens,
+        cache_write_tokens: usage.cache_write_tokens,
+        audio_input_tokens: usage.audio_input_tokens,
+        audio_output_tokens: usage.audio_output_tokens,
+        billing_tier: None,
+    })
+}
+
+/// Converts one optional JS-safe V1 token count into the host release width.
+/// 将一个可选 JS 安全 V1 Token 数转换为宿主 Release 位宽。
+fn checked_v1_token_dimension(value: Option<u64>) -> Option<Option<usize>> {
+    match value {
+        Some(value) => usize::try_from(value).ok().map(Some),
+        None => Some(None),
+    }
+}
+
 /// Formats one provider usage row for the context usage tooltip.
 /// 为上下文占用提示浮层格式化单条 Provider 用量行。
 pub(crate) fn provider_usage_label(usage: &vulcan_core::types::ProviderUsageSnapshot) -> String {
@@ -547,6 +726,7 @@ mod tests {
             context_usage_snapshot_from_runtime_state(
                 session_id,
                 Some(&runtime_state),
+                None,
                 &live_context_budgets,
                 None,
                 None,
@@ -559,7 +739,7 @@ mod tests {
     /// 验证明细行保持 Provider 校准后的 Token 与百分比总量。
     #[test]
     fn context_usage_breakdown_items_preserve_calibrated_totals() {
-        let breakdown = vulcan_workbench_model::SessionProviderRequestContextBreakdown {
+        let breakdown = ProviderRequestContextBreakdown {
             message_units: 70,
             system_tool_units: 10,
             mcp_tool_units: 8,

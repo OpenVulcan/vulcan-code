@@ -86,8 +86,6 @@ struct RuntimeEventPhaseTransition {
 /// `agent_runtime` 持有会话 Hook 与子任务运行时订阅。
 /// `request_trace_state` records the first event observed after a provider request starts.
 /// `request_trace_state` 记录 Provider 请求启动后观察到的首个事件。
-/// `record_ids` owns the current thinking and output streaming record identifiers.
-/// `record_ids` 持有当前思考与输出流式记录标识。
 /// `hook_policy` is the immutable Hook route derived from the execution request.
 /// `hook_policy` 是从执行请求派生出的不可变 Hook 路由。
 /// `session_id` identifies the session that owns the runtime event.
@@ -107,7 +105,6 @@ pub(super) async fn handle_runtime_stream_event(
     controller_runtime: &ControllerRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     request_trace_state: &mut StreamRequestTraceState,
-    record_ids: &mut SessionStreamingRecordIds,
     hook_policy: &RuntimeEventHookPolicy,
     session_id: SessionId,
     active_stream_task_id: Uuid,
@@ -130,34 +127,6 @@ pub(super) async fn handle_runtime_stream_event(
             ),
         );
     }
-    if is_provider_tool_boundary_runtime_event(&event) {
-        match seal_stream_content_records_with_entries(app, task_state, session_id, record_ids) {
-            Ok(sealed_entries) if !sealed_entries.is_empty() => {
-                if let Err(error) = spawn_exact_session_transcript_entries_persist_task(
-                    task_state.clone(),
-                    controller_runtime.clone(),
-                    session_id,
-                    sealed_entries,
-                    Some(String::from("provider_tool_boundary_stream_seal")),
-                ) {
-                    eprintln!(
-                        "[webui-service] persist sealed provider content records failed: {error}"
-                    );
-                    if let Err(rejection_error) = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::reject_runtime_event_projection_barrier_from_event(&event) {
-                        eprintln!(
-                            "[webui-service] reject failed sealed-content durability barrier failed: {rejection_error}"
-                        );
-                    }
-                    return;
-                }
-            }
-            Ok(_) => {}
-            Err(error) => {
-                eprintln!("[webui-service] seal provider content records failed: {error}");
-            }
-        }
-    }
-
     // Wait-agent state must observe the tool boundary before phase and projection updates run.
     // wait-agent 状态必须先观察工具边界，随后才能执行阶段与投影更新。
     match update_webui_wait_agent_runtime_state(
@@ -248,72 +217,10 @@ pub(super) async fn handle_runtime_stream_event(
         eprintln!("[webui-service] append runtime event failed: {error}");
     }
 
-    if !subagent_event_consumed && runtime_event_forms_durable_transcript_boundary(&event) {
-        // durable_started_at measures the exact canonical append barrier before Core may advance.
-        // durable_started_at 测量 Core 可继续推进前的精确规范追加屏障。
-        let durable_started_at = std::time::Instant::now();
-        if let Err(error) = await_session_transcript_writer_durable(session_id).await {
-            eprintln!(
-                "[webui-service] runtime transcript durability boundary failed: session={session_id} kind={:?} error={error}",
-                event.kind
-            );
-            if let Err(rejection_error) = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::reject_runtime_event_projection_barrier_from_event(&event) {
-                eprintln!(
-                    "[webui-service] reject failed transcript durability barrier failed: {rejection_error}"
-                );
-            }
-            return;
-        }
-        webui_trace(
-            "runtime_transcript_durable_ack",
-            format!(
-                "session={session_id} kind={:?} durable_ack_ms={}",
-                event.kind,
-                durable_started_at.elapsed().as_millis()
-            ),
-        );
-    }
-
-    // Barrier acknowledgement follows canonical durability for stable tool boundaries.
-    // 稳定工具边界的屏障确认发生在规范持久化可靠之后。
+    // Provider tool boundaries are durably acknowledged by ProviderV1StreamSink before this path.
+    // Provider 工具边界会在进入该路径前由 ProviderV1StreamSink 可靠确认。
     if let Err(error) = release_runtime_event_projection_barrier_after_attempt(&event) {
         eprintln!("[webui-service] release runtime event projection barrier failed: {error}");
-    }
-
-    // Pending prompts may start only after event projection and its barrier acknowledgement complete.
-    // 排队提示词只能在事件投影及其屏障确认完成后启动。
-    let pending_after_runtime_event_started_at = current_unix_millis_value();
-    match maybe_prepare_next_webui_pending_prompt(
-        app,
-        task_state,
-        controller_runtime,
-        agent_runtime,
-        session_id,
-        false,
-    )
-    .await
-    {
-        Ok(started) => {
-            // The started flag records whether this event released one queued prompt into preparation.
-            // started 标记记录当前事件是否将一个排队提示词释放到准备阶段。
-            webui_trace_if_slow(
-                "pending_prompt_after_runtime_event_slow",
-                pending_after_runtime_event_started_at,
-                format!(
-                    "session={session_id} kind={:?} started={started}",
-                    event.kind
-                ),
-            );
-            if started {
-                webui_trace(
-                    "pending_prompt_started_after_runtime_event",
-                    format!("session={session_id} kind={:?}", event.kind),
-                );
-            }
-        }
-        Err(error) => {
-            eprintln!("[webui-service] prepare pending prompt after runtime event failed: {error}");
-        }
     }
 }
 

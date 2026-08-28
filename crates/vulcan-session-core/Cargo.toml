@@ -1,6 +1,6 @@
 [package]
 name = "vulcan-session-core"
-description = "Shared session protocol models for main sessions and task sessions."
+description = "Unified V1 session facts and shared runtime policy models."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,8 +11,10 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-futures-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 uuid.workspace = true
+vulcan-ai-contract.workspace = true
+vulcan-change-set.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }

@@ -2,20 +2,23 @@
 //! 供执行器、传输适配器与协议桥接辅助逻辑复用的共享 Provider 流式通道类型。
 
 use crate::agent_runtime::events::{
-    ProviderRequestDurabilityCompletion, RuntimeEvent, TransientReasoningStatus,
+    ProviderRequestDurabilityCompletion, ProviderRequestPreparationCandidate,
+    ProviderRequestPreparationCompletion, RuntimeEvent, TransientReasoningStatus,
 };
 use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
+use crate::context_budget::ContextBudgetSnapshot;
 use crate::conversation_protocol::SessionConversationState;
 use futures_util::Stream;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::pin::Pin;
-use vulcan_ai_contract::{AiExecutionError, AiExecutionRequest, AiTransportKind};
+use vulcan_ai_contract::{AiExecutionError, AiTransportKind};
 use vulcan_context::RuntimeProviderLoweringRepairEvent;
 use vulcan_core::types::{
     ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     ProviderUsageSnapshot as CoreProviderUsageSnapshot,
 };
+use vulcan_session_core::v1::event::ProviderSourceInput;
 
 /// Lightweight provider-stream delta emitted while one real run is still in progress.
 /// 单次真实运行仍在进行中时发出的轻量 Provider 流式增量。
@@ -30,28 +33,23 @@ pub(crate) enum ProviderStreamDelta {
     /// Structured request snapshot whose durable start record must be acknowledged before dispatch.
     /// 结构化请求快照；分派前必须确认其开始记录已可靠持久化。
     RequestPrepared {
-        /// Exact Provider-neutral request snapshot.
-        /// 精确 Provider 中立请求快照。
-        snapshot: CoreProviderRequestSnapshot,
-        /// Exact provider-neutral request that will be dispatched after the durability barrier.
-        /// 可靠持久化屏障后将被分派的精确 Provider 中立请求。
-        exact_request: AiExecutionRequest,
-        /// Exact controller configuration frozen for subsequent tool-result turns.
-        /// 为后续工具结果回合冻结的精确控制器配置。
-        controller_config: vulcan_core::types::ControllerConfig,
-        /// Exact canonical Core snapshot used to build this request.
-        /// 用于构建当前请求的精确规范 Core 快照。
-        controller_snapshot: vulcan_core::types::ConversationSnapshot,
-        /// Context-budget decision made from this exact request before dispatch.
-        /// 根据当前精确请求在分派前作出的上下文预算决策。
-        context_budget: Option<crate::context_budget::ContextBudgetSnapshot>,
-        /// Host completion released after the session state write succeeds.
-        /// 会话状态写入成功后由宿主释放的完成句柄。
-        completion: ProviderRequestDurabilityCompletion,
+        /// Pre-gate candidate that the unique V1 owner must rebuild before dispatch.
+        /// 唯一 V1 所有者必须在分派前重建的闸门前候选。
+        candidate: ProviderRequestPreparationCandidate,
+        /// Host completion released with the exact physical dispatch permit.
+        /// 使用精确物理分派许可释放的宿主完成句柄。
+        completion: ProviderRequestPreparationCompletion,
     },
-    /// Confirms the host durably retained Started and released the pre-dispatch gate.
-    /// 确认宿主已经可靠保留 Started，并释放分派前闸门。
-    RequestStartDurabilityConfirmed,
+    /// Confirms the host durably retained Started and released the exact post-gate request facts.
+    /// 确认宿主已经可靠保留 Started，并放行精确的闸门后请求事实。
+    RequestStartDurabilityConfirmed {
+        /// Exact request snapshot returned by the durable preparation permit.
+        /// 由可靠准备许可返回的精确请求快照。
+        request_snapshot: CoreProviderRequestSnapshot,
+        /// Exact context-budget decision returned with the permit.
+        /// 随许可返回的精确上下文预算判定。
+        context_budget: Option<ContextBudgetSnapshot>,
+    },
     /// Final provider-specific HTTP request JSON captured immediately before network dispatch.
     /// 在网络发送前捕获到的最终 Provider 专用 HTTP 请求 JSON。
     WireRequest(Value),
@@ -104,6 +102,12 @@ pub(crate) enum ProviderStreamDelta {
         /// Final normalized Provider usage when supplied.
         /// Provider 提供时的最终规范化用量。
         usage: Option<CoreProviderUsageSnapshot>,
+        /// Exact typed Provider replay source extracted from the completed response.
+        /// 从已完成响应提取的精确强类型 Provider 重放来源。
+        provider_source: ProviderSourceInput,
+        /// Exact number of tool calls returned by the completed Provider response.
+        /// 已完成 Provider 响应返回的精确工具调用数量。
+        tool_call_count: usize,
         /// Host completion released after terminal session-state persistence.
         /// 终态会话状态持久化后由宿主释放的完成句柄。
         completion: ProviderRequestDurabilityCompletion,

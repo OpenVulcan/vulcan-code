@@ -8,18 +8,17 @@ import {
   cancelConversationSubmission,
   compactSelectedConversationContext,
   closeSubagentTask,
-  forkConversation,
-  getUserPromptEditDraft,
   insertPendingPrompt,
   openSubagentPanel,
   removePendingPrompt,
   reorderPendingPrompts,
   continueConversation,
+  editConversationGenerationV1,
+  forkConversationGenerationV1,
   stopCommandSession,
   stopConversationRun,
   stopSubagentTask,
   submitConversationPrompt,
-  submitUserPromptEdit,
   type StopConversationRunMode,
   type StopConversationRunResponse,
 } from "@/service/conversation-actions-service";
@@ -32,21 +31,15 @@ import {
 } from "@/service/settings-actions-service";
 import { loadWorkbenchSnapshot } from "@/service/workbench-snapshot-service";
 import {
-  canOpenCachedSubagentSurface,
   applySubagentPanelRouteResponse,
-  injectCachedSubagentSurfaceMessages,
-  mergeConversationMessagesWithSubagentSurfaceMessageCache,
   reorderPendingPromptSummaries,
-  type SubagentSurfaceMessageCache,
   type WorkbenchMergeOptions,
 } from "@/state/workbench-state";
 import type {
-  ComposerAttachmentSummary,
   ConversationSummary,
   ProviderModelSecondaryRouteSelection,
   ProviderModelSecondaryRouteSummary,
   SubagentPanelRouteResponse,
-  UserPromptEditDraftSummary,
   WorkbenchSnapshot,
 } from "@/types";
 import type { TranslationKey } from "@/i18n-messages";
@@ -54,11 +47,6 @@ import {
   conversationContinuationBlockedReasonText,
   conversationContinuationBlockedReasonTextFromError,
 } from "@/components/conversation/continuation-blocked-reason";
-import {
-  continuationClaimSnapshotHasConverged,
-  reconcileContinuationClaimSnapshot,
-  type ContinuationClaimExpectation,
-} from "@/components/conversation/continuation-claim-reconciliation";
 import { toast } from "sonner";
 import {
   webuiClickTrace,
@@ -108,21 +96,12 @@ interface WorkbenchConversationActionsOptions {
   // Persisted conversation id whose draft-to-session sidebar projection is still converging.
   // 草稿转为持久化会话后仍在等待侧栏投影收敛的会话标识。
   pendingMaterializedConversationIdRef: React.MutableRefObject<string | null>;
-  // Conversation ids created in this frontend lifetime whose transcript is already live and needs no history hydration.
-  // 当前前端生命周期内创建且转录已实时可用、无需历史水合的会话标识。
-  locallyCreatedConversationIdsRef: React.MutableRefObject<Set<string>>;
   // Latest workbench snapshot for callbacks that should not close over stale state.
   // 供回调读取最新工作台快照，避免闭包过期。
   workbenchStateRef: React.MutableRefObject<WorkbenchSnapshot>;
   // Asks the user whether running child agents should be stopped together.
   // 询问用户是否要同时停止运行中的智能体。
   requestStopConversationRunChoice: RequestStopConversationRunChoice;
-  // Cached subagent transcript surfaces for instant route switching.
-  // 用于即时路由切换的子代理转录界面缓存。
-  subagentSurfaceMessageCacheRef: React.MutableRefObject<SubagentSurfaceMessageCache>;
-  // Invalidates hydration responses that began before a destructive prompt edit committed.
-  // 作废在破坏性提示词编辑提交前启动的水合响应。
-  invalidateConversationHydration: (conversationId: string) => void;
 }
 
 // useWorkbenchConversationActions owns conversation, subagent, pending-prompt, model, edit, and fork callbacks.
@@ -139,21 +118,12 @@ export function useWorkbenchConversationActions(options: WorkbenchConversationAc
     setSelectedConversationId,
     selectedConversationIdRef,
     pendingMaterializedConversationIdRef,
-    locallyCreatedConversationIdsRef,
     workbenchStateRef,
     requestStopConversationRunChoice,
-    subagentSurfaceMessageCacheRef,
-    invalidateConversationHydration,
   } = options;
   // inflightSubagentOpenRequestsRef coalesces duplicate opens without serializing independent side-panel tabs.
   // inflightSubagentOpenRequestsRef 合并重复打开请求，但不串行化彼此独立的侧栏页签。
   const inflightSubagentOpenRequestsRef = React.useRef<SubagentOpenRequestMap>(new Map());
-  // conversationForkInFlightRef synchronously gates duplicate fork submissions before React state commits.
-  // conversationForkInFlightRef 在 React 状态提交前同步拦截重复分叉提交。
-  const conversationForkInFlightRef = React.useRef(false);
-  // conversationForkInProgress drives the workspace-level blocking progress overlay.
-  // conversationForkInProgress 驱动工作台级阻塞进度遮罩。
-  const [conversationForkInProgress, setConversationForkInProgress] = React.useState(false);
 // handleSubmitConversationPrompt sends the composer text through the shared backend runtime.
 // handleSubmitConversationPrompt 通过共享后端运行时发送输入区文本。
 const handleSubmitConversationPrompt = React.useCallback(async (submission: ComposerSubmission): Promise<boolean> => {
@@ -238,7 +208,6 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
       // A successful draft submit creates the persisted id before its ordered sidebar delta is rendered.
       // 草稿提交成功后，持久化标识会先于有序侧栏增量完成渲染。
       if (selectedDraftConversation?.id === submittedSelectionId) {
-        locallyCreatedConversationIdsRef.current.add(nextConversationId);
         // materializedConversationAlreadyVisible closes the transition immediately when the delta won the race.
         // materializedConversationAlreadyVisible 在增量先到达时立即结束转正过渡。
         const materializedConversationAlreadyVisible = workbenchStateRef.current.conversations
@@ -278,7 +247,6 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
   }
 }, [
   pendingMaterializedConversationIdRef,
-  locallyCreatedConversationIdsRef,
   selectedConversation,
   selectedConversationId,
   selectedDraftConversation,
@@ -337,34 +305,9 @@ const handleStopConversationRun = React.useCallback(async (): Promise<boolean> =
   }
 }, [mergeWorkbenchWithLocalCaches, requestStopConversationRunChoice, selectedConversation?.id, setWorkbenchState]);
 
-// continuationRequestTimeoutMs bounds one Continue claim so the UI never stays silently locked.
-// continuationRequestTimeoutMs 限制单次 Continue 领取请求，避免界面无提示地长期锁定。
-const continuationRequestTimeoutMs = 15_000;
-
-// continuationReconciliationTimeoutMs bounds one authoritative state read after a Continue claim.
-// continuationReconciliationTimeoutMs 限制 Continue 领取后的单次权威状态回读。
-const continuationReconciliationTimeoutMs = 5_000;
-
-// loadContinuationReconciliationSnapshot reads one bounded authoritative snapshot for claim convergence.
-// loadContinuationReconciliationSnapshot 为领取收敛读取一次有界权威快照。
-//
-// Returns: the authoritative snapshot, or null when the read fails or reaches its timeout.
-// 返回值：权威快照；读取失败或达到超时上限时返回 null。
-async function loadContinuationReconciliationSnapshot(): Promise<WorkbenchSnapshot | null> {
-  // controller owns only this reconciliation request and never aborts the accepted claim.
-  // controller 只控制本次对账请求，绝不会中止已经接受的领取。
-  const controller = new AbortController();
-  // timeoutId releases a reconciliation request that cannot produce an authoritative state.
-  // timeoutId 解除无法产生权威状态的对账请求。
-  const timeoutId = setTimeout(() => controller.abort(), continuationReconciliationTimeoutMs);
-  try {
-    return await loadWorkbenchSnapshot(controller.signal);
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
+// continuationRequestTimeoutMs exceeds the backend durable transport-observation deadline.
+// continuationRequestTimeoutMs 长于后端可靠传输观察等待期限。
+const continuationRequestTimeoutMs = 130_000;
 
 // continuationErrorMessage maps stable Continue failures to persistent user-facing feedback.
 // continuationErrorMessage 将稳定 Continue 错误映射为用户可见反馈。
@@ -379,9 +322,6 @@ function continuationErrorMessage(error: unknown, translate: (key: TranslationKe
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes("ERR_CONVERSATION_CONTINUE_TIMEOUT")) {
     return translate("conversation.continuation.timeout");
-  }
-  if (message.includes("ERR_CONVERSATION_CONTINUE_STATE_RECONCILIATION_FAILED")) {
-    return translate("conversation.continuation.stateSyncFailed");
   }
   if (message.includes("ERR_CONVERSATION_CONTINUE_ACK_MISMATCH")) {
     return translate("conversation.continuation.ackMismatch");
@@ -404,16 +344,15 @@ function continuationErrorMessage(error: unknown, translate: (key: TranslationKe
   return `${translate("conversation.continuation.claimFailed")} (${message})`;
 }
 
-// handleContinueConversation continues a terminated conversation through the revision-bound retained state.
-// handleContinueConversation 通过绑定修订号的保留状态继续已终止会话。
+// handleContinueConversation continues the exact V1 open Turn and waits for durable transport observation.
+// handleContinueConversation 继续精确的 V1 开放 Turn，并等待可靠传输观察事实。
 const handleContinueConversation = React.useCallback(async (
   conversationId: string,
-  expectedGeneration: number,
-  expectedLedgerRevision: number,
   clientContinuationId: string,
+  supplement: ComposerSubmission | null,
 ): Promise<boolean> => {
-  // controller owns the claim request timeout before any post-ACK state reconciliation begins.
-  // controller 在 ACK 后状态对账开始前控制领取请求超时。
+  // controller owns only the bounded RPC wait for the durable transport observation.
+  // controller 只控制等待可靠传输观察事实的有界 RPC。
   const controller = new AbortController();
   // timedOut distinguishes a local timeout from an immediate service rejection.
   // timedOut 区分本地超时与服务立即拒绝。
@@ -430,9 +369,8 @@ const handleContinueConversation = React.useCallback(async (
   try {
     response = await continueConversation(
       conversationId,
-      expectedGeneration,
-      expectedLedgerRevision,
       clientContinuationId,
+      supplement,
       controller.signal,
     );
     if (!response) {
@@ -451,48 +389,102 @@ const handleContinueConversation = React.useCallback(async (
     const normalizedError = timedOut
       ? new Error("ERR_CONVERSATION_CONTINUE_TIMEOUT")
       : nextError;
-    // Reconcile every failed claim so stale eligibility cannot leave the same dead button visible.
-    // 每次领取失败都回读权威状态，避免过期资格让同一个无效按钮继续显示。
-    // snapshot is optional because the persistent failure status must remain visible during outages.
-    // snapshot 是可选值，因为服务中断期间仍必须保留持久失败状态。
-    const snapshot = await loadContinuationReconciliationSnapshot();
-    if (snapshot) {
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-    }
     toast.error(continuationErrorMessage(normalizedError, translate));
     return false;
   } finally {
     clearTimeout(timeoutId);
   }
-  if (!response) {
+  return response !== null;
+}, [translate]);
+
+// handleEditConversationGeneration replaces one exact root input through the V1 generation service.
+// handleEditConversationGeneration 通过 V1 generation 服务替换一条精确根输入。
+const handleEditConversationGeneration = React.useCallback(async (
+  sessionId: string,
+  expectedWindowGeneration: number,
+  targetSeq: number,
+  replacementText: string,
+): Promise<boolean> => {
+  try {
+    // response is accepted only when every immutable request identity is echoed exactly.
+    // 仅当全部不可变请求身份都被精确回显时才接受响应。
+    const response = await editConversationGenerationV1({
+      sessionId,
+      expectedWindowGeneration,
+      targetSeq,
+      replacementText,
+    });
+    if (!response) {
+      toast.info(translate("conversationActions.previewCannotSend"));
+      return false;
+    }
+    if (
+      response.sessionId !== sessionId
+      || response.targetSeq !== targetSeq
+      || !response.dispatchStarted
+    ) {
+      throw new Error("ERR_CONVERSATION_EDIT_GENERATION_ACK_MISMATCH");
+    }
+    return true;
+  } catch (nextError) {
+    const message = nextError instanceof Error ? nextError.message : String(nextError);
+    toast.error(`${translate("conversation.action.editPromptFailed")}: ${message}`);
     return false;
   }
-  // expectation binds the post-ACK snapshot to the exact token and durable revision just accepted.
-  // expectation 将 ACK 后快照绑定到刚刚接受的精确令牌与持久修订。
-  const expectation: ContinuationClaimExpectation = {
-    conversationId,
-    expectedGeneration,
-    expectedLedgerRevision,
-    acceptedRevision: response.revision,
-  };
-  // reconciliationSnapshot closes the success path even when the preceding broadcast delta was lost.
-  // reconciliationSnapshot 即使前置广播增量丢失，也会闭合成功路径。
-  const reconciliationSnapshot = await loadContinuationReconciliationSnapshot();
-  if (
-    !reconciliationSnapshot
-    || !continuationClaimSnapshotHasConverged(reconciliationSnapshot, expectation)
-  ) {
-    toast.error(translate("conversation.continuation.stateSyncFailed"));
-    return false;
+}, [translate]);
+
+// handleForkConversationGeneration creates one immutable V1 child and selects it after index refresh.
+// handleForkConversationGeneration 创建一个不可变 V1 子会话，并在索引刷新后选中它。
+const handleForkConversationGeneration = React.useCallback(async (
+  sourceSessionId: string,
+  expectedWindowGeneration: number,
+  targetSeq: number,
+  childSessionId: string,
+  title: string,
+): Promise<string | null> => {
+  try {
+    // response must preserve the exact parent, child, and source-seq identities.
+    // 响应必须保留精确的父会话、子会话与来源 seq 身份。
+    const response = await forkConversationGenerationV1({
+      sourceSessionId,
+      expectedWindowGeneration,
+      targetSeq,
+      childSessionId,
+      title,
+    });
+    if (!response) {
+      toast.info(translate("conversationActions.previewCannotSend"));
+      return null;
+    }
+    if (
+      response.sourceSessionId !== sourceSessionId
+      || response.childSessionId !== childSessionId
+      || response.sourceTargetSeq !== targetSeq
+      || !response.dispatchStarted
+    ) {
+      throw new Error("ERR_CONVERSATION_FORK_GENERATION_ACK_MISMATCH");
+    }
+    // snapshot refresh makes the SQLite projection visible before sidebar selection changes.
+    // 快照刷新会在侧栏选择变化前让 SQLite 投影可见。
+    const snapshot = await loadWorkbenchSnapshot();
+    setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+    if (selectedConversationIdRef.current === sourceSessionId) {
+      setSelectedConversationId(childSessionId);
+    }
+    toast.success(translate("conversation.action.forkSucceeded"));
+    return childSessionId;
+  } catch (nextError) {
+    const message = nextError instanceof Error ? nextError.message : String(nextError);
+    toast.error(`${translate("conversation.action.forkFailed")}: ${message}`);
+    return null;
   }
-  setWorkbenchState((current) => {
-    // merged applies the normal full-snapshot ordering rule before the target-only loss repair.
-    // merged 在目标级丢失修复前先应用常规全量快照排序规则。
-    const merged = mergeWorkbenchWithLocalCaches(current, reconciliationSnapshot);
-    return reconcileContinuationClaimSnapshot(merged, reconciliationSnapshot, expectation);
-  });
-  return true;
-}, [mergeWorkbenchWithLocalCaches, setWorkbenchState, translate]);
+}, [
+  mergeWorkbenchWithLocalCaches,
+  selectedConversationIdRef,
+  setSelectedConversationId,
+  setWorkbenchState,
+  translate,
+]);
 
 // handleCancelConversationSubmission aborts a pending upload before the backend materializes the prompt.
 // handleCancelConversationSubmission 在后端物化提示词前中止待处理上传。
@@ -529,16 +521,6 @@ const handleOpenSubagentPanel = React.useCallback(async (parentConversationId: s
   // routeKey is the stable concurrency boundary for one parent/task transcript.
   // routeKey 是单个父级/任务转录的稳定并发边界。
   const routeKey = `${parentConversationId}:${taskId}`;
-  if (canOpenCachedSubagentSurface(
-    workbenchStateRef.current,
-    subagentSurfaceMessageCacheRef.current,
-    parentConversationId,
-    taskId,
-  )) {
-    webuiClickTrace("subagent.open.local_cache", { parentConversationId, taskId, routeKey });
-    setWorkbenchState((current) => injectCachedSubagentSurfaceMessages(current, subagentSurfaceMessageCacheRef.current));
-    return true;
-  }
   // inflightRequests stores all independent route loads instead of one global last-click request.
   // inflightRequests 保存全部独立路由加载，而不是只保存全局最后一次点击请求。
   const inflightRequests = inflightSubagentOpenRequestsRef.current;
@@ -559,16 +541,14 @@ const handleOpenSubagentPanel = React.useCallback(async (parentConversationId: s
     taskId,
     routeKey,
   });
-  setWorkbenchState((current) => injectCachedSubagentSurfaceMessages(current, subagentSurfaceMessageCacheRef.current));
   try {
-    // Every route consumer waits for the shared command and applies its successful transcript independently.
-    // 每个路由调用方都等待共享命令，并独立应用其成功返回的转录。
+    // Every route consumer waits for the shared command and applies navigation independently.
+    // 每个路由调用方都等待共享命令，并独立应用导航。
     const response = await requestPromise;
     if (response) {
       setWorkbenchState((current) => applySubagentPanelRouteResponse(
         current,
         response,
-        subagentSurfaceMessageCacheRef.current,
       ));
     }
     webuiClickTrace(coalesced ? "subagent.open.coalesced_result" : "subagent.open.result", {
@@ -616,7 +596,6 @@ const handleStopSubagentTask = React.useCallback(async (parentConversationId: st
       setWorkbenchState((current) => applySubagentPanelRouteResponse(
         current,
         response,
-        subagentSurfaceMessageCacheRef.current,
       ));
     }
   } catch (nextError) {
@@ -634,7 +613,6 @@ const handleCloseSubagentTask = React.useCallback(async (parentConversationId: s
       setWorkbenchState((current) => applySubagentPanelRouteResponse(
         current,
         response,
-        subagentSurfaceMessageCacheRef.current,
       ));
     }
   } catch (nextError) {
@@ -748,128 +726,6 @@ const handleSelectWorkbenchModelSecondaryRoute = React.useCallback(async (
   }
 }, [mergeWorkbenchWithLocalCaches, setWorkbenchState, translate]);
 
-// handleGetUserPromptEditDraft loads one backend-validated edit draft.
-// handleGetUserPromptEditDraft 加载单条后端校验过的编辑草稿。
-const handleGetUserPromptEditDraft = React.useCallback(async (
-  conversationId: string,
-  messageId: string,
-): Promise<UserPromptEditDraftSummary | null> => {
-  try {
-    return await getUserPromptEditDraft(conversationId, messageId);
-  } catch (nextError) {
-    toast.error(formatUserPromptEditFailure(translate, nextError));
-    return null;
-  }
-}, [translate]);
-
-// handleSubmitUserPromptEdit submits one edit and closes the destructive transaction with an authoritative snapshot.
-// handleSubmitUserPromptEdit 提交单次编辑，并用权威快照闭合破坏性事务。
-const handleSubmitUserPromptEdit = React.useCallback(async (request: {
-  conversationId: string;
-  messageId: string;
-  prompt: string;
-  attachments: ComposerAttachmentSummary[];
-}): Promise<boolean> => {
-  try {
-    const ack = await submitUserPromptEdit(request);
-    if (!ack) {
-      toast.error(translate("conversation.action.editPromptFailed"));
-      return false;
-    }
-    if (selectedConversationIdRef.current === request.conversationId) {
-      setSelectedConversationId(ack.conversationId);
-    }
-    // The first-open hydration request may still carry the pre-edit transcript and must never cross this commit boundary.
-    // 首次打开时的水合请求可能仍携带编辑前转录，绝不能跨越本次提交边界。
-    invalidateConversationHydration(request.conversationId);
-    try {
-      // authoritativeSnapshot closes the destructive-edit transaction even if an intermediate
-      // rollback patch was delayed behind the replacement prompt's live stream.
-      // authoritativeSnapshot 在中间回滚补丁晚于替代提示词实时流时，仍会闭合破坏性编辑事务。
-      const authoritativeSnapshot = await loadWorkbenchSnapshot();
-      // authoritativeConversationMessages is the exact post-edit window and must not inherit the removed streaming tail.
-      // authoritativeConversationMessages 是编辑后的精确窗口，不得继承已删除的流式尾部。
-      const authoritativeConversationMessages = authoritativeSnapshot.messages.filter(
-        (message) => message.conversationId === request.conversationId,
-      );
-      setWorkbenchState((current) => {
-        const mergedWorkbench = mergeWorkbenchWithLocalCaches(current, authoritativeSnapshot);
-        return mergeConversationMessagesWithSubagentSurfaceMessageCache(
-          mergedWorkbench,
-          request.conversationId,
-          authoritativeConversationMessages,
-          subagentSurfaceMessageCacheRef.current,
-        );
-      });
-    } catch (refreshError) {
-      // The edit already committed; live deltas and gap recovery remain authoritative fallbacks.
-      // 编辑已经提交；实时增量与缺口恢复仍是权威回退路径。
-      console.warn("Failed to refresh the workbench after a committed prompt edit.", refreshError);
-    }
-    return true;
-  } catch (nextError) {
-    toast.error(formatUserPromptEditFailure(translate, nextError));
-    return false;
-  }
-}, [
-  mergeWorkbenchWithLocalCaches,
-  invalidateConversationHydration,
-  selectedConversationIdRef,
-  setSelectedConversationId,
-  setWorkbenchState,
-  subagentSurfaceMessageCacheRef,
-  translate,
-]);
-
-// handleForkConversation creates a persisted copy of the current conversation and opens it.
-// handleForkConversation 创建当前会话的持久化副本并打开。
-const handleForkConversation = React.useCallback(async (conversationId: string, anchorMessageId?: string): Promise<boolean> => {
-  if (conversationForkInFlightRef.current) {
-    return false;
-  }
-  conversationForkInFlightRef.current = true;
-  setConversationForkInProgress(true);
-  const sourceConversation = workbenchStateRef.current.conversations.find((conversation) => conversation.id === conversationId);
-  const sourceTitle = sourceConversation?.title.trim() || translate("console.newConversation");
-  try {
-    const snapshot = await forkConversation({
-      conversationId,
-      title: `${sourceTitle}${translate("conversation.action.forkTitleSuffix")}`,
-      anchorMessageId,
-    });
-    if (snapshot) {
-      // Validate the service-selected fork before mirroring it into local sidebar state.
-      // 写入本地侧栏状态前校验服务端选中的分叉会话仍在会话列表中。
-      const forkedConversationId = snapshot.conversations.some((conversation) => (
-        conversation.id === snapshot.selectedConversationId
-      ))
-        ? snapshot.selectedConversationId
-        : null;
-      if (forkedConversationId) {
-        setSelectedConversationId(forkedConversationId);
-      }
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(
-        current,
-        snapshot,
-        { selectedConversationSource: "incoming" },
-      ));
-      toast.success(translate("conversation.action.forkSucceeded"));
-    }
-    return true;
-  } catch (nextError) {
-    const errorMessage = nextError instanceof Error ? nextError.message.trim() : "";
-    toast.error(
-      errorMessage
-        ? `${translate("conversation.action.forkFailed")}${translate("global.labelSeparator")}${errorMessage}`
-        : translate("conversation.action.forkFailed"),
-    );
-    return false;
-  } finally {
-    conversationForkInFlightRef.current = false;
-    setConversationForkInProgress(false);
-  }
-}, [mergeWorkbenchWithLocalCaches, setSelectedConversationId, setWorkbenchState, translate, workbenchStateRef]);
-
 // handleSelectWorkbenchReasoningEffort persists one reasoning-effort choice through the shared service router.
 // handleSelectWorkbenchReasoningEffort 通过共享服务路由持久化单个思考档位选择。
 const handleSelectWorkbenchReasoningEffort = React.useCallback(async (effort: string): Promise<boolean> => {
@@ -920,6 +776,8 @@ const handleSelectWorkbenchThinkingDisplayMode = React.useCallback(async (mode: 
     handleInsertPendingPrompt,
     handleStopConversationRun,
     handleContinueConversation,
+    handleEditConversationGeneration,
+    handleForkConversationGeneration,
     handleCancelConversationSubmission,
     handleCompactSelectedConversationContext,
     handleOpenSubagentPanel,
@@ -931,10 +789,6 @@ const handleSelectWorkbenchThinkingDisplayMode = React.useCallback(async (mode: 
     handleStopCommandSession,
     handleListWorkbenchModelSecondaryRoutes,
     handleSelectWorkbenchModelSecondaryRoute,
-    handleGetUserPromptEditDraft,
-    handleSubmitUserPromptEdit,
-    handleForkConversation,
-    conversationForkInProgress,
     handleSelectWorkbenchReasoningEffort,
     handleSelectWorkbenchThinkingDisplayMode,
   };
@@ -968,15 +822,4 @@ function formatConversationActionTranslation(
     (text, [name, value]) => text.replaceAll(`{${name}}`, value),
     translate(key),
   );
-}
-
-// formatUserPromptEditFailure retains the backend rejection reason after the localized action label.
-// formatUserPromptEditFailure 在本地化动作标签后保留后端拒绝原因。
-function formatUserPromptEditFailure(
-  translate: (key: TranslationKey) => string,
-  error: unknown,
-): string {
-  const actionLabel = translate("conversation.action.editPromptFailed");
-  const detail = error instanceof Error ? error.message.trim() : String(error).trim();
-  return detail ? `${actionLabel}: ${detail}` : actionLabel;
 }

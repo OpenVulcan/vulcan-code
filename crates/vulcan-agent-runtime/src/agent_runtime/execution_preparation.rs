@@ -22,6 +22,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use vulcan_core::types::ConversationPayload as CoreConversationPayload;
 use vulcan_luaskills_prompt::{LuaSkillPromptEntry, render_luaskills_prompt_segment};
+use vulcan_prompt_composer::{
+    AdditionalPromptSegment, PromptBaselineKind, PromptBaselineProvenance,
+};
 use vulcan_prompt_skills::{
     PromptSkillsProjectConfig, PromptSkillsSessionConfig, render_prompt_skills_instructions,
     resolve_prompt_skills,
@@ -34,7 +37,7 @@ mod codebase_tool_routing_prompt;
 #[path = "execution_preparation/tool_exposure.rs"]
 mod tool_exposure;
 
-use codebase_tool_routing_prompt::append_codebase_tool_routing_prompt;
+use codebase_tool_routing_prompt::codebase_tool_routing_prompt;
 use tool_exposure::{
     filter_resolved_tool_set_by_tool_exposure, filter_vulcan_plugin_tool_groups,
     resolve_execution_tool_exposure,
@@ -224,11 +227,22 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     });
     let implicit_luaskills = tool_exposure.luaskills_dispatch_tools.clone();
     let implicit_luaskill_prompt_entries = tool_exposure.luaskill_prompt_entries.clone();
-    let mut prompt_skill_developer_segment = build_skill_developer_segment(
+    let mut additional_developer_segments = Vec::new();
+    if let Some(segment) = build_skill_developer_segment(
         request.prompt_purpose,
         &prompt_skills,
         &implicit_luaskill_prompt_entries,
-    );
+    ) {
+        additional_developer_segments.push(AdditionalPromptSegment::locked(
+            "Prompt Skill Injection",
+            segment,
+            "Enabled prompt-skill instructions",
+            PromptBaselineProvenance::new(
+                PromptBaselineKind::PromptSkillInjection,
+                "enabled-prompt-skills",
+            ),
+        ));
+    }
     let enabled_prompt_skill_names = vulcan_prompt_skills::enabled_skill_names(&prompt_skills);
     // prepared_prompt_skills freezes parsed instructions for the complete execution turn.
     // prepared_prompt_skills 为完整执行回合冻结已解析技能说明。
@@ -294,6 +308,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         luaskills_runtime,
         workspace_root,
         request.controller_runtime.clone(),
+        request.native_goal_runtime.clone(),
         request.knowledge_access.clone(),
         tool_exposure.native_tool_ids.clone(),
         tool_exposure.luaskills_tools.clone(),
@@ -344,7 +359,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         resolved_tools.definitions.clear();
     }
     append_vulcan_plugin_prompt_contributions(
-        &mut prompt_skill_developer_segment,
+        &mut additional_developer_segments,
         foundation.vulcan_plugin_catalog().as_deref(),
         &resolved_tools.descriptors,
     );
@@ -365,10 +380,13 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         warnings.push(reasoning_note.clone());
     }
 
-    append_codebase_tool_routing_prompt(
-        &mut prompt_skill_developer_segment,
-        &resolved_tools.descriptors,
-    );
+    if let Some(segment) = codebase_tool_routing_prompt(&resolved_tools.descriptors) {
+        additional_developer_segments.push(AdditionalPromptSegment::dynamic(
+            "Codebase Tool Routing",
+            segment,
+            "Final provider-visible codebase tool contract",
+        ));
+    }
 
     let temperature = if model_blueprint.supports_temperature() {
         request.temperature
@@ -389,6 +407,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     let preparation = ExecutionPreparation {
         session_id: request.session_id,
         conversation_hook_turn_id: request.conversation_hook_turn_id.clone(),
+        continuation_action_id: request.continuation_action_id.clone(),
         session_title: request.session_title.clone(),
         agent_id: active_agent.id.clone(),
         agent_name: active_agent.name.clone(),
@@ -398,7 +417,6 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         model_blueprint,
         prompt_preview: execution_prompt_preview(request),
         workspace_path,
-        task_session_store_root: request.task_session_store_root.clone(),
         session_storage_directory: request.session_storage_directory.clone(),
         conversation_attachments,
         context_history_count: request.conversation_state.messages.len(),
@@ -410,7 +428,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         prompt_skills,
         prompt_skill_user_root,
         implicit_luaskill_prompt_entries,
-        prompt_skill_developer_segment,
+        additional_developer_segments,
         skill_names: foundation.skill_names_for_agent(&active_agent.id),
         tool_descriptors,
         tool_request_rejection_reason: request.tool_request_rejection_reason.clone().or_else(
@@ -433,8 +451,6 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         context_budget: None,
         context_compaction_policy: Some(resolved_context_compaction_policy),
         context_budget_override: request.context_budget_override,
-        provider_usage_budget_baseline: request.provider_usage_budget_baseline.clone(),
-        provider_usage_context_generation_id: request.provider_usage_context_generation_id.clone(),
         context_assembly: None,
         context_baseline: None,
         context_request_mode: None,
@@ -495,7 +511,7 @@ fn prompt_skill_is_visible_for_policy(skill_name: &str, policy: &CapabilityPolic
 /// Appends plugin-level instructions only when every declared tool dependency remains visible.
 /// 仅在所有声明的工具依赖仍然可见时追加插件级说明。
 fn append_vulcan_plugin_prompt_contributions(
-    developer_segment: &mut Option<String>,
+    developer_segments: &mut Vec<AdditionalPromptSegment>,
     catalog: Option<&vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
     visible_tools: &[vulcan_tools_manager::VulcanToolDescriptor],
 ) {
@@ -515,20 +531,24 @@ fn append_vulcan_plugin_prompt_contributions(
                 .iter()
                 .all(|tool_id| visible_ids.contains(tool_id.as_str()))
         })
-        .map(|contribution| contribution.body.trim())
-        .filter(|body| !body.is_empty())
+        .filter_map(|contribution| {
+            let body = contribution.body.trim();
+            (!body.is_empty()).then_some((contribution, body))
+        })
         .collect::<Vec<_>>();
-    if plugin_instructions.is_empty() {
-        return;
-    }
-    let plugin_segment = plugin_instructions.join("\n\n");
-    match developer_segment {
-        Some(segment) if !segment.trim().is_empty() => {
-            segment.push_str("\n\n");
-            segment.push_str(&plugin_segment);
-        }
-        Some(segment) => *segment = plugin_segment,
-        None => *developer_segment = Some(plugin_segment),
+    for (contribution, body) in plugin_instructions {
+        developer_segments.push(AdditionalPromptSegment::locked(
+            format!(
+                "Plugin Instructions: {}/{}",
+                contribution.plugin_id, contribution.id
+            ),
+            body,
+            format!("Plugin {}/{}", contribution.plugin_id, contribution.id),
+            PromptBaselineProvenance::new(
+                PromptBaselineKind::PluginInstructions,
+                format!("{}/{}", contribution.plugin_id, contribution.id),
+            ),
+        ));
     }
 }
 

@@ -5,7 +5,9 @@ use crate::composer::request::PromptAssemblyInput;
 use crate::personality::catalog::PersonalityDefinition;
 use crate::source::hashing::stable_text_hash;
 use crate::strategy::PlannedNode;
-use crate::types::{PromptNodeKind, PromptSegment, PromptTarget};
+use crate::types::{
+    PromptBaselineKind, PromptBaselineProvenance, PromptNodeKind, PromptSegment, PromptTarget,
+};
 
 /// Render one planned non-bundle node.
 /// 渲染一个非组合型计划节点。
@@ -91,7 +93,11 @@ pub fn render_node(
                     format!("Personality {}", definition.label),
                     &definition.text,
                     definition.source_label.clone(),
-                ),
+                )
+                .with_baseline_provenance(PromptBaselineProvenance::new(
+                    PromptBaselineKind::AgentPersona,
+                    definition.id.clone(),
+                )),
             )
         }),
         PlannedNode::OutputStyle => input
@@ -109,7 +115,11 @@ pub fn render_node(
                         format!("Output Style {}", snapshot.label),
                         &snapshot.text,
                         snapshot.source_label.clone(),
-                    ),
+                    )
+                    .with_baseline_provenance(PromptBaselineProvenance::new(
+                        PromptBaselineKind::OutputStyle,
+                        snapshot.id.clone(),
+                    )),
                 )
             }),
         PlannedNode::ProjectRules => input.project_rules.as_ref().map(|snapshot| {
@@ -123,7 +133,11 @@ pub fn render_node(
                     format!("Project Rules {}", snapshot.source),
                     &snapshot.text,
                     format!("Project rules `{}`", snapshot.source),
-                ),
+                )
+                .with_baseline_provenance(PromptBaselineProvenance::new(
+                    PromptBaselineKind::AgentsMd,
+                    snapshot.source.clone(),
+                )),
             )
         }),
         PlannedNode::EnvironmentContext => input.environment_context.as_ref().map(|snapshot| {
@@ -194,7 +208,11 @@ fn build_cached_segment(
     let cache_key = node_cache_key(descriptor.namespace, descriptor.fingerprint);
     if let Some(segment) = context.cache.get_node(&cache_key) {
         context.diagnostics.record_node_cache(&cache_key, true);
-        return Some(segment.with_source_label(descriptor.source_label));
+        return Some(
+            segment
+                .with_source_label(descriptor.source_label)
+                .with_optional_baseline_provenance(descriptor.baseline_provenance),
+        );
     }
     context.diagnostics.record_node_cache(&cache_key, false);
     if descriptor.body.trim().is_empty() {
@@ -208,7 +226,8 @@ fn build_cached_segment(
         descriptor.title,
         descriptor.body,
     )
-    .with_source_label(descriptor.source_label);
+    .with_source_label(descriptor.source_label)
+    .with_optional_baseline_provenance(descriptor.baseline_provenance);
     context.cache.put_node(segment.clone());
     Some(segment)
 }
@@ -248,6 +267,9 @@ struct CachedSegmentDescriptor {
     /// Diagnostics source label.
     /// 诊断来源标签。
     source_label: String,
+    /// Producer-declared locked-baseline provenance.
+    /// 生产者声明的锁定基线来源。
+    baseline_provenance: Option<PromptBaselineProvenance>,
 }
 
 impl CachedSegmentDescriptor {
@@ -270,6 +292,14 @@ impl CachedSegmentDescriptor {
             title: title.into(),
             body: body.into(),
             source_label: source_label.into(),
+            baseline_provenance: None,
         }
+    }
+
+    /// Attaches producer-declared locked-baseline provenance to this descriptor.
+    /// 为当前描述附加由生产者声明的锁定基线来源。
+    fn with_baseline_provenance(mut self, provenance: PromptBaselineProvenance) -> Self {
+        self.baseline_provenance = Some(provenance);
+        self
     }
 }

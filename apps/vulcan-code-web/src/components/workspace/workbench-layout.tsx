@@ -54,7 +54,6 @@ import {
   webuiClickTrace,
   type WorkbenchDeltaSignal,
 } from "@/components/workspace/workbench-layout/types";
-import { useConversationHydration } from "@/components/workspace/workbench-layout/conversation-hydration";
 import { useWorkbenchConversationActions } from "@/components/workspace/workbench-layout/conversation-actions";
 import { useWorkbenchProjectActions } from "@/components/workspace/workbench-layout/project-actions";
 import { useWorkbenchSessionActions } from "@/components/workspace/workbench-layout/session-actions";
@@ -88,8 +87,6 @@ import type {
   AgentSkillsCatalogUpdate,
   ComposerSlashCommandSummary,
   ConversationArchivedDelta,
-  ConversationHistoryPageResponse,
-  ConversationMessage,
   ConversationSummary,
   FeatureAreaSummary,
   LuaSkillsCatalogUpdate,
@@ -113,7 +110,6 @@ import {
   replyPendingQuestion,
   stageComposerAttachmentBytes,
 } from "@/service/conversation-actions-service";
-import { loadCachedConversationToolDetail } from "@/service/conversation-tool-detail-service";
 import {
   addProjectFromPath,
   archiveConversation,
@@ -176,16 +172,11 @@ import {
 } from "@/service/workbench-snapshot-service";
 import { localMediaSourceUrl } from "@/resources/localMedia";
 import {
-  applyWorkbenchDeltaWithSubagentSurfaceMessageCache,
-  coalesceWorkbenchDeltaEnvelopes,
+  applyWorkbenchDelta,
   markConversationLocallyRead,
-  mergeConversationHistoryPageResponseWithSubagentSurfaceMessageCache,
-  mergeConversationHydrationSnapshotWithSubagentSurfaceMessageCache,
-  mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache,
+  mergeWorkbenchSnapshot,
   shouldAcceptWorkbenchRevision,
   workbenchWithSelectedConversationProjection,
-  workbenchWithSubagentSurfaceMessageCache,
-  type SubagentSurfaceMessageCache,
   type WorkbenchMergeOptions,
 } from "@/state/workbench-state";
 import {
@@ -256,6 +247,9 @@ export function WorkbenchLayout(props: {
   // Acknowledges one exact partial signal after every envelope has been considered.
   // 在每条增量都完成处理后确认一个精确的局部信号。
   onWorkbenchDeltaConsumed: (sequence: number) => void;
+  // Publishes the exact durable conversation selected by the local workbench route.
+  // 发布本地工作台路由选中的精确持久化会话。
+  onSelectedConversationIdChanged: (conversationId: string | null) => void;
 }) {
   React.useEffect(() => {
     // handleWorkspacePointerOwner routes input ownership from explicit pointer targets before bubble handlers run.
@@ -371,17 +365,9 @@ export function WorkbenchLayout(props: {
   // pendingMaterializedConversationIdRef protects a committed draft selection until its sidebar summary arrives.
   // pendingMaterializedConversationIdRef 在侧栏摘要到达前保护已提交草稿对应的会话选择。
   const pendingMaterializedConversationIdRef = React.useRef<string | null>(null);
-  // locallyCreatedConversationIdsRef distinguishes live-created transcripts from persisted conversations that require history hydration.
-  // locallyCreatedConversationIdsRef 区分实时创建的转录与需要历史水合的持久化会话。
-  const locallyCreatedConversationIdsRef = React.useRef<Set<string>>(new Set());
-  // subagentSurfaceMessageCacheRef retains every loaded child transcript for instant side-panel reuse.
-  // subagentSurfaceMessageCacheRef 保留每个已载入的子代理转录，用于侧栏即时复用。
-  const subagentSurfaceMessageCacheRef = React.useRef<SubagentSurfaceMessageCache>(new Map());
   // workbenchState stores local message hydration updates.
   // workbenchState 保存本地会话正文水合更新。
-  const [workbenchState, setWorkbenchState] = React.useState<WorkbenchSnapshot>(
-    () => workbenchWithSubagentSurfaceMessageCache(props.workbench, subagentSurfaceMessageCacheRef.current),
-  );
+  const [workbenchState, setWorkbenchState] = React.useState<WorkbenchSnapshot>(() => props.workbench);
   // activeProjectId owns project-level tools independently from conversation lifetime.
   // activeProjectId 独立于会话生命周期持有项目级工具。
   const [activeProjectId, setActiveProjectId] = React.useState<string | null>(() => {
@@ -540,11 +526,8 @@ export function WorkbenchLayout(props: {
   const workbenchStateRef = React.useRef<WorkbenchSnapshot>(workbenchState);
   workbenchStateRef.current = workbenchState;
   React.useEffect(() => {
-    // Stable coverage reconciliation runs after React commits the message projection.
-    // 稳定覆盖对账在 React 提交消息投影后运行。
-    liveStreamStore.reconcileStableCoverage(workbenchState);
-    // Settled tool-request subscribers observe cleanup only after the committed execution card renders once.
-    // 已结束的工具请求订阅者仅在已提交执行卡片完成一次渲染后收到清理通知。
+    // Ephemeral subscribers observe the exact batch after React commits the corresponding structural state.
+    // 瞬态订阅者在 React 提交对应结构状态后观察精确批次。
     liveStreamStore.flushNotifications();
   }, [liveStreamStore, workbenchState]);
   // conversationArchivePendingIdsRef blocks duplicate archive RPCs until failure or visible lifecycle convergence.
@@ -557,18 +540,17 @@ export function WorkbenchLayout(props: {
   // localeSaveSeqRef prevents older locale-save responses from overriding newer choices.
   // localeSaveSeqRef 防止较早的语言保存响应覆盖较新的选择。
   const localeSaveSeqRef = React.useRef(0);
-  // mergeWorkbenchWithLocalCaches centralizes service snapshot merges that must preserve loaded child surfaces.
-  // mergeWorkbenchWithLocalCaches 集中处理必须保留已载入子代理界面的服务快照合并。
+  // mergeWorkbenchWithLocalCaches centralizes service snapshot merges while preserving UI-local state.
+  // mergeWorkbenchWithLocalCaches 集中处理服务快照合并，同时保留界面本地状态。
   const mergeWorkbenchWithLocalCaches = React.useCallback((
     current: WorkbenchSnapshot,
     incoming: WorkbenchSnapshot,
     options?: WorkbenchMergeOptions,
   ) => (
     (() => {
-      const merged = mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache(
+      const merged = mergeWorkbenchSnapshot(
         current,
         incoming,
-        subagentSurfaceMessageCacheRef.current,
         options,
       );
       if (merged !== current) {
@@ -591,48 +573,6 @@ export function WorkbenchLayout(props: {
       return merged;
     })()
   ), []);
-  // mergeConversationHydrationWithLocalCaches merges focused conversation body responses without losing child panels.
-  // mergeConversationHydrationWithLocalCaches 合并聚焦会话正文响应且不丢失子代理面板。
-  const mergeConversationHydrationWithLocalCaches = React.useCallback((
-    current: WorkbenchSnapshot,
-    incoming: WorkbenchSnapshot,
-    options?: WorkbenchMergeOptions,
-  ) => (
-    (() => {
-      const merged = mergeConversationHydrationSnapshotWithSubagentSurfaceMessageCache(
-        current,
-        incoming,
-        subagentSurfaceMessageCacheRef.current,
-        options,
-      );
-      if (merged !== current) {
-        acceptedWorkbenchRevisionRef.current = Math.max(acceptedWorkbenchRevisionRef.current, merged.revision ?? 0);
-      }
-      return merged;
-    })()
-  ), []);
-  // mergeConversationHistoryPageWithLocalCaches applies one page without replacing unrelated live workbench state.
-  // mergeConversationHistoryPageWithLocalCaches 应用单页历史，且不替换无关的实时工作台状态。
-  const mergeConversationHistoryPageWithLocalCaches = React.useCallback((
-    current: WorkbenchSnapshot,
-    response: ConversationHistoryPageResponse,
-  ) => {
-    // result is the deterministic page merge after reconciling retained child surfaces.
-    // result 是对账已保留子界面后的确定性分页合并结果。
-    const result = mergeConversationHistoryPageResponseWithSubagentSurfaceMessageCache(
-      current,
-      response,
-      subagentSurfaceMessageCacheRef.current,
-    );
-    acceptedWorkbenchRevisionRef.current = Math.max(
-      acceptedWorkbenchRevisionRef.current,
-      result.workbench.revision ?? 0,
-    );
-    return result;
-  }, []);
-  // readLatestWorkbenchState returns the latest committed UI snapshot for pagination preflight checks.
-  // readLatestWorkbenchState 返回用于分页预检的最新已提交界面快照。
-  const readLatestWorkbenchState = React.useCallback((): WorkbenchSnapshot => workbenchStateRef.current, []);
   // resetAcceptedWorkbenchOrderingForServiceInstance clears ordering owned by a replaced service.
   // resetAcceptedWorkbenchOrderingForServiceInstance 清理由已替换服务持有的版本排序。
   const resetAcceptedWorkbenchOrderingForServiceInstance = React.useCallback((
@@ -808,20 +748,16 @@ export function WorkbenchLayout(props: {
     }
     acceptedWorkbenchRevisionRef.current = Math.max(acceptedWorkbenchRevisionRef.current, generation);
     setWorkbenchState((current) => acceptedEnvelopes.reduce(
-      (nextWorkbench, envelope) => applyWorkbenchDeltaWithSubagentSurfaceMessageCache(
-        nextWorkbench,
-        envelope,
-        subagentSurfaceMessageCacheRef.current,
-      ),
+      (nextWorkbench, envelope) => applyWorkbenchDelta(nextWorkbench, envelope),
       current,
     ));
     return true;
   }, [acceptConversationArchiveTransitions, acceptProjectRemovalTransition]);
   // applyLocalPreviewWithLocalCaches applies optimistic snapshots without service revision gating.
   // applyLocalPreviewWithLocalCaches 应用乐观快照，不经过服务版本门禁。
-  const applyLocalPreviewWithLocalCaches = React.useCallback((current: WorkbenchSnapshot, incoming: WorkbenchSnapshot) => {
-    return workbenchWithSubagentSurfaceMessageCache(incoming, subagentSurfaceMessageCacheRef.current);
-  }, []);
+  const applyLocalPreviewWithLocalCaches = React.useCallback((current: WorkbenchSnapshot, incoming: WorkbenchSnapshot) => (
+    incoming
+  ), []);
   // handleWebuiLocaleChange applies the locale immediately and persists it through the service.
   // handleWebuiLocaleChange 立即应用语言，并通过服务持久化。
   const handleWebuiLocaleChange = React.useCallback((locale: LocaleCode) => {
@@ -1046,51 +982,6 @@ export function WorkbenchLayout(props: {
   // selectedConversation stores the conversation used by the console header.
   // selectedConversation 保存控制台标题栏使用的当前会话。
   const selectedConversation = workbenchState.conversations.find((conversation) => conversation.id === selectedConversationId);
-  // selectedConversationMessages stores the current parent conversation message window.
-  // selectedConversationMessages 保存当前父会话消息窗口。
-  const selectedConversationMessages = React.useMemo(
-    () => workbenchState.messages.filter((message) => message.conversationId === selectedConversationId),
-    [selectedConversationId, workbenchState.messages],
-  );
-  // hydratedConversationWindowById indexes Rust-retained hydrated windows for render and request decisions.
-  // hydratedConversationWindowById 为渲染与请求判断索引 Rust 保留的已水合窗口。
-  const hydratedConversationWindowById = React.useMemo(
-    () => new Map((workbenchState.hydratedConversationWindows ?? []).map((window) => [window.sessionId, window])),
-    [workbenchState.hydratedConversationWindows],
-  );
-  // selectedConversationHistoryCursor reflects Rust-retained pagination plus local request progress.
-  // selectedConversationHistoryCursor 反映 Rust 保留分页与本地请求进度。
-  const selectedConversationHistoryCursor = selectedConversationId
-    ? hydratedConversationWindowById.get(selectedConversationId)
-    : null;
-  // selectedConversationCreatedLocally identifies a new live transcript that has no persisted history to hydrate.
-  // selectedConversationCreatedLocally 标识没有持久化历史需要水合的新建实时转录。
-  const selectedConversationCreatedLocally = selectedConversationId
-    ? locallyCreatedConversationIdsRef.current.has(selectedConversationId)
-    : false;
-  // selectedConversationHydrated records whether the selected body is already available locally or retained by Rust.
-  // selectedConversationHydrated 记录当前正文是否已由本地创建流程提供或由 Rust 保留。
-  const selectedConversationHydrated = Boolean(
-    selectedConversationCreatedLocally || selectedConversationHistoryCursor?.subagentMetadataLoaded,
-  );
-  // conversationHydration owns backend hydration and older-history paging for the selected conversation.
-  // conversationHydration 持有当前选中会话的后端水合与更早历史分页状态。
-  const {
-    loadingConversationId,
-    conversationLoadError,
-    conversationHistoryLoadingIds,
-    handleLoadConversationHistory,
-    invalidateConversationHydration,
-  } = useConversationHydration({
-    selectedConversationId,
-    draftConversationId: draftConversation?.id ?? null,
-    selectedConversationHydrated,
-    hydratedConversationWindowById,
-    mergeConversationHistoryPageWithLocalCaches,
-    mergeConversationHydrationWithLocalCaches,
-    readLatestWorkbenchState,
-    setWorkbenchState,
-  });
   // selectedDraftConversation stores the draft used by the console header and empty state.
   // selectedDraftConversation 保存控制台标题栏与空状态使用的草稿会话。
   const selectedDraftConversation = selectedConversationId === draftConversation?.id ? draftConversation : null;
@@ -1116,6 +1007,13 @@ export function WorkbenchLayout(props: {
     const projectedConversationId = selectedDraftConversation ? null : selectedConversationId;
     return workbenchWithSelectedConversationProjection(workbenchState, projectedConversationId);
   }, [selectedConversationId, selectedDraftConversation, workbenchState]);
+  // Keep the WorkbenchApp V1 owner aligned with the real local route; drafts own no durable session.
+  // 让 WorkbenchApp 的 V1 归属对齐真实本地路由；草稿不持有持久化会话。
+  React.useEffect(() => {
+    props.onSelectedConversationIdChanged(
+      selectedDraftConversation ? null : selectedConversationId,
+    );
+  }, [props.onSelectedConversationIdChanged, selectedConversationId, selectedDraftConversation]);
   // showStartupOverlay blocks workspace interaction until the real service bootstrap completes.
   // showStartupOverlay 在真实服务启动完成前阻塞工作区交互。
   const showStartupOverlay = !props.startup.ready && props.startup.phase !== "browser-preview";
@@ -1234,6 +1132,8 @@ export function WorkbenchLayout(props: {
     handleInsertPendingPrompt,
     handleStopConversationRun,
     handleContinueConversation,
+    handleEditConversationGeneration,
+    handleForkConversationGeneration,
     handleCancelConversationSubmission,
     handleCompactSelectedConversationContext,
     handleOpenSubagentPanel,
@@ -1245,10 +1145,6 @@ export function WorkbenchLayout(props: {
     handleStopCommandSession,
     handleListWorkbenchModelSecondaryRoutes,
     handleSelectWorkbenchModelSecondaryRoute,
-    handleGetUserPromptEditDraft,
-    handleSubmitUserPromptEdit,
-    handleForkConversation,
-    conversationForkInProgress,
     handleSelectWorkbenchReasoningEffort,
     handleSelectWorkbenchThinkingDisplayMode,
   } = useWorkbenchConversationActions({
@@ -1262,11 +1158,8 @@ export function WorkbenchLayout(props: {
     setSelectedConversationId,
     selectedConversationIdRef,
     pendingMaterializedConversationIdRef,
-    locallyCreatedConversationIdsRef,
     workbenchStateRef,
     requestStopConversationRunChoice,
-    subagentSurfaceMessageCacheRef,
-    invalidateConversationHydration,
   });
 
   // handleConversationMenuAction executes conversation-tree context menu commands.
@@ -1374,7 +1267,7 @@ export function WorkbenchLayout(props: {
           && selectedConversationIdRef.current === conversationId
           && snapshot.selectedConversationId === conversationId
         ) {
-          liveStreamStore.rebaseWorkbenchSnapshot(snapshot);
+          liveStreamStore.resetForWorkbenchSnapshot();
           liveStreamStore.flushNotifications();
           setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(
             current,
@@ -1392,7 +1285,7 @@ export function WorkbenchLayout(props: {
           && selectedConversationIdRef.current === conversationId
           && snapshot.selectedConversationId === conversationId
         ) {
-          liveStreamStore.rebaseWorkbenchSnapshot(snapshot);
+          liveStreamStore.resetForWorkbenchSnapshot();
           liveStreamStore.flushNotifications();
           setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
         }
@@ -1657,10 +1550,9 @@ export function WorkbenchLayout(props: {
         : { ...current, ...acceptedProjectSettings }
     ));
     setWorkbenchState((current) => (
-      mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache(
+      mergeWorkbenchSnapshot(
         current,
         props.workbench,
-        subagentSurfaceMessageCacheRef.current,
         {
           allowServiceRevisionReset: serviceInstanceChanged,
           preserveExpandedProjectIds: expandedProjectIdsLocallyEditedRef.current,
@@ -1902,11 +1794,7 @@ export function WorkbenchLayout(props: {
     acceptedWorkbenchRevisionRef.current = nextAcceptedRevision;
     setWorkbenchState((current) => (
       acceptedEnvelopes.reduce(
-        (nextWorkbench, envelope) => applyWorkbenchDeltaWithSubagentSurfaceMessageCache(
-          nextWorkbench,
-          envelope,
-          subagentSurfaceMessageCacheRef.current,
-        ),
+        (nextWorkbench, envelope) => applyWorkbenchDelta(nextWorkbench, envelope),
         current,
       )
     ));
@@ -1931,21 +1819,6 @@ export function WorkbenchLayout(props: {
     }
   }, [workbenchState.conversations]);
 
-  // Retire local-creation markers after their active conversation lifecycle ends.
-  // 在对应活动会话生命周期结束后清理本地创建标记。
-  React.useEffect(() => {
-    // activeConversationIds is the authoritative active sidebar identity set for marker retention.
-    // activeConversationIds 是保留创建标记所依据的权威活动侧栏身份集合。
-    const activeConversationIds = new Set(workbenchState.conversations.map((conversation) => conversation.id));
-    for (const conversationId of locallyCreatedConversationIdsRef.current) {
-      if (conversationId === pendingMaterializedConversationIdRef.current) {
-        continue;
-      }
-      if (!activeConversationIds.has(conversationId)) {
-        locallyCreatedConversationIdsRef.current.delete(conversationId);
-      }
-    }
-  }, [workbenchState.conversations]);
 
   // Keep local sidebar selection inside the active conversation lifecycle domain after deltas apply.
   // 在增量应用后，保持本地侧栏选择位于活动会话生命周期领域内。
@@ -2029,12 +1902,6 @@ export function WorkbenchLayout(props: {
             chromeActions={shellChromeActions}
             titlebarDragRegion={windowDragRegionEnabled}
             onTitlebarDoubleClick={handleTitlebarDoubleClick}
-            loadingConversationId={loadingConversationId}
-            conversationLoadError={conversationLoadError}
-            conversationHydration={workbenchState.conversationHydration ?? null}
-            conversationHasMoreHistory={Boolean(selectedConversationHistoryCursor?.hasMoreHistory)}
-            conversationHistoryLoading={selectedConversationId ? conversationHistoryLoadingIds.has(selectedConversationId) : false}
-            conversationForkInProgress={conversationForkInProgress}
             pinnedConversationIds={pinnedConversationIds}
             onConversationMenuAction={handleConversationMenuAction}
             onCreateConversation={handleCreateConversationForProject}
@@ -2056,7 +1923,6 @@ export function WorkbenchLayout(props: {
             onReorderProjects={handleReorderProjects}
             onSelectProject={setActiveProjectId}
             onSelectConversation={handleSelectConversation}
-            onLoadConversationHistory={handleLoadConversationHistory}
             onSelectWorkbenchModel={handleSelectWorkbenchModel}
             onListWorkbenchModelSecondaryRoutes={handleListWorkbenchModelSecondaryRoutes}
             onSelectWorkbenchModelSecondaryRoute={handleSelectWorkbenchModelSecondaryRoute}
@@ -2082,6 +1948,8 @@ export function WorkbenchLayout(props: {
             onSetSessionContextCompactionWindow={handleSetSessionContextCompactionWindow}
             onStopConversationRun={handleStopConversationRun}
             onContinueConversation={handleContinueConversation}
+            onEditConversationGeneration={handleEditConversationGeneration}
+            onForkConversationGeneration={handleForkConversationGeneration}
             onOpenSubagentPanel={handleOpenSubagentPanel}
             onStopSubagentTask={handleStopSubagentTask}
             onCloseSubagentTask={handleCloseSubagentTask}
@@ -2098,10 +1966,6 @@ export function WorkbenchLayout(props: {
             onRunWorkspaceGitFileAction={runWorkspaceGitFileAction}
             onStageAttachmentBytes={stageComposerAttachmentBytes}
             onCopyText={copyText}
-            onGetUserPromptEditDraft={handleGetUserPromptEditDraft}
-            onSubmitUserPromptEdit={handleSubmitUserPromptEdit}
-            onForkConversation={handleForkConversation}
-            onLoadToolDetail={loadCachedConversationToolDetail}
             resolveMediaSourceUrl={localMediaSourceUrl}
             footer={(
               <footer className="statusbar workspace-statusbar">

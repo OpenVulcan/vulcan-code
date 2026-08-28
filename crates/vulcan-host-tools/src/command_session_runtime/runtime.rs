@@ -68,23 +68,22 @@ impl CommandSessionRuntime {
         self: &Arc<Self>,
         request: CommandSessionStartRequest,
     ) -> Result<CommandSessionSnapshot, String> {
-        let mut command = TokioCommand::new(&request.launcher_program);
+        let mut command = new_background_tokio_command(&request.launcher_program);
         command.args(&request.launcher_args);
         command.current_dir(&request.cwd);
         command.stdin(Stdio::piped());
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
         command.kill_on_drop(true);
-        apply_windows_release_no_window(&mut command);
         // VULCAN_HOME keeps long-lived shell sessions aligned with the compiled user profile.
         // VULCAN_HOME 让长生命周期 shell 会话与当前编译用户配置保持一致。
-        if std::env::var_os("VULCAN_HOME").is_none() {
-            if let Some(user_vulcan_root) = vulcan_runtime_assets::resolve_user_vulcan_root() {
-                command.env(
-                    "VULCAN_HOME",
-                    vulcan_runtime_assets::native_host_path(&user_vulcan_root),
-                );
-            }
+        if std::env::var_os("VULCAN_HOME").is_none()
+            && let Some(user_vulcan_root) = vulcan_runtime_assets::resolve_user_vulcan_root()
+        {
+            command.env(
+                "VULCAN_HOME",
+                vulcan_runtime_assets::native_host_path(&user_vulcan_root),
+            );
         }
         apply_child_path_prefixes(&mut command, &request.path_prefixes)?;
 

@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
-import type { ConversationMessage } from "@/types";
 import {
-  hasAuthoritativeSubmissionCorrelation,
   materializeAcknowledgedDraftSubmission,
   retireMaterializedDraftSubmission,
 } from "@/components/workspace/draft-submission-state";
@@ -66,18 +64,5 @@ describe("draft submission materialization", () => {
     )).toBe(current);
     expect(retireMaterializedDraftSubmission(current, "conversation-1")).toBe(current);
     expect(retireMaterializedDraftSubmission({ ...current, id: "conversation-1" }, "conversation-1")).toBeNull();
-  });
-
-  it("recognizes the authoritative user message by the exact client submission id", () => {
-    const messages: ConversationMessage[] = [{
-      id: "message-1",
-      conversationId: "conversation-1",
-      createdAt: "100",
-      role: "user",
-      body: "hello",
-      metadata: { client_submission_id: "client-1" },
-    }];
-    expect(hasAuthoritativeSubmissionCorrelation(messages, "client-1")).toBe(true);
-    expect(hasAuthoritativeSubmissionCorrelation(messages, "client-2")).toBe(false);
   });
 });
