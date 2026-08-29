@@ -458,6 +458,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         system_prompt_hook_blocks,
         project_vmm,
         session_vmm,
+        vmm_runtime_ready: request.vmm_runtime_ready,
         boundary_events: request.boundary_events.clone(),
         runtime_system_updates: request.runtime_system_updates.clone(),
         session_goal_context: request.session_goal_context.clone(),

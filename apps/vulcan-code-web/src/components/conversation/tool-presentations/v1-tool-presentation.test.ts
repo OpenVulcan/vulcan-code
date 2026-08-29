@@ -43,6 +43,7 @@ function toolItem(options: {
       tool_call_id: options.toolCallId ?? seq + 100,
       tool_name: options.toolName ?? "file_edit",
       input: options.input ?? { path: "D:/project/README.md" },
+      request_stream_id: `v1-presentation-tool-${options.toolCallId ?? seq + 100}`,
       output: options.output,
       changeset: options.changeset,
       status: options.status ?? "completed",

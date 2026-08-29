@@ -75,6 +75,43 @@ export interface ConversationSummary {
   projectId?: string | null;
 }
 
+// ConversationMessage is the in-memory presentation record consumed by the restored conversation UI.
+// ConversationMessage 是恢复后的会话界面消费的纯内存展示记录。
+// It is projected only from V1 events and is never a persistence or RPC authority.
+// 它仅由 V1 事件投影生成，绝不作为持久化或 RPC 权威。
+export interface ConversationMessage {
+  // Stable presentation identity derived from the V1 event sequence.
+  // 从 V1 事件序号派生的稳定展示身份。
+  id: string;
+  // Stable owning session identity.
+  // 稳定的所属会话身份。
+  conversationId: string;
+  // Unix-millisecond timestamp text used by the restored visual timeline.
+  // 恢复后的视觉时间线使用的 Unix 毫秒时间戳文本。
+  createdAt?: string;
+  // Presentation role derived from the typed V1 event kind.
+  // 从强类型 V1 事件种类派生的展示角色。
+  role: "user" | "assistant" | "system";
+  // Optional display title retained for the branch presentation components.
+  // 为分支展示组件保留的可选显示标题。
+  title?: string | null;
+  // Optional display record kind; it does not name a persisted legacy record.
+  // 可选展示记录种类；它不代表任何旧版持久化记录。
+  recordKind?: string | null;
+  // Canonical visible body copied from the V1 event.
+  // 从 V1 事件复制的规范可见正文。
+  body: string;
+  // Typed projection metadata used only by presentation components.
+  // 仅供展示组件使用的强类型投影元数据。
+  metadata?: unknown;
+  // Optional composer-compatible previews for process-local optimistic content.
+  // 进程内乐观内容使用的可选输入区兼容预览。
+  attachments?: ComposerAttachmentSummary[];
+  // Whether the V1 generation boundary permits editing this root input.
+  // V1 generation 边界是否允许编辑当前根输入。
+  editableUserPrompt?: boolean;
+}
+
 // ConversationAttentionSummary describes one conversation-level action marker.
 // ConversationAttentionSummary 描述单个会话级动作标记。
 export interface ConversationAttentionSummary {

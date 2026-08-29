@@ -168,6 +168,67 @@ pub(crate) async fn persist_v1_execution_failure_boundary(
         .map_err(|error| format!("failed to persist V1 stream failure `{reason_code}`: {error}"))
 }
 
+/// Settles one stream terminal authority and releases its exact admission owner.
+/// 结算一个流终态权威，并释放其精确准入 owner。
+///
+/// # Parameters
+/// 参数
+/// `task_state` owns the registered V1 session and terminal-persistence owner table.
+/// `task_state` 持有已注册 V1 会话与终态持久化 owner 表。
+/// `session_id` selects the exact finished session.
+/// `session_id` 选择精确的已结束会话。
+/// `v1_api_terminal_persisted` reports whether Provider handling already produced a durable API terminal.
+/// `v1_api_terminal_persisted` 表示 Provider 处理是否已经生成可靠 API 终态。
+/// `fallback_reason_code` is the stable redacted fact used only when no API terminal exists.
+/// `fallback_reason_code` 是仅在不存在 API 终态时使用的稳定脱敏事实。
+/// `terminal_persistence_owner` is the exact owner adopted after removing the active stream task.
+/// `terminal_persistence_owner` 是移除活动流任务后接管的精确 owner。
+///
+/// # Returns
+/// 返回值
+/// `true` only after a durable terminal fact exists and the exact admission owner is released.
+/// 仅在可靠终态事实存在且精确准入 owner 已释放后返回 `true`。
+pub(crate) async fn settle_stream_terminal_authority(
+    task_state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    v1_api_terminal_persisted: bool,
+    fallback_reason_code: &'static str,
+    terminal_persistence_owner: SessionTerminalPersistenceOwnerGuard,
+) -> bool {
+    // A pre-ApiStarted failure has no ApiStats receipt, so the same V1 owner must append a permanent error before admission reopens.
+    // ApiStarted 前失败没有 ApiStats 回执，因此重新开放准入前必须由同一 V1 owner 追加永久错误。
+    let terminal_state_persisted = if v1_api_terminal_persisted {
+        true
+    } else {
+        match persist_v1_execution_failure_boundary(task_state, session_id, fallback_reason_code)
+            .await
+        {
+            Ok(()) => true,
+            Err(error) => {
+                eprintln!(
+                    "[webui-service] stream fallback terminal persistence failed: session={session_id} reason={fallback_reason_code} error={error}"
+                );
+                false
+            }
+        }
+    };
+    if !terminal_state_persisted {
+        // An uncertain durable write remains fail-closed by deliberately retaining the exact owner.
+        // 可靠写入结果不确定时会有意保留精确 owner，从而保持失败关闭。
+        drop(terminal_persistence_owner);
+        return false;
+    }
+    match terminal_persistence_owner.release() {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!(
+                "[webui-service] stream terminal-persistence owner release failed: session={session_id} error={error}"
+            );
+            false
+        }
+    }
+}
+
 /// Completes V1 durability after an owned terminal stream failure.
 /// 在自有终态流失败后完成 V1 持久化。
 ///
@@ -204,36 +265,14 @@ async fn finalize_failed_execution_stream_retry_lifecycle(
             return;
         }
     };
-    // terminalStatePersisted is the only condition that may reopen admission after this failed launch.
-    // terminalStatePersisted 是当前失败启动后允许重新开放准入的唯一条件。
-    let terminal_state_persisted = match persist_v1_execution_failure_boundary(
+    settle_stream_terminal_authority(
         &task_state,
         session_id,
+        false,
         reason_code,
+        terminal_persistence_guard,
     )
-    .await
-    {
-        Ok(()) => true,
-        Err(error) => {
-            eprintln!(
-                "[webui-service] V1 terminal stream failure persistence failed: session={session_id} error={error}"
-            );
-            false
-        }
-    };
-    // The guard opens admission only after the latest terminal or fail-closed replacement state is durable.
-    // 该守卫仅在最新终态或失败关闭替代状态可靠落盘后开放准入。
-    if terminal_state_persisted {
-        if let Err(error) = terminal_persistence_guard.release() {
-            eprintln!(
-                "[webui-service] terminal stream failure persistence owner release failed: session={session_id} error={error}"
-            );
-        }
-    } else {
-        // Unreleased drop deliberately retains the in-process admission block after an uncertain write.
-        // 未释放即丢弃会在写入结果不确定后有意保留进程内准入阻塞。
-        drop(terminal_persistence_guard);
-    }
+    .await;
 }
 
 /// Spawns one background task that forwards agent runtime stream events into the WebUI state.
@@ -1280,31 +1319,14 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                 StreamTaskExitReason::StaleKernelGeneration => "stale_kernel_generation",
                 StreamTaskExitReason::FinishedEventHandled => "finished_event_already_handled",
             };
-            let terminal_state_persisted =
-                match persist_v1_execution_failure_boundary(&task_state, session_id, reason_code)
-                    .await
-                {
-                    Ok(()) => true,
-                    Err(error) => {
-                        eprintln!(
-                            "[webui-service] persist early stream V1 terminal state failed: {error}"
-                        );
-                        false
-                    }
-                };
-            // Admission opens only after the latest terminal or fail-closed replacement revision is durable.
-            // 仅在最新终态或失败关闭替代修订可靠落盘后开放准入。
-            if terminal_state_persisted {
-                if let Err(error) = terminal_persistence_guard.release() {
-                    eprintln!(
-                        "[webui-service] early stream terminal-persistence owner release failed: session={session_id} error={error}"
-                    );
-                }
-            } else {
-                // Unreleased drop deliberately retains the in-process admission block after an uncertain write.
-                // 未释放即丢弃会在写入结果不确定后有意保留进程内准入阻塞。
-                drop(terminal_persistence_guard);
-            }
+            settle_stream_terminal_authority(
+                &task_state,
+                session_id,
+                false,
+                reason_code,
+                terminal_persistence_guard,
+            )
+            .await;
         }
         webui_trace(
             "stream_task_exit_handled",

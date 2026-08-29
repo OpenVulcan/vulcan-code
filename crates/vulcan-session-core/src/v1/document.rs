@@ -2322,16 +2322,95 @@ impl SessionDocument {
         &self,
         action_id: &ClientActionId,
     ) -> Result<Option<ContinuationDispatchResolution>, DomainError> {
-        let Some(prepared) = self.existing_api_start_for_action(action_id)? else {
+        let Some(through_seq) = self.events.last().map(|event| event.seq) else {
             return Ok(None);
         };
-        if let Some(observed) = self.api_transport_observed_for_action(action_id)? {
+        self.continuation_dispatch_resolution_through(action_id, through_seq)
+    }
+
+    /// Resolves one Continue dispatch from facts no later than an exact durable event frontier.
+    /// 仅使用不晚于精确可靠事件前沿的事实解析一次 Continue 分派。
+    ///
+    /// # Parameters / 参数
+    ///
+    /// `action_id` is the persisted client idempotency identity and `through_seq` is the last event
+    /// known to be durable by the unique storage owner.
+    /// `action_id` 是持久化客户端幂等身份；`through_seq` 是唯一存储 owner 已确认可靠的最后事件。
+    ///
+    /// # Returns / 返回值
+    ///
+    /// Returns only the dispatch state derivable from the bounded durable prefix. Later in-memory
+    /// facts are deliberately invisible to this query.
+    /// 仅返回可由有界可靠前缀推导的分派状态；更晚的内存事实会被该查询明确忽略。
+    pub fn continuation_dispatch_resolution_through(
+        &self,
+        action_id: &ClientActionId,
+        through_seq: Seq,
+    ) -> Result<Option<ContinuationDispatchResolution>, DomainError> {
+        let mut prepared = None;
+        for event in self
+            .events
+            .iter()
+            .take_while(|event| event.seq <= through_seq)
+        {
+            let EventBody::ApiStarted(started) = &event.event else {
+                continue;
+            };
+            if started.continuation_action_id.as_ref() != Some(action_id) {
+                continue;
+            }
+            let receipt = PreparedApiStart {
+                api_call_id: started.api_call_id,
+                started_seq: event.seq,
+                projection: started.projection.clone(),
+                continuation_action_id: Some(action_id.clone()),
+            };
+            if prepared.replace(receipt).is_some() {
+                return Err(DomainError::InvalidContinuationHistory {
+                    field: "duplicate_continue_api_binding",
+                });
+            }
+        }
+        let Some(prepared) = prepared else {
+            return Ok(None);
+        };
+        let mut observed_seq = None;
+        for event in self
+            .events
+            .iter()
+            .take_while(|event| event.seq <= through_seq)
+        {
+            let EventBody::ExecutionControl(control) = &event.event else {
+                continue;
+            };
+            if control.control_kind != ExecutionControlKind::ApiTransportObserved
+                || control.api_call_id != Some(prepared.api_call_id)
+            {
+                continue;
+            }
+            if observed_seq.replace(event.seq).is_some() {
+                return Err(DomainError::InvalidContinuationHistory {
+                    field: "duplicate_api_transport_observed",
+                });
+            }
+        }
+        if let Some(observed_seq) = observed_seq {
+            let observed = ApiTransportObservedReceipt {
+                api_call_id: prepared.api_call_id,
+                started_seq: prepared.started_seq,
+                observed_seq,
+                continuation_action_id: prepared.continuation_action_id,
+            };
             return Ok(Some(ContinuationDispatchResolution::TransportObserved(
                 observed,
             )));
         }
         let mut terminal_seq = None;
-        for event in &self.events {
+        for event in self
+            .events
+            .iter()
+            .take_while(|event| event.seq <= through_seq)
+        {
             let EventBody::ApiStats(stats) = &event.event else {
                 continue;
             };

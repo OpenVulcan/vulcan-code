@@ -60,6 +60,7 @@ function toolSummary(
       tool_call_id: options.toolCallId ?? seq,
       tool_name: "file_edit",
       input: { path: `file-${seq}.txt` },
+      request_stream_id: `review-selector-tool-${options.toolCallId ?? seq}`,
       status: options.status ?? "completed",
       ...(options.changeset === undefined ? {} : { changeset: options.changeset }),
     },

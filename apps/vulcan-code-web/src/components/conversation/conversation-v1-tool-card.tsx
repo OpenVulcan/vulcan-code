@@ -161,7 +161,7 @@ interface ToolPresentationStateProps {
 function ToolPresentationState(props: ToolPresentationStateProps) {
   // Icon is a visual companion to the exact status text.
   // Icon 是精确状态文本的视觉辅助。
-  const Icon = props.state === "running"
+  const Icon = props.state === "prepared" || props.state === "running"
     ? LoaderCircle
     : props.state === "waiting_user"
       ? Clock3
@@ -172,7 +172,7 @@ function ToolPresentationState(props: ToolPresentationStateProps) {
           : CircleStop;
   return (
     <span className={cn("tool-presentation-state", `state-${props.state}`)}>
-      <Icon className={props.state === "running" ? "animate-spin" : undefined} size={14} aria-hidden="true" />
+      <Icon className={props.state === "prepared" || props.state === "running" ? "animate-spin" : undefined} size={14} aria-hidden="true" />
       <span>{toolStateLabel(props.state)}</span>
     </span>
   );
@@ -182,6 +182,8 @@ function ToolPresentationState(props: ToolPresentationStateProps) {
  * 返回一个持久化工具状态的用户可见标签。 */
 function toolStateLabel(state: V1ToolPresentationState): string {
   switch (state) {
+    case "prepared":
+      return "准备调用";
     case "running":
       return "正在调用";
     case "waiting_user":

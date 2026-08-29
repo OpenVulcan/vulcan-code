@@ -758,6 +758,10 @@ impl InferenceWorkloadScheduler {
         };
         loop {
             let changed = self.changed.notified();
+            tokio::pin!(changed);
+            // Register before checking scheduler capacity because releases use notify_waiters.
+            // 在检查调度容量前完成注册，因为容量释放使用 notify_waiters。
+            changed.as_mut().enable();
             {
                 let mut state = self.state.lock().map_err(lock_error)?;
                 if state.can_admit(class, ticket) {
@@ -771,9 +775,11 @@ impl InferenceWorkloadScheduler {
                 }
             }
             match scheduler_wait_duration(deadline_unix_ms)? {
-                None => changed.await,
+                None => changed.as_mut().await,
                 Some(duration) => {
-                    tokio::time::timeout(duration, changed).await.map_err(|_| {
+                    tokio::time::timeout(duration, changed.as_mut())
+                        .await
+                        .map_err(|_| {
                         ConfiguredInferenceError::new(
                             ConfiguredInferenceErrorCategory::Limit,
                             "Configured inference expired while waiting for scheduled capacity.",
@@ -1974,10 +1980,14 @@ impl ConfiguredInferenceService {
         if !is_leader {
             loop {
                 let notified = state.terminal_notify.notified();
+                tokio::pin!(notified);
+                // Register before reading the shared terminal result because all leaders notify waiters.
+                // 在读取共享终态结果前完成注册，因为所有领导请求都使用 notify_waiters。
+                notified.as_mut().enable();
                 if let Some(result) = state.result.lock().map_err(lock_error)?.clone() {
                     return result;
                 }
-                notified.await;
+                notified.as_mut().await;
             }
         }
         let guard = SharedInferenceLeaderGuard {
@@ -2648,9 +2658,13 @@ impl ConfiguredInferenceService {
             // transition between the read and the await cannot be missed.
             // 在读取阶段前注册通知 Future，避免终态转换发生在读取与等待之间而丢失唤醒。
             let terminal_notification = state.terminal_notify.notified();
+            tokio::pin!(terminal_notification);
+            // Register before reading the execution phase because terminal publishers use notify_waiters.
+            // 在读取执行阶段前完成注册，因为终态发布者使用 notify_waiters。
+            terminal_notification.as_mut().enable();
             let snapshot = state.snapshot.lock().map_err(lock_error)?.clone();
             match snapshot.phase {
-                ConfiguredLlmExecutionPhase::Running => terminal_notification.await,
+                ConfiguredLlmExecutionPhase::Running => terminal_notification.as_mut().await,
                 ConfiguredLlmExecutionPhase::Completed => {
                     return snapshot.response.ok_or_else(|| {
                         ConfiguredInferenceError::new(

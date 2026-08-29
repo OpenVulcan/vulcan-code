@@ -56,6 +56,10 @@ const EMBEDDED_TASK_PARTITION: &str = "TASK";
 /// 用于无扫描派生 `TASK/task-{session_id}` 的固定确定性目录桶。
 const EMBEDDED_TASK_BUCKET: &str = "task";
 
+/// Fixed V1 session partition below the application data root.
+/// 应用数据根目录下固定的 V1 会话分区。
+pub const SESSION_V1_STORAGE_PARTITION: &str = "sessions";
+
 /// One failure crossing the V1 index and physical-storage boundary.
 /// 一条跨越 V1 索引与物理存储边界的失败。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -567,8 +571,8 @@ pub struct SessionV1FlushResult {
 ///
 /// - `data_root`: Absolute application data root retained by the controller.
 ///   `data_root`：控制器保留的应用数据绝对根目录。
-/// - `storage_partition`: Exact V1 storage partition such as `code/sessions`.
-///   `storage_partition`：精确 V1 存储分区，例如 `code/sessions`。
+/// - `storage_partition`: Exact V1 storage partition `sessions` below `data_root`.
+///   `storage_partition`：位于 `data_root` 下的精确 V1 存储分区 `sessions`。
 /// - `project_partition`: Exact project partition stored in V1 metadata/index.
 ///   `project_partition`：V1 metadata/index 中保存的精确项目分区。
 ///
@@ -591,12 +595,7 @@ pub fn project_resource_directory_v1(
         }
         .into());
     }
-    validate_relative_path(storage_partition).map_err(|detail| {
-        SessionIndexV1Error::InvalidLocator {
-            session_id: None,
-            detail: format!("invalid storage_partition: {detail}"),
-        }
-    })?;
+    validate_production_storage_partition(storage_partition, None)?;
     validate_project_partition(project_partition).map_err(|detail| {
         SessionIndexV1Error::InvalidLocator {
             session_id: None,
@@ -773,7 +772,7 @@ pub async fn list_active_sessions_v1(
 ) -> Result<Vec<SessionV1ListEntry>, SessionV1StoreError> {
     list_active_session_index_v1(controller, project_id)
         .await
-        .map(|rows| rows.into_iter().map(SessionV1ListEntry::from).collect())
+        .map(|rows| current_partition_list_entries(&controller.data_root, rows))
         .map_err(SessionV1StoreError::from)
 }
 
@@ -785,8 +784,23 @@ pub async fn list_archived_sessions_v1(
 ) -> Result<Vec<SessionV1ListEntry>, SessionV1StoreError> {
     list_archived_session_index_v1(controller, project_id)
         .await
-        .map(|rows| rows.into_iter().map(SessionV1ListEntry::from).collect())
+        .map(|rows| current_partition_list_entries(&controller.data_root, rows))
         .map_err(SessionV1StoreError::from)
+}
+
+/// Projects only exact current-partition locators and silently ignores unsupported development rows.
+/// 仅投影精确的当前分区定位信息，并静默忽略不受支持的开发期记录。
+fn current_partition_list_entries(
+    data_root: &Path,
+    rows: Vec<SessionIndexV1Row>,
+) -> Vec<SessionV1ListEntry> {
+    rows.into_iter()
+        .filter_map(|row| {
+            storage_locator_from_row(data_root, row.clone())
+                .ok()
+                .map(|_| SessionV1ListEntry::from(row))
+        })
+        .collect()
 }
 
 /// Validates one V1 restore target without changing an existing SQLite lifecycle row.
@@ -1070,12 +1084,10 @@ fn create_index_row(
             detail: "project_id must not be empty".to_string(),
         });
     }
-    validate_relative_path(request.storage_partition).map_err(|detail| {
-        SessionIndexV1Error::InvalidLocator {
-            session_id: Some(request.metadata.session_id.clone()),
-            detail: format!("invalid storage_partition: {detail}"),
-        }
-    })?;
+    validate_production_storage_partition(
+        request.storage_partition,
+        Some(request.metadata.session_id.as_str()),
+    )?;
     let relative_path = compose_relative_path(
         &request.metadata.project_tag,
         request.date_bucket,
@@ -1105,12 +1117,7 @@ fn storage_locator_from_row(
     data_root: &Path,
     row: SessionIndexV1Row,
 ) -> Result<SessionV1StorageLocator, SessionIndexV1Error> {
-    validate_relative_path(&row.storage_partition).map_err(|detail| {
-        SessionIndexV1Error::InvalidLocator {
-            session_id: Some(row.session_id.clone()),
-            detail: format!("invalid storage_partition: {detail}"),
-        }
-    })?;
+    validate_production_storage_partition(&row.storage_partition, Some(row.session_id.as_str()))?;
     validate_relative_path(&row.relative_path).map_err(|detail| {
         SessionIndexV1Error::InvalidLocator {
             session_id: Some(row.session_id.clone()),
@@ -1170,6 +1177,29 @@ fn storage_locator_from_row(
     })
 }
 
+/// Validates the single production partition and rejects obsolete duplicate-root locators.
+/// 校验唯一生产分区，并拒绝会重复拼接数据根的过时定位信息。
+fn validate_production_storage_partition(
+    storage_partition: &str,
+    session_id: Option<&str>,
+) -> Result<(), SessionIndexV1Error> {
+    validate_relative_path(storage_partition).map_err(|detail| {
+        SessionIndexV1Error::InvalidLocator {
+            session_id: session_id.map(str::to_string),
+            detail: format!("invalid storage_partition: {detail}"),
+        }
+    })?;
+    if storage_partition != SESSION_V1_STORAGE_PARTITION {
+        return Err(SessionIndexV1Error::InvalidLocator {
+            session_id: session_id.map(str::to_string),
+            detail: format!(
+                "unsupported storage_partition {storage_partition:?}; expected {SESSION_V1_STORAGE_PARTITION:?} below the application data root"
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// Creates one exact physical V1 session tree for downstream persistence tests.
 /// 为下游持久化测试创建一棵精确的 V1 会话物理目录树。
 ///
@@ -1201,7 +1231,7 @@ pub fn create_session_v1_storage_fixture(
         session_id: session_id.to_string(),
         project_id: "v1-test-project".to_string(),
         project_tag: "v1-test-project".to_string(),
-        storage_partition: "code/sessions".to_string(),
+        storage_partition: SESSION_V1_STORAGE_PARTITION.to_string(),
         relative_path: compose_relative_path("v1-test-project", "1970-01-01", session_id)
             .map_err(|error| format!("Failed to compose V1 test locator: {error}"))?,
         title: "V1 persistence test session".to_string(),
@@ -1485,7 +1515,7 @@ connection.close()
     ) -> CreateSessionV1Request<'a> {
         CreateSessionV1Request {
             project_id: "project-id",
-            storage_partition: "code/sessions",
+            storage_partition: SESSION_V1_STORAGE_PARTITION,
             date_bucket: "2026-08-27",
             metadata,
             runtime_lock,
@@ -1512,7 +1542,7 @@ connection.close()
         let observed_index_called = Arc::clone(&index_called);
         let expected_metadata_path = data_root
             .path()
-            .join("code/sessions/project-tag/2026-08-27-session-1/metadata.json");
+            .join("sessions/project-tag/2026-08-27-session-1/metadata.json");
 
         let created = create_indexed_session_v1_with_insert(
             data_root.path(),
@@ -1548,7 +1578,7 @@ connection.close()
         let row = create_index_row(&request).expect("valid index row");
         let expected_session_dir = data_root
             .path()
-            .join("code/sessions/project-tag/2026-08-27-session-2");
+            .join("sessions/project-tag/2026-08-27-session-2");
 
         let error =
             create_indexed_session_v1_with_insert(data_root.path(), &request, row, |_row| async {
@@ -1596,7 +1626,7 @@ connection.close()
         let row = create_index_row(&request).expect("valid index row");
         let metadata_path = data_root
             .path()
-            .join("code/sessions/project-tag/2026-08-27-session-retry/metadata.json");
+            .join("sessions/project-tag/2026-08-27-session-retry/metadata.json");
 
         create_indexed_session_v1_with_insert(
             data_root.path(),
@@ -1766,7 +1796,7 @@ connection.close()
             data_root
                 .path()
                 .join(
-                    "code/sessions/project-tag/2026-08-27-parent-session/TASK/task-child-session/metadata.json"
+                    "sessions/project-tag/2026-08-27-parent-session/TASK/task-child-session/metadata.json"
                 )
                 .is_file()
         );
@@ -1812,7 +1842,7 @@ connection.close()
         assert!(
             !data_root
                 .path()
-                .join("code/sessions/project-tag/2026-08-27-parent-session/TASK/task-child-session")
+                .join("sessions/project-tag/2026-08-27-parent-session/TASK/task-child-session")
                 .exists()
         );
     }
@@ -1826,7 +1856,7 @@ connection.close()
             session_id: "session-4".to_string(),
             project_id: "project-id".to_string(),
             project_tag: "project-tag".to_string(),
-            storage_partition: "code/sessions".to_string(),
+            storage_partition: SESSION_V1_STORAGE_PARTITION.to_string(),
             relative_path: "other-tag/2026-08-27-session-4".to_string(),
             title: "title".to_string(),
             created_at_ms: 4,
@@ -1841,6 +1871,63 @@ connection.close()
         assert!(matches!(error, SessionIndexV1Error::InvalidLocator { .. }));
     }
 
+    /// The production session partition is joined exactly once below the application data root.
+    /// 生产会话分区只在应用数据根目录下拼接一次。
+    #[test]
+    fn production_partition_is_directly_below_application_data_root() {
+        let profile_root = tempfile::tempdir().expect("temporary profile root");
+        let application_data_root = profile_root.path().join("code");
+        let row = SessionIndexV1Row {
+            session_id: "session-direct-root".to_string(),
+            project_id: "project-id".to_string(),
+            project_tag: "project-tag".to_string(),
+            storage_partition: SESSION_V1_STORAGE_PARTITION.to_string(),
+            relative_path: "project-tag/2026-08-29-session-direct-root".to_string(),
+            title: "title".to_string(),
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            archived_at_ms: None,
+            unread: 0,
+        };
+
+        let locator = storage_locator_from_row(&application_data_root, row).expect("exact locator");
+
+        assert_eq!(
+            locator.session_directory(),
+            application_data_root.join("sessions/project-tag/2026-08-29-session-direct-root")
+        );
+        assert!(
+            !locator
+                .session_directory()
+                .starts_with(application_data_root.join("code"))
+        );
+    }
+
+    /// Obsolete locators that prepend `code` a second time are unsupported and omitted from lists.
+    /// 会再次前置 `code` 的过时定位信息不受支持，并从列表中忽略。
+    #[test]
+    fn legacy_duplicate_code_partition_is_rejected_and_omitted_from_lists() {
+        let data_root = tempfile::tempdir().expect("temporary application data root");
+        let row = SessionIndexV1Row {
+            session_id: "session-legacy-root".to_string(),
+            project_id: "project-id".to_string(),
+            project_tag: "project-tag".to_string(),
+            storage_partition: "code/sessions".to_string(),
+            relative_path: "project-tag/2026-08-29-session-legacy-root".to_string(),
+            title: "legacy".to_string(),
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            archived_at_ms: None,
+            unread: 0,
+        };
+
+        let error = storage_locator_from_row(data_root.path(), row.clone())
+            .expect_err("duplicate code partition must be unsupported");
+
+        assert!(matches!(error, SessionIndexV1Error::InvalidLocator { .. }));
+        assert!(current_partition_list_entries(data_root.path(), vec![row]).is_empty());
+    }
+
     /// Missing metadata is reported as absence and never triggers a sibling scan.
     /// metadata 缺失会报告为不存在，绝不触发同级目录扫描。
     #[test]
@@ -1850,7 +1937,7 @@ connection.close()
             session_id: "session-5".to_string(),
             project_id: "project-id".to_string(),
             project_tag: "project-tag".to_string(),
-            storage_partition: "code/sessions".to_string(),
+            storage_partition: SESSION_V1_STORAGE_PARTITION.to_string(),
             relative_path: "project-tag/2026-08-27-session-5".to_string(),
             title: "title".to_string(),
             created_at_ms: 5,
@@ -1862,7 +1949,7 @@ connection.close()
         fs::create_dir_all(
             data_root
                 .path()
-                .join("code/sessions/project-tag/another-session"),
+                .join("sessions/project-tag/another-session"),
         )
         .expect("create unrelated sibling");
         assert!(!exact_metadata_file_exists(&locator).expect("missing metadata outcome"));
@@ -1877,7 +1964,7 @@ connection.close()
             session_id: "session-6".to_string(),
             project_id: "project-id".to_string(),
             project_tag: "project-tag".to_string(),
-            storage_partition: "code/sessions".to_string(),
+            storage_partition: SESSION_V1_STORAGE_PARTITION.to_string(),
             relative_path: "project-tag/2026-08-27-session-6".to_string(),
             title: "title".to_string(),
             created_at_ms: 6,
@@ -2083,7 +2170,7 @@ INSERT INTO session_index_v1 (
                     ControllerSqliteValue::String("not-a-session-uuid".to_string()),
                     ControllerSqliteValue::String("project-id".to_string()),
                     ControllerSqliteValue::String("project-tag".to_string()),
-                    ControllerSqliteValue::String("code/sessions".to_string()),
+                    ControllerSqliteValue::String(SESSION_V1_STORAGE_PARTITION.to_string()),
                     ControllerSqliteValue::String(
                         "project-tag/2026-08-28-not-a-session-uuid".to_string(),
                     ),

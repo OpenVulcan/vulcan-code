@@ -28,6 +28,10 @@ const SERVICE_EPOCH = "service-epoch-primary";
  * 权威 V1 事件体允许的工具调用状态。 */
 type ToolCallStatus = Extract<ConversationEventBody, { kind: "tool_call" }>["status"];
 
+/** Exact mutable tool-call body used by lifecycle fixtures.
+ * 生命周期夹具使用的精确可变工具调用事件体。 */
+type ToolCallBody = Extract<ConversationEventBody, { kind: "tool_call" }>;
+
 /** API-stat status accepted by the authoritative V1 event body.
  * 权威 V1 事件体允许的 API 统计状态。 */
 type ApiStatStatus = Extract<ConversationEventBody, { kind: "api_stats" }>["status"];
@@ -142,13 +146,14 @@ function toolCall(
   toolCallId: number,
   status: ToolCallStatus = "running",
   inputPath = "D:/project/README.md",
-): ConversationEventBody {
+): ToolCallBody {
   return {
     kind: "tool_call",
     api_call_id: 5,
     tool_call_id: toolCallId,
     tool_name: "file",
     input: { path: inputPath },
+    request_stream_id: `store-tool-${toolCallId}`,
     status,
   };
 }
@@ -583,6 +588,106 @@ describe("conversation-event-window-store V1 same-seq evolution", () => {
 
     expect(store.render()[0]).toMatchObject({ event_revision: 3, updated_at_ms: 50 });
     expect(store.render()[0].event).toMatchObject({ status: "completed" });
+  });
+
+  it("accepts prepared, running, terminal, and durable acknowledgement without losing the memory frontier", () => {
+    const store = new ConversationEventWindowStore();
+    const prepared = {
+      ...toolCall(5, "prepared"),
+      request_stream_id: "request-stream-5",
+    } satisfies ConversationEventBody;
+    const running = {
+      ...prepared,
+      status: "running" as const,
+      started_at_ms: 20,
+    } satisfies ConversationEventBody;
+    const completed = {
+      ...running,
+      status: "completed" as const,
+      output: { result: "done" },
+      finished_at_ms: 30,
+    } satisfies ConversationEventBody;
+    store.hydrate(batch([summary(1, prepared, 10, 1)]));
+
+    store.applyLive(livePatch([summary(1, running, 20, 2)]));
+    store.applyLive(livePatch([summary(1, completed, 30, 3)]));
+    store.applyLive(livePatch([], {
+      durability: "durable",
+      base_durable_revision: 1,
+      revision: 3,
+    }));
+
+    expect(store.getFrontier()).toEqual({
+      service_epoch: SERVICE_EPOCH,
+      memory_revision: 3,
+      durable_revision: 3,
+    });
+    expect(store.render()[0].event).toMatchObject({
+      status: "completed",
+      started_at_ms: 20,
+      finished_at_ms: 30,
+    });
+  });
+
+  it("accepts a reconnect that coalesces prepared directly into a terminal tool snapshot", () => {
+    const store = new ConversationEventWindowStore();
+    const prepared = {
+      ...toolCall(5, "prepared"),
+      request_stream_id: "request-stream-5",
+    } satisfies ConversationEventBody;
+    const completed = {
+      ...prepared,
+      status: "completed" as const,
+      started_at_ms: 20,
+      finished_at_ms: 30,
+      output: { result: "done" },
+    } satisfies ConversationEventBody;
+    store.hydrate(batch([summary(1, prepared, 10, 1)]));
+
+    store.applyReconnect({
+      session_id: SESSION_ID,
+      window_generation: WINDOW_GENERATION,
+      service_epoch: SERVICE_EPOCH,
+      base_memory_revision: 1,
+      memory_revision: 3,
+      durable_revision: 3,
+      events: [summary(1, completed, 30, 3)],
+    });
+
+    expect(store.getFrontier()).toEqual({
+      service_epoch: SERVICE_EPOCH,
+      memory_revision: 3,
+      durable_revision: 3,
+    });
+    expect(store.render()[0].event).toMatchObject({ status: "completed" });
+  });
+
+  it("allows a terminal Provider-source attachment but rejects terminal output drift", () => {
+    const store = new ConversationEventWindowStore();
+    const completed = {
+      ...toolCall(5, "completed"),
+      started_at_ms: 20,
+      finished_at_ms: 30,
+      output: { result: "done" },
+      request_stream_id: "request-stream-5",
+    } satisfies ConversationEventBody;
+    const withProviderSource = {
+      ...completed,
+      provider_source: {
+        provider: "test-provider",
+        model: "test-model",
+        covered_until_seq: 1,
+        fingerprint_sha256: "a".repeat(64),
+      },
+    } satisfies ConversationEventBody;
+    store.hydrate(batch([summary(1, completed, 30, 1)]));
+    store.applyLive(livePatch([summary(1, withProviderSource, 40, 2)]));
+
+    expect(() => store.applyLive(livePatch([summary(1, {
+      ...withProviderSource,
+      output: { result: "drifted" },
+    }, 50, 3)]))).toThrow(/illegal tool_call evolution/);
+    expect(store.render()[0].event).toEqual(withProviderSource);
   });
 
   it("accepts a forward event revision when the display timestamp moves backward", () => {

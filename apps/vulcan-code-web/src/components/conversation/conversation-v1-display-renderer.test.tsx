@@ -64,6 +64,12 @@ describe("ConversationV1DisplayRenderer", () => {
         input_source: "queued_scheduled",
         text: "scheduled input",
       }),
+      summary(3, {
+        kind: "assistant_text",
+        api_call_id: 3,
+        text: "turn-ending answer",
+        status: "completed",
+      }),
     ];
     // onAction proves action controls require an explicit production owner.
     // onAction 证明动作控件必须拥有显式生产归属。
@@ -79,8 +85,11 @@ describe("ConversationV1DisplayRenderer", () => {
       </I18nProvider>,
     );
 
-    expect(markup.match(/编辑用户提示词/g)).toHaveLength(1);
-    expect(markup.match(/分叉会话/g)).toHaveLength(1);
+    expect(markup.match(/aria-label="编辑用户提示词"/g)).toHaveLength(1);
+    expect(markup.match(/aria-label="分叉会话"/g)).toHaveLength(1);
+    expect(markup).toContain("lucide-pencil");
+    expect(markup).toContain("lucide-split");
+    expect(seqOffset(markup, 2)).toBeLessThan(seqOffset(markup, 3));
     expect(markup).toContain("editable root");
     expect(markup).toContain("scheduled input");
   });
@@ -98,10 +107,11 @@ describe("ConversationV1DisplayRenderer", () => {
       summary(2, {
         kind: "tool_call",
         api_call_id: 1,
-        tool_call_id: 1,
-        tool_name: "image_generate",
-        input: { prompt: "render" },
-        status: "completed",
+      tool_call_id: 1,
+      tool_name: "image_generate",
+      input: { prompt: "render" },
+      request_stream_id: "display-renderer-tool-1",
+      status: "completed",
         generated_resources: [
           {
             resource_id: resourceId(201),
@@ -183,6 +193,9 @@ describe("ConversationV1DisplayRenderer", () => {
     expect(popupOnlyMarkup).not.toContain("first reasoning");
     expect(popupOnlyMarkup).not.toContain("second reasoning");
     expect(popupOnlyMarkup).toContain("answer after reasoning");
+    expect(inlineMarkup).toContain('class="thinking-block"');
+    expect(inlineMarkup).toContain("思考过程");
+    expect(inlineMarkup).not.toContain("处理过程");
   });
 
   it("connects one hydrated controller to the standalone React test host", async () => {
@@ -241,15 +254,19 @@ describe("ConversationV1DisplayRenderer", () => {
     await controller.hydrate(hydration.session_id);
     // markup proves the host reads controller events without a legacy transcript model.
     // markup 证明测试宿主无需旧 transcript 模型即可读取控制器事件。
-    const markup = renderToStaticMarkup(<ConversationV1EventWindowView controller={controller} />);
+    const markup = renderToStaticMarkup(
+      <I18nProvider initialLocale="zh-CN">
+        <ConversationV1EventWindowView controller={controller} />
+      </I18nProvider>,
+    );
 
     expect(markup).toContain("controller-owned input");
     expect(markup).toContain('data-seq="1"');
   });
 
-  it("renders every visible V1 family in exact seq order after full-sequence validation", () => {
-    // events includes HostOnly boundaries that must occupy seq without becoming UI nodes.
-    // events 包含必须占据 seq 但不能成为 UI 节点的 HostOnly 边界。
+  it("restores the established transcript hierarchy without exposing structural ledger rows", () => {
+    // events models one tool API followed by one final no-tool API in the same logical Turn.
+    // events 模拟同一逻辑 Turn 中一个工具 API 以及随后一个无工具最终 API。
     const events: readonly ConversationEventSummary[] = [
       summary(1, {
         kind: "system_context",
@@ -282,16 +299,17 @@ describe("ConversationV1DisplayRenderer", () => {
       summary(5, {
         kind: "assistant_text",
         api_call_id: 31,
-        text: "The **result** is ready.",
+        text: "I will inspect the exact source.",
         status: "completed",
       }),
       summary(6, {
         kind: "tool_call",
         api_call_id: 31,
-        tool_call_id: 51,
-        tool_name: "shell_command",
-        input: { command: "rg exact-source" },
-        output: { stdout: "one match" },
+      tool_call_id: 51,
+      tool_name: "shell_command",
+      input: { command: "rg exact-source" },
+      request_stream_id: "display-renderer-tool-51",
+      output: { stdout: "one match" },
         status: "completed",
       }),
       summary(7, {
@@ -307,21 +325,89 @@ describe("ConversationV1DisplayRenderer", () => {
         timing: { completed_at_ms: 200 },
       }, "ui_only"),
       summary(8, {
+        kind: "api_started",
+        api_call_id: 32,
+        purpose: "main_generation",
+        request: { provider: "openai", model: "gpt-v1" },
+      }, "host_only"),
+      summary(9, {
+        kind: "assistant_text",
+        api_call_id: 32,
+        text: "The **result** is ready.",
+        status: "completed",
+      }),
+      summary(10, {
+        kind: "api_stats",
+        api_call_id: 32,
+        purpose: "main_generation",
+        provider: "openai",
+        model: "gpt-v1",
+        thinking_level: "high",
+        usage: { input_tokens: 24, output_tokens: 6, total_tokens: 30 },
+        status: "completed",
+        continuation_eligibility: "forbidden",
+        timing: { completed_at_ms: 220 },
+      }, "ui_only"),
+      summary(11, {
+        kind: "turn_boundary",
+        outcome: "completed",
+      }, "provider"),
+      summary(12, {
+        kind: "turn_stats",
+        start_seq: 1,
+        end_seq: 11,
+        outcome: "completed",
+        duration_ms: 1200,
+        buckets: {
+          direct: {
+            api_call_count: 2,
+            unknown_usage_api_call_count: 0,
+            tool_call_count: 1,
+            subagent_return_count: 0,
+            usage: {
+              uncached_input_tokens: 44,
+              output_tokens: 14,
+              total_tokens: 58,
+              cache_read_tokens: 0,
+            },
+          },
+          subagent: {
+            api_call_count: 0,
+            unknown_usage_api_call_count: 0,
+            tool_call_count: 0,
+            subagent_return_count: 0,
+            usage: {},
+          },
+          total: {
+            api_call_count: 2,
+            unknown_usage_api_call_count: 0,
+            tool_call_count: 1,
+            subagent_return_count: 0,
+            usage: {
+              uncached_input_tokens: 44,
+              output_tokens: 14,
+              total_tokens: 58,
+              cache_read_tokens: 0,
+            },
+          },
+        },
+      }, "ui_only"),
+      summary(13, {
         kind: "display_note",
         notice_kind: "resumed",
         severity: "info",
         reason_code: "connection_resumed",
         redacted_detail: "Connection restored",
       }, "ui_only"),
-      summary(9, {
+      summary(14, {
         kind: "request_config_changed",
         previous: { provider: "openai", model: "gpt-v1", thinking_level: "high" },
         current: { provider: "openai", model: "gpt-v2", thinking_level: "max" },
       }, "ui_only"),
-      summary(10, {
+      summary(15, {
         kind: "execution_control",
         control_kind: "recovered",
-        api_call_id: 31,
+        api_call_id: 32,
       }, "host_only"),
     ];
     // resourceCatalog is the exact owner-bound metadata projection for the two persisted ids.
@@ -350,28 +436,49 @@ describe("ConversationV1DisplayRenderer", () => {
     // markup 是挂载原生工具卡后的独立 V1 渲染器输出。
     const markup = renderToStaticMarkup(
       <I18nProvider initialLocale="zh-CN">
-        <ConversationV1DisplayRenderer events={events} resourceCatalog={resourceCatalog} />
+        <ConversationV1DisplayRenderer
+          events={events}
+          onCopyText={() => undefined}
+          onRootInputGenerationAction={() => undefined}
+          resourceCatalog={resourceCatalog}
+        />
       </I18nProvider>,
     );
-    // visibleSeqs captures the exact UI sequence after renderer-only HostOnly filtering.
-    // visibleSeqs 捕获仅由 renderer 过滤 HostOnly 后的精确 UI 顺序。
-    const visibleSeqs = [1, 3, 4, 5, 6, 7, 8, 9];
-
+    // Structural facts remain in validation but do not become standalone transcript rows.
+    // 结构事实继续参与校验，但不会成为独立转录行。
+    expect(seqOffset(markup, 1)).toBe(-1);
     expect(seqOffset(markup, 2)).toBe(-1);
+    expect(seqOffset(markup, 7)).toBe(-1);
+    expect(seqOffset(markup, 8)).toBe(-1);
     expect(seqOffset(markup, 10)).toBe(-1);
-    for (let index = 1; index < visibleSeqs.length; index += 1) {
-      expect(seqOffset(markup, visibleSeqs[index - 1])).toBeLessThan(seqOffset(markup, visibleSeqs[index]));
-    }
-    expect(markup).toContain("Continue the active goal.");
+    expect(seqOffset(markup, 11)).toBe(-1);
+    expect(seqOffset(markup, 15)).toBe(-1);
+    expect(seqOffset(markup, 3)).toBeLessThan(seqOffset(markup, 4));
+    expect(seqOffset(markup, 4)).toBeLessThan(seqOffset(markup, 9));
+    expect(seqOffset(markup, 9)).toBeLessThan(seqOffset(markup, 12));
+    expect(seqOffset(markup, 12)).toBeLessThan(seqOffset(markup, 13));
+    expect(seqOffset(markup, 13)).toBeLessThan(seqOffset(markup, 14));
+    expect(markup).not.toContain("Continue the active goal.");
     expect(markup).toContain("Inspect the repository");
     expect(markup).toContain("diagram.png");
     expect(markup).toContain("[MISSING PROJECT RESOURCE]");
     expect(markup).not.toContain("资源：101, 102");
     expect(markup).toContain("Checking");
     expect(markup).toContain("result");
+    expect(markup).toContain("处理过程");
+    expect(markup).toContain('class="thinking-block"');
+    expect(markup).toContain("思考过程");
+    expect(markup).toContain('class="message-row user conversation-v1-event"');
+    expect(markup).toContain('class="message-row assistant assistant-final-output conversation-v1-event"');
     expect(markup).toContain('class="tool-presentation-card v1-tool-card');
     expect(markup).toContain("rg exact-source");
-    expect(markup).toContain("总计 28");
+    expect(markup).toContain('class="turn-stats-row completed"');
+    expect(markup).toContain("回合统计 · API 2 · 工具 1");
+    expect(markup).toContain('aria-label="编辑用户提示词"');
+    expect(markup).toContain('aria-label="分叉会话"');
+    expect(markup).toContain("lucide-pencil");
+    expect(markup).toContain("lucide-split");
+    expect(markup).not.toContain("回合结束");
     expect(markup).toContain("Connection restored");
     expect(markup).toContain("gpt-v1 · high");
     expect(markup).toContain("gpt-v2 · max");
@@ -424,6 +531,7 @@ describe("ConversationV1DisplayRenderer", () => {
 
     expect(markup).not.toContain("host-only content");
     expect(markup).toContain('data-seq="2"');
-    expect(markup).toContain("goal_status");
+    expect(markup).toContain("目标状态已更新");
+    expect(markup).not.toContain("goal_status");
   });
 });

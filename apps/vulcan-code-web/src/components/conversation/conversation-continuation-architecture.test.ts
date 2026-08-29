@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 // Returns: UTF-8 source text used for continuation ownership assertions.
 // 返回值：用于继续流程所有权断言的 UTF-8 源码文本。
 function readContinuationSource(relativePath: string): string {
-  return readFileSync(fileURLToPath(new URL(relativePath, import.meta.url)), "utf8");
+  return readFileSync(fileURLToPath(new URL(relativePath, import.meta.url)), "utf8").replace(/\r\n/g, "\n");
 }
 
 describe("conversation continuation architecture", () => {
@@ -49,7 +49,7 @@ describe("conversation continuation architecture", () => {
     expect(handlerSource).toContain('kind: "failed"');
   });
 
-  it("keeps the ordinary service boundary free of continuation authorization", () => {
+  it("keeps ordinary composer submissions independent from problem-turn recovery", () => {
     // actions owns the selected-conversation decision at the composer submission boundary.
     // actions 持有输入区提交边界的选中会话决策。
     const actions = readContinuationSource("../workspace/workbench-layout/conversation-actions.ts");
@@ -71,10 +71,7 @@ describe("conversation continuation architecture", () => {
     expect(handlerSource).not.toContain("continuationExpectation");
     expect(handlerSource).not.toContain("selectedConversation?.continuation");
     expect(service).not.toContain("ConversationContinuationExpectation");
-    expect(service).not.toContain("continuationExpectation");
     expect(service).not.toContain("expectedGeneration");
     expect(service).not.toContain("expectedLedgerRevision");
-    expect(service).toContain("clientContinuationId");
-    expect(service).toContain("supplement?.prompt");
   });
 });

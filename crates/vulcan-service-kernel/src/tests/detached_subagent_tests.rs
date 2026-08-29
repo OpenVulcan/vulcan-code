@@ -347,18 +347,18 @@ fn regular_execution_report_hook_lock_failure_preserves_workspace_state() {
     assert!(!workspace.session_runtime_state.contains_key(&session_id));
 }
 
-/// Verifies a VMM/Hook turn mismatch is rejected before either terminal state machine consumes ownership.
-/// 验证 VMM 与 Hook 回合身份不匹配时，会在任一终态状态机消费所有权之前被拒绝。
+/// Verifies stale VMM ownership is ignored while the managed service is not fully ready.
+/// 验证托管服务未完全就绪时会忽略陈旧的 VMM 所有权。
 #[test]
-fn regular_execution_report_vmm_turn_mismatch_preserves_both_owners() {
+fn regular_execution_report_ignores_stale_vmm_owner_while_service_stopped() {
     // session_id identifies the regular session whose exact terminal ownership is under test.
     // session_id 标识正在测试精确终态所有权的普通会话。
     let session_id = SessionId::new_v4();
     // controller_root keeps this test's isolated VMM files alive through every assertion.
     // controller_root 在全部断言期间保持本测试隔离 VMM 文件有效。
     let controller_root = TestControllerRuntimeRoot::new(session_id);
-    // service_state contains one registered V1 session and one deliberately divergent VMM lease.
-    // service_state 包含一个已注册 V1 会话与一条刻意分歧的 VMM 租约。
+    // service_state keeps the managed VMM runtime stopped while retaining one stale controller lease.
+    // service_state 保持托管 VMM 运行时未启动，同时保留一条陈旧控制器租约。
     let service_state = test_service_state_with_parent_session(session_id);
     let handle = crate::session_runtime_registry_v1::SessionHandle::new(
         session_id,
@@ -444,8 +444,8 @@ fn regular_execution_report_vmm_turn_mismatch_preserves_both_owners() {
             .to_string()
     };
     assert_ne!(retained_hook_turn_id, "vmm-divergent-turn");
-    // report is a successful user turn that would consume TTL if both identities matched.
-    // report 是一个成功用户回合，若两个身份匹配本应消费 TTL。
+    // report has no admitted preparation, so stale VMM state cannot authorize terminal participation.
+    // report 不含已准入的准备事实，因此陈旧 VMM 状态不能授权终态参与。
     let report = ExecutionRunReport {
         session_id,
         preparation: None,
@@ -462,28 +462,26 @@ fn regular_execution_report_vmm_turn_mismatch_preserves_both_owners() {
         error: None,
         controller_events: Vec::new(),
     };
-    // error proves the cross-state identity fence rejected the terminal commit.
-    // error 证明跨状态身份栅栏拒绝了终态提交。
-    let error = match apply_execution_report_to_memory(
+    // outcome proves a stopped service cannot inject a stale VMM identity check into terminal commit.
+    // outcome 证明未启动服务不能把陈旧 VMM 身份校验注入终态提交。
+    let outcome = apply_execution_report_to_memory(
         &ServiceEventEmitter::new(Vec::new()),
         &state,
         &agent_runtime,
         report,
-    ) {
-        Ok(_) => panic!("VMM/Hook turn mismatch must reject terminal commit"),
-        Err(error) => error,
-    };
-    assert!(error.contains("does not match the retained conversation Hook turn"));
+    )
+    .expect("stopped VMM service must not reject the ordinary terminal commit");
+    assert!(outcome.completion_request.is_some());
     assert_eq!(
         agent_runtime
             .conversation_hook_runtime
             .lock()
             .expect("lock Hook runtime after mismatch")
             .active_turn_id(session_id),
-        Some(retained_hook_turn_id.as_str())
+        None
     );
-    // persisted_vmm_state confirms mismatch rejection did not consume controller ownership.
-    // persisted_vmm_state 确认身份不匹配拒绝没有消费控制器所有权。
+    // persisted_vmm_state confirms the stopped service neither validates nor consumes stale ownership.
+    // persisted_vmm_state 确认未启动服务既不校验也不消费陈旧所有权。
     let persisted_vmm_state = vmm_controller
         .snapshot()
         .expect("read VMM controller after mismatch");

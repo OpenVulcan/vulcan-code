@@ -944,6 +944,9 @@ async fn prepare_webui_pending_prompt(
             attachment
         })
         .collect();
+    // vmmReadiness is the service-owned prerequisite captured before this process-local admission.
+    // vmmReadiness 是在本次进程内准入前捕获的服务级权威前提事实。
+    let vmm_readiness = webui_vmm_runtime_readiness(state)?;
     let prompt_turn_begin_input = SharedPromptTurnBeginInput {
         session_id,
         session_title: &session_title,
@@ -958,6 +961,8 @@ async fn prepare_webui_pending_prompt(
         append_canonical_user_message: false,
         append_visible_user_prompt_record: false,
         source: entry.source,
+        vmm_runtime_ready: vmm_readiness.service_ready,
+        vmm_precheck_ready: vmm_readiness.precheck_ready,
         execution_mode: String::from("build"),
         reasoning_effort,
     };
@@ -1125,17 +1130,20 @@ async fn prepare_webui_pending_prompt(
         precheck_start.canonical_user_message_id.as_deref(),
         prepared_submission_media,
     )?;
-    refresh_exact_vmm_hook_session_projection(
-        &entry_agent_runtime.vmm_hook_runtime,
-        &workspace_snapshot,
-        session_id,
-    )?;
+    if precheck_start.vmm_runtime_ready {
+        refresh_exact_vmm_hook_session_projection(
+            &entry_agent_runtime.vmm_hook_runtime,
+            &workspace_snapshot,
+            session_id,
+        )?;
+    }
     let precheck_plan = if entry.source.runs_user_prompt_precheck() {
         webui_shared_prompt_precheck_plan(
             &entry_agent_runtime,
             &workspace_snapshot,
             session_id,
             &workspace_path,
+            precheck_start.vmm_precheck_ready,
         )?
     } else {
         SharedPromptPrecheckPlan {

@@ -60,6 +60,7 @@ use super::{
     start_reserved_webui_session_kernel_user_turn, start_webui_precheck_or_continue,
     start_webui_session_kernel_user_turn, webui_session_kernel_has_active_turn,
     webui_shared_prompt_precheck_plan, webui_submit_trace, webui_trace_if_slow,
+    webui_vmm_runtime_readiness,
 };
 mod activation;
 mod preflight;
@@ -1869,7 +1870,7 @@ async fn service_continue_conversation_with_submission(
         crate::session_goal_lifecycle::session_v1_handle_from_state(&state, session_id).await?;
     let dispatch_guard = handle.acquire_continuation_dispatch().await;
     if handle
-        .continuation_transport_observed_for_action(&continuation_action_id)
+        .reconcile_continuation_dispatch_for_action(&continuation_action_id)
         .map_err(|error| error.to_string())?
         .is_some()
     {
@@ -2736,6 +2737,9 @@ async fn service_start_conversation_execution(
             current_unix_millis_value().saturating_sub(submit_run_prepare_started_at)
         ),
     );
+    // vmmReadiness is captured before Hook turn admission and remains immutable for this request.
+    // vmmReadiness 在 Hook 回合准入前捕获，并在本次请求期间保持不可变。
+    let vmm_readiness = webui_vmm_runtime_readiness(&state)?;
     let turn_begin_started_at = current_unix_millis_value();
     let mut precheck_start = {
         let mut hook_runtime = agent_runtime
@@ -2762,6 +2766,8 @@ async fn service_start_conversation_execution(
                 append_canonical_user_message: append_user_records,
                 append_visible_user_prompt_record: append_user_records,
                 source: prompt_source,
+                vmm_runtime_ready: vmm_readiness.service_ready,
+                vmm_precheck_ready: vmm_readiness.precheck_ready,
                 execution_mode: runtime_options.execution_mode,
                 reasoning_effort: runtime_options.reasoning_effort,
             },
@@ -3017,6 +3023,7 @@ async fn service_start_conversation_execution(
                     &workspace_snapshot,
                     session_id,
                     &workspace_path,
+                    precheck_start.vmm_precheck_ready,
                 )?
             } else {
                 SharedPromptPrecheckPlan {
@@ -3036,11 +3043,13 @@ async fn service_start_conversation_execution(
                 ),
             );
             let hook_snapshot_started_at = current_unix_millis_value();
-            refresh_exact_vmm_hook_session_projection(
-                &agent_runtime_for_preparation.vmm_hook_runtime,
-                &workspace_snapshot,
-                session_id,
-            )?;
+            if precheck_start.vmm_runtime_ready {
+                refresh_exact_vmm_hook_session_projection(
+                    &agent_runtime_for_preparation.vmm_hook_runtime,
+                    &workspace_snapshot,
+                    session_id,
+                )?;
+            }
             webui_submit_trace(
                 "submit_prompt_hook_snapshot_ready",
                 format!(

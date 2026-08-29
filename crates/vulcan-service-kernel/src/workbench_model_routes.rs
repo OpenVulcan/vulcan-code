@@ -300,20 +300,10 @@ pub(super) async fn service_select_workbench_reasoning_effort(
                 .session_runtime_state
                 .get_mut(&conversation_id)
                 .ok_or_else(|| format!("Conversation `{conversation_id}` has no runtime state."))?;
-            let pending_route = runtime_state.pending_model_selection.as_ref();
-            let fallback = crate::session_request_config_v1::SessionRequestFallback {
-                provider: pending_route
-                    .map(|selection| selection.provider_id.clone())
-                    .or_else(|| runtime_state.active_provider_id.clone()),
-                connection_id: pending_route
-                    .map(|selection| selection.connection_id.clone())
-                    .or_else(|| runtime_state.active_connection_id.clone()),
-                model: pending_route
-                    .map(|selection| selection.model_id.clone())
-                    .or_else(|| runtime_state.active_model_id.clone()),
-                thinking_level: runtime_state.active_reasoning_effort,
-                temperature: runtime_state.active_temperature,
-            };
+            let fallback =
+                crate::session_request_config_v1::SessionRequestFallback::from_runtime_state(
+                    runtime_state,
+                );
             crate::session_request_config_v1::set_pending_reasoning_request_v1(
                 handle.as_ref(),
                 selected_effort,

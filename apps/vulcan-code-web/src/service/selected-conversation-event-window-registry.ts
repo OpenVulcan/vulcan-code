@@ -4,12 +4,68 @@ import type {
   ConversationEventWindowControllerSnapshot,
 } from "./conversation-event-window-controller";
 
+/** Tracks effect setup generations so React StrictMode rehearsal cleanup cannot destroy a live registry.
+ * 跟踪副作用建立代次，避免 React StrictMode 演练清理销毁仍在使用的 registry。 */
+export interface SelectedConversationRegistryDisposalLease {
+  // generation identifies the newest mounted effect setup that owns disposal authority.
+  // generation 标识当前拥有释放权限的最新已挂载副作用建立。
+  generation: number;
+}
+
+/** Creates the disposal lease owned by one WorkbenchApp component instance.
+ * 创建由一个 WorkbenchApp 组件实例持有的释放租约。
+ *
+ * @returns A fresh lease with no mounted effect generation.
+ *          返回尚无已挂载副作用代次的新租约。
+ */
+export function createSelectedConversationRegistryDisposalLease(): SelectedConversationRegistryDisposalLease {
+  return { generation: 0 };
+}
+
+/** Activates one effect generation and returns an idempotent deferred cleanup.
+ * 激活一个副作用代次并返回幂等的延迟清理函数。
+ *
+ * React StrictMode immediately runs setup-cleanup-setup in development. Deferring the release to
+ * a microtask lets the second setup supersede the rehearsal cleanup, while a real final unmount
+ * has no successor and therefore still releases the registry.
+ * React StrictMode 在开发环境会立即执行建立-清理-再建立。将释放延迟到微任务后，第二次建立
+ * 可以取代演练清理；真实最终卸载没有后继建立，因此仍会释放 registry。
+ *
+ * @param lease Component-owned generation lease.
+ *              组件持有的代次租约。
+ * @param dispose Permanently releases the selected-session registry.
+ *                永久释放选中会话 registry。
+ * @returns Cleanup function for this exact effect setup.
+ *          返回本次精确副作用建立的清理函数。
+ */
+export function activateSelectedConversationRegistryDisposalLease(
+  lease: SelectedConversationRegistryDisposalLease,
+  dispose: () => void,
+): () => void {
+  // generation captures this exact setup before a later StrictMode setup can supersede it.
+  // generation 在后续 StrictMode 建立取代本次建立前捕获其精确代次。
+  const generation = ++lease.generation;
+  // cleanupScheduled keeps duplicate cleanup calls idempotent.
+  // cleanupScheduled 保证重复清理调用保持幂等。
+  let cleanupScheduled = false;
+  return () => {
+    if (cleanupScheduled) return;
+    cleanupScheduled = true;
+    queueMicrotask(() => {
+      if (lease.generation === generation) dispose();
+    });
+  };
+}
+
 /** Minimal controller lifecycle owned by the selected-session registry.
  * 选中会话 registry 持有的最小控制器生命周期。 */
 export interface SelectedConversationEventWindowController {
   /** Establishes one exact selected-session ownership boundary.
    * 建立一个精确的选中会话归属边界。 */
   hydrate(sessionId: string): Promise<boolean>;
+  /** Refreshes the exact owned session through a generation-aware atomic replacement.
+   * 通过可识别 generation 的原子替换刷新精确的已持有会话。 */
+  rehydrate(sessionId: string): Promise<boolean>;
   /** Recovers transport continuity while leaving rebuild authority to the service response.
    * 恢复传输连续性，同时把是否重建的权威留给服务响应。 */
   recoverConnection(serviceInstanceChanged: boolean): Promise<void>;
@@ -43,6 +99,14 @@ export interface SelectedConversationEventWindowCommands {
    * 为绑定归属前插一页相邻历史记录。 */
   prependOlder(): Promise<boolean>;
 }
+
+/** Selected-session hydration lifecycle published independently from canonical event data.
+ * 独立于 canonical 事件数据发布的选中会话 hydration 生命周期。 */
+export type SelectedConversationEventWindowStatus =
+  | { readonly kind: "idle" }
+  | { readonly kind: "loading"; readonly session_id: string }
+  | { readonly kind: "ready"; readonly session_id: string }
+  | { readonly kind: "failed"; readonly session_id: string; readonly message: string };
 
 /** One active selected-session controller and its registry relay.
  * 一条活动选中会话控制器及其 registry 转发订阅。 */
@@ -83,6 +147,11 @@ ConversationEventWindowControllerSnapshot = {
   session_config: null,
 };
 
+/** Stable status exposed while no durable session is selected.
+ * 未选中持久化会话时暴露的稳定状态。 */
+const IDLE_SELECTED_CONVERSATION_EVENT_WINDOW_STATUS:
+SelectedConversationEventWindowStatus = { kind: "idle" };
+
 /** Shared command surface used while no durable selected-session owner exists.
  * 不存在持久化选中会话归属时使用的共享命令面。 */
 const UNAVAILABLE_SELECTED_CONVERSATION_EVENT_WINDOW_COMMANDS:
@@ -115,6 +184,9 @@ export class SelectedConversationEventWindowRegistry {
   /** Stable snapshot consumed by the React external-store adapter.
    * React 外部 store 适配器消费的稳定快照。 */
   private snapshotCache = EMPTY_SELECTED_CONVERSATION_EVENT_WINDOW_SNAPSHOT;
+  /** Stable selected-session hydration status consumed by the React status store.
+   * React 状态 store 消费的稳定选中会话 hydration 状态。 */
+  private statusCache = IDLE_SELECTED_CONVERSATION_EVENT_WINDOW_STATUS;
   /** Monotonic token invalidating delayed hydration after a selection change.
    * 在选择变化后使延迟 hydration 失效的单调令牌。 */
   private selectionToken = 0;
@@ -141,6 +213,12 @@ export class SelectedConversationEventWindowRegistry {
    * 返回最近的选中会话快照，不进行重建。 */
   snapshot(): ConversationEventWindowControllerSnapshot {
     return this.snapshotCache;
+  }
+
+  /** Returns the latest selected-session hydration lifecycle without rebuilding it.
+   * 返回最近的选中会话 hydration 生命周期，不进行重建。 */
+  status(): SelectedConversationEventWindowStatus {
+    return this.statusCache;
   }
 
   /** Returns commands bound to the current exact controller entry.
@@ -183,6 +261,7 @@ export class SelectedConversationEventWindowRegistry {
     this.releaseActiveEntry();
     if (sessionId === null) {
       this.publishSnapshot(EMPTY_SELECTED_CONVERSATION_EVENT_WINDOW_SNAPSHOT);
+      this.publishStatus(IDLE_SELECTED_CONVERSATION_EVENT_WINDOW_STATUS);
       return true;
     }
 
@@ -201,6 +280,7 @@ export class SelectedConversationEventWindowRegistry {
     });
     this.activeEntry = entry;
     this.publishSnapshot(controller.snapshot());
+    this.publishStatus({ kind: "loading", session_id: sessionId });
     const hydrated = await this.hydrateEntry(entry);
     if (selectionToken !== this.selectionToken || this.activeEntry !== entry) {
       entry.unsubscribe();
@@ -247,14 +327,38 @@ export class SelectedConversationEventWindowRegistry {
 
   /** Hydrates one current entry once and shares the in-flight task with duplicate selection signals.
    * 对当前条目执行一次 hydration，并与重复选择信号共享进行中任务。 */
-  private hydrateEntry(entry: SelectedConversationEventWindowEntry): Promise<boolean> {
-    if (entry.hydrated) return Promise.resolve(true);
+  private hydrateEntry(
+    entry: SelectedConversationEventWindowEntry,
+    refresh: boolean = false,
+  ): Promise<boolean> {
+    if (entry.hydrated && !refresh) return Promise.resolve(true);
     if (entry.hydrationPromise !== null) return entry.hydrationPromise;
-    entry.hydrationPromise = entry.controller
-      .hydrate(entry.sessionId)
+    if (this.activeEntry === entry) {
+      this.publishStatus({ kind: "loading", session_id: entry.sessionId });
+    }
+    const hydration = refresh
+      ? entry.controller.rehydrate(entry.sessionId)
+      : entry.controller.hydrate(entry.sessionId);
+    entry.hydrationPromise = hydration
       .then((hydrated) => {
-        if (this.activeEntry === entry) entry.hydrated = hydrated;
+        if (this.activeEntry === entry) {
+          entry.hydrated = hydrated;
+          if (hydrated) {
+            this.publishStatus({ kind: "ready", session_id: entry.sessionId });
+          }
+        }
         return hydrated;
+      })
+      .catch((error: unknown) => {
+        if (this.activeEntry === entry) {
+          entry.hydrated = false;
+          this.publishStatus({
+            kind: "failed",
+            session_id: entry.sessionId,
+            message: selectedConversationHydrationErrorMessage(error),
+          });
+        }
+        throw error;
       })
       .finally(() => {
         entry.hydrationPromise = null;
@@ -286,8 +390,8 @@ export class SelectedConversationEventWindowRegistry {
    *
    * @param selectionToken captured registry ownership generation.
    *                       捕获的 registry 归属代次。
-   * @param controller captured controller that must still be active and hydrated.
-   *                   仍须处于活动且已加载状态的捕获控制器。
+   * @param controller captured controller that must still be the active owner.
+   *                   仍须为活动归属方的捕获控制器。
    * @returns whether the replacement generation was committed to the bound controller.
    *          替换 generation 是否已提交到绑定控制器。
    */
@@ -301,11 +405,10 @@ export class SelectedConversationEventWindowRegistry {
       || selectionToken !== this.selectionToken
       || entry === null
       || entry.controller !== controller
-      || !entry.hydrated
     ) {
       throw new Error("selected conversation event window command owner is no longer active");
     }
-    const hydrated = await controller.hydrate(entry.sessionId);
+    const hydrated = await this.hydrateEntry(entry, entry.hydrated);
     if (
       !hydrated
       || this.disposed
@@ -361,4 +464,33 @@ export class SelectedConversationEventWindowRegistry {
     this.snapshotCache = snapshot;
     for (const listener of this.listeners) listener();
   }
+
+  /** Publishes one stable hydration status only when its semantic value changes.
+   * 仅在语义值变化时发布一份稳定 hydration 状态。 */
+  private publishStatus(status: SelectedConversationEventWindowStatus): void {
+    if (selectedConversationWindowStatusEquals(this.statusCache, status)) return;
+    this.statusCache = status;
+    for (const listener of this.listeners) listener();
+  }
+}
+
+/** Normalizes one transport or storage failure for the selected-session error surface.
+ * 为选中会话错误界面规范化一条传输或存储失败。 */
+function selectedConversationHydrationErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Compares two selected-session lifecycle values without relying on object identity.
+ * 不依赖对象身份比较两份选中会话生命周期值。 */
+function selectedConversationWindowStatusEquals(
+  left: SelectedConversationEventWindowStatus,
+  right: SelectedConversationEventWindowStatus,
+): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === "idle" || right.kind === "idle") return true;
+  if (left.session_id !== right.session_id) return false;
+  if (left.kind === "failed" && right.kind === "failed") {
+    return left.message === right.message;
+  }
+  return true;
 }

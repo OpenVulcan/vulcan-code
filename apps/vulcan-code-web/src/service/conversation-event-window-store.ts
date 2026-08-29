@@ -320,10 +320,10 @@ resolution: "moved_to_draft" | "removed" | "promoted_to_pending_in_turn";
       input: ToolPayload;
       output?: ToolPayload;
       changeset?: PersistentChangeSet;
-      status: "running" | "waiting_user" | "completed" | "failed" | "cancelled" | "stopped" | "interrupted";
+      status: "prepared" | "running" | "waiting_user" | "completed" | "failed" | "cancelled" | "stopped" | "interrupted";
       started_at_ms?: number;
       finished_at_ms?: number;
-      request_stream_id?: string;
+      request_stream_id: string;
       provider_tool_call_id?: string;
       external_refs?: ExternalResourceRef[];
       generated_resources?: GeneratedResourceRef[];
@@ -1204,12 +1204,15 @@ function assertMutableEventEvolution(
       if (next.kind === "tool_call") {
         assertToolImmutableFields(existing, incoming);
         const allowed =
-          current.status === "running"
+          current.status === "prepared"
+            ? ["prepared", "running", "waiting_user", "completed", "failed", "cancelled", "stopped", "interrupted"]
+            : current.status === "running"
             ? ["running", "waiting_user", "completed", "failed", "cancelled", "stopped", "interrupted"]
             : current.status === "waiting_user"
               ? ["waiting_user", "running", "completed", "failed", "cancelled", "stopped", "interrupted"]
-              : [];
+              : [current.status];
         assertAllowedTransition(incoming, current.status, next.status, allowed);
+        assertTerminalToolEvolution(existing, incoming);
         return;
       }
       break;
@@ -1230,12 +1233,51 @@ function assertToolImmutableFields(
     current.api_call_id !== next.api_call_id ||
     current.tool_name !== next.tool_name ||
     canonicalJson(current.input) !== canonicalJson(next.input) ||
-    current.started_at_ms !== next.started_at_ms ||
     current.request_stream_id !== next.request_stream_id ||
     current.provider_tool_call_id !== next.provider_tool_call_id
   ) {
     throwIllegalEvolution(existing, incoming, current.status, next.status);
   }
+}
+
+/** Restricts a terminal same-status update to the one Core-owned Provider-source attachment.
+ * 将终态同状态更新限制为 Core 持有的唯一 Provider 来源附着。 */
+function assertTerminalToolEvolution(
+  existing: ConversationEventSummary,
+  incoming: ConversationEventSummary,
+): void {
+  if (existing.event.kind !== "tool_call" || incoming.event.kind !== "tool_call") return;
+  // current is the already accepted same-seq tool snapshot.
+  // current 是已经接受的同 seq 工具快照。
+  const current = existing.event;
+  // next is the higher event-revision candidate delivered by live or reconnect.
+  // next 是由实时推送或重连送达的更高事件修订候选。
+  const next = incoming.event;
+  if (!isTerminalToolStatus(current.status) || current.status !== next.status) return;
+  // Provider source is the only terminal field that Core may attach after tool completion.
+  // Provider 来源是 Core 可以在工具完成后继续附着的唯一终态字段。
+  const { provider_source: currentProviderSource, ...currentWithoutProviderSource } = current;
+  const { provider_source: nextProviderSource, ...nextWithoutProviderSource } = next;
+  // immutableTerminalBodyChanged detects every terminal fact drift except the allowed source attachment.
+  // immutableTerminalBodyChanged 检测除允许的来源附着外的所有终态事实漂移。
+  const immutableTerminalBodyChanged = canonicalJson(currentWithoutProviderSource) !== canonicalJson(nextWithoutProviderSource);
+  // existingProviderSourceChanged prevents an attached source from being replaced or removed later.
+  // existingProviderSourceChanged 防止已经附着的来源随后被替换或移除。
+  const existingProviderSourceChanged = currentProviderSource !== undefined
+    && canonicalJson(currentProviderSource) !== canonicalJson(nextProviderSource);
+  if (immutableTerminalBodyChanged || existingProviderSourceChanged) {
+    throwIllegalEvolution(existing, incoming, current.status, next.status);
+  }
+}
+
+/** Returns whether one V1 tool status is terminal and cannot transition to another lifecycle state.
+ * 返回一个 V1 工具状态是否为不可再迁移到其他生命周期状态的终态。 */
+function isTerminalToolStatus(status: Extract<ConversationEventBody, { kind: "tool_call" }>["status"]): boolean {
+  return status === "completed"
+    || status === "failed"
+    || status === "cancelled"
+    || status === "stopped"
+    || status === "interrupted";
 }
 
 /** Verifies one explicit status transition.

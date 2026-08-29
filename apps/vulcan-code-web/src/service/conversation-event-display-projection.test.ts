@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  clientActionId,
   ConversationEventBody,
   ConversationEventLivePatch,
   ConversationEventSummary,
@@ -10,8 +11,8 @@ import {
 } from "./conversation-event-window-store";
 import {
   projectConversationEventDisplay,
+  projectConversationTranscriptDisplay,
   ToolCallDisplayItem,
-  visibleConversationEventDisplayItems,
 } from "./conversation-event-display-projection";
 
 /** Stable session id used by the projection fixture.
@@ -103,6 +104,7 @@ function tool(
     tool_call_id: toolCallId,
     tool_name: "file_edit",
     input: { path: "D:/project/README.md", content: "new" },
+    request_stream_id: `display-tool-${toolCallId}`,
     output: status === "running" ? undefined : { result: status },
     changeset,
     status,
@@ -128,6 +130,106 @@ function asTool(item: ReturnType<typeof projectConversationEventDisplay>[number]
 }
 
 describe("conversation V1 event display projection", () => {
+  it("derives user, process, and final-answer hierarchy while hiding structural ledger facts", () => {
+    // emptyBucket provides an exact zero-value terminal statistics bucket.
+    // emptyBucket 提供一个精确零值终态统计桶。
+    const emptyBucket = {
+      api_call_count: 0,
+      unknown_usage_api_call_count: 0,
+      tool_call_count: 0,
+      subagent_return_count: 0,
+      usage: {},
+    };
+    const projected = projectConversationEventDisplay([
+      summary(1, {
+        kind: "user_input",
+        client_action_id: clientActionId("projection-root"),
+        input_id: 1,
+        input_source: "root",
+        text: "inspect",
+      }),
+      summary(2, {
+        kind: "api_started",
+        api_call_id: 11,
+        purpose: "main_generation",
+        request: { provider: "test-provider", model: "test-model" },
+      }, 10, 1, "host_only"),
+      summary(3, reasoning("reason")),
+      summary(4, assistant("tool preamble")),
+      summary(5, tool(31, "completed")),
+      summary(6, {
+        kind: "api_stats",
+        api_call_id: 11,
+        purpose: "main_generation",
+        provider: "test-provider",
+        model: "test-model",
+        usage: { total_tokens: 5 },
+        status: "completed",
+        continuation_eligibility: "forbidden",
+        timing: {},
+      }, 10, 1, "ui_only"),
+      summary(7, {
+        kind: "api_started",
+        api_call_id: 12,
+        purpose: "main_generation",
+        request: { provider: "test-provider", model: "test-model" },
+      }, 10, 1, "host_only"),
+      summary(8, { kind: "assistant_text", api_call_id: 12, text: "final answer", status: "completed" }),
+      summary(9, {
+        kind: "api_stats",
+        api_call_id: 12,
+        purpose: "main_generation",
+        provider: "test-provider",
+        model: "test-model",
+        usage: { total_tokens: 9 },
+        status: "completed",
+        continuation_eligibility: "forbidden",
+        timing: {},
+      }, 10, 1, "ui_only"),
+      summary(10, { kind: "turn_boundary", outcome: "completed" }),
+      summary(11, {
+        kind: "turn_stats",
+        start_seq: 1,
+        end_seq: 10,
+        outcome: "completed",
+        buckets: { direct: emptyBucket, subagent: emptyBucket, total: emptyBucket },
+      }, 10, 1, "ui_only"),
+    ]);
+
+    const transcript = projectConversationTranscriptDisplay(projected);
+
+    expect(transcript.map((node) => node.kind)).toEqual([
+      "user_input",
+      "process_group",
+      "assistant_final",
+      "turn_stats",
+    ]);
+    const process = transcript[1];
+    expect(process.kind === "process_group" ? process.items.map((item) => item.seq) : []).toEqual([3, 4, 5]);
+    const finalAnswer = transcript[2];
+    expect(finalAnswer.kind === "assistant_final" ? finalAnswer.api_stats?.usage.total_tokens : null)
+      .toBe(9);
+    expect(finalAnswer.kind === "assistant_final" ? finalAnswer.root_input : null)
+      .toEqual({ seq: 1, text: "inspect" });
+    const turnStats = transcript[3];
+    expect(turnStats.kind === "turn_stats" ? turnStats.item.event.buckets.total : null)
+      .toEqual(emptyBucket);
+  });
+
+  it("never merges process items from two logical Turns", () => {
+    const first = summary(1, reasoning("first turn"));
+    const second = { ...summary(2, reasoning("second turn")), turn_id: 8 };
+
+    const transcript = projectConversationTranscriptDisplay(
+      projectConversationEventDisplay([first, second]),
+    );
+
+    expect(transcript.map((node) => [node.kind, node.turn_id, node.seq])).toEqual([
+      ["process_group", 7, 1],
+      ["process_group", 8, 2],
+    ]);
+  });
+
   it("projects the complete visibility sequence before the renderer hides host-only items", () => {
     // projected preserves every canonical seq before any visibility decision is applied.
     // projected 在应用任何可见性决策前保留每个 canonical seq。
@@ -167,12 +269,8 @@ describe("conversation V1 event display projection", () => {
     ]);
 
     expect(projected.map((item) => item.seq)).toEqual([1, 2, 3, 4, 5]);
-    // visible is the renderer-only subset and therefore does not participate in gap validation.
-    // visible 是仅供 renderer 使用的子集，因此不参与缺口校验。
-    const visible = visibleConversationEventDisplayItems(projected);
-    expect(visible.map((item) => item.seq)).toEqual([2, 3, 4, 5]);
-    expect(visible.map((item) => item.group.api_call_id)).toEqual([11, 11, 11, 11]);
-    expect(visible.filter((item) => item.kind === "tool_call").map((item) => item.tool_call.status))
+    expect(projected.slice(1).map((item) => item.group.api_call_id)).toEqual([11, 11, 11, 11]);
+    expect(projected.filter((item) => item.kind === "tool_call").map((item) => item.tool_call.status))
       .toEqual(["failed", "completed"]);
   });
 

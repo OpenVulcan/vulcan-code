@@ -256,26 +256,22 @@ pub(super) async fn handle_finished_stream_event(
             final_report_apply.is_some()
         ),
     );
-    // The durable V1 ApiStats receipt is the only terminal authority allowed to reopen admission.
-    // 可靠 V1 ApiStats 回执是唯一允许重新开放准入的终态权威。
-    let terminal_authority_persisted = v1_api_terminal_receipt.is_some();
+    // A durable ApiStats or the explicit pre-API fallback is required before the exact owner may reopen admission.
+    // 只有可靠 ApiStats 或明确的 API 前失败回退落盘后，精确 owner 才允许重新开放准入。
+    let terminal_authority_settled = settle_stream_terminal_authority(
+        task_state,
+        finished_session_id,
+        v1_api_terminal_receipt.is_some(),
+        "stream_finished_without_v1_api_terminal",
+        terminal_persistence_owner,
+    )
+    .await;
     webui_trace(
         "stream_terminal_authority",
-        format!("session={finished_session_id} v1_api_terminal={terminal_authority_persisted}"),
+        format!(
+            "session={finished_session_id} terminal_authority_settled={terminal_authority_settled}"
+        ),
     );
-    // The exact marker opens admission only after the authoritative V1 terminal is durable.
-    // 精确标记只在权威 V1 终态可靠落盘后开放准入。
-    if terminal_authority_persisted {
-        if let Err(error) = terminal_persistence_owner.release() {
-            eprintln!(
-                "[webui-service] finished stream terminal-persistence owner release failed: session={finished_session_id} error={error}"
-            );
-        }
-    } else {
-        // Dropping without release deliberately retains the authoritative in-process admission block.
-        // 未释放即丢弃会有意保留权威进程内准入阻塞。
-        drop(terminal_persistence_owner);
-    }
 
     // The durable V1 Turn receipt alone selects and authorizes a successor; legacy persistence cannot veto it.
     // 可靠 V1 回合回执独自选择并授权后继；旧持久化不得否决该事实。
@@ -311,7 +307,7 @@ pub(super) async fn handle_finished_stream_event(
     } else {
         false
     };
-    if terminal_authority_persisted
+    if terminal_authority_settled
         && logical_turn_completed
         && let Some(apply) = final_report_apply.as_ref()
         && let Some(event) = conversation_run_settled_event_from_terminal_facts(
@@ -327,7 +323,7 @@ pub(super) async fn handle_finished_stream_event(
     }
     // A completion request exists only when terminal memory projection opened a completed-turn hook.
     // 仅当终态内存投影打开完成回合 Hook 时才存在完成请求。
-    if terminal_authority_persisted
+    if terminal_authority_settled
         && logical_turn_completed
         && !started_next_prompt
         && let Some(completion_request) = final_report_apply

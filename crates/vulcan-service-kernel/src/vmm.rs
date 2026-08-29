@@ -44,5 +44,47 @@ pub(super) use memory_actions::*;
 pub(super) use snapshot::*;
 pub(super) use static_profile::*;
 
+/// Returns the deployment mode selected by the current authoritative global configuration.
+/// 返回当前权威全局配置选择的部署模式。
+///
+/// # Parameters
+/// 参数
+/// `global_layer` is the current persisted global VMM configuration.
+/// `global_layer` 是当前持久化的全局 VMM 配置。
+///
+/// # Returns
+/// 返回值
+/// The explicit disabled, managed, or external deployment mode.
+/// 返回明确的禁用、托管或外部部署模式。
+pub(crate) fn current_vmm_deployment_mode(
+    global_layer: &vulcan_vmm::VmmConfigLayer,
+) -> VmmDeploymentMode {
+    vmm_deployment_mode(global_layer)
+}
+
+/// Resolves current external VMM service readiness from authoritative configuration and health state.
+/// 从权威配置与健康状态解析当前外部 VMM 服务就绪事实。
+///
+/// # Parameters
+/// 参数
+/// `global_layer` is the current persisted global VMM configuration.
+/// `global_layer` 是当前持久化的全局 VMM 配置。
+///
+/// # Returns
+/// 返回值
+/// `true` only for a fully configured external endpoint with a matching successful probe.
+/// 仅对配置完整且拥有匹配成功探测的外部端点返回 `true`。
+pub(crate) fn current_external_vmm_service_ready(
+    global_layer: &vulcan_vmm::VmmConfigLayer,
+) -> bool {
+    if vmm_deployment_mode(global_layer) != VmmDeploymentMode::External {
+        return false;
+    }
+    let effective = vulcan_vmm::VmmEffectiveConfig::resolve(global_layer, None, None);
+    let scope_configured =
+        effective.diagnose_memory_flow(true) == vulcan_vmm::VmmConfigDiagnostic::Ready;
+    external_vmm_service_ready(&effective.grpc_target, scope_configured)
+}
+
 #[cfg(test)]
 mod tests;

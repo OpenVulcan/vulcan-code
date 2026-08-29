@@ -2,7 +2,7 @@
 //! WebUI 提示词生命周期 precheck continue 辅助逻辑。
 
 use uuid::Uuid;
-use vulcan_service_api::{ServiceEvent, WorkbenchDeltaEnvelope};
+use vulcan_service_api::{ServiceEvent, VmmDeploymentMode, WorkbenchDeltaEnvelope};
 use vulcan_workbench_model::{SessionMessageEntry, SessionMessageKind};
 
 use super::*;
@@ -17,6 +17,99 @@ use crate::{
     owning_project_id_for_session, register_session_terminal_persistence_owner,
     sync_hydrated_session_dialogue_ready_marker,
 };
+
+/// Immutable VMM service readiness captured before one prompt turn is admitted.
+/// 在单个提示词回合准入前捕获的不可变 VMM 服务就绪事实。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WebuiVmmRuntimeReadiness {
+    /// Whether configuration succeeded and the managed service process is actually ready.
+    /// 配置是否成功且托管服务进程是否真实就绪。
+    pub(crate) service_ready: bool,
+    /// Whether the ready process also exposes the complete PreCheck capability.
+    /// 已就绪进程是否同时具备完整 PreCheck 能力。
+    pub(crate) precheck_ready: bool,
+}
+
+/// Reads the only service-owned VMM readiness fact used by prompt admission.
+/// 读取提示词准入使用的唯一服务级 VMM 就绪事实。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the current Provider configuration and managed-service lifecycle owner.
+/// `state` 持有当前 Provider 配置与托管服务生命周期所有者。
+///
+/// # Returns
+/// 返回值
+/// Both fields are false unless the service process is fully ready.
+/// 除非服务进程完全就绪，否则两个字段均为 false。
+pub(crate) fn webui_vmm_runtime_readiness(
+    state: &SharedServiceBridgeState,
+) -> Result<WebuiVmmRuntimeReadiness, String> {
+    let global_layer = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("读取 VMM 服务就绪状态失败：{error}"))?;
+        let Some(agent_runtime) = guard.agent_runtime.as_ref() else {
+            return Ok(project_webui_vmm_runtime_readiness(false, false, false));
+        };
+        agent_runtime.provider_configuration.vmm.clone()
+    };
+    match crate::vmm::current_vmm_deployment_mode(&global_layer) {
+        VmmDeploymentMode::Managed => {
+            let Some(runtime) = crate::managed_memory_mesh_runtime::snapshot_from_state(state)
+            else {
+                return Ok(project_webui_vmm_runtime_readiness(false, false, false));
+            };
+            Ok(project_webui_vmm_runtime_readiness(
+                runtime.phase == "ready",
+                runtime.scope_ready,
+                runtime.capabilities.precheck_ready,
+            ))
+        }
+        VmmDeploymentMode::External => {
+            let service_ready = crate::vmm::current_external_vmm_service_ready(&global_layer);
+            let effective = vulcan_vmm::VmmEffectiveConfig::resolve(&global_layer, None, None);
+            let precheck_ready = service_ready
+                && effective.diagnose_precheck_flow(true) == vulcan_vmm::VmmConfigDiagnostic::Ready;
+            Ok(project_webui_vmm_runtime_readiness(
+                service_ready,
+                service_ready,
+                precheck_ready,
+            ))
+        }
+        VmmDeploymentMode::Disabled => Ok(project_webui_vmm_runtime_readiness(false, false, false)),
+    }
+}
+
+/// Projects current lifecycle facts into strict prompt-admission readiness.
+/// 将当前生命周期事实投影为严格的提示词准入就绪状态。
+///
+/// # Parameters
+/// 参数
+/// `process_ready` proves that the current service process or endpoint is live.
+/// `process_ready` 证明当前服务进程或端点处于存活状态。
+/// `scope_ready` proves that required service configuration is complete.
+/// `scope_ready` 证明必需的服务配置已经完整。
+/// `precheck_ready` proves that the current managed generation exposes PreCheck.
+/// `precheck_ready` 证明当前托管代次提供 PreCheck 能力。
+///
+/// # Returns
+/// 返回值
+/// Both capabilities remain unavailable unless service startup and configuration are complete.
+/// 除非服务启动且配置完整，否则两项能力均保持不可用。
+fn project_webui_vmm_runtime_readiness(
+    process_ready: bool,
+    scope_ready: bool,
+    precheck_ready: bool,
+) -> WebuiVmmRuntimeReadiness {
+    // serviceReady requires both a live process and the exact configured user/project scope.
+    // serviceReady 同时要求进程存活以及精确用户/项目作用域完成配置。
+    let service_ready = process_ready && scope_ready;
+    WebuiVmmRuntimeReadiness {
+        service_ready,
+        precheck_ready: service_ready && precheck_ready,
+    }
+}
 
 /// Builds the shared precheck plan for a WebUI session using the service VMM layering rules.
 /// 使用服务运行时的 VMM 分层规则为一个 WebUI 会话构建共享 precheck 计划。
@@ -41,6 +134,7 @@ pub(crate) fn webui_shared_prompt_precheck_plan(
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
     workspace_path: &str,
+    vmm_precheck_ready: bool,
 ) -> Result<SharedPromptPrecheckPlan, String> {
     let project_configuration_started_at = current_unix_millis_value();
     let project_layer = cached_project_vmm_layer(workspace_path);
@@ -77,6 +171,7 @@ pub(crate) fn webui_shared_prompt_precheck_plan(
     Ok(shared_prompt_precheck_plan(
         &effective_vmm_config,
         &precheck_hook_snapshots,
+        vmm_precheck_ready,
     ))
 }
 
@@ -177,10 +272,6 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         session_id,
         Some(&start.preparation_turn_id),
     )?;
-    // vmm_controller is the sole authoritative state owner for this session.
-    // vmm_controller 是该会话唯一的权威状态所有者。
-    let vmm_controller =
-        open_registered_session_vmm_controller(state, session_id, &current_unix_millis_text())?;
     webui_after_precheck_trace(
         "after_precheck_03_runtime_state_ready",
         format!(
@@ -211,14 +302,11 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         )
         .enabled
     };
-    if vulcan_vmm::VmmRuntimeFeaturePolicy::from_env().session_state_enabled
-        && !effective_vmm_enabled
-    {
-        webui_trace(
-            "vmm_effective_disable_pending",
-            format!("session={session_id}"),
-        );
-    }
+    // vmmDomainActive cannot be inferred from configuration or retained session state.
+    // vmmDomainActive 不能从配置或保留的会话状态反向推断。
+    let vmm_domain_active = vulcan_vmm::VmmRuntimeFeaturePolicy::from_env().session_state_enabled
+        && start.vmm_runtime_ready
+        && effective_vmm_enabled;
     let runtime_reasoning_effort = workspace_snapshot
         .session_runtime_state
         .get(&session_id)
@@ -253,57 +341,75 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         patch_visible_user_prompt_record: runs_user_prompt_precheck,
     };
     let replay_continuation_input = continuation_input.clone();
-    // vmm_commit owns both shared prompt VMM mutation and durable publication under one session lock.
-    // vmm_commit 在同一会话锁内拥有共享提示词 VMM 变更与持久发布。
-    let vmm_commit =
-        vmm_controller.execute_command(&vmm_command_id, &vmm_command_timestamp, |candidate| {
-            if vulcan_vmm::VmmRuntimeFeaturePolicy::from_env().session_state_enabled
-                && !effective_vmm_enabled
-            {
-                candidate.disable(&vmm_command_timestamp)?;
+    let continuation = if vmm_domain_active {
+        // vmmController is opened only after every service/configuration prerequisite is true.
+        // 仅当全部服务与配置前提成立后才打开 vmmController。
+        let vmm_controller =
+            open_registered_session_vmm_controller(state, session_id, &vmm_command_timestamp)?;
+        // vmmCommit owns both shared prompt VMM mutation and durable publication under one session lock.
+        // vmmCommit 在同一会话锁内拥有共享提示词 VMM 变更与持久发布。
+        let vmm_commit = vmm_controller.execute_command(
+            &vmm_command_id,
+            &vmm_command_timestamp,
+            |candidate| {
+                // continuation is built against the exact isolated controller candidate.
+                // continuation 基于精确的隔离控制器候选状态构建。
+                let continuation = continue_shared_prompt_turn_after_preparation(
+                    &mut workspace_snapshot,
+                    candidate,
+                    continuation_input,
+                )?;
+                continuation_result = Some(continuation);
+                Ok(())
+            },
+        )?;
+        // A duplicate receipt rebuilds only the transient request from committed state.
+        // 重复回执只会从已提交状态重建临时请求。
+        if vmm_commit.applied {
+            continuation_result.ok_or_else(|| {
+                format!(
+                    "Core VMM Provider-boundary command `{vmm_command_id}` committed without a continuation result."
+                )
+            })?
+        } else {
+            if continuation_result.is_some() {
+                return Err(format!(
+                    "Core VMM Provider-boundary command `{vmm_command_id}` returned an invalid duplicate continuation result."
+                ));
             }
-            // continuation is built against the exact isolated controller candidate.
-            // continuation 基于精确的隔离控制器候选状态构建。
-            let continuation = continue_shared_prompt_turn_after_preparation(
+            webui_trace(
+                "precheck_continue_vmm_command_replayed",
+                format!("session={session_id} command_id={vmm_command_id}"),
+            );
+            let mut replay_vmm_state = vmm_commit.state.clone();
+            continue_shared_prompt_turn_after_preparation(
                 &mut workspace_snapshot,
-                candidate,
-                continuation_input,
-            )?;
-            continuation_result = Some(continuation);
-            Ok(())
-        })?;
-    // A duplicate receipt means the initial pre-provider VMM transition committed before Stop
-    // cut off the request builder. Rebuild only the transient provider request from a clone of
-    // the authoritative post-commit state; never run or persist the VMM mutator a second time.
-    // 重复回执表示首次 Provider 前 VMM 转换已在 Stop 截断请求构建前提交。这里仅基于权威提交后
-    // 状态的克隆重建临时 Provider 请求，绝不再次运行或持久化 VMM 变更器。
-    let continuation = if vmm_commit.applied {
-        continuation_result.ok_or_else(|| {
-            format!(
-                "Core VMM Provider-boundary command `{vmm_command_id}` committed without a continuation result."
+                &mut replay_vmm_state,
+                replay_continuation_input,
             )
-        })?
-    } else {
-        if continuation_result.is_some() {
-            return Err(format!(
-                "Core VMM Provider-boundary command `{vmm_command_id}` returned an invalid duplicate continuation result."
-            ));
+            .map_err(|error| {
+                format!(
+                    "Core VMM Provider-boundary command `{vmm_command_id}` was already committed, but continuation reconstruction failed: {error}"
+                )
+            })?
         }
+    } else {
+        // An unconfigured or stopped service bypasses every VMM controller and uses empty local state.
+        // 未完成配置或已停止的服务会绕过全部 VMM Controller，并使用空的本地状态继续普通请求。
         webui_trace(
-            "precheck_continue_vmm_command_replayed",
-            format!("session={session_id} command_id={vmm_command_id}"),
+            "precheck_continue_vmm_bypassed",
+            format!(
+                "session={session_id} service_ready={} effective_enabled={effective_vmm_enabled}",
+                replay_continuation_input.start.vmm_runtime_ready
+            ),
         );
-        let mut replay_vmm_state = vmm_commit.state.clone();
+        let mut inactive_vmm_state = vulcan_vmm::VmmSessionMemoryState::default();
         continue_shared_prompt_turn_after_preparation(
             &mut workspace_snapshot,
-            &mut replay_vmm_state,
+            &mut inactive_vmm_state,
             replay_continuation_input,
         )
-        .map_err(|error| {
-            format!(
-                "Core VMM Provider-boundary command `{vmm_command_id}` was already committed, but continuation reconstruction failed: {error}"
-            )
-        })?
+        .map_err(|error| format!("Build prompt without VMM failed: {error}"))?
     };
     webui_trace(
         "precheck_continue_request_ready",
@@ -341,13 +447,7 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
     // Live VMM readiness is captured at turn admission so model-visible memory tools cannot outlive
     // a stopped or failed transport. Child tasks inherit the same immutable request fact.
     // 在回合准入时捕获 VMM 实时就绪状态，避免模型可见记忆工具在传输停止或失败后继续暴露；子任务继承同一不可变请求事实。
-    request.vmm_runtime_ready = state
-        .lock()
-        .map_err(|error| format!("读取 VMM 实时就绪状态失败：{error}"))?
-        .workbench
-        .vmm_memory
-        .runtime
-        .process_ready;
+    request.vmm_runtime_ready = vmm_domain_active;
     request.provider_id_override = agent_runtime.provider_id_override.clone();
     request.model_id_override = agent_runtime.model_id_override.clone();
     request.connection_id_override = agent_runtime.connection_id_override.clone();
@@ -1186,6 +1286,9 @@ fn abandon_failed_webui_prompt_vmm_turn(
     failed_turn_id: &str,
     updated_at: &str,
 ) -> Result<(), String> {
+    if !webui_vmm_runtime_readiness(state)?.service_ready {
+        return Ok(());
+    }
     // controller is the sole authority for active VMM logical-turn ownership.
     // controller 是 VMM 活动逻辑回合所有权的唯一权威。
     let controller = open_registered_session_vmm_controller(state, session_id, updated_at)?;
@@ -1208,4 +1311,60 @@ fn abandon_failed_webui_prompt_vmm_turn(
         Ok(())
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod readiness_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    /// Verifies configured capabilities never imply startup before the service process is ready.
+    /// 验证在服务进程就绪前，已配置能力绝不能反向证明服务已启动。
+    #[test]
+    fn configured_but_stopped_vmm_is_not_ready_for_any_prompt_path() {
+        let readiness = project_webui_vmm_runtime_readiness(false, true, true);
+
+        assert!(!readiness.service_ready);
+        assert!(!readiness.precheck_ready);
+    }
+
+    /// Verifies PreCheck remains unavailable until both process and capability readiness are true.
+    /// 验证只有进程与能力就绪同时为 true 时 PreCheck 才可用。
+    #[test]
+    fn vmm_precheck_requires_ready_process_and_ready_capability() {
+        assert!(!project_webui_vmm_runtime_readiness(true, true, false).precheck_ready);
+
+        let readiness = project_webui_vmm_runtime_readiness(true, true, true);
+        assert!(readiness.service_ready);
+        assert!(readiness.precheck_ready);
+    }
+
+    /// Verifies a live process without configured scope is still treated as not started.
+    /// 验证进程虽存活但作用域未完成配置时仍按未启动处理。
+    #[test]
+    fn vmm_process_without_configured_scope_is_not_service_ready() {
+        let readiness = project_webui_vmm_runtime_readiness(true, false, true);
+
+        assert!(!readiness.service_ready);
+        assert!(!readiness.precheck_ready);
+    }
+
+    /// Verifies a stale ready workbench projection cannot start VMM paths before Agent Runtime exists.
+    /// 验证 Agent Runtime 尚不存在时，过期的工作台就绪投影不能启动任何 VMM 链路。
+    #[test]
+    fn stale_workbench_readiness_cannot_replace_current_service_startup() {
+        let session_id = Uuid::new_v4();
+        let mut service_state =
+            crate::tests::test_support::test_service_state_with_parent_session(session_id);
+        service_state.workbench.vmm_memory.runtime.process_ready = true;
+        service_state.workbench.vmm_memory.runtime.scope_ready = true;
+        service_state.workbench.vmm_memory.runtime.precheck_ready = true;
+        let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
+
+        let readiness = webui_vmm_runtime_readiness(&state)
+            .expect("readiness should fail closed during startup");
+
+        assert!(!readiness.service_ready);
+        assert!(!readiness.precheck_ready);
+    }
 }

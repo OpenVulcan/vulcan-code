@@ -307,7 +307,6 @@ impl TestControllerRuntimeRoot {
             )
             .expect("create exact V1 VMM session fixture");
         let v1_session_directory = data_root
-            .join("code")
             .join("sessions")
             .join("v1-test-project")
             .join(format!("1970-01-01-{session_id}"));

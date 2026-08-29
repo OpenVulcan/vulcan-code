@@ -53,7 +53,9 @@ pub(crate) fn vmm_memory_snapshot(
     );
     let mut runtime = vmm_runtime_summary(selected_runtime_state, managed_runtime);
     if vmm_deployment_mode(&provider_configuration.vmm) == VmmDeploymentMode::External {
-        apply_external_vmm_health_probe(&effective.grpc_target, &mut runtime);
+        let scope_configured =
+            effective.diagnose_memory_flow(true) == vulcan_vmm::VmmConfigDiagnostic::Ready;
+        apply_external_vmm_health_probe(&effective.grpc_target, scope_configured, &mut runtime);
     }
     let experience_state = vmm_experience_state(&effective, &provider_configuration.vmm, &runtime);
     let prerequisites = vmm_prerequisites(&effective, &provider_configuration.vmm, &runtime);
@@ -577,7 +579,7 @@ fn vmm_capabilities(
         ),
         vmm_capability(
             "ai_memory_tools",
-            runtime.process_ready,
+            runtime.process_ready && runtime.scope_ready,
             effective.ai_tools_enabled,
             None,
             "rules",
@@ -927,19 +929,24 @@ pub(crate) fn vmm_runtime_summary(
         && managed_runtime
             .map(|runtime| runtime.scope_ready)
             .unwrap_or(false);
-    let precheck_ready = process_ready
+    // service_ready is the sole runtime capability boundary: a live child without a configured
+    // scope is still a stopped service for recall, writeback, tools, profiles, and reranking.
+    // service_ready 是唯一运行能力边界：只有子进程但尚未配置作用域时，召回、回写、工具、画像与
+    // 重排都必须继续按服务未启动处理。
+    let service_ready = process_ready && scope_ready;
+    let precheck_ready = service_ready
         && capabilities
             .map(|capabilities| capabilities.precheck_ready)
             .unwrap_or(false);
-    let postaction_ready = process_ready
+    let postaction_ready = service_ready
         && capabilities
             .map(|capabilities| capabilities.postaction_ready)
             .unwrap_or(false);
-    let profile_instruction_ready = process_ready
+    let profile_instruction_ready = service_ready
         && capabilities
             .map(|capabilities| capabilities.profile_instruction_ready)
             .unwrap_or(false);
-    let rerank_ready = process_ready
+    let rerank_ready = service_ready
         && capabilities
             .map(|capabilities| capabilities.rerank_ready)
             .unwrap_or(false);

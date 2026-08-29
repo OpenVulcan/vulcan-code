@@ -19,7 +19,11 @@ import {
 } from "@/service";
 import { createConversationEventWindowClient } from "@/service/conversation-event-window-client";
 import { ConversationEventWindowController } from "@/service/conversation-event-window-controller";
-import { SelectedConversationEventWindowRegistry } from "@/service/selected-conversation-event-window-registry";
+import {
+  activateSelectedConversationRegistryDisposalLease,
+  createSelectedConversationRegistryDisposalLease,
+  SelectedConversationEventWindowRegistry,
+} from "@/service/selected-conversation-event-window-registry";
 import {
   BROWSER_SERVICE_CONNECTION_TOAST_ID,
   hasServiceRuntime,
@@ -97,6 +101,11 @@ export function WorkbenchApp(props: {
   const [conversationEventWindowExternalStore] = React.useState(() =>
     createConversationEventWindowExternalStore(conversationEventWindowRegistry),
   );
+  // conversationEventWindowRegistryDisposalLease distinguishes a StrictMode rehearsal cleanup from the final unmount.
+  // conversationEventWindowRegistryDisposalLease 区分 StrictMode 演练清理与最终卸载。
+  const [conversationEventWindowRegistryDisposalLease] = React.useState(
+    createSelectedConversationRegistryDisposalLease,
+  );
   // workbenchRef exposes the latest authoritative conversation titles to service event callbacks.
   // workbenchRef 向服务事件回调暴露最近的权威会话标题。
   const workbenchRef = React.useRef<WorkbenchSnapshot | null>(null);
@@ -147,11 +156,14 @@ export function WorkbenchApp(props: {
     appLocaleRef.current = webuiAppLocale(workbench?.uiLocale ?? startup.uiLocale);
   }, [startup.uiLocale, workbench?.uiLocale]);
 
-  // Release the selected-session live subscription and controller when WorkbenchApp unmounts.
-  // WorkbenchApp 卸载时释放选中会话实时订阅与控制器。
+  // Release the selected-session live subscription and controller only after the final WorkbenchApp unmount.
+  // 仅在 WorkbenchApp 最终卸载后释放选中会话实时订阅与控制器。
   React.useEffect(
-    () => () => conversationEventWindowRegistry.dispose(),
-    [conversationEventWindowRegistry],
+    () => activateSelectedConversationRegistryDisposalLease(
+      conversationEventWindowRegistryDisposalLease,
+      () => conversationEventWindowRegistry.dispose(),
+    ),
+    [conversationEventWindowRegistry, conversationEventWindowRegistryDisposalLease],
   );
 
   // Route one real local selected-session change into the sole V1 owner registry.

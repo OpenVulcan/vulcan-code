@@ -53,7 +53,8 @@ use super::{
     owning_project_id_for_session, refresh_exact_vmm_hook_session_projection,
     remove_active_stream_task_if_id, spawn_service_task,
     sync_hydrated_session_dialogue_ready_marker, webui_session_kernel_generation, webui_trace,
-    workspace_path_for_session, workspace_snapshot_contains_regular_session,
+    webui_vmm_runtime_readiness, workspace_path_for_session,
+    workspace_snapshot_contains_regular_session,
 };
 
 /// Metadata trigger label for user-requested manual context compaction.

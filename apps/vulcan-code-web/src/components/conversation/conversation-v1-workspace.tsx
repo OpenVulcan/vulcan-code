@@ -182,6 +182,7 @@ export function ConversationV1Workspace(props: ConversationV1WorkspaceProps) {
               availableExternalRefKeys={props.availableExternalRefKeys}
               defaultExpandedTools={false}
               events={events}
+              onCopyText={props.onCopyText}
               onOpenExternalRef={props.onOpenExternalRef}
               onRootInputGenerationAction={props.onRootInputGenerationAction}
               reasoningDisplayMode={props.reasoningDisplayMode}

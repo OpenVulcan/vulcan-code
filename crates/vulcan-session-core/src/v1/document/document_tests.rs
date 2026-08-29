@@ -6381,6 +6381,14 @@ fn continue_dispatch_resolution_reports_terminal_before_transport() -> Result<()
     let terminal_seq = complete_user_interrupted(&mut doc, prepared.api_call_id, T0 + 5)?;
 
     assert_eq!(
+        doc.continuation_dispatch_resolution_through(&action_id, prepared.started_seq)?,
+        Some(ContinuationDispatchResolution::AwaitingTransport {
+            api_call_id: prepared.api_call_id,
+            started_seq: prepared.started_seq,
+        }),
+        "the durable-prefix query must not observe a later in-memory terminal"
+    );
+    assert_eq!(
         doc.continuation_dispatch_resolution(&action_id)?,
         Some(ContinuationDispatchResolution::TerminalBeforeTransport {
             api_call_id: prepared.api_call_id,

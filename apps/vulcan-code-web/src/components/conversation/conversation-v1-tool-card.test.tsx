@@ -42,6 +42,7 @@ function cardItem(options: {
       tool_call_id: seq + 9,
       tool_name: options.toolName,
       input: options.input,
+      request_stream_id: `v1-card-tool-${seq + 9}`,
       output: options.output,
       changeset: options.changeset,
       status: options.status ?? "completed",
@@ -150,9 +151,10 @@ describe("ConversationV1ToolCard", () => {
   });
 
   it("keeps all persisted active and terminal states expandable", () => {
-    // states covers the five user-visible states required by the V1 card contract.
-    // states 覆盖 V1 卡片契约要求的五种用户可见状态。
+    // states covers every user-visible state required by the V1 card contract.
+    // states 覆盖 V1 卡片契约要求的全部用户可见状态。
     const states = [
+      ["prepared", "准备调用"],
       ["completed", "已执行"],
       ["failed", "执行失败"],
       ["interrupted", "已中断"],

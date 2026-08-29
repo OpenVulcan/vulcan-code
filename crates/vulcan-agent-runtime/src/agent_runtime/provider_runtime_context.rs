@@ -1583,6 +1583,7 @@ mod tests {
             system_prompt_hook_blocks: Vec::new(),
             project_vmm: Default::default(),
             session_vmm: Default::default(),
+            vmm_runtime_ready: false,
             boundary_events: Vec::new(),
             runtime_system_updates: Vec::new(),
             session_goal_context: None,

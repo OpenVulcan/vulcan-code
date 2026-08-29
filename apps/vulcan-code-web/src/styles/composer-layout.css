@@ -325,6 +325,26 @@ opacity: 0.6;
   font-weight: 600;
 }
 
+.conversation-loading-error {
+  color: var(--destructive);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.conversation-loading-retry {
+  width: fit-content;
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--foreground);
+  background: var(--background);
+  cursor: pointer;
+}
+
+.conversation-loading-retry:hover {
+  background: var(--accent);
+}
+
 .composer-dock {
   position: absolute;
   left: 50%;

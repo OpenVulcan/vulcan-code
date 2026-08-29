@@ -20,6 +20,7 @@ use crate::session_v1_lifecycle::{
 };
 use crate::state::SharedServiceBridgeState;
 use crate::webui_turn_chaining::start_exact_v1_user_root_turn;
+use crate::workbench_refresh::refresh_workbench_snapshot_for_selected_session;
 
 /// Publishes one edited V1 history generation and starts its exact rewritten root Turn.
 /// 发布一份编辑后的 V1 历史 generation，并启动其精确重写根回合。
@@ -61,6 +62,12 @@ pub(crate) async fn service_edit_conversation_generation_v1(
             },
         )
         .map_err(|error| error.to_string())?;
+    // The edited generation is now the durable session authority. Refresh the retained process
+    // projection before physical admission so the exact new root is never checked against the
+    // pre-edit Workbench generation.
+    // 编辑后的 generation 现已成为可靠会话权威。物理准入前先刷新保留的进程投影，确保精确新根
+    // 不会与编辑前的 Workbench generation 进行校验。
+    refresh_workbench_snapshot_for_selected_session(state.clone(), session_id).await?;
     let dispatch_started = start_exact_generation_root(
         &app,
         &state,
@@ -115,6 +122,10 @@ pub(crate) async fn service_fork_conversation_generation_v1(
     )
     .await
     .map_err(|error| error.to_string())?;
+    // The child is already durable and indexed, but physical admission consumes the retained
+    // process projection. Refresh that exact child before asking the admission adapter to start it.
+    // 子会话已可靠落盘并进入索引，但物理准入消费保留的进程投影；因此必须先刷新该精确子会话，再请求准入适配器启动。
+    refresh_workbench_snapshot_for_selected_session(state.clone(), child_session_id).await?;
     let dispatch_started = start_exact_generation_root(
         &app,
         &state,

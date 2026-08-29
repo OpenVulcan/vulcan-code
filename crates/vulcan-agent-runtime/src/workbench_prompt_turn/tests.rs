@@ -229,6 +229,80 @@ fn typed_vmm_recall_targets_visible_canonical_user_message() {
     assert_eq!(canonical_target_count, 1);
 }
 
+/// Verifies a stopped VMM service cannot enter local state, recall, profile, or anchor paths.
+/// 验证已停止的 VMM 服务不能进入本地状态、召回、画像或锚点链路。
+#[test]
+fn stopped_vmm_service_bypasses_every_memory_path_without_canonical_user_id() {
+    let session_id = SessionId::from_u128(903);
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    let mut hook_runtime = ConversationHookRuntime::new();
+    let start = begin_shared_prompt_turn_with_runtime_state(
+        &mut runtime_state,
+        &mut hook_runtime,
+        SharedPromptTurnRuntimeBeginInput {
+            session_id,
+            session_title: "目标续轮",
+            workspace_path: "D:/workspace",
+            prompt_entry_id: String::from("stopped-vmm-goal"),
+            continuation_action_id: None,
+            prompt: "继续目标",
+            hidden_model_guidance: None,
+            provider_visible_agent_messages: Vec::new(),
+            attachments: Vec::new(),
+            provider_attachments: None,
+            append_canonical_user_message: false,
+            append_visible_user_prompt_record: false,
+            source: PendingSessionPromptSource::GoalContinuation,
+            vmm_runtime_ready: false,
+            vmm_precheck_ready: false,
+            execution_mode: String::from("Build"),
+            reasoning_effort: None,
+            owning_project_id: Some(String::from("project-a")),
+        },
+    )
+    .expect("a normal prompt turn must start while VMM is stopped");
+    assert!(start.canonical_user_message_id.is_none());
+
+    let mut vmm_session_memory = test_vmm_session_memory(session_id);
+    vmm_session_memory
+        .apply_recall_batch(
+            &session_id.to_string(),
+            "historical-user",
+            &VmmRecallBatch {
+                ttl_turns: 2,
+                injection_tag: String::from("VMM_MEMORY"),
+                injection_description: String::from("Historical memory."),
+                items: vec![ContextItem {
+                    text: String::from("must not be recalled while stopped"),
+                    memory_id: 99,
+                    ..ContextItem::default()
+                }],
+            },
+            "1",
+        )
+        .expect("historical VMM fixture should be valid");
+    let original_vmm_state = vmm_session_memory.clone();
+    let continuation = continue_shared_prompt_turn_after_preparation_with_runtime_state(
+        &mut runtime_state,
+        &mut vmm_session_memory,
+        SharedPromptTurnContinueInput {
+            precheck_outcome: start.precheck_request.clone().skip(),
+            profile_outcome: start.profile_request.clone().skip(),
+            start,
+            project_configuration: ProjectVulcanCodeConfigurationFile::default(),
+            runtime_reasoning_effort: None,
+            provider_reasoning_effort: None,
+            patch_visible_user_prompt_record: false,
+        },
+    )
+    .expect("a stopped VMM service must not block the ordinary Provider request");
+
+    assert!(!continuation.request.vmm_runtime_ready);
+    assert!(continuation.request.context_injection.is_none());
+    assert!(continuation.request.system_prompt_hook_blocks.is_empty());
+    assert_eq!(vmm_session_memory, original_vmm_state);
+}
+
 /// Begins one user-authored prompt turn used by session boundary tests.
 /// 启动一条供 会话边界测试使用的用户提示词回合。
 fn begin_user_prompt(runtime_state: &mut SessionRuntimeStateEntry) -> SharedPromptTurnStart {
@@ -250,6 +324,8 @@ fn begin_user_prompt(runtime_state: &mut SessionRuntimeStateEntry) -> SharedProm
             append_canonical_user_message: true,
             append_visible_user_prompt_record: true,
             source: PendingSessionPromptSource::UserFollowup,
+            vmm_runtime_ready: true,
+            vmm_precheck_ready: true,
             execution_mode: String::from("Build"),
             reasoning_effort: None,
             owning_project_id: Some(String::from("project-a")),
@@ -283,6 +359,8 @@ fn idle_dispatched_interrupt_produces_conversation_hook_turn_id() {
             append_canonical_user_message: true,
             append_visible_user_prompt_record: true,
             source,
+            vmm_runtime_ready: true,
+            vmm_precheck_ready: true,
             execution_mode: String::from("Build"),
             reasoning_effort: None,
             owning_project_id: Some(String::from("project-a")),
@@ -370,6 +448,8 @@ fn session_mailbox_begin_keeps_user_input_hidden_even_if_visibility_flag_is_true
             append_canonical_user_message: true,
             append_visible_user_prompt_record: true,
             source: PendingSessionPromptSource::SessionMailbox,
+            vmm_runtime_ready: true,
+            vmm_precheck_ready: true,
             execution_mode: String::from("Build"),
             reasoning_effort: None,
             owning_project_id: Some(String::from("project-a")),
@@ -416,6 +496,8 @@ fn goal_continuation_begin_never_persists_user_message() {
             append_canonical_user_message: true,
             append_visible_user_prompt_record: true,
             source: PendingSessionPromptSource::GoalContinuation,
+            vmm_runtime_ready: true,
+            vmm_precheck_ready: true,
             execution_mode: String::from("Build"),
             reasoning_effort: None,
             owning_project_id: Some(String::from("project-a")),
@@ -471,6 +553,8 @@ fn manual_continuation_preparation_preserves_exact_hook_correlation() {
             append_canonical_user_message: false,
             append_visible_user_prompt_record: false,
             source: PendingSessionPromptSource::ExecutionRetry,
+            vmm_runtime_ready: true,
+            vmm_precheck_ready: true,
             execution_mode: String::from("Build"),
             reasoning_effort: None,
             owning_project_id: Some(String::from("project-a")),
@@ -551,6 +635,8 @@ fn goal_continuation_reuses_persisted_vmm_profile_baseline() {
             append_canonical_user_message: false,
             append_visible_user_prompt_record: false,
             source: PendingSessionPromptSource::GoalContinuation,
+            vmm_runtime_ready: true,
+            vmm_precheck_ready: true,
             execution_mode: String::from("Build"),
             reasoning_effort: None,
             owning_project_id: Some(String::from("project-a")),
@@ -723,6 +809,8 @@ fn hidden_model_guidance_stays_out_of_visible_transcript() {
             append_canonical_user_message: true,
             append_visible_user_prompt_record: true,
             source: PendingSessionPromptSource::UserFollowup,
+            vmm_runtime_ready: true,
+            vmm_precheck_ready: true,
             execution_mode: String::from("Build"),
             reasoning_effort: None,
             owning_project_id: Some(String::from("project-a")),
@@ -917,6 +1005,8 @@ fn begin_prompt_keeps_runtime_messages_when_records_are_empty() {
             append_canonical_user_message: true,
             append_visible_user_prompt_record: true,
             source: PendingSessionPromptSource::UserFollowup,
+            vmm_runtime_ready: true,
+            vmm_precheck_ready: true,
             execution_mode: String::from("Build"),
             reasoning_effort: None,
             owning_project_id: Some(String::from("project-a")),

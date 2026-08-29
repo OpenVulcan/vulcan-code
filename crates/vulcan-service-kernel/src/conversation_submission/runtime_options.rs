@@ -7,7 +7,11 @@ use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
 use crate::{
     SharedServiceBridgeState, current_unix_millis_text, persist_session_plan_mode_v1,
-    session_goal_lifecycle::ensure_session_can_enter_plan_mode,
+    session_goal_lifecycle::{
+        current_v1_goal_unix_millis, ensure_session_can_enter_plan_mode,
+        registered_session_v1_handle_from_state,
+    },
+    session_request_config_v1::{SessionRequestFallback, set_pending_reasoning_request_v1},
     workspace_persistence_versions::parse_reasoning_effort,
 };
 
@@ -54,8 +58,8 @@ impl SubmissionRuntimeOptions {
 /// 参数
 /// `controller_runtime` owns the goal store used by Plan-mode mutual-exclusion checks.
 /// `controller_runtime` 持有计划模式互斥检查所用的目标存储。
-/// `workspace_snapshot` owns the authoritative session configuration and persistent work mode.
-/// `workspace_snapshot` 持有权威会话配置与持久工作模式。
+/// `workspace_snapshot` owns the process-local execution mirror; the registered V1 document owns request authority.
+/// `workspace_snapshot` 持有进程内执行镜像；已注册 V1 文档持有请求权威。
 /// `session_id` selects the materialized session receiving these controls.
 /// `session_id` 选择接收这些控制项的已物化会话。
 /// `input` contains request-scoped wire controls consumed exactly once.
@@ -80,9 +84,57 @@ pub(crate) async fn prepare_submission_runtime_options(
         apply_authorized_plan_mode(workspace_snapshot, session_id);
     }
     if let Some(reasoning_effort) = options.reasoning_effort {
-        apply_submission_reasoning_effort(workspace_snapshot, session_id, reasoning_effort);
+        let handle = registered_session_v1_handle_from_state(state, session_id)?;
+        commit_submission_reasoning_effort(
+            handle.as_ref(),
+            workspace_snapshot,
+            session_id,
+            reasoning_effort,
+            current_v1_goal_unix_millis()?,
+        )?;
     }
     Ok(options)
+}
+
+/// Durably stages one submission-scoped reasoning choice before updating its process mirror.
+/// 在更新进程内镜像前，可靠暂存一次提交范围的思考选择。
+///
+/// # Parameters
+/// 参数
+/// `handle` owns the authoritative V1 request configuration.
+/// `handle` 持有权威 V1 请求配置。
+/// `workspace_snapshot` contains the exact admitted process-local runtime projection.
+/// `workspace_snapshot` 包含精确已准入的进程内运行时投影。
+/// `session_id` selects the single session receiving both projections.
+/// `session_id` 选择同时接收两种投影的唯一会话。
+/// `reasoning_effort` is the validated provider-neutral reasoning level.
+/// `reasoning_effort` 是经过校验的供应商中立思考档位。
+/// `now_ms` is the checked V1 mutation timestamp.
+/// `now_ms` 是经过检查的 V1 修改时间戳。
+///
+/// # Returns
+/// 返回值
+/// Success only after the V1 pending request is durable and the process mirror matches it.
+/// 仅在 V1 待生效请求可靠落盘且进程内镜像与其一致后返回成功。
+fn commit_submission_reasoning_effort(
+    handle: &crate::session_runtime_registry_v1::SessionHandle,
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    reasoning_effort: ReasoningEffortLevel,
+    now_ms: i64,
+) -> Result<(), String> {
+    let fallback = workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .map(SessionRequestFallback::from_runtime_state)
+        .ok_or_else(|| {
+            format!("Session `{session_id}` has no admitted runtime state for reasoning selection.")
+        })?;
+    set_pending_reasoning_request_v1(handle, reasoning_effort, fallback, now_ms)?;
+    // The process mirror changes only after the authoritative pending request is durable.
+    // 只有权威待生效请求可靠落盘后，进程内镜像才允许改变。
+    apply_submission_reasoning_effort(workspace_snapshot, session_id, reasoning_effort);
+    Ok(())
 }
 
 /// Commits the submitted reasoning effort to the exact materialized session.
@@ -203,8 +255,41 @@ fn apply_authorized_plan_mode(workspace_snapshot: &mut WorkspaceSnapshot, sessio
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::Arc;
 
     use super::*;
+    use crate::session_runtime_registry_v1::{SessionHandle, SessionPersistenceBackend};
+    use vulcan_session_core::v1::config::ActiveRequestConfig;
+    use vulcan_session_core::v1::document::{FlushCandidate, SessionDocument};
+    use vulcan_workspace_store::workspace_store::{SessionV1FlushResult, SessionV1StoreError};
+
+    /// In-memory publication seam for submission runtime-option durability tests.
+    /// 提交运行选项可靠性测试使用的内存发布接缝。
+    struct SubmissionRuntimeOptionsTestBackend;
+
+    impl SessionPersistenceBackend for SubmissionRuntimeOptionsTestBackend {
+        /// Accepts one complete V1 flush candidate without touching the filesystem.
+        /// 接纳一份完整 V1 flush 候选且不访问文件系统。
+        ///
+        /// # Parameters
+        /// 参数
+        /// `candidate` is the exact candidate emitted by the session owner.
+        /// `candidate` 是会话 owner 发出的精确候选。
+        ///
+        /// # Returns
+        /// 返回值
+        /// A successful publication receipt carrying the candidate metadata.
+        /// 返回携带候选 metadata 的成功发布回执。
+        fn flush(
+            &self,
+            candidate: &FlushCandidate,
+        ) -> Result<SessionV1FlushResult, SessionV1StoreError> {
+            Ok(SessionV1FlushResult {
+                written_file_count: candidate.dirty.len(),
+                published_metadata: Some(candidate.metadata.clone()),
+            })
+        }
+    }
 
     /// Builds an empty workspace snapshot with one explicit selection anchor.
     /// 构建带有一个显式选择锚点的空工作区快照。
@@ -313,6 +398,76 @@ mod tests {
                 .get(&unrelated_session_id)
                 .and_then(|runtime_state| runtime_state.active_reasoning_effort),
             Some(ReasoningEffortLevel::Low)
+        );
+    }
+
+    /// Verifies a submission reasoning change reaches V1 pending metadata before its process mirror changes.
+    /// 验证提交思考档位变化会先进入 V1 pending metadata，再更新进程内镜像。
+    #[test]
+    fn submission_reasoning_stages_v1_pending_before_process_mirror() {
+        let session_id = SessionId::from_u128(0x6301);
+        let mut document = SessionDocument::new(
+            session_id.to_string(),
+            "project-a",
+            "Submission reasoning",
+            1,
+        );
+        document.metadata.config.active_request = ActiveRequestConfig {
+            provider: Some(String::from("provider-a")),
+            connection_id: Some(String::from("connection-a")),
+            model: Some(String::from("model-a")),
+            thinking_level: Some(String::from("high")),
+            temperature: Some(0.25),
+        };
+        let handle = SessionHandle::with_backend(
+            session_id,
+            document,
+            Arc::new(SubmissionRuntimeOptionsTestBackend),
+        );
+        let mut workspace_snapshot = empty_workspace_snapshot(session_id);
+        workspace_snapshot.session_runtime_state.insert(
+            session_id,
+            SessionRuntimeStateEntry {
+                active_provider_id: Some(String::from("provider-a")),
+                active_connection_id: Some(String::from("connection-a")),
+                active_model_id: Some(String::from("model-a")),
+                active_reasoning_effort: Some(ReasoningEffortLevel::High),
+                active_reasoning_effort_explicit: true,
+                active_temperature: Some(0.25),
+                ..SessionRuntimeStateEntry::default()
+            },
+        );
+
+        commit_submission_reasoning_effort(
+            handle.as_ref(),
+            &mut workspace_snapshot,
+            session_id,
+            ReasoningEffortLevel::Max,
+            2,
+        )
+        .expect("submission reasoning should stage durably");
+
+        let (active, pending) = handle
+            .read(|document| {
+                (
+                    document.metadata.config.active_request.clone(),
+                    document.metadata.config.pending_request.clone(),
+                )
+            })
+            .expect("request metadata should remain readable");
+        assert_eq!(active.thinking_level.as_deref(), Some("high"));
+        let pending = pending.expect("submission reasoning should create pending metadata");
+        assert_eq!(pending.provider.as_deref(), Some("provider-a"));
+        assert_eq!(pending.connection_id.as_deref(), Some("connection-a"));
+        assert_eq!(pending.model.as_deref(), Some("model-a"));
+        assert_eq!(pending.thinking_level.as_deref(), Some("max"));
+        assert_eq!(pending.temperature, Some(0.25));
+        assert_eq!(
+            workspace_snapshot
+                .session_runtime_state
+                .get(&session_id)
+                .and_then(|runtime_state| runtime_state.active_reasoning_effort),
+            Some(ReasoningEffortLevel::Max)
         );
     }
 }

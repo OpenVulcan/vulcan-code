@@ -57,9 +57,10 @@ pub use resource_catalog::{
 pub use session_v1_store::create_session_v1_storage_fixture;
 pub use session_v1_store::{
     CreateEmbeddedTaskSessionV1Request, CreateSessionV1Request, CreatedSessionV1,
-    DeleteSessionV1Outcome, LoadedSessionV1, SessionIndexV1ConflictField, SessionIndexV1Error,
-    SessionV1EventRange, SessionV1EventWindowState, SessionV1FlushResult, SessionV1ListEntry,
-    SessionV1LoadReport, SessionV1StorageError, SessionV1StorageErrorCode, SessionV1StorageLocator,
+    DeleteSessionV1Outcome, LoadedSessionV1, SESSION_V1_STORAGE_PARTITION,
+    SessionIndexV1ConflictField, SessionIndexV1Error, SessionV1EventRange,
+    SessionV1EventWindowState, SessionV1FlushResult, SessionV1ListEntry, SessionV1LoadReport,
+    SessionV1StorageError, SessionV1StorageErrorCode, SessionV1StorageLocator,
     SessionV1StoragePreflightOutcome, SessionV1StoreError, SessionV1TurnEventWindow,
     create_embedded_task_session_v1, create_indexed_session_v1, delete_session_v1,
     ensure_session_v1_storage_schema, flush_session_v1_candidate, list_active_sessions_v1,

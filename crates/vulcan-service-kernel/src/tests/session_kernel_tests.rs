@@ -2506,6 +2506,115 @@ fn preparation_failure_boundary_holds_terminal_owner_until_explicit_release() {
         .expect("replacement turn should start after durable release");
 }
 
+/// Verifies a finished pre-API failure persists one V1 error and releases the exact admission owner.
+/// 验证 API 前结束失败会持久化一条 V1 错误，并释放精确准入 owner。
+#[tokio::test]
+async fn finished_pre_api_failure_persists_error_and_reopens_admission() {
+    let session_id = SessionId::from_u128(0x9608);
+    let mut document =
+        SessionDocument::new(session_id.to_string(), "project-a", "Pre-API failure", 1);
+    document
+        .submit_root_input(
+            vulcan_session_core::v1::ClientInputSubmission::new(
+                vulcan_session_core::v1::ClientActionId::try_new("pre-api-root")
+                    .expect("valid client action id"),
+                "run provider request",
+                Vec::new(),
+            ),
+            2,
+        )
+        .expect("root input should open one V1 turn");
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    let handle = register_test_session_v1_document(&mut service_state, session_id, document);
+    let first_owner = SessionTerminalPersistenceOwner::StreamTask(Uuid::new_v4());
+    register_session_terminal_persistence_owner(&mut service_state, session_id, first_owner)
+        .expect("first terminal owner should register");
+    let state = Arc::new(Mutex::new(service_state));
+    let first_guard = SessionTerminalPersistenceOwnerGuard::adopt_registered(
+        state.clone(),
+        session_id,
+        first_owner,
+    )
+    .expect("first terminal owner should be adoptable");
+
+    assert!(
+        settle_stream_terminal_authority(
+            &state,
+            session_id,
+            false,
+            "stream_finished_without_v1_api_terminal",
+            first_guard,
+        )
+        .await
+    );
+    {
+        let guard = state
+            .lock()
+            .expect("terminal owner table should remain readable");
+        assert!(
+            guard
+                .session_terminal_persistence_owners
+                .get(&session_id)
+                .is_none()
+        );
+    }
+    let first_revision = handle
+        .read(SessionDocument::memory_revision)
+        .expect("V1 revision should remain readable");
+    let matching_notes = handle
+        .read(|document| {
+            document
+                .events()
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        &event.event,
+                        vulcan_session_core::v1::EventBody::DisplayNote(note)
+                            if note.notice_kind
+                                == vulcan_session_core::v1::DisplayNoticeKind::SystemError
+                                && note.reason_code == "stream_finished_without_v1_api_terminal"
+                    )
+                })
+                .count()
+        })
+        .expect("V1 error projection should remain readable");
+    assert_eq!(matching_notes, 1);
+
+    let second_owner = SessionTerminalPersistenceOwner::StreamTask(Uuid::new_v4());
+    {
+        let mut guard = state.lock().expect("second terminal owner should register");
+        register_session_terminal_persistence_owner(&mut guard, session_id, second_owner)
+            .expect("second terminal owner should register exactly");
+    }
+    let second_guard = SessionTerminalPersistenceOwnerGuard::adopt_registered(
+        state.clone(),
+        session_id,
+        second_owner,
+    )
+    .expect("second terminal owner should be adoptable");
+    assert!(
+        settle_stream_terminal_authority(
+            &state,
+            session_id,
+            false,
+            "stream_finished_without_v1_api_terminal",
+            second_guard,
+        )
+        .await
+    );
+    assert_eq!(
+        handle
+            .read(SessionDocument::memory_revision)
+            .expect("idempotent V1 revision should remain readable"),
+        first_revision
+    );
+    let mut guard = state
+        .lock()
+        .expect("replacement admission should be inspectable");
+    start_webui_session_kernel_user_turn(&mut guard, session_id, "replacement-turn")
+        .expect("replacement turn should start after durable terminal settlement");
+}
+
 /// Verifies stale preparation cleanup cannot stop a replacement kernel turn.
 /// 验证过期准备清理不能停止替代 kernel 回合。
 #[test]

@@ -4,6 +4,7 @@
 use super::*;
 use crate::{
     applied_output_style_snapshot, vmm_session_controller::open_registered_session_vmm_controller,
+    webui_vmm_runtime_readiness,
 };
 
 /// Runs budget-triggered context compaction before one exact active Provider stream continues.
@@ -90,18 +91,24 @@ async fn maybe_auto_compact_webui_session_with_mode(
             Ok(None)
         };
     };
-    // vmm_controller_registry is cloned without retaining the shared service lock.
-    // vmm_controller_registry 在不保留共享服务锁的情况下完成克隆。
-    // vmm_controller is the sole owner used for pressure and refreshed injection projections.
-    // vmm_controller 是压力与刷新注入投影使用的唯一所有者。
-    let vmm_controller = open_registered_session_vmm_controller(
-        state,
-        request.session_id,
-        &current_unix_millis_text(),
-    )?;
-    // vmm_cache_pressure measures immutable text that can only be reclaimed at a compaction boundary.
-    // vmm_cache_pressure 衡量只能在压缩边界回收的不可变文本。
-    let vmm_cache_pressure = vmm_controller.snapshot()?.cache_pressure();
+    // VMM pressure is eligible only when the request and the current configured service are both ready.
+    // 仅当请求准入事实与当前已配置服务都就绪时，VMM 压力才可参与压缩决策。
+    let vmm_runtime_ready =
+        request.vmm_runtime_ready && webui_vmm_runtime_readiness(state)?.service_ready;
+    let vmm_controller = if vmm_runtime_ready {
+        Some(open_registered_session_vmm_controller(
+            state,
+            request.session_id,
+            &current_unix_millis_text(),
+        )?)
+    } else {
+        None
+    };
+    let vmm_cache_pressure = if let Some(controller) = vmm_controller.as_ref() {
+        controller.snapshot()?.cache_pressure()
+    } else {
+        vulcan_vmm::VmmCachePressure::default()
+    };
     // vmm_pressure_requires_compaction raises priority only after an absolute or proportional threshold.
     // vmm_pressure_requires_compaction 仅在达到绝对或比例阈值后提高压缩优先级。
     let vmm_pressure_requires_compaction =
@@ -339,7 +346,10 @@ async fn maybe_auto_compact_webui_session_with_mode(
             }
             // refreshed_vmm_state observes the cache epoch committed by the compaction controller command.
             // refreshed_vmm_state 观察由压缩控制器命令提交的缓存纪元。
-            let refreshed_vmm_state = vmm_controller.snapshot()?;
+            let refreshed_vmm_state = match vmm_controller.as_ref() {
+                Some(controller) => controller.snapshot()?,
+                None => vulcan_vmm::VmmSessionMemoryState::default(),
+            };
             let mut refreshed = refreshed_execution_request_after_context_compaction(
                 state,
                 request,
@@ -727,6 +737,7 @@ pub(crate) fn refreshed_execution_request_after_context_compaction(
     request: &ExecutionPreparationRequest,
     vmm_session_memory: &vulcan_vmm::VmmSessionMemoryState,
 ) -> Result<ExecutionPreparationRequest, String> {
+    let current_vmm_service_ready = webui_vmm_runtime_readiness(state)?.service_ready;
     let guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -738,6 +749,9 @@ pub(crate) fn refreshed_execution_request_after_context_compaction(
         .get(&request.session_id)
         .ok_or_else(|| String::from("自动上下文压缩完成后未找到会话运行时状态。"))?;
     let mut refreshed = request.clone();
+    // vmmRuntimeReady cannot become true during compaction and is revoked immediately after stop.
+    // vmmRuntimeReady 在压缩期间不能由 false 变为 true，并会在服务停止后立即撤销。
+    let vmm_runtime_ready = request.vmm_runtime_ready && current_vmm_service_ready;
     refreshed.conversation_state = runtime_state.conversation_state.clone();
     // The compacted state already contains the internal continuation seed, so replaying it as a
     // new UserPrompt would append the original prompt to the visible transcript a second time.
@@ -754,6 +768,7 @@ pub(crate) fn refreshed_execution_request_after_context_compaction(
         &runtime_state.context_injection_state,
         vmm_session_memory,
         turn_marker.as_deref(),
+        vmm_runtime_ready,
     );
     Ok(refreshed)
 }

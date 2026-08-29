@@ -14,7 +14,7 @@ describe("transient reasoning status", () => {
     // source owns the exact provider-node projection at the transcript tail.
     // source 持有转录尾部精确的供应商节点投影。
     const source = readFileSync(
-      new URL("./conversation-live-reasoning.tsx", import.meta.url),
+      new URL("./conversation-blocks.tsx", import.meta.url),
       "utf8",
     );
 

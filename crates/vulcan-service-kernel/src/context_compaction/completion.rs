@@ -217,6 +217,7 @@ fn dispatch_context_compaction_committed_hook(
     trigger: &str,
     provider_request_count: usize,
     summary_body: &str,
+    vmm_runtime_ready: bool,
 ) -> Result<(), String> {
     // hook_runtime only dispatches an asynchronous notification and does not own compaction state.
     // hook_runtime 仅分发异步通知，不持有上下文压缩状态。
@@ -231,6 +232,7 @@ fn dispatch_context_compaction_committed_hook(
         false,
         provider_request_count,
         summary_body,
+        vmm_runtime_ready,
     );
     Ok(())
 }
@@ -408,16 +410,19 @@ pub(crate) fn finish_webui_context_compaction_execution(
             .clone();
         (workspace, phase_event)
     };
+    let vmm_runtime_ready = webui_vmm_runtime_readiness(state)?.service_ready;
 
     project_committed_context_compaction_surfaces(app, state, session_id, phase_event);
     // VMM Hook state is a derived projection and cannot invalidate the already
     // durable V1 context generation.
     // VMM Hook 状态是派生投影，不得使已经可靠发布的 V1 上下文代次失效。
-    if let Err(error) = refresh_exact_vmm_hook_session_projection(
-        &agent_runtime.vmm_hook_runtime,
-        &workspace,
-        session_id,
-    ) {
+    if vmm_runtime_ready
+        && let Err(error) = refresh_exact_vmm_hook_session_projection(
+            &agent_runtime.vmm_hook_runtime,
+            &workspace,
+            session_id,
+        )
+    {
         webui_trace(
             "context_compaction_vmm_snapshot_refresh_failed_after_commit",
             format!("session={session_id} error={error}"),
@@ -430,6 +435,7 @@ pub(crate) fn finish_webui_context_compaction_execution(
         trigger,
         provider_request_count,
         &summary_body,
+        vmm_runtime_ready,
     ) {
         webui_trace(
             "context_compaction_hook_dispatch_failed_after_commit",

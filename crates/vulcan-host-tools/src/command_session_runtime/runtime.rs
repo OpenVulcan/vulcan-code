@@ -221,6 +221,10 @@ impl CommandSessionRuntime {
 
         loop {
             let notified = record.shared_state.change_notify.notified();
+            tokio::pin!(notified);
+            // Register before reading output and lifecycle state because producers use notify_waiters.
+            // 在读取输出与生命周期状态前完成注册，因为生产者使用 notify_waiters。
+            notified.as_mut().enable();
             let outcome = record.read_since(after_seq, max_chunks, true).await;
             if !outcome.returned_chunks.is_empty()
                 || outcome.snapshot.status != CommandSessionStatus::Running
@@ -233,7 +237,7 @@ impl CommandSessionRuntime {
             if remaining_ms == 0 {
                 return Ok(outcome);
             }
-            let _ = timeout(Duration::from_millis(remaining_ms), notified).await;
+            let _ = timeout(Duration::from_millis(remaining_ms), notified.as_mut()).await;
         }
     }
 
@@ -397,6 +401,10 @@ impl CommandSessionRuntime {
         let wait_started_at = Instant::now();
         loop {
             let notified = record.shared_state.change_notify.notified();
+            tokio::pin!(notified);
+            // Register before reading the terminal state so a fast process exit cannot be lost.
+            // 在读取终态前完成注册，避免快速进程退出通知丢失。
+            notified.as_mut().enable();
             let snapshot = record.snapshot().await;
             if snapshot.status != CommandSessionStatus::Running || wait_for_exit_ms == 0 {
                 return Ok(snapshot);
@@ -406,7 +414,7 @@ impl CommandSessionRuntime {
             if remaining_ms == 0 {
                 return Ok(snapshot);
             }
-            let _ = timeout(Duration::from_millis(remaining_ms), notified).await;
+            let _ = timeout(Duration::from_millis(remaining_ms), notified.as_mut()).await;
         }
     }
 
@@ -454,6 +462,10 @@ impl CommandSessionRuntime {
 
         loop {
             let notified = record.shared_state.change_notify.notified();
+            tokio::pin!(notified);
+            // Register before reading output and cursor state because producers use notify_waiters.
+            // 在读取输出与游标状态前完成注册，因为生产者使用 notify_waiters。
+            notified.as_mut().enable();
             let outcome = record
                 .read_since(after_seq, max_chunks, request.advance_ai_cursor)
                 .await;
@@ -471,7 +483,7 @@ impl CommandSessionRuntime {
             if remaining_ms == 0 {
                 return Ok(outcome);
             }
-            let _ = timeout(Duration::from_millis(remaining_ms), notified).await;
+            let _ = timeout(Duration::from_millis(remaining_ms), notified.as_mut()).await;
         }
     }
 

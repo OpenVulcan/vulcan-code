@@ -40,6 +40,32 @@ fn normalize_external_vmm_grpc_target(grpc_target: &str) -> String {
     grpc_target.trim().to_string()
 }
 
+/// Returns whether the exact external endpoint has a current successful health probe.
+/// 返回准确外部端点当前是否拥有成功的健康探测事实。
+///
+/// # Parameters
+/// 参数
+/// `grpc_target` is the endpoint from the current authoritative configuration.
+/// `grpc_target` 是当前权威配置中的端点。
+/// `scope_configured` reports whether the current effective service scope is complete.
+/// `scope_configured` 表示当前最终服务作用域是否已完整配置。
+///
+/// # Returns
+/// 返回值
+/// `true` only when configuration is complete and the matching endpoint is currently healthy.
+/// 仅当配置完整且匹配端点当前健康时返回 `true`。
+pub(super) fn external_vmm_service_ready(grpc_target: &str, scope_configured: bool) -> bool {
+    if !scope_configured {
+        return false;
+    }
+    let target = normalize_external_vmm_grpc_target(grpc_target);
+    external_vmm_health_probe_store()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .is_some_and(|probe| probe.grpc_target == target && probe.error.is_none())
+}
+
 /// Records a successful explicit health probe for one external VMM endpoint.
 /// 记录单个外部 VMM 端点的显式健康探测成功结果。
 ///
@@ -107,6 +133,8 @@ pub(super) fn clear_external_vmm_health_probe() {
 /// 参数
 /// `grpc_target` is the currently effective external VMM endpoint.
 /// `grpc_target` 是当前生效的外部 VMM 端点。
+/// `scope_configured` reports whether the effective identity and project scope are complete.
+/// `scope_configured` 表示最终身份与项目作用域配置是否完整。
 /// `runtime` is the runtime summary being projected to the workbench.
 /// `runtime` 是正在投影到工作台的运行摘要。
 ///
@@ -114,7 +142,11 @@ pub(super) fn clear_external_vmm_health_probe() {
 /// 返回值
 /// This function returns no value after applying a matching in-memory result.
 /// 应用匹配的内存结果后不返回值。
-pub(super) fn apply_external_vmm_health_probe(grpc_target: &str, runtime: &mut VmmRuntimeSummary) {
+pub(super) fn apply_external_vmm_health_probe(
+    grpc_target: &str,
+    scope_configured: bool,
+    runtime: &mut VmmRuntimeSummary,
+) {
     let target = normalize_external_vmm_grpc_target(grpc_target);
     let store = external_vmm_health_probe_store()
         .lock()
@@ -123,6 +155,7 @@ pub(super) fn apply_external_vmm_health_probe(grpc_target: &str, runtime: &mut V
         return;
     };
     runtime.process_ready = probe.error.is_none();
+    runtime.scope_ready = runtime.process_ready && scope_configured;
     runtime.managed_last_error = probe.error.clone();
 }
 
@@ -137,19 +170,32 @@ mod tests {
         clear_external_vmm_health_probe();
         record_external_vmm_health_success(" 127.0.0.1:17625 ");
 
+        assert!(external_vmm_service_ready("127.0.0.1:17625", true));
+        assert!(!external_vmm_service_ready("127.0.0.1:17625", false));
+        assert!(!external_vmm_service_ready("127.0.0.1:17635", true));
+
         let mut matching_runtime = VmmRuntimeSummary::default();
-        apply_external_vmm_health_probe("127.0.0.1:17625", &mut matching_runtime);
+        apply_external_vmm_health_probe("127.0.0.1:17625", true, &mut matching_runtime);
         assert!(matching_runtime.process_ready);
+        assert!(matching_runtime.scope_ready);
+
+        let mut incomplete_scope_runtime = VmmRuntimeSummary::default();
+        apply_external_vmm_health_probe("127.0.0.1:17625", false, &mut incomplete_scope_runtime);
+        assert!(incomplete_scope_runtime.process_ready);
+        assert!(!incomplete_scope_runtime.scope_ready);
 
         let mut different_runtime = VmmRuntimeSummary::default();
-        apply_external_vmm_health_probe("127.0.0.1:17635", &mut different_runtime);
+        apply_external_vmm_health_probe("127.0.0.1:17635", true, &mut different_runtime);
         assert!(!different_runtime.process_ready);
+        assert!(!different_runtime.scope_ready);
 
         record_external_vmm_health_failure("127.0.0.1:17625", " connection refused ");
+        assert!(!external_vmm_service_ready("127.0.0.1:17625", true));
 
         let mut runtime = VmmRuntimeSummary::default();
-        apply_external_vmm_health_probe("127.0.0.1:17625", &mut runtime);
+        apply_external_vmm_health_probe("127.0.0.1:17625", true, &mut runtime);
         assert!(!runtime.process_ready);
+        assert!(!runtime.scope_ready);
         assert_eq!(
             runtime.managed_last_error.as_deref(),
             Some("connection refused")

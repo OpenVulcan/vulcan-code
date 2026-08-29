@@ -96,6 +96,7 @@ function toolSummary(
       tool_call_id: seq,
       tool_name: "file_edit",
       input: { path: `tool-${seq}.txt` },
+      request_stream_id: `workspace-review-tool-${seq}`,
       status: options.status ?? "completed",
       ...(options.changeset === undefined ? {} : { changeset: options.changeset }),
     },
@@ -199,6 +200,7 @@ function renderHost(controllerSnapshot: ConversationEventWindowControllerSnapsho
       rehydrate: async () => false,
       prependOlder: async () => false,
     }),
+    getStatus: () => ({ kind: "ready", session_id: "session-review-host" }),
   };
   // props supplies only project Git services; conversation review data comes from V1 context.
   // props 只提供项目 Git 服务；会话审核数据来自 V1 context。

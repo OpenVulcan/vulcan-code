@@ -132,10 +132,14 @@ impl MediaUploadCancellation {
     pub async fn wait(&self) {
         loop {
             let notified = self.notify.notified();
+            tokio::pin!(notified);
+            // Register before reading the cancellation flag because cancel uses notify_waiters.
+            // 在读取取消标记前完成注册，因为 cancel 使用 notify_waiters。
+            notified.as_mut().enable();
             if self.is_cancelled() {
                 return;
             }
-            notified.await;
+            notified.as_mut().await;
             if self.is_cancelled() {
                 return;
             }

@@ -222,6 +222,9 @@ pub(super) struct ActiveConversationTurn {
     /// First visible user content that opened the turn.
     /// 打开该回合的首条可见用户内容。
     pub(super) user_content: String,
+    /// Whether the VMM service was fully configured and live when this turn was admitted.
+    /// 当前回合准入时 VMM 服务是否已完成配置并处于运行就绪状态。
+    pub(super) vmm_runtime_ready: bool,
     /// Timeline items collected before the final assistant answer.
     /// 最终助手回答前收集到的 timeline 项。
     pub(super) timeline: Vec<ConversationTimelineItem>,
@@ -233,10 +236,15 @@ pub(super) struct ActiveConversationTurn {
 impl ActiveConversationTurn {
     /// Builds one active turn from the first user prompt.
     /// 根据首条用户提示构建一个活动回合。
-    pub(super) fn new(turn_id: impl Into<String>, user_content: impl Into<String>) -> Self {
+    pub(super) fn new(
+        turn_id: impl Into<String>,
+        user_content: impl Into<String>,
+        vmm_runtime_ready: bool,
+    ) -> Self {
         Self {
             turn_id: turn_id.into(),
             user_content: user_content.into(),
+            vmm_runtime_ready,
             timeline: Vec::new(),
             recorded_prompt_entry_ids: std::collections::BTreeSet::new(),
         }

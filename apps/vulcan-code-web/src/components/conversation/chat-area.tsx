@@ -5,12 +5,14 @@ import {
   ConversationSubmissionStatus,
   EmptyConversationPrompt,
 } from "@/components/conversation/conversation-chrome";
-import { ConversationV1Workspace } from "@/components/conversation/conversation-v1-workspace";
+import {
+  ConversationBranchWorkspaceV1,
+  type ConversationBranchRootInputGenerationActionV1,
+} from "@/components/conversation/conversation-branch-workspace-v1";
 import {
   ConversationGenerationDialogV1,
   type ConversationGenerationDialogActionV1,
 } from "@/components/conversation/conversation-generation-dialog-v1";
-import type { ConversationV1RootInputGenerationAction } from "@/components/conversation/conversation-v1-display-renderer";
 import {
   StreamingThinkingOverlay,
   TransientReasoningStatusLine,
@@ -44,7 +46,6 @@ import { selectConversationContinueCandidateV1 } from "@/service/conversation-co
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
 import type {
   ConversationEventSummary,
-  ExternalResourceRef,
 } from "@/service/conversation-event-window-store";
 import {
   useSelectedConversationEventWindowCommands,
@@ -54,7 +55,7 @@ import {
 /** Process-local target for one exact V1 edit or fork action.
  * 一次精确 V1 编辑或分叉动作的进程内目标。
  */
-interface ConversationGenerationTargetV1 extends ConversationV1RootInputGenerationAction {
+interface ConversationGenerationTargetV1 extends ConversationBranchRootInputGenerationActionV1 {
   /** Stable child identity reused by every fork retry from this dialog.
    * 当前对话框中每次分叉重试复用的稳定子会话身份。
    */
@@ -143,7 +144,7 @@ export function ChatArea(props: ChatAreaProps) {
    * 从一条 canonical 根输入事件打开 generation 对话框。
    */
   const handleRootInputGenerationAction = React.useCallback((
-    action: ConversationV1RootInputGenerationAction,
+    action: ConversationBranchRootInputGenerationActionV1,
   ) => {
     setGenerationTarget({
       ...action,
@@ -303,6 +304,7 @@ export function ChatArea(props: ChatAreaProps) {
   // 界面布局记忆管理滚动与展开恢复记录。
   const {
     read: readConversationSurfaceLayoutState,
+    writeExpandedState: writeSurfaceExpandedState,
     writeScroll: writeSurfaceScrollSnapshot,
   } = useConversationSurfaceLayoutMemory({ liveSurfaceIds: liveLayoutSurfaceIds });
   const surfaceConversation = selectedConversation;
@@ -507,23 +509,6 @@ export function ChatArea(props: ChatAreaProps) {
     conversationScrollController.remember();
     return props.onOpenSubagentPanel(parentConversationId, taskId);
   }, [conversationScrollController, props.onOpenSubagentPanel]);
-  // availableExternalRefKeys contains only references with a real production navigation route.
-  // availableExternalRefKeys 仅包含拥有真实生产导航路径的引用。
-  const availableExternalRefKeys = React.useMemo(
-    () => new Set(
-      (subagentNavigation?.tasks ?? []).map((task) => `subagent:${task.taskId}`),
-    ),
-    [subagentNavigation?.tasks],
-  );
-  // handleOpenExternalRef routes only the strongly typed resource kinds currently owned by this surface.
-  // handleOpenExternalRef 仅路由当前界面真实持有的强类型资源种类。
-  const handleOpenExternalRef = React.useCallback((reference: ExternalResourceRef) => {
-    if (reference.kind !== "subagent" || !activeSurfaceConversationId) {
-      return;
-    }
-    void handleOpenSubagentPanelFromTimeline(activeSurfaceConversationId, reference.id);
-  }, [activeSurfaceConversationId, handleOpenSubagentPanelFromTimeline]);
-
   // scrollConversationToBottom transfers the main viewport to explicit tail ownership.
   // scrollConversationToBottom 将主视口切换到显式尾部所有权。
   const scrollConversationToBottom = React.useCallback((behavior: ScrollBehavior = "smooth") => {
@@ -586,6 +571,19 @@ export function ChatArea(props: ChatAreaProps) {
       onSubmitPrompt={handleComposerSubmit}
     />
   );
+  // activeSurfaceLayoutState reuses one surface-scoped layout snapshot for this render.
+  // activeSurfaceLayoutState 在本次渲染中复用一个界面级布局快照。
+  const activeSurfaceLayoutState = activeSurfaceConversationId
+    ? readConversationSurfaceLayoutState(activeSurfaceConversationId)
+    : null;
+  // handleExpandedStateChange stores branch process, prompt, and tool-card expansion state per session.
+  // handleExpandedStateChange 按会话保存分支处理过程、提示词与工具卡展开状态。
+  const handleExpandedStateChange = React.useCallback((
+    surfaceId: string,
+    state: Parameters<typeof writeSurfaceExpandedState>[1],
+  ): void => {
+    writeSurfaceExpandedState(surfaceId, state);
+  }, [writeSurfaceExpandedState]);
   // conversationSurfaceContent keeps transcript, overlays, and composer in one adaptive content coordinate space.
   // conversationSurfaceContent 将转录、浮层与输入区保留在同一个自适应内容坐标空间内。
   const conversationSurfaceContent = (
@@ -597,9 +595,10 @@ export function ChatArea(props: ChatAreaProps) {
         />
       ) : null}
       {selectedConversation ? (
-        <ConversationV1Workspace
-          availableExternalRefKeys={availableExternalRefKeys}
+        <ConversationBranchWorkspaceV1
+          commandSessions={props.workbench.commandSessions ?? []}
           commands={eventWindowCommands}
+          conversation={selectedConversation}
           footer={continuationCandidate?.session_id === selectedConversation.id
             && !conversationIsRunning(selectedConversation)
             && props.onContinueConversation ? (
@@ -621,7 +620,8 @@ export function ChatArea(props: ChatAreaProps) {
               />
             ) : null}
           onCopyText={props.onCopyText}
-          onOpenExternalRef={handleOpenExternalRef}
+          onExpandedStateChange={handleExpandedStateChange}
+          onOpenSubagentPanel={handleOpenSubagentPanelFromTimeline}
           onRootInputGenerationAction={handleRootInputGenerationAction}
           optimisticUserInput={optimisticUserInput}
           onPlanArtifactCancel={handlePlanArtifactCancel}
@@ -630,6 +630,7 @@ export function ChatArea(props: ChatAreaProps) {
           onPreserveHistoryPrepend={conversationScrollController.preserveHistoryPrepend}
           onScrollStateChange={conversationScrollController.handleScroll}
           pendingPlanArtifact={pendingPlanArtifact}
+          initialExpandedState={activeSurfaceLayoutState?.expandedState ?? null}
           reasoningDisplayMode={thinkingDisplayMode}
           scrollRef={workspaceRef}
           sessionId={selectedConversation.id}
@@ -639,7 +640,9 @@ export function ChatArea(props: ChatAreaProps) {
           transientReasoningStatus={transientReasoningStatus ? (
             <TransientReasoningStatusLine status={transientReasoningStatus} />
           ) : null}
+          visibleThinkingOverlayBlockId={visibleStreamingThinkingOverlayBlock?.id ?? null}
           workspacePath={selectedProject?.path ?? null}
+          onTrace={props.onTrace}
         />
       ) : null}
       {props.selectedDraftConversation?.pendingSubmission && pendingSubmissionVisible ? (

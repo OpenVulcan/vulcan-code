@@ -19,22 +19,18 @@ use vulcan_workbench_model::SessionId;
 use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
 use vulcan_workspace_store::workspace_store::{
     CreateEmbeddedTaskSessionV1Request, CreateSessionV1Request, ProjectResourceCatalogError,
-    ProjectResourceCatalogRegistry, SessionV1ListEntry, SessionV1StoragePreflightOutcome,
-    SessionV1StoreError, create_embedded_task_session_v1, create_indexed_session_v1,
-    delete_session_v1, list_active_sessions_v1, list_archived_sessions_v1, load_session_v1_full,
-    load_session_v1_tail, locate_embedded_task_session_v1, locate_optional_session_v1_storage,
-    locate_session_v1_storage, preflight_session_v1_storage, project_resource_directory_v1,
-    project_session_lifecycle_v1,
+    ProjectResourceCatalogRegistry, SESSION_V1_STORAGE_PARTITION, SessionV1ListEntry,
+    SessionV1StoragePreflightOutcome, SessionV1StoreError, create_embedded_task_session_v1,
+    create_indexed_session_v1, delete_session_v1, list_active_sessions_v1,
+    list_archived_sessions_v1, load_session_v1_full, load_session_v1_tail,
+    locate_embedded_task_session_v1, locate_optional_session_v1_storage, locate_session_v1_storage,
+    preflight_session_v1_storage, project_resource_directory_v1, project_session_lifecycle_v1,
 };
 
 use crate::session_runtime_registry_v1::{
     SessionFlushReason, SessionHandle, SessionMutationAdmission, SessionMutationChange,
     SessionRuntimeError, SessionRuntimeRegistry,
 };
-
-/// Immutable storage partition used by every production V1 session.
-/// 每个生产 V1 会话使用的不可变存储分区。
-const SESSION_V1_STORAGE_PARTITION: &str = "code/sessions";
 
 /// Complete caller-resolved facts required to create one root V1 session.
 /// 创建一个根 V1 会话所需的完整调用方已解析事实。

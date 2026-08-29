@@ -27,6 +27,7 @@ use super::{
     workspace_session_summary_for_session, workspace_snapshot_contains_regular_session,
 };
 use crate::vmm_session_controller::open_registered_session_vmm_controller;
+use crate::webui_vmm_runtime_readiness;
 
 /// Applies one streamed conversation checkpoint to retained workspace memory.
 /// 将单个流式对话检查点应用到保留工作区内存。
@@ -164,6 +165,9 @@ struct TerminalConversationHookRequest<'a> {
     /// Number of descendant subagents still blocking final completion.
     /// 仍阻止最终完成的后代子代理数量。
     pending_subagent_count: usize,
+    /// Whether VMM remained fully configured and runtime-ready at terminal dispatch.
+    /// 终态调度时 VMM 是否仍完成配置并处于运行就绪状态。
+    vmm_runtime_ready: bool,
     /// Exclusive logical-turn action selected before hook runtime locking.
     /// 在锁定 Hook 运行时前选择的互斥逻辑回合操作。
     action: TerminalConversationHookAction,
@@ -226,6 +230,7 @@ where
                 request.conversation_state,
                 request.completion_status,
                 request.pending_subagent_count,
+                request.vmm_runtime_ready,
             );
         return Ok(TerminalConversationHookCommit::Completion {
             turn_id,
@@ -421,18 +426,28 @@ pub(super) fn apply_execution_report_to_memory(
     if !report_is_regular_session {
         return apply_task_session_execution_report_to_memory(state, report);
     }
-    // vmm_controller is the sole terminal TTL state owner for this session.
-    // vmm_controller 是该会话终态 TTL 状态的唯一所有者。
-    webui_trace(
-        "execution_report_vmm_controller_open_start",
-        format!("session={session_id}"),
-    );
-    let vmm_controller =
-        open_registered_session_vmm_controller(state, session_id, &current_unix_millis_text())?;
-    webui_trace(
-        "execution_report_vmm_controller_open_finished",
-        format!("session={session_id}"),
-    );
+    // Both immutable admission and current service readiness are required for terminal VMM work.
+    // 终态 VMM 工作同时要求不可变准入事实与当前服务就绪。
+    let vmm_runtime_ready = report
+        .preparation
+        .as_ref()
+        .is_some_and(|preparation| preparation.vmm_runtime_ready)
+        && webui_vmm_runtime_readiness(state)?.service_ready;
+    let vmm_controller = if vmm_runtime_ready {
+        webui_trace(
+            "execution_report_vmm_controller_open_start",
+            format!("session={session_id}"),
+        );
+        let controller =
+            open_registered_session_vmm_controller(state, session_id, &current_unix_millis_text())?;
+        webui_trace(
+            "execution_report_vmm_controller_open_finished",
+            format!("session={session_id}"),
+        );
+        Some(controller)
+    } else {
+        None
+    };
     let prompt_purpose = report
         .preparation
         .as_ref()
@@ -488,9 +503,12 @@ pub(super) fn apply_execution_report_to_memory(
                 .session_runtime_state
                 .get(&session_id)
                 .unwrap_or(&default_runtime_state);
-            // vmm_state_before_terminal is the exact controller audit baseline before TTL consumption.
-            // vmm_state_before_terminal 是 TTL 消费前精确的控制器审计基线。
-            let vmm_state_before_terminal = vmm_controller.snapshot()?;
+            // VMM state is inspected only while the fully configured service remains ready.
+            // 仅当完成配置的 VMM 服务仍就绪时才读取其状态。
+            let vmm_state_before_terminal = match vmm_controller.as_ref() {
+                Some(controller) => Some(controller.snapshot()?),
+                None => None,
+            };
             let (mut runtime_state, apply_result) = build_terminal_execution_report_state(
                 source_runtime_state,
                 session_id,
@@ -509,15 +527,20 @@ pub(super) fn apply_execution_report_to_memory(
             let completion_status = completion_gate.completion_status();
             // consumes_vmm_ttl identifies the single final boundary before either state machine commits ownership.
             // consumes_vmm_ttl 在任一状态机提交所有权前标识唯一终态边界。
-            let consumes_vmm_ttl = terminal_action_consumes_vmm_ttl(hook_action, completion_status);
+            let consumes_vmm_ttl = vmm_runtime_ready
+                && terminal_action_consumes_vmm_ttl(hook_action, completion_status);
             // expected_vmm_turn_id identifies the controller command that must commit under the Hook ownership lock.
             // expected_vmm_turn_id 标识必须在 Hook 所有权锁内提交的控制器命令。
             let expected_vmm_turn_id = if consumes_vmm_ttl
-                && (vmm_state_before_terminal.active_turn_id.is_some()
-                    || vmm_state_before_terminal.last_consumed_turn_id.is_some())
-            {
+                && vmm_state_before_terminal.as_ref().is_some_and(|state| {
+                    state.active_turn_id.is_some() || state.last_consumed_turn_id.is_some()
+                }) {
                 // turn_id is the exact controller owner that must match the active Hook turn.
                 // turn_id 是必须与活动 Hook 回合匹配的精确控制器所有者。
+                let vmm_state_before_terminal =
+                    vmm_state_before_terminal.as_ref().ok_or_else(|| {
+                        String::from("Durable VMM state is unavailable at terminal completion.")
+                    })?;
                 let turn_id = vmm_state_before_terminal
                     .active_turn_id
                     .clone()
@@ -549,12 +572,18 @@ pub(super) fn apply_execution_report_to_memory(
                     conversation_state: &runtime_state.conversation_state,
                     completion_status,
                     pending_subagent_count: completion_gate.pending_subagent_count,
+                    vmm_runtime_ready,
                     action: hook_action,
                     expected_vmm_turn_id: expected_vmm_turn_id.as_deref(),
                 },
                 || {
                     let Some(turn_id) = expected_vmm_turn_id.as_deref() else {
                         return Ok(());
+                    };
+                    let Some(vmm_controller) = vmm_controller.as_ref() else {
+                        return Err(String::from(
+                            "VMM controller is unavailable for a terminal turn that requires TTL consumption.",
+                        ));
                     };
                     // command_id makes a terminal retry side-effect free after a durable controller commit.
                     // command_id 使控制器持久提交后的终态重试不产生副作用。
@@ -850,9 +879,21 @@ pub(super) fn spawn_conversation_completion_hook_task(
     _app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     agent_runtime: AgentRuntimeBridge,
-    completion_request: ConversationCompletionRequest,
+    mut completion_request: ConversationCompletionRequest,
 ) {
     spawn_service_task(async move {
+        // Current readiness may only revoke the immutable admission-time VMM permission.
+        // 当前就绪事实只能撤销不可变的准入期 VMM 权限。
+        let vmm_runtime_ready = match webui_vmm_runtime_readiness(&state) {
+            Ok(readiness) => readiness.service_ready,
+            Err(error) => {
+                eprintln!(
+                    "[webui-service] VMM completion readiness check failed; treating service as stopped: {error}"
+                );
+                false
+            }
+        };
+        completion_request.restrict_vmm_runtime_readiness(vmm_runtime_ready);
         let outcome = completion_request.run().await;
         let session_id = outcome.session_id;
         if let Err(error) = outcome.report.as_ref() {
@@ -863,6 +904,18 @@ pub(super) fn spawn_conversation_completion_hook_task(
         }
         if outcome.vmm_writeback_effects.is_empty() {
             return;
+        }
+        // A service stop during hook execution revokes every returned VMM side effect.
+        // Hook 执行期间发生服务停止时，撤销其返回的全部 VMM 副作用。
+        match webui_vmm_runtime_readiness(&state) {
+            Ok(readiness) if readiness.service_ready => {}
+            Ok(_) => return,
+            Err(error) => {
+                eprintln!(
+                    "[webui-service] VMM writeback readiness check failed; dropping stopped-service effects: {error}"
+                );
+                return;
+            }
         }
         // authoritative_status is the last successful PostAction lifecycle observation in FIFO order.
         // authoritative_status 是按 FIFO 顺序最后一次成功 PostAction 观察到的生命周期状态。

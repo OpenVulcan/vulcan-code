@@ -35,6 +35,32 @@ impl ConversationCompletionRequest {
         }
     }
 
+    /// Restricts VMM hook execution using the latest host-owned service readiness.
+    /// 使用宿主最新持有的服务就绪事实限制 VMM Hook 执行。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `vmm_runtime_ready` is true only when service configuration and runtime remain ready.
+    /// `vmm_runtime_ready` 仅在服务配置与运行态仍保持就绪时为 true。
+    ///
+    /// # Returns
+    /// 返回值
+    /// This method returns no value and can only revoke, never grant, admission-time readiness.
+    /// 本方法不返回值，并且只能撤销、绝不能授予准入时的就绪事实。
+    pub fn restrict_vmm_runtime_readiness(&mut self, vmm_runtime_ready: bool) {
+        let admitted_ready = self
+            .payload
+            .get("vmm_runtime_ready")
+            .and_then(Value::as_bool)
+            == Some(true);
+        if let Some(payload) = self.payload.as_object_mut() {
+            payload.insert(
+                String::from("vmm_runtime_ready"),
+                Value::Bool(admitted_ready && vmm_runtime_ready),
+            );
+        }
+    }
+
     /// Returns the session that owns the completed turn.
     /// 返回拥有该完成回合的会话。
     pub fn session_id(&self) -> SessionId {

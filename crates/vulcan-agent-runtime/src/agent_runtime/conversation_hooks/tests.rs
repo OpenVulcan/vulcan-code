@@ -77,6 +77,7 @@ fn profile_preparation_dispatches_when_precheck_is_skipped() {
         SystemPromptHookPhase::SubsequentSession,
         "Continue working toward the active thread goal.",
         &conversation_state,
+        true,
     );
     // profile_request owns system-profile placement metadata and its dedicated Hook dispatch.
     // profile_request 持有系统画像放置元数据及其专用 Hook 派发。
@@ -148,6 +149,7 @@ fn turn_completion_keeps_supplement_inside_timeline() {
         SystemPromptHookPhase::FirstSession,
         "first",
         &state,
+        true,
     );
     runtime.prepare_user_prompt_hook_requests(
         session_id,
@@ -158,6 +160,7 @@ fn turn_completion_keeps_supplement_inside_timeline() {
         SystemPromptHookPhase::SubsequentSession,
         "supplement",
         &state,
+        true,
     );
 
     let turn = runtime
@@ -263,6 +266,7 @@ fn tool_runtime_event_stays_out_of_completed_timeline() {
         SystemPromptHookPhase::FirstSession,
         "first",
         &state,
+        true,
     );
     runtime.record_tool_runtime_event_for_execution(
         session_id,
@@ -305,6 +309,7 @@ fn awaiting_subagent_completion_keeps_active_turn() {
         SystemPromptHookPhase::FirstSession,
         "spawn two subagents",
         &state,
+        true,
     );
 
     let (awaiting_turn_id, awaiting_request) = runtime
@@ -316,6 +321,7 @@ fn awaiting_subagent_completion_keeps_active_turn() {
             &state,
             ConversationTurnCompletionStatus::AwaitingSubagents,
             2,
+            true,
         );
 
     assert!(runtime.has_active_turn(session_id));
@@ -438,6 +444,7 @@ async fn precheck_hook_injections_are_returned_to_send_pipeline() {
             SystemPromptHookPhase::FirstSession,
             "hello",
             &SessionConversationState::default(),
+            true,
         )
         .precheck
         .run()
@@ -482,6 +489,7 @@ async fn precheck_hook_timeout_records_failure_without_hanging() {
             SystemPromptHookPhase::FirstSession,
             "hello",
             &SessionConversationState::default(),
+            true,
         )
         .precheck
         .run()
@@ -551,6 +559,7 @@ async fn effect_hook_dispatch_runs_on_private_worker_runtime() {
         SystemPromptHookPhase::FirstSession,
         "hello",
         &SessionConversationState::default(),
+        true,
     );
     let (_, request) = runtime.prepare_turn_completion_dispatch(
         session_id,
@@ -622,6 +631,7 @@ async fn completion_hook_dispatch_preserves_dispatcher_failure_stage() {
         SystemPromptHookPhase::FirstSession,
         "hello",
         &SessionConversationState::default(),
+        true,
     );
     let (_, request) = runtime.prepare_turn_completion_dispatch(
         session_id,

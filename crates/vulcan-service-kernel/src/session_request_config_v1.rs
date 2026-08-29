@@ -7,6 +7,7 @@ use vulcan_session_core::v1::config::{
     ProviderToolSelectionConfig, VmmSessionPolicyConfig,
 };
 use vulcan_session_core::v1::document::SessionSelectionBundleInput;
+use vulcan_workbench_model::SessionRuntimeStateEntry;
 
 use crate::session_runtime_registry_v1::{
     SessionFlushReason, SessionHandle, SessionMutationAdmission, SessionMutationChange,
@@ -31,6 +32,37 @@ pub(crate) struct SessionRequestFallback {
     /// Exact optional temperature selected for the session.
     /// 当前会话选择的精确可选温度。
     pub(crate) temperature: Option<f32>,
+}
+
+impl SessionRequestFallback {
+    /// Captures the exact next-request route and controls from one admitted runtime projection.
+    /// 从一份已准入运行时投影捕获精确的下一请求路由与控制项。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `runtime_state` is the exact session-owned process projection already selected by the caller.
+    /// `runtime_state` 是调用方已经选定、由精确会话持有的进程内投影。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A complete fallback that prefers the pending route over the active route without inventing values.
+    /// 返回一份完整回退事实；其严格优先使用待生效路由，其次使用活动路由，不会发明任何值。
+    pub(crate) fn from_runtime_state(runtime_state: &SessionRuntimeStateEntry) -> Self {
+        let pending_route = runtime_state.pending_model_selection.as_ref();
+        Self {
+            provider: pending_route
+                .map(|selection| selection.provider_id.clone())
+                .or_else(|| runtime_state.active_provider_id.clone()),
+            connection_id: pending_route
+                .map(|selection| selection.connection_id.clone())
+                .or_else(|| runtime_state.active_connection_id.clone()),
+            model: pending_route
+                .map(|selection| selection.model_id.clone())
+                .or_else(|| runtime_state.active_model_id.clone()),
+            thinking_level: runtime_state.active_reasoning_effort,
+            temperature: runtime_state.active_temperature,
+        }
+    }
 }
 
 /// Durably records a complete next-request model route while preserving reasoning controls.

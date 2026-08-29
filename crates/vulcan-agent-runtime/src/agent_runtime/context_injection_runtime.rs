@@ -21,6 +21,7 @@ pub fn core_provider_context_injection_from_state_for_turn(
     state: &ContextInjectionState,
     vmm_state: &VmmSessionMemoryState,
     current_turn_marker: Option<&str>,
+    vmm_runtime_ready: bool,
 ) -> Option<CoreProviderContextInjection> {
     let registry = context_injection_renderer_registry();
     let options = InjectionRenderOptions {
@@ -31,7 +32,8 @@ pub fn core_provider_context_injection_from_state_for_turn(
     // feature_policy independently gates state consumption and provider anchor rendering.
     // feature_policy 分别控制状态消费与 Provider 锚点渲染。
     let feature_policy = VmmRuntimeFeaturePolicy::from_env();
-    let anchored_prefixes = if feature_policy.session_state_enabled
+    let vmm_domain_active = feature_policy.session_state_enabled && vmm_runtime_ready;
+    let anchored_prefixes = if vmm_domain_active
         && feature_policy.stable_anchors_enabled
         && vmm_state.session_memory_status.allows_runtime_memory()
         && vmm_state.stable_anchor_rendering_enabled
@@ -58,7 +60,11 @@ pub fn core_provider_context_injection_from_state_for_turn(
     };
     let fingerprint = provider_context_injection_fingerprint(
         &view.fingerprint,
-        vmm_state.cache_epoch.epoch_id.as_str(),
+        if vmm_domain_active {
+            vmm_state.cache_epoch.epoch_id.as_str()
+        } else {
+            ""
+        },
         &anchored_prefixes,
     );
     // Only persistent generic layers need fingerprint comparison across provider cursors.
@@ -67,21 +73,20 @@ pub fn core_provider_context_injection_from_state_for_turn(
         (!view.persistent_blocks.is_empty()).then(|| view.fingerprint.clone());
     // cache_pressure contains body-free aggregate capacity diagnostics for the active VMM epoch.
     // cache_pressure 包含当前 VMM 纪元不含正文的聚合容量诊断。
-    let cache_pressure = if feature_policy.session_state_enabled
-        && vmm_state.session_memory_status.allows_runtime_memory()
-    {
-        vmm_state.cache_pressure()
-    } else {
-        vulcan_vmm::VmmCachePressure::default()
-    };
+    let cache_pressure =
+        if vmm_domain_active && vmm_state.session_memory_status.allows_runtime_memory() {
+            vmm_state.cache_pressure()
+        } else {
+            vulcan_vmm::VmmCachePressure::default()
+        };
     let injection = CoreProviderContextInjection {
         persistent_blocks: view.persistent_blocks,
         transient_prefix: view.transient_prefix,
         anchored_prefixes,
         mutation_kind,
-        cache_epoch_id: (!vmm_state.cache_epoch.anchors.is_empty())
+        cache_epoch_id: (vmm_domain_active && !vmm_state.cache_epoch.anchors.is_empty())
             .then(|| vmm_state.cache_epoch.epoch_id.clone()),
-        anchor_revision: (!vmm_state.cache_epoch.anchors.is_empty())
+        anchor_revision: (vmm_domain_active && !vmm_state.cache_epoch.anchors.is_empty())
             .then_some(vmm_state.cache_epoch.anchor_revision),
         rewrite_fingerprint,
         active_memory_body_bytes: cache_pressure.active_body_bytes,
@@ -262,6 +267,7 @@ mod tests {
             &state,
             &VmmSessionMemoryState::default(),
             Some("turn-a"),
+            false,
         );
 
         assert!(overlay.is_none());
@@ -297,6 +303,7 @@ mod tests {
             &ContextInjectionState::default(),
             &vmm_state,
             Some("turn-a"),
+            true,
         );
 
         assert!(overlay.is_none());
@@ -329,6 +336,7 @@ mod tests {
             &ContextInjectionState::default(),
             &vmm_state,
             Some("turn-1"),
+            true,
         )
         .expect("active VMM anchor should render");
         vmm_state
@@ -342,6 +350,7 @@ mod tests {
             &ContextInjectionState::default(),
             &vmm_state,
             Some("turn-2"),
+            true,
         )
         .expect("expired resident anchor should remain in the cache epoch");
 

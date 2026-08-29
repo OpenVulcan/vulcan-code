@@ -657,12 +657,16 @@ fn emit_context_injection_changed_delta_internal(
     session_id: SessionId,
     require_selected_session: bool,
 ) -> Result<(), String> {
-    // vmm_session_memory is a read-only controller projection for this exact delta.
-    // vmm_session_memory 是用于本次精确增量的只读控制器投影。
-    let vmm_session_memory = Some(
-        open_registered_session_vmm_controller(state, session_id, &current_unix_millis_text())?
-            .snapshot()?,
-    );
+    // VMM projection is absent unless both service configuration and runtime are ready.
+    // 除非 VMM 服务配置与运行态同时就绪，否则投影必须为空。
+    let vmm_session_memory = if webui_vmm_runtime_readiness(state)?.service_ready {
+        Some(
+            open_registered_session_vmm_controller(state, session_id, &current_unix_millis_text())?
+                .snapshot()?,
+        )
+    } else {
+        None
+    };
     let event = {
         let mut guard = state
             .lock()

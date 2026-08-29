@@ -499,7 +499,9 @@ pub(crate) fn provider_tool_selection_config_from_parts_v1(
     >,
     overridden: bool,
 ) -> ProviderToolSelectionConfig {
-    ProviderToolSelectionConfig {
+    // config owns the final string-keyed persistence representation before Core validation.
+    // config 在 Core 校验前持有最终以字符串为键的持久化表示。
+    let mut config = ProviderToolSelectionConfig {
         initialized: true,
         overridden,
         enabled_capabilities: enabled_capabilities
@@ -539,7 +541,23 @@ pub(crate) fn provider_tool_selection_config_from_parts_v1(
                 },
             )
             .collect(),
+    };
+    // Enum Ord follows declaration order, while the V1 contract orders final serialized keys.
+    // 枚举 Ord 遵循声明顺序，而 V1 契约按最终序列化键排序。
+    config.enabled_capabilities.sort();
+    config
+        .selections
+        .sort_by(|left, right| left.capability.cmp(&right.capability));
+    config
+        .media_understanding_modes
+        .sort_by(|left, right| left.capability.cmp(&right.capability));
+    for target_set in &mut config.extension_target_sets {
+        target_set.targets.sort();
     }
+    config
+        .extension_target_sets
+        .sort_by(|left, right| left.capability.cmp(&right.capability));
+    config
 }
 
 /// Builds the complete canonical V1 Provider-tool selection from one validated browser snapshot.
@@ -14898,6 +14916,119 @@ mod inference_settings_route_tests {
         assert_eq!(
             conflicts[0].capability,
             ProviderToolCapabilityKind::WebSearch
+        );
+    }
+
+    /// Verifies V1 Provider-tool persistence uses serialized capability order instead of enum order.
+    /// 验证 V1 Provider 工具持久化使用序列化能力键顺序，而不是枚举顺序。
+    #[test]
+    fn provider_tool_selection_v1_orders_final_persisted_keys() {
+        // enabledCapabilities deliberately uses enum pairs whose declaration and string orders differ.
+        // enabledCapabilities 刻意使用声明顺序与字符串顺序不同的枚举组合。
+        let enabled_capabilities = BTreeSet::from([
+            ProviderToolCapabilityKind::WebSearch,
+            ProviderToolCapabilityKind::WebExtract,
+        ]);
+        // selections covers the same ordering divergence for direct target entries.
+        // selections 覆盖直接目标条目的相同顺序差异。
+        let selections = BTreeMap::from([
+            (
+                ProviderToolCapabilityKind::WebSearch,
+                ProviderToolTargetSelection {
+                    connection_id: String::from("search-connection"),
+                    target_id: String::from("search-target"),
+                },
+            ),
+            (
+                ProviderToolCapabilityKind::WebExtract,
+                ProviderToolTargetSelection {
+                    connection_id: String::from("extract-connection"),
+                    target_id: String::from("extract-target"),
+                },
+            ),
+        ]);
+        // mediaModes proves media capability entries are sorted by their final persisted key.
+        // mediaModes 证明媒体能力条目按最终持久化键排序。
+        let media_modes = BTreeMap::from([
+            (
+                ProviderToolCapabilityKind::ImageUnderstand,
+                vulcan_workbench_model::SessionMediaUnderstandingMode::ProviderTool,
+            ),
+            (
+                ProviderToolCapabilityKind::AudioUnderstand,
+                vulcan_workbench_model::SessionMediaUnderstandingMode::ModelReplacement,
+            ),
+        ]);
+        // extensionTargets also carries two targets in reverse insertion order for nested sorting.
+        // extensionTargets 还以反向插入顺序携带两个目标，用于验证嵌套排序。
+        let extension_targets = BTreeMap::from([
+            (
+                ProviderToolCapabilityKind::ImageGenerate,
+                BTreeSet::from([ProviderToolTargetSelection {
+                    connection_id: String::from("generate-connection"),
+                    target_id: String::from("generate-target"),
+                }]),
+            ),
+            (
+                ProviderToolCapabilityKind::ImageEdit,
+                BTreeSet::from([
+                    ProviderToolTargetSelection {
+                        connection_id: String::from("z-edit-connection"),
+                        target_id: String::from("z-edit-target"),
+                    },
+                    ProviderToolTargetSelection {
+                        connection_id: String::from("a-edit-connection"),
+                        target_id: String::from("a-edit-target"),
+                    },
+                ]),
+            ),
+        ]);
+
+        // selection is the exact producer result sent to the strict Session Core setter.
+        // selection 是发送给严格 Session Core setter 的精确生产结果。
+        let selection = provider_tool_selection_config_from_parts_v1(
+            &enabled_capabilities,
+            &selections,
+            &media_modes,
+            &extension_targets,
+            true,
+        );
+
+        assert_eq!(
+            selection.enabled_capabilities,
+            vec![String::from("web_extract"), String::from("web_search")]
+        );
+        assert_eq!(
+            selection
+                .selections
+                .iter()
+                .map(|entry| entry.capability.as_str())
+                .collect::<Vec<_>>(),
+            vec!["web_extract", "web_search"]
+        );
+        assert_eq!(
+            selection
+                .media_understanding_modes
+                .iter()
+                .map(|entry| entry.capability.as_str())
+                .collect::<Vec<_>>(),
+            vec!["audio_understand", "image_understand"]
+        );
+        assert_eq!(
+            selection
+                .extension_target_sets
+                .iter()
+                .map(|entry| entry.capability.as_str())
+                .collect::<Vec<_>>(),
+            vec!["image_edit", "image_generate"]
+        );
+        assert_eq!(
+            selection.extension_target_sets[0]
+                .targets
+                .iter()
+                .map(|target| target.connection_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a-edit-connection", "z-edit-connection"]
         );
     }
 

@@ -208,8 +208,17 @@ export class ConversationEventWindowController {
     this.hydratingSessionId = sessionId;
     this.pendingHydrationDeltas = [];
     this.generationRebaseTarget = null;
+    // liveSubscriptionReady observes physical socket readiness without allowing it to block
+    // the durable HTTP hydration that can already render the selected conversation.
+    // liveSubscriptionReady 观察物理套接字就绪状态，但不允许它阻塞已经可以渲染选中会话的可靠 HTTP hydration。
+    const liveSubscriptionReady = this.ensureLiveSubscription().then(
+      () => true,
+      (error: unknown) => {
+        console.error("[conversation-event-window] live subscription setup failed", error);
+        return false;
+      },
+    );
     try {
-      await this.ensureLiveSubscription();
       const response = await this.rpc.hydrate(sessionId, options);
       if (requestToken !== this.hydrationRequestToken) return false;
       assertWindowBoundary(response);
@@ -221,6 +230,13 @@ export class ConversationEventWindowController {
       this.hydratingSessionId = null;
       for (const delta of pending) this.applyOwnedPushedDelta(delta, false);
       this.publishSnapshotIfChanged();
+      if (this.liveUnsubscribe === null) {
+        this.reconcileAfterDelayedLiveSubscription(
+          requestToken,
+          sessionId,
+          liveSubscriptionReady,
+        );
+      }
       return true;
     } catch (error) {
       if (requestToken === this.hydrationRequestToken) {
@@ -229,6 +245,46 @@ export class ConversationEventWindowController {
       }
       throw error;
     }
+  }
+
+  /** Refreshes an already-owned session without reusing the initial-only hydration transition.
+   * 在不复用仅限首次归属的 hydration 转换前提下刷新已持有的会话。 */
+  async rehydrate(sessionId: string, options?: ServiceRequestOptions): Promise<boolean> {
+    if (this.disposed) throw new Error("conversation event window controller is disposed");
+    const initialOwner = this.store.getOwner();
+    if (initialOwner === null) return this.hydrate(sessionId, options);
+    if (initialOwner.session_id !== sessionId) {
+      throw new Error("conversation event rehydration cannot change the owned session");
+    }
+    const requestToken = ++this.hydrationRequestToken;
+    const response = await this.rpc.hydrate(sessionId, options);
+    if (requestToken !== this.hydrationRequestToken) return false;
+    assertWindowBoundary(response);
+    if (response.session_id !== sessionId) {
+      throw new Error("conversation event rehydration returned another session");
+    }
+    const currentOwner = this.store.getOwner();
+    const currentFrontier = this.store.getFrontier();
+    if (currentOwner === null || currentFrontier === null) {
+      throw new Error("conversation event window owner disappeared during rehydration");
+    }
+    if (currentOwner.session_id !== sessionId) return false;
+    if (response.window_generation < currentOwner.window_generation) return true;
+
+    if (response.window_generation > currentOwner.window_generation) {
+      this.store.rebase(response);
+      this.generationRebaseTarget = null;
+    } else {
+      const serviceEpochChanged = response.service_epoch !== currentFrontier.service_epoch;
+      const frontierAdvanced = response.memory_revision > currentFrontier.memory_revision
+        || response.durable_revision > currentFrontier.durable_revision;
+      if (!serviceEpochChanged && !frontierAdvanced) return true;
+      this.store.restoreDurableBaseline(response);
+    }
+    this.settleToolRequestProgress(response.events, response.session_id);
+    this.commitWindowBoundary(response);
+    this.publishSnapshotIfChanged();
+    return true;
   }
 
   /** Prepends one adjacent historical page without clearing current events.
@@ -382,6 +438,42 @@ export class ConversationEventWindowController {
         this.liveSubscriptionPromise = null;
       });
     return this.liveSubscriptionPromise;
+  }
+
+  /** Reconnects from the committed hydration frontier after a delayed socket becomes usable.
+   * 在延迟套接字变为可用后，从已提交的 hydration 前沿执行重连。
+   *
+   * The live handler is registered synchronously before HTTP hydration starts. If physical
+   * WebSocket readiness trails the hydration response, this reconciliation closes only that
+   * transport gap while keeping persisted conversation data immediately visible.
+   * 实时处理器会在 HTTP hydration 开始前同步登记；若物理 WebSocket 晚于 hydration 响应就绪，
+   * 此协调仅补齐该传输缺口，同时让已持久化会话数据立即可见。
+   *
+   * @param requestToken hydration ownership token captured by the committed request.
+   *                     已提交请求捕获的 hydration 归属令牌。
+   * @param sessionId exact selected session owned by the committed hydration.
+   *                  已提交 hydration 持有的精确选中会话。
+   * @param liveSubscriptionReady non-throwing physical subscription readiness result.
+   *                              不抛错的物理订阅就绪结果。
+   * @returns This method schedules reconciliation and returns immediately.
+   *          此方法安排协调任务后立即返回。
+   */
+  private reconcileAfterDelayedLiveSubscription(
+    requestToken: number,
+    sessionId: string,
+    liveSubscriptionReady: Promise<boolean>,
+  ): void {
+    void liveSubscriptionReady.then(async (ready) => {
+      if (!ready || this.disposed || requestToken !== this.hydrationRequestToken) return;
+      const owner = this.store.getOwner();
+      if (owner === null || owner.session_id !== sessionId) return;
+      try {
+        await this.reconnect();
+      } catch (error) {
+        if (this.disposed || requestToken !== this.hydrationRequestToken) return;
+        console.error("[conversation-event-window] delayed live reconciliation failed", error);
+      }
+    });
   }
 
   /** Receives one pushed delta while preserving hydration/live atomic ownership.

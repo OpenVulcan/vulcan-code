@@ -22,7 +22,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ConversationV1Workspace } from "@/components/conversation/conversation-v1-workspace";
+import { ConversationBranchWorkspaceV1 } from "@/components/conversation/conversation-branch-workspace-v1";
 import { TransientReasoningStatusLine } from "@/components/conversation/conversation-live-reasoning";
 import type {
   ConversationSurfaceExpandedState,
@@ -809,6 +809,20 @@ function WorkspaceSubagentPanel(args: {
   // task stores the current backend task row when it is still present in the snapshot.
   // task 保存快照中仍存在时的当前后端任务行。
   const task = taskId ? navigation?.tasks?.find((candidate) => candidate.taskId === taskId) ?? null : null;
+  // subagentConversation supplies only the visual summary fields required by the restored branch shell.
+  // subagentConversation 仅提供恢复后的分支界面所需的视觉摘要字段。
+  const subagentConversation = React.useMemo(() => ({
+    id: taskId ?? "",
+    title: task?.label ?? args.tab.title,
+    status: task?.runState ?? "unknown",
+    runPhase: task?.runState,
+  }), [args.tab.title, task?.label, task?.runState, taskId]);
+  // subagentCommandSessions keeps only live terminal sessions owned by this exact child session.
+  // subagentCommandSessions 仅保留由当前精确子会话拥有的实时终端会话。
+  const subagentCommandSessions = React.useMemo(
+    () => (args.props.workbench.commandSessions ?? []).filter((session) => session.ownerSessionId === taskId),
+    [args.props.workbench.commandSessions, taskId],
+  );
   // workspacePath stores the parent project path used for Markdown media resolution.
   // workspacePath 保存用于 Markdown 媒体解析的父项目路径。
   const workspacePath = subagentWorkspacePath(args.props.workbench, parentConversationId);
@@ -889,6 +903,16 @@ function WorkspaceSubagentPanel(args: {
       args.scrollSnapshots.current.set(surfaceId, snapshot);
     }
   }, [args.scrollSnapshots, taskId]);
+  // writeSubagentExpandedState retains branch process and card expansion choices for this child surface only.
+  // writeSubagentExpandedState 仅为当前子界面保留分支处理过程与卡片展开选择。
+  const writeSubagentExpandedState = React.useCallback((
+    surfaceId: string,
+    state: ConversationSurfaceExpandedState,
+  ): void => {
+    if (surfaceId === taskId) {
+      args.expandedStates.current.set(surfaceId, state);
+    }
+  }, [args.expandedStates, taskId]);
   // subagentScrollController is the sole owner of child-transcript scrolling and geometry restoration.
   // subagentScrollController 是子转录滚动与几何恢复的唯一所有者。
   const subagentScrollController = useConversationScrollController({
@@ -910,8 +934,13 @@ function WorkspaceSubagentPanel(args: {
 
   return (
     <div className="workspace-subagent-panel">
-      <ConversationV1Workspace
+      <ConversationBranchWorkspaceV1
+        commandSessions={subagentCommandSessions}
         commands={transcriptOwner.commands}
+        conversation={subagentConversation}
+        initialExpandedState={args.expandedStates.current.get(taskId) ?? null}
+        onExpandedStateChange={writeSubagentExpandedState}
+        onOpenSubagentPanel={args.props.onOpenSubagentPanel}
         reasoningDisplayMode="inline_output"
         scrollRef={scrollRef}
         sessionId={taskId}

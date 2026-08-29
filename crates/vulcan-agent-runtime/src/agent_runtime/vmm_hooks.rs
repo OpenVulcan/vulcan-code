@@ -670,6 +670,9 @@ async fn handle_vmm_profile_prepare(
     runtime: VmmHookRuntimeHandle,
     invocation: HookInvocation,
 ) -> Result<HookResult, HookError> {
+    if !invocation_vmm_runtime_ready(&invocation) {
+        return Ok(HookResult::default());
+    }
     let config = runtime
         .resolve_effective_config(&invocation)
         .map_err(HookError::handler)?;
@@ -714,6 +717,9 @@ async fn handle_vmm_precheck(
     runtime: VmmHookRuntimeHandle,
     invocation: HookInvocation,
 ) -> Result<HookResult, HookError> {
+    if !invocation_vmm_runtime_ready(&invocation) {
+        return Ok(HookResult::default());
+    }
     let config = runtime
         .resolve_effective_config(&invocation)
         .map_err(HookError::handler)?;
@@ -753,7 +759,9 @@ async fn handle_vmm_post_action(
     runtime: VmmHookRuntimeHandle,
     invocation: HookInvocation,
 ) -> Result<HookResult, HookError> {
-    if !vmm_post_action_payload_is_final(&invocation.payload.value) {
+    if !invocation_vmm_runtime_ready(&invocation)
+        || !vmm_post_action_payload_is_final(&invocation.payload.value)
+    {
         return Ok(HookResult::default());
     }
     let config = runtime
@@ -824,6 +832,9 @@ async fn handle_vmm_chat_compact(
     runtime: VmmHookRuntimeHandle,
     invocation: HookInvocation,
 ) -> Result<HookResult, HookError> {
+    if !invocation_vmm_runtime_ready(&invocation) {
+        return Ok(HookResult::default());
+    }
     let config = runtime
         .resolve_effective_config(&invocation)
         .map_err(HookError::handler)?;
@@ -1446,6 +1457,21 @@ fn invocation_session_id(invocation: &HookInvocation) -> Option<String> {
         .or_else(|| payload_string(&invocation.payload.value, "session_id"))
 }
 
+/// Returns whether the host proved the VMM service was configured and live for this invocation.
+/// 返回宿主是否已证明本次调用对应的 VMM 服务完成配置且处于运行就绪状态。
+///
+/// Missing or non-boolean payload data fails closed because configuration alone cannot prove that
+/// the managed service process exists.
+/// 载荷缺失或类型错误时按未启动处理，因为仅凭配置不能证明托管服务进程存在。
+fn invocation_vmm_runtime_ready(invocation: &HookInvocation) -> bool {
+    invocation
+        .payload
+        .value
+        .get("vmm_runtime_ready")
+        .and_then(Value::as_bool)
+        == Some(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1466,6 +1492,87 @@ mod tests {
         ] {
             assert_eq!(vmm_hook_timeout_ms(hook_id), VMM_BACKGROUND_HOOK_TIMEOUT_MS);
         }
+    }
+
+    /// Verifies missing, false, and malformed readiness facts all keep VMM stopped.
+    /// 验证缺失、false 与畸形就绪事实都会让 VMM 保持未启动状态。
+    #[test]
+    fn vmm_hook_runtime_readiness_fails_closed() {
+        let invocation = HookInvocation {
+            registration: vmm_hook_registration(
+                VMM_PRECHECK_HOOK_ID,
+                HOOK_CONVERSATION_TURN_PRECHECK,
+                HookMode::Transform,
+            ),
+            payload: HookPayload::empty_object(),
+            context: HookContext::new("readiness-test", HOOK_CONVERSATION_TURN_PRECHECK),
+        };
+        assert!(!invocation_vmm_runtime_ready(&invocation));
+
+        let mut false_invocation = invocation.clone();
+        false_invocation.payload = HookPayload {
+            value: json!({ "vmm_runtime_ready": false }),
+        };
+        assert!(!invocation_vmm_runtime_ready(&false_invocation));
+
+        let mut malformed_invocation = invocation.clone();
+        malformed_invocation.payload = HookPayload {
+            value: json!({ "vmm_runtime_ready": "yes" }),
+        };
+        assert!(!invocation_vmm_runtime_ready(&malformed_invocation));
+
+        let mut ready_invocation = invocation;
+        ready_invocation.payload = HookPayload {
+            value: json!({ "vmm_runtime_ready": true }),
+        };
+        assert!(invocation_vmm_runtime_ready(&ready_invocation));
+    }
+
+    /// Verifies every built-in VMM handler exits before configuration or transport work when stopped.
+    /// 验证 VMM 停止时所有内置处理器都会在配置解析或传输工作前退出。
+    #[tokio::test]
+    async fn stopped_vmm_runtime_skips_all_builtin_handlers() {
+        let runtime = VmmHookRuntimeHandle::new(VmmHookConfigSnapshot::default());
+        let invocation = HookInvocation {
+            registration: vmm_hook_registration(
+                VMM_PRECHECK_HOOK_ID,
+                HOOK_CONVERSATION_TURN_PRECHECK,
+                HookMode::Transform,
+            ),
+            payload: HookPayload {
+                value: json!({
+                    "vmm_runtime_ready": false,
+                    "turn_complete": true,
+                    "completion_status": "completed"
+                }),
+            },
+            context: HookContext::new("stopped-runtime", HOOK_CONVERSATION_TURN_PRECHECK),
+        };
+
+        assert_eq!(
+            handle_vmm_profile_prepare(runtime.clone(), invocation.clone())
+                .await
+                .expect("stopped profile handler should skip"),
+            HookResult::default()
+        );
+        assert_eq!(
+            handle_vmm_precheck(runtime.clone(), invocation.clone())
+                .await
+                .expect("stopped precheck handler should skip"),
+            HookResult::default()
+        );
+        assert_eq!(
+            handle_vmm_post_action(runtime.clone(), invocation.clone())
+                .await
+                .expect("stopped post-action handler should skip"),
+            HookResult::default()
+        );
+        assert_eq!(
+            handle_vmm_chat_compact(runtime, invocation)
+                .await
+                .expect("stopped compaction handler should skip"),
+            HookResult::default()
+        );
     }
 
     /// Verifies one session projection update preserves every unrelated VMM entry.

@@ -366,7 +366,7 @@ use webui_prompt_context::*;
 use webui_prompt_lifecycle::{
     mark_webui_prompt_preparation_failed, queued_dispatch_authority_for_client_action,
     service_insert_pending_prompt, start_webui_precheck_or_continue,
-    webui_shared_prompt_precheck_plan,
+    webui_shared_prompt_precheck_plan, webui_vmm_runtime_readiness,
 };
 use webui_turn_chaining::{
     maybe_start_session_goal_continuation_if_idle, maybe_start_webui_turn_chain_after_finished,

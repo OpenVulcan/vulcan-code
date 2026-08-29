@@ -888,7 +888,7 @@ pub async fn migrate_application_provider_usage(
     controller: &ControllerRuntimeHandle,
 ) -> Result<(), String> {
     ensure_provider_usage_schema(controller).await?;
-    if application_provider_usage_migration_completed(controller).await? {
+    if application_provider_usage_cutover_completed(controller).await? {
         return Ok(());
     }
     let source_exists = application_provider_usage_source_exists(controller).await?;
@@ -909,12 +909,12 @@ pub async fn migrate_application_provider_usage(
         ensure_provider_usage_schema(controller).await?;
         rebuild_provider_usage_daily(controller, current_provider_usage_unix_millis()).await?;
     }
-    persist_application_provider_usage_migration_completed(controller).await
+    persist_application_provider_usage_cutover_completed(controller).await
 }
 
 /// Reads the durable cutover marker from the independent system-statistics database.
 /// 从独立系统统计数据库读取持久切换标记。
-async fn application_provider_usage_migration_completed(
+async fn application_provider_usage_cutover_completed(
     controller: &ControllerRuntimeHandle,
 ) -> Result<bool, String> {
     let result = controller
@@ -1104,7 +1104,7 @@ async fn load_provider_usage_table_columns(
 
 /// Persists the completed native application-database migration boundary.
 /// 持久化原生应用数据库迁移完成边界。
-async fn persist_application_provider_usage_migration_completed(
+async fn persist_application_provider_usage_cutover_completed(
     controller: &ControllerRuntimeHandle,
 ) -> Result<(), String> {
     controller

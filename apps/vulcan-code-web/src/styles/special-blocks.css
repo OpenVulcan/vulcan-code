@@ -392,6 +392,18 @@
   gap: 12px;
 }
 
+/* A grouped tool sequence receives two ordinary height units before its own viewport scrolls. */
+/* 聚合工具序列在自身视口滚动前可使用两个普通高度单位。 */
+.conversation-tool-sequence > .conversation-collapsible-motion > .conversation-collapsible-motion-inner > .conversation-tool-sequence-body {
+  max-height: min(
+    calc(var(--tool-presentation-expanded-height-unit) + var(--tool-presentation-expanded-height-unit)),
+    78vh
+  );
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
 /* The live layer owns row spacing so retiring rows can remove their gap without a final layout jump. */
 /* 实时层自行管理行间距，使退场工具行可以同步移除间距且不会在末尾产生布局跳变。 */
 .conversation-tool-sequence-running {
@@ -655,8 +667,10 @@
 }
 
 .tool-execution-stack {
-  width: fit-content;
-  max-width: min(100%, 760px);
+  /* Tool cards share the transcript lane instead of shrinking to their summary text. */
+  /* 工具卡片统一占用会话内容栏，不再按折叠摘要文本收缩。 */
+  width: 100%;
+  max-width: 100%;
   display: grid;
   gap: 8px;
 }

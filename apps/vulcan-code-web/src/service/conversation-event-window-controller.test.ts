@@ -92,8 +92,8 @@ function userInput(inputId: number): ConversationEventBody {
 function toolCall(
   status: Extract<ConversationEventBody, { kind: "tool_call" }>["status"],
   toolCallId = 3,
-  requestStreamId?: string,
-): ConversationEventBody {
+  requestStreamId = `controller-tool-${toolCallId}`,
+): Extract<ConversationEventBody, { kind: "tool_call" }> {
   return {
     kind: "tool_call",
     api_call_id: 2,
@@ -768,6 +768,79 @@ describe("V1 conversation event window controller", () => {
     expect(controller.snapshot()).toMatchObject({ memory_revision: 2, durable_revision: 1 });
   });
 
+  it("commits HTTP hydration even when physical live subscription readiness never settles", async () => {
+    // subscribeLive models a WebSocket handshake that remains pending indefinitely.
+    // subscribeLive 模拟一个无限期保持等待的 WebSocket 握手。
+    const subscribeLive = vi.fn(
+      () => new Promise<() => void>(() => undefined),
+    );
+    // hydrate proves durable session data remains independently available over HTTP.
+    // hydrate 证明可靠会话数据仍可通过 HTTP 独立获得。
+    const hydrate = vi.fn(async () => response([summary(1, userInput(1))]));
+    // controller must publish the durable snapshot without waiting for physical socket readiness.
+    // controller 必须在不等待物理套接字就绪的情况下发布可靠快照。
+    const controller = new ConversationEventWindowController(rpcMock({
+      hydrate,
+      subscribeLive,
+    }));
+
+    await expect(controller.hydrate(SESSION_ID)).resolves.toBe(true);
+
+    expect(subscribeLive).toHaveBeenCalledTimes(1);
+    expect(hydrate).toHaveBeenCalledTimes(1);
+    expect(controller.snapshot()).toMatchObject({
+      owner: { session_id: SESSION_ID, window_generation: 1 },
+      memory_revision: 1,
+      durable_revision: 1,
+    });
+    expect(controller.snapshot().events.map((event) => event.seq)).toEqual([1]);
+  });
+
+  it("reconnects once after delayed live readiness to close the post-hydration gap", async () => {
+    // resolveSubscription releases the exact delayed physical readiness barrier.
+    // resolveSubscription 释放精确的延迟物理就绪屏障。
+    let resolveSubscription: ((unsubscribe: () => void) => void) | null = null;
+    // subscription remains pending until after the durable hydration has committed.
+    // subscription 保持等待，直到可靠 hydration 已经提交。
+    const subscription = new Promise<() => void>((resolve) => {
+      resolveSubscription = resolve;
+    });
+    // reconnect returns the same frontier because this fixture has no missed live events.
+    // reconnect 返回相同前沿，因为此夹具不存在遗漏的实时事件。
+    const reconnect = vi.fn(async () => reconnectResponse([], {
+      base_memory_revision: 1,
+      memory_revision: 1,
+      durable_revision: 1,
+    }));
+    // controller owns both the durable hydration and its delayed transport reconciliation.
+    // controller 同时持有可靠 hydration 与其延迟传输协调。
+    const controller = new ConversationEventWindowController(rpcMock({
+      hydrate: async () => response([summary(1, userInput(1))]),
+      reconnect,
+      subscribeLive: async () => subscription,
+    }));
+
+    await expect(controller.hydrate(SESSION_ID)).resolves.toBe(true);
+    expect(reconnect).not.toHaveBeenCalled();
+
+    requireAssignedCallback(resolveSubscription, "delayed subscription resolver")(
+      () => undefined,
+    );
+    await vi.waitFor(() => expect(reconnect).toHaveBeenCalledTimes(1));
+
+    expect(reconnect).toHaveBeenCalledWith(
+      { session_id: SESSION_ID, window_generation: 1 },
+      1,
+      1,
+      SERVICE_EPOCH,
+      undefined,
+    );
+    expect(controller.snapshot()).toMatchObject({
+      memory_revision: 1,
+      durable_revision: 1,
+    });
+  });
+
   it("repairs a skipped revision before a later durable acknowledgement can hide its append", async () => {
     let push: ((delta: ConversationEventLiveDeltaV1) => void) | null = null;
     let resolveReconnect: ((value: ConversationEventReconnectV1Response) => void) | null = null;
@@ -1008,6 +1081,51 @@ describe("V1 conversation event window controller", () => {
     expect(controller.snapshot()).toMatchObject({ memory_revision: 3, durable_revision: 3 });
   });
 
+  it("keeps the pushed frontier live across prepared, running, terminal, and durable tool updates", async () => {
+    let push: ((delta: ConversationEventLiveDeltaV1) => void) | null = null;
+    const prepared = toolCall("prepared", 3, "request-stream-3");
+    const running = {
+      ...prepared,
+      status: "running" as const,
+      started_at_ms: 20,
+    };
+    const completed = {
+      ...running,
+      status: "completed" as const,
+      output: { result: "done" },
+      finished_at_ms: 30,
+    };
+    const controller = new ConversationEventWindowController(
+      rpcMock({
+        hydrate: async () => response(
+          [summary(1, prepared, 10, 1)],
+          { memory_revision: 1, durable_revision: 1 },
+        ),
+        subscribeLive: async (handler) => {
+          push = handler;
+          return () => undefined;
+        },
+      }),
+    );
+    await controller.hydrate(SESSION_ID);
+
+    requireAssignedCallback(push, "tool lifecycle subscriber")(
+      liveDelta([summary(1, running, 20, 2)], { revision: 2 }),
+    );
+    requireAssignedCallback(push, "tool lifecycle subscriber")(
+      liveDelta([summary(1, completed, 30, 3)], { revision: 3 }),
+    );
+    requireAssignedCallback(push, "tool lifecycle subscriber")
+      (liveDelta([], { durability: "durable", base_durable_revision: 1, revision: 3 }));
+
+    expect(controller.snapshot()).toMatchObject({ memory_revision: 3, durable_revision: 3 });
+    expect(controller.snapshot().events[0].event).toMatchObject({
+      status: "completed",
+      started_at_ms: 20,
+      finished_at_ms: 30,
+    });
+  });
+
   it("keeps an open edited Turn visible until a higher generation atomically truncates the tail", async () => {
     let push: ((delta: ConversationEventLiveDeltaV1) => void) | null = null;
     let resolveRebase: ((value: ConversationEventHydrationV1Response) => void) | null = null;
@@ -1068,6 +1186,107 @@ describe("V1 conversation event window controller", () => {
       liveDelta([summary(2, toolCall("completed"), 30, 3)], { revision: 3 }),
     );
     expect(controller.snapshot().events[1].event).toMatchObject({ status: "waiting_user" });
+  });
+
+  it("rehydrates an owned session by atomically rebasing to a newer generation", async () => {
+    const hydrate = vi
+      .fn()
+      .mockResolvedValueOnce(response([summary(1, userInput(1))]))
+      .mockResolvedValueOnce(
+        response([summary(1, userInput(2))], {
+          window_generation: 2,
+          memory_revision: 2,
+          durable_revision: 2,
+        }),
+      );
+    const controller = new ConversationEventWindowController(rpcMock({ hydrate }));
+    await controller.hydrate(SESSION_ID);
+
+    await expect(controller.rehydrate(SESSION_ID)).resolves.toBe(true);
+
+    expect(controller.snapshot().owner).toEqual({
+      session_id: SESSION_ID,
+      window_generation: 2,
+    });
+    expect(controller.snapshot().events[0].event).toMatchObject({ input_id: 2 });
+  });
+
+  it("accepts manual rehydration after live generation rebase without reinitializing the owner", async () => {
+    let push: ((delta: ConversationEventLiveDeltaV1) => void) | null = null;
+    const generationTwo = response([summary(1, userInput(2))], {
+      window_generation: 2,
+      memory_revision: 2,
+      durable_revision: 2,
+    });
+    const hydrate = vi
+      .fn()
+      .mockResolvedValueOnce(response([summary(1, userInput(1))]))
+      .mockResolvedValueOnce(generationTwo)
+      .mockResolvedValueOnce(generationTwo);
+    const controller = new ConversationEventWindowController(
+      rpcMock({
+        hydrate,
+        subscribeLive: async (handler) => {
+          push = handler;
+          return () => undefined;
+        },
+      }),
+    );
+    await controller.hydrate(SESSION_ID);
+    requireAssignedCallback(push, "generation rebase subscriber")(
+      liveDelta([], { window_generation: 2, revision: 2 }),
+    );
+    await vi.waitFor(() => expect(controller.snapshot().owner?.window_generation).toBe(2));
+
+    await expect(controller.rehydrate(SESSION_ID)).resolves.toBe(true);
+
+    expect(controller.snapshot().owner?.window_generation).toBe(2);
+    expect(hydrate).toHaveBeenCalledTimes(3);
+  });
+
+  it("ignores a delayed manual rehydration after live state reaches a newer generation", async () => {
+    let push: ((delta: ConversationEventLiveDeltaV1) => void) | null = null;
+    let resolveManual: ((value: ConversationEventHydrationV1Response) => void) | null = null;
+    const delayedManual = new Promise<ConversationEventHydrationV1Response>((resolve) => {
+      resolveManual = resolve;
+    });
+    const hydrate = vi
+      .fn()
+      .mockResolvedValueOnce(response([summary(1, userInput(1))]))
+      .mockImplementationOnce(async () => delayedManual)
+      .mockResolvedValueOnce(
+        response([summary(1, userInput(3))], {
+          window_generation: 3,
+          memory_revision: 3,
+          durable_revision: 3,
+        }),
+      );
+    const controller = new ConversationEventWindowController(
+      rpcMock({
+        hydrate,
+        subscribeLive: async (handler) => {
+          push = handler;
+          return () => undefined;
+        },
+      }),
+    );
+    await controller.hydrate(SESSION_ID);
+    const manualRehydration = controller.rehydrate(SESSION_ID);
+    requireAssignedCallback(push, "newer generation subscriber")(
+      liveDelta([], { window_generation: 3, revision: 3 }),
+    );
+    await vi.waitFor(() => expect(controller.snapshot().owner?.window_generation).toBe(3));
+    requireAssignedCallback(resolveManual, "delayed manual rehydration resolver")(
+      response([summary(1, userInput(2))], {
+        window_generation: 2,
+        memory_revision: 2,
+        durable_revision: 2,
+      }),
+    );
+
+    await expect(manualRehydration).resolves.toBe(true);
+    expect(controller.snapshot().owner?.window_generation).toBe(3);
+    expect(controller.snapshot().events[0].event).toMatchObject({ input_id: 3 });
   });
 
   it("hydrates through rapid higher-generation pushes without committing an older response", async () => {

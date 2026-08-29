@@ -56,6 +56,12 @@ impl ConversationHookRuntime {
         precheck_payload: Value,
         profile_payload: Value,
     ) -> Result<ConversationPromptHookRequests, String> {
+        // Missing readiness is deliberately treated as stopped for legacy retry payloads.
+        // 旧重试载荷缺失就绪事实时按未启动处理，禁止恢复时误触发 VMM。
+        let vmm_runtime_ready = precheck_payload
+            .get("vmm_runtime_ready")
+            .and_then(Value::as_bool)
+            == Some(true);
         match self.active_turns.get(&session_id) {
             Some(active_turn)
                 if active_turn.turn_id != turn_id || active_turn.user_content != prompt =>
@@ -68,7 +74,11 @@ impl ConversationHookRuntime {
             None => {
                 self.active_turns.insert(
                     session_id,
-                    ActiveConversationTurn::new(turn_id.clone(), prompt.to_string()),
+                    ActiveConversationTurn::new(
+                        turn_id.clone(),
+                        prompt.to_string(),
+                        vmm_runtime_ready,
+                    ),
                 );
             }
         }
@@ -180,6 +190,7 @@ impl ConversationHookRuntime {
         system_prompt_hook_phase: SystemPromptHookPhase,
         prompt: &str,
         conversation_state: &SessionConversationState,
+        vmm_runtime_ready: bool,
     ) -> ConversationPromptHookRequests {
         let event_kind = pending_prompt_source_event_kind(source);
         let was_recorded_while_queued = self
@@ -191,7 +202,7 @@ impl ConversationHookRuntime {
             let turn_id = new_conversation_turn_id(session_id);
             self.active_turns.insert(
                 session_id,
-                ActiveConversationTurn::new(turn_id.clone(), prompt.to_string()),
+                ActiveConversationTurn::new(turn_id.clone(), prompt.to_string(), vmm_runtime_ready),
             );
             turn_id
         } else if was_recorded_while_queued {
@@ -204,6 +215,7 @@ impl ConversationHookRuntime {
                 .active_turns
                 .get_mut(&session_id)
                 .expect("active turn should exist after contains_key");
+            turn.vmm_runtime_ready = vmm_runtime_ready;
             turn.timeline.push(ConversationTimelineItem::new(
                 "user",
                 event_kind,
@@ -227,6 +239,7 @@ impl ConversationHookRuntime {
             "visible_history_count": visible_history_count(conversation_state),
             "message_count": conversation_state.messages.len(),
             "record_count": conversation_state.records.len(),
+            "vmm_runtime_ready": vmm_runtime_ready,
         });
         if !was_recorded_while_queued {
             self.dispatch_json(
@@ -246,6 +259,7 @@ impl ConversationHookRuntime {
             "system_prompt_hook_phase": system_prompt_hook_phase.as_str(),
             "message_count": conversation_state.messages.len(),
             "record_count": conversation_state.records.len(),
+            "vmm_runtime_ready": vmm_runtime_ready,
         });
         ConversationPromptHookRequests {
             profile: ConversationProfileRequest::new(
@@ -480,6 +494,7 @@ impl ConversationHookRuntime {
             conversation_state,
             ConversationTurnCompletionStatus::Completed,
             0,
+            true,
         )
     }
 
@@ -494,6 +509,7 @@ impl ConversationHookRuntime {
         conversation_state: &SessionConversationState,
         completion_status: ConversationTurnCompletionStatus,
         pending_subagent_count: usize,
+        vmm_runtime_ready: bool,
     ) -> (String, ConversationCompletionRequest) {
         let turn = if completion_status.is_final() {
             self.active_turns
@@ -523,6 +539,7 @@ impl ConversationHookRuntime {
             "record_count": conversation_state.records.len(),
             "turn_messages": &conversation_state.messages,
             "turn_records": &conversation_state.records,
+            "vmm_runtime_ready": turn.vmm_runtime_ready && vmm_runtime_ready,
             "conversation_state": conversation_state,
         });
         (
@@ -572,6 +589,7 @@ impl ConversationHookRuntime {
         fallback_used: bool,
         provider_request_count: usize,
         summary: &str,
+        vmm_runtime_ready: bool,
     ) {
         self.dispatch_json(
             HOOK_CONVERSATION_COMPACTED,
@@ -583,6 +601,7 @@ impl ConversationHookRuntime {
                 "fallback_used": fallback_used,
                 "provider_request_count": provider_request_count,
                 "summary": summary,
+                "vmm_runtime_ready": vmm_runtime_ready,
             }),
             HookScope::Session,
         );
@@ -604,7 +623,7 @@ impl ConversationHookRuntime {
                 _ => None,
             })
             .unwrap_or_default();
-        ActiveConversationTurn::new(new_conversation_turn_id(session_id), user_content)
+        ActiveConversationTurn::new(new_conversation_turn_id(session_id), user_content, false)
     }
 
     /// Ensures runtime-only events still have a turn container.
@@ -616,7 +635,7 @@ impl ConversationHookRuntime {
         let turn_id = new_conversation_turn_id(session_id);
         self.active_turns.insert(
             session_id,
-            ActiveConversationTurn::new(turn_id.clone(), String::new()),
+            ActiveConversationTurn::new(turn_id.clone(), String::new(), false),
         );
         turn_id
     }

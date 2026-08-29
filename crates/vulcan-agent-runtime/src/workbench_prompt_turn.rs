@@ -153,6 +153,12 @@ pub struct SharedPromptTurnStart {
     /// Prompt entry source shared with service queue semantics.
     /// 与服务队列语义共享的提示词来源。
     pub source: PendingSessionPromptSource,
+    /// Whether the VMM service was fully configured and running at turn admission.
+    /// 回合准入时 VMM 服务是否已完成配置并处于运行状态。
+    pub vmm_runtime_ready: bool,
+    /// Whether the live VMM generation can execute PreCheck at turn admission.
+    /// 回合准入时当前 VMM 运行代次是否能够执行 PreCheck。
+    pub vmm_precheck_ready: bool,
     /// Prepared precheck request returned by the shared hook runtime.
     /// 共享 hook 运行时返回的已准备 precheck 请求。
     pub precheck_request: ConversationPrecheckRequest,
@@ -201,6 +207,8 @@ impl fmt::Debug for SharedPromptTurnStart {
             .field("session_title", &self.session_title)
             .field("workspace_path", &self.workspace_path)
             .field("source", &self.source)
+            .field("vmm_runtime_ready", &self.vmm_runtime_ready)
+            .field("vmm_precheck_ready", &self.vmm_precheck_ready)
             .field("prompt", &self.prompt)
             .field(
                 "provider_visible_agent_messages",
@@ -276,6 +284,12 @@ pub struct SharedPromptTurnBeginInput<'a> {
     /// Prompt entry source shared with queue routing.
     /// 与队列路由共享的提示词来源。
     pub source: PendingSessionPromptSource,
+    /// Whether the VMM service was fully configured and running at admission.
+    /// 准入时 VMM 服务是否已完成配置并处于运行状态。
+    pub vmm_runtime_ready: bool,
+    /// Whether the live VMM generation can execute PreCheck at admission.
+    /// 准入时当前 VMM 运行代次是否能够执行 PreCheck。
+    pub vmm_precheck_ready: bool,
     /// Execution mode requested by the shell command.
     /// 外壳命令请求的执行模式。
     pub execution_mode: String,
@@ -326,6 +340,12 @@ pub struct SharedPromptTurnRuntimeBeginInput<'a> {
     /// Prompt entry source shared with queue routing.
     /// 与队列路由共享的提示词来源。
     pub source: PendingSessionPromptSource,
+    /// Whether the VMM service was fully configured and running at admission.
+    /// 准入时 VMM 服务是否已完成配置并处于运行状态。
+    pub vmm_runtime_ready: bool,
+    /// Whether the live VMM generation can execute PreCheck at admission.
+    /// 准入时当前 VMM 运行代次是否能够执行 PreCheck。
+    pub vmm_precheck_ready: bool,
     /// Execution mode requested by the shell command.
     /// 外壳命令请求的执行模式。
     pub execution_mode: String,
@@ -417,6 +437,8 @@ pub fn begin_shared_prompt_turn(
                 append_canonical_user_message: input.append_canonical_user_message,
                 append_visible_user_prompt_record: input.append_visible_user_prompt_record,
                 source: input.source,
+                vmm_runtime_ready: input.vmm_runtime_ready,
+                vmm_precheck_ready: input.vmm_precheck_ready,
                 execution_mode: input.execution_mode,
                 reasoning_effort: input.reasoning_effort,
                 owning_project_id,
@@ -545,6 +567,7 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
         system_prompt_hook_phase,
         &sanitized_prompt,
         &hook_conversation_state,
+        input.vmm_runtime_ready,
     );
     // preparation_turn_id correlates sibling requests without making either line the owner.
     // preparation_turn_id 关联同级请求，而不让任一线路成为另一线路的所有者。
@@ -571,6 +594,8 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
         session_title: input.session_title.to_string(),
         workspace_path: input.workspace_path.to_string(),
         source: input.source,
+        vmm_runtime_ready: input.vmm_runtime_ready,
+        vmm_precheck_ready: input.vmm_precheck_ready,
         precheck_request: hook_requests.precheck,
         profile_request: hook_requests.profile,
         prompt: sanitized_prompt,
@@ -803,10 +828,11 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
     let mut system_prompt_hook_blocks = Vec::new();
     let mut precheck_failure_detail = None;
     let mut profile_failure_detail = None;
-    // feature_policy governs local VMM state independently from the remote PreCheck outcome.
-    // feature_policy 独立于远端 PreCheck 结果控制本地 VMM 状态。
+    // vmmDomainActive requires both the feature policy and the host-owned live service fact.
+    // vmmDomainActive 同时要求功能策略开启以及宿主持有的服务实时就绪事实成立。
     let feature_policy = vulcan_vmm::VmmRuntimeFeaturePolicy::from_env();
-    if feature_policy.session_state_enabled {
+    let vmm_domain_active = feature_policy.session_state_enabled && input.start.vmm_runtime_ready;
+    if vmm_domain_active {
         if let Some(target_message_id) = input.start.canonical_user_message_id.as_deref() {
             // now is shared by the atomic local pre-provider VMM boundary transition.
             // now 由 Provider 调用前的原子本地 VMM 边界转换共享。
@@ -841,7 +867,8 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
     // 画像准备仅持有持久化基线与仅追加画像增量。
     match input.profile_outcome.report {
         Ok(report) => {
-            if let Some(effect) = vmm_profile_sync_effect_from_report(&report) {
+            if vmm_domain_active && let Some(effect) = vmm_profile_sync_effect_from_report(&report)
+            {
                 runtime_state.vmm_profile_sync = effect.state;
                 runtime_state.updated_at = current_unix_millis_text();
             }
@@ -866,7 +893,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
     // 用户提示 precheck 仅持有召回、提示词转换及其自身的非画像 Hook 输出。
     match input.precheck_outcome.report {
         Ok(report) => {
-            if feature_policy.session_state_enabled
+            if vmm_domain_active
                 && let Some(effect) = vmm_session_status_effect_from_report(&report)?
             {
                 let now = current_unix_millis_text();
@@ -878,8 +905,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
                     runtime_state.updated_at = now;
                 }
             }
-            if feature_policy.session_state_enabled
-                && let Some(effect) = vmm_recall_batch_effect_from_report(&report)?
+            if vmm_domain_active && let Some(effect) = vmm_recall_batch_effect_from_report(&report)?
             {
                 let target_message_id = input
                     .start
@@ -934,10 +960,19 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
     }
     // Persisted profile projection is authoritative after both lines, so precheck cannot add or replace it.
     // 两条线路结束后持久化画像投影仍具权威性，因此 precheck 无法添加或替换它。
-    stabilize_vmm_profile_system_prompt_blocks(
-        &mut system_prompt_hook_blocks,
-        &runtime_state.vmm_profile_sync,
-    );
+    if vmm_domain_active {
+        stabilize_vmm_profile_system_prompt_blocks(
+            &mut system_prompt_hook_blocks,
+            &runtime_state.vmm_profile_sync,
+        );
+    } else {
+        // An inactive service cannot restore a persisted VMM profile into the provider request.
+        // 未启动的服务不能把持久化 VMM 画像恢复到 Provider 请求中。
+        stabilize_vmm_profile_system_prompt_blocks(
+            &mut system_prompt_hook_blocks,
+            &Default::default(),
+        );
+    }
     request_prompt = append_hidden_model_guidance_to_prompt(
         request_prompt,
         input.start.hidden_model_guidance.as_deref(),
@@ -956,6 +991,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         &runtime_state.context_injection_state,
         vmm_session_memory,
         Some(&expected_turn_id),
+        input.start.vmm_runtime_ready,
     );
     validate_session_provider_tool_target_completeness(runtime_state)?;
     // providerConversationState is a request-owned copy; canonical history keeps original attachments unchanged.
@@ -1058,7 +1094,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         system_prompt_hook_blocks,
         project_vmm: input.project_configuration.vmm,
         session_vmm: runtime_state.vmm.clone(),
-        vmm_runtime_ready: false,
+        vmm_runtime_ready: input.start.vmm_runtime_ready,
         boundary_events: input.start.boundary_events.clone(),
         runtime_system_updates: Vec::new(),
         controller_runtime: None,
@@ -1092,9 +1128,10 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
 pub fn shared_prompt_precheck_plan(
     effective_vmm_config: &VmmEffectiveConfig,
     precheck_hook_snapshots: &[HookRegistrationSnapshot],
+    vmm_precheck_ready: bool,
 ) -> SharedPromptPrecheckPlan {
-    let vmm_precheck_ready =
-        effective_vmm_config.diagnose_precheck_flow(true) == VmmConfigDiagnostic::Ready;
+    let vmm_precheck_ready = vmm_precheck_ready
+        && effective_vmm_config.diagnose_precheck_flow(true) == VmmConfigDiagnostic::Ready;
     let should_skip_precheck = !vmm_precheck_ready
         && !precheck_hook_snapshots.is_empty()
         && precheck_hook_snapshots

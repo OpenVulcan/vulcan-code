@@ -667,6 +667,28 @@ fn managed_runtime_projection_rebuilds_product_state_and_preserves_catalog() {
         Some("default/default/visible-project")
     );
 
+    // A live child without an initialized scope is not an operational VMM service.
+    // 子进程存活但作用域未初始化时，不构成可运行的 VMM 服务。
+    managed_runtime.scope_ready = false;
+    let scope_incomplete = refresh_vmm_memory_runtime_projection(
+        &ready,
+        &workspace,
+        &provider_configuration,
+        &managed_runtime,
+    );
+    assert!(scope_incomplete.runtime.process_ready);
+    assert!(!scope_incomplete.runtime.scope_ready);
+    assert!(!scope_incomplete.runtime.precheck_ready);
+    assert!(!scope_incomplete.runtime.postaction_ready);
+    assert!(!scope_incomplete.runtime.profile_instruction_ready);
+    assert!(!scope_incomplete.runtime.rerank_ready);
+    assert!(
+        scope_incomplete
+            .capabilities
+            .iter()
+            .all(|capability| !capability.available)
+    );
+
     managed_runtime.phase = String::from("stopped");
     managed_runtime.grpc_target = None;
     let stopped = refresh_vmm_memory_runtime_projection(

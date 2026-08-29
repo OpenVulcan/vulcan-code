@@ -705,6 +705,9 @@ pub struct ExecutionPreparation {
     /// Effective session-level VMM configuration captured for this run.
     /// 为本次运行捕获的有效会话级 VMM 配置。
     pub session_vmm: VmmConfigLayer,
+    /// Whether VMM was fully configured and runtime-ready when this execution was admitted.
+    /// 本次执行准入时 VMM 是否已完成配置并处于运行就绪状态。
+    pub vmm_runtime_ready: bool,
     /// session-boundary boundary events accepted before this prepared execution starts.
     /// 本次已准备执行开始前已经接受的 会话边界边界事件。
     pub boundary_events: Vec<SessionBoundaryEvent>,

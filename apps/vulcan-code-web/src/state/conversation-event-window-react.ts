@@ -7,6 +7,7 @@ import type {
 } from "@/service/conversation-event-window-controller";
 import type {
   SelectedConversationEventWindowCommands,
+  SelectedConversationEventWindowStatus,
 } from "@/service/selected-conversation-event-window-registry";
 
 /** Minimal controller surface required by React's external-store protocol.
@@ -23,6 +24,9 @@ export interface ConversationEventWindowOwnedStore
   /** Returns commands bound to the current selected-session controller generation.
    * 返回绑定到当前选中会话控制器代次的命令。 */
   commands(): SelectedConversationEventWindowCommands;
+  /** Returns the current selected-session hydration lifecycle.
+   * 返回当前选中会话 hydration 生命周期。 */
+  status(): SelectedConversationEventWindowStatus;
 }
 
 /** Stable adapter consumed by React useSyncExternalStore.
@@ -40,6 +44,9 @@ export interface ConversationEventWindowExternalStore {
   /** Returns commands bound to the selected owner visible in the current snapshot.
    * 返回绑定到当前快照可见选中归属的命令。 */
   getCommands(): SelectedConversationEventWindowCommands;
+  /** Returns the stable selected-session hydration lifecycle.
+   * 返回稳定的选中会话 hydration 生命周期。 */
+  getStatus(): SelectedConversationEventWindowStatus;
 }
 
 /** React owner boundary for the selected-session V1 external store.
@@ -62,6 +69,7 @@ export function createConversationEventWindowExternalStore(
     getSnapshot: () => controller.snapshot(),
     getServerSnapshot: () => controller.snapshot(),
     getCommands: () => controller.commands(),
+    getStatus: () => controller.status(),
   };
 }
 
@@ -141,6 +149,18 @@ ConversationEventWindowControllerSnapshot {
     store.subscribe,
     store.getSnapshot,
     store.getServerSnapshot,
+  );
+}
+
+/** Reads the selected-session hydration lifecycle through the same external-store publication.
+ * 通过同一外部 store 发布读取选中会话 hydration 生命周期。 */
+export function useSelectedConversationEventWindowStatus():
+SelectedConversationEventWindowStatus {
+  const store = useSelectedConversationEventWindowExternalStore();
+  return React.useSyncExternalStore(
+    store.subscribe,
+    store.getStatus,
+    store.getStatus,
   );
 }
 

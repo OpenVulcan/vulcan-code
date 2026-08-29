@@ -334,6 +334,7 @@ export type TranslationKey =
   | "conversation.loading.projecting"
   | "conversation.loading.done"
   | "conversation.loading.failed"
+  | "conversation.loading.retry"
   | "conversation.unlinkedProject"
   | "conversation.history.loadMore"
   | "conversation.history.loading"
@@ -1146,7 +1147,13 @@ export type TranslationKey =
   | "toolPresentation.output.loading"
   | "toolPresentation.output.waiting"
   | "toolPresentation.output.empty"
+  | "toolPresentation.raw.open"
+  | "toolPresentation.raw.title"
+  | "toolPresentation.raw.legacyPartial"
+  | "toolPresentation.execution.running"
   | "toolPresentation.exitCode"
+  | "toolPresentation.command.terminalTitle"
+  | "toolPresentation.command.shellTitle"
   | "toolPresentation.command.running"
   | "toolPresentation.command.failed"
   | "toolPresentation.command.stopped"
@@ -1214,6 +1221,19 @@ export type TranslationKey =
   | "toolPresentation.ask.questionLabel"
   | "toolPresentation.ask.answerLabel"
   | "toolPresentation.ask.waitingAnswer"
+  | "toolPresentation.native.todolist"
+  | "toolPresentation.native.getGoal"
+  | "toolPresentation.native.createGoal"
+  | "toolPresentation.native.updateGoal"
+  | "toolPresentation.native.knowledgeSearch"
+  | "toolPresentation.native.knowledgeBrowse"
+  | "toolPresentation.native.knowledgeRead"
+  | "toolPresentation.native.skill"
+  | "toolPresentation.native.memorySearch"
+  | "toolPresentation.native.turnDetails"
+  | "toolPresentation.native.memoryWrite"
+  | "toolPresentation.native.memoryDelete"
+  | "toolPresentation.native.runtimeConfig"
   | "toolPresentation.file.count"
   | "toolPresentation.file.multiChange"
   | "toolPresentation.file.empty"
@@ -1234,16 +1254,26 @@ export type TranslationKey =
   | "toolPresentation.file.modify.completed"
   | "toolPresentation.file.delete.completed"
   | "toolPresentation.file.mixed.completed"
+  | "toolPresentation.file.edited"
+  | "toolPresentation.file.notEdited"
+  | "toolPresentation.file.executionFailed"
+  | "toolPresentation.file.executionStopped"
+  | "toolPresentation.file.executionCompleted"
   | "toolPresentation.markdownOutput.running"
   | "toolPresentation.markdownOutput.failed"
   | "toolPresentation.markdownOutput.stopped"
   | "toolPresentation.markdownOutput.completed"
   | "toolPresentation.fileList.title"
   | "toolPresentation.fileRead.title"
+  | "toolPresentation.fileRead.rangeFrom"
+  | "toolPresentation.fileRead.range"
+  | "toolPresentation.fileSearch.title"
+  | "toolPresentation.fileStat.title"
   | "toolPresentation.codekit.astTree.title"
   | "toolPresentation.codekit.astDetail.title"
   | "toolPresentation.codekit.rg.title"
   | "toolPresentation.codekit.nodeSource.title"
+  | "toolPresentation.codekit.markdownMenu.title"
   | "markdown.wrap.enable"
   | "markdown.wrap.disable"
   | "markdown.copyCode"
@@ -3177,6 +3207,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.loading.projecting": "正在整理显示数据",
     "conversation.loading.done": "会话载入完成",
     "conversation.loading.failed": "会话正文载入失败",
+    "conversation.loading.retry": "重试载入",
     "conversation.unlinkedProject": "未关联项目",
     "conversation.history.loadMore": "加载更多历史",
     "conversation.history.loading": "正在加载历史",
@@ -3973,7 +4004,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.output.loading": "正在加载输出...",
     "toolPresentation.output.waiting": "等待工具返回输出...",
     "toolPresentation.output.empty": "无输出",
+    "toolPresentation.raw.open": "显示原始工具调用输出",
+    "toolPresentation.raw.title": "{tool} 原始调用",
+    "toolPresentation.raw.legacyPartial": "当前仅有可见的部分调用信息。",
+    "toolPresentation.execution.running": "执行中",
     "toolPresentation.exitCode": "退出代码",
+    "toolPresentation.command.terminalTitle": "终端命令",
+    "toolPresentation.command.shellTitle": "Shell 命令",
     "toolPresentation.command.running": "执行中",
     "toolPresentation.command.failed": "执行失败",
     "toolPresentation.command.stopped": "已停止",
@@ -4041,6 +4078,19 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.ask.questionLabel": "问题：",
     "toolPresentation.ask.answerLabel": "回答：",
     "toolPresentation.ask.waitingAnswer": "等待用户回答",
+    "toolPresentation.native.todolist": "更新待办事项",
+    "toolPresentation.native.getGoal": "读取目标",
+    "toolPresentation.native.createGoal": "创建目标",
+    "toolPresentation.native.updateGoal": "更新目标",
+    "toolPresentation.native.knowledgeSearch": "搜索知识库",
+    "toolPresentation.native.knowledgeBrowse": "浏览知识库",
+    "toolPresentation.native.knowledgeRead": "读取知识库文档",
+    "toolPresentation.native.skill": "查看技能",
+    "toolPresentation.native.memorySearch": "搜索记忆",
+    "toolPresentation.native.turnDetails": "读取回合详情",
+    "toolPresentation.native.memoryWrite": "写入记忆",
+    "toolPresentation.native.memoryDelete": "删除记忆",
+    "toolPresentation.native.runtimeConfig": "更新运行配置",
     "toolPresentation.file.count": "{count} 个文件",
     "toolPresentation.file.multiChange": "多文件变更",
     "toolPresentation.file.empty": "无可展示内容",
@@ -4061,16 +4111,26 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.file.modify.completed": "已编辑",
     "toolPresentation.file.delete.completed": "已删除",
     "toolPresentation.file.mixed.completed": "已变更",
+    "toolPresentation.file.edited": "已编辑",
+    "toolPresentation.file.notEdited": "未修改",
+    "toolPresentation.file.executionFailed": "执行失败",
+    "toolPresentation.file.executionStopped": "已停止",
+    "toolPresentation.file.executionCompleted": "执行完成",
     "toolPresentation.markdownOutput.running": "查询中",
     "toolPresentation.markdownOutput.failed": "查询失败",
     "toolPresentation.markdownOutput.stopped": "已停止",
     "toolPresentation.markdownOutput.completed": "已查询",
     "toolPresentation.fileList.title": "查询文件列表",
     "toolPresentation.fileRead.title": "读取文件",
+    "toolPresentation.fileRead.rangeFrom": "从第 {start} 行开始",
+    "toolPresentation.fileRead.range": "第 {start}-{end} 行",
+    "toolPresentation.fileSearch.title": "搜索文件",
+    "toolPresentation.fileStat.title": "读取文件信息",
     "toolPresentation.codekit.astTree.title": "列出 AST 树",
     "toolPresentation.codekit.astDetail.title": "查看 AST 详情",
     "toolPresentation.codekit.rg.title": "RG增强探索",
     "toolPresentation.codekit.nodeSource.title": "获取节点源码",
+    "toolPresentation.codekit.markdownMenu.title": "查询 Markdown 目录",
     "markdown.wrap.enable": "开启自动换行",
     "markdown.wrap.disable": "关闭自动换行",
     "markdown.copyCode": "复制代码",
@@ -6018,6 +6078,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.loading.projecting": "Preparing display data",
     "conversation.loading.done": "Conversation loaded",
     "conversation.loading.failed": "Conversation body failed to load",
+    "conversation.loading.retry": "Retry loading",
     "conversation.unlinkedProject": "Unlinked project",
     "conversation.history.loadMore": "Load more history",
     "conversation.history.loading": "Loading history",
@@ -6814,7 +6875,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.output.loading": "Loading output...",
     "toolPresentation.output.waiting": "Waiting for tool output...",
     "toolPresentation.output.empty": "No output",
+    "toolPresentation.raw.open": "Show raw tool invocation output",
+    "toolPresentation.raw.title": "Raw {tool} invocation",
+    "toolPresentation.raw.legacyPartial": "Only the visible partial invocation is available.",
+    "toolPresentation.execution.running": "Running",
     "toolPresentation.exitCode": "Exit code",
+    "toolPresentation.command.terminalTitle": "Terminal command",
+    "toolPresentation.command.shellTitle": "Shell command",
     "toolPresentation.command.running": "Running",
     "toolPresentation.command.failed": "Failed",
     "toolPresentation.command.stopped": "Stopped",
@@ -6882,6 +6949,19 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.ask.questionLabel": "Question:",
     "toolPresentation.ask.answerLabel": "Answer:",
     "toolPresentation.ask.waitingAnswer": "Waiting for user answer",
+    "toolPresentation.native.todolist": "Update todo list",
+    "toolPresentation.native.getGoal": "Read goal",
+    "toolPresentation.native.createGoal": "Create goal",
+    "toolPresentation.native.updateGoal": "Update goal",
+    "toolPresentation.native.knowledgeSearch": "Search knowledge",
+    "toolPresentation.native.knowledgeBrowse": "Browse knowledge",
+    "toolPresentation.native.knowledgeRead": "Read knowledge document",
+    "toolPresentation.native.skill": "View skill",
+    "toolPresentation.native.memorySearch": "Search memory",
+    "toolPresentation.native.turnDetails": "Read turn details",
+    "toolPresentation.native.memoryWrite": "Write memory",
+    "toolPresentation.native.memoryDelete": "Delete memory",
+    "toolPresentation.native.runtimeConfig": "Update runtime config",
     "toolPresentation.file.count": "{count} files",
     "toolPresentation.file.multiChange": "Multiple file changes",
     "toolPresentation.file.empty": "No displayable content",
@@ -6902,16 +6982,26 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.file.modify.completed": "Edited",
     "toolPresentation.file.delete.completed": "Deleted",
     "toolPresentation.file.mixed.completed": "Changed",
+    "toolPresentation.file.edited": "Edited",
+    "toolPresentation.file.notEdited": "Not edited",
+    "toolPresentation.file.executionFailed": "Execution failed",
+    "toolPresentation.file.executionStopped": "Stopped",
+    "toolPresentation.file.executionCompleted": "Completed",
     "toolPresentation.markdownOutput.running": "Querying",
     "toolPresentation.markdownOutput.failed": "Query failed",
     "toolPresentation.markdownOutput.stopped": "Stopped",
     "toolPresentation.markdownOutput.completed": "Queried",
     "toolPresentation.fileList.title": "List files",
     "toolPresentation.fileRead.title": "Read file",
+    "toolPresentation.fileRead.rangeFrom": "From line {start}",
+    "toolPresentation.fileRead.range": "Lines {start}-{end}",
+    "toolPresentation.fileSearch.title": "Search files",
+    "toolPresentation.fileStat.title": "Read file metadata",
     "toolPresentation.codekit.astTree.title": "List AST Tree",
     "toolPresentation.codekit.astDetail.title": "View AST Details",
     "toolPresentation.codekit.rg.title": "RG Enhanced Search",
     "toolPresentation.codekit.nodeSource.title": "Get node source",
+    "toolPresentation.codekit.markdownMenu.title": "Query Markdown outline",
     "markdown.wrap.enable": "Enable line wrap",
     "markdown.wrap.disable": "Disable line wrap",
     "markdown.copyCode": "Copy code",

@@ -156,6 +156,12 @@ impl LiveWatchReceiver {
     pub async fn recv(&mut self) -> Option<LiveFileWatchEvent> {
         loop {
             let notified = self.inner.notify.notified();
+            tokio::pin!(notified);
+            // Register before checking buffered paths and sender liveness because the last-sender
+            // path uses notify_waiters, which does not retain a permit for future waiters.
+            // 在检查缓冲路径与发送者存活状态前完成注册，因为最后一个发送者使用 notify_waiters，
+            // 它不会为未来等待者保留许可。
+            notified.as_mut().enable();
             {
                 let mut changed_paths = self.inner.changed_paths.lock().await;
                 if !changed_paths.is_empty() {
@@ -167,7 +173,7 @@ impl LiveWatchReceiver {
                     return None;
                 }
             }
-            notified.await;
+            notified.as_mut().await;
         }
     }
 }

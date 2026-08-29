@@ -7,6 +7,7 @@ import {
   createConversationEventWindowExternalStore,
   useSelectedConversationEventWindowCommands,
   useSelectedConversationEventWindowSnapshot,
+  useSelectedConversationEventWindowStatus,
   useConversationEventWindowSnapshot,
   type ConversationEventWindowOwnedStore,
   type ConversationEventWindowReadableStore,
@@ -14,6 +15,7 @@ import {
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
 import type {
   SelectedConversationEventWindowCommands,
+  SelectedConversationEventWindowStatus,
 } from "@/service/selected-conversation-event-window-registry";
 
 /** Builds one stable empty controller snapshot for external-store tests.
@@ -33,6 +35,12 @@ function emptySnapshot(memoryRevision: number): ConversationEventWindowControlle
   };
 }
 
+/** Builds one stable ready lifecycle for the selected-session React bridge.
+ * 为选中会话 React 桥构建一个稳定的已就绪生命周期。 */
+function readyStatus(): SelectedConversationEventWindowStatus {
+  return { kind: "ready", session_id: "session-react-store" };
+}
+
 /** Renders the revision selected through React useSyncExternalStore.
  * 渲染通过 React useSyncExternalStore 选中的修订号。 */
 function SnapshotProbe(props: { store: ConversationEventWindowReadableStore }) {
@@ -49,6 +57,13 @@ function OwnedSnapshotProbe() {
   // snapshot 仅来自稳定的选中会话归属上下文。
   const snapshot = useSelectedConversationEventWindowSnapshot();
   return <span data-owner-session={snapshot.owner?.session_id ?? "none"} />;
+}
+
+/** Renders the selected-session lifecycle published independently from canonical events.
+ * 渲染独立于 canonical 事件发布的选中会话生命周期。 */
+function OwnedStatusProbe() {
+  const status = useSelectedConversationEventWindowStatus();
+  return <span data-window-status={status.kind} />;
 }
 
 /** Captures commands exposed by the WorkbenchApp-owned external-store boundary.
@@ -90,6 +105,7 @@ describe("conversation event window React external store", () => {
         return () => listenerSet.delete(listener);
       },
       commands: () => commands,
+      status: readyStatus,
     };
     // externalStore freezes the callback identities consumed by useSyncExternalStore.
     // externalStore 固定 useSyncExternalStore 消费的回调身份。
@@ -104,6 +120,7 @@ describe("conversation event window React external store", () => {
     expect(externalStore.getSnapshot()).toBe(snapshot);
     expect(externalStore.getServerSnapshot()).toBe(snapshot);
     expect(externalStore.getCommands()).toBe(commands);
+    expect(externalStore.getStatus()).toEqual(readyStatus());
     for (const activeListener of listenerSet) activeListener();
     expect(listener).toHaveBeenCalledTimes(1);
 
@@ -131,6 +148,7 @@ describe("conversation event window React external store", () => {
       snapshot: () => snapshot,
       subscribe: () => () => undefined,
       commands: () => commands,
+      status: readyStatus,
     };
     // markup is produced through React's server-side useSyncExternalStore path.
     // markup 通过 React 服务端 useSyncExternalStore 路径生成。
@@ -156,6 +174,7 @@ describe("conversation event window React external store", () => {
       snapshot: () => snapshot,
       subscribe: () => () => undefined,
       commands: () => commands,
+      status: readyStatus,
     };
     // externalStore is created once by the WorkbenchApp owner.
     // externalStore 由 WorkbenchApp 归属方创建一次。
@@ -165,10 +184,12 @@ describe("conversation event window React external store", () => {
     const markup = renderToStaticMarkup(
       <ConversationEventWindowExternalStoreProvider store={externalStore}>
         <OwnedSnapshotProbe />
+        <OwnedStatusProbe />
       </ConversationEventWindowExternalStoreProvider>,
     );
 
     expect(markup).toContain('data-owner-session="session-react-store"');
+    expect(markup).toContain('data-window-status="ready"');
   });
 
   it("exposes the exact owner-bound commands through the React provider", () => {
@@ -187,6 +208,7 @@ describe("conversation event window React external store", () => {
       snapshot: () => snapshot,
       subscribe: () => () => undefined,
       commands: () => commands,
+      status: readyStatus,
     };
     // capturedCommands receives the exact command object observed by the hook.
     // capturedCommands 接收 hook 观察到的精确命令对象。

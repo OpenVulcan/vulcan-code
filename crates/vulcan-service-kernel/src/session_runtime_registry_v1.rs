@@ -1,7 +1,7 @@
 //! Unique in-memory V1 session owners and serialized whole-document flushes.
 //! V1 会话唯一内存所有者与串行化整文档 flush。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};
@@ -270,6 +270,29 @@ pub(crate) struct ContinuationDispatchGuard {
     _guard: OwnedMutexGuard<()>,
 }
 
+/// Process-local durable frontier and explicit persistence failures for Continue dispatch.
+/// Continue 分派的进程内可靠前沿与显式持久化失败状态。
+struct ContinuationDispatchDurabilityState {
+    /// Last event seq covered by a successfully published complete candidate.
+    /// 最近一份成功发布的完整候选所覆盖的最后事件 seq。
+    durable_through_seq: Option<Seq>,
+    /// Failed candidate affecting each exact Continue action until a covering retry succeeds.
+    /// 影响每个精确 Continue 动作的失败候选；覆盖该候选的重试成功前持续保留。
+    persistence_failures: BTreeMap<ClientActionId, ContinuationDispatchPersistenceFailure>,
+}
+
+/// One non-durable flush failure attached to an exact Continue action.
+/// 绑定到一个精确 Continue 动作的一次未可靠落盘失败。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ContinuationDispatchPersistenceFailure {
+    /// Complete candidate revision that failed physical publication.
+    /// 物理发布失败的完整候选修订号。
+    candidate_revision: u64,
+    /// Stable storage failure detail retained for the waiting owner.
+    /// 为等待 owner 保留的稳定存储失败详情。
+    detail: String,
+}
+
 /// Process-local ownership token for one session lifecycle projection transaction.
 /// 单个会话生命周期投影事务的进程内所有权令牌。
 ///
@@ -336,6 +359,16 @@ pub(crate) enum SessionQuarantineReason {
         /// 构建回执时产生的领域失败。
         error: DomainError,
     },
+    /// Storage accepted one complete candidate, but the resident owner rejected its commit receipt.
+    /// 存储已接纳一份完整候选，但常驻 owner 拒绝了其提交回执。
+    DurableCommitApplicationRejected {
+        /// Candidate revision already accepted by physical storage.
+        /// 物理存储已经接纳的候选修订号。
+        candidate_revision: u64,
+        /// Exact post-commit failure that prevents safe continued ownership.
+        /// 阻止 owner 安全继续运行的精确提交后失败。
+        detail: String,
+    },
     /// A published replacement generation could not be loaded back as the new resident owner.
     /// 已发布的替换 generation 无法重新加载为新的常驻 owner。
     GenerationReloadRejected {
@@ -381,6 +414,13 @@ impl fmt::Display for SessionQuarantineReason {
                 formatter,
                 "revision receipt for mutation {before_revision}->{after_revision} was rejected: {error}"
             ),
+            Self::DurableCommitApplicationRejected {
+                candidate_revision,
+                detail,
+            } => write!(
+                formatter,
+                "physical storage accepted candidate revision {candidate_revision}, but the resident owner rejected its commit receipt: {detail}"
+            ),
             Self::GenerationReloadRejected { detail } => write!(
                 formatter,
                 "published replacement generation could not become the resident owner: {detail}"
@@ -411,6 +451,9 @@ pub(crate) enum SessionRuntimeError {
     /// The session quarantine-state mutex is poisoned.
     /// 会话隔离状态互斥锁已中毒。
     QuarantineLockPoisoned,
+    /// The Continue durable-frontier state mutex is poisoned.
+    /// Continue 可靠前沿状态互斥锁已中毒。
+    ContinuationDispatchStateLockPoisoned,
     /// The session handle is quarantined after a domain contract violation.
     /// 会话句柄因领域契约违反而处于隔离状态。
     SessionQuarantined {
@@ -472,6 +515,19 @@ pub(crate) enum SessionRuntimeError {
         /// Physical API identity that terminated before dispatch observation.
         /// 在分派观察前终止的物理 API 身份。
         api_call_id: ApiCallId,
+    },
+    /// A candidate carrying this Continue action failed physical persistence.
+    /// 携带该 Continue 动作的候选发生物理持久化失败。
+    ContinuationDispatchPersistenceFailed {
+        /// Browser idempotency identity of the affected Continue action.
+        /// 受影响 Continue 动作的浏览器幂等身份。
+        client_action_id: ClientActionId,
+        /// Complete candidate revision that failed publication.
+        /// 发布失败的完整候选修订号。
+        candidate_revision: u64,
+        /// Stable storage failure detail.
+        /// 稳定的存储失败详情。
+        detail: String,
     },
     /// A mutation returned without issuing a new document revision.
     /// 修改返回时没有产生新的文档修订号。
@@ -588,6 +644,9 @@ impl fmt::Display for SessionRuntimeError {
             Self::QuarantineLockPoisoned => {
                 formatter.write_str("V1 session quarantine lock poisoned")
             }
+            Self::ContinuationDispatchStateLockPoisoned => {
+                formatter.write_str("V1 Continue durable-frontier state lock poisoned")
+            }
             Self::SessionQuarantined { session_id, reason } => write!(
                 formatter,
                 "V1 session {session_id} is quarantined and rejects further writes: {reason}"
@@ -628,6 +687,17 @@ impl fmt::Display for SessionRuntimeError {
                 "V1 Continue action {} terminated API {} before durable transport observation",
                 client_action_id.as_str(),
                 api_call_id.value()
+            ),
+            Self::ContinuationDispatchPersistenceFailed {
+                client_action_id,
+                candidate_revision,
+                detail,
+            } => write!(
+                formatter,
+                "V1 Continue action {} failed to persist candidate revision {}: {}",
+                client_action_id.as_str(),
+                candidate_revision,
+                detail
             ),
             Self::MutationProducedNoRevision => {
                 formatter.write_str("V1 session mutation produced no revision")
@@ -786,12 +856,15 @@ pub(crate) struct SessionHandle {
     /// Optional process-local publisher installed by the production service host.
     /// 由生产服务宿主安装的可选进程内发布器。
     live_event_publisher: Mutex<Option<SessionLivePublisher>>,
-    /// Wakes waiters only after an API transport-observed fact is durably committed.
-    /// 仅在 API transport-observed 事实可靠提交后唤醒等待者。
-    transport_observed_notify: Notify,
+    /// Wakes Continue dispatch waiters after any document revision becomes durable.
+    /// 任一文档修订可靠落盘后唤醒 Continue 分派等待者。
+    continuation_dispatch_notify: Notify,
     /// Process-local single-flight gate spanning Continue admission through durable transport observation.
     /// 覆盖 Continue 准入至可靠传输观察的进程内单飞门。
     continuation_dispatch_gate: Arc<AsyncMutex<()>>,
+    /// Process-local durable Continue frontier and exact transient persistence failures.
+    /// 进程内 Continue 可靠前沿与精确瞬态持久化失败。
+    continuation_dispatch_durability: Mutex<ContinuationDispatchDurabilityState>,
     /// Whether root-Turn admission has closed for shutdown.
     /// 根回合准入是否因关闭流程而关闭。
     shutting_down: Mutex<bool>,
@@ -808,6 +881,9 @@ impl SessionHandle {
         locator: SessionV1StorageLocator,
         document: SessionDocument,
     ) -> Arc<Self> {
+        let durable_through_seq = (document.memory_revision() == document.durable_revision())
+            .then(|| document.events().last().map(|event| event.seq))
+            .flatten();
         let provider_api_trace_store =
             ProviderApiTraceStore::new(locator.provider_api_trace_directory(), true);
         Arc::new(Self {
@@ -821,8 +897,12 @@ impl SessionHandle {
             locator: Some(locator),
             provider_api_trace_store: Some(provider_api_trace_store),
             live_event_publisher: Mutex::new(None),
-            transport_observed_notify: Notify::new(),
+            continuation_dispatch_notify: Notify::new(),
             continuation_dispatch_gate: Arc::new(AsyncMutex::new(())),
+            continuation_dispatch_durability: Mutex::new(ContinuationDispatchDurabilityState {
+                durable_through_seq,
+                persistence_failures: BTreeMap::new(),
+            }),
             shutting_down: Mutex::new(false),
             quarantine: Mutex::new(None),
         })
@@ -836,6 +916,9 @@ impl SessionHandle {
         document: SessionDocument,
         backend: Arc<dyn SessionPersistenceBackend>,
     ) -> Arc<Self> {
+        let durable_through_seq = (document.memory_revision() == document.durable_revision())
+            .then(|| document.events().last().map(|event| event.seq))
+            .flatten();
         Arc::new(Self {
             session_id,
             document: Mutex::new(document),
@@ -845,8 +928,12 @@ impl SessionHandle {
             locator: None,
             provider_api_trace_store: None,
             live_event_publisher: Mutex::new(None),
-            transport_observed_notify: Notify::new(),
+            continuation_dispatch_notify: Notify::new(),
             continuation_dispatch_gate: Arc::new(AsyncMutex::new(())),
+            continuation_dispatch_durability: Mutex::new(ContinuationDispatchDurabilityState {
+                durable_through_seq,
+                persistence_failures: BTreeMap::new(),
+            }),
             shutting_down: Mutex::new(false),
             quarantine: Mutex::new(None),
         })
@@ -963,6 +1050,7 @@ impl SessionHandle {
         }
         let new_revision = reloaded.document.memory_revision();
         let new_generation = reloaded.document.segment_generation();
+        let new_durable_through_seq = reloaded.document.events().last().map(|event| event.seq);
         let target_seq = output.history_target_seq;
         let mut resident = self
             .document
@@ -970,6 +1058,14 @@ impl SessionHandle {
             .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?;
         *resident = reloaded.document;
         drop(resident);
+        let mut continuation_durability = self
+            .continuation_dispatch_durability
+            .lock()
+            .map_err(|_| SessionRuntimeError::ContinuationDispatchStateLockPoisoned)?;
+        continuation_durability.durable_through_seq = new_durable_through_seq;
+        continuation_durability.persistence_failures.clear();
+        drop(continuation_durability);
+        self.continuation_dispatch_notify.notify_waiters();
         self.publish_generation_rebase_best_effort(prior_revision, new_revision, new_generation);
         Ok(SessionEditGenerationReceipt {
             target_seq,
@@ -1539,7 +1635,6 @@ impl SessionHandle {
                 },
             )
             .await?;
-        self.transport_observed_notify.notify_waiters();
         Ok(receipt)
     }
 
@@ -1562,10 +1657,12 @@ impl SessionHandle {
     ) -> Result<ApiTransportObservedReceipt, SessionRuntimeError> {
         let deadline = Instant::now() + wait;
         loop {
-            let notified = self.transport_observed_notify.notified();
+            let notified = self.continuation_dispatch_notify.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            match self.read(|document| document.continuation_dispatch_resolution(action_id))?? {
+            self.ensure_not_quarantined()?;
+            self.ensure_no_continuation_dispatch_persistence_failure(action_id)?;
+            match self.durable_continuation_dispatch_resolution(action_id)? {
                 Some(ContinuationDispatchResolution::TransportObserved(receipt)) => {
                     return Ok(receipt);
                 }
@@ -1605,10 +1702,12 @@ impl SessionHandle {
         action_id: &ClientActionId,
     ) -> Result<ApiTransportObservedReceipt, SessionRuntimeError> {
         loop {
-            let notified = self.transport_observed_notify.notified();
+            let notified = self.continuation_dispatch_notify.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            match self.read(|document| document.continuation_dispatch_resolution(action_id))?? {
+            self.ensure_not_quarantined()?;
+            self.ensure_no_continuation_dispatch_persistence_failure(action_id)?;
+            match self.durable_continuation_dispatch_resolution(action_id)? {
                 Some(ContinuationDispatchResolution::TransportObserved(receipt)) => {
                     return Ok(receipt);
                 }
@@ -1626,6 +1725,69 @@ impl SessionHandle {
                 }
             }
         }
+    }
+
+    /// Resolves one Continue action only through the process-local durable event frontier.
+    /// 仅通过进程内可靠事件前沿解析一次 Continue 动作。
+    ///
+    /// # Parameters / 参数
+    ///
+    /// `action_id` is the exact persisted browser idempotency identity.
+    /// `action_id` 是精确持久化的浏览器幂等身份。
+    ///
+    /// # Returns / 返回值
+    ///
+    /// Returns no state before any event is durable, otherwise delegates to the Core bounded-prefix
+    /// projection. It never exposes a newer in-memory-only terminal or transport observation.
+    /// 尚无可靠事件时返回空；否则委托 Core 的有界前缀投影。绝不暴露更新但仅存在于内存的终态或
+    /// 传输观察事实。
+    fn durable_continuation_dispatch_resolution(
+        &self,
+        action_id: &ClientActionId,
+    ) -> Result<Option<ContinuationDispatchResolution>, SessionRuntimeError> {
+        let through_seq = self
+            .continuation_dispatch_durability
+            .lock()
+            .map_err(|_| SessionRuntimeError::ContinuationDispatchStateLockPoisoned)?
+            .durable_through_seq;
+        let Some(through_seq) = through_seq else {
+            return Ok(None);
+        };
+        self.read(|document| {
+            document.continuation_dispatch_resolution_through(action_id, through_seq)
+        })?
+        .map_err(SessionRuntimeError::from)
+    }
+
+    /// Rejects one active waiter when its exact Continue candidate failed persistence.
+    /// 当精确 Continue 候选持久化失败时拒绝对应的活动等待者。
+    ///
+    /// # Parameters / 参数
+    ///
+    /// `action_id` is the exact action currently awaiting a durable dispatch decision.
+    /// `action_id` 是当前等待可靠分派判定的精确动作。
+    ///
+    /// # Returns / 返回值
+    ///
+    /// Returns success when no failed candidate is pending, otherwise returns the retained
+    /// structured persistence failure so the detached owner releases its single-flight gate.
+    /// 没有待处理失败候选时返回成功；否则返回保留的结构化持久化失败，使分离 owner 释放单飞门。
+    fn ensure_no_continuation_dispatch_persistence_failure(
+        &self,
+        action_id: &ClientActionId,
+    ) -> Result<(), SessionRuntimeError> {
+        let state = self
+            .continuation_dispatch_durability
+            .lock()
+            .map_err(|_| SessionRuntimeError::ContinuationDispatchStateLockPoisoned)?;
+        let Some(failure) = state.persistence_failures.get(action_id) else {
+            return Ok(());
+        };
+        Err(SessionRuntimeError::ContinuationDispatchPersistenceFailed {
+            client_action_id: action_id.clone(),
+            candidate_revision: failure.candidate_revision,
+            detail: failure.detail.clone(),
+        })
     }
 
     /// Acquires the sole process-local Continue dispatch owner for this session.
@@ -1654,11 +1816,62 @@ impl SessionHandle {
     /// # Returns / 返回值
     /// The persisted receipt when observed, `None` before observation, or a strict history error.
     /// 已观察时返回持久化回执；观察前返回 `None`；历史不合法时返回严格错误。
+    #[cfg(test)]
     pub(crate) fn continuation_transport_observed_for_action(
         &self,
         action_id: &ClientActionId,
     ) -> Result<Option<ApiTransportObservedReceipt>, SessionRuntimeError> {
-        match self.read(|document| document.continuation_dispatch_resolution(action_id))?? {
+        self.ensure_not_quarantined()?;
+        match self.durable_continuation_dispatch_resolution(action_id)? {
+            Some(ContinuationDispatchResolution::TransportObserved(receipt)) => Ok(Some(receipt)),
+            Some(ContinuationDispatchResolution::TerminalBeforeTransport {
+                api_call_id, ..
+            }) => Err(SessionRuntimeError::ContinuationTerminatedBeforeTransport {
+                client_action_id: action_id.clone(),
+                api_call_id,
+            }),
+            Some(ContinuationDispatchResolution::AwaitingTransport { .. }) | None => Ok(None),
+        }
+    }
+
+    /// Reconciles one Continue action's dirty dispatch facts before allowing another physical API.
+    /// 在允许另一次物理 API 前，协调一次 Continue 动作尚未落盘的分派事实。
+    ///
+    /// # Parameters / 参数
+    /// `action_id` is the exact browser-generated idempotency identity protected by the caller's
+    /// per-session Continue dispatch guard.
+    /// `action_id` 是由调用方会话级 Continue 分派守卫保护的精确浏览器幂等身份。
+    ///
+    /// # Returns / 返回值
+    /// Returns the original durable transport receipt when the physical request was already
+    /// observed, `None` only when the action may still start its first physical request, or a
+    /// strict terminal/persistence error. Any dirty `ApiStarted`, transport observation, or API
+    /// terminal fact is flushed and re-read under the sole writer and publisher boundary first.
+    /// 若物理请求已经被观察，则返回原始可靠传输回执；仅当该动作仍可启动首次物理请求时返回
+    /// `None`；终态或持久化失败则返回严格错误。任何尚未落盘的 `ApiStarted`、传输观察或 API
+    /// 终态事实都会先在唯一 writer 与 publisher 边界内完成 flush 并重新读取。
+    pub(crate) fn reconcile_continuation_dispatch_for_action(
+        &self,
+        action_id: &ClientActionId,
+    ) -> Result<Option<ApiTransportObservedReceipt>, SessionRuntimeError> {
+        self.ensure_admitted(SessionMutationAdmission::ExistingTurn)?;
+        let _writer = self
+            .writer
+            .lock()
+            .map_err(|_| SessionRuntimeError::WriterLockPoisoned)?;
+        let _publisher = self
+            .mutation_publisher
+            .lock()
+            .map_err(|_| SessionRuntimeError::MutationPublisherLockPoisoned)?;
+        let required_revision = self
+            .document
+            .lock()
+            .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?
+            .memory_revision();
+        self.flush_through_with_writer_and_publisher_locked(required_revision)?;
+        self.ensure_not_quarantined()?;
+        self.ensure_no_continuation_dispatch_persistence_failure(action_id)?;
+        match self.durable_continuation_dispatch_resolution(action_id)? {
             Some(ContinuationDispatchResolution::TransportObserved(receipt)) => Ok(Some(receipt)),
             Some(ContinuationDispatchResolution::TerminalBeforeTransport {
                 api_call_id, ..
@@ -2457,6 +2670,167 @@ impl SessionHandle {
         Ok(Some((candidate, base_durable_revision)))
     }
 
+    /// Clears transient failures covered by the complete candidate before one physical retry.
+    /// 在一次物理重试前清除被完整候选覆盖的瞬态失败。
+    ///
+    /// # Parameters / 参数
+    ///
+    /// `candidate_revision` is the complete document revision about to be published.
+    /// `candidate_revision` 是即将发布的完整文档修订号。
+    ///
+    /// # Returns / 返回值
+    ///
+    /// Returns after all failures at or before the covering revision are removed. A failed retry
+    /// records the exact failure again before notifying waiters.
+    /// 删除不晚于覆盖修订的全部失败后返回；重试若失败，会在通知等待者前重新记录精确失败。
+    fn begin_continuation_dispatch_flush_attempt(
+        &self,
+        candidate_revision: u64,
+    ) -> Result<(), SessionRuntimeError> {
+        let mut state = self
+            .continuation_dispatch_durability
+            .lock()
+            .map_err(|_| SessionRuntimeError::ContinuationDispatchStateLockPoisoned)?;
+        state
+            .persistence_failures
+            .retain(|_, failure| failure.candidate_revision > candidate_revision);
+        Ok(())
+    }
+
+    /// Finds exact Continue actions whose dispatch facts changed in one failed candidate.
+    /// 查找一份失败候选中分派事实发生变化的精确 Continue 动作。
+    ///
+    /// # Parameters / 参数
+    ///
+    /// `candidate` supplies the exact changed seq set captured with the failed full state.
+    /// `candidate` 提供与失败完整状态一同捕获的精确已变化 seq 集合。
+    ///
+    /// # Returns / 返回值
+    ///
+    /// Returns unique action ids derived from typed ApiStarted, ApiStats, and ExecutionControl
+    /// facts. The full document is scanned only on the exceptional storage-failure path.
+    /// 返回从强类型 ApiStarted、ApiStats 与 ExecutionControl 事实推导的唯一动作 id；完整文档
+    /// 仅在异常存储失败路径扫描。
+    fn continuation_actions_changed_by_candidate(
+        &self,
+        candidate: &FlushCandidate,
+    ) -> Result<Vec<ClientActionId>, SessionRuntimeError> {
+        let changed_seqs = candidate
+            .changed_event_seqs
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let document = self
+            .document
+            .lock()
+            .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?;
+        let mut action_by_api = BTreeMap::new();
+        for event in document.events() {
+            let EventBody::ApiStarted(started) = &event.event else {
+                continue;
+            };
+            if let Some(action_id) = &started.continuation_action_id {
+                action_by_api.insert(started.api_call_id, action_id.clone());
+            }
+        }
+        let mut actions = BTreeSet::new();
+        for event in document.events() {
+            if !changed_seqs.contains(&event.seq) {
+                continue;
+            }
+            match &event.event {
+                EventBody::ApiStarted(started) => {
+                    if let Some(action_id) = &started.continuation_action_id {
+                        actions.insert(action_id.clone());
+                    }
+                }
+                EventBody::ApiStats(stats) => {
+                    if let Some(action_id) = action_by_api.get(&stats.api_call_id) {
+                        actions.insert(action_id.clone());
+                    }
+                }
+                EventBody::ExecutionControl(control) => {
+                    if let Some(action_id) = &control.client_action_id {
+                        actions.insert(action_id.clone());
+                    }
+                    // Transport observations intentionally carry only the local API identity, so
+                    // recover the owning Continue action from the immutable ApiStarted binding.
+                    // 传输观察按契约只携带本地 API 身份，因此必须从不可变 ApiStarted 绑定恢复所属
+                    // Continue 动作。
+                    if let Some(api_call_id) = control.api_call_id
+                        && let Some(action_id) = action_by_api.get(&api_call_id)
+                    {
+                        actions.insert(action_id.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(actions.into_iter().collect())
+    }
+
+    /// Records one failed complete candidate for every affected Continue action.
+    /// 为每个受影响 Continue 动作记录一份失败的完整候选。
+    ///
+    /// # Parameters / 参数
+    ///
+    /// `action_ids` are exact typed identities, `candidate_revision` is the failed revision, and
+    /// `detail` is the stable storage diagnostic.
+    /// `action_ids` 是精确强类型身份；`candidate_revision` 是失败修订；`detail` 是稳定存储诊断。
+    ///
+    /// # Returns / 返回值
+    ///
+    /// Returns after replacing any older failure for the same action.
+    /// 替换同一动作的任何更早失败后返回。
+    fn record_continuation_dispatch_persistence_failure(
+        &self,
+        action_ids: &[ClientActionId],
+        candidate_revision: u64,
+        detail: &str,
+    ) -> Result<(), SessionRuntimeError> {
+        let mut state = self
+            .continuation_dispatch_durability
+            .lock()
+            .map_err(|_| SessionRuntimeError::ContinuationDispatchStateLockPoisoned)?;
+        for action_id in action_ids {
+            state.persistence_failures.insert(
+                action_id.clone(),
+                ContinuationDispatchPersistenceFailure {
+                    candidate_revision,
+                    detail: detail.to_owned(),
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// Advances the process-local durable Continue event frontier after physical publication.
+    /// 在物理发布后推进进程内 Continue 可靠事件前沿。
+    ///
+    /// # Parameters / 参数
+    ///
+    /// `candidate` is the exact immutable state accepted by storage.
+    /// `candidate` 是存储已接纳的精确不可变状态。
+    ///
+    /// # Returns / 返回值
+    ///
+    /// Returns after publishing the candidate's last active-tail seq when present.
+    /// 候选存在活动尾段事件时，发布其最后 seq 后返回。
+    fn advance_continuation_dispatch_durable_frontier(
+        &self,
+        candidate: &FlushCandidate,
+    ) -> Result<(), SessionRuntimeError> {
+        let Some(through_seq) = candidate.tail_events.last().map(|event| event.seq) else {
+            return Ok(());
+        };
+        let mut state = self
+            .continuation_dispatch_durability
+            .lock()
+            .map_err(|_| SessionRuntimeError::ContinuationDispatchStateLockPoisoned)?;
+        state.durable_through_seq = Some(through_seq);
+        Ok(())
+    }
+
     /// Persists one captured candidate while the caller owns the session writer.
     /// 在调用方拥有会话 writer 时持久化一份已捕获候选。
     ///
@@ -2475,17 +2849,68 @@ impl SessionHandle {
         candidate: &FlushCandidate,
         base_durable_revision: u64,
     ) -> Result<(), SessionRuntimeError> {
-        let outcome = self.backend.flush(candidate)?;
-        let mut document = self
-            .document
-            .lock()
-            .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?;
-        if let Some(published) = &outcome.published_metadata {
-            document.apply_published_storage_metadata(published)?;
-        }
-        document.advance_durable(candidate.revision)?;
-        let window_generation = document.segment_generation();
-        drop(document);
+        self.begin_continuation_dispatch_flush_attempt(candidate.revision)?;
+        let outcome = match self.backend.flush(candidate) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let action_ids = match self.continuation_actions_changed_by_candidate(candidate) {
+                    Ok(action_ids) => action_ids,
+                    Err(action_error) => {
+                        self.continuation_dispatch_notify.notify_waiters();
+                        return Err(action_error);
+                    }
+                };
+                let record_result = self.record_continuation_dispatch_persistence_failure(
+                    &action_ids,
+                    candidate.revision,
+                    &error.to_string(),
+                );
+                // A failed publication is not a durable settlement, but it is a terminal
+                // process-local outcome for every waiter owned by this failed attempt. Wake them
+                // so they can return the exact persistence failure and release the session gate.
+                // 发布失败不是可靠结算，但它是本次失败尝试所拥有的每个等待者的进程内终态；唤醒
+                // 它们，使其返回精确持久化失败并释放会话门。
+                self.continuation_dispatch_notify.notify_waiters();
+                record_result?;
+                return Err(error.into());
+            }
+        };
+        let post_commit_result: Result<u64, SessionRuntimeError> = (|| {
+            let mut document = self
+                .document
+                .lock()
+                .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?;
+            if let Some(published) = &outcome.published_metadata {
+                document.apply_published_storage_metadata(published)?;
+            }
+            document.advance_durable(candidate.revision)?;
+            let window_generation = document.segment_generation();
+            drop(document);
+            self.advance_continuation_dispatch_durable_frontier(candidate)?;
+            Ok(window_generation)
+        })();
+        let window_generation = match post_commit_result {
+            Ok(window_generation) => window_generation,
+            Err(error) => {
+                // Storage has already committed the candidate, so continuing with an unconfirmed
+                // resident frontier would create two authorities. Quarantine the owner and wake
+                // every Continue waiter instead of retrying or exposing memory as durable state.
+                // 存储已经提交候选，若继续使用未确认的常驻前沿就会产生两个权威。必须隔离 owner
+                // 并唤醒全部 Continue 等待者，而不是继续重试或把内存状态冒充为可靠状态。
+                let reason = SessionQuarantineReason::DurableCommitApplicationRejected {
+                    candidate_revision: candidate.revision,
+                    detail: error.to_string(),
+                };
+                self.enter_quarantine(reason)?;
+                return Err(error);
+            }
+        };
+        // Continue settlement is a condition over the durable ledger, so every successful durable
+        // frontier advancement must wake waiters. Restricting this signal to transport observation
+        // loses the terminal-before-transport edge and can park the detached owner forever.
+        // Continue 结算是可靠账本上的条件，因此每次可靠前沿推进成功都必须唤醒等待者；若只在传输
+        // 观测时发信号，就会漏掉“传输前终止”边，并可能让分离 owner 永久停驻。
+        self.continuation_dispatch_notify.notify_waiters();
         self.publish_durable_event_ack_best_effort(
             candidate,
             window_generation,
@@ -2732,8 +3157,17 @@ impl SessionHandle {
             .quarantine
             .lock()
             .map_err(|_| SessionRuntimeError::QuarantineLockPoisoned)?;
-        if quarantine.is_none() {
+        let newly_quarantined = quarantine.is_none();
+        if newly_quarantined {
             *quarantine = Some(reason);
+        }
+        drop(quarantine);
+        if newly_quarantined {
+            // Quarantine permanently ends every in-flight write-side owner. A registered Continue
+            // waiter must observe that state transition instead of retaining the session gate.
+            // 隔离会永久终止每个在途写侧 owner；已注册的 Continue 等待者必须观察该状态变化，
+            // 而不能继续持有会话门。
+            self.continuation_dispatch_notify.notify_waiters();
         }
         Ok(())
     }
@@ -3186,17 +3620,21 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::sync::Barrier;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::thread;
 
     use vulcan_service_api::ServiceEventSink;
+    use vulcan_session_core::v1::config::{ActiveRequestConfig, PendingRequestConfig};
     use vulcan_session_core::v1::context::LockedBaselineProjection;
+    use vulcan_session_core::v1::document::ApiCompletion;
     use vulcan_session_core::v1::event::{
-        ApiPurposeKind, ApiRequestSnapshot, DisplayNoticeKind, EventBody, NoticeSeverity,
-        ProviderProjectionProof, ToolCallStatus,
+        ApiCallStatus, ApiEndReason, ApiErrorCategory, ApiPurposeKind, ApiRequestSnapshot,
+        ApiTimings, ContinuationEligibility, DisplayNoticeKind, EventBody, NoticeSeverity,
+        ProviderProjectionProof, RedactedApiError, ToolCallStatus,
     };
     use vulcan_session_core::v1::ids::{ClientActionId, RequestStreamId};
     use vulcan_session_core::v1::projection::provider_visible_fingerprint;
+    use vulcan_session_core::v1::stats::UsageSnapshot;
     use vulcan_workspace_store::workspace_store::SessionV1StorageError;
 
     /// In-memory sink that captures the exact service events delivered by the publisher.
@@ -3304,6 +3742,34 @@ mod tests {
                 )));
             }
             self.delegate.flush(candidate)
+        }
+    }
+
+    /// Backend that commits the candidate but corrupts one returned publication receipt.
+    /// 提交候选后破坏一次返回发布回执的后端。
+    struct CorruptPublishedMetadataBackend {
+        /// Whether the next successful publication receipt must carry a foreign session id.
+        /// 下一份成功发布回执是否必须携带外部会话 id。
+        corrupt_next: AtomicBool,
+        /// Recording backend that proves the candidate was physically accepted first.
+        /// 用于证明候选已经先被物理接纳的记录后端。
+        delegate: Arc<RecordingPersistenceBackend>,
+    }
+
+    impl SessionPersistenceBackend for CorruptPublishedMetadataBackend {
+        /// Persists first, then injects one impossible post-commit metadata identity.
+        /// 先持久化，再注入一份不可能成立的提交后 metadata 身份。
+        fn flush(
+            &self,
+            candidate: &FlushCandidate,
+        ) -> Result<SessionV1FlushResult, SessionV1StoreError> {
+            let mut outcome = self.delegate.flush(candidate)?;
+            if self.corrupt_next.swap(false, Ordering::SeqCst)
+                && let Some(metadata) = outcome.published_metadata.as_mut()
+            {
+                metadata.session_id = String::from("foreign-session");
+            }
+            Ok(outcome)
         }
     }
 
@@ -3484,6 +3950,193 @@ mod tests {
             .api_call_id
     }
 
+    /// The physical Provider permit promotes the exact pending request before request capture.
+    /// 物理 Provider 许可会在捕获请求前提升精确待生效配置。
+    #[test]
+    fn physical_provider_permit_promotes_pending_thinking_before_api_start() {
+        let temporary = tempfile::tempdir().expect("temporary session root");
+        let session_id = SessionId::new_v4();
+        let locator =
+            create_session_v1_storage_fixture(temporary.path(), &session_id.to_string(), 1)
+                .expect("create exact V1 session fixture");
+        let loaded = load_session_v1_full(&locator).expect("load complete initial session");
+        let handle = SessionHandle::new(session_id, locator, loaded.document);
+        handle
+            .mutate_durable_if_changed(
+                SessionMutationAdmission::MetadataOnly,
+                SessionFlushReason::MetadataChanged,
+                |document| {
+                    document.metadata.config.active_request = ActiveRequestConfig {
+                        provider: Some(String::from("provider-1")),
+                        connection_id: Some(String::from("connection-1")),
+                        model: Some(String::from("model-1")),
+                        thinking_level: Some(String::from("high")),
+                        temperature: Some(0.2),
+                    };
+                    let changed = document.set_pending_request(
+                        PendingRequestConfig {
+                            provider: Some(String::from("provider-1")),
+                            connection_id: Some(String::from("connection-1")),
+                            model: Some(String::from("model-1")),
+                            thinking_level: Some(String::from("max")),
+                            temperature: Some(0.2),
+                            set_at_ms: 2,
+                        },
+                        2,
+                    )?;
+                    assert!(changed, "pending request fixture must change metadata");
+                    Ok(SessionMutationChange::Changed(()))
+                },
+            )
+            .expect("publish active and pending request fixture");
+        handle
+            .submit_root_input(
+                test_client_input("registry-pending-thinking-root", "root"),
+                3,
+            )
+            .expect("submit root input");
+        let fingerprint_sha256 = handle
+            .read(|document| {
+                let through_seq = document.events().last().expect("root event").seq();
+                provider_visible_fingerprint(document.events(), through_seq)
+            })
+            .expect("read provider projection")
+            .expect("fingerprint provider projection");
+        let request = ApiRequestSnapshot {
+            provider: String::from("provider-1"),
+            profile: None,
+            model: String::from("model-1"),
+            connection_id: Some(String::from("connection-1")),
+            thinking_level: Some(String::from("max")),
+            temperature: Some(0.2),
+        };
+
+        let receipt = handle
+            .prepare_physical_api_durable(
+                ApiPurposeKind::MainGeneration,
+                request.clone(),
+                LockedBaselineProjection::empty(),
+                None,
+                4,
+                move |snapshot| {
+                    Ok(SessionPreparedPhysicalRequest {
+                        transport: (),
+                        projection: ProviderProjectionProof {
+                            segment_generation: snapshot.segment_generation,
+                            document_revision: snapshot.document_revision,
+                            retained_from_seq: snapshot.retained_from_seq,
+                            through_seq: snapshot.through_seq,
+                            fingerprint_sha256,
+                        },
+                        request_budget_evidence: test_provider_request_budget_evidence(),
+                    })
+                },
+            )
+            .expect("prepare physical API after pending promotion");
+
+        assert!(receipt.changed);
+        handle
+            .read(|document| {
+                assert!(document.metadata.config.pending_request.is_none());
+                assert_eq!(
+                    document
+                        .metadata
+                        .config
+                        .active_request
+                        .thinking_level
+                        .as_deref(),
+                    Some("max")
+                );
+                assert!(document.events().iter().any(|event| {
+                    matches!(
+                        &event.event,
+                        EventBody::ApiStarted(started)
+                            if started.api_call_id == receipt.value.core_start.api_call_id
+                                && started.request == request
+                    )
+                }));
+            })
+            .expect("read promoted request facts");
+        assert_eq!(
+            handle
+                .read(|document| document.memory_revision() == document.durable_revision())
+                .expect("read durable revision"),
+            true
+        );
+    }
+
+    /// Builds one retryable network terminal that can end before transport observation.
+    /// 构建一份可重试的网络终态，用于表达传输观测前结束。
+    fn retryable_network_completion(now_ms: i64) -> ApiCompletion {
+        ApiCompletion {
+            request: ApiRequestSnapshot::new("openai", "gpt-5"),
+            usage: UsageSnapshot::default(),
+            status: ApiCallStatus::Failed,
+            end_reason: Some(ApiEndReason::NetworkError),
+            error: Some(RedactedApiError {
+                category: ApiErrorCategory::Network,
+                error_code: None,
+                message: String::from("redacted pre-wire network failure"),
+            }),
+            continuation_eligibility: ContinuationEligibility::Allowed,
+            timing: ApiTimings {
+                completed_at_ms: Some(now_ms),
+                ..ApiTimings::default()
+            },
+            provider_source: None,
+            completed_at_ms: now_ms,
+        }
+    }
+
+    /// Admits one Continue action after a retryable terminal on the initial physical API.
+    /// 在初始物理 API 的可重试终态之后准入一个 Continue 动作。
+    async fn admit_test_continue_action(
+        handle: &Arc<SessionHandle>,
+        action_id: &str,
+    ) -> ClientActionId {
+        let initial_api_call_id = start_initialized_test_api(handle);
+        Arc::clone(handle)
+            .mutate_durable_async(
+                SessionMutationAdmission::ExistingTurn,
+                SessionFlushReason::ApiCompleted,
+                move |document| {
+                    document
+                        .complete_api_group(initial_api_call_id, retryable_network_completion(5))
+                },
+            )
+            .await
+            .expect("complete initial API before Continue");
+        let action_id =
+            ClientActionId::try_new(action_id).expect("valid Continue action id for test");
+        handle
+            .continue_turn(
+                ContinuationRequest::new(action_id.clone(), "", Vec::new()),
+                6,
+            )
+            .expect("admit Continue action");
+        action_id
+    }
+
+    /// Builds one exact Continue API preparation from the current authoritative test document.
+    /// 从当前权威测试文档构建一份精确 Continue API 准备输入。
+    fn test_continue_prepare_input(
+        handle: &SessionHandle,
+        action_id: &ClientActionId,
+    ) -> PrepareAndStartApiInput {
+        let mut input = handle
+            .read(|document| {
+                test_prepare_api_input(
+                    document,
+                    ApiPurposeKind::Continue,
+                    ApiRequestSnapshot::new("openai", "gpt-5"),
+                    7,
+                )
+            })
+            .expect("build Continue API preparation");
+        input.continuation_action_id = Some(action_id.clone());
+        input
+    }
+
     /// Async durable mutation returns only after the captured candidate is published.
     /// 异步可靠修改仅在捕获候选完成发布后返回。
     #[tokio::test]
@@ -3531,6 +4184,540 @@ mod tests {
         drop(first);
         follower.await.expect("follower dispatch owner");
         assert_eq!(acquired.load(Ordering::SeqCst), 1);
+    }
+
+    /// A durable pre-wire terminal wakes the detached Continue owner and releases its gate.
+    /// 可靠的传输前终态会唤醒分离 Continue owner，并释放其门锁。
+    #[tokio::test]
+    async fn terminal_before_transport_wakes_continue_owner_and_releases_gate() {
+        let (_recording, handle) = recording_handle();
+        let initial_api_call_id = start_initialized_test_api(&handle);
+        Arc::clone(&handle)
+            .mutate_durable_async(
+                SessionMutationAdmission::ExistingTurn,
+                SessionFlushReason::ApiCompleted,
+                move |document| {
+                    document
+                        .complete_api_group(initial_api_call_id, retryable_network_completion(5))
+                },
+            )
+            .await
+            .expect("complete initial API before Continue");
+
+        let action_id = ClientActionId::try_new("continue-pre-wire-terminal")
+            .expect("valid Continue action id");
+        handle
+            .continue_turn(
+                ContinuationRequest::new(action_id.clone(), "", Vec::new()),
+                6,
+            )
+            .expect("admit Continue action");
+        let mut prepare_input = handle
+            .read(|document| {
+                test_prepare_api_input(
+                    document,
+                    ApiPurposeKind::Continue,
+                    ApiRequestSnapshot::new("openai", "gpt-5"),
+                    7,
+                )
+            })
+            .expect("build Continue API preparation");
+        prepare_input.continuation_action_id = Some(action_id.clone());
+        let continued_api_call_id = handle
+            .prepare_and_start_api_durable(prepare_input)
+            .expect("prepare Continue API")
+            .value
+            .api_call_id;
+
+        let durable_edge = handle.continuation_dispatch_notify.notified();
+        tokio::pin!(durable_edge);
+        durable_edge.as_mut().enable();
+        let waiter_handle = Arc::clone(&handle);
+        let waiter_action_id = action_id.clone();
+        let waiter_started = Arc::new(Notify::new());
+        let waiter_started_signal = Arc::clone(&waiter_started);
+        let waiter = tokio::spawn(async move {
+            let _guard = waiter_handle.acquire_continuation_dispatch().await;
+            waiter_started_signal.notify_one();
+            waiter_handle
+                .wait_until_continuation_dispatch_settled(&waiter_action_id)
+                .await
+        });
+        waiter_started.notified().await;
+        tokio::task::yield_now().await;
+
+        Arc::clone(&handle)
+            .mutate_durable_async(
+                SessionMutationAdmission::ExistingTurn,
+                SessionFlushReason::ApiCompleted,
+                move |document| {
+                    document
+                        .complete_api_group(continued_api_call_id, retryable_network_completion(8))
+                },
+            )
+            .await
+            .expect("persist terminal before transport observation");
+
+        tokio::time::timeout(Duration::from_secs(1), durable_edge)
+            .await
+            .expect("durable terminal must notify registered waiters");
+        let waiter_error = tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("detached Continue waiter must settle")
+            .expect("detached Continue waiter task must join")
+            .expect_err("pre-wire terminal must not report transport observation");
+        assert!(matches!(
+            waiter_error,
+            SessionRuntimeError::ContinuationTerminatedBeforeTransport {
+                client_action_id,
+                api_call_id,
+            } if client_action_id == action_id && api_call_id == continued_api_call_id
+        ));
+
+        let _next_owner = tokio::time::timeout(
+            Duration::from_secs(1),
+            handle.acquire_continuation_dispatch(),
+        )
+        .await
+        .expect("terminal waiter must release the per-session Continue gate");
+    }
+
+    /// An in-memory-only terminal stays invisible until its exact candidate becomes durable.
+    /// 仅存在于内存的终态在其精确候选可靠落盘前保持不可见。
+    #[tokio::test]
+    async fn continuation_waiter_never_exposes_in_memory_only_terminal() {
+        let (_recording, handle) = recording_handle();
+        let initial_api_call_id = start_initialized_test_api(&handle);
+        Arc::clone(&handle)
+            .mutate_durable_async(
+                SessionMutationAdmission::ExistingTurn,
+                SessionFlushReason::ApiCompleted,
+                move |document| {
+                    document
+                        .complete_api_group(initial_api_call_id, retryable_network_completion(5))
+                },
+            )
+            .await
+            .expect("complete initial API before Continue");
+        let action_id = ClientActionId::try_new("continue-in-memory-terminal")
+            .expect("valid Continue action id");
+        handle
+            .continue_turn(
+                ContinuationRequest::new(action_id.clone(), "", Vec::new()),
+                6,
+            )
+            .expect("admit Continue action");
+        let mut prepare_input = handle
+            .read(|document| {
+                test_prepare_api_input(
+                    document,
+                    ApiPurposeKind::Continue,
+                    ApiRequestSnapshot::new("openai", "gpt-5"),
+                    7,
+                )
+            })
+            .expect("build Continue API preparation");
+        prepare_input.continuation_action_id = Some(action_id.clone());
+        let continued_api_call_id = handle
+            .prepare_and_start_api_durable(prepare_input)
+            .expect("prepare Continue API")
+            .value
+            .api_call_id;
+        handle
+            .mutate_in_memory(
+                SessionMutationAdmission::ExistingTurn,
+                SessionFlushReason::ApiCompleted,
+                move |document| {
+                    document
+                        .complete_api_group(continued_api_call_id, retryable_network_completion(8))
+                },
+            )
+            .expect("append terminal without physical flush");
+
+        let before_flush = handle
+            .wait_for_continuation_transport_observed(&action_id, Duration::from_millis(25))
+            .await
+            .expect_err("in-memory-only terminal must remain invisible");
+        assert!(matches!(
+            before_flush,
+            SessionRuntimeError::ContinuationTransportObservationTimedOut {
+                client_action_id,
+            } if client_action_id == action_id
+        ));
+
+        handle
+            .flush_all()
+            .expect("publish exact terminal candidate");
+        let after_flush = handle
+            .wait_until_continuation_dispatch_settled(&action_id)
+            .await
+            .expect_err("durable terminal must settle without transport observation");
+        assert!(matches!(
+            after_flush,
+            SessionRuntimeError::ContinuationTerminatedBeforeTransport {
+                client_action_id,
+                api_call_id,
+            } if client_action_id == action_id && api_call_id == continued_api_call_id
+        ));
+    }
+
+    /// A failed Continue terminal flush releases waiters, while admission retry exposes terminal.
+    /// Continue 终态 flush 失败会释放等待者，而准入重试会暴露该终态。
+    #[tokio::test]
+    async fn continuation_terminal_flush_failure_releases_gate_and_retry_clears_failure() {
+        let recording = Arc::new(RecordingPersistenceBackend::default());
+        let backend = Arc::new(FailThenPersistBackend {
+            remaining_failures: AtomicUsize::new(0),
+            delegate: Arc::clone(&recording),
+        });
+        let handle = published_handle(backend.clone());
+        let initial_api_call_id = start_initialized_test_api(&handle);
+        Arc::clone(&handle)
+            .mutate_durable_async(
+                SessionMutationAdmission::ExistingTurn,
+                SessionFlushReason::ApiCompleted,
+                move |document| {
+                    document
+                        .complete_api_group(initial_api_call_id, retryable_network_completion(5))
+                },
+            )
+            .await
+            .expect("complete initial API before Continue");
+        let action_id = ClientActionId::try_new("continue-terminal-flush-failure")
+            .expect("valid Continue action id");
+        handle
+            .continue_turn(
+                ContinuationRequest::new(action_id.clone(), "", Vec::new()),
+                6,
+            )
+            .expect("admit Continue action");
+        let mut prepare_input = handle
+            .read(|document| {
+                test_prepare_api_input(
+                    document,
+                    ApiPurposeKind::Continue,
+                    ApiRequestSnapshot::new("openai", "gpt-5"),
+                    7,
+                )
+            })
+            .expect("build Continue API preparation");
+        prepare_input.continuation_action_id = Some(action_id.clone());
+        let continued_api_call_id = handle
+            .prepare_and_start_api_durable(prepare_input)
+            .expect("prepare Continue API")
+            .value
+            .api_call_id;
+
+        let waiter_handle = Arc::clone(&handle);
+        let waiter_action_id = action_id.clone();
+        let waiter_started = Arc::new(Notify::new());
+        let waiter_started_signal = Arc::clone(&waiter_started);
+        let waiter = tokio::spawn(async move {
+            let _guard = waiter_handle.acquire_continuation_dispatch().await;
+            waiter_started_signal.notify_one();
+            waiter_handle
+                .wait_until_continuation_dispatch_settled(&waiter_action_id)
+                .await
+        });
+        waiter_started.notified().await;
+        backend.remaining_failures.store(1, Ordering::SeqCst);
+        let flush_error = Arc::clone(&handle)
+            .mutate_durable_async(
+                SessionMutationAdmission::ExistingTurn,
+                SessionFlushReason::ApiCompleted,
+                move |document| {
+                    document
+                        .complete_api_group(continued_api_call_id, retryable_network_completion(8))
+                },
+            )
+            .await
+            .expect_err("injected terminal flush must fail");
+        assert!(matches!(flush_error, SessionRuntimeError::Storage(_)));
+        let failed_revision = handle
+            .read(SessionDocument::memory_revision)
+            .expect("read failed candidate revision");
+        let waiter_error = tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("failed persistence must wake detached waiter")
+            .expect("detached waiter task must join")
+            .expect_err("failed persistence cannot report a durable settlement");
+        assert!(matches!(
+            waiter_error,
+            SessionRuntimeError::ContinuationDispatchPersistenceFailed {
+                client_action_id,
+                candidate_revision,
+                ..
+            } if client_action_id == action_id && candidate_revision == failed_revision
+        ));
+        let bounded_error = handle
+            .wait_for_continuation_transport_observed(&action_id, Duration::from_secs(1))
+            .await
+            .expect_err("bounded waiter must see the same failed attempt");
+        assert!(matches!(
+            bounded_error,
+            SessionRuntimeError::ContinuationDispatchPersistenceFailed {
+                client_action_id,
+                candidate_revision,
+                ..
+            } if client_action_id == action_id && candidate_revision == failed_revision
+        ));
+        let next_owner = tokio::time::timeout(
+            Duration::from_secs(1),
+            handle.acquire_continuation_dispatch(),
+        )
+        .await
+        .expect("failed waiter must release the per-session Continue gate");
+        drop(next_owner);
+
+        let durable_error = handle
+            .reconcile_continuation_dispatch_for_action(&action_id)
+            .expect_err("admission retry must expose durable terminal before dispatch");
+        assert!(matches!(
+            durable_error,
+            SessionRuntimeError::ContinuationTerminatedBeforeTransport {
+                client_action_id,
+                api_call_id,
+            } if client_action_id == action_id && api_call_id == continued_api_call_id
+        ));
+        assert!(recording.flush_count() >= 6);
+    }
+
+    /// Quarantine wakes one detached Continue waiter and releases its session gate.
+    /// 隔离会唤醒一个分离 Continue 等待者并释放其会话门。
+    #[tokio::test]
+    async fn quarantine_wakes_continue_waiter_and_releases_gate() {
+        let (_recording, handle) = recording_handle();
+        let action_id =
+            ClientActionId::try_new("continue-quarantine").expect("valid Continue action id");
+        let quarantine_edge = handle.continuation_dispatch_notify.notified();
+        tokio::pin!(quarantine_edge);
+        quarantine_edge.as_mut().enable();
+        let waiter_handle = Arc::clone(&handle);
+        let waiter_action_id = action_id.clone();
+        let waiter = tokio::spawn(async move {
+            let _guard = waiter_handle.acquire_continuation_dispatch().await;
+            waiter_handle
+                .wait_until_continuation_dispatch_settled(&waiter_action_id)
+                .await
+        });
+        let reason = SessionQuarantineReason::MutationRevisionMismatch {
+            before_revision: 3,
+            after_revision: 5,
+        };
+        handle
+            .enter_quarantine(reason.clone())
+            .expect("enter deterministic quarantine");
+        tokio::time::timeout(Duration::from_secs(1), quarantine_edge)
+            .await
+            .expect("quarantine transition must notify registered waiters");
+        let waiter_error = tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("quarantine must settle detached waiter")
+            .expect("detached waiter task must join")
+            .expect_err("quarantine cannot produce a dispatch receipt");
+        assert!(matches!(
+            waiter_error,
+            SessionRuntimeError::SessionQuarantined {
+                session_id,
+                reason: actual_reason,
+            } if session_id == handle.session_id && actual_reason == reason
+        ));
+        let _next_owner = tokio::time::timeout(
+            Duration::from_secs(1),
+            handle.acquire_continuation_dispatch(),
+        )
+        .await
+        .expect("quarantined waiter must release the per-session Continue gate");
+    }
+
+    /// A rejected post-commit receipt quarantines the resident owner and releases Continue waiters.
+    /// 被拒绝的提交后回执会隔离常驻 owner，并释放 Continue 等待者。
+    #[tokio::test]
+    async fn post_commit_receipt_rejection_quarantines_and_releases_continue_gate() {
+        let recording = Arc::new(RecordingPersistenceBackend::default());
+        let backend = Arc::new(CorruptPublishedMetadataBackend {
+            corrupt_next: AtomicBool::new(false),
+            delegate: Arc::clone(&recording),
+        });
+        let handle = published_handle(backend.clone());
+        let action_id =
+            admit_test_continue_action(&handle, "continue-post-commit-receipt-rejected").await;
+        let continued_api_call_id = handle
+            .prepare_and_start_api_durable(test_continue_prepare_input(&handle, &action_id))
+            .expect("prepare Continue API")
+            .value
+            .api_call_id;
+        let waiter_handle = Arc::clone(&handle);
+        let waiter_action_id = action_id.clone();
+        let waiter_started = Arc::new(Notify::new());
+        let waiter_started_signal = Arc::clone(&waiter_started);
+        let waiter = tokio::spawn(async move {
+            let _guard = waiter_handle.acquire_continuation_dispatch().await;
+            waiter_started_signal.notify_one();
+            waiter_handle
+                .wait_until_continuation_dispatch_settled(&waiter_action_id)
+                .await
+        });
+        waiter_started.notified().await;
+        tokio::task::yield_now().await;
+
+        backend.corrupt_next.store(true, Ordering::SeqCst);
+        let completion_error = Arc::clone(&handle)
+            .mutate_durable_async(
+                SessionMutationAdmission::ExistingTurn,
+                SessionFlushReason::ApiCompleted,
+                move |document| {
+                    document
+                        .complete_api_group(continued_api_call_id, retryable_network_completion(8))
+                },
+            )
+            .await
+            .expect_err("foreign post-commit metadata must reject the resident owner");
+        assert!(matches!(
+            completion_error,
+            SessionRuntimeError::Domain(error)
+                if matches!(*error, DomainError::ImmutableFieldMutation {
+                    entity: "metadata",
+                    field: "session_id",
+                })
+        ));
+        assert!(
+            recording.persisted_events().iter().any(|event| matches!(
+                &event.event,
+                EventBody::ApiStats(stats) if stats.api_call_id == continued_api_call_id
+            )),
+            "the injected failure must happen after physical candidate acceptance"
+        );
+
+        let waiter_error = tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("post-commit quarantine must settle detached waiter")
+            .expect("detached waiter task must join")
+            .expect_err("quarantined owner cannot return a dispatch receipt");
+        assert!(matches!(
+            waiter_error,
+            SessionRuntimeError::SessionQuarantined {
+                session_id,
+                reason: SessionQuarantineReason::DurableCommitApplicationRejected {
+                    candidate_revision: _,
+                    detail: _,
+                },
+            } if session_id == handle.session_id
+        ));
+        let _next_owner = tokio::time::timeout(
+            Duration::from_secs(1),
+            handle.acquire_continuation_dispatch(),
+        )
+        .await
+        .expect("post-commit quarantine must release the per-session Continue gate");
+    }
+
+    /// A failed ApiStarted publication is reconciled before the first physical request is allowed.
+    /// ApiStarted 发布失败会在允许首次物理请求前被协调落盘。
+    #[tokio::test]
+    async fn continuation_api_start_flush_failure_is_retained_until_covering_retry() {
+        let recording = Arc::new(RecordingPersistenceBackend::default());
+        let backend = Arc::new(FailThenPersistBackend {
+            remaining_failures: AtomicUsize::new(0),
+            delegate: Arc::clone(&recording),
+        });
+        let handle = published_handle(backend.clone());
+        let action_id =
+            admit_test_continue_action(&handle, "continue-api-start-flush-failure").await;
+        let prepare_input = test_continue_prepare_input(&handle, &action_id);
+        backend.remaining_failures.store(1, Ordering::SeqCst);
+        let prepare_error = handle
+            .prepare_and_start_api_durable(prepare_input)
+            .expect_err("injected ApiStarted flush must fail");
+        assert!(matches!(prepare_error, SessionRuntimeError::Storage(_)));
+        assert!(
+            handle
+                .continuation_transport_observed_for_action(&action_id)
+                .expect("query only the durable prefix")
+                .is_none(),
+            "failed ApiStarted candidate must not appear durable"
+        );
+        let wait_error = handle
+            .wait_for_continuation_transport_observed(&action_id, Duration::from_secs(1))
+            .await
+            .expect_err("late waiter must receive retained persistence failure");
+        assert!(matches!(
+            wait_error,
+            SessionRuntimeError::ContinuationDispatchPersistenceFailed {
+                client_action_id,
+                ..
+            } if client_action_id == action_id
+        ));
+
+        let observed = handle
+            .reconcile_continuation_dispatch_for_action(&action_id)
+            .expect("retry must reconcile the exact ApiStarted candidate");
+        assert!(
+            observed.is_none(),
+            "an ApiStarted-only retry must still allow the first physical dispatch"
+        );
+        let after_retry = handle
+            .wait_for_continuation_transport_observed(&action_id, Duration::from_millis(25))
+            .await
+            .expect_err("retried ApiStarted still awaits transport observation");
+        assert!(matches!(
+            after_retry,
+            SessionRuntimeError::ContinuationTransportObservationTimedOut {
+                client_action_id,
+            } if client_action_id == action_id
+        ));
+        assert!(recording.flush_count() >= 5);
+    }
+
+    /// A failed transport-observation flush is reconciled before retry can dispatch again.
+    /// 传输观察 flush 失败会在重试能够再次分派前被协调落盘。
+    #[tokio::test]
+    async fn continuation_transport_observation_flush_failure_suppresses_second_dispatch() {
+        let recording = Arc::new(RecordingPersistenceBackend::default());
+        let backend = Arc::new(FailThenPersistBackend {
+            remaining_failures: AtomicUsize::new(0),
+            delegate: Arc::clone(&recording),
+        });
+        let handle = published_handle(backend.clone());
+        let action_id =
+            admit_test_continue_action(&handle, "continue-transport-observation-flush-failure")
+                .await;
+        let continued_api_call_id = handle
+            .prepare_and_start_api_durable(test_continue_prepare_input(&handle, &action_id))
+            .expect("prepare Continue API")
+            .value
+            .api_call_id;
+        let failed_edge = handle.continuation_dispatch_notify.notified();
+        tokio::pin!(failed_edge);
+        failed_edge.as_mut().enable();
+        backend.remaining_failures.store(1, Ordering::SeqCst);
+        let observation_error = handle
+            .mark_api_transport_observed_durable(continued_api_call_id, 8)
+            .await
+            .expect_err("injected transport-observation flush must fail");
+        assert!(matches!(observation_error, SessionRuntimeError::Storage(_)));
+        tokio::time::timeout(Duration::from_secs(1), failed_edge)
+            .await
+            .expect("failed transport observation must notify registered waiters");
+        let waiter_error = handle
+            .wait_until_continuation_dispatch_settled(&action_id)
+            .await
+            .expect_err("failed transport observation cannot return a durable receipt");
+        assert!(matches!(
+            waiter_error,
+            SessionRuntimeError::ContinuationDispatchPersistenceFailed {
+                client_action_id,
+                ..
+            } if client_action_id == action_id
+        ));
+
+        let observed = handle
+            .reconcile_continuation_dispatch_for_action(&action_id)
+            .expect("admission retry must reconcile the exact transport observation")
+            .expect("reconciled observation must suppress a second physical dispatch");
+        assert_eq!(observed.api_call_id, continued_api_call_id);
+        assert_eq!(observed.continuation_action_id, Some(action_id));
+        assert!(recording.flush_count() >= 6);
     }
 
     /// An unchanged mutation on a clean document succeeds without physical I/O.
@@ -4587,10 +5774,12 @@ mod tests {
         assert!(
             handle
                 .read(|document| {
-                    document.events().iter().any(|event| matches!(
-                &event.event,
-                EventBody::AssistantReasoning(reasoning) if reasoning.text == "not durable"
-            ))
+                    document.events().iter().any(|event| {
+                    matches!(
+                        &event.event,
+                        EventBody::AssistantReasoning(reasoning) if reasoning.text == "not durable"
+                    )
+                })
                 })
                 .unwrap()
         );

@@ -6,6 +6,8 @@ import type {
 } from "./conversation-event-window-controller";
 import { createConversationEventWindowExternalStore } from "@/state/conversation-event-window-react";
 import {
+  activateSelectedConversationRegistryDisposalLease,
+  createSelectedConversationRegistryDisposalLease,
   SelectedConversationEventWindowRegistry,
   type SelectedConversationEventWindowController,
 } from "./selected-conversation-event-window-registry";
@@ -50,6 +52,13 @@ class TestSelectedConversationController implements SelectedConversationEventWin
   /** Hydration call recorder.
    * hydration 调用记录器。 */
   readonly hydrate = vi.fn(async (sessionId: string) => {
+    this.currentSnapshot = hydratedSnapshot(sessionId);
+    for (const listener of this.listeners) listener();
+    return true;
+  });
+  /** Rehydration call recorder for an already-owned session.
+   * 已持有会话的重新加载调用记录器。 */
+  readonly rehydrate = vi.fn(async (sessionId: string) => {
     this.currentSnapshot = hydratedSnapshot(sessionId);
     for (const listener of this.listeners) listener();
     return true;
@@ -151,6 +160,7 @@ describe("selected conversation event window registry", () => {
     expect(first?.listenerCount()).toBe(0);
     expect(second?.hydrate).toHaveBeenCalledWith("session-b");
     expect(fixture.registry.snapshot().owner?.session_id).toBe("session-b");
+    expect(fixture.registry.status()).toEqual({ kind: "ready", session_id: "session-b" });
     expect(listener).toHaveBeenCalled();
   });
 
@@ -164,6 +174,7 @@ describe("selected conversation event window registry", () => {
 
     expect(fixture.controllers[0]?.dispose).toHaveBeenCalledTimes(1);
     expect(fixture.registry.snapshot().owner).toBeNull();
+    expect(fixture.registry.status()).toEqual({ kind: "idle" });
   });
 
   it("releases the current controller on unmount and ignores later connection events", async () => {
@@ -209,8 +220,35 @@ describe("selected conversation event window registry", () => {
     const hydrated = await commands.rehydrate();
 
     expect(hydrated).toBe(true);
-    expect(controller?.hydrate).toHaveBeenCalledTimes(2);
-    expect(controller?.hydrate).toHaveBeenLastCalledWith("session-a");
+    expect(controller?.hydrate).toHaveBeenCalledTimes(1);
+    expect(controller?.rehydrate).toHaveBeenCalledTimes(1);
+    expect(controller?.rehydrate).toHaveBeenLastCalledWith("session-a");
+  });
+
+  it("publishes a terminal hydration failure and retries through the same bound owner", async () => {
+    // controller fails exactly once so the registry can prove the error state is not an infinite loader.
+    // controller 精确失败一次，使 registry 能证明错误状态不会成为无限加载动画。
+    const controller = new TestSelectedConversationController();
+    controller.hydrate.mockRejectedValueOnce(new Error("session metadata is unavailable"));
+    const registry = new SelectedConversationEventWindowRegistry(() => controller);
+
+    await expect(registry.selectSession("session-failed")).rejects.toThrow(
+      "session metadata is unavailable",
+    );
+
+    expect(registry.status()).toEqual({
+      kind: "failed",
+      session_id: "session-failed",
+      message: "session metadata is unavailable",
+    });
+    expect(registry.snapshot().owner).toBeNull();
+
+    const retried = await registry.commands().rehydrate();
+
+    expect(retried).toBe(true);
+    expect(controller.hydrate).toHaveBeenCalledTimes(2);
+    expect(registry.status()).toEqual({ kind: "ready", session_id: "session-failed" });
+    expect(registry.snapshot().owner?.session_id).toBe("session-failed");
   });
 
   it("invalidates a captured command after switching sessions without retargeting it", async () => {
@@ -256,6 +294,32 @@ describe("selected conversation event window registry", () => {
     await expect(staleCommands.prependOlder()).rejects.toThrow(/owner is no longer active/);
     await expect(fixture.registry.commands().prependOlder()).rejects.toThrow(/commands are unavailable/);
     expect(fixture.controllers[0]?.prependOlder).not.toHaveBeenCalled();
+  });
+
+  it("ignores StrictMode rehearsal cleanup and disposes only after the final effect cleanup", async () => {
+    // lease models the stable WorkbenchApp-owned disposal authority across effect rehearsals.
+    // lease 模拟跨副作用演练保持稳定的 WorkbenchApp 释放权限。
+    const lease = createSelectedConversationRegistryDisposalLease();
+    // dispose records the only permitted permanent registry release.
+    // dispose 记录唯一允许的永久 registry 释放。
+    const dispose = vi.fn();
+    // rehearsalCleanup belongs to StrictMode's first setup.
+    // rehearsalCleanup 属于 StrictMode 的第一次建立。
+    const rehearsalCleanup = activateSelectedConversationRegistryDisposalLease(lease, dispose);
+
+    rehearsalCleanup();
+    // finalCleanup supersedes the queued rehearsal cleanup before its microtask runs.
+    // finalCleanup 在演练清理微任务执行前取代其释放权限。
+    const finalCleanup = activateSelectedConversationRegistryDisposalLease(lease, dispose);
+    await Promise.resolve();
+
+    expect(dispose).not.toHaveBeenCalled();
+
+    finalCleanup();
+    finalCleanup();
+    await Promise.resolve();
+
+    expect(dispose).toHaveBeenCalledTimes(1);
   });
 
   it("preserves the published snapshot when pagination fails", async () => {
