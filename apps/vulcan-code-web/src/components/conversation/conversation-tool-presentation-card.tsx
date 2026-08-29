@@ -315,9 +315,9 @@ function NativeSemanticToolPresentationCard(props: {
   const markdown = props.presentation.family === "todo"
     ? nativeSemanticCardMarkdown(props.presentation)
     : hydratedBody ?? nativeSemanticCardMarkdown(props.presentation);
-  // canExpand keeps read-like native results folded while TODO remains an always-visible process preview.
-  // canExpand 让读取类原生结果保持折叠，同时让 TODO 继续作为始终可见的过程预览。
-  const canExpand = props.presentation.family !== "todo" && Boolean(markdown);
+  // canExpand keeps every native semantic result inside the same explicit folded-card contract.
+  // canExpand 让每个原生语义结果都遵循同一套显式折叠卡片契约。
+  const canExpand = Boolean(markdown);
   // handleToggle changes only the exact card expansion identity owned by the transcript surface.
   // handleToggle 只改变转录界面持有的精确卡片展开身份。
   const handleToggle = React.useCallback(() => {
@@ -346,11 +346,6 @@ function NativeSemanticToolPresentationCard(props: {
             : <ChevronRight className="tool-presentation-toggle" size={15} />
         ) : null}
       </button>
-      {!canExpand && markdown ? (
-        <div className="markdown-tool-block native-semantic-tool-body">
-          <MarkdownMessage content={markdown} eager />
-        </div>
-      ) : null}
       <ConversationMeasuredCollapse collapseId={`native-semantic:${props.presentation.id}`} expanded={canExpand && props.expanded}>
         {canExpand && markdown ? (
           <div className="markdown-tool-block native-semantic-tool-body">
@@ -410,9 +405,9 @@ function GenericToolMarkdownPresentationCard(props: {
   // markdown uses terminal detail when available and otherwise keeps the visible result.
   // markdown 在终态详情可用时使用详情，否则保留可见结果。
   const markdown = hydratedBody ?? props.presentation.markdown;
-  // canExpand requires an actual terminal non-native raw-detail action.
-  // canExpand 要求真实存在终态非原生原始详情操作。
-  const canExpand = Boolean(props.expandedFooter);
+  // canExpand keeps every unknown tool payload inside a bounded folded card even without a legacy raw-detail RPC.
+  // canExpand 即使没有旧 raw-detail RPC，也会把每个未知工具载荷放入有界折叠卡片。
+  const canExpand = Boolean(markdown || props.expandedFooter);
   // handleToggle opens only the expanded card content and never acts during request formation.
   // handleToggle 仅打开卡片展开内容，且绝不在请求构造阶段生效。
   const handleToggle = React.useCallback(() => {
@@ -442,12 +437,12 @@ function GenericToolMarkdownPresentationCard(props: {
             : <ChevronRight className="tool-presentation-toggle" size={15} />
         ) : null}
       </button>
-      {markdown ? (
-        <div className="markdown-tool-block generic-tool-markdown-body">
-          <MarkdownMessage content={markdown} eager />
-        </div>
-      ) : null}
       <ConversationMeasuredCollapse collapseId={`generic-tool:${props.presentation.id}`} expanded={canExpand && props.expanded}>
+        {markdown ? (
+          <div className="markdown-tool-block generic-tool-markdown-body">
+            <MarkdownMessage content={markdown} eager />
+          </div>
+        ) : null}
         {props.expandedFooter}
       </ConversationMeasuredCollapse>
     </div>

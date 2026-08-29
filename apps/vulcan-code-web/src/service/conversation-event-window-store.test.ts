@@ -131,7 +131,7 @@ function assistantText(
   apiCallId: number,
   status: "streaming" | "completed" | "interrupted" = "completed",
   text = "answer",
-): ConversationEventBody {
+): Extract<ConversationEventBody, { kind: "assistant_text" }> {
   return {
     kind: "assistant_text",
     api_call_id: apiCallId,
@@ -687,6 +687,28 @@ describe("conversation-event-window-store V1 same-seq evolution", () => {
       ...withProviderSource,
       output: { result: "drifted" },
     }, 50, 3)]))).toThrow(/illegal tool_call evolution/);
+    expect(store.render()[0].event).toEqual(withProviderSource);
+  });
+
+  it("allows terminal assistant Provider-source attachment but rejects completed text drift", () => {
+    const store = new ConversationEventWindowStore();
+    const completed = assistantText(5, "completed", "done");
+    const withProviderSource = {
+      ...completed,
+      provider_source: {
+        provider: "test-provider",
+        model: "test-model",
+        covered_until_seq: 1,
+        fingerprint_sha256: "b".repeat(64),
+      },
+    } satisfies ConversationEventBody;
+    store.hydrate(batch([summary(1, completed, 30, 1)]));
+    store.applyLive(livePatch([summary(1, withProviderSource, 40, 2)]));
+
+    expect(() => store.applyLive(livePatch([summary(1, {
+      ...withProviderSource,
+      text: "drifted",
+    }, 50, 3)]))).toThrow(/illegal assistant_text evolution/);
     expect(store.render()[0].event).toEqual(withProviderSource);
   });
 

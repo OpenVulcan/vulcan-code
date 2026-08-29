@@ -6,14 +6,13 @@ use vulcan_session_core::v1::document::{
     ApiGroupCompletionReceipt, SubagentReturnReceipt, TurnCompletionTransition, TurnSuccessor,
 };
 use vulcan_session_core::v1::event::EventBody;
-use vulcan_workbench_model::{
-    PendingPromptRuntimeOptions, PendingSessionPromptEntry, PendingSessionPromptSource, SessionId,
-};
+use vulcan_workbench_model::{PendingSessionPromptEntry, PendingSessionPromptSource, SessionId};
 use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
 use vulcan_workspace_store::workspace_store::{
     load_project_resource_catalog, locate_session_v1_storage,
 };
 
+use super::conversation_submission::exact_v1_dispatch_runtime_options;
 use super::pending_prompt_services::rebuild_pending_prompt_panel_from_v1;
 use super::pending_prompts::emit_pending_prompts_changed_delta;
 use super::session_goal_lifecycle::{
@@ -202,7 +201,7 @@ pub(crate) async fn start_exact_v1_queued_turn(
         preview: authority.text.clone(),
         attachments,
         model_reference: None,
-        runtime_options: PendingPromptRuntimeOptions::default(),
+        runtime_options: exact_v1_dispatch_runtime_options(handle.as_ref())?,
         source: PendingSessionPromptSource::UserFollowup,
         task_id: None,
         panel_entry_id: None,
@@ -308,7 +307,7 @@ pub(crate) async fn start_exact_v1_pending_in_turn(
         preview: prompt,
         attachments,
         model_reference: None,
-        runtime_options: PendingPromptRuntimeOptions::default(),
+        runtime_options: exact_v1_dispatch_runtime_options(handle.as_ref())?,
         source: PendingSessionPromptSource::UserInterrupt,
         task_id: None,
         panel_entry_id: None,
@@ -418,7 +417,7 @@ pub(crate) async fn start_exact_v1_user_root_turn(
         preview: authority.text.clone(),
         attachments,
         model_reference: None,
-        runtime_options: PendingPromptRuntimeOptions::default(),
+        runtime_options: exact_v1_dispatch_runtime_options(handle.as_ref())?,
         source: PendingSessionPromptSource::UserFollowup,
         task_id: None,
         panel_entry_id: None,

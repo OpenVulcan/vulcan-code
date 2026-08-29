@@ -44,7 +44,13 @@ import type {
   WorkspaceReviewFocusRequest,
 } from "@/diff/types";
 import { loadWorkspaceGitCatalog, setWorkspaceGitMonitoring } from "@/service/workbench-snapshot-service";
+import {
+  mergeConversationSessionTerminalsV1,
+  selectConversationSessionTerminalsV1,
+  selectConversationSessionTodolistV1,
+} from "@/service/conversation-session-tools-v1";
 import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtime";
+import { useSelectedConversationEventWindowSnapshot } from "@/state/conversation-event-window-react";
 import type { WorkspaceGitChangedEvent } from "@/types";
 import type { WorkspacePageDescriptor } from "@/components/workspace/workspace-page-descriptor";
 import { useI18n } from "@/i18n";
@@ -139,6 +145,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // t translates shared workspace chrome labels.
   // t 翻译共享工作区外壳标签。
   const { locale, t } = useI18n();
+  // eventWindowSnapshot supplies the durable selected-session tool-panel facts.
+  // eventWindowSnapshot 提供选中会话可靠的工具面板事实。
+  const eventWindowSnapshot = useSelectedConversationEventWindowSnapshot();
   // shellRef measures the available workspace width for automatic panel collapse.
   // shellRef 测量工作台可用宽度，用于自动折叠面板。
   const shellRef = React.useRef<HTMLDivElement | null>(null);
@@ -334,9 +343,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   const activeGitCommitBusyState = activeGitCommitRepositoryForActions
     ? gitCommitBusyStateForRepository(activeGitCommitRepositoryForActions)
     : gitCommitBusyState;
-  // sessionTerminalSessions stores terminal sessions relevant to the selected conversation.
-  // sessionTerminalSessions 保存与当前选中会话相关的终端会话。
-  const sessionTerminalSessions = React.useMemo(
+  // liveSessionTerminalSessions stores current runtime terminal facts for the selected conversation.
+  // liveSessionTerminalSessions 保存当前选中会话的实时终端事实。
+  const liveSessionTerminalSessions = React.useMemo(
     () => {
       if (!hasSelectedChatConversation || !props.selectedConversationId) {
         return [];
@@ -350,12 +359,29 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     },
     [hasSelectedChatConversation, props.selectedConversationId, props.workbench.commandSessions],
   );
+  // durableSessionTerminalSessions restores every V1-owned terminal from the selected event generation.
+  // durableSessionTerminalSessions 从选中事件代次恢复每个由 V1 归属的终端。
+  const durableSessionTerminalSessions = React.useMemo(
+    () => eventWindowSnapshot.owner?.session_id === props.selectedConversationId
+      ? selectConversationSessionTerminalsV1(eventWindowSnapshot)
+      : [],
+    [eventWindowSnapshot, props.selectedConversationId],
+  );
+  // sessionTerminalSessions keeps only exact durable terminal identities that still exist as live running sessions.
+  // sessionTerminalSessions 仅保留仍以实时运行态存在的精确可靠终端身份。
+  const sessionTerminalSessions = React.useMemo(
+    () => mergeConversationSessionTerminalsV1(
+      durableSessionTerminalSessions,
+      liveSessionTerminalSessions,
+    ),
+    [durableSessionTerminalSessions, liveSessionTerminalSessions],
+  );
   // visibleSessionTerminalSessions mirrors the terminal panel's own render filter.
   // visibleSessionTerminalSessions 对齐终端面板自身的可渲染过滤条件。
   const visibleSessionTerminalSessions = React.useMemo(
     () => sessionTerminalSessions
       .map((summary) => terminalSessionViewModel(summary, t))
-      .filter((session) => session.canStop || session.state === "lost" || session.state === "waiting"),
+      .filter((session) => session.canStop),
     [sessionTerminalSessions, t],
   );
   // effectiveRightPanelOpen suppresses stale right-panel state while a draft conversation is selected.
@@ -608,11 +634,15 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     }
   }, []);
 
-  // sessionTodolist stores the selected conversation todolist payload when it should be visible.
-  // sessionTodolist 保存需要展示时当前会话的 todolist 载荷。
-  const sessionTodolist = hasSelectedChatConversation && props.workbench.sessionTodolist?.items.length
-    ? props.workbench.sessionTodolist
-    : null;
+  // sessionTodolist restores the latest exact todolist from the selected V1 event generation.
+  // sessionTodolist 从选中的 V1 事件代次恢复最近一份精确待办清单。
+  const sessionTodolist = React.useMemo(
+    () => hasSelectedChatConversation
+      && eventWindowSnapshot.owner?.session_id === props.selectedConversationId
+      ? selectConversationSessionTodolistV1(eventWindowSnapshot)
+      : null,
+    [eventWindowSnapshot, hasSelectedChatConversation, props.selectedConversationId],
+  );
   // sessionGitRepositoryAvailable tracks whether the current chat project resolved as a Git repository.
   // sessionGitRepositoryAvailable 标记当前聊天项目是否已解析为 Git 仓库。
   const sessionGitRepositoryAvailable = Boolean(sessionReviewRepositories.length || sessionReviewSummary || selectedWorkspaceGitState?.loading);
@@ -640,7 +670,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // sessionToolPanelVisible opens the floating chat tool panel only when it has renderable content.
   // sessionToolPanelVisible 仅在浮动工具面板存在可渲染内容时打开。
   const sessionToolPanelVisible = hasSelectedChatConversation && (
-    sessionGitCommitActionVisible || visibleSessionTerminalSessions.length > 0 || visibleSessionSubagentTaskCount > 0
+    sessionGitCommitActionVisible
+    || visibleSessionTerminalSessions.length > 0
+    || visibleSessionSubagentTaskCount > 0
   );
 
   // refreshProjectGitSummary reloads the shared Git summary for one project path.

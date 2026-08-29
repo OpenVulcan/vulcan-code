@@ -534,7 +534,11 @@ export class ConversationEventWindowController {
         this.requestServiceEpochRebase(error.actual_service_epoch, delta);
         return;
       }
-      if (!(error instanceof ConversationEventRevisionGapError)) throw error;
+      // Every rejected pushed patch is recovered through the authoritative reconnect boundary.
+      // 每个被拒绝的推送 patch 都通过权威重连边界恢复。
+      if (!(error instanceof ConversationEventRevisionGapError)) {
+        console.warn("[conversation-event-window] pushed delta validation failed; recovering", error);
+      }
       this.pendingRevisionDeltas.push(delta);
       this.startRevisionReconnectTask();
     }
@@ -651,7 +655,17 @@ export class ConversationEventWindowController {
         await this.recoverConnection(true);
         return;
       }
-      this.store.applyReconnect(response);
+      try {
+        this.store.applyReconnect(response);
+      } catch (error) {
+        // A reconnect replacement that cannot evolve from local state requires one clean durable baseline.
+        // 无法从本地状态演进的重连替换需要重新加载一份干净可靠基线。
+        if (error instanceof ConversationEventServiceEpochMismatchError) throw error;
+        this.pendingRevisionDeltas = [];
+        console.warn("[conversation-event-window] reconnect validation failed; rehydrating", error);
+        await this.recoverConnection(true);
+        return;
+      }
       this.settleToolRequestProgress(response.events, response.session_id);
 
       const pending = this.pendingRevisionDeltas;
@@ -671,7 +685,14 @@ export class ConversationEventWindowController {
           this.store.applyLive(delta);
           this.settleToolRequestProgress(delta.events, delta.session_id);
         } catch (error) {
-          if (!(error instanceof ConversationEventRevisionGapError)) throw error;
+          if (!(error instanceof ConversationEventRevisionGapError)) {
+            // Replaying a structurally rejected patch cannot make progress from this local baseline.
+            // 重放结构上被拒绝的 patch 无法从当前本地基线继续推进。
+            this.pendingRevisionDeltas = [];
+            console.warn("[conversation-event-window] pending delta validation failed; rehydrating", error);
+            await this.recoverConnection(true);
+            return;
+          }
           this.pendingRevisionDeltas.push(...pending.slice(index));
           retry = true;
           break;

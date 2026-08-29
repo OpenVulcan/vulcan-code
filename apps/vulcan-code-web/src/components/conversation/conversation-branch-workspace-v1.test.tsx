@@ -13,6 +13,8 @@ import {
 import type { ConversationSummary } from "@/types";
 import { ConversationLiveStreamProvider } from "@/state/conversation-live-stream-context";
 import { ConversationLiveStreamStore } from "@/state/conversation-live-stream-store";
+import type { ConversationSessionResourceCatalogV1 } from "@/state/conversation-session-resources-v1";
+import { projectConversationBranchPresentationV1 } from "./conversation-branch-presentation-v1";
 import { ConversationBranchWorkspaceV1 } from "./conversation-branch-workspace-v1";
 
 // eventSummary builds one typed V1 envelope for restored-workspace tests.
@@ -30,6 +32,18 @@ function eventSummary(
     event_revision: 1,
     visibility,
     event,
+  };
+}
+
+// emptyResourceCatalog builds an owner-bound catalog for presentation-only tests with no attachments.
+// emptyResourceCatalog 为不含附件的纯展示测试构建一份绑定所有者的资源目录。
+function emptyResourceCatalog(): ConversationSessionResourceCatalogV1 {
+  return {
+    sessionId: "session-branch-v1",
+    status: "ready",
+    resources: new Map(),
+    error: null,
+    contentUrl: (resourceId) => `/resource/${resourceId}`,
   };
 }
 
@@ -177,6 +191,29 @@ function renderWorkspace(events: readonly ConversationEventSummary[]): string {
 }
 
 describe("ConversationBranchWorkspaceV1", () => {
+  it("uses the durable user-input update time after an edited generation", () => {
+    const editedRoot = {
+      ...eventSummary(1, {
+        kind: "user_input",
+        client_action_id: clientActionId("branch-workspace-edited-root"),
+        input_id: 1,
+        input_source: "root",
+        text: "编辑后的提示词",
+      }),
+      created_at_ms: 1_000,
+      updated_at_ms: 9_000,
+      event_revision: 2,
+    } satisfies ConversationEventSummary;
+    const presentation = projectConversationBranchPresentationV1(
+      "session-branch-v1",
+      [editedRoot],
+      emptyResourceCatalog(),
+      (key) => key,
+    );
+
+    expect(presentation.messages[0]?.createdAt).toBe("9000");
+  });
+
   it("restores the complete branch transcript suite while retaining V1 as the only authority", () => {
     const markup = renderWorkspace(completeTurnEvents());
 

@@ -95,7 +95,7 @@ export function ConversationGenerationDialogV1(
     <Dialog open={props.action !== null} onOpenChange={(open) => {
       if (!open && !props.submitting) props.onCancel();
     }}>
-      <DialogContent showCloseButton={!props.submitting} size="sm">
+      <DialogContent aria-describedby={undefined} showCloseButton={!props.submitting} size="sm">
         <DialogHeader>
           <DialogTitle>
             {props.action?.kind === "fork"

@@ -1189,14 +1189,18 @@ function assertMutableEventEvolution(
     case "assistant_reasoning":
     case "assistant_text":
       if (next.kind === current.kind) {
+        // allowed preserves streaming progress and permits one terminal Provider-source attachment revision.
+        // allowed 保留流式进度，并允许终态追加一次 Provider 来源证明修订。
+        const allowed = current.status === "streaming"
+          ? ["streaming", "completed", "interrupted"]
+          : [current.status];
         assertAllowedTransition(
           incoming,
           current.status,
           next.status,
-          current.status === "streaming"
-            ? ["streaming", "completed", "interrupted"]
-            : [],
+          allowed,
         );
+        assertAssistantEvolution(existing, incoming);
         return;
       }
       break;
@@ -1218,6 +1222,31 @@ function assertMutableEventEvolution(
       break;
   }
   throwIllegalEvolution(existing, incoming, "immutable", "changed");
+}
+
+/** Restricts same-seq assistant evolution to streaming text progress or terminal Provider-source attachment.
+ * 将同 seq assistant 演进限制为流式正文进度或终态 Provider 来源证明追加。 */
+function assertAssistantEvolution(
+  existing: ConversationEventSummary,
+  incoming: ConversationEventSummary,
+): void {
+  const current = existing.event;
+  const next = incoming.event;
+  const assistantKind = current.kind === "assistant_reasoning" || current.kind === "assistant_text";
+  if (!assistantKind || next.kind !== current.kind) return;
+  if (current.api_call_id !== next.api_call_id) {
+    throwIllegalEvolution(existing, incoming, current.status, next.status);
+  }
+  if (current.status === "streaming") return;
+  const providerSourceUnchanged = canonicalJson(current.provider_source) === canonicalJson(next.provider_source);
+  const providerSourceAttached = current.provider_source === undefined && next.provider_source !== undefined;
+  if (
+    current.status !== next.status
+    || current.text !== next.text
+    || (!providerSourceUnchanged && !providerSourceAttached)
+  ) {
+    throwIllegalEvolution(existing, incoming, current.status, next.status);
+  }
 }
 
 /** Rejects changes to immutable tool-call identity and request fields.

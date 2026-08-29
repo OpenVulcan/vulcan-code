@@ -210,10 +210,15 @@ function conversationMessageBase(
   summary: ConversationEventSummary,
   rootInput: V1RootInputPresentationMetadata | undefined,
 ): Pick<ConversationMessage, "id" | "conversationId" | "createdAt" | "metadata"> {
+  // displayedCreatedAtMs uses the durable last-update timestamp only for editable user-input facts.
+  // displayedCreatedAtMs 仅对可编辑的用户输入事实使用持久化最后更新时间。
+  const displayedCreatedAtMs = summary.event.kind === "user_input"
+    ? summary.updated_at_ms
+    : summary.created_at_ms;
   return {
     id: `v1:${summary.seq}`,
     conversationId: sessionId,
-    createdAt: String(summary.created_at_ms),
+    createdAt: String(displayedCreatedAtMs),
     metadata: presentationMetadata(summary, rootInput),
   };
 }

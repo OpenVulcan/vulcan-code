@@ -38,6 +38,9 @@ export interface ChatAreaComposerDockLayerProps {
   // Todolist status portal host mounted beside the workspace version.
   // 挂载在工作区版本号旁的 Todo 状态 Portal 宿主。
   todolistStatusHost: ComposerDockProps["todolistStatusHost"];
+  // Latest todolist projected from the selected durable V1 event generation.
+  // 从选中可靠 V1 事件代次投影出的最近待办清单。
+  sessionTodolist: ComposerDockProps["sessionTodolist"];
   // Current thinking display mode.
   // 当前思考展示模式。
   thinkingDisplayMode: ThinkingDisplayMode;
@@ -103,7 +106,7 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
       thinkingDisplayMode={props.thinkingDisplayMode}
       reasoningSelection={workbench.reasoningSelection ?? null}
       sessionGoal={props.isEmptyConversation ? null : workbench.sessionGoal ?? null}
-      sessionTodolist={props.isEmptyConversation ? null : workbench.sessionTodolist ?? null}
+      sessionTodolist={props.isEmptyConversation ? null : props.sessionTodolist}
       sessionReviewSummary={props.isEmptyConversation ? null : props.sessionReviewSummary}
       sessionPlanMode={props.isEmptyConversation ? null : workbench.sessionPlanMode ?? null}
       sessionVmmPolicy={props.isEmptyConversation ? null : workbench.sessionVmmPolicy ?? null}

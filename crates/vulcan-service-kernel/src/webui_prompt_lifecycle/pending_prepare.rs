@@ -13,7 +13,9 @@ use vulcan_workbench_model::{PendingPromptRuntimeOptions, PendingSessionPromptEn
 
 use crate::{
     commit_prepared_submission_media_ledger,
-    conversation_submission::effective_pending_prompt_reasoning_effort,
+    conversation_submission::{
+        effective_pending_prompt_reasoning_effort, exact_v1_dispatch_runtime_options,
+    },
     prepare_submission_media,
     project_conversation_services::try_begin_pending_prompt_dispatch_exclusion,
     session_goal_lifecycle::{
@@ -649,6 +651,7 @@ pub(crate) async fn maybe_prepare_webui_subagent_return_continuation(
     session_id: SessionId,
     authority: SessionSubagentReturnDispatchAuthority,
 ) -> Result<bool, String> {
+    let handle = registered_session_v1_handle_from_state(state, session_id)?;
     let entry = PendingSessionPromptEntry {
         id: format!(
             "webui-v1-subagent-return-{}-{}",
@@ -660,7 +663,7 @@ pub(crate) async fn maybe_prepare_webui_subagent_return_continuation(
         preview: authority.content.clone(),
         attachments: Vec::new(),
         model_reference: None,
-        runtime_options: PendingPromptRuntimeOptions::default(),
+        runtime_options: exact_v1_dispatch_runtime_options(handle.as_ref())?,
         source: PendingSessionPromptSource::SubagentReturnContinuation,
         task_id: Some(authority.child_task_id.as_str().to_string()),
         panel_entry_id: None,

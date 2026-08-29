@@ -6,6 +6,7 @@ import type {
   CommandExecutionPresentation,
   FileAccessPresentation,
   FileChangePresentation,
+  GenericToolMarkdownPresentation,
   MarkdownToolPresentation,
   NativeSemanticToolPresentation,
   ProviderToolTextPresentation,
@@ -87,6 +88,32 @@ const SKILL_PRESENTATION: NativeSemanticToolPresentation = {
   state: "completed",
   titleKey: "toolPresentation.native.skill",
   toolId: "skill",
+};
+
+// TODO_PRESENTATION represents one native checklist update that must stay inside a folded card.
+// TODO_PRESENTATION 表示一条必须保留在折叠卡片内的原生待办更新。
+const TODO_PRESENTATION: NativeSemanticToolPresentation = {
+  arguments: {
+    explanation: "推进测试",
+    items: [{ step: "补回动态面板", status: "in_progress" }],
+  },
+  family: "todo",
+  id: "todo-update",
+  kind: "native_semantic",
+  result: null,
+  state: "completed",
+  titleKey: "toolPresentation.native.todolist",
+  toolId: "todolist",
+};
+
+// GENERIC_PRESENTATION represents an unknown V1 tool whose persisted result has no hidden-detail RPC.
+// GENERIC_PRESENTATION 表示一个没有隐藏详情 RPC 的未知 V1 工具持久化结果。
+const GENERIC_PRESENTATION: GenericToolMarkdownPresentation = {
+  id: "generic-v1-tool",
+  kind: "generic_tool_markdown",
+  markdown: "# Persisted result\n\nVisible only after expansion.",
+  state: "completed",
+  toolName: "custom_tool",
 };
 
 // MULTI_FILE_CHANGE represents one authoritative completed ChangeSet with two actual files.
@@ -282,6 +309,45 @@ describe("ToolPresentationCard file access icons", () => {
     expect(expandedMarkup).toContain("Terminal Session");
     expect(expandedMarkup).toContain("Use the persistent terminal safely.");
     expect(expandedMarkup).not.toContain("language-json");
+  });
+
+  // TODO and unknown tools must use the same default-folded interaction instead of leaking bodies inline.
+  // TODO 与未知工具必须使用同一默认折叠交互，不能把正文直接泄露到行内。
+  it.each([
+    ["todo", TODO_PRESENTATION, "补回动态面板"],
+    ["generic", GENERIC_PRESENTATION, "Visible only after expansion."],
+  ] as const)("keeps %s tool content inside its folded card", (_kind, presentation, bodyText) => {
+    const collapsedMarkup = renderToStaticMarkup(
+      <I18nProvider initialLocale="zh-CN">
+        <ToolPresentationCard
+          detailLoadEnabled={false}
+          expanded={false}
+          expandedToolPresentationIds={new Set()}
+          presentation={presentation}
+          requestProgress={null}
+          onExpandedChange={() => undefined}
+          onLoadToolDetail={async () => null}
+        />
+      </I18nProvider>,
+    );
+    const expandedMarkup = renderToStaticMarkup(
+      <I18nProvider initialLocale="zh-CN">
+        <ToolPresentationCard
+          detailLoadEnabled={false}
+          expanded
+          expandedToolPresentationIds={new Set([presentation.id])}
+          presentation={presentation}
+          requestProgress={null}
+          onExpandedChange={() => undefined}
+          onLoadToolDetail={async () => null}
+        />
+      </I18nProvider>,
+    );
+
+    expect(collapsedMarkup).toContain('aria-expanded="false"');
+    expect(collapsedMarkup).not.toContain(bodyText);
+    expect(expandedMarkup).toContain('aria-expanded="true"');
+    expect(expandedMarkup).toContain(bodyText);
   });
 
   // Recognized Markdown-menu cards expose a localized title and directory while remaining folded.

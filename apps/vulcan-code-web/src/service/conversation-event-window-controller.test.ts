@@ -110,7 +110,7 @@ function toolCall(
 function assistantText(
   status: Extract<ConversationEventBody, { kind: "assistant_text" }>["status"],
   text: string,
-): ConversationEventBody {
+): Extract<ConversationEventBody, { kind: "assistant_text" }> {
   return {
     kind: "assistant_text",
     api_call_id: 2,
@@ -667,6 +667,44 @@ describe("V1 conversation event window controller", () => {
     });
   });
 
+  it("keeps live delivery synchronized when a completed assistant gains its durable Provider source", async () => {
+    const completed = assistantText("completed", "answer");
+    const withProviderSource = {
+      ...completed,
+      provider_source: {
+        provider: "test-provider",
+        model: "test-model",
+        covered_until_seq: 1,
+        fingerprint_sha256: "a".repeat(64),
+      },
+    } satisfies Extract<ConversationEventBody, { kind: "assistant_text" }>;
+    const controller = new ConversationEventWindowController(
+      rpcMock({
+        hydrate: async () => response(
+          [summary(1, completed, 10, 1)],
+          { memory_revision: 1, durable_revision: 1 },
+        ),
+      }),
+    );
+    await controller.hydrate(SESSION_ID);
+
+    controller.applyLive(liveDelta(
+      [summary(1, withProviderSource, 20, 2)],
+      { revision: 2, durability: "volatile" },
+    ));
+    controller.applyLive(liveDelta([], {
+      revision: 2,
+      durability: "durable",
+      base_durable_revision: 1,
+    }));
+
+    expect(controller.snapshot()).toMatchObject({
+      memory_revision: 2,
+      durable_revision: 2,
+    });
+    expect(controller.snapshot().events[0].event).toEqual(withProviderSource);
+  });
+
   it("rejects frontier overflow and durable-ahead acknowledgements without regressing on stale delivery", async () => {
     const controller = new ConversationEventWindowController(
       rpcMock({
@@ -1124,6 +1162,49 @@ describe("V1 conversation event window controller", () => {
       started_at_ms: 20,
       finished_at_ms: 30,
     });
+  });
+
+  it("rehydrates instead of crashing when a pushed same-seq evolution cannot be reconciled", async () => {
+    let push: ((delta: ConversationEventLiveDeltaV1) => void) | null = null;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const hydrate = vi
+      .fn()
+      .mockResolvedValueOnce(response(
+        [summary(1, assistantText("completed", "initial"), 10, 1)],
+        { memory_revision: 1, durable_revision: 1 },
+      ))
+      .mockResolvedValueOnce(response(
+        [summary(1, assistantText("completed", "authoritative"), 30, 2)],
+        { memory_revision: 2, durable_revision: 2 },
+      ));
+    const controller = new ConversationEventWindowController(
+      rpcMock({
+        hydrate,
+        reconnect: async () => reconnectResponse(
+          [summary(1, assistantText("completed", "reconnect"), 20, 2)],
+          { base_memory_revision: 1, memory_revision: 2, durable_revision: 2 },
+        ),
+        subscribeLive: async (handler) => {
+          push = handler;
+          return () => undefined;
+        },
+      }),
+    );
+    await controller.hydrate(SESSION_ID);
+
+    expect(() => requireAssignedCallback(push, "invalid evolution subscriber")(
+      liveDelta(
+        [summary(1, assistantText("completed", "invalid-live"), 20, 2)],
+        { revision: 2 },
+      ),
+    )).not.toThrow();
+    await vi.waitFor(() => expect(controller.snapshot().events[0].event).toMatchObject({
+      text: "authoritative",
+    }));
+
+    expect(hydrate).toHaveBeenCalledTimes(2);
+    expect(controller.snapshot()).toMatchObject({ memory_revision: 2, durable_revision: 2 });
+    warn.mockRestore();
   });
 
   it("keeps an open edited Turn visible until a higher generation atomically truncates the tail", async () => {

@@ -2,7 +2,9 @@
 //! 即时会话提交的运行选项准备。
 
 use vulcan_provider_config::config::ReasoningEffortLevel;
-use vulcan_workbench_model::{PendingSessionPromptSource, SessionId, SessionRuntimeStateEntry};
+use vulcan_workbench_model::{
+    PendingPromptRuntimeOptions, PendingSessionPromptSource, SessionId, SessionRuntimeStateEntry,
+};
 use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
 use crate::{
@@ -197,6 +199,47 @@ fn resolve_submission_runtime_options(
     }
 }
 
+/// Builds the runtime controls for a host adapter that dispatches an already durable V1 input.
+/// 为分发已可靠写入 V1 输入的宿主适配器构建运行控制项。
+///
+/// # Parameters
+/// 参数
+/// `handle` owns the exact pending-or-active request configuration for the next physical API.
+/// `handle` 持有下一次物理 API 的精确待生效或当前请求配置。
+///
+/// # Returns
+/// 返回值
+/// Runtime controls whose reasoning effort exactly matches the configuration that the Provider
+/// permit will promote, or an explicit error when the durable value cannot be represented.
+/// 返回推理强度与 Provider 许可将提升的配置完全一致的运行控制项；可靠值无法表示时显式报错。
+pub(crate) fn exact_v1_dispatch_runtime_options(
+    handle: &crate::session_runtime_registry_v1::SessionHandle,
+) -> Result<PendingPromptRuntimeOptions, String> {
+    let thinking_level = handle
+        .read(|document| {
+            if let Some(pending) = document.metadata.config.pending_request.as_ref() {
+                pending.thinking_level.clone()
+            } else {
+                document
+                    .metadata
+                    .config
+                    .active_request
+                    .thinking_level
+                    .clone()
+            }
+        })
+        .map_err(|error| format!("读取 V1 精确请求推理配置失败：{error}"))?;
+    let reasoning_effort = match thinking_level {
+        Some(thinking_level) => parse_reasoning_effort(thinking_level.as_str())
+            .ok_or_else(|| format!("V1 精确请求包含无法识别的推理档位 `{thinking_level}`。"))?,
+        None => ReasoningEffortLevel::Off,
+    };
+    Ok(PendingPromptRuntimeOptions {
+        reasoning_effort,
+        ..PendingPromptRuntimeOptions::default()
+    })
+}
+
 /// Resolves reasoning effort for a queued prompt at its actual dispatch boundary.
 /// 在排队提示词的实际分发边界解析推理强度。
 ///
@@ -259,7 +302,7 @@ mod tests {
 
     use super::*;
     use crate::session_runtime_registry_v1::{SessionHandle, SessionPersistenceBackend};
-    use vulcan_session_core::v1::config::ActiveRequestConfig;
+    use vulcan_session_core::v1::config::{ActiveRequestConfig, PendingRequestConfig};
     use vulcan_session_core::v1::document::{FlushCandidate, SessionDocument};
     use vulcan_workspace_store::workspace_store::{SessionV1FlushResult, SessionV1StoreError};
 
@@ -469,5 +512,72 @@ mod tests {
                 .and_then(|runtime_state| runtime_state.active_reasoning_effort),
             Some(ReasoningEffortLevel::Max)
         );
+    }
+
+    /// Verifies a generation-root adapter reuses the durable active reasoning level instead of the Off sentinel.
+    /// 验证代际根适配器复用可靠的当前推理档位，而不是使用 Off 哨兵值。
+    #[test]
+    fn exact_v1_dispatch_uses_active_reasoning_after_generation_rebase() {
+        let session_id = SessionId::from_u128(0x6302);
+        let mut document = SessionDocument::new(
+            session_id.to_string(),
+            "project-a",
+            "Edited generation reasoning",
+            1,
+        );
+        document.metadata.config.active_request.thinking_level = Some(String::from("max"));
+        let handle = SessionHandle::with_backend(
+            session_id,
+            document,
+            Arc::new(SubmissionRuntimeOptionsTestBackend),
+        );
+
+        let options = exact_v1_dispatch_runtime_options(handle.as_ref())
+            .expect("active V1 reasoning should produce exact dispatch controls");
+
+        assert_eq!(options.reasoning_effort, ReasoningEffortLevel::Max);
+    }
+
+    /// Verifies an explicit pending Off selection wins over the previous active reasoning level.
+    /// 验证显式待生效 Off 选择优先于上一份当前推理档位。
+    #[test]
+    fn exact_v1_dispatch_preserves_pending_off_selection() {
+        let session_id = SessionId::from_u128(0x6303);
+        let mut document = SessionDocument::new(
+            session_id.to_string(),
+            "project-a",
+            "Pending Off reasoning",
+            1,
+        );
+        document.metadata.config.active_request = ActiveRequestConfig {
+            provider: Some(String::from("provider-a")),
+            connection_id: Some(String::from("connection-a")),
+            model: Some(String::from("model-a")),
+            thinking_level: Some(String::from("max")),
+            temperature: None,
+        };
+        document
+            .set_pending_request(
+                PendingRequestConfig {
+                    provider: Some(String::from("provider-a")),
+                    connection_id: Some(String::from("connection-a")),
+                    model: Some(String::from("model-a")),
+                    thinking_level: None,
+                    temperature: None,
+                    set_at_ms: 2,
+                },
+                2,
+            )
+            .expect("pending Off selection should be accepted");
+        let handle = SessionHandle::with_backend(
+            session_id,
+            document,
+            Arc::new(SubmissionRuntimeOptionsTestBackend),
+        );
+
+        let options = exact_v1_dispatch_runtime_options(handle.as_ref())
+            .expect("pending Off selection should produce exact dispatch controls");
+
+        assert_eq!(options.reasoning_effort, ReasoningEffortLevel::Off);
     }
 }

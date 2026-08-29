@@ -389,7 +389,7 @@ export function ConversationSessionTodolistPanel(props: {
   const terminalSessions = React.useMemo(
     () => props.terminalSessions
       .map((summary) => terminalSessionViewModel(summary, t))
-      .filter((session) => session.canStop || session.state === "lost" || session.state === "waiting"),
+      .filter((session) => session.canStop),
     [props.terminalSessions, t],
   );
   const terminalSummaryById = React.useMemo(

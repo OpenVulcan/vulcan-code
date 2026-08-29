@@ -29,6 +29,7 @@ import type {
 import type { ComposerSubmission } from "@/components/composer/composer-model";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
+import { selectConversationSessionTodolistV1 } from "@/service/conversation-session-tools-v1";
 import { projectForConversation } from "@/state/workbench-selectors";
 import { useConversationTransientReasoningStatus } from "@/state/conversation-live-stream-context";
 import { toast } from "sonner";
@@ -90,6 +91,14 @@ export function ChatArea(props: ChatAreaProps) {
   // eventWindowSnapshot is the sole durable authority for Continue eligibility and consumption.
   // eventWindowSnapshot 是 Continue 资格与消费状态的唯一可靠权威。
   const eventWindowSnapshot = useSelectedConversationEventWindowSnapshot();
+  // sessionTodolist is projected from the same durable V1 generation as the visible transcript.
+  // sessionTodolist 从与可见转录相同的可靠 V1 代次投影。
+  const sessionTodolist = React.useMemo(
+    () => eventWindowSnapshot.owner?.session_id === selectedConversation?.id
+      ? selectConversationSessionTodolistV1(eventWindowSnapshot)
+      : null,
+    [eventWindowSnapshot, selectedConversation?.id],
+  );
   // eventWindowCommands stays bound to the exact owner generation represented by the selected store.
   // eventWindowCommands 始终绑定到选中 store 所表示的精确归属代次。
   const eventWindowCommands = useSelectedConversationEventWindowCommands();
@@ -563,6 +572,7 @@ export function ChatArea(props: ChatAreaProps) {
       runtimeCue={runtimeCue}
       runtimeStatusHost={props.runtimeStatusHost ?? null}
       todolistStatusHost={props.todolistStatusHost ?? null}
+      sessionTodolist={sessionTodolist}
       thinkingDisplayMode={thinkingDisplayMode}
       sessionReviewSummary={props.sessionReviewSummary}
       onComposerDockHeightChange={handleComposerDockHeightChange}
