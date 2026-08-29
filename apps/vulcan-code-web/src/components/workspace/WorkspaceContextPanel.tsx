@@ -795,12 +795,6 @@ function WorkspaceSubagentPanel(args: {
   // taskId stores the subagent child conversation id represented by this tab.
   // taskId 保存该页签代表的子代理子会话标识。
   const taskId = args.tab.subagentTaskId ?? null;
-  // transientReasoningStatus subscribes to request-local summary or encrypted reasoning for this exact child task.
-  // transientReasoningStatus 订阅当前精确子任务的请求局部摘要或加密思考状态。
-  const transientReasoningStatus = useConversationTransientReasoningStatus(taskId);
-  // transientReasoningStatusVisible tracks insertion and removal while shared resize handling owns node reflow.
-  // transientReasoningStatusVisible 跟踪插入与移除，共享尺寸处理负责节点重排。
-  const transientReasoningStatusVisible = transientReasoningStatus !== null;
   // navigation stores the matching backend subagent projection for this parent conversation.
   // navigation 保存该父会话匹配的后端子代理投影。
   const navigation = parentConversationId && args.props.workbench.subagentNavigation?.parentConversationId === parentConversationId
@@ -809,6 +803,18 @@ function WorkspaceSubagentPanel(args: {
   // task stores the current backend task row when it is still present in the snapshot.
   // task 保存快照中仍存在时的当前后端任务行。
   const task = taskId ? navigation?.tasks?.find((candidate) => candidate.taskId === taskId) ?? null : null;
+  // taskRunning records whether the backend still allows stopping this task.
+  // taskRunning 记录后端是否仍允许停止该任务。
+  const taskRunning = Boolean(task?.isRunning && parentConversationId && taskId);
+  // taskOpen is the sole authority for retaining a live child handle and event subscription.
+  // taskOpen 是保留实时子会话句柄与事件订阅的唯一权威。
+  const taskOpen = Boolean(task && parentConversationId && taskId);
+  // transientReasoningStatus subscribes only while this exact child remains live.
+  // transientReasoningStatus 仅在当前精确子会话仍实时存在时订阅。
+  const transientReasoningStatus = useConversationTransientReasoningStatus(taskOpen ? taskId : null);
+  // transientReasoningStatusVisible tracks insertion and removal while shared resize handling owns node reflow.
+  // transientReasoningStatusVisible 跟踪插入与移除，共享尺寸处理负责节点重排。
+  const transientReasoningStatusVisible = transientReasoningStatus !== null;
   // subagentConversation supplies only the visual summary fields required by the restored branch shell.
   // subagentConversation 仅提供恢复后的分支界面所需的视觉摘要字段。
   const subagentConversation = React.useMemo(() => ({
@@ -826,32 +832,13 @@ function WorkspaceSubagentPanel(args: {
   // workspacePath stores the parent project path used for Markdown media resolution.
   // workspacePath 保存用于 Markdown 媒体解析的父项目路径。
   const workspacePath = subagentWorkspacePath(args.props.workbench, parentConversationId);
-  // onOpenSubagentPanel is the stable backend route owner supplied by WorkbenchLayout.
-  // onOpenSubagentPanel 是 WorkbenchLayout 提供的稳定后端路由拥有者。
-  const onOpenSubagentPanel = args.props.onOpenSubagentPanel;
-  // prepareSubagentSession registers or strictly reloads the embedded child V1 handle before hydration.
-  // prepareSubagentSession 在 hydration 前注册或严格重载嵌入式子会话 V1 handle。
-  const prepareSubagentSession = React.useCallback(async (): Promise<void> => {
-    if (!parentConversationId || !taskId) {
-      throw new Error("Subagent V1 route identity is incomplete.");
-    }
-    const opened = await onOpenSubagentPanel(parentConversationId, taskId);
-    if (!opened) {
-      throw new Error(t("conversation.subagent.state.failed"));
-    }
-  }, [onOpenSubagentPanel, parentConversationId, t, taskId]);
   // transcriptOwner owns the exact child V1 window independently from the selected root session.
   // transcriptOwner 独立于当前选中根会话持有精确子会话 V1 窗口。
   const transcriptOwner = useConversationSessionEventWindowOwnerV1({
-    prepare: taskId ? prepareSubagentSession : null,
+    live: taskOpen,
+    parentSessionId: parentConversationId,
     sessionId: taskId,
   });
-  // taskRunning records whether the backend still allows stopping this task.
-  // taskRunning 记录后端是否仍允许停止该任务。
-  const taskRunning = Boolean(task?.isRunning && parentConversationId && taskId);
-  // taskOpen records whether the backend still exposes this task as an unclosed agent.
-  // taskOpen 记录后端是否仍将该任务暴露为未关闭智能体。
-  const taskOpen = Boolean(task && parentConversationId && taskId);
   // handleStopConfirmed executes the single-task stop after confirmation.
   // handleStopConfirmed 在确认后执行单任务停止。
   const handleStopConfirmed = React.useCallback(async () => {
@@ -928,12 +915,21 @@ function WorkspaceSubagentPanel(args: {
   React.useLayoutEffect(() => {
     subagentScrollController.scheduleStoredRestore();
   }, [subagentScrollController, transientReasoningStatusVisible]);
+  // transcriptHasEvents distinguishes a full empty-state failure from a non-blocking refresh warning.
+  // transcriptHasEvents 区分完整空状态失败与不阻塞内容的刷新警告。
+  const transcriptHasEvents = transcriptOwner.snapshot.events.length > 0;
   if (!parentConversationId || !taskId) {
     return <WorkspaceSubagentEmptyState title={workspaceContextTabDefaultTitle("subagent", t)} />;
   }
 
   return (
     <div className="workspace-subagent-panel">
+      {transcriptOwner.error && transcriptHasEvents ? (
+        <div className="workspace-subagent-error-inline" role="alert">
+          <Bot size={16} />
+          <span>{transcriptOwner.error}</span>
+        </div>
+      ) : null}
       <ConversationBranchWorkspaceV1
         commandSessions={subagentCommandSessions}
         commands={transcriptOwner.commands}
@@ -961,7 +957,7 @@ function WorkspaceSubagentPanel(args: {
           <span>{t("conversation.subagent.loadingTranscript")}</span>
         </div>
       ) : null}
-      {transcriptOwner.error ? (
+      {transcriptOwner.error && !transcriptHasEvents ? (
         <div className="workspace-subagent-loading" role="alert">
           <Bot size={18} />
           <span>{transcriptOwner.error}</span>

@@ -400,7 +400,9 @@
     78vh
   );
   overflow: auto;
-  overscroll-behavior: contain;
+  /* Boundary wheel deltas continue into the parent conversation viewport. */
+  /* 边界处的滚轮增量继续传递给父级会话视口。 */
+  overscroll-behavior: auto;
   scrollbar-gutter: stable;
 }
 
@@ -540,7 +542,9 @@
   max-height: 300px;
   min-height: 0;
   overflow: auto;
-  overscroll-behavior: contain;
+  /* Boundary wheel deltas continue into the parent conversation viewport. */
+  /* 边界处的滚轮增量继续传递给父级会话视口。 */
+  overscroll-behavior: auto;
   border-left: 2px solid var(--border);
   padding-left: 12px;
   color: var(--muted-foreground);

@@ -188,6 +188,20 @@ export class ServiceConversationEventWindowClient implements ConversationEventWi
     );
   }
 
+  /** Loads one immutable recent window from an exact embedded TaskSession file without runtime admission.
+   * 从精确嵌入式 TaskSession 文件加载一份不可变最近窗口，且不执行运行时准入。 */
+  hydrateEmbeddedTaskSnapshot(
+    parentSessionId: string,
+    sessionId: string,
+    options?: ServiceRequestOptions,
+  ): Promise<ConversationEventHydrationV1Response> {
+    return this.service.request<ConversationEventHydrationV1Response>(
+      SESSION_EVENT_HYDRATION_V1_METHOD,
+      { sessionId, parentSessionId },
+      options,
+    );
+  }
+
   /** Loads one historical page bound to the current owner generation.
    * 加载绑定到当前归属代次的一页历史记录。 */
   page(

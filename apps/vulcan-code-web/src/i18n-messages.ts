@@ -379,6 +379,8 @@ export type TranslationKey =
   | "conversation.modelSwitch.title"
   | "conversation.modelSwitch.immediate"
   | "conversation.modelSwitch.nextProviderRequest"
+  | "conversation.reasoningSwitch.title"
+  | "conversation.reasoningSwitch.nextProviderRequest"
   | "conversation.continue"
   | "conversation.continuing"
   | "conversation.continuation.claimFailed"
@@ -1092,6 +1094,7 @@ export type TranslationKey =
   | "conversation.subagent.detail.agent"
   | "conversation.subagent.detail.status"
   | "conversation.subagent.detail.unknown"
+  | "conversation.subagent.detail.usage"
   | "conversation.subagent.detail.result"
   | "conversation.subagent.detail.noResult"
   | "conversation.subagent.detail.target"
@@ -3252,6 +3255,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.modelSwitch.title": "模型选择",
     "conversation.modelSwitch.immediate": "已选择 {provider} / {account} / {model}。",
     "conversation.modelSwitch.nextProviderRequest": "已选择 {provider} / {account} / {model}；当前正在进行的 Provider 请求保持冻结，该选择从下一次真实 Provider 请求开始生效。",
+    "conversation.reasoningSwitch.title": "思考强度",
+    "conversation.reasoningSwitch.nextProviderRequest": "思考强度已从 {previous} 调整为 {current}；当前正在进行的 Provider 请求保持冻结，新强度从下一次真实 Provider 请求开始生效。",
     "conversation.continue": "继续",
     "conversation.continuing": "继续中",
     "conversation.continuation.claimFailed": "继续失败，请查看会话状态后重试。",
@@ -3943,6 +3948,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.subagent.detail.agent": "智能体",
     "conversation.subagent.detail.status": "状态",
     "conversation.subagent.detail.unknown": "未知",
+    "conversation.subagent.detail.usage": "智能体用量",
     "conversation.subagent.detail.result": "返回内容",
     "conversation.subagent.detail.noResult": "没有返回内容。",
     "conversation.subagent.detail.target": "目标",
@@ -6123,6 +6129,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.modelSwitch.title": "Model selection",
     "conversation.modelSwitch.immediate": "Selected {provider} / {account} / {model}.",
     "conversation.modelSwitch.nextProviderRequest": "Selected {provider} / {account} / {model}; the current Provider request keeps its frozen route, and this selection applies to the next real Provider request.",
+    "conversation.reasoningSwitch.title": "Reasoning effort",
+    "conversation.reasoningSwitch.nextProviderRequest": "Reasoning effort changed from {previous} to {current}; the current Provider request remains frozen, and the new effort applies to the next real Provider request.",
     "conversation.continue": "Continue",
     "conversation.continuing": "Continuing",
     "conversation.continuation.claimFailed": "Continue failed. Check the session state and try again.",
@@ -6814,6 +6822,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.subagent.detail.agent": "Agent",
     "conversation.subagent.detail.status": "Status",
     "conversation.subagent.detail.unknown": "Unknown",
+    "conversation.subagent.detail.usage": "Agent usage",
     "conversation.subagent.detail.result": "Result",
     "conversation.subagent.detail.noResult": "No result content.",
     "conversation.subagent.detail.target": "Target",

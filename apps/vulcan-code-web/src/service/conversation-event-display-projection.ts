@@ -21,6 +21,30 @@ export type ToolCallEvent = Extract<ConversationEventBody, { kind: "tool_call" }
  * 作为永久 UI 事实渲染的精确安全边界请求配置变更。 */
 export type RequestConfigChangedEvent = Extract<ConversationEventBody, { kind: "request_config_changed" }>;
 
+/** User-visible category of one exact request-configuration transition.
+ * 一次精确请求配置转换的用户可见分类。 */
+export type RequestConfigChangeKind = "route" | "thinking" | "none";
+
+/** Classifies one durable request configuration event by the fields that actually changed.
+ * 按实际发生变化的字段分类一条可靠请求配置事件。
+ *
+ * @param event exact previous/current request configurations.
+ *              精确的变更前后请求配置。
+ * @returns route for Provider/account/model changes, thinking for thinking-only changes, otherwise none.
+ *          Provider/账号/模型变化返回 route，仅思考强度变化返回 thinking，否则返回 none。 */
+export function requestConfigChangeKind(event: RequestConfigChangedEvent): RequestConfigChangeKind {
+  const routeChanged = event.previous.provider !== event.current.provider
+    || (event.previous.connection_id ?? null) !== (event.current.connection_id ?? null)
+    || event.previous.model !== event.current.model;
+  if (routeChanged) {
+    return "route";
+  }
+  if ((event.previous.thinking_level ?? null) !== (event.current.thinking_level ?? null)) {
+    return "thinking";
+  }
+  return "none";
+}
+
 /** User input rendered through the established right-aligned conversation bubble.
  * 通过既有右对齐会话气泡渲染的用户输入。 */
 export type UserInputEvent = Extract<ConversationEventBody, { kind: "user_input" }>;

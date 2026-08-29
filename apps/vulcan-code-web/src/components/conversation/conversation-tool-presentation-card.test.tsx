@@ -10,6 +10,7 @@ import type {
   MarkdownToolPresentation,
   NativeSemanticToolPresentation,
   ProviderToolTextPresentation,
+  SubagentOrchestrationPresentation,
 } from "@/components/conversation/conversation-tool-presentations";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { I18nProvider } from "@/i18n";
@@ -160,6 +161,33 @@ const COMPLETED_COMMAND: CommandExecutionPresentation = {
   state: "completed",
   stderr: "",
   stdout: "",
+};
+
+// WAIT_AGENT_PRESENTATION represents one completed wait with authoritative child usage.
+// WAIT_AGENT_PRESENTATION 表示一次携带权威子智能体用量的已完成等待。
+const WAIT_AGENT_PRESENTATION: SubagentOrchestrationPresentation = {
+  agents: [{
+    id: "child-agent-1",
+    name: "agentA",
+    status: "completed",
+    usageSummary: {
+      cachedInputTokens: 30_000,
+      providerCallCount: 2,
+      toolCallCount: 0,
+      totalTokens: 38_348,
+    },
+  }],
+  agentsKnown: true,
+  closedAgents: [],
+  closedCount: 0,
+  id: "wait-agent-usage",
+  kind: "subagent_orchestration",
+  operation: "wait",
+  state: "completed",
+  stoppedCount: 0,
+  stoppedTaskIds: [],
+  terminalEventReceived: true,
+  title: "wait_agent",
 };
 
 describe("ToolPresentationCard file access icons", () => {
@@ -454,5 +482,29 @@ describe("ToolPresentationCard file access icons", () => {
     expect(markup).toContain("git status --short");
     expect(markup).not.toContain("已执行");
     expect(markup).not.toContain("执行失败");
+  });
+
+  // Completed child usage keeps its compact chip and exposes the dedicated Tooltip trigger.
+  // 已完成子智能体用量保留紧凑胶囊，并暴露专用 Tooltip 触发器。
+  it("binds completed subagent usage to a focusable Tooltip trigger", () => {
+    const markup = renderToStaticMarkup(
+      <I18nProvider initialLocale="zh-CN">
+        <TooltipProvider>
+          <ToolPresentationCard
+            detailLoadEnabled={false}
+            expanded={false}
+            expandedToolPresentationIds={new Set()}
+            presentation={WAIT_AGENT_PRESENTATION}
+            requestProgress={null}
+            onExpandedChange={() => undefined}
+            onLoadToolDetail={async () => null}
+          />
+        </TooltipProvider>
+      </I18nProvider>,
+    );
+
+    expect(markup).toContain("2 次调用 · 0 个工具 · 38348 tokens · 缓存 30000 tokens");
+    expect(markup).toContain('data-subagent-usage-tooltip="true"');
+    expect(markup).toContain('tabindex="0"');
   });
 });

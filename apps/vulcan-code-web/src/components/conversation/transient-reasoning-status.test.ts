@@ -28,8 +28,8 @@ describe("transient reasoning status", () => {
     expect(source).not.toContain("transientReasoningSummaryStage");
   });
 
-  // Verifies the read-only child transcript subscribes to its own ephemeral reasoning channel.
-  // 验证只读子任务转录订阅自身的瞬态思考通道。
+  // Verifies only a live child transcript subscribes to its own ephemeral reasoning channel.
+  // 验证仅实时子任务转录订阅自身的瞬态思考通道。
   it("projects transient reasoning into the active subagent transcript", () => {
     // source is the authoritative right-side subagent transcript component.
     // source 是右侧子智能体转录的权威组件源码。
@@ -38,7 +38,7 @@ describe("transient reasoning status", () => {
       "utf8",
     );
 
-    expect(source).toContain("useConversationTransientReasoningStatus(taskId)");
+    expect(source).toContain("useConversationTransientReasoningStatus(taskOpen ? taskId : null)");
     expect(source).toContain("transientReasoningStatus={transientReasoningStatus ? (");
     expect(source).toContain("<TransientReasoningStatusLine status={transientReasoningStatus} />");
     expect(source).toContain("transientReasoningStatusVisible");

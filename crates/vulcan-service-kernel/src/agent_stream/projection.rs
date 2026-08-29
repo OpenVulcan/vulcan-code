@@ -1073,6 +1073,25 @@ fn append_runtime_event_projection_with_authority(
     let refreshes_command_sessions = runtime_event_changes_command_sessions(event);
     let refreshes_subagent_navigation = runtime_event_changes_subagent_navigation(event);
     let closed_subagent_task_ids = close_agent_closed_subagent_task_ids_from_event(event)?;
+    if !closed_subagent_task_ids.is_empty() {
+        // session_registry is cloned under the service lock before child handles are unloaded.
+        // session_registry 在服务锁内克隆，随后卸载子会话句柄。
+        let session_registry = {
+            let guard = state
+                .lock()
+                .map_err(|error| format!("failed to lock service state: {error}"))?;
+            std::sync::Arc::clone(&guard.session_runtime_registry)
+        };
+        for closed_task_id in &closed_subagent_task_ids {
+            session_registry
+                .unregister_lifecycle_session(*closed_task_id)
+                .map_err(|error| {
+                    format!(
+                        "failed to unload closed subagent V1 session '{closed_task_id}': {error}"
+                    )
+                })?;
+        }
+    }
     let subagent_navigation_changed = if closed_subagent_task_ids.is_empty() {
         false
     } else {
@@ -1120,8 +1139,8 @@ fn runtime_event_changes_command_sessions(event: &RuntimeEvent) -> bool {
         )
 }
 
-/// Reports whether one runtime event created a subagent that must enter parent-session navigation.
-/// 判断单个运行时事件是否创建了必须进入父会话导航的子代理。
+/// Reports whether one runtime event changed the open-subagent navigation lifecycle.
+/// 判断单个运行时事件是否改变了未关闭子代理的导航生命周期。
 ///
 /// # Parameters
 /// 参数
@@ -1130,12 +1149,16 @@ fn runtime_event_changes_command_sessions(event: &RuntimeEvent) -> bool {
 ///
 /// # Returns
 /// 返回值
-/// `true` only after `spawn_agent` has registered its new child task successfully.
-/// 仅当 `spawn_agent` 已成功注册新子任务后返回 `true`。
+/// `true` after `spawn_agent` registers a child or `close_agent` removes one from the open tree.
+/// `spawn_agent` 注册子任务或 `close_agent` 从开放树移除子任务后返回 `true`。
 fn runtime_event_changes_subagent_navigation(event: &RuntimeEvent) -> bool {
     event.kind == RuntimeEventKind::ToolFinished
-        && runtime_event_tool_name(event) == Some("spawn_agent")
+        && matches!(
+            runtime_event_tool_name(event),
+            Some("spawn_agent" | "close_agent")
+        )
 }
+
 /// Extracts closed subagent task ids from a structured `close_agent` host result.
 /// 从结构化 `close_agent` 宿主结果中提取已关闭的子代理任务标识。
 fn close_agent_closed_subagent_task_ids_from_event(
@@ -1522,7 +1545,7 @@ mod tests {
     /// Verifies subagent navigation synchronization runs only after a spawn tool finishes.
     /// 验证子代理导航同步仅在创建工具完成后运行。
     #[test]
-    fn runtime_event_subagent_navigation_refresh_matches_finished_spawn() {
+    fn runtime_event_subagent_navigation_refresh_matches_finished_lifecycle_tools() {
         // spawn_finished represents a child task already registered by the orchestration runtime.
         // spawn_finished 表示编排运行时已经注册完成的子任务。
         let spawn_finished =
@@ -1532,12 +1555,18 @@ mod tests {
         // spawn_started 不得在子任务注册提交前投影导航。
         let spawn_started = RuntimeEvent::new(RuntimeEventKind::ToolStarted, "spawn started", "")
             .with_metadata(Some(json!({ "tool_name": "spawn_agent" })));
+        // close_finished must publish the rebuilt parent tree even when cache cleanup already happened.
+        // close_finished 即使发生在缓存清理之后，也必须发布重建后的父级导航树。
+        let close_finished =
+            RuntimeEvent::new(RuntimeEventKind::ToolFinished, "close finished", "")
+                .with_metadata(Some(json!({ "tool_name": "close_agent" })));
         // send_finished updates an existing child and must rely on its dedicated event-ingest path.
         // send_finished 更新既有子任务，必须继续使用其专用事件摄取路径。
         let send_finished = RuntimeEvent::new(RuntimeEventKind::ToolFinished, "send finished", "")
             .with_metadata(Some(json!({ "tool_name": "send_message" })));
 
         assert!(runtime_event_changes_subagent_navigation(&spawn_finished));
+        assert!(runtime_event_changes_subagent_navigation(&close_finished));
         assert!(!runtime_event_changes_subagent_navigation(&spawn_started));
         assert!(!runtime_event_changes_subagent_navigation(&send_finished));
     }

@@ -93,6 +93,118 @@ fn workspace_bootstrap_ready_message_excludes_subagent_index_preload() {
     assert!(!message.to_ascii_lowercase().contains("subagent"));
 }
 
+/// Verifies an exact embedded task file remains readable after every live agent entry is gone.
+/// 验证全部实时智能体条目消失后，精确嵌入式任务文件仍可读取。
+#[tokio::test]
+async fn closed_subagent_panel_reopens_exact_embedded_task_file() {
+    // parent_session_id identifies the indexed root that owns the deterministic TASK directory.
+    // parent_session_id 标识拥有确定性 TASK 目录的已索引根会话。
+    let parent_session_id = SessionId::new_v4();
+    // task_session_id identifies the closed child transcript recovered only from its exact file.
+    // task_session_id 标识仅从精确文件恢复的已关闭子任务转录。
+    let task_session_id = SessionId::new_v4();
+    // controller_root owns production-shaped root storage and removes it after the test.
+    // controller_root 持有生产形态的根存储，并在测试结束后将其移除。
+    let controller_root = TestControllerRuntimeRoot::new(parent_session_id);
+    // service_state intentionally has no AgentRuntime, proving open-task registry membership is not required.
+    // service_state 故意不包含 AgentRuntime，以证明无需属于开放任务注册表。
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    // controller_client keeps the isolated attached APP space alive through exact locator lookup.
+    // controller_client 在精确定位查询期间保持隔离的已挂接 APP 空间存活。
+    let (_controller_client, controller_runtime) =
+        controller_root.attached_controller_runtime_handle().await;
+    service_state.controller_runtime = Some(controller_runtime);
+    // root_handle publishes the exact parent locator required to create the deterministic child file.
+    // root_handle 发布创建确定性子文件所需的精确父定位器。
+    let root_handle = crate::session_runtime_registry_v1::SessionHandle::new(
+        parent_session_id,
+        controller_root.v1_storage_locator(),
+        vulcan_session_core::v1::document::SessionDocument::new(
+            parent_session_id.to_string(),
+            "project-a",
+            "Closed child transcript owner",
+            1,
+        ),
+    );
+    service_state
+        .session_runtime_registry
+        .register(root_handle)
+        .expect("root V1 session should register");
+    // child_handle creates and flushes the embedded task before its process-local handle is removed.
+    // child_handle 在移除进程内句柄前创建并刷新嵌入式任务。
+    let child_handle = crate::session_v1_lifecycle::create_or_load_embedded_task_session_v1(
+        service_state.session_runtime_registry.as_ref(),
+        vulcan_agent_runtime::agent_runtime::task_runtime::TaskV1ExecutionFacts {
+            root_session_id: parent_session_id,
+            parent_session_id,
+            task_id: task_session_id,
+            execution_id: String::from("closed-subagent-transcript-execution"),
+            prompt: String::from("retain this transcript after close"),
+            display_title: String::from("Closed child transcript"),
+            is_resumed: false,
+            admitted_at_ms: 1_787_788_800_020,
+        },
+    )
+    .expect("embedded task file should be created");
+    assert_eq!(child_handle.session_id(), task_session_id);
+    service_state
+        .session_runtime_registry
+        .unregister_lifecycle_session(task_session_id)
+        .expect("closed child handle should unregister")
+        .expect("closed child handle should exist");
+    let state = Arc::new(Mutex::new(service_state));
+
+    let response = service_open_subagent_panel(
+        Arc::clone(&state),
+        parent_session_id.to_string(),
+        task_session_id.to_string(),
+    )
+    .await
+    .expect("closed child transcript should reopen from exact storage");
+
+    assert_eq!(
+        response.parent_conversation_id,
+        Some(parent_session_id.to_string())
+    );
+    assert_eq!(
+        response.active_conversation_id,
+        Some(task_session_id.to_string())
+    );
+    assert!(response.subagent_navigation.is_none());
+    assert!(matches!(
+        state
+            .lock()
+            .expect("lock route-only child state")
+            .session_runtime_registry
+            .get(task_session_id),
+        Err(crate::session_runtime_registry_v1::SessionRuntimeError::SessionNotRegistered(_))
+    ));
+
+    // hydration is the one explicit persisted-window transfer requested by the visible closed-child tab.
+    // hydration 是可见已关闭子会话页签显式请求的一次持久化窗口传递。
+    let hydration = crate::conversation_events_v1::service_session_event_hydration_v1(
+        Arc::clone(&state),
+        vulcan_service_api::ConversationEventHydrationV1Request {
+            session_id: task_session_id.to_string(),
+            parent_session_id: Some(parent_session_id.to_string()),
+        },
+    )
+    .await
+    .expect("closed child recent window should load once from exact storage");
+    assert_eq!(hydration.batch.session_id, task_session_id.to_string());
+    assert!(!hydration.batch.events.is_empty());
+    assert_eq!(hydration.older_before_seq, None);
+    assert!(!hydration.has_more);
+    assert!(matches!(
+        state
+            .lock()
+            .expect("lock one-shot child state")
+            .session_runtime_registry
+            .get(task_session_id),
+        Err(crate::session_runtime_registry_v1::SessionRuntimeError::SessionNotRegistered(_))
+    ));
+}
+
 /// Verifies registry terminal status remains visible after a stale listener is suppressed.
 /// 验证陈旧监听器被抑制后，注册表中的终态状态仍然会显示在导航中。
 #[test]

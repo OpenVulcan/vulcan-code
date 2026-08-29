@@ -270,6 +270,9 @@ pub(crate) fn test_service_state_with_parent_session(
 /// Owns one isolated controller data root for Core VMM service tests.
 /// 为 Core VMM 服务测试持有一个隔离的控制器数据根。
 pub(crate) struct TestControllerRuntimeRoot {
+    /// Exact session identity owned by this isolated fixture.
+    /// 当前隔离夹具拥有的精确会话身份。
+    session_id: SessionId,
     /// Exact temporary data root removed when the fixture leaves scope.
     /// 夹具离开作用域时移除的精确临时数据根。
     data_root: std::path::PathBuf,
@@ -311,6 +314,7 @@ impl TestControllerRuntimeRoot {
             .join("v1-test-project")
             .join(format!("1970-01-01-{session_id}"));
         Self {
+            session_id,
             data_root,
             v1_storage_locator,
             v1_session_directory,
@@ -360,6 +364,144 @@ impl TestControllerRuntimeRoot {
                 ),
             },
         )
+    }
+
+    /// Starts a real isolated controller and returns it with an APP-space runtime handle.
+    /// 启动真实的隔离控制器，并将其与已挂接 APP 空间的运行时句柄一并返回。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The connected client that keeps the managed controller alive and its production-shaped runtime handle.
+    /// 返回用于维持托管控制器存活的已连接客户端，以及对应的生产形态运行时句柄。
+    pub(crate) async fn attached_controller_runtime_handle(
+        &self,
+    ) -> (
+        vldb_controller_client::ControllerClient,
+        vulcan_workspace_store::data_plane::ControllerRuntimeHandle,
+    ) {
+        // listener reserves an exact free loopback port until the managed process is ready to bind.
+        // listener 在托管进程准备绑定前精确保留一个空闲回环端口。
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("reserve attached test controller port");
+        let port = listener
+            .local_addr()
+            .expect("attached test controller address")
+            .port();
+        drop(listener);
+        // executable resolves the bundled controller used by production-shaped integration tests.
+        // executable 指向生产形态集成测试使用的内置控制器。
+        let executable = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("output/bin/vldb-controller.exe");
+        assert!(executable.is_file(), "bundled controller must exist");
+        // endpoint isolates this fixture from every application and parallel test controller.
+        // endpoint 将该夹具与所有应用实例及并行测试控制器隔离。
+        let endpoint = format!("http://127.0.0.1:{port}");
+        // client owns the managed controller lease for the complete caller scope.
+        // client 在调用方完整作用域内持有托管控制器租约。
+        let client = vldb_controller_client::ControllerClient::new(
+            vldb_controller_client::ControllerClientConfig {
+                endpoint: endpoint.clone(),
+                auto_spawn: true,
+                spawn_executable: Some(executable.display().to_string()),
+                spawn_process_mode: vldb_controller_client::ControllerProcessMode::Managed,
+                minimum_uptime_secs: 0,
+                idle_timeout_secs: 1,
+                default_lease_ttl_secs: 30,
+                connect_timeout_secs: 30,
+                startup_timeout_secs: 15,
+                startup_retry_interval_ms: 100,
+                lease_renew_interval_secs: 10,
+            },
+            vldb_controller_client::ClientRegistration {
+                client_name: format!("vulcan-service-kernel-attached-test-{}", Uuid::new_v4()),
+                host_kind: String::from("vulcan-service-kernel-test"),
+                process_id: std::process::id(),
+                process_name: String::from("vulcan-service-kernel-test"),
+                lease_ttl_secs: Some(30),
+            },
+        );
+        client
+            .connect()
+            .await
+            .expect("connect attached test controller");
+        // sqlite_path is the exact APP database already populated by the V1 fixture.
+        // sqlite_path 是已由 V1 夹具填充的精确 APP 数据库。
+        let sqlite_path = self.data_root.join("sqlite").join("app-workspace.sqlite3");
+        // sqlite_binding_id uniquely owns this fixture's controller binding.
+        // sqlite_binding_id 唯一标识该夹具的控制器绑定。
+        let sqlite_binding_id = format!("attached-test-{}", Uuid::new_v4());
+        client
+            .attach_space(vldb_controller_client::SpaceRegistration {
+                space_id: String::from(vulcan_workspace_store::data_plane::APP_SPACE_ID),
+                space_label: String::from("APP"),
+                space_kind: vldb_controller_client::SpaceKind::User,
+                space_root: self.data_root.to_string_lossy().into_owned(),
+            })
+            .await
+            .expect("attach APP space for service test");
+        client
+            .enable_sqlite(vldb_controller_client::ControllerSqliteEnableRequest {
+                space_id: String::from(vulcan_workspace_store::data_plane::APP_SPACE_ID),
+                binding_id: sqlite_binding_id.clone(),
+                db_path: sqlite_path.to_string_lossy().into_owned(),
+                ..vldb_controller_client::ControllerSqliteEnableRequest::default()
+            })
+            .await
+            .expect("enable APP SQLite binding for service test");
+        // controller carries the exact metadata consumed by the service selection preflight.
+        // controller 携带服务选择预检所消费的精确元数据。
+        let controller = vulcan_workspace_store::data_plane::ControllerRuntimeHandle::new(
+            client.clone(),
+            vulcan_workspace_store::data_plane::ControllerRuntimeMetadata {
+                endpoint,
+                executable: executable.display().to_string(),
+                data_root: self.data_root.clone(),
+                sqlite_path: sqlite_path.clone(),
+                sqlite_binding_id: sqlite_binding_id.clone(),
+                system_statistics_sqlite_path: sqlite_path,
+                system_statistics_sqlite_binding_id: sqlite_binding_id,
+            },
+        );
+        // The offline fixture publishes files first; production creation below republishes the same exact session through the strict SQLite index boundary.
+        // 离线夹具先发布文件；下面的生产创建入口通过严格 SQLite 索引边界重新发布同一精确会话。
+        std::fs::remove_dir_all(&self.v1_session_directory)
+            .expect("remove offline V1 fixture before indexed publication");
+        // session_id_text keeps the metadata identity stable for every borrowed creation field.
+        // session_id_text 为所有借用的创建字段保持稳定的 metadata 身份。
+        let session_id_text = self.session_id.to_string();
+        // metadata is the authoritative V1 document published by the indexed creation path.
+        // metadata 是由索引创建路径发布的权威 V1 文档。
+        let metadata = vulcan_session_core::v1::config::MetadataDocument::new(
+            session_id_text.as_str(),
+            "v1-test-project",
+            "V1 persistence test session",
+            1,
+        );
+        // runtime_lock starts from the same fresh state as the original storage fixture.
+        // runtime_lock 从与原存储夹具相同的全新状态开始。
+        let runtime_lock = vulcan_session_core::v1::context::RuntimeLock {
+            initialization_state:
+                vulcan_session_core::v1::context::RuntimeInitializationState::FreshUninitialized,
+            current_compaction_id: None,
+            locked_sources: Vec::new(),
+        };
+        vulcan_workspace_store::workspace_store::create_indexed_session_v1(
+            &controller,
+            &vulcan_workspace_store::workspace_store::CreateSessionV1Request {
+                project_id: "v1-test-project",
+                storage_partition:
+                    vulcan_workspace_store::workspace_store::SESSION_V1_STORAGE_PARTITION,
+                date_bucket: "1970-01-01",
+                metadata: &metadata,
+                runtime_lock: &runtime_lock,
+                compactions: &[],
+                events: &[],
+            },
+        )
+        .await
+        .expect("publish indexed V1 service fixture");
+        (client, controller)
     }
 
     /// Returns the exact isolated data root owned by this fixture.

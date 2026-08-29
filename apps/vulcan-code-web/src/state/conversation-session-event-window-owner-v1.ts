@@ -19,9 +19,12 @@ export interface ConversationSessionEventWindowOwnerV1Options {
   /** Exact session identity, or null while the route is incomplete.
    * 精确会话身份；路由不完整时为空。 */
   sessionId: string | null;
-  /** Resolves the exact backend session locator before hydration.
-   * 在 hydration 前解析精确后端会话定位器。 */
-  prepare?: (() => Promise<void>) | null;
+  /** Indexed parent session identity required by immutable embedded-task snapshots.
+   * 不可变嵌入式任务快照所需的已索引父会话身份。 */
+  parentSessionId: string | null;
+  /** Whether this exact child still owns a live runtime handle and subscription.
+   * 当前精确子会话是否仍持有实时运行时句柄与订阅。 */
+  live: boolean;
 }
 
 /** React state exposed by one component-owned V1 event-window controller.
@@ -44,24 +47,30 @@ export interface ConversationSessionEventWindowOwnerV1 {
 /** Owns one independent V1 event window for a non-selected visible session.
  * 为一个非当前选中但可见的会话持有独立 V1 事件窗口。
  *
- * @param options exact session identity and optional locator preparation.
- *                精确会话身份与可选定位准备。
+ * @param options exact child identity, indexed parent identity, and live ownership state.
+ *                精确子会话身份、已索引父会话身份与实时归属状态。
  * @returns the atomic snapshot, owner-bound commands, and loading state.
  *          原子快照、归属绑定命令与加载状态。 */
 export function useConversationSessionEventWindowOwnerV1(
   options: ConversationSessionEventWindowOwnerV1Options,
 ): ConversationSessionEventWindowOwnerV1 {
-  // controller is replaced only when the exact visible session identity changes.
-  // controller 仅在精确可见会话身份变化时替换。
+  // eventWindowClient owns both ordinary live hydration and exact embedded snapshot reads.
+  // eventWindowClient 同时持有普通实时 hydration 与精确嵌入式快照读取。
+  const eventWindowClient = React.useMemo(
+    () => createConversationEventWindowClient(serviceClient),
+    [],
+  );
+  // controller is replaced when the exact visible session or its live/static ownership changes.
+  // controller 在精确可见会话或其实时/静态归属变化时替换。
   const controller = React.useMemo(
-    () => new ConversationEventWindowController(createConversationEventWindowClient(serviceClient)),
-    [options.sessionId],
+    () => new ConversationEventWindowController(eventWindowClient),
+    [eventWindowClient, options.live, options.sessionId],
   );
   // snapshot is read through React's tear-free external-store contract.
   // snapshot 通过 React 无撕裂外部存储契约读取。
   const snapshot = useConversationEventWindowSnapshot(controller);
-  // loading covers preparation and the first authoritative hydration as one boundary.
-  // loading 将准备与首次权威 hydration 作为一个边界覆盖。
+  // loading covers the first live hydration or one-shot persisted snapshot read.
+  // loading 覆盖首次实时 hydration 或一次性持久化快照读取。
   const [loading, setLoading] = React.useState(Boolean(options.sessionId));
   // error preserves the latest exact owner failure without falling back to legacy messages.
   // error 保留最近一次精确归属失败，不回退到旧消息。
@@ -75,11 +84,22 @@ export function useConversationSessionEventWindowOwnerV1(
   // commands never retarget after the session identity changes.
   // commands 在会话身份变化后绝不重定向。
   const commands = React.useMemo<SelectedConversationEventWindowCommands>(() => ({
-    rehydrate: () => options.sessionId
-      ? controller.hydrate(options.sessionId)
-      : Promise.reject(new Error("conversation event window owner has no durable session")),
-    prependOlder: () => controller.prependOlder(),
-  }), [controller, options.sessionId]);
+    rehydrate: async () => {
+      if (!options.sessionId) {
+        throw new Error("conversation event window owner has no durable session");
+      }
+      // Closed children are immutable one-shot snapshots; reopening the tab creates the next explicit read.
+      // 已关闭子会话是不可变的一次性快照；重新打开页签才会创建下一次显式读取。
+      return options.live ? controller.rehydrate(options.sessionId) : false;
+    },
+    prependOlder: () => options.live ? controller.prependOlder() : Promise.resolve(false),
+  }), [controller, eventWindowClient, options.live, options.parentSessionId, options.sessionId]);
+
+  React.useEffect(() => {
+    // Controller disposal belongs only to controller replacement or component unmount.
+    // 控制器销毁仅属于控制器替换或组件卸载。
+    return () => controller.dispose();
+  }, [controller]);
 
   React.useEffect(() => {
     // active prevents a late preparation or hydration result from mutating replacement state.
@@ -90,20 +110,34 @@ export function useConversationSessionEventWindowOwnerV1(
     setError(null);
     if (!options.sessionId) {
       setLoading(false);
-      return () => controller.dispose();
+      return () => {
+        active = false;
+      };
     }
     setLoading(true);
     const sessionId = options.sessionId;
     void (async () => {
       try {
-        await options.prepare?.();
-        if (!active) return;
-        const hydrated = await controller.hydrate(sessionId);
+        // Live children hydrate through their resident owner; closed children receive one persisted window only.
+        // 实时子会话通过常驻归属 hydration；已关闭子会话仅接收一份持久化窗口。
+        const hydrated = options.live
+          ? await controller.hydrate(sessionId)
+          : await (async () => {
+            if (!options.parentSessionId) {
+              throw new Error("closed subagent snapshot has no indexed parent session");
+            }
+            const response = await eventWindowClient.hydrateEmbeddedTaskSnapshot(
+              options.parentSessionId,
+              sessionId,
+            );
+            if (!active) return false;
+            return controller.hydrateSnapshot(response);
+          })();
         if (!active) return;
         if (!hydrated) {
           throw new Error("V1 session hydration was superseded before publication.");
         }
-        hydratedRef.current = true;
+        hydratedRef.current = options.live;
       } catch (ownerError) {
         if (active) {
           setError(ownerError instanceof Error ? ownerError.message : String(ownerError));
@@ -114,9 +148,8 @@ export function useConversationSessionEventWindowOwnerV1(
     })();
     return () => {
       active = false;
-      controller.dispose();
     };
-  }, [controller, options.prepare, options.sessionId]);
+  }, [controller, eventWindowClient, options.live, options.parentSessionId, options.sessionId]);
 
   React.useEffect(() => {
     /** Recovers only after one real disconnect and one established owner baseline.
@@ -127,7 +160,7 @@ export function useConversationSessionEventWindowOwnerV1(
         wasDisconnectedRef.current = true;
         return;
       }
-      if (!wasDisconnectedRef.current || !hydratedRef.current) return;
+      if (!options.live || !wasDisconnectedRef.current || !hydratedRef.current) return;
       wasDisconnectedRef.current = false;
       void controller.recoverConnection(false).catch((recoveryError) => {
         setError(recoveryError instanceof Error ? recoveryError.message : String(recoveryError));
@@ -135,7 +168,7 @@ export function useConversationSessionEventWindowOwnerV1(
     };
     window.addEventListener(BROWSER_SERVICE_CONNECTION_EVENT, handleConnectionStatus);
     return () => window.removeEventListener(BROWSER_SERVICE_CONNECTION_EVENT, handleConnectionStatus);
-  }, [controller]);
+  }, [controller, options.live]);
 
   return { snapshot, commands, loading, error };
 }

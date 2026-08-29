@@ -7269,19 +7269,6 @@ impl SessionDocument {
             return Ok(None);
         }
         let from_seq = self.metadata.mode.goal.origin_seq.map_or(1, Seq::value);
-        let subagent_api_ids: BTreeSet<ApiCallId> = self
-            .events
-            .iter()
-            .filter_map(|event| match &event.event {
-                EventBody::ApiStarted(started)
-                    if event.seq.value() >= from_seq
-                        && started.purpose == ApiPurposeKind::Subagent =>
-                {
-                    Some(started.api_call_id)
-                }
-                _ => None,
-            })
-            .collect();
         let mut direct_usages = Vec::new();
         let mut direct_api_count = 0u64;
         let mut direct_tool_count = 0u64;
@@ -7293,11 +7280,13 @@ impl SessionDocument {
             .filter(|event| event.seq.value() >= from_seq)
         {
             match &event.event {
-                EventBody::ApiStats(api) if !subagent_api_ids.contains(&api.api_call_id) => {
+                // Every ApiStats persisted in this document is local work; nested work enters only through SubagentReturnStats.
+                // 当前文档持久化的每条 ApiStats 都是本地工作；嵌套工作仅通过 SubagentReturnStats 回流。
+                EventBody::ApiStats(api) => {
                     direct_api_count += 1;
                     direct_usages.push(&api.usage);
                 }
-                EventBody::ToolCall(tool) if !subagent_api_ids.contains(&tool.api_call_id) => {
+                EventBody::ToolCall(_) => {
                     direct_tool_count += 1;
                 }
                 EventBody::SubagentReturnStats(returned)
@@ -8099,18 +8088,6 @@ impl SessionDocument {
                 actual: first_event.turn_id.map_or(0, TurnId::value),
             });
         }
-        let subagent_api_ids: BTreeSet<ApiCallId> = turn_events
-            .iter()
-            .filter_map(|event| match &event.event {
-                EventBody::ApiStarted(started)
-                    if event.turn_id == Some(turn_id)
-                        && started.purpose == ApiPurposeKind::Subagent =>
-                {
-                    Some(started.api_call_id)
-                }
-                _ => None,
-            })
-            .collect();
         let mut direct_usages = Vec::new();
         let mut direct_api_count = 0u64;
         let mut direct_tool_count = 0u64;
@@ -8121,11 +8098,13 @@ impl SessionDocument {
             .filter(|event| event.turn_id == Some(turn_id))
         {
             match &event.event {
-                EventBody::ApiStats(api) if api.purpose != ApiPurposeKind::Subagent => {
+                // Purpose describes why this document called the Provider, not ownership by another document.
+                // purpose 描述当前文档调用 Provider 的原因，不代表该调用归属于其他文档。
+                EventBody::ApiStats(api) => {
                     direct_api_count += 1;
                     direct_usages.push(&api.usage);
                 }
-                EventBody::ToolCall(tool) if !subagent_api_ids.contains(&tool.api_call_id) => {
+                EventBody::ToolCall(_) => {
                     direct_tool_count += 1;
                 }
                 EventBody::SubagentReturnStats(return_stats)

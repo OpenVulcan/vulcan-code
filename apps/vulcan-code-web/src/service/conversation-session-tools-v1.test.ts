@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
 import type { ConversationEventSummary, ToolPayload } from "@/service/conversation-event-window-store";
 import {
-  mergeConversationSessionTerminalsV1,
+  selectConversationSessionTerminalMutationTokenV1,
+  selectLiveConversationSessionTerminalsV1,
   selectConversationSessionTerminalsV1,
   selectConversationSessionTodolistV1,
 } from "@/service/conversation-session-tools-v1";
@@ -180,6 +181,19 @@ describe("conversation session tools V1", () => {
     })]);
   });
 
+  it("advances the terminal mutation token for every completed terminal event", () => {
+    const first = snapshot([
+      completedTool(10, "terminal_session", {}, "terminal-v1"),
+    ]);
+    const second = snapshot([
+      completedTool(10, "terminal_session", {}, "terminal-v1"),
+      completedTool(12, "terminal_session", {}, "terminal-v1"),
+    ]);
+
+    expect(selectConversationSessionTerminalMutationTokenV1(first)).toBe("session-v1:10:3:1007");
+    expect(selectConversationSessionTerminalMutationTokenV1(second)).toBe("session-v1:12:3:1207");
+  });
+
   it("rejects a terminal payload whose local identity disagrees with the external reference", () => {
     const result = selectConversationSessionTerminalsV1(snapshot([
       completedTool(10, "terminal_session", {
@@ -246,44 +260,24 @@ describe("conversation session tools V1", () => {
     expect(result).toEqual([]);
   });
 
-  it("overlays live runtime facts only on V1-owned terminal identities", () => {
-    const merged = mergeConversationSessionTerminalsV1(
-      [{ id: "terminal-v1", command: "pwsh", status: "running", preview: "durable", ownerSessionId: "session-v1" }],
-      [
-        { id: "terminal-v1", command: "pwsh", status: "running", preview: "live", ownerSessionId: "session-v1" },
-        { id: "unowned-terminal", command: "cmd", status: "running", preview: "ignored", ownerSessionId: "session-v1" },
-      ],
-    );
-
-    expect(merged).toEqual([
+  it("shows a newly created live terminal before its durable event reaches the selected window", () => {
+    const selected = selectLiveConversationSessionTerminalsV1("session-v1", [
       { id: "terminal-v1", command: "pwsh", status: "running", preview: "live", ownerSessionId: "session-v1" },
+      { id: "terminal-v2", command: "cmd", status: "running", preview: "also live", ownerSessionId: "session-v1" },
+    ]);
+
+    expect(selected).toEqual([
+      { id: "terminal-v1", command: "pwsh", status: "running", preview: "live", ownerSessionId: "session-v1" },
+      { id: "terminal-v2", command: "cmd", status: "running", preview: "also live", ownerSessionId: "session-v1" },
     ]);
   });
 
-  it("hides durable terminals that are absent, closed, lost, or owned by another live session", () => {
-    const durable = [{
-      id: "terminal-v1",
-      command: "pwsh",
-      status: "running",
-      preview: "durable",
-      ownerSessionId: "session-v1",
-    }];
-
-    expect(mergeConversationSessionTerminalsV1(durable, [])).toEqual([]);
-    expect(mergeConversationSessionTerminalsV1(durable, [{
-      ...durable[0],
-      status: "completed",
-      preview: "closed",
-    }])).toEqual([]);
-    expect(mergeConversationSessionTerminalsV1(durable, [{
-      ...durable[0],
-      lost: true,
-      preview: "lost",
-    }])).toEqual([]);
-    expect(mergeConversationSessionTerminalsV1(durable, [{
-      ...durable[0],
-      ownerSessionId: "another-session",
-      preview: "foreign",
-    }])).toEqual([]);
+  it("hides completed, lost, foreign, and internal runtime terminals", () => {
+    expect(selectLiveConversationSessionTerminalsV1("session-v1", [
+      { id: "completed", command: "pwsh", status: "completed", preview: "closed", ownerSessionId: "session-v1" },
+      { id: "lost", command: "pwsh", status: "running", preview: "lost", ownerSessionId: "session-v1", lost: true },
+      { id: "foreign", command: "pwsh", status: "running", preview: "foreign", ownerSessionId: "another-session" },
+      { id: "vldb-controller", command: "vldb", status: "running", preview: "internal", ownerSessionId: "session-v1" },
+    ])).toEqual([]);
   });
 });

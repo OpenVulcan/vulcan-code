@@ -247,6 +247,31 @@ export class ConversationEventWindowController {
     }
   }
 
+  /** Installs or refreshes one immutable durable snapshot without opening a live subscription.
+   * 安装或刷新一份不可变可靠快照，且不打开实时订阅。
+   *
+   * @param response exact persisted event window returned for a closed embedded TaskSession.
+   *                 为已关闭嵌入式 TaskSession 返回的精确持久化事件窗口。
+   * @returns true after the snapshot becomes the visible controller boundary.
+   *          快照成为可见控制器边界后返回 true。 */
+  hydrateSnapshot(response: ConversationEventHydrationV1Response): boolean {
+    if (this.disposed) throw new Error("conversation event window controller is disposed");
+    this.hydrationRequestToken += 1;
+    this.hydratingSessionId = null;
+    this.pendingHydrationDeltas = [];
+    this.generationRebaseTarget = null;
+    assertWindowBoundary(response);
+    if (this.store.getOwner() === null) {
+      this.store.hydrate(response);
+    } else {
+      this.store.restoreDurableBaseline(response);
+    }
+    this.settleToolRequestProgress(response.events, response.session_id);
+    this.commitWindowBoundary(response);
+    this.publishSnapshotIfChanged();
+    return true;
+  }
+
   /** Refreshes an already-owned session without reusing the initial-only hydration transition.
    * 在不复用仅限首次归属的 hydration 转换前提下刷新已持有的会话。 */
   async rehydrate(sessionId: string, options?: ServiceRequestOptions): Promise<boolean> {

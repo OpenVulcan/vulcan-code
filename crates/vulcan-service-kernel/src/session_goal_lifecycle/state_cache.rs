@@ -11,8 +11,8 @@ use vulcan_session_core::v1::config::{
     KnowledgeRetrievalMode, QueuedInput, VmmSessionPolicyConfig,
 };
 use vulcan_session_core::v1::document::SessionDocument;
-use vulcan_session_core::v1::event::{ApiPurposeKind, EventBody, SubagentReturnStatus};
-use vulcan_session_core::v1::ids::{ApiCallId, ResourceId, Seq, TurnId};
+use vulcan_session_core::v1::event::{EventBody, SubagentReturnStatus};
+use vulcan_session_core::v1::ids::{ResourceId, Seq, TurnId};
 use vulcan_session_core::v1::stats::{
     AggregatedUsage, StatBucket, TurnStatBuckets, goal_budget_tokens,
 };
@@ -635,18 +635,6 @@ fn session_goal_summary_from_document(
     let from_seq = goal
         .origin_seq
         .map_or(1, vulcan_session_core::v1::ids::Seq::value);
-    let subagent_api_ids: BTreeSet<ApiCallId> = document
-        .events()
-        .iter()
-        .filter_map(|event| match &event.event {
-            EventBody::ApiStarted(started)
-                if event.seq.value() >= from_seq && started.purpose == ApiPurposeKind::Subagent =>
-            {
-                Some(started.api_call_id)
-            }
-            _ => None,
-        })
-        .collect();
     let mut direct_usages = Vec::new();
     let mut direct_api_count = 0u64;
     let mut direct_tool_count = 0u64;
@@ -662,7 +650,9 @@ fn session_goal_summary_from_document(
     {
         updated_at_ms = updated_at_ms.max(event.updated_at_ms);
         match &event.event {
-            EventBody::ApiStats(api) if !subagent_api_ids.contains(&api.api_call_id) => {
+            // Provider statistics physically stored in this document are always local goal work.
+            // 物理存储在当前文档中的 Provider 统计始终属于本地 Goal 工作。
+            EventBody::ApiStats(api) => {
                 direct_api_count = direct_api_count.saturating_add(1);
                 direct_usages.push(&api.usage);
                 if let (Some(prepared_at_ms), Some(completed_at_ms)) =
@@ -673,7 +663,7 @@ fn session_goal_summary_from_document(
                     );
                 }
             }
-            EventBody::ToolCall(tool) if !subagent_api_ids.contains(&tool.api_call_id) => {
+            EventBody::ToolCall(_) => {
                 direct_tool_count = direct_tool_count.saturating_add(1);
             }
             EventBody::SubagentReturnStats(returned)

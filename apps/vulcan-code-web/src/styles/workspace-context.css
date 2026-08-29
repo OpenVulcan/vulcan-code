@@ -332,6 +332,24 @@
   pointer-events: none;
 }
 
+.workspace-subagent-error-inline {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid color-mix(in oklab, var(--destructive) 28%, var(--border));
+  background: color-mix(in oklab, var(--destructive) 8%, var(--background));
+  color: var(--destructive);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.workspace-subagent-error-inline span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .workspace-subagent-scroll-bottom {
   position: absolute;
   right: 18px;

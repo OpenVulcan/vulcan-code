@@ -1360,6 +1360,65 @@ fn turn_stats_aggregate_direct_and_subagent() -> Result<(), DomainError> {
     Ok(())
 }
 
+/// Turn statistics count Provider and tool work physically owned by a child TaskSession.
+/// 回合统计会计入子 TaskSession 物理持有的 Provider 与工具工作。
+#[test]
+fn child_turn_stats_include_local_subagent_purpose_work() -> Result<(), DomainError> {
+    let mut child = SessionDocument::new("child-local-session", "project-1", "child", T0);
+    child.submit_root_input_fixture("run locally", Vec::new(), T0)?;
+    let tool_api = child.start_api(
+        ApiPurposeKind::Subagent,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        T0 + 1,
+    )?;
+    let tool_call_id = child.start_tool(
+        tool_api,
+        "file",
+        ToolPayload::try_new(serde_json::json!({"path": "child.txt"}))?,
+        Some("provider-child-local-tool".to_string()),
+        T0 + 2,
+    )?;
+    child.finish_tool(
+        tool_api,
+        tool_call_id,
+        tool_completion(
+            Some(ToolPayload::try_new(serde_json::json!({"ok": true}))?),
+            ToolCallStatus::Completed,
+            T0 + 3,
+        ),
+    )?;
+    complete_ok(&mut child, tool_api, None, T0 + 4)?;
+    let final_api = child.start_api(
+        ApiPurposeKind::Subagent,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        T0 + 5,
+    )?;
+    child.append_assistant_text(
+        final_api,
+        "done",
+        AssistantSemanticStatus::Completed,
+        T0 + 6,
+    )?;
+    complete_ok(&mut child, final_api, None, T0 + 7)?;
+    child.close_turn(TurnOutcome::Completed, 8, T0 + 8)?;
+
+    let stats = child
+        .events()
+        .iter()
+        .find_map(|event| match &event.event {
+            EventBody::TurnStats(stats) => Some(stats),
+            _ => None,
+        })
+        .expect("child turn stats must exist");
+    assert_eq!(stats.buckets.direct.api_call_count, 2);
+    assert_eq!(stats.buckets.direct.tool_call_count, 1);
+    assert_eq!(stats.buckets.total.api_call_count, 2);
+    assert_eq!(stats.buckets.total.tool_call_count, 1);
+    assert_eq!(stats.buckets.total.usage.input_tokens, Some(20));
+    assert_eq!(stats.buckets.total.usage.output_tokens, Some(40));
+    Ok(())
+}
+
 /// Truncating a historical tail keeps the retained seqs contiguous.
 /// 截断历史尾部后保留的 seq 仍然连续。
 #[test]

@@ -44,9 +44,10 @@ import type {
   WorkspaceReviewFocusRequest,
 } from "@/diff/types";
 import { loadWorkspaceGitCatalog, setWorkspaceGitMonitoring } from "@/service/workbench-snapshot-service";
+import { refreshCommandSessions } from "@/service/conversation-actions-service";
 import {
-  mergeConversationSessionTerminalsV1,
-  selectConversationSessionTerminalsV1,
+  selectConversationSessionTerminalMutationTokenV1,
+  selectLiveConversationSessionTerminalsV1,
   selectConversationSessionTodolistV1,
 } from "@/service/conversation-session-tools-v1";
 import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtime";
@@ -343,39 +344,41 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   const activeGitCommitBusyState = activeGitCommitRepositoryForActions
     ? gitCommitBusyStateForRepository(activeGitCommitRepositoryForActions)
     : gitCommitBusyState;
-  // liveSessionTerminalSessions stores current runtime terminal facts for the selected conversation.
-  // liveSessionTerminalSessions 保存当前选中会话的实时终端事实。
-  const liveSessionTerminalSessions = React.useMemo(
-    () => {
-      if (!hasSelectedChatConversation || !props.selectedConversationId) {
-        return [];
-      }
-      return (props.workbench.commandSessions ?? []).filter((session) => {
-        if (session.id === "vldb-controller") {
-          return false;
-        }
-        return session.ownerSessionId === props.selectedConversationId;
-      });
-    },
+  // sessionTerminalSessions uses the live runtime as the sole authority for currently visible terminals.
+  // sessionTerminalSessions 使用实时运行时作为当前可见终端的唯一权威。
+  const sessionTerminalSessions = React.useMemo(
+    () => hasSelectedChatConversation && props.selectedConversationId
+      ? selectLiveConversationSessionTerminalsV1(
+        props.selectedConversationId,
+        props.workbench.commandSessions ?? [],
+      )
+      : [],
     [hasSelectedChatConversation, props.selectedConversationId, props.workbench.commandSessions],
   );
-  // durableSessionTerminalSessions restores every V1-owned terminal from the selected event generation.
-  // durableSessionTerminalSessions 从选中事件代次恢复每个由 V1 归属的终端。
-  const durableSessionTerminalSessions = React.useMemo(
+  // terminalMutationToken identifies every completed terminal operation in the selected durable V1 window.
+  // terminalMutationToken 标识选中可靠 V1 窗口内每次完成的终端操作。
+  const terminalMutationToken = React.useMemo(
     () => eventWindowSnapshot.owner?.session_id === props.selectedConversationId
-      ? selectConversationSessionTerminalsV1(eventWindowSnapshot)
-      : [],
+      ? selectConversationSessionTerminalMutationTokenV1(eventWindowSnapshot)
+      : null,
     [eventWindowSnapshot, props.selectedConversationId],
   );
-  // sessionTerminalSessions keeps only exact durable terminal identities that still exist as live running sessions.
-  // sessionTerminalSessions 仅保留仍以实时运行态存在的精确可靠终端身份。
-  const sessionTerminalSessions = React.useMemo(
-    () => mergeConversationSessionTerminalsV1(
-      durableSessionTerminalSessions,
-      liveSessionTerminalSessions,
-    ),
-    [durableSessionTerminalSessions, liveSessionTerminalSessions],
-  );
+  React.useEffect(() => {
+    if (!hasSelectedChatConversation || !terminalMutationToken) {
+      return;
+    }
+    // cancelled prevents a late recovery failure from outliving the selected conversation surface.
+    // cancelled 防止迟到的恢复失败越过当前选中会话界面。
+    let cancelled = false;
+    void refreshCommandSessions().catch((error) => {
+      if (!cancelled) {
+        console.warn("[workspace-shell] command-session runtime refresh failed", error);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [hasSelectedChatConversation, terminalMutationToken]);
   // visibleSessionTerminalSessions mirrors the terminal panel's own render filter.
   // visibleSessionTerminalSessions 对齐终端面板自身的可渲染过滤条件。
   const visibleSessionTerminalSessions = React.useMemo(

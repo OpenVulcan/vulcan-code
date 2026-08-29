@@ -50,6 +50,7 @@ fn runtime_shutdown_order_is_tasks_then_managed_memory_then_mcp() {
         vec!["tasks", "vmm", "mcp"]
     );
 }
+mod conversation_selection_tests;
 mod conversation_submission_activation_tests;
 mod conversation_submission_preflight_tests;
 mod conversation_submission_queue_tests;

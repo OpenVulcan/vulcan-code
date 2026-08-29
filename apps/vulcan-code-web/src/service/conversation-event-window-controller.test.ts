@@ -255,7 +255,7 @@ function rpcMock(overrides: Partial<ConversationEventWindowRpc>): ConversationEv
 }
 
 describe("V1 conversation event service client", () => {
-  it("sends exact camelCase RPC parameters for hydrate, page, and reconnect", async () => {
+  it("sends exact camelCase RPC parameters for live, embedded-snapshot, page, and reconnect reads", async () => {
     const request = vi.fn();
     const subscribe = vi.fn(async () => () => undefined);
     const service = {
@@ -273,6 +273,7 @@ describe("V1 conversation event service client", () => {
     const owner: ConversationEventWindowOwner = { session_id: SESSION_ID, window_generation: 7 };
 
     await client.hydrate(SESSION_ID);
+    await client.hydrateEmbeddedTaskSnapshot("session-parent", SESSION_ID);
     await client.page(owner, 40);
     await client.reconnect(owner, 88, 12, SERVICE_EPOCH);
     const unsubscribe = await client.subscribeLive(() => undefined);
@@ -286,12 +287,18 @@ describe("V1 conversation event service client", () => {
     );
     expect(request).toHaveBeenNthCalledWith(
       2,
+      SESSION_EVENT_HYDRATION_V1_METHOD,
+      { sessionId: SESSION_ID, parentSessionId: "session-parent" },
+      undefined,
+    );
+    expect(request).toHaveBeenNthCalledWith(
+      3,
       SESSION_EVENT_PAGE_V1_METHOD,
       { sessionId: SESSION_ID, windowGeneration: 7, beforeSeq: 40 },
       undefined,
     );
     expect(request).toHaveBeenNthCalledWith(
-      3,
+      4,
       SESSION_EVENT_RECONNECT_V1_METHOD,
       {
         sessionId: SESSION_ID,
@@ -315,6 +322,16 @@ type ConversationEventWindowRpcTestRequest = <T>(
 ) => Promise<T>;
 
 describe("V1 conversation event window controller", () => {
+  it("hydrates an immutable snapshot without opening the live subscription", () => {
+    const subscribeLive = vi.fn(async () => () => undefined);
+    const controller = new ConversationEventWindowController(rpcMock({ subscribeLive }));
+
+    expect(controller.hydrateSnapshot(response([summary(1, userInput(1))]))).toBe(true);
+
+    expect(subscribeLive).not.toHaveBeenCalled();
+    expect(controller.snapshot().events).toEqual([summary(1, userInput(1))]);
+  });
+
   it("hands a settled request draft to the admitted V1 ToolCall without allowing replay revival", async () => {
     // requestStreamId is the exact identity shared by the live-only draft and canonical ToolCall.
     // requestStreamId 是仅实时草稿与 canonical ToolCall 共享的精确身份。

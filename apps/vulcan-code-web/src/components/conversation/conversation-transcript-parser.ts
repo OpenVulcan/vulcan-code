@@ -124,7 +124,11 @@ function structuredMessageBlockKind(message: ConversationMessage): ConversationB
     // noticeKind identifies backend-owned display notes that use the generic notice surface.
     // noticeKind 标识使用通用提示界面的后端自有显示备注。
     const noticeKind = metadataString(message.metadata, ["notice_kind"]);
-    if (noticeKind === "provider_retry" || noticeKind === "model_switch") return "notice";
+    if (
+      noticeKind === "provider_retry"
+      || noticeKind === "model_switch"
+      || noticeKind === "reasoning_effort_switch"
+    ) return "notice";
     if (isSubagentFeedbackMetadata(message.metadata)) return "tool-result";
   }
   if (message.recordKind === "thinking-output") return "thinking";
@@ -202,9 +206,9 @@ function structuredMessageAttributes(
       "preview",
       "summary",
     ]) ?? turnStatsSummary(message.metadata, t);
-  // modelSwitchAttributes localizes the durable backend audit record without persisting UI language.
-  // modelSwitchAttributes 在不持久化界面语言的前提下本地化后端可靠审计记录。
-  const modelSwitchAttributes = localizedModelSwitchAttributes(message, t);
+  // requestConfigChangeAttributes localizes the durable backend audit record without persisting UI language.
+  // requestConfigChangeAttributes 在不持久化界面语言的前提下本地化后端可靠审计记录。
+  const requestConfigChangeAttributes = localizedRequestConfigChangeAttributes(message, t);
   if (message.title) attributes.title = message.title;
   if (message.recordKind) attributes.record_kind = message.recordKind;
   if (toolName) attributes.tool_name = toolName;
@@ -214,16 +218,16 @@ function structuredMessageAttributes(
   if (subagentName) attributes.subagent_name = subagentName;
   if (status) attributes.status = status;
   if (summary) attributes.summary = summary;
-  if (modelSwitchAttributes) {
-    attributes.title = modelSwitchAttributes.title;
-    attributes.summary = modelSwitchAttributes.summary;
+  if (requestConfigChangeAttributes) {
+    attributes.title = requestConfigChangeAttributes.title;
+    attributes.summary = requestConfigChangeAttributes.summary;
   }
   return attributes;
 }
 
-// localizedModelSwitchAttributes renders one backend-owned model-switch audit record in the active locale.
-// localizedModelSwitchAttributes 使用当前语言渲染一条后端自有模型切换审计记录。
-function localizedModelSwitchAttributes(
+// localizedRequestConfigChangeAttributes renders one backend-owned request-configuration audit record in the active locale.
+// localizedRequestConfigChangeAttributes 使用当前语言渲染一条后端自有请求配置审计记录。
+function localizedRequestConfigChangeAttributes(
   // Source transcript message.
   // 源转录消息。
   message: ConversationMessage,
@@ -231,8 +235,29 @@ function localizedModelSwitchAttributes(
   // 当前会话界面提供的可选翻译函数。
   t?: (key: TranslationKey) => string,
 ): { title: string; summary: string } | null {
-  if (message.recordKind !== "display-note"
-    || metadataString(message.metadata, ["notice_kind"]) !== "model_switch") {
+  if (message.recordKind !== "display-note") {
+    return null;
+  }
+  // noticeKind distinguishes route changes from thinking-effort changes without inspecting display text.
+  // noticeKind 在不检查展示文本的前提下区分路由变化与思考强度变化。
+  const noticeKind = metadataString(message.metadata, ["notice_kind"]);
+  if (noticeKind === "reasoning_effort_switch") {
+    // previousEffort and currentEffort are the exact persisted request values.
+    // previousEffort 与 currentEffort 是精确持久化的请求值。
+    const previousEffort = metadataString(message.metadata, ["previous_thinking_level"]) ?? "—";
+    const currentEffort = metadataString(message.metadata, ["current_thinking_level"]) ?? "—";
+    // template explains the same next-request activation boundary used by route selection.
+    // template 说明与路由选择相同的下一请求生效边界。
+    const template = t?.("conversation.reasoningSwitch.nextProviderRequest")
+      ?? "Reasoning effort changed from {previous} to {current}; the current Provider request remains frozen, and the new effort applies to the next real Provider request.";
+    return {
+      title: t?.("conversation.reasoningSwitch.title") ?? "Reasoning effort",
+      summary: template
+        .replaceAll("{previous}", previousEffort)
+        .replaceAll("{current}", currentEffort),
+    };
+  }
+  if (noticeKind !== "model_switch") {
     return null;
   }
   // providerName prefers the frozen display label and falls back only to its exact persisted id.

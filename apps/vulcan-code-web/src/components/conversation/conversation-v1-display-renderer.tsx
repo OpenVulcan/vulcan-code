@@ -17,6 +17,7 @@ import type { GeneratedMediaAttachment } from "@/components/media/generated-medi
 import {
   projectConversationEventDisplay,
   projectConversationTranscriptDisplay,
+  requestConfigChangeKind,
   type ConversationAssistantTranscriptNode,
   type ConversationDisplayNoteTranscriptNode,
   type ConversationEventDisplayItem,
@@ -635,19 +636,32 @@ function ConversationV1TurnStatsView(props: { node: ConversationTurnStatsTranscr
 /** Renders one explicit request-configuration transition without reading current settings.
  * 在不读取当前设置的情况下渲染一条明确的请求配置切换。 */
 function RequestConfigChangedEventView(props: { item: RequestConfigChangedDisplayItem }) {
+  // t localizes the exact category reported by the persisted change fields.
+  // t 本地化由持久化变化字段确定的精确分类。
+  const { t } = useI18n();
+  // changeKind prevents a thinking-only transition from masquerading as a model route switch.
+  // changeKind 防止仅思考强度变化被伪装成模型路由切换。
+  const changeKind = requestConfigChangeKind(props.item.request_config_changed);
+  if (changeKind === "none") {
+    return null;
+  }
   // previousLabel is derived only from the persisted previous request configuration.
   // previousLabel 仅从持久化的上一请求配置派生。
-  const previousLabel = requestConfigLabel(props.item.request_config_changed.previous);
+  const previousLabel = changeKind === "thinking"
+    ? props.item.request_config_changed.previous.thinking_level ?? "—"
+    : requestConfigLabel(props.item.request_config_changed.previous);
   // currentLabel is derived only from the persisted current request configuration.
   // currentLabel 仅从持久化的当前请求配置派生。
-  const currentLabel = requestConfigLabel(props.item.request_config_changed.current);
+  const currentLabel = changeKind === "thinking"
+    ? props.item.request_config_changed.current.thinking_level ?? "—"
+    : requestConfigLabel(props.item.request_config_changed.current);
   return (
     <section
       className="conversation-v1-event conversation-v1-request-config"
       data-event-kind="request_config_changed"
       data-seq={props.item.seq}
     >
-      <strong>请求配置已切换</strong>
+      <strong>{changeKind === "thinking" ? t("conversation.reasoningSwitch.title") : t("conversation.modelSwitch.title")}</strong>
       <span>{previousLabel} → {currentLabel}</span>
     </section>
   );

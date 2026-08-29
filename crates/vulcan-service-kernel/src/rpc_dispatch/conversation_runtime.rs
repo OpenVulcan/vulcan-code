@@ -14,6 +14,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_stop_conversation_run",
     "service_stop_command_session",
     "service_get_command_session_snapshot",
+    "service_refresh_command_sessions",
     "service_attach_command_session_display",
     "service_detach_command_session_display",
     "service_send_command_session_input",
@@ -161,6 +162,9 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
+        "service_refresh_command_sessions" => {
+            rpc_json_result(service_refresh_command_sessions(app, state))
+        }
         "service_attach_command_session_display" => rpc_json_result(
             service_attach_command_session_display(
                 app,

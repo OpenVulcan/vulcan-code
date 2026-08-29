@@ -328,6 +328,21 @@ export async function getCommandSessionSnapshot(
   });
 }
 
+/** Reprojects the exact retained command-session runtime after a durable terminal mutation.
+ * 在可靠终端变更后重新投影精确保留的命令会话运行时。
+ *
+ * Parameters: none.
+ * 参数：无。
+ * Returns: the authoritative current command-session summaries.
+ * 返回值：权威的当前命令会话摘要。
+ */
+export async function refreshCommandSessions(): Promise<CommandSessionSummary[]> {
+  if (!hasServiceRuntime()) {
+    return [];
+  }
+  return serviceClient.request<CommandSessionSummary[]>("service_refresh_command_sessions");
+}
+
 // TerminalInputEvent describes one structured terminal input sent through the service runtime.
 // TerminalInputEvent 描述一条通过服务运行时发送的结构化终端输入。
 export type TerminalInputEvent =

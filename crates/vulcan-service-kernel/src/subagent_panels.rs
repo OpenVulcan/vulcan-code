@@ -2,8 +2,10 @@
 //! 子代理面板 WebUI 服务处理器。
 
 use super::*;
-use crate::session_v1_lifecycle::get_or_load_embedded_task_session_v1_for_display;
 use vulcan_tools_manager::VulcanToolInvocationResult;
+use vulcan_workspace_store::workspace_store::{
+    locate_embedded_task_session_v1, locate_session_v1_storage,
+};
 
 /// Emits the navigation part of one subagent panel route response.
 /// 发出单个子代理面板路由响应中的导航部分。
@@ -33,8 +35,8 @@ fn emit_subagent_navigation_delta_from_route_response(
 /// 标记已停止子代理时使用的直接父会话、子任务标识与可选缓存面板状态。
 type SubagentTaskStopMark = (SessionId, SessionId, Option<SubagentTaskPanelState>);
 
-/// Opens one subagent transcript panel from the already-hydrated in-memory session state.
-/// 从已水合的内存会话状态中打开单个子智能体转录面板。
+/// Opens one subagent transcript panel from its exact embedded TaskSession storage.
+/// 从精确的嵌入式 TaskSession 存储中打开单个子智能体转录面板。
 ///
 /// # Parameters
 /// 参数
@@ -47,14 +49,13 @@ type SubagentTaskStopMark = (SessionId, SessionId, Option<SubagentTaskPanelState
 ///
 /// # Returns
 /// 返回值
-/// A route response built only from memory, or a friendly initialization/closed-state error.
-/// 返回仅由内存构建的路由响应，或友好的未初始化/已关闭状态错误。
+/// A route response after the exact child file is loaded, including for closed runtime agents.
+/// 在精确子文件加载后返回路由响应，包括运行时已关闭的智能体。
 pub(super) async fn service_open_subagent_panel(
     state: SharedServiceBridgeState,
     parent_conversation_id: String,
     task_id: String,
 ) -> Result<SubagentPanelRouteResponse, String> {
-    let (controller_runtime, _, _, _, _) = runtime_parts_from_state(&state)?;
     let parent_session_id = parent_conversation_id
         .parse::<SessionId>()
         .map_err(|error| {
@@ -68,93 +69,55 @@ pub(super) async fn service_open_subagent_panel(
         format!("parent={parent_session_id} task={task_session_id}"),
     );
     let cache_open_started_at = current_unix_millis_value();
-    let (response, resolved_parent_session_id) = {
+    let controller_runtime = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        // controller_runtime resolves the indexed parent without admitting the closed child into memory.
+        // controller_runtime 解析已索引父会话，且不会把已关闭子会话重新准入内存。
+        guard.controller_runtime.clone().ok_or_else(|| {
+            String::from("service is still starting; controller runtime is not ready")
+        })?
+    };
+    let parent_locator =
+        locate_session_v1_storage(&controller_runtime, &parent_session_id.to_string())
+            .await
+            .map_err(|error| format!("failed to locate parent V1 session: {error}"))?;
+    let task_locator =
+        locate_embedded_task_session_v1(&parent_locator, &task_session_id.to_string())
+            .map_err(|error| format!("failed to locate embedded V1 task session: {error}"))?;
+    // Reading the event-window state validates the exact file without creating or registering a SessionHandle.
+    // 读取事件窗口状态会验证精确文件，但不会创建或注册 SessionHandle。
+    task_locator
+        .event_window_state()
+        .map_err(|error| format!("failed to validate embedded V1 task session: {error}"))?;
+    // response is route-only; the visible panel requests one immutable recent window separately.
+    // response 仅负责路由；可见面板会另行请求一份不可变的最近窗口。
+    let mut response = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         let workspace_snapshot = guard.workspace_snapshot.clone().ok_or_else(|| {
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
-        let opened_parent_session_id = match open_webui_subagent_panel_from_authoritative_state(
-            &guard,
+        build_readonly_subagent_panel_route_response_for_task_locked(
+            &mut guard,
             &workspace_snapshot,
             parent_session_id,
             task_session_id,
-        ) {
-            Ok(opened_parent_session_id) => opened_parent_session_id,
-            Err(error) => {
-                return Err(error);
-            }
-        };
-        let Some(resolved_parent_session_id) = opened_parent_session_id else {
-            webui_trace(
-                "open_subagent_panel_missing",
-                format!("parent={parent_session_id} task={task_session_id} source=registry"),
-            );
-            return Err(String::from(
-                "智能体会话尚未完成初始化，或该智能体已经关闭。",
-            ));
-        };
-        let response = build_readonly_subagent_panel_route_response_for_task_locked(
-            &mut guard,
-            &workspace_snapshot,
-            resolved_parent_session_id,
-            task_session_id,
-        )?;
-        Ok::<_, String>((response, resolved_parent_session_id))
-    }?;
-    let registry = {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        std::sync::Arc::clone(&guard.session_runtime_registry)
+        )?
     };
-    get_or_load_embedded_task_session_v1_for_display(
-        &controller_runtime,
-        registry.as_ref(),
-        resolved_parent_session_id,
-        task_session_id,
-    )
-    .await
-    .map_err(|error| format!("failed to load embedded V1 task session: {error}"))?;
+    // active_conversation_id is route-local transcript identity even when the closed task is absent from live navigation.
+    // active_conversation_id 是路由局部转录身份，即使已关闭任务不在实时导航中也必须指向该子任务。
+    response.active_conversation_id = Some(task_session_id.to_string());
     webui_trace_if_slow(
         "open_subagent_panel_cache_slow",
         cache_open_started_at,
-        format!("parent={parent_session_id} task={task_session_id} opened_from_memory=true"),
+        format!(
+            "parent={parent_session_id} task={task_session_id} validated_exact_storage=true registered=false"
+        ),
     );
     Ok(response)
-}
-
-/// Resolves an open WebUI subagent panel against the authoritative runtime registry.
-/// 通过权威运行时注册表解析一个可打开的 WebUI 子智能体面板。
-///
-/// # Parameters
-/// 参数
-/// `guard` provides the shared runtime registry and render-only detail cache.
-/// `guard` 提供共享运行时注册表与仅用于渲染的详情缓存。
-/// `workspace_snapshot` provides already-hydrated transcript messages for the selected session.
-/// `workspace_snapshot` 提供当前选中会话已水合的转录消息。
-/// `root_parent_session_id` is the selected root or direct parent session id.
-/// `root_parent_session_id` 是选中根会话或直接父会话标识。
-/// `task_session_id` identifies the child task panel requested by the WebUI.
-/// `task_session_id` 标识 WebUI 请求打开的子任务面板。
-///
-/// # Returns
-/// 返回值
-/// The direct parent session id when the registry says the task is open and reviewable.
-/// 当注册表确认该任务未关闭且可复看时返回直接父会话标识。
-fn open_webui_subagent_panel_from_authoritative_state(
-    guard: &ServiceBridgeState,
-    _workspace_snapshot: &WorkspaceSnapshot,
-    root_parent_session_id: SessionId,
-    task_session_id: SessionId,
-) -> Result<Option<SessionId>, String> {
-    let Some(entry) =
-        open_subagent_registry_entry_for_task(guard, root_parent_session_id, task_session_id)?
-    else {
-        return Ok(None);
-    };
-    Ok(Some(entry.parent_session_id.as_uuid()))
 }
 
 /// Builds a subagent response with a temporary active task selection.
@@ -395,7 +358,7 @@ pub(super) async fn service_close_subagent_task(
     let task_session_id = task_id
         .parse::<SessionId>()
         .map_err(|error| format!("invalid agent task id '{task_id}': {error}"))?;
-    let (resolved_parent_session_id, public_task_id) = {
+    let (resolved_parent_session_id, public_task_id, session_registry) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -407,7 +370,11 @@ pub(super) async fn service_close_subagent_task(
         .ok_or_else(|| {
             format!("agent task `{task_session_id}` is not open under parent `{parent_session_id}`")
         })?;
-        (entry.parent_session_id.as_uuid(), entry.agent_id)
+        (
+            entry.parent_session_id.as_uuid(),
+            entry.agent_id,
+            std::sync::Arc::clone(&guard.session_runtime_registry),
+        )
     };
     webui_trace(
         "close_subagent_task_requested",
@@ -423,6 +390,13 @@ pub(super) async fn service_close_subagent_task(
         )
         .await?;
     let closed_task_ids = closed_subagent_task_ids_from_close_result(&close_result)?;
+    for closed_task_id in &closed_task_ids {
+        session_registry
+            .unregister_lifecycle_session(*closed_task_id)
+            .map_err(|error| {
+                format!("failed to unload closed subagent V1 session '{closed_task_id}': {error}")
+            })?;
+    }
     webui_trace(
         "close_subagent_task_result",
         format!(

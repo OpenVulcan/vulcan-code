@@ -90,4 +90,33 @@ describe("conversation transcript parser source identity", () => {
     expect(block?.summary).toBe("已选择 Command Code / 主账号 / DeepSeek；下一次真实 Provider 请求生效。");
     expect(block?.sourceMessageId).toBe("model-switch-1");
   });
+
+  // Verifies thinking-only request changes never reuse the model-selection notice category.
+  // 验证仅思考强度变化绝不会复用模型选择提示类别。
+  it("projects thinking-only changes as reasoning-effort notices", () => {
+    const message: ConversationMessage = {
+      id: "reasoning-switch-1",
+      conversationId: "conversation",
+      role: "assistant",
+      recordKind: "display-note",
+      body: "Reasoning effort changed",
+      metadata: {
+        notice_kind: "reasoning_effort_switch",
+        activation: "next_provider_request",
+        previous_thinking_level: "high",
+        current_thinking_level: "max",
+      },
+    };
+    const translations: Partial<Record<TranslationKey, string>> = {
+      "conversation.reasoningSwitch.title": "思考强度",
+      "conversation.reasoningSwitch.nextProviderRequest": "思考强度从 {previous} 调整为 {current}；下一次真实 Provider 请求生效。",
+    };
+
+    const [block] = parseConversationBlocks(message, (key) => translations[key] ?? key);
+
+    expect(block?.kind).toBe("notice");
+    expect(block?.title).toBe("思考强度");
+    expect(block?.summary).toBe("思考强度从 high 调整为 max；下一次真实 Provider 请求生效。");
+    expect(block?.summary).not.toContain("模型");
+  });
 });

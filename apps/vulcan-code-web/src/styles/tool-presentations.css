@@ -140,8 +140,46 @@
 .tool-presentation-card > .conversation-collapsible-motion > .conversation-collapsible-motion-inner > * {
   max-height: min(var(--tool-presentation-expanded-height-unit), 56vh);
   overflow: auto;
-  overscroll-behavior: contain;
+  /* Boundary wheel deltas continue into the parent conversation viewport. */
+  /* 边界处的滚轮增量继续传递给父级会话视口。 */
+  overscroll-behavior: auto;
   scrollbar-gutter: stable;
+}
+
+.subagent-orchestration-usage-tooltip-anchor {
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.subagent-orchestration-usage-tooltip {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 30;
+  display: grid;
+  min-width: 220px;
+  gap: 8px;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(3px);
+  transition: opacity 120ms ease, transform 120ms ease, visibility 120ms linear;
+}
+
+.subagent-orchestration-usage-tooltip-anchor:hover .subagent-orchestration-usage-tooltip,
+.subagent-orchestration-usage-tooltip-anchor:focus-within .subagent-orchestration-usage-tooltip {
+  visibility: visible;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.subagent-orchestration-usage-tooltip-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+  color: var(--muted-foreground);
+  font-size: 12px;
 }
 
 .tool-presentation-command-line,

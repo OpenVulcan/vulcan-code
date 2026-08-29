@@ -18,9 +18,13 @@ pub const CONVERSATION_EVENT_WINDOW_V1_TURN_LIMIT: usize = 30;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationEventHydrationV1Request {
-    /// Cross-system session identity resolved only through the V1 SQLite index.
-    /// 仅通过 V1 SQLite 索引解析的跨系统会话身份。
+    /// Cross-system session identity resolved through the V1 SQLite index or an exact embedded-task locator.
+    /// 通过 V1 SQLite 索引或精确嵌入式任务定位器解析的跨系统会话身份。
     pub session_id: String,
+    /// Exact indexed parent session used only for one-shot embedded TaskSession reads.
+    /// 仅用于嵌入式 TaskSession 一次性读取的精确已索引父会话。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
 }
 
 /// Requests one adjacent historical page before an already loaded seq.
@@ -619,6 +623,24 @@ mod tests {
         ProviderRequestContextBreakdown, ProviderRequestTextMeasurement, RequestStreamId,
         ResourceId,
     };
+
+    /// Hydration requests preserve the indexed parent only for exact embedded TaskSession snapshots.
+    /// hydration 请求仅为精确嵌入式 TaskSession 快照保留已索引父会话。
+    #[test]
+    fn embedded_task_hydration_request_uses_exact_camel_case_parent_identity() {
+        let request = ConversationEventHydrationV1Request {
+            session_id: String::from("child-session"),
+            parent_session_id: Some(String::from("parent-session")),
+        };
+
+        assert_eq!(
+            serde_json::to_value(request).expect("serialize embedded task hydration request"),
+            serde_json::json!({
+                "sessionId": "child-session",
+                "parentSessionId": "parent-session",
+            })
+        );
+    }
 
     /// Builds deterministic valid Provider budget evidence for the service golden fixture.
     /// 为服务 golden 夹具构建确定且有效的 Provider 预算证据。

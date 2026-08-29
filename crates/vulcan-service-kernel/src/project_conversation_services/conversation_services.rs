@@ -502,9 +502,8 @@ pub(crate) async fn service_select_conversation(
         guard.controller_runtime.clone()
     };
     let cleanup_result = if let Some(controller_runtime) = controller_runtime {
-        // The admission guard prevents a concurrent lifecycle mutation while the exact V1 row is checked.
-        // 准入护栏用于在检查精确 V1 记录时阻止并发生命周期变更。
-        let _lifecycle_guard = begin_session_lifecycle_transition(&state, [session_id], "检查")?;
+        // Selection is a read/navigation operation and must remain available while the target session runs.
+        // 选择属于读取/导航操作，即使目标会话正在运行也必须保持可用。
         match preflight_session_v1_storage(&controller_runtime, &session_id.to_string())
             .await
             .map_err(|error| error.to_string())?

@@ -14,7 +14,8 @@ use vulcan_session_core::v1::ids::{Seq, TurnId};
 use vulcan_session_core::v1::service_dto::ConversationEventWindowBatch;
 use vulcan_workbench_model::SessionId;
 use vulcan_workspace_store::workspace_store::{
-    SessionV1EventWindowState, SessionV1StorageLocator, locate_session_v1_storage,
+    SessionV1EventWindowState, SessionV1StorageLocator, locate_embedded_task_session_v1,
+    locate_session_v1_storage,
 };
 
 use crate::session_runtime_registry_v1::{
@@ -97,20 +98,32 @@ pub(crate) async fn service_session_event_hydration_v1(
     state: SharedServiceBridgeState,
     request: ConversationEventHydrationV1Request,
 ) -> Result<ConversationEventWindowV1Response, String> {
-    let (session_id, locator, registry) =
-        resolve_exact_locator_and_registry(&state, &request.session_id).await?;
+    let (session_id, locator, registry, snapshot_only) =
+        resolve_hydration_locator_and_registry(&state, &request).await?;
     let persisted = locator
         .load_recent_event_window(CONVERSATION_EVENT_WINDOW_V1_TURN_LIMIT)
         .map_err(|error| format!("failed to load V1 event hydration: {error}"))?;
-    let resident = optional_registered_handle(&registry, session_id)?
-        .map(|handle| capture_resident_snapshot(&handle))
-        .transpose()?;
+    // Embedded TaskSession snapshots deliberately ignore the runtime registry so closed agents remain unloaded.
+    // 嵌入式 TaskSession 快照刻意忽略运行时注册表，确保已关闭智能体保持卸载状态。
+    let resident = if snapshot_only {
+        None
+    } else {
+        optional_registered_handle(&registry, session_id)?
+            .map(|handle| capture_resident_snapshot(&handle))
+            .transpose()?
+    };
     let revision_frontier = authoritative_revision_frontier(
         registry.service_epoch(),
         &persisted.state,
         resident.as_ref(),
     )?;
-    let older_before_seq = persisted.older_before_seq;
+    // One-shot closed-agent reads expose only the latest visible window and never create a paging owner.
+    // 已关闭智能体的一次性读取仅暴露最近可见窗口，绝不创建分页归属。
+    let older_before_seq = if snapshot_only {
+        None
+    } else {
+        persisted.older_before_seq
+    };
     let resident = resident.map(|mut snapshot| {
         if let Some(first_persisted) = persisted.events.first() {
             let first_seq = first_persisted.seq.value();
@@ -136,6 +149,56 @@ pub(crate) async fn service_session_event_hydration_v1(
         ConversationSessionConfigV1::from_session_config(&session_config),
         revision_frontier,
     ))
+}
+
+/// Resolves either an indexed live session or one exact embedded TaskSession snapshot locator.
+/// 解析已索引实时会话，或一个精确嵌入式 TaskSession 快照定位器。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the controller and the shared live-session registry.
+/// `state` 持有控制器与共享实时会话注册表。
+/// `request` identifies the target session and optionally its indexed parent.
+/// `request` 标识目标会话，并可选标识其已索引父会话。
+///
+/// # Returns
+/// 返回值
+/// Returns the target identity, exact locator, registry, and whether the read must remain snapshot-only.
+/// 返回目标身份、精确定位器、注册表，以及本次读取是否必须保持仅快照模式。
+async fn resolve_hydration_locator_and_registry(
+    state: &SharedServiceBridgeState,
+    request: &ConversationEventHydrationV1Request,
+) -> Result<
+    (
+        SessionId,
+        SessionV1StorageLocator,
+        std::sync::Arc<SessionRuntimeRegistry>,
+        bool,
+    ),
+    String,
+> {
+    let Some(parent_session_id) = request.parent_session_id.as_deref() else {
+        let (session_id, locator, registry) =
+            resolve_exact_locator_and_registry(state, &request.session_id).await?;
+        return Ok((session_id, locator, registry, false));
+    };
+    let task_session_id = request.session_id.parse::<SessionId>().map_err(|error| {
+        format!(
+            "invalid embedded task session id '{}': {error}",
+            request.session_id
+        )
+    })?;
+    let (resolved_parent_session_id, parent_locator, registry) =
+        resolve_exact_locator_and_registry(state, parent_session_id).await?;
+    let task_locator =
+        locate_embedded_task_session_v1(&parent_locator, &task_session_id.to_string()).map_err(
+            |error| {
+                format!(
+                    "failed to locate embedded V1 task session '{task_session_id}' under parent '{resolved_parent_session_id}': {error}"
+                )
+            },
+        )?;
+    Ok((task_session_id, task_locator, registry, true))
 }
 
 /// Loads one immediately adjacent historical complete-Turn page from the exact

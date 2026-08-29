@@ -405,6 +405,11 @@ describe("ConversationV1DisplayRenderer", () => {
         current: { provider: "openai", model: "gpt-v2", thinking_level: "max" },
       }, "ui_only"),
       summary(15, {
+        kind: "request_config_changed",
+        previous: { provider: "openai", model: "gpt-v2", thinking_level: "high" },
+        current: { provider: "openai", model: "gpt-v2", thinking_level: "max" },
+      }, "ui_only"),
+      summary(16, {
         kind: "execution_control",
         control_kind: "recovered",
         api_call_id: 32,
@@ -452,7 +457,7 @@ describe("ConversationV1DisplayRenderer", () => {
     expect(seqOffset(markup, 8)).toBe(-1);
     expect(seqOffset(markup, 10)).toBe(-1);
     expect(seqOffset(markup, 11)).toBe(-1);
-    expect(seqOffset(markup, 15)).toBe(-1);
+    expect(seqOffset(markup, 16)).toBe(-1);
     expect(seqOffset(markup, 3)).toBeLessThan(seqOffset(markup, 4));
     expect(seqOffset(markup, 4)).toBeLessThan(seqOffset(markup, 9));
     expect(seqOffset(markup, 9)).toBeLessThan(seqOffset(markup, 12));
@@ -482,6 +487,7 @@ describe("ConversationV1DisplayRenderer", () => {
     expect(markup).toContain("Connection restored");
     expect(markup).toContain("gpt-v1 · high");
     expect(markup).toContain("gpt-v2 · max");
+    expect(markup).toContain("<strong>思考强度</strong><span>high → max</span>");
   });
 
   it("rejects a missing HostOnly sequence instead of inventing display continuity", () => {

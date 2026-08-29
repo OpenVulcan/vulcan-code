@@ -618,6 +618,27 @@ pub(crate) fn emit_live_command_sessions_changed_delta(
     emit_command_sessions_changed_delta(app, state, &controller_runtime, &agent_runtime)
 }
 
+/// Reprojects the authoritative command-session runtime for an explicit WebUI recovery request.
+/// 为 WebUI 的显式恢复请求重新投影权威命令会话运行时。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the refreshed workbench delta to connected WebUI clients.
+/// `app` 将刷新后的工作台增量发送给已连接的 WebUI 客户端。
+/// `state` owns the retained runtime and workbench projection.
+/// `state` 持有保留的运行时与工作台投影。
+///
+/// # Returns
+/// 返回值
+/// The exact current runtime summaries after their workbench delta has been emitted.
+/// 在工作台增量发出后返回精确的当前运行时摘要。
+pub(super) fn service_refresh_command_sessions(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+) -> Result<Vec<CommandSessionSummary>, String> {
+    emit_live_command_sessions_changed_delta(&app, &state)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

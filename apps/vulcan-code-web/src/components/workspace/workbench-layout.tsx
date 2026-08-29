@@ -354,6 +354,9 @@ export function WorkbenchLayout(props: {
   // selectedConversationIdRef lets async submit completions avoid stealing focus after the user switches sessions.
   // selectedConversationIdRef 让异步提交完成时避免在用户已切换会话后抢回焦点。
   const selectedConversationIdRef = React.useRef<string | null>(selectedConversationId);
+  // conversationSelectionRequestVersionRef prevents an older selection response from committing after a newer click.
+  // conversationSelectionRequestVersionRef 防止较早的选择响应在较新的点击之后提交。
+  const conversationSelectionRequestVersionRef = React.useRef(0);
   // draftConversation stores the local-only conversation opened before the first user message is sent.
   // draftConversation 保存发送第一条用户消息前打开的本地草稿会话。
   const [draftConversation, setDraftConversation] = React.useState<DraftConversationSelection | null>(
@@ -1253,20 +1256,20 @@ export function WorkbenchLayout(props: {
   // handleSelectConversation 选择会话并持久化它的已读标记。
   const handleSelectConversation = React.useCallback((conversationId: string) => {
     handleOpenWorkspaceChat();
-    // Update the async authority guard before the service can resolve from an already-retained session.
-    // 在服务可能从已保留会话立即返回前，先同步更新异步权威保护。
-    selectedConversationIdRef.current = conversationId;
-    setSelectedConversationId(conversationId);
-    setWorkbenchState((current) => markConversationLocallyRead(current, conversationId));
+    // requestVersion keeps the visible route on its current fully owned snapshot until the target snapshot is ready.
+    // requestVersion 在目标快照就绪前让可见路由继续使用当前完整归属快照。
+    const requestVersion = conversationSelectionRequestVersionRef.current + 1;
+    conversationSelectionRequestVersionRef.current = requestVersion;
     void selectConversation(conversationId)
       .then((snapshot) => {
-        // Only the still-selected conversation may replace session-sensitive model controls.
-        // 只有仍处于选中状态的会话才能替换会话敏感的模型控制字段。
-        if (
-          snapshot
-          && selectedConversationIdRef.current === conversationId
-          && snapshot.selectedConversationId === conversationId
-        ) {
+        if (conversationSelectionRequestVersionRef.current !== requestVersion) {
+          return null;
+        }
+        // Commit the route and its session-sensitive controls atomically after the exact selection response arrives.
+        // 精确选择响应到达后，原子提交路由及其会话敏感控制字段。
+        selectedConversationIdRef.current = conversationId;
+        setSelectedConversationId(conversationId);
+        if (snapshot && snapshot.selectedConversationId === conversationId) {
           liveStreamStore.resetForWorkbenchSnapshot();
           liveStreamStore.flushNotifications();
           setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(
@@ -1274,14 +1277,24 @@ export function WorkbenchLayout(props: {
             snapshot,
             { selectedConversationSource: "incoming" },
           ));
+        } else {
+          // Browser preview has no service snapshot but still owns a local-only route.
+          // 浏览器预览没有服务快照，但仍持有本地路由。
+          setWorkbenchState((current) => markConversationLocallyRead(current, conversationId));
         }
-        return markConversationRead(conversationId);
+        // Read-marker persistence is ancillary and must never turn a successful navigation into an error toast.
+        // 已读标记持久化属于附属操作，绝不能把成功导航变成错误提示。
+        return markConversationRead(conversationId).catch((error) => {
+          console.warn("[workbench] conversation read marker update failed", error);
+          return null;
+        });
       })
       .then((snapshot) => {
         // Read-marker responses can arrive after another conversation has already been selected.
         // 已读标记响应可能在另一个会话已经被选中后才到达。
         if (
           snapshot
+          && conversationSelectionRequestVersionRef.current === requestVersion
           && selectedConversationIdRef.current === conversationId
           && snapshot.selectedConversationId === conversationId
         ) {
@@ -1291,6 +1304,9 @@ export function WorkbenchLayout(props: {
         }
       })
       .catch(async (error) => {
+        if (conversationSelectionRequestVersionRef.current !== requestVersion) {
+          return;
+        }
         const message = error instanceof Error ? error.message : String(error);
         if (message === "会话已被删除，已经清理。") {
           // Clear the deleted route before applying the refreshed authoritative snapshot.

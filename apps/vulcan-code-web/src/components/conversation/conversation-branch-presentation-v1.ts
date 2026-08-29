@@ -14,6 +14,7 @@ import type {
   StatBucket,
 } from "@/service/conversation-event-window-store";
 import type { ConversationSessionResourceCatalogV1 } from "@/state/conversation-session-resources-v1";
+import { requestConfigChangeKind } from "@/service/conversation-event-display-projection";
 
 // V1RootInputPresentationMetadata stores the exact generation anchor used by restored edit and fork actions.
 // V1RootInputPresentationMetadata 保存恢复后的编辑与分叉操作使用的精确 generation 锚点。
@@ -163,7 +164,29 @@ function conversationMessagesForV1Event(
       }];
     case "display_note":
       return [displayNoteMessage(base, summary, summary.event, rootInput, apiStatsByCall)];
-    case "request_config_changed":
+    case "request_config_changed": {
+      // changeKind is derived from exact persisted fields, never from a display label.
+      // changeKind 从精确持久化字段派生，绝不依赖展示文案。
+      const changeKind = requestConfigChangeKind(summary.event);
+      if (changeKind === "none") {
+        return [];
+      }
+      if (changeKind === "thinking") {
+        return [{
+          ...base,
+          role: "assistant",
+          recordKind: "display-note",
+          title: "Reasoning effort",
+          body: "Reasoning effort changed",
+          metadata: {
+            ...presentationMetadata(summary, rootInput),
+            notice_kind: "reasoning_effort_switch",
+            activation: "next_provider_request",
+            previous_thinking_level: summary.event.previous.thinking_level,
+            current_thinking_level: summary.event.current.thinking_level,
+          },
+        }];
+      }
       return [{
         ...base,
         role: "assistant",
@@ -179,6 +202,7 @@ function conversationMessagesForV1Event(
           model_id: summary.event.current.model,
         },
       }];
+    }
     case "api_stats":
       return [];
     case "subagent_return":

@@ -679,53 +679,6 @@ pub(crate) fn create_or_load_embedded_task_session_v1(
     Ok(handle)
 }
 
-/// Loads one persisted embedded task session through its exact root-session locator.
-/// 通过根会话精确定位器加载一个已持久化的内嵌任务会话。
-///
-/// # Parameters
-/// 参数
-/// `controller` resolves the indexed root session without scanning directories.
-/// `controller` 在不扫描目录的前提下解析已索引的根会话。
-/// `registry` owns the unique process-local root and child handles.
-/// `registry` 持有进程内唯一的根会话与子会话句柄。
-/// `root_session_id` is the indexed root session that owns the TASK directory.
-/// `root_session_id` 是拥有 TASK 目录的已索引根会话。
-/// `task_session_id` is the exact embedded child session identity.
-/// `task_session_id` 是精确的内嵌子会话身份。
-///
-/// # Returns
-/// 返回值
-/// The unique loaded child handle after persisted interruption projection is durable.
-/// 在持久化中断投影可靠落盘后返回唯一的子会话句柄。
-pub(crate) async fn get_or_load_embedded_task_session_v1_for_display(
-    controller: &ControllerRuntimeHandle,
-    registry: &SessionRuntimeRegistry,
-    root_session_id: SessionId,
-    task_session_id: SessionId,
-) -> Result<Arc<SessionHandle>, SessionV1LifecycleError> {
-    let root_handle = get_or_load_session_v1(controller, registry, root_session_id).await?;
-    let root_locator = root_handle.storage_locator()?;
-    let child_locator =
-        locate_embedded_task_session_v1(&root_locator, &task_session_id.to_string())?;
-    let handle = registry.get_or_load(task_session_id, move || {
-        let loaded = load_session_v1_tail(&child_locator)?;
-        if loaded.metadata.session_id != task_session_id.to_string() {
-            return Err(SessionRuntimeError::LoadedSessionDocumentIdentityMismatch {
-                expected: task_session_id,
-                actual: loaded.metadata.session_id,
-            });
-        }
-        let mut document = loaded.document;
-        let projected = document.project_persisted_interruptions()?;
-        let handle = SessionHandle::new(task_session_id, loaded.locator, document);
-        if projected > 0 {
-            handle.flush_all()?;
-        }
-        Ok(handle)
-    })?;
-    Ok(handle)
-}
-
 /// Resolves SQLite first, then loads or reuses the unique process-local handle.
 /// 先通过 SQLite 定位，再加载或复用进程内唯一句柄。
 pub(crate) async fn get_or_load_session_v1(
@@ -1703,23 +1656,19 @@ mod tests {
         );
 
         let display_registry = SessionRuntimeRegistry::default();
-        let displayed = get_or_load_embedded_task_session_v1_for_display(
-            &fixture.controller,
-            &display_registry,
-            root_session_id,
-            child_session_id,
-        )
-        .await
-        .expect("load embedded task through the exact root locator");
-        let displayed_events = displayed
-            .read(|document| document.events().to_vec())
-            .expect("read displayed embedded task events");
-        assert_eq!(displayed_events, created_events);
+        let displayed = child_locator
+            .load_recent_event_window(30)
+            .expect("read embedded task through the exact root-derived locator");
+        assert_eq!(displayed.events, created_events);
+        assert!(matches!(
+            display_registry.get(child_session_id),
+            Err(SessionRuntimeError::SessionNotRegistered(actual)) if actual == child_session_id
+        ));
         assert!(
             locate_session_v1_storage(&fixture.controller, &child_session_id.to_string())
                 .await
                 .is_err(),
-            "display loading must not create an embedded-task SQLite row"
+            "snapshot reading must not create an embedded-task SQLite row"
         );
 
         let reload_registry = SessionRuntimeRegistry::default();

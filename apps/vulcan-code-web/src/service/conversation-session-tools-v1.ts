@@ -115,31 +115,53 @@ export function selectConversationSessionTerminalsV1(
   });
 }
 
-/** Selects currently running terminals by intersecting durable V1 identities with live runtime facts.
- * 通过求可靠 V1 身份与实时运行态事实的交集，选择当前仍在运行的终端。
+/** Selects the newest exact terminal-tool mutation token in one V1 event window.
+ * 选择一个 V1 事件窗口中最新的精确终端工具变更令牌。
  *
- * Parameters: durable contains V1 terminal snapshots and live contains runtime summaries.
- * 参数：durable 包含 V1 终端快照，live 包含运行态摘要。
- * Returns: only matching, owner-consistent, currently running terminals in durable first-reference order.
- * 返回值：仅返回身份匹配、归属一致且当前运行中的终端，并保留可靠首次引用顺序。
+ * Parameters: snapshot is the atomic selected-session V1 event window.
+ * 参数：snapshot 是选中会话的原子 V1 事件窗口。
+ * Returns: a stable token that changes for every completed terminal mutation, or null when none exists.
+ * 返回值：每次终端变更完成时都会变化的稳定令牌；不存在时返回 null。
  */
-export function mergeConversationSessionTerminalsV1(
-  durable: readonly CommandSessionSummary[],
+export function selectConversationSessionTerminalMutationTokenV1(
+  snapshot: ConversationEventWindowControllerSnapshot,
+): string | null {
+  if (!snapshot.owner) {
+    return null;
+  }
+  let latest: ConversationEventSummary | null = null;
+  for (const summary of snapshot.events) {
+    if (
+      summary.event.kind === "tool_call"
+      && summary.event.tool_name === "terminal_session"
+      && summary.event.status === "completed"
+    ) {
+      latest = summary;
+    }
+  }
+  return latest
+    ? `${snapshot.owner.session_id}:${latest.seq}:${latest.event_revision}:${latest.updated_at_ms}`
+    : null;
+}
+
+/** Selects the live running terminals owned by one exact V1 conversation.
+ * 选择一个精确 V1 会话拥有的实时运行终端。
+ *
+ * Parameters: ownerSessionId is the selected durable conversation id and live contains runtime summaries.
+ * 参数：ownerSessionId 是选中的可靠会话标识，live 包含运行态摘要。
+ * Returns: owner-consistent running terminal summaries in runtime order, excluding internal and lost sessions.
+ * 返回值：按运行时顺序返回归属一致的运行终端摘要，并排除内部终端与丢失会话。
+ */
+export function selectLiveConversationSessionTerminalsV1(
+  ownerSessionId: string,
   live: readonly CommandSessionSummary[],
 ): CommandSessionSummary[] {
-  const liveById = new Map(live.map((summary) => [summary.id, summary]));
-  return durable.flatMap((summary) => {
-    const liveSummary = liveById.get(summary.id);
-    if (
-      !liveSummary
-      || liveSummary.status !== "running"
-      || Boolean(liveSummary.lost)
-      || liveSummary.ownerSessionId !== summary.ownerSessionId
-    ) {
-      return [];
-    }
-    return [liveSummary];
-  });
+  return live.filter((summary) => (
+    summary.id !== "vldb-controller"
+    && summary.status === "running"
+    && !summary.lost
+    && summary.ownerSessionId === ownerSessionId
+  ));
 }
 
 /** Extracts the exact host-result envelope persisted by one terminal tool event.

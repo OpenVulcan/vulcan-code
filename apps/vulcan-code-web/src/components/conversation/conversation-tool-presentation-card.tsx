@@ -1864,10 +1864,42 @@ function SubagentUsageChip(props: {
   // 翻译辅助函数。
   t: (key: TranslationKey) => string;
 }) {
+  // summaryText is shared by the compact trigger and its accessible label.
+  // summaryText 由紧凑触发器及其无障碍标签共享。
+  const summaryText = subagentUsageSummaryText(props.summary, props.t);
+  // detailRows preserve every authoritative usage dimension inside the hover/focus card.
+  // detailRows 在悬浮/焦点卡片中保留全部权威用量维度。
+  const detailRows = [
+    formatSubagentUsageTranslation(props.t("conversation.stats.providerCalls"), props.summary.providerCallCount),
+    formatSubagentUsageTranslation(props.t("conversation.stats.toolCalls"), props.summary.toolCallCount),
+    formatSubagentUsageTranslation(props.t("conversation.stats.totalTokens"), props.summary.totalTokens),
+    formatSubagentUsageTranslation(props.t("conversation.stats.cachedTokensCompact"), props.summary.cachedInputTokens),
+  ];
+  // tooltipId connects the focusable usage chip to its state-free detail card.
+  // tooltipId 将可聚焦的用量胶囊与无状态详情卡关联起来。
+  const tooltipId = React.useId();
   return (
-    <div className="subagent-orchestration-usage">
-      <Bot aria-hidden="true" size={13} />
-      <span>{subagentUsageSummaryText(props.summary, props.t)}</span>
+    <div className="subagent-orchestration-usage-tooltip-anchor">
+      <div
+        aria-describedby={tooltipId}
+        aria-label={summaryText}
+        className="subagent-orchestration-usage"
+        data-subagent-usage-tooltip="true"
+        tabIndex={0}
+      >
+        <Bot aria-hidden="true" size={13} />
+        <span>{summaryText}</span>
+      </div>
+      <div
+        className="context-usage-tooltip subagent-orchestration-usage-tooltip"
+        id={tooltipId}
+        role="tooltip"
+      >
+        <strong>{props.t("conversation.subagent.detail.usage")}</strong>
+        <div className="subagent-orchestration-usage-tooltip-grid">
+          {detailRows.map((row) => <span key={row}>{row}</span>)}
+        </div>
+      </div>
     </div>
   );
 }
