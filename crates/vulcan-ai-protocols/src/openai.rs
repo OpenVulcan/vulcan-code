@@ -582,8 +582,9 @@ fn encode_messages(request: &AiExecutionRequest) -> Result<Vec<Value>, ProtocolC
                 }));
             }
             let role = match message.role {
-                MessageRole::System => "system",
-                MessageRole::Developer => "developer",
+                // Chat compatibility uses system for both instruction roles; canonical history stays unchanged.
+                // Chat 兼容层将两类指令角色都投影为 system；规范历史保持不变。
+                MessageRole::System | MessageRole::Developer => "system",
                 MessageRole::User => "user",
                 MessageRole::Assistant => "assistant",
                 MessageRole::Tool => {
@@ -1668,6 +1669,64 @@ mod tests {
 
         assert!(output["output"].is_array());
         assert_eq!(output["output"][1]["type"], "input_image");
+    }
+
+    /// Verifies direct Chat encoding maps developer to system while Responses retains canonical roles.
+    /// 验证直接 Chat 编码将 developer 映射到 system，而 Responses 保留规范角色。
+    #[test]
+    fn chat_developer_role_is_system_without_mutating_responses_history() {
+        // request contains developer text plus structured policy in the same canonical message.
+        // request 在同一规范消息内包含 developer 文本与结构化策略。
+        let mut request = codex_request();
+        request.messages.insert(
+            1,
+            AiMessage {
+                role: MessageRole::Developer,
+                content: vec![
+                    ContentItem::Text {
+                        text: String::from("policy\n"),
+                    },
+                    ContentItem::StructuredJson {
+                        value: json!({"mode":"safe"}),
+                    },
+                ],
+                provider_context_items: Vec::new(),
+            },
+        );
+        // chat is the direct protocol entry point, separate from Responses-baseline projection.
+        // chat 是独立于 Responses 基线投影的直接协议入口。
+        let chat = OpenAiChatProfile
+            .encode(&request)
+            .expect("Chat developer conversion");
+        assert_eq!(
+            chat.body["messages"][1],
+            json!({"role":"system","content":"policy\n{\"mode\":\"safe\"}"})
+        );
+        assert!(
+            chat.body["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|message| message["role"] != "developer")
+        );
+        assert_eq!(request.messages[1].role, MessageRole::Developer);
+        for profile in [
+            &OpenAiResponsesProfile as &dyn ProtocolProfile,
+            &OpenAiCodexResponsesProfile,
+        ] {
+            // responses must still carry developer independently of the selected Chat wire behavior.
+            // responses 必须仍独立于 Chat 线路行为保留 developer。
+            let responses = profile
+                .encode(&request)
+                .expect("Responses developer preservation");
+            assert!(
+                responses.body["input"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|message| message["role"] == "developer")
+            );
+        }
     }
 
     /// Verifies a proven Responses cursor emits `previous_response_id` and only the uncovered suffix.

@@ -335,6 +335,80 @@ mod tests {
         assert!(result.get("enable_thinking").is_none());
     }
 
+    /// Verifies Chat maps developer instructions to system without losing array content or ordinary roles.
+    /// 验证 Chat 将 developer 指令映射到 system，且不丢失数组文本或普通角色。
+    #[test]
+    fn chat_developer_instructions_preserve_order_and_text_parts() {
+        // body mixes all supported instruction carriers with a user message containing literal role text.
+        // body 混合全部支持的指令载体，并包含带角色字样的普通用户消息。
+        let body = json!({
+            "model":"test-chat", "instructions":"root",
+            "input":[
+                {"role":"system","content":[{"type":"input_text","text":"system-a"},{"type":"input_text","text":"system-b"}]},
+                {"role":"developer","content":[{"type":"input_text","text":"developer-a"},{"type":"input_text","text":"developer-b"}]},
+                {"role":"user","content":"literal developer text"},
+                {"type":"message","role":"developer","content":"later policy"},
+                {"type":"message","role":"assistant","content":"answer"},
+                {"type":"function_call","call_id":"call-1","name":"lookup","arguments":"{}"},
+                {"type":"function_call_output","call_id":"call-1","output":"done"}
+            ]
+        });
+        // converted consumes only a request copy, never rewriting canonical roles.
+        // converted 仅消费请求副本，绝不改写规范角色。
+        let converted = responses_to_chat_completions(body.clone()).expect("Chat instructions");
+        let messages = converted["messages"].as_array().expect("Chat messages");
+        assert_eq!(
+            messages[0],
+            json!({"role":"system","content":"root\n\nsystem-a\nsystem-b\n\ndeveloper-a\ndeveloper-b\n\nlater policy"})
+        );
+        assert!(
+            !messages
+                .iter()
+                .any(|message| message["role"] == "developer")
+        );
+        assert_eq!(
+            messages[1],
+            json!({"role":"user","content":"literal developer text"})
+        );
+        assert_eq!(messages[2]["role"], "assistant");
+        assert_eq!(messages[2]["tool_calls"][0]["id"], "call-1");
+        assert_eq!(messages[3]["role"], "tool");
+        assert_eq!(messages[3]["tool_call_id"], "call-1");
+        assert_eq!(body["input"][1]["role"], "developer");
+        assert_eq!(
+            project_responses_for_provider(
+                body.clone(),
+                &ProviderRouteContext {
+                    upstream_protocol: UpstreamProtocol::OpenAiResponses,
+                    anthropic_reasoning_mode: AnthropicReasoningMode::NativeBudget,
+                }
+            )
+            .expect("Responses role preservation"),
+            body
+        );
+    }
+
+    /// Verifies unsupported instruction media fails explicitly rather than disappearing during system merging.
+    /// 验证不支持的指令媒体明确失败，而非在 system 合并时静默消失。
+    #[test]
+    fn chat_developer_instruction_media_is_not_silently_discarded() {
+        for role in ["system", "developer"] {
+            // body intentionally violates the text-only instruction boundary.
+            // body 特意违反仅文本指令边界。
+            let body = json!({"model":"test-chat","input":[{"role":role,"content":[
+                {"type":"input_text","text":"keep this"},
+                {"type":"input_image","image_url":"https://example.com/image.png"}
+            ]}]});
+            let error = responses_to_chat_completions(body)
+                .expect_err("instruction image must not be dropped");
+            assert!(
+                error
+                    .to_string()
+                    .contains("system messages require text content")
+            );
+        }
+    }
+
     #[test]
     fn function_call_and_output_keep_tool_identity() {
         let result = responses_to_chat_completions(json!({

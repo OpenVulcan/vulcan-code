@@ -36,7 +36,7 @@ pub fn responses_to_chat_completions(body: Value) -> Result<Value, LlmCoreError>
     }
     result.insert(
         "messages".to_string(),
-        Value::Array(collapse_system_messages(messages)),
+        Value::Array(collapse_system_messages(messages)?),
     );
 
     if let Some(limit) = body.get("max_output_tokens") {
@@ -174,6 +174,9 @@ fn append_input_item(item: &Value, messages: &mut Vec<Value>) -> Result<(), LlmC
     match kind {
         "message" => {
             let role = item.get("role").and_then(Value::as_str).unwrap_or("user");
+            // Normalize developer to the system role used by the compatible Chat contract.
+            // 将 developer 规范化为兼容 Chat 契约使用的 system 角色。
+            let role = if role == "developer" { "system" } else { role };
             let content = map_message_content(item.get("content").unwrap_or(&Value::Null))?;
             let mut message = json!({"role": role, "content": content});
             if let Some(reasoning) = item.get("reasoning_content") {
@@ -470,27 +473,40 @@ fn json_string(value: &Value) -> String {
     }
 }
 
-/// Moves all system messages to the only position accepted by strict providers.
-/// 将所有 system 消息移动到严格供应商接受的唯一位置。
-fn collapse_system_messages(messages: Vec<Value>) -> Vec<Value> {
+/// Merges compatible Chat instructions at the head while preserving ordered text parts.
+/// 在兼容 Chat 的开头合并指令，并保留有序文本块。
+/// `messages` contains mapped Chat content; returns the merged sequence or an error for non-text instructions.
+/// `messages` 包含已映射的 Chat 内容；返回合并序列，非文本指令则返回错误。
+fn collapse_system_messages(messages: Vec<Value>) -> Result<Vec<Value>, LlmCoreError> {
     let mut system_text = Vec::new();
     let mut rest = Vec::new();
     for message in messages {
         if message.get("role").and_then(Value::as_str) == Some("system") {
-            if let Some(text) = message.get("content").and_then(Value::as_str)
-                && !text.trim().is_empty()
+            // Mapped Responses instructions are commonly text arrays, not scalar strings.
+            // 映射后的 Responses 指令通常是文本数组，而不是单个字符串。
+            let content = &message["content"];
+            if let Some(parts) = content.as_array()
+                && parts.iter().any(|part| part["type"] != "text")
             {
-                system_text.push(text.to_string());
+                return Err(LlmCoreError::new(
+                    "Chat system messages require text content; non-text instruction parts cannot be discarded.",
+                ));
+            }
+            // Preserve ordered text parts instead of silently dropping the complete instruction message.
+            // 保留有序文本块，避免静默丢弃整条指令消息。
+            let text = instruction_text(content);
+            if !text.trim().is_empty() {
+                system_text.push(text);
             }
         } else {
             rest.push(message);
         }
     }
     if system_text.is_empty() {
-        rest
+        Ok(rest)
     } else {
         let mut result = vec![json!({"role":"system","content":system_text.join("\n\n")})];
         result.extend(rest);
-        result
+        Ok(result)
     }
 }

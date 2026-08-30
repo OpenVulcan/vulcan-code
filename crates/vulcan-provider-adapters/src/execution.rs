@@ -5023,12 +5023,12 @@ fn project_responses_baseline_for_provider(
     // nativeCodexResponses 是保留 Codex 传输身份的唯一冻结权威。
     let native_codex_responses = route_uses_native_codex_responses(route);
     let Some(upstream_protocol) = upstream_protocol_for_route(route) else {
-        if !native_codex_responses {
-            // An unregistered target protocol never inherits Codex transport identity.
-            // 未注册的目标协议绝不继承 Codex 传输身份。
-            encoded.headers.clear();
-        }
-        return Ok(encoded);
+        // A standalone decoder does not prove that this Responses-first path can encode its protocol.
+        // 独立解码器存在，并不能证明这条 Responses 优先链路能够编码对应协议。
+        return Err(pre_dispatch_failure(format!(
+            "No Responses request converter is registered for protocol `{}`; dispatch was not attempted.",
+            route.protocol_route.protocol_profile_id
+        )));
     };
     if !native_codex_responses {
         // Canonical Codex encoding is an internal body baseline. Every other declared protocol
@@ -10660,6 +10660,239 @@ mod tests {
                     "{profile_id}"
                 );
             }
+        }
+    }
+
+    /// Verifies all production conversion families preserve canonical role semantics and reversible Responses history.
+    /// 验证全部生产转换协议族保留规范角色语义，并可从原历史重新投影为 Responses。
+    #[test]
+    fn protocol_roles_preserve_instruction_and_tool_identity_across_switches() {
+        // client exercises the real Responses-first boundary instead of standalone encoders only.
+        // client 验证真实 Responses 优先边界，而不只测试独立编码器。
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        // request includes each of the five canonical roles and a complete assistant/tool pair.
+        // request 包含全部五类规范角色，以及完整的助手调用与工具结果配对。
+        let mut request = minimal_request();
+        request.messages.insert(
+            0,
+            AiMessage {
+                role: MessageRole::System,
+                content: vec![ContentItem::Text {
+                    text: String::from("root-policy"),
+                }],
+                provider_context_items: Vec::new(),
+            },
+        );
+        request.messages.insert(
+            1,
+            AiMessage {
+                role: MessageRole::Developer,
+                content: vec![
+                    ContentItem::Text {
+                        text: String::from("developer-policy-a"),
+                    },
+                    ContentItem::Text {
+                        text: String::from("developer-policy-b"),
+                    },
+                ],
+                provider_context_items: Vec::new(),
+            },
+        );
+        request.messages.extend([
+            AiMessage {
+                role: MessageRole::Assistant,
+                content: vec![
+                    ContentItem::Text {
+                        text: String::from("assistant-answer"),
+                    },
+                    ContentItem::ToolCall {
+                        call: vulcan_ai_contract::ToolCall {
+                            id: String::from("role-call-1"),
+                            name: String::from("lookup"),
+                            arguments: json!({}),
+                            signature: None,
+                        },
+                    },
+                ],
+                provider_context_items: Vec::new(),
+            },
+            AiMessage {
+                role: MessageRole::Tool,
+                content: vec![ContentItem::ToolResult {
+                    result: vulcan_ai_contract::ToolResult {
+                        call_id: String::from("role-call-1"),
+                        is_error: false,
+                        content: json!("tool-result"),
+                    },
+                }],
+                provider_context_items: Vec::new(),
+            },
+        ]);
+        // original proves protocol selection never overwrites original roles or tool identities.
+        // original 证明协议选择不会覆盖原始角色或工具身份。
+        let original = request.messages.clone();
+        let mut route = pinned_openrouter_route(OPENAI_CHAT_PROFILE_ID);
+        for profile in [
+            OPENAI_CHAT_PROFILE_ID,
+            ANTHROPIC_MESSAGES_PROFILE_ID,
+            ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
+            CLAUDE_CODE_MESSAGES_PROFILE_ID,
+            GEMINI_GENERATE_CONTENT_PROFILE_ID,
+            GEMINI_INTERACTIONS_PROFILE_ID,
+            GOOGLE_CODE_ASSIST_PROFILE_ID,
+            OPENAI_RESPONSES_PROFILE_ID,
+            OPENAI_CODEX_RESPONSES_PROFILE_ID,
+        ] {
+            route.protocol_route.protocol_profile_id = profile.to_string();
+            // encoded retains every semantic marker while applying the target's exact role vocabulary.
+            // encoded 保留全部语义标记，同时使用目标协议的精确角色词汇。
+            let encoded = client
+                .encode_request(&route, &request)
+                .expect("role projection");
+            for marker in [
+                "root-policy",
+                "developer-policy-a",
+                "developer-policy-b",
+                "assistant-answer",
+                "role-call-1",
+                "tool-result",
+                "hello",
+            ] {
+                assert!(
+                    encoded.body.to_string().contains(marker),
+                    "{profile} lost {marker}"
+                );
+            }
+            match upstream_protocol_for_profile_id(profile).expect("production family") {
+                UpstreamProtocol::OpenAiChatCompletions => {
+                    assert_eq!(encoded.body["messages"][0]["role"], "system");
+                    assert_eq!(
+                        encoded.body["messages"][0]["content"],
+                        "root-policy\n\ndeveloper-policy-a\ndeveloper-policy-b"
+                    );
+                    assert!(encoded.body["messages"].as_array().unwrap().iter().all(
+                        |message| matches!(
+                            message["role"].as_str(),
+                            Some("system" | "user" | "assistant" | "tool")
+                        )
+                    ));
+                    assert_eq!(encoded.body["messages"][3]["tool_call_id"], "role-call-1");
+                }
+                UpstreamProtocol::AnthropicMessages => {
+                    assert!(
+                        encoded.body["system"]
+                            .as_str()
+                            .unwrap()
+                            .contains("developer-policy-a")
+                    );
+                    assert!(encoded.body["messages"].as_array().unwrap().iter().all(
+                        |message| matches!(message["role"].as_str(), Some("user" | "assistant"))
+                    ));
+                    assert_eq!(
+                        encoded.body["messages"][2]["content"][0]["tool_use_id"],
+                        "role-call-1"
+                    );
+                }
+                UpstreamProtocol::GeminiGenerateContent | UpstreamProtocol::GoogleCodeAssist => {
+                    // Code Assist wraps the same GenerateContent message contract in request.
+                    // Code Assist 在 request 内封装相同的 GenerateContent 消息契约。
+                    let body = if profile == GOOGLE_CODE_ASSIST_PROFILE_ID {
+                        &encoded.body["request"]
+                    } else {
+                        &encoded.body
+                    };
+                    assert_eq!(
+                        body["systemInstruction"]["parts"].as_array().unwrap().len(),
+                        3
+                    );
+                    assert!(
+                        body["contents"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .all(|message| matches!(
+                                message["role"].as_str(),
+                                Some("user" | "model")
+                            ))
+                    );
+                    assert_eq!(
+                        body["contents"][2]["parts"][0]["functionResponse"]["id"],
+                        "role-call-1"
+                    );
+                }
+                UpstreamProtocol::GeminiInteractions => {
+                    assert!(
+                        encoded.body["system_instruction"]
+                            .as_str()
+                            .unwrap()
+                            .contains("developer-policy-b")
+                    );
+                    assert_eq!(encoded.body["input"][0]["type"], "user_input");
+                    assert_eq!(encoded.body["input"][1]["type"], "model_output");
+                    assert_eq!(encoded.body["input"][2]["type"], "function_call");
+                    assert_eq!(encoded.body["input"][3]["type"], "function_result");
+                }
+                UpstreamProtocol::OpenAiResponses => {
+                    assert_eq!(encoded.body["input"][0]["role"], "developer");
+                    assert_eq!(encoded.body["input"][3]["type"], "function_call");
+                    assert_eq!(encoded.body["input"][4]["type"], "function_call_output");
+                }
+            }
+            assert_eq!(request.messages, original);
+        }
+        // Returning to Responses starts from canonical messages, never by guessing merged system text.
+        // 切回 Responses 从规范消息开始，绝不从合并后的 system 文本猜测原角色。
+        route.protocol_route.protocol_profile_id = String::from(OPENAI_RESPONSES_PROFILE_ID);
+        let restored = client
+            .encode_request(&route, &request)
+            .expect("restored Responses");
+        assert_eq!(restored.body["input"][0]["role"], "developer");
+        assert_eq!(
+            restored.body["input"][0]["content"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    /// Verifies missing protocol converters fail before dispatch instead of forwarding a Responses body.
+    /// 验证缺少协议转换器时在发送前失败，而非转发 Responses 正文。
+    #[test]
+    fn protocol_roles_reject_missing_conversion_before_dispatch() {
+        // client uses the same public boundary as normal provider requests.
+        // client 使用与普通供应商请求相同的公共边界。
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        // route is an isolated fixture; registration alone must not imply a canonical converter exists.
+        // route 是隔离夹具；仅注册协议不能推断规范转换器存在。
+        let mut route = pinned_openrouter_route(OPENAI_CHAT_PROFILE_ID);
+        for profile in [
+            vulcan_ai_protocols::COHERE_CHAT_PROFILE_ID,
+            "unregistered.protocol",
+        ] {
+            route.protocol_route.protocol_profile_id = profile.to_string();
+            // failure must accurately report that no wire payload has been sent.
+            // failure 必须准确报告尚未发送任何线路载荷。
+            let failure = client
+                .encode_request(&route, &minimal_request())
+                .expect_err("missing converter");
+            assert!(
+                failure
+                    .error
+                    .message
+                    .contains("No Responses request converter")
+            );
+            assert_eq!(
+                failure.error.dispatch_outcome,
+                DispatchOutcome::NotDispatched
+            );
+            assert!(!failure.error.retryable);
         }
     }
 

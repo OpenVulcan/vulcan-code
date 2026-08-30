@@ -8,6 +8,7 @@ import {
   FileText,
   FolderTree,
   GitBranch,
+  Hammer,
   ListChecks,
   MessageCircleQuestionMark,
   Pencil,
@@ -313,13 +314,15 @@ function NativeSemanticToolPresentationCard(props: {
   // targetLabel exposes the exact prompt-skill name while the detail remains folded.
   // targetLabel 在详情折叠时展示精确的提示词技能名称。
   const targetLabel = nativeSemanticTargetLabel(props.presentation);
-  // Icon follows the typed tool family and reuses the existing Goal and Plan symbols.
-  // Icon 按强类型工具族复用既有目标与方案图标。
+  // Icon follows the typed tool family and reuses the existing Goal, Plan and Skill symbols.
+  // Icon 按强类型工具族复用既有目标、方案与技能图标。
   const Icon = props.presentation.family === "goal"
     ? Target
     : props.presentation.family === "todo"
       ? ListChecks
-      : Braces;
+      : props.presentation.family === "skill"
+        ? Hammer
+        : Braces;
   // markdown keeps TODO previews authoritative while other families prefer terminal output.
   // markdown 保持 TODO 预览权威，其他卡片族优先使用终态输出。
   const markdown = props.presentation.family === "todo"

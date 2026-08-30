@@ -191,14 +191,14 @@ const WAIT_AGENT_PRESENTATION: SubagentOrchestrationPresentation = {
 };
 
 describe("ToolPresentationCard file access icons", () => {
-  // Goal operations share Target, TODO uses the Plan icon, and unrelated native tools stay unchanged.
-  // 目标操作共用靶心，TODO 使用方案图标，其他原生工具保持不变。
+  // Goal, TODO and skill operations reuse their existing navigation icons.
+  // 目标、TODO 和技能操作复用各自既有的导航图标。
   it.each([
     [GET_GOAL_PRESENTATION, "lucide-target"],
     [{ ...GET_GOAL_PRESENTATION, toolId: "create_goal" as const, titleKey: "toolPresentation.native.createGoal" as const }, "lucide-target"],
     [{ ...GET_GOAL_PRESENTATION, toolId: "update_goal" as const, titleKey: "toolPresentation.native.updateGoal" as const }, "lucide-target"],
     [TODO_PRESENTATION, "lucide-list-checks"],
-    [SKILL_PRESENTATION, "lucide-braces"],
+    [SKILL_PRESENTATION, "lucide-hammer"],
   ] as const)("renders %o with its semantic icon %s", (presentation, iconClass) => {
     // Both active and finished calls retain the same business icon.
     // 执行中和已完成调用保持同一个业务图标。
@@ -217,7 +217,7 @@ describe("ToolPresentationCard file access icons", () => {
         </I18nProvider>,
       );
       expect(markup).toContain(iconClass);
-      if (presentation.family === "goal" || presentation.family === "todo") {
+      if (presentation.family === "goal" || presentation.family === "todo" || presentation.family === "skill") {
         expect(markup).not.toContain("lucide-braces");
       }
     }
