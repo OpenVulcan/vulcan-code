@@ -3,6 +3,70 @@
 
 use super::*;
 
+/// Metadata-only model controls survive index reloads without claiming that history was hydrated.
+/// 纯 metadata 模型控件跨索引重载保留，但不声称历史已水合。
+#[test]
+fn preserve_active_session_run_state_keeps_metadata_only_model_selection() {
+    // The cold session has no active kernel, loaded history, or conversation context.
+    // 冷会话没有活动内核、已加载历史或会话上下文。
+    let session_id = SessionId::from_u128(0x7120);
+    // Only request configuration has been restored before the next generic index refresh.
+    // 下一次通用索引刷新之前，仅恢复了请求配置。
+    let previous = WorkspaceSnapshot {
+        task_projects: Vec::new(),
+        archived_task_projects: Vec::new(),
+        sessions: vec![SessionSummary::new(
+            session_id,
+            None,
+            "Cold",
+            "",
+            SessionState::Completed,
+            0,
+            0,
+            "",
+        )],
+        archived_sessions: Vec::new(),
+        session_runtime_state: BTreeMap::from([(
+            session_id,
+            SessionRuntimeStateEntry {
+                active_provider_id: Some("kimi".into()),
+                active_connection_id: Some("kimi-account".into()),
+                active_model_id: Some("k3-256k".into()),
+                ..Default::default()
+            },
+        )]),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::new(),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: session_id,
+        hydrated_session_ids: BTreeSet::new(),
+    };
+    // The SQLite index intentionally has no legacy runtime adapters.
+    // SQLite 索引刻意不包含旧运行态适配器。
+    let mut refreshed = previous.clone();
+    refreshed.session_runtime_state.clear();
+    // Capture follows the production generic-refresh path, without submitted/active exceptions.
+    // 捕获遵循生产通用刷新路径，不使用已提交或活动中的例外。
+    let preserved = capture_preserved_workspace_run_state(Some(&previous), &BTreeSet::new(), None);
+    preserve_active_session_run_state(preserved.as_ref(), &mut refreshed);
+    assert_eq!(
+        refreshed.session_runtime_state[&session_id]
+            .active_model_id
+            .as_deref(),
+        Some("k3-256k")
+    );
+    assert_eq!(
+        refreshed.session_runtime_state[&session_id]
+            .active_connection_id
+            .as_deref(),
+        Some("kimi-account")
+    );
+    assert!(refreshed.hydrated_session_ids.is_empty());
+    assert!(!runtime_state_has_concrete_conversation_context(
+        &refreshed.session_runtime_state[&session_id]
+    ));
+}
+
 /// Verifies stale workspace refreshes cannot drop an in-memory prompt turn that has not reached disk.
 /// 验证陈旧工作区刷新不能丢弃尚未落盘的内存提示词回合。
 #[test]

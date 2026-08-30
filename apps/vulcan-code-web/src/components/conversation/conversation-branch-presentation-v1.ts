@@ -16,6 +16,7 @@ import type {
 } from "@/service/conversation-event-window-store";
 import type { ConversationSessionResourceCatalogV1 } from "@/state/conversation-session-resources-v1";
 import { requestConfigChangeKind } from "@/service/conversation-event-display-projection";
+import { projectTurnUsageCoverage, type TurnUsageCoverage } from "@/service/conversation-usage-coverage";
 import { modelSwitchRouteLabel } from "./conversation-model-switch";
 import { goalNoticeTitle } from "./conversation-goal-notice";
 import { parseSystemProviderError } from "./conversation-system-error-card";
@@ -73,6 +74,9 @@ export function projectConversationBranchPresentationV1(
   // 已配置的显示目录；隔离宿主可以不带供应商配置。
   providers: readonly ProviderSummary[] = [],
 ): ConversationBranchPresentationV1 {
+  // usageCoverageBySeq retains known API contributions separately from strict persisted totals.
+  // usageCoverageBySeq 将已知 API 贡献与严格持久化总量分开保留。
+  const usageCoverageBySeq = projectTurnUsageCoverage(events);
   // apiStatsByCall makes terminal request facts available without changing event display order.
   // apiStatsByCall 让终态请求事实可供读取，同时不改变事件显示顺序。
   const apiStatsByCall = new Map<number, ApiStatsBody>();
@@ -108,6 +112,7 @@ export function projectConversationBranchPresentationV1(
       resources,
       providers,
       t,
+      usageCoverageBySeq.get(summary.seq),
     ));
   }
 
@@ -127,6 +132,9 @@ function conversationMessagesForV1Event(
   resources: ConversationSessionResourceCatalogV1,
   providers: readonly ProviderSummary[],
   t: Translation,
+  // Optional canonical usage evidence for the current terminal event, never persisted message content.
+  // 当前终态事件的可选规范用量证据，绝不是持久化消息正文。
+  usageCoverage: TurnUsageCoverage | undefined,
 ): ConversationMessage[] {
   const base = conversationMessageBase(sessionId, summary, rootInput);
   switch (summary.event.kind) {
@@ -170,7 +178,7 @@ function conversationMessagesForV1Event(
         body: "Turn statistics",
         metadata: {
           ...presentationMetadata(summary, rootInput),
-          turn_stats: turnStatsMetadata(summary.event.buckets.total, summary.event.buckets.subagent, summary.event.duration_ms, summary.event.outcome),
+          turn_stats: turnStatsMetadata(summary.event.buckets.total, summary.event.buckets.subagent, summary.event.duration_ms, summary.event.outcome, usageCoverage),
         },
       }];
     case "display_note":
@@ -543,11 +551,16 @@ function displayNoteMessage(
 
 // turnStatsMetadata maps one typed bucket set to the branch tooltip's established field contract.
 // turnStatsMetadata 将一组强类型统计桶映射为分支悬浮卡的既有字段契约。
+// total/subagent are exact persisted scopes; durationMs/outcome describe the terminal Turn; coverage is optional view evidence.
+// total/subagent 是精确持久化范围；durationMs/outcome 描述终态 Turn；coverage 是可选视图证据。
+// Returns display metadata while leaving all persisted accounting fields unchanged.
+// 返回展示元数据，保持全部持久化核算字段不变。
 function turnStatsMetadata(
   total: StatBucket,
   subagent: StatBucket,
   durationMs: number | undefined,
   outcome: "completed" | "abandoned" | "stopped",
+  coverage: TurnUsageCoverage | undefined,
 ): Record<string, unknown> {
   return {
     turn_kind: "user_turn",
@@ -558,6 +571,7 @@ function turnStatsMetadata(
     tool_call_count: total.tool_call_count,
     subagent_return_count: total.subagent_return_count,
     ...usageFields(total),
+    usage_coverage: coverage?.total,
     usage_groups: subagent.api_call_count > 0 || subagent.tool_call_count > 0 || subagent.subagent_return_count > 0
       ? [{
         kind: "subagent",
@@ -566,6 +580,7 @@ function turnStatsMetadata(
         tool_call_count: subagent.tool_call_count,
         subagent_return_count: subagent.subagent_return_count,
         ...usageFields(subagent),
+        usage_coverage: coverage?.subagent,
       }]
       : [],
   };

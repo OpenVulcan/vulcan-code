@@ -9,12 +9,14 @@ import {
 import { useI18n } from "@/i18n";
 import type { StatBucket } from "@/service/conversation-event-window-store";
 import type { ConversationTurnStatsTranscriptNode } from "@/service/conversation-event-display-projection";
+import type { UsageCoverage } from "@/service/conversation-usage-coverage";
+import { usageCacheRatio, usageMetricDisplay } from "./conversation-usage-display";
 
 /** Props for one V1-native terminal Turn statistics card.
  * 一张 V1 原生终态 Turn 统计卡的属性。 */
 export interface ConversationV1TurnStatsCardProps {
-  /** Exact persisted statistics node rendered without recomputation from transcript text.
-   * 不通过转录文本重算、直接渲染的精确持久化统计节点。 */
+  /** Exact persisted totals plus optional known-usage evidence derived from API events, never transcript text.
+   * 精确持久化总量及从 API 事件派生的可选已知用量证据，绝不从转录文本重算。 */
   node: ConversationTurnStatsTranscriptNode;
 }
 
@@ -32,8 +34,8 @@ export function ConversationV1TurnStatsCard(props: ConversationV1TurnStatsCardPr
   // zh keeps the compact historical Chinese wording on the Chinese surface.
   // zh 在中文界面保持历史紧凑文案。
   const zh = locale === "zh-CN";
-  // event is the sole source for the row and detail card.
-  // event 是统计行和详情卡的唯一数据源。
+  // event owns exact totals; view-only coverage may additionally expose proven partial contributions.
+  // event 持有精确总量；仅供视图的覆盖信息可额外展示已证明的部分贡献。
   const event = props.node.item.event;
   // total is the authoritative inclusive bucket for this completed Turn.
   // total 是当前已完成 Turn 的权威总计桶。
@@ -81,15 +83,15 @@ export function ConversationV1TurnStatsCard(props: ConversationV1TurnStatsCardPr
             <strong>{zh ? "本轮统计" : "Turn usage"}</strong>
             <span>{durationLabel ?? (zh ? "终态统计" : "Terminal totals")}</span>
           </div>
-          <TurnStatsUsageRows bucket={total} locale={locale} />
-          <TurnStatsCacheSummary bucket={total} locale={locale} />
+          <TurnStatsUsageRows bucket={total} coverage={props.node.usage_coverage?.total} locale={locale} />
+          <TurnStatsCacheSummary bucket={total} coverage={props.node.usage_coverage?.total} locale={locale} />
           {bucketHasFacts(event.buckets.subagent) ? (
             <section className="turn-stats-subagent-section">
               <div className="turn-stats-section-title">
                 <Bot aria-hidden="true" size={13} />
                 <span>{zh ? "子代理统计" : "Subagent usage"}</span>
               </div>
-              <TurnStatsUsageRows bucket={event.buckets.subagent} locale={locale} />
+              <TurnStatsUsageRows bucket={event.buckets.subagent} coverage={props.node.usage_coverage?.subagent} locale={locale} />
             </section>
           ) : null}
         </TooltipContent>
@@ -98,17 +100,29 @@ export function ConversationV1TurnStatsCard(props: ConversationV1TurnStatsCardPr
   );
 }
 
-/** Renders four exact paired accounting rows for one persisted statistics bucket.
- * 为一个持久化统计桶渲染四行精确的双列核算数据。
+/** Renders four paired accounting rows using the existing labels and plain numeric values.
+ * 使用既有标签和纯数值渲染四行双列核算数据。
  *
- * @param props persisted bucket plus display locale.
- *              持久化统计桶与展示语言。
+ * @param props persisted bucket, optional view-only coverage, and display locale.
+ *              持久化统计桶、可选纯视图覆盖信息及展示语言。
  * @returns the aligned metric grid.
  *          对齐后的统计网格。 */
-function TurnStatsUsageRows(props: { bucket: StatBucket; locale: "zh-CN" | "en-US" }) {
+function TurnStatsUsageRows(props: { bucket: StatBucket; coverage?: UsageCoverage; locale: "zh-CN" | "en-US" }) {
   // zh selects compact labels while values remain untouched.
   // zh 选择紧凑标签，而数值保持不变。
   const zh = props.locale === "zh-CN";
+  // Metrics retain their existing sources without adding visible coverage qualifiers.
+  // 指标保持既有来源，不添加可见覆盖限定说明。
+  const cached = usageMetricDisplay(props.bucket.usage.cache_read_tokens, "cache_read_tokens", props.coverage, props.locale);
+  // Uncached input never substitutes the complete Provider input count.
+  // 无缓存输入绝不使用完整 Provider 输入数替代。
+  const uncached = usageMetricDisplay(props.bucket.usage.uncached_input_tokens, "uncached_input_tokens", props.coverage, props.locale);
+  // Output uses the shared numeric format without changing source usage.
+  // 输出使用共享数值格式，不改变源用量。
+  const output = usageMetricDisplay(props.bucket.usage.output_tokens, "output_tokens", props.coverage, props.locale);
+  // Total follows the same plain numeric display policy as its component dimensions.
+  // 总量与各分项使用相同的纯数值展示规则。
+  const total = usageMetricDisplay(props.bucket.usage.total_tokens, "total_tokens", props.coverage, props.locale);
   return (
     <div className="turn-stats-metric-grid">
       <TurnStatsMetricRow
@@ -125,15 +139,15 @@ function TurnStatsUsageRows(props: { bucket: StatBucket; locale: "zh-CN" | "en-U
       />
       <TurnStatsMetricRow
         leftLabel={zh ? "缓存 Tokens" : "Cached tokens"}
-        leftValue={formatOptionalNumber(props.bucket.usage.cache_read_tokens, props.locale)}
+        leftValue={cached}
         rightLabel={zh ? "无缓存输入" : "Uncached input"}
-        rightValue={formatOptionalNumber(props.bucket.usage.uncached_input_tokens, props.locale)}
+        rightValue={uncached}
       />
       <TurnStatsMetricRow
         leftLabel={zh ? "输出 Tokens" : "Output tokens"}
-        leftValue={formatOptionalNumber(props.bucket.usage.output_tokens, props.locale)}
+        leftValue={output}
         rightLabel={zh ? "合计 Tokens" : "Total tokens"}
-        rightValue={formatOptionalNumber(props.bucket.usage.total_tokens, props.locale)}
+        rightValue={total}
       />
     </div>
   );
@@ -166,28 +180,34 @@ function TurnStatsMetricRow(props: {
   );
 }
 
-/** Renders the exact cache-hit ratio when both denominator dimensions are present.
- * 在分母两个维度都存在时渲染精确缓存命中率。
+/** Renders the existing cache-hit ratio with the original short label and progress bar.
+ * 使用原有简短标签和进度条渲染既有缓存命中率。
  *
- * @param props persisted statistics bucket plus display locale.
- *              持久化统计桶与展示语言。
+ * @param props persisted bucket, optional paired coverage, and display locale.
+ *              持久化统计桶、可选配对覆盖信息及展示语言。
  * @returns one cache summary with an indeterminate text state when facts are absent.
  *          一条缓存摘要；事实缺失时显示无数据状态。 */
-function TurnStatsCacheSummary(props: { bucket: StatBucket; locale: "zh-CN" | "en-US" }) {
+function TurnStatsCacheSummary(props: { bucket: StatBucket; coverage?: UsageCoverage; locale: "zh-CN" | "en-US" }) {
   // zh selects the localized cache labels.
   // zh 选择本地化缓存标签。
   const zh = props.locale === "zh-CN";
-  // percentage remains null unless both cached and uncached dimensions are authoritative.
-  // percentage 在缓存与无缓存两个维度都权威时才有值。
-  const percentage = cacheHitPercent(props.bucket);
+  // ratio never combines input components belonging to different request cohorts.
+  // ratio 绝不混合属于不同请求样本组的输入分项。
+  const ratio = usageCacheRatio(props.bucket.usage.cache_read_tokens, props.bucket.usage.uncached_input_tokens, props.coverage);
+  // Missing or empty paired evidence remains an indeterminate percentage.
+  // 缺失或为空的配对证据保持百分比未知。
+  const percentage = ratio.percent;
+  // Keep internal coverage out of the compact card's visible labels.
+  // 不在紧凑卡的可见标签中展示内部覆盖信息。
+  const label = zh ? "缓存命中率" : "Cache hit rate";
   return (
     <div className="turn-stats-cache-summary">
       <div className="turn-stats-cache-header">
-        <span>{zh ? "缓存命中率" : "Cache hit rate"}</span>
+        <span>{label}</span>
         <strong>{percentage === null ? (zh ? "暂无数据" : "No data") : `${percentage.toFixed(1)}%`}</strong>
       </div>
       <div
-        aria-label={zh ? "缓存命中率" : "Cache hit rate"}
+        aria-label={label}
         aria-valuemax={100}
         aria-valuemin={0}
         aria-valuenow={percentage ?? undefined}
@@ -211,21 +231,6 @@ function turnStatsIcon(outcome: "completed" | "abandoned" | "stopped"): string {
   if (outcome === "abandoned") return "!";
   if (outcome === "stopped") return "■";
   return "◔";
-}
-
-/** Calculates a cache-hit percentage only from explicit cached and uncached counts.
- * 仅根据明确的缓存与无缓存计数计算缓存命中率。
- *
- * @param bucket persisted statistics bucket.
- *               持久化统计桶。
- * @returns a percentage or null when either source dimension is absent.
- *          百分比；任一来源维度缺失时返回 null。 */
-function cacheHitPercent(bucket: StatBucket): number | null {
-  const cached = bucket.usage.cache_read_tokens;
-  const uncached = bucket.usage.uncached_input_tokens;
-  if (cached === undefined || uncached === undefined) return null;
-  const totalInput = cached + uncached;
-  return totalInput === 0 ? 0 : Math.min(100, Math.max(0, (cached / totalInput) * 100));
 }
 
 /** Reports whether one subagent bucket contains any persisted accounting fact.
@@ -254,19 +259,6 @@ function bucketHasFacts(bucket: StatBucket): boolean {
  *          本地化十进制文本。 */
 function formatNumber(value: number, locale: string): string {
   return new Intl.NumberFormat(locale).format(value);
-}
-
-/** Formats an optional exact count without turning absence into zero.
- * 格式化一个可选精确计数，同时不把缺失转换为零。
- *
- * @param value optional persisted count.
- *              可选持久化计数。
- * @param locale active display locale.
- *               当前展示语言。
- * @returns localized decimal text or an em dash for absent data.
- *          本地化十进制文本；数据缺失时返回破折号。 */
-function formatOptionalNumber(value: number | undefined, locale: string): string {
-  return value === undefined ? "—" : formatNumber(value, locale);
 }
 
 /** Formats an exact persisted duration without deriving throughput.

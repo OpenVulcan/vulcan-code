@@ -97,7 +97,19 @@ fn capture_preserved_workspace_run_state_inner(
         let had_hydrated_window = previous_snapshot
             .hydrated_session_ids
             .contains(&previous_session.id);
-        if !had_active_run && !is_submitted_session && !had_hydrated_window && !had_runtime_context
+        // Metadata-only model controls must survive index refreshes even before history is ever hydrated.
+        // 即使历史从未水合，纯 metadata 模型控件也必须跨索引刷新保留。
+        let had_request_selection = runtime_state.is_some_and(|state| {
+            state.active_provider_id.is_some()
+                || state.active_connection_id.is_some()
+                || state.active_model_id.is_some()
+                || state.pending_model_selection.is_some()
+        });
+        if !had_active_run
+            && !is_submitted_session
+            && !had_hydrated_window
+            && !had_runtime_context
+            && !had_request_selection
         {
             continue;
         }

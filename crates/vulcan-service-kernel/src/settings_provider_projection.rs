@@ -50,26 +50,6 @@ pub(crate) fn setting_section(
     }
 }
 
-/// Projects credential-scoped public AI catalogs into the shared model-picker shape.
-/// 把凭据作用域公共 AI 目录投影为共享模型选择器结构。
-///
-/// # Parameters
-/// 参数
-/// `configuration` owns connection selection and `runtime` owns memory-only catalogs.
-/// `configuration` 持有连接选择，`runtime` 持有仅内存目录。
-///
-/// # Returns
-/// 返回值
-/// One provider row per credential connection so duplicate model accounts remain explicit.
-/// 每个凭据连接对应一行供应商，使重复模型账号保持明确。
-pub(crate) fn public_ai_provider_rows(
-    configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
-    runtime: &vulcan_provider_adapters::PublicAiRuntime,
-) -> Result<Vec<ProviderSummary>, String> {
-    let active_selection = runtime.resolve_active_selection(configuration).ok();
-    public_ai_provider_rows_for_selection(configuration, runtime, active_selection.as_ref())
-}
-
 /// Returns the process-local immutable selection owned by one exact session when coherent.
 /// 当租约一致时返回一个精确会话拥有的进程内不可变选择。
 ///
@@ -144,6 +124,11 @@ pub(crate) fn public_ai_workbench_selection(
     session_id: Option<crate::SessionId>,
     runtime_state: Option<&vulcan_workbench_model::SessionRuntimeStateEntry>,
 ) -> Result<Option<vulcan_provider_adapters::ResolvedPublicAiSelection>, String> {
+    // An indexed conversation with unread metadata is not a blank draft and cannot inherit a global model.
+    // metadata 尚未读取的索引会话不是空白草稿，不能继承全局模型。
+    if session_id.is_some_and(|id| id != crate::SessionId::nil()) && runtime_state.is_none() {
+        return Ok(None);
+    }
     if runtime_state.is_some_and(|runtime_state| runtime_state.pending_model_selection.is_some()) {
         // A persisted pending target is the user's latest exact choice. If it is no longer
         // executable the picker must become empty and require reselection instead of showing the
@@ -549,7 +534,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
-    use super::public_ai_workbench_selection_from_runtime_state;
+    use super::{public_ai_workbench_selection, public_ai_workbench_selection_from_runtime_state};
     use vulcan_provider_adapters::{
         ActiveAiModelSelection, CredentialConnection, CredentialMode, PersistedAiConfiguration,
         ProtocolModelVariant, PublicAiRuntime, UnavailableCredentialSecretResolver,
@@ -697,6 +682,40 @@ mod tests {
 
         assert_eq!(selection.route.connection.id, "global-account");
         assert_eq!(selection.model.id, "openai/gpt-5.6-terra");
+    }
+
+    /// An unread existing session must not masquerade as a draft and adopt the global model.
+    /// 未读取配置的既有会话不得伪装成草稿并采用全局模型。
+    #[test]
+    fn unread_session_metadata_blocks_global_model_fallback() {
+        // Keep a valid global model so a missing session guard would visibly select it.
+        // 保留有效全局模型，确保会话守卫缺失时会明确选中它。
+        let (configuration, runtime) = runtime_with_global_selection();
+        assert!(
+            public_ai_workbench_selection(
+                &configuration,
+                &runtime,
+                Some(crate::SessionId::from_u128(0x7110)),
+                None
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            public_ai_workbench_selection(
+                &configuration,
+                &runtime,
+                Some(crate::SessionId::nil()),
+                None
+            )
+            .unwrap()
+            .is_some()
+        );
+        assert!(
+            public_ai_workbench_selection(&configuration, &runtime, None, None)
+                .unwrap()
+                .is_some()
+        );
     }
 
     /// Verifies an incomplete persisted identity is rejected instead of rebound to another account.

@@ -305,6 +305,20 @@ fn startup_and_index_refresh_never_hydrate_selected_session() {
         refresh_violations.is_empty(),
         "index refresh reintroduced selected-session body work: {refresh_violations:?}"
     );
+    // Metadata-only model restoration is required, but must never become interaction hydration.
+    // 必须恢复纯 metadata 模型配置，但绝不能变成交互水合。
+    assert!(bootstrap_source.contains("read_session_model_projection_v1("));
+    assert!(refresh_source.contains("read_session_model_projection_v1("));
+    assert!(!bootstrap_source.contains("public_ai_provider_rows("));
+    // Navigation and settings refresh share the same session-sensitive model authority.
+    // 导航与设置刷新共享同一会话敏感模型权威。
+    let navigation = include_str!("../project_conversation_services/conversation_services.rs");
+    assert!(navigation.contains("read_session_model_projection_v1("));
+    let model_projection = include_str!("../session_model_projection_v1.rs");
+    assert!(!model_projection.contains("get_or_load_session_v1("));
+    assert!(!model_projection.contains("load_session_v1_full("));
+    let settings_projection = include_str!("../settings_runtime_projection.rs");
+    assert!(!settings_projection.contains("public_ai_provider_rows("));
 }
 
 /// Verifies request-time restart projection uses V1 and exposes no segmented hydration entry.

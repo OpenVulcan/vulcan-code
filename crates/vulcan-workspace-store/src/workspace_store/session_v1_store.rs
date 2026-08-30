@@ -136,7 +136,7 @@ impl SessionV1StorageLocator {
     /// 仅读取精确 metadata 文件，校验契约及定位器身份。
     /// Returns metadata without reading runtime, compactions, or interaction segments.
     /// 返回元数据，不读取运行时、压缩文档或交互分片。
-    fn read_configuration_metadata(&self) -> Result<MetadataDocument, SessionV1StoreError> {
+    fn read_indexed_metadata(&self) -> Result<MetadataDocument, SessionV1StoreError> {
         // Metadata is the sole configuration authority; event replay is deliberately excluded.
         // metadata 是唯一配置权威；此处刻意排除事件重放。
         let metadata = super::session_v1::documents::read_metadata(&self.layout.metadata_path())?;
@@ -147,6 +147,17 @@ impl SessionV1StorageLocator {
             }
             .into());
         }
+        Ok(metadata)
+    }
+
+    /// Reads the capability configuration's metadata and validates its own selection subtree.
+    /// 读取能力配置元数据，并校验其自有选择子树。
+    /// Returns validated metadata without loading any interaction data.
+    /// 返回已校验元数据，不加载任何交互数据。
+    fn read_configuration_metadata(&self) -> Result<MetadataDocument, SessionV1StoreError> {
+        // Capability validation stays scoped to capability access, not model restoration.
+        // 能力校验限定在能力访问中，不与模型恢复耦合。
+        let metadata = self.read_indexed_metadata()?;
         metadata
             .config
             .selection
@@ -160,6 +171,28 @@ impl SessionV1StorageLocator {
                 )
             })?;
         Ok(metadata)
+    }
+
+    /// Reads the exact active and pending request configuration from metadata only.
+    /// 仅从 metadata 读取精确的活动及待生效请求配置。
+    /// Returns both request states without replaying Turns, repairing history, or writing files.
+    /// 返回两种请求状态，不重放回合、不修复历史，也不写入文件。
+    pub fn read_request_configuration(
+        &self,
+    ) -> Result<
+        (
+            vulcan_session_core::v1::config::ActiveRequestConfig,
+            Option<vulcan_session_core::v1::config::PendingRequestConfig>,
+        ),
+        SessionV1StoreError,
+    > {
+        // The metadata owner is validated before exposing its session-local route.
+        // 暴露会话自有路由前先校验 metadata 所有者。
+        let metadata = self.read_indexed_metadata()?;
+        Ok((
+            metadata.config.active_request,
+            metadata.config.pending_request,
+        ))
     }
 
     /// Reads session-owned capability settings without constructing a runtime session.
@@ -1542,6 +1575,78 @@ fn remove_exact_session_directory(
 
 #[cfg(test)]
 mod tests {
+    /// Model restoration reads metadata even when interactions are corrupt, without changing either file.
+    /// 即使交互内容损坏，模型恢复仍仅读取 metadata，且不修改任何文件。
+    #[test]
+    fn request_metadata_restores_active_and_pending_without_interaction_loading() {
+        use vulcan_session_core::v1::config::{ActiveRequestConfig, PendingRequestConfig};
+        // An isolated real directory exercises the production metadata reader without user data.
+        // 隔离的真实目录用于验证生产 metadata 读取器，不使用用户数据。
+        let temporary = tempfile::tempdir().unwrap();
+        // The fixture owns the authoritative locator and its exact identity.
+        // 夹具持有权威定位器及其精确身份。
+        let locator =
+            super::create_session_v1_storage_fixture(temporary.path(), "model-metadata", 1)
+                .unwrap();
+        // Save both an executed route and a newer unexecuted user choice.
+        // 保存一条已执行路线和一条更新但尚未执行的用户选择。
+        let mut metadata = locator.read_indexed_metadata().unwrap();
+        metadata.config.active_request = ActiveRequestConfig {
+            provider: Some("kimi".into()),
+            connection_id: Some("kimi-account".into()),
+            model: Some("k3-256k".into()),
+            thinking_level: Some("max".into()),
+            ..Default::default()
+        };
+        metadata.config.pending_request = Some(PendingRequestConfig {
+            provider: Some("other-provider".into()),
+            connection_id: Some("other-account".into()),
+            model: Some("other-model".into()),
+            set_at_ms: 2,
+            thinking_level: None,
+            temperature: None,
+        });
+        super::super::session_v1::documents::write_json_document(
+            &locator.layout.metadata_path(),
+            &metadata,
+            "metadata",
+        )
+        .unwrap();
+        // A broken interaction tail proves no Turn replay is needed to restore a model.
+        // 损坏的交互尾部证明恢复模型不需要重放回合。
+        let tail = locator.layout.segment_entry_path(
+            metadata.segment_generation,
+            &metadata.split_list[0].file_name,
+        );
+        std::fs::write(&tail, b"invalid interaction JSON\n").unwrap();
+        // Preserve the exact source bytes to detect unintended repair or persistence.
+        // 保留精确源字节，以检测非预期修复或持久化。
+        let before = std::fs::read(locator.layout.metadata_path()).unwrap();
+        assert!(super::load_session_v1_tail(&locator).is_err());
+        assert_eq!(
+            locator.read_request_configuration().unwrap(),
+            (
+                metadata.config.active_request.clone(),
+                metadata.config.pending_request.clone()
+            )
+        );
+        assert_eq!(
+            std::fs::read(locator.layout.metadata_path()).unwrap(),
+            before
+        );
+        assert_eq!(std::fs::read(&tail).unwrap(), b"invalid interaction JSON\n");
+        // Metadata belonging to another owner must never become this session's model.
+        // 其他 owner 的 metadata 绝不能成为当前会话的模型。
+        metadata.session_id = "wrong-owner".into();
+        super::super::session_v1::documents::write_json_document(
+            &locator.layout.metadata_path(),
+            &metadata,
+            "metadata",
+        )
+        .unwrap();
+        assert!(locator.read_request_configuration().is_err());
+    }
+
     /// Verifies metadata reads and writes remain independent of corrupt or absent interactions.
     /// 验证元数据读写独立于损坏或缺失的交互内容。
     #[test]

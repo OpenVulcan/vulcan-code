@@ -1,0 +1,54 @@
+import type { UsageCoverage, UsageDimension } from "@/service/conversation-usage-coverage";
+
+/** Formats `exact` when reported, otherwise the known contribution for `field`, without extra coverage annotations.
+ * 已报告时格式化 `exact`，否则显示 `field` 的已知贡献，不附加覆盖说明。
+ * `coverage` supplies view-only evidence and `locale` selects number formatting; returns plain numeric text.
+ * `coverage` 提供仅供视图使用的证据，`locale` 选择数字格式；返回纯数值文本。
+ * Missing values display as zero by UI policy without changing persisted usage or the ratio calculation.
+ * 按界面规则将空值显示为零，不改变持久化用量或命中率计算。 */
+export function usageMetricDisplay(
+  exact: number | null | undefined,
+  field: UsageDimension,
+  coverage: UsageCoverage | null | undefined,
+  locale: string,
+): string {
+  // Only a positive reported count proves the presence of a value, including explicit zero.
+  // 只有正数上报次数才能证明数值存在，也包括明确零值。
+  const known = coverage?.dimensions[field];
+  // Exact totals take precedence without overwriting or persisting partial evidence.
+  // 精确总量优先，不覆盖或持久化部分证据。
+  const value = exact ?? (known && known.reportedApiCallCount > 0 ? known.knownTokens : null);
+  return new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(value ?? 0);
+}
+
+/** Computes a cache ratio only from exact totals or paired values of the same known requests.
+ * 仅从精确总量或同一批已知请求的配对值计算缓存命中率。
+ * `cached` and `uncached` are optional exact totals; `coverage` supplies paired evidence when exact totals are incomplete.
+ * `cached` 和 `uncached` 是可选精确总量；精确总量不全时，`coverage` 提供配对证据。
+ * Returns the ratio and whether its cohort omits any expected requests; never mixes independent partial sums.
+ * 返回比率及样本组是否缺少预期请求；绝不混合独立的部分累计值。 */
+export function usageCacheRatio(
+  cached: number | null | undefined,
+  uncached: number | null | undefined,
+  coverage: UsageCoverage | null | undefined,
+): { percent: number | null; partial: boolean } {
+  // Both exact components must exist before selecting the complete-turn denominator.
+  // 只有两个精确分项都存在，才选择完整回合分母。
+  const exact = cached != null && uncached != null;
+  // The cohort explicitly excludes requests missing either input component.
+  // 样本组明确排除缺少任一输入分项的请求。
+  const cohort = coverage?.cacheRatio;
+  // Never combine an exact cached total with a partial uncached total.
+  // 绝不将精确缓存总量与部分无缓存累计混用。
+  const cachedCount = exact ? cached : cohort && cohort.reportedApiCallCount > 0 ? cohort.cachedTokens : null;
+  // Use the identical cohort selected for cached input.
+  // 使用与缓存输入完全相同的样本组。
+  const uncachedCount = exact ? uncached : cohort && cohort.reportedApiCallCount > 0 ? cohort.uncachedTokens : null;
+  // An empty or absent input denominator does not imply a measured zero-percent hit rate.
+  // 空或缺失的输入分母不代表测得零命中率。
+  const denominator = cachedCount == null || uncachedCount == null ? 0 : cachedCount + uncachedCount;
+  return {
+    percent: denominator > 0 && cachedCount != null ? Math.min(100, Math.max(0, cachedCount / denominator * 100)) : null,
+    partial: !exact && Boolean(coverage && cohort && cohort.reportedApiCallCount > 0 && cohort.reportedApiCallCount < coverage.expectedApiCallCount),
+  };
+}

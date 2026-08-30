@@ -5,6 +5,8 @@ import {
   numericMetadata,
   objectValue,
 } from "@/components/conversation/conversation-metadata";
+import { readUsageCoverage, type UsageCoverage } from "@/service/conversation-usage-coverage";
+import { usageCacheRatio, usageMetricDisplay } from "./conversation-usage-display";
 
 // TurnStatsUsageSnapshot contains only the accounting fields shown in the compact statistics card.
 // TurnStatsUsageSnapshot 仅包含紧凑统计卡展示的核算字段。
@@ -20,13 +22,16 @@ interface TurnStatsUsageSnapshot {
   uncachedInputTokens: number | null;
   // Provider-reported output token count.
   // Provider 报告的输出 Token 数。
-  outputTokens: number;
+  outputTokens: number | null;
   // Provider-reported total token count.
   // Provider 报告的总 Token 数。
-  totalTokens: number;
+  totalTokens: number | null;
   // Optional Provider-reported cache-hit input token count.
   // Provider 报告的可选缓存命中输入 Token 数。
   cachedInputTokens: number | null;
+  // Coverage is derived only for V1 views and never replaces the strict persisted totals.
+  // 覆盖信息仅为 V1 视图派生，绝不替换严格持久化总量。
+  coverage: UsageCoverage | null;
 }
 
 // TurnStatsTooltipCard renders three aligned aggregate rows, one cache-hit bar, and an optional child-agent section.
@@ -56,15 +61,21 @@ export function TurnStatsTooltipCard(props: {
   // zh selects compact local labels without expanding the global translation contract for one private card.
   // zh 为该私有卡片选择紧凑本地标签，避免扩展全局翻译契约。
   const zh = props.locale === "zh-CN";
-  // aggregate contains the complete turn totals persisted by the backend.
-  // aggregate 包含后端持久化的完整轮次总计。
+  // aggregate keeps exact persisted totals separate from optional view-only coverage.
+  // aggregate 将精确持久化总量与可选的纯视图覆盖信息分开保留。
   const aggregate = turnStatsUsageSnapshot(stats);
   // subagent contains the first-class child-agent group only for a parent turn.
   // subagent 仅在父轮次中包含一等子代理分组。
   const subagent = props.subagentStats ? null : turnStatsSubagentUsageSnapshot(stats);
-  // cacheHitPercent uses the Provider input-token total as the denominator shown in this card.
-  // cacheHitPercent 使用卡片展示的 Provider 输入 Token 总数作为分母。
-  const cacheHitPercent = turnStatsCacheHitPercent(aggregate);
+  // cacheRatio uses exact input components or paired evidence from the same known requests.
+  // cacheRatio 使用精确输入分项，或同一批已知请求的配对证据。
+  const cacheRatio = usageCacheRatio(aggregate.cachedInputTokens, aggregate.uncachedInputTokens, aggregate.coverage);
+  // A null percentage means no complete pair with a positive input denominator is available.
+  // 百分比为 null 表示没有分母为正的完整输入配对。
+  const cacheHitPercent = cacheRatio.percent;
+  // Keep the original short label without exposing internal coverage metadata.
+  // 保持原有简短标签，不展示内部覆盖元数据。
+  const cacheLabel = zh ? "缓存命中率" : "Cache hit rate";
   // speed preserves the backend-derived output speed and avoids deriving it again in the browser.
   // speed 保留后端推导的输出速度，避免浏览器再次计算。
   const speed = numericMetadata(stats.output_tokens_per_second ?? stats.outputTokensPerSecond);
@@ -83,11 +94,11 @@ export function TurnStatsTooltipCard(props: {
       <TurnStatsUsageRows locale={props.locale} usage={aggregate} />
       <div className="turn-stats-cache-summary">
         <div className="turn-stats-cache-header">
-          <span>{zh ? "缓存命中率" : "Cache hit rate"}</span>
+          <span>{cacheLabel}</span>
           <strong>{cacheHitPercent == null ? (zh ? "暂无数据" : "No data") : `${cacheHitPercent.toFixed(1)}%`}</strong>
         </div>
         <div
-          aria-label={zh ? "缓存命中率" : "Cache hit rate"}
+          aria-label={cacheLabel}
           aria-valuemax={100}
           aria-valuemin={0}
           aria-valuenow={cacheHitPercent ?? undefined}
@@ -125,16 +136,18 @@ function TurnStatsUsageRows(props: {
   // zh selects the compact labels used in each paired row.
   // zh 选择每行双列使用的紧凑标签。
   const zh = props.locale === "zh-CN";
-  // cachedValue preserves the distinction between an official zero and unavailable cache accounting.
-  // cachedValue 保留官方零值与缺少缓存统计之间的区别。
-  const cachedValue = props.usage.cachedInputTokens == null
-    ? "—"
-    : formatTurnStatsNumber(props.usage.cachedInputTokens, props.locale);
-  // uncachedInputValue never presents the Provider total input as non-cached input.
-  // uncachedInputValue 绝不把 Provider 输入总量冒充无缓存输入。
-  const uncachedInputValue = props.usage.uncachedInputTokens == null
-    ? "—"
-    : formatTurnStatsNumber(props.usage.uncachedInputTokens, props.locale);
+  // cached displays the recorded token count as a plain number, with zero for an empty value.
+  // cached 以纯数值显示已记录的 Token 数，空值显示零。
+  const cached = usageMetricDisplay(props.usage.cachedInputTokens, "cache_read_tokens", props.usage.coverage, props.locale);
+  // uncached never presents the Provider total input as non-cached input.
+  // uncached 绝不把 Provider 输入总量冒充无缓存输入。
+  const uncached = usageMetricDisplay(props.usage.uncachedInputTokens, "uncached_input_tokens", props.usage.coverage, props.locale);
+  // Output uses the shared numeric format without changing source usage.
+  // 输出使用共享数值格式，不改变源用量。
+  const output = usageMetricDisplay(props.usage.outputTokens, "output_tokens", props.usage.coverage, props.locale);
+  // Total keeps the same source precedence without extra visible qualifiers.
+  // 总量保持相同来源优先级，不附加可见限定说明。
+  const total = usageMetricDisplay(props.usage.totalTokens, "total_tokens", props.usage.coverage, props.locale);
   return (
     <div className="turn-stats-metric-grid">
       <TurnStatsMetricRow
@@ -145,15 +158,15 @@ function TurnStatsUsageRows(props: {
       />
       <TurnStatsMetricRow
         leftLabel={zh ? "缓存 Tokens" : "Cached tokens"}
-        leftValue={cachedValue}
+        leftValue={cached}
         rightLabel={zh ? "无缓存输入" : "Uncached input"}
-        rightValue={uncachedInputValue}
+        rightValue={uncached}
       />
       <TurnStatsMetricRow
         leftLabel={zh ? "输出 Tokens" : "Output tokens"}
-        leftValue={formatTurnStatsNumber(props.usage.outputTokens, props.locale)}
+        leftValue={output}
         rightLabel={zh ? "合计 Tokens" : "Total tokens"}
-        rightValue={formatTurnStatsNumber(props.usage.totalTokens, props.locale)}
+        rightValue={total}
       />
     </div>
   );
@@ -218,9 +231,10 @@ function turnStatsUsageSnapshot(stats: Record<string, unknown>): TurnStatsUsageS
     providerCallCount: numberMetadata(stats.provider_call_count ?? stats.providerCallCount),
     toolCallCount: numberMetadata(stats.tool_call_count ?? stats.toolCallCount),
     uncachedInputTokens,
-    outputTokens: numberMetadata(stats.output_tokens ?? stats.outputTokens),
-    totalTokens: numberMetadata(stats.total_tokens ?? stats.totalTokens),
+    outputTokens: optionalTurnStatsCount(stats.output_tokens ?? stats.outputTokens),
+    totalTokens: optionalTurnStatsCount(stats.total_tokens ?? stats.totalTokens),
     cachedInputTokens,
+    coverage: readUsageCoverage(stats.usage_coverage),
   };
 }
 
@@ -321,26 +335,6 @@ function optionalTurnStatsCount(value: unknown): number | null {
   return numericValue == null || !Number.isFinite(numericValue)
     ? null
     : Math.max(0, Math.trunc(numericValue));
-}
-
-// turnStatsCacheHitPercent calculates the displayed cache-hit percentage from normalized cached and uncached input.
-// turnStatsCacheHitPercent 根据归一化后的缓存与无缓存输入计算展示用缓存命中率。
-//
-// Parameters:
-// 参数：usage 是当前卡片分区的标准化用量。
-// Returns a percentage clamped to the progress-bar domain, or null when the ratio is unavailable.
-// 返回限制在进度条范围内的百分比；比率不可用时返回 null。
-function turnStatsCacheHitPercent(usage: TurnStatsUsageSnapshot): number | null {
-  if (usage.cachedInputTokens == null || usage.uncachedInputTokens == null) {
-    return null;
-  }
-  // totalInputTokens reconstructs one protocol-neutral input denominator from normalized components.
-  // totalInputTokens 根据归一化分项重建协议无关的输入分母。
-  const totalInputTokens = usage.cachedInputTokens + usage.uncachedInputTokens;
-  if (totalInputTokens <= 0) {
-    return null;
-  }
-  return Math.min(100, Math.max(0, (usage.cachedInputTokens / totalInputTokens) * 100));
 }
 
 // formatTurnStatsNumber formats one exact integer using the active interface locale.

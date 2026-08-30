@@ -407,58 +407,11 @@ pub(crate) fn refresh_settings_projection_locked(
     guard: &mut ServiceBridgeState,
     provider_configuration: &ProviderConfigurationFile,
 ) {
-    // publicAiSelection retains both capability and exact protocol facts for composer projection.
-    // publicAiSelection 为输入区投影同时保留能力与精确协议事实。
-    let public_ai_selection = guard.agent_runtime.as_ref().and_then(|agent_runtime| {
-        let configuration = agent_runtime
-            .public_ai_runtime
-            .configuration_snapshot()
-            .ok()?;
-        agent_runtime
-            .public_ai_runtime
-            .resolve_active_selection(&configuration)
-            .ok()
-    });
-    // publicModelCapabilities belongs to the exact active selection.
-    // publicModelCapabilities 属于精确活动选择。
-    let public_model_capabilities = public_ai_selection
-        .as_ref()
-        .map(|selection| selection.model.capabilities.clone());
-    let bridged_media_kinds = guard
-        .agent_runtime
-        .as_ref()
-        .and_then(|agent_runtime| {
-            let configuration = agent_runtime
-                .public_ai_runtime
-                .configuration_snapshot()
-                .ok()?;
-            let runtime_state = guard.workspace_snapshot.as_ref().and_then(|workspace| {
-                workspace
-                    .session_runtime_state
-                    .get(&workspace.selected_session)
-            });
-            crate::public_ai_settings::public_ai_session_media_understanding_bridge_kinds(
-                agent_runtime.public_ai_runtime.as_ref(),
-                &configuration,
-                runtime_state,
-            )
-            .ok()
-        })
-        .unwrap_or_default();
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
     guard.workbench.ui_locale = provider_configuration.ui_locale.clone();
-    if let Some(agent_runtime) = guard.agent_runtime.as_ref()
-        && let Ok(configuration) = agent_runtime.public_ai_runtime.configuration_snapshot()
-        && let Ok(rows) =
-            public_ai_provider_rows(&configuration, agent_runtime.public_ai_runtime.as_ref())
-    {
-        guard.workbench.providers = rows;
-    }
     guard.workbench.mcp_servers = mcp_servers(provider_configuration);
     guard.workbench.mcp_tools = mcp_tools(&cached_mcp_catalog_from_state(guard));
-    guard.workbench.reasoning_selection =
-        reasoning_selection(provider_configuration, public_model_capabilities.as_ref());
     guard.workbench.thinking_display_mode = workbench_thinking_display_mode(provider_configuration);
     guard.workbench.git_commit = git_commit_settings(provider_configuration);
     guard.workbench.provider_retry = provider_retry_settings(provider_configuration);
@@ -466,13 +419,18 @@ pub(crate) fn refresh_settings_projection_locked(
         provider_configuration.provider_request_trace_enabled;
     guard.workbench.host_tools = host_tools_settings(provider_configuration);
     guard.workbench.output_style_catalog = output_style_catalog_summary(provider_configuration);
-    guard.workbench.composer_attachment_capabilities = composer_attachment_capabilities(
-        public_ai_selection
-            .as_ref()
-            .map(|selection| selection.route.protocol_route.protocol_profile_id.as_str()),
-        public_model_capabilities.as_ref(),
-        &bridged_media_kinds,
+    // Settings refreshes use the same session-owned model projection as navigation, never global picker rows.
+    // 设置刷新与导航使用同一会话自有模型投影，绝不使用全局选择器行。
+    let mut selected_configuration = provider_configuration.clone();
+    restore_webui_runtime_controls_for_session(
+        &mut selected_configuration,
+        guard.workspace_snapshot.as_ref().and_then(|workspace| {
+            workspace
+                .session_runtime_state
+                .get(&workspace.selected_session)
+        }),
     );
+    sync_workbench_runtime_control_fields_locked(guard, &selected_configuration);
 }
 
 /// Refreshes model, reasoning, attachment, and context-usage projections after runtime controls change.

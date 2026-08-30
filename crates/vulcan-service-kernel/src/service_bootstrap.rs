@@ -1034,7 +1034,7 @@ fn run_service_bootstrap(
     // workspace_index_started_at measures only the indexed project/session summary load.
     // workspace_index_started_at 仅测量已索引项目与会话摘要加载。
     let workspace_index_started_at = start_bootstrap_stage("workspace_index");
-    let workspace_snapshot = bootstrap_step(
+    let mut workspace_snapshot = bootstrap_step(
         runtime.block_on(
             vulcan_workspace_store::workspace_store::load_or_seed_workspace_index(
                 controller_runtime.clone(),
@@ -1054,6 +1054,56 @@ fn run_service_bootstrap(
         ),
     );
     let selected_session_id = workspace_snapshot.selected_session;
+    // Restore only the selected session's request metadata before publishing the first usable model picker.
+    // 发布首个可用模型选择器前，仅恢复选中会话的请求 metadata。
+    let session_registry = Arc::clone(
+        &state
+            .lock()
+            .map_err(|error| {
+                ServiceBootstrapError::new(
+                    "workspace",
+                    "Workspace",
+                    format!("failed to lock service state: {error}"),
+                )
+            })?
+            .session_runtime_registry,
+    );
+    // Keep lifecycle ownership through initial publication; this does not load a Turn or its context.
+    // 贯穿首次发布保留生命周期所有权；这不会加载回合或其上下文。
+    let selected_model_projection = if selected_session_id != crate::SessionId::nil() {
+        Some(bootstrap_step(
+            runtime.block_on(
+                crate::session_model_projection_v1::read_session_model_projection_v1(
+                    &controller_runtime,
+                    session_registry.as_ref(),
+                    selected_session_id,
+                ),
+            ),
+            "workspace",
+            "Workspace",
+        )?)
+    } else {
+        None
+    };
+    if let Some(projection) = selected_model_projection.as_ref() {
+        bootstrap_step(
+            projection.apply(
+                session_registry.as_ref(),
+                &mut workspace_snapshot.session_runtime_state,
+            ),
+            "workspace",
+            "Workspace",
+        )?;
+    }
+    // Initial reasoning controls follow the same selected-session metadata as the model, without rewriting global defaults.
+    // 初始思考控件与模型使用同一选中会话 metadata，不改写全局默认值。
+    let mut selected_provider_configuration = provider_configuration.clone();
+    crate::restore_webui_runtime_controls_for_session(
+        &mut selected_provider_configuration,
+        workspace_snapshot
+            .session_runtime_state
+            .get(&selected_session_id),
+    );
     let vmm_hook_snapshot =
         build_vmm_hook_config_snapshot(&provider_configuration, &workspace_snapshot);
     bootstrap_step(
@@ -1150,7 +1200,7 @@ fn run_service_bootstrap(
             subagent_catalog: agent_runtime.subagent_catalog.as_ref(),
             mcp_server_states: &mcp_server_states,
             mcp_catalog: &mcp_catalog,
-            provider_configuration: &provider_configuration,
+            provider_configuration: &selected_provider_configuration,
             public_ai_runtime: Some(agent_runtime.public_ai_runtime.as_ref()),
             workspace: &workspace_snapshot,
             pending_prompt_process_mirrors: &guard.pending_prompt_process_mirrors,
@@ -1166,11 +1216,6 @@ fn run_service_bootstrap(
             selected_context_usage_facts: None,
             native_tools: native_tool_summaries_from_agent_runtime(Some(&agent_runtime)),
         });
-        workbench.providers = crate::public_ai_provider_rows(
-            &public_ai_configuration,
-            agent_runtime.public_ai_runtime.as_ref(),
-        )
-        .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
         crate::reconcile_workbench_conversation_lifecycle_projection(
             &mut workbench,
             &guard,
@@ -1192,6 +1237,9 @@ fn run_service_bootstrap(
         guard.cached_mcp_catalog = Some(mcp_catalog);
         workbench
     };
+    // Initial configuration publication is complete; later navigation acquires its own scoped guard.
+    // 首次配置发布已完成；后续导航获取自己的作用域守卫。
+    drop(selected_model_projection);
     trace_bootstrap_stage(
         "initial_workbench_projection",
         initial_projection_started_at,

@@ -4,6 +4,7 @@ import {
   ConversationEventSummary,
   ConversationEventVisibility,
 } from "./conversation-event-window-store";
+import { projectTurnUsageCoverage, type TurnUsageCoverage } from "./conversation-usage-coverage";
 
 /** Assistant reasoning event rendered directly from the V1 event stream.
  * 直接从 V1 事件流渲染的 assistant 思考事件。 */
@@ -189,6 +190,9 @@ export interface ConversationAssistantTranscriptNode extends ConversationTranscr
 export interface ConversationTurnStatsTranscriptNode extends ConversationTranscriptNodeBase {
   kind: "turn_stats";
   item: AuxiliaryEventDisplayItem & { event: TurnStatsEvent };
+  /** Known usage evidence derived from canonical API events, not transcript text.
+   * 从规范 API 事件而非转录文本派生的已知用量证据。 */
+  usage_coverage?: TurnUsageCoverage;
 }
 
 /** One permanent request-configuration transition.
@@ -225,6 +229,9 @@ export type ConversationTranscriptDisplayNode =
 export function projectConversationTranscriptDisplay(
   items: readonly ConversationEventDisplayItem[],
 ): ConversationTranscriptDisplayNode[] {
+  // Include hidden accounting facts before filtering display-only nodes.
+  // 在过滤仅展示节点前纳入隐藏的核算事实。
+  const usageCoverageBySeq = projectTurnUsageCoverage(items.filter((item): item is AuxiliaryEventDisplayItem => item.kind === "event"));
   const finalAssistantSeqByTurn = finalAssistantSeqs(items);
   const apiStatsById = new Map<number, ApiStatsEvent>();
   const rootInputByTurn = new Map<string, ConversationRootInputAnchor>();
@@ -335,6 +342,7 @@ export function projectConversationTranscriptDisplay(
         seq: item.seq,
         turn_id: item.turn_id,
         item: { ...item, event: item.event },
+        usage_coverage: usageCoverageBySeq.get(item.seq),
       });
     }
   }

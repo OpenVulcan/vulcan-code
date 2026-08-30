@@ -265,6 +265,29 @@ async fn refresh_workbench_snapshot_with_selected_session(
         projection_inputs_started_at,
         "result=captured",
     );
+    // Metadata-only request restoration keeps startup/index refresh independent from Turn hydration.
+    // 纯 metadata 请求恢复使启动及索引刷新保持独立于回合水合。
+    let selected_session_id = refreshed_snapshot.selected_session;
+    // Hold the selected owner's lifecycle guard until the refreshed snapshot is published.
+    // 保留选中 owner 的生命周期守卫，直至刷新快照发布。
+    let model_projection = if selected_session_id != SessionId::nil() {
+        Some(
+            crate::session_model_projection_v1::read_session_model_projection_v1(
+                &controller_runtime,
+                session_runtime_registry.as_ref(),
+                selected_session_id,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    if let Some(projection) = model_projection.as_ref() {
+        projection.apply(
+            session_runtime_registry.as_ref(),
+            &mut refreshed_snapshot.session_runtime_state,
+        )?;
+    }
     let vulcan_plugin_catalog = agent_runtime_for_status
         .as_ref()
         .and_then(|agent_runtime| agent_runtime.extension_generation.plugin_catalog());
@@ -368,6 +391,20 @@ async fn refresh_workbench_snapshot_with_selected_session(
             final_preserved_run_state.as_ref(),
             &mut refreshed_snapshot,
         );
+        // Preserve the explicit target for edit/fork refreshes; ordinary refreshes retain the latest navigation.
+        // 编辑或分叉刷新保留显式目标；普通刷新保留最新导航选择。
+        refreshed_snapshot.selected_session =
+            selected_session_id_after_refresh(&refreshed_snapshot, target_session_id);
+        // A concurrent navigation owns the final selected session; never apply another session's model to it.
+        // 并发导航拥有最终选中会话；绝不向它应用另一会话的模型。
+        if refreshed_snapshot.selected_session == selected_session_id {
+            if let Some(projection) = model_projection.as_ref() {
+                projection.apply(
+                    session_runtime_registry.as_ref(),
+                    &mut refreshed_snapshot.session_runtime_state,
+                )?;
+            }
+        }
         reconcile_workbench_conversation_lifecycle_projection(
             &mut workbench,
             &guard,
@@ -379,10 +416,35 @@ async fn refresh_workbench_snapshot_with_selected_session(
             captured_workbench_generation,
             guard.workbench_generation,
         );
+        // Reconcile the selected identity and its scoped controls under the same final publication lock.
+        // 在同一最终发布锁内协调选中身份及其作用域控件。
+        workbench.selected_conversation_id = selected_workspace_session_id(&refreshed_snapshot)
+            .map(|session_id| session_id.to_string());
+        if let Some(conversation_id) = workbench.selected_conversation_id.clone() {
+            sync_selected_conversation_fields_for_retained_workbench(
+                &mut workbench,
+                &conversation_id,
+            );
+        }
+        // Use the latest runtime configuration so a concurrent settings publication is not rolled back.
+        // 使用最新运行时配置，避免回滚并发设置发布。
+        let mut selected_provider_configuration = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.provider_configuration.clone())
+            .unwrap_or_else(|| provider_configuration.clone());
+        restore_webui_runtime_controls_for_session(
+            &mut selected_provider_configuration,
+            refreshed_snapshot
+                .session_runtime_state
+                .get(&refreshed_snapshot.selected_session),
+        );
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         workbench.revision = guard.workbench_generation;
         guard.workbench = workbench.clone();
         guard.workspace_snapshot = Some(refreshed_snapshot);
+        sync_workbench_runtime_control_fields_locked(&mut guard, &selected_provider_configuration);
+        workbench = guard.workbench.clone();
     }
     trace_workbench_refresh_if_slow(
         "final_state_commit",

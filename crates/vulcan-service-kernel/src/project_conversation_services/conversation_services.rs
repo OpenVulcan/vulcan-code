@@ -501,10 +501,10 @@ pub(crate) async fn service_select_conversation(
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         guard.controller_runtime.clone()
     };
-    let cleanup_result = if let Some(controller_runtime) = controller_runtime {
+    let cleanup_result = if let Some(controller_runtime) = controller_runtime.as_ref() {
         // Selection is a read/navigation operation and must remain available while the target session runs.
         // 选择属于读取/导航操作，即使目标会话正在运行也必须保持可用。
-        match preflight_session_v1_storage(&controller_runtime, &session_id.to_string())
+        match preflight_session_v1_storage(controller_runtime, &session_id.to_string())
             .await
             .map_err(|error| error.to_string())?
         {
@@ -520,11 +520,44 @@ pub(crate) async fn service_select_conversation(
         refresh_workbench_snapshot(state.clone()).await?;
         return Err(String::from("会话已被删除，已经清理。"));
     }
+    // Resolve metadata before entering the retained navigation path, which deliberately never loads history.
+    // 进入保留导航路径前解析 metadata；该路径刻意不加载历史。
+    let registry = Arc::clone(
+        &state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?
+            .session_runtime_registry,
+    );
+    // The optional controller exists only outside the retained in-memory service fixtures.
+    // 仅保留内存服务夹具以外的场景存在可选控制器。
+    let model_projection = if let Some(controller_runtime) = controller_runtime.as_ref() {
+        Some(
+            crate::session_model_projection_v1::read_session_model_projection_v1(
+                controller_runtime,
+                registry.as_ref(),
+                session_id,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    if let Some(projection) = model_projection.as_ref() {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        if let Some(workspace) = guard.workspace_snapshot.as_mut() {
+            projection.apply(registry.as_ref(), &mut workspace.session_runtime_state)?;
+        }
+    }
     if let Some(workbench) =
         select_conversation_in_retained_state(&state, session_id, &conversation_id)?
     {
         return Ok(workbench);
     }
+    // The full refresh resolves the same metadata owner, so release this navigation guard first.
+    // 完整刷新会解析同一 metadata owner，因此先释放本次导航守卫。
+    drop(model_projection);
     refresh_workbench_snapshot_for_selected_session(state, session_id).await
 }
 
@@ -610,7 +643,7 @@ fn select_conversation_in_retained_state(
 /// `workbench` 是正在原地更新的保留快照。
 /// `conversation_id` identifies the newly selected conversation.
 /// `conversation_id` 标识新选中的会话。
-fn sync_selected_conversation_fields_for_retained_workbench(
+pub(crate) fn sync_selected_conversation_fields_for_retained_workbench(
     workbench: &mut WorkbenchSnapshot,
     conversation_id: &str,
 ) {
