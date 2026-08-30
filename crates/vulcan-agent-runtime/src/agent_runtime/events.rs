@@ -115,6 +115,9 @@ impl ProviderRequestPreparationCandidate {
 /// 由唯一准备所有者放行的精确物理 Provider 请求。
 #[derive(Debug, Clone)]
 pub enum PreparedPhysicalApi {
+    /// A newer user selection requires rebuilding this undispatched candidate on the same logical turn.
+    /// 新的用户选择要求在同一逻辑回合内重建尚未派发的候选请求。
+    RequestConfigurationChanged,
     /// A V1 session request rebuilt from the durable event ledger and committed before dispatch.
     /// 从可靠事件账本重建并在分派前完成提交的 V1 会话请求。
     SessionV1 {

@@ -8,9 +8,11 @@ import {
   FileText,
   FolderTree,
   GitBranch,
+  ListChecks,
   MessageCircleQuestionMark,
   Pencil,
   Search,
+  Target,
   TerminalSquare,
   Trash2,
 } from "lucide-react";
@@ -24,6 +26,7 @@ import { MarkdownMessage } from "@/components/conversation/conversation-markdown
 import { ConversationMeasuredCollapse } from "@/components/conversation/conversation-measured-collapse";
 import { FileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import { TerminalOutputView } from "@/components/conversation/conversation-terminal-output";
+import { formatTurnStatsNumber, TurnStatsMetricRow } from "@/components/conversation/conversation-turn-stats-card";
 import {
   terminalStateClass,
   type TerminalVisualState,
@@ -310,6 +313,13 @@ function NativeSemanticToolPresentationCard(props: {
   // targetLabel exposes the exact prompt-skill name while the detail remains folded.
   // targetLabel 在详情折叠时展示精确的提示词技能名称。
   const targetLabel = nativeSemanticTargetLabel(props.presentation);
+  // Icon follows the typed tool family and reuses the existing Goal and Plan symbols.
+  // Icon 按强类型工具族复用既有目标与方案图标。
+  const Icon = props.presentation.family === "goal"
+    ? Target
+    : props.presentation.family === "todo"
+      ? ListChecks
+      : Braces;
   // markdown keeps TODO previews authoritative while other families prefer terminal output.
   // markdown 保持 TODO 预览权威，其他卡片族优先使用终态输出。
   const markdown = props.presentation.family === "todo"
@@ -335,7 +345,7 @@ function NativeSemanticToolPresentationCard(props: {
         title={targetLabel ? `${title} · ${targetLabel}` : title}
         type="button"
       >
-        <Braces className="markdown-tool-icon" size={15} />
+        <Icon className="markdown-tool-icon" size={15} />
         {status ? <span className="tool-presentation-state shimmer">{status}</span> : null}
         <span className="tool-presentation-command">
           <span className="tool-presentation-command-text">{title}{targetLabel ? ` · ${targetLabel}` : ""}</span>
@@ -1867,14 +1877,10 @@ function SubagentUsageChip(props: {
   // summaryText is shared by the compact trigger and its accessible label.
   // summaryText 由紧凑触发器及其无障碍标签共享。
   const summaryText = subagentUsageSummaryText(props.summary, props.t);
-  // detailRows preserve every authoritative usage dimension inside the hover/focus card.
-  // detailRows 在悬浮/焦点卡片中保留全部权威用量维度。
-  const detailRows = [
-    formatSubagentUsageTranslation(props.t("conversation.stats.providerCalls"), props.summary.providerCallCount),
-    formatSubagentUsageTranslation(props.t("conversation.stats.toolCalls"), props.summary.toolCallCount),
-    formatSubagentUsageTranslation(props.t("conversation.stats.totalTokens"), props.summary.totalTokens),
-    formatSubagentUsageTranslation(props.t("conversation.stats.cachedTokensCompact"), props.summary.cachedInputTokens),
-  ];
+  // Locale and shared metric rows match the turn-statistics card without inventing unavailable token fields.
+  // 语言及共用统计行与轮次统计卡一致，不虚构当前没有的 Token 字段。
+  const { locale } = useI18n();
+  const zh = locale === "zh-CN";
   // tooltipId connects the focusable usage chip to its state-free detail card.
   // tooltipId 将可聚焦的用量胶囊与无状态详情卡关联起来。
   const tooltipId = React.useId();
@@ -1895,9 +1901,22 @@ function SubagentUsageChip(props: {
         id={tooltipId}
         role="tooltip"
       >
-        <strong>{props.t("conversation.subagent.detail.usage")}</strong>
-        <div className="subagent-orchestration-usage-tooltip-grid">
-          {detailRows.map((row) => <span key={row}>{row}</span>)}
+        <div className="context-usage-card-header turn-stats-card-header">
+          <strong>{props.t("conversation.subagent.detail.usage")}</strong>
+        </div>
+        <div className="turn-stats-metric-grid">
+          <TurnStatsMetricRow
+            leftLabel={zh ? "总请求次数" : "Requests"}
+            leftValue={formatTurnStatsNumber(props.summary.providerCallCount, locale)}
+            rightLabel={zh ? "工具调用次数" : "Tool calls"}
+            rightValue={formatTurnStatsNumber(props.summary.toolCallCount, locale)}
+          />
+          <TurnStatsMetricRow
+            leftLabel={zh ? "缓存 Tokens" : "Cached tokens"}
+            leftValue={formatTurnStatsNumber(props.summary.cachedInputTokens, locale)}
+            rightLabel={zh ? "合计 Tokens" : "Total tokens"}
+            rightValue={formatTurnStatsNumber(props.summary.totalTokens, locale)}
+          />
         </div>
       </div>
     </div>

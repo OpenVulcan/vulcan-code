@@ -3,13 +3,13 @@
 //!
 //! Loading touches only metadata, runtime, compactions, and the exact segment
 //! files named by the split map. It never scans directories, never searches
-//! for candidates, never rewrites files, and never repairs anything.
+//! for candidates and never rewrites files. The explicit runtime entry may stage a narrowly validated recovery.
 //! `load_session` retains the full stream; `load_session_tail_only` retains
 //! the active tail plus the exact open-turn/retained-goal interval and reports its metrics: sealed segments
 //! stay logically addressable through the catalog and are validated on their
 //! first precise load (plan 6.1.4/6.1.8).
 //! 加载只接触 metadata、runtime、compactions 与分片映射精确命名的分片文件。
-//! 它绝不扫描目录、绝不寻找候选、绝不重写文件、绝不修复任何内容。
+//! 它绝不扫描目录、绝不寻找候选、绝不重写文件。显式运行时入口可暂存严格限定的恢复候选。
 //! `load_session` 保留完整流；`load_session_tail_only` 保留活动尾段与精确的开放回合、保留目标区间并报告
 //! 其指标(审计 P0#2)：封口分片通过 catalog 保持逻辑可寻址，并在首次精确
 //! 加载时校验(计划 6.1.4/6.1.8)。
@@ -150,6 +150,27 @@ pub fn load_session(layout: &SessionV1Layout) -> Result<LoadedV1Session, Session
 pub fn load_session_tail_only(
     layout: &SessionV1Layout,
 ) -> Result<(LoadedV1Session, LoadReport), SessionV1Error> {
+    load_session_tail_with_recovery(layout, false)
+}
+
+/// Loads `layout` for a runtime owner, staging proven tail-only Goal corrections without writing files.
+/// 为运行时 owner 加载 `layout`，暂存已证实的仅尾段目标纠正，不写文件。
+/// Returns the validated candidate and metrics; the owner must persist dirty recovery before publication.
+/// 返回已校验候选与指标；owner 必须在发布前持久化待写恢复内容。
+pub(crate) fn load_session_tail_for_runtime(
+    layout: &SessionV1Layout,
+) -> Result<(LoadedV1Session, LoadReport), SessionV1Error> {
+    load_session_tail_with_recovery(layout, true)
+}
+
+/// Reads exact session parts; `recover_goal_owners` selects strict or narrowly recoverable construction.
+/// 读取精确会话部件；`recover_goal_owners` 选择严格构建或限定可恢复构建。
+/// Returns no partial document on validation failure and performs no persistence.
+/// 校验失败不返回部分文档，也不执行持久化。
+fn load_session_tail_with_recovery(
+    layout: &SessionV1Layout,
+    recover_goal_owners: bool,
+) -> Result<(LoadedV1Session, LoadReport), SessionV1Error> {
     let SmallDocuments {
         metadata,
         runtime_document,
@@ -211,7 +232,14 @@ pub fn load_session_tail_only(
         locked_sources: runtime_document.locked_sources,
     };
     let compactions = compactions_document.nodes;
-    let document = SessionDocument::from_parts(
+    // Both constructors run the same strict validators; runtime recovery corrects only its proven pair.
+    // 两种构建器都执行相同严格校验；运行时恢复仅纠正已证实的事件对。
+    let restore = if recover_goal_owners {
+        SessionDocument::from_parts_with_goal_owner_recovery
+    } else {
+        SessionDocument::from_parts
+    };
+    let document = restore(
         metadata.clone(),
         runtime_lock,
         compactions,

@@ -1109,6 +1109,9 @@ impl ProviderV1StreamSink {
                 rebuild_provider_transport_candidate(snapshot, &facts_for_build, candidate)
             },
         )?;
+        let Some(receipt) = receipt else {
+            return Ok(PreparedPhysicalApi::RequestConfigurationChanged);
+        };
         let prepared = receipt.value;
         let core_start = prepared.core_start;
         let transport = prepared.transport;

@@ -448,36 +448,28 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
     // a stopped or failed transport. Child tasks inherit the same immutable request fact.
     // 在回合准入时捕获 VMM 实时就绪状态，避免模型可见记忆工具在传输停止或失败后继续暴露；子任务继承同一不可变请求事实。
     request.vmm_runtime_ready = vmm_domain_active;
-    request.provider_id_override = agent_runtime.provider_id_override.clone();
-    request.model_id_override = agent_runtime.model_id_override.clone();
-    request.connection_id_override = agent_runtime.connection_id_override.clone();
-    if request.provider_id_override.is_none() && request.model_id_override.is_none() {
-        // sessionRuntimeState owns both the selected target and its persisted non-secret lease identity.
-        // sessionRuntimeState 同时持有所选目标及其持久化非秘密租约身份。
-        let session_runtime_state = workspace_snapshot.session_runtime_state.get(&session_id);
-        if let Some(runtime_state) = session_runtime_state {
-            request.provider_route_lease_identity = runtime_state.provider_route_lease.clone();
-            if let Some((provider_id, model_id)) = runtime_state
-                .active_provider_id
-                .as_deref()
-                .zip(runtime_state.active_model_id.as_deref())
-            {
-                // Exact persisted identifiers are passed through without consulting the current
-                // catalog. The provider runtime either reuses the in-memory lease or proves an
-                // identical restart restoration; it never degrades to another account or route.
-                // 精确持久化标识不查询当前目录而直接传递。供应商运行时要么复用内存租约，
-                // 要么证明重启恢复完全一致；绝不降级到其他账号或路由。
-                request.provider_id_override = Some(provider_id.to_string());
-                request.model_id_override = Some(model_id.to_string());
-                request.connection_id_override =
-                    runtime_state.active_connection_id.as_ref().cloned();
-            }
-        }
-    } else {
-        // An explicit agent-scoped model target owns an independent lease and must not inherit
-        // the main session model identity.
-        // 显式代理作用域模型目标拥有独立租约，不得继承主会话模型身份。
-        request.provider_route_lease_identity = None;
+    // Main-session requests consume V1 configuration before construction, including Goal and queued continuations.
+    // 主会话请求在构建前消费 V1 配置，包括目标续跑和排队续跑，不能再次从全局选择或旧镜像取模型。
+    let handle =
+        crate::session_goal_lifecycle::registered_session_v1_handle_from_state(state, session_id)?;
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&session_id)
+        .ok_or_else(|| format!("Session `{session_id}` has no admitted runtime state."))?;
+    crate::session_request_config_v1::synchronize_v1_dispatch_model_selection(
+        handle.as_ref(),
+        agent_runtime.public_ai_runtime.as_ref(),
+        runtime_state,
+    )?;
+    request.provider_id_override = runtime_state.active_provider_id.clone();
+    request.model_id_override = runtime_state.active_model_id.clone();
+    request.connection_id_override = runtime_state.active_connection_id.clone();
+    request.provider_route_lease_identity = runtime_state.provider_route_lease.clone();
+    if request.provider_id_override.is_some() {
+        request.reasoning_effort = runtime_state
+            .active_reasoning_effort
+            .unwrap_or(vulcan_provider_config::config::ReasoningEffortLevel::Off);
+        request.temperature = runtime_state.active_temperature;
     }
     request.controller_runtime = Some(controller_runtime.clone());
     // Native Goal tools receive the exact request session's V1 domain port; no SQLite store is exposed.
@@ -1248,6 +1240,7 @@ pub(crate) async fn mark_webui_prompt_preparation_failed(
         state,
         session_id,
         "prompt_preparation_failed",
+        Some(error.to_owned()),
     )
     .await
     .map_err(|persist_error| {

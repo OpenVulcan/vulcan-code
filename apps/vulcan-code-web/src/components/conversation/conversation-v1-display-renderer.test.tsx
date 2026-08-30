@@ -46,6 +46,21 @@ function seqOffset(markup: string, seq: number): number {
 }
 
 describe("ConversationV1DisplayRenderer", () => {
+  // Goal control facts must render as marked cards, not raw protocol identifiers or assistant paragraphs.
+  // 目标控制事实必须渲染为标记卡片，不能成为原始协议编号或 assistant 段落。
+  it("renders resumed and blocked goals as localized notice cards", () => {
+    const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN">
+      <ConversationV1DisplayRenderer events={[
+        summary(1, { kind: "display_note", notice_kind: "goal_status", severity: "info", reason_code: "goal_resumed" }, "ui_only"),
+        summary(2, { kind: "display_note", notice_kind: "goal_status", severity: "info", reason_code: "goal_blocked" }, "ui_only"),
+      ]} />
+    </I18nProvider>);
+    expect(markup.match(/class="special-block notice"/g)).toHaveLength(2);
+    expect(markup).toContain("目标已恢复");
+    expect(markup).toContain("目标受阻");
+    expect(markup).not.toContain("goal_resumed");
+    expect(markup).not.toContain("goal_blocked");
+  });
   it("offers edit at the root input and fork only after the owning Turn completes", () => {
     // events contain one root input, one queued input, one final answer, and terminal TurnStats.
     // events 包含一条根输入、一条排队输入、一条最终回答与终态 TurnStats。
@@ -556,11 +571,12 @@ describe("ConversationV1DisplayRenderer", () => {
     ];
     // markup includes only the visible note while seq 1 still participated in validation.
     // markup 仅包含可见提示，但 seq 1 仍参与了序列校验。
-    const markup = renderToStaticMarkup(<ConversationV1DisplayRenderer events={events} />);
+    const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN"><ConversationV1DisplayRenderer events={events} /></I18nProvider>);
 
     expect(markup).not.toContain("host-only content");
     expect(markup).toContain('data-seq="2"');
     expect(markup).toContain("目标状态已更新");
-    expect(markup).not.toContain("goal_status");
+    expect(markup).toContain('class="special-block notice"');
+    expect(markup).not.toContain(">goal_running<");
   });
 });

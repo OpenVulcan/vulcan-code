@@ -64,10 +64,10 @@ pub use session_v1_store::{
     SessionV1StoragePreflightOutcome, SessionV1StoreError, SessionV1TurnEventWindow,
     create_embedded_task_session_v1, create_indexed_session_v1, delete_session_v1,
     ensure_session_v1_storage_schema, flush_session_v1_candidate, list_active_sessions_v1,
-    list_archived_sessions_v1, load_session_v1_full, load_session_v1_tail,
-    locate_embedded_task_session_v1, locate_optional_session_v1_storage, locate_session_v1_storage,
-    preflight_session_v1_storage, project_resource_directory_v1, project_session_lifecycle_v1,
-    publish_edit_session_v1, set_session_unread_v1,
+    list_archived_sessions_v1, load_session_v1_for_runtime, load_session_v1_full,
+    load_session_v1_tail, locate_embedded_task_session_v1, locate_optional_session_v1_storage,
+    locate_session_v1_storage, preflight_session_v1_storage, project_resource_directory_v1,
+    project_session_lifecycle_v1, publish_edit_session_v1, set_session_unread_v1,
 };
 pub use session_vmm_v1::{load_session_vmm_state, persist_session_vmm_state};
 

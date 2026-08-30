@@ -812,8 +812,13 @@ pub(crate) async fn persist_failed_webui_context_compaction(
         },
         error,
     )?;
-    crate::persist_v1_execution_failure_boundary(state, session_id, "context_compaction_failed")
-        .await
+    crate::persist_v1_execution_failure_boundary(
+        state,
+        session_id,
+        "context_compaction_failed",
+        Some(error.to_owned()),
+    )
+    .await
 }
 
 /// Builds one WebUI compaction job from an already frozen plan and exact model target.

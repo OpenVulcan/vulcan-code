@@ -126,6 +126,7 @@ function structuredMessageBlockKind(message: ConversationMessage): ConversationB
     const noticeKind = metadataString(message.metadata, ["notice_kind"]);
     if (
       noticeKind === "provider_retry"
+      || noticeKind === "goal_status"
       || noticeKind === "model_switch"
       || noticeKind === "reasoning_effort_switch"
     ) return "notice";

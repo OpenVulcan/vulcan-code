@@ -1076,6 +1076,29 @@ fn goal_restart_between_requests_pauses_and_remains_reloadable() -> Result<(), D
     Ok(())
 }
 
+/// Repeating stream-failure settlement must preserve an already interrupted API's Continue boundary.
+/// 重复结算流失败必须保留已中断 API 的 Continue 边界。
+#[test]
+fn repeated_failure_keeps_interrupted_api_continuable() -> Result<(), DomainError> {
+    let mut document = new_document();
+    document.create_goal("work", None, "work", T0)?;
+    document.start_api(
+        ApiPurposeKind::MainGeneration,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        T0 + 1,
+    )?;
+    document.interrupt_active_api_for_process(T0 + 2)?;
+    let before = document.clone();
+    assert!(!document.fail_turn_without_active_api(
+        "stream_finished_without_v1_api_terminal",
+        None,
+        T0 + 3
+    )?);
+    assert_eq!(document, before);
+    assert!(!document.active_turn().unwrap().closed);
+    Ok(())
+}
+
 /// Legacy paused goals whose origin was rewritten must not gain working time from unrelated metadata updates.
 /// 旧版暂停期间改写过起点的目标，不得因无关元数据更新增加工作时长。
 #[test]

@@ -10501,6 +10501,168 @@ mod tests {
         }
     }
 
+    /// Verifies the production Responses-first encoder carries Apply Patch schemas and replay across every protocol family.
+    /// 验证生产 Responses 优先编码链在所有协议族中保留 Apply Patch Schema 与历史重放。
+    /// No network is used; assertions cover fresh calls, canonical history and legacy custom history.
+    /// 不使用网络；断言覆盖首次调用、规范历史与旧 custom 历史。
+    #[test]
+    fn apply_patch_standard_function_survives_production_protocol_projection() {
+        // client invokes the same public encoding boundary as live provider requests.
+        // client 调用与真实供应商请求相同的公共编码边界。
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::new(),
+            Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+        );
+        // schema is the existing single-patch JSON contract, including its closed object boundary.
+        // schema 是既有单 patch JSON 契约，包括封闭对象边界。
+        let schema = json!({"type":"object","properties":{"patch":{"type":"string"}},"required":["patch"],"additionalProperties":false});
+        // patch exercises escaping, Unicode and newlines without applying filesystem changes.
+        // patch 验证转义、中文和换行，不实际修改文件系统。
+        let patch = "*** Begin Patch\n*** Add File: note.txt\n+你好 \"quoted\" C:\\workspace\n*** End Patch";
+        // cases use converter-owned JSON pointers rather than guessing equivalent field names.
+        // cases 使用转换器持有的 JSON Pointer，不猜测等价字段名。
+        let cases = [
+            (
+                OPENAI_RESPONSES_PROFILE_ID,
+                "/tools/0/parameters",
+                "/input/1/arguments",
+                "/input/2/call_id",
+            ),
+            (
+                OPENAI_CODEX_RESPONSES_PROFILE_ID,
+                "/tools/0/parameters",
+                "/input/1/arguments",
+                "/input/2/call_id",
+            ),
+            (
+                OPENAI_CHAT_PROFILE_ID,
+                "/tools/0/function/parameters",
+                "/messages/1/tool_calls/0/function/arguments",
+                "/messages/2/tool_call_id",
+            ),
+            (
+                ANTHROPIC_MESSAGES_PROFILE_ID,
+                "/tools/0/input_schema",
+                "/messages/1/content/0/input",
+                "/messages/2/content/0/tool_use_id",
+            ),
+            (
+                ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
+                "/tools/0/input_schema",
+                "/messages/1/content/0/input",
+                "/messages/2/content/0/tool_use_id",
+            ),
+            (
+                CLAUDE_CODE_MESSAGES_PROFILE_ID,
+                "/tools/0/input_schema",
+                "/messages/1/content/0/input",
+                "/messages/2/content/0/tool_use_id",
+            ),
+            (
+                GEMINI_GENERATE_CONTENT_PROFILE_ID,
+                "/tools/0/functionDeclarations/0/parameters",
+                "/contents/1/parts/0/functionCall/args",
+                "/contents/2/parts/0/functionResponse/id",
+            ),
+            (
+                GEMINI_INTERACTIONS_PROFILE_ID,
+                "/tools/0/parameters",
+                "/input/1/arguments",
+                "/input/2/call_id",
+            ),
+            (
+                GOOGLE_CODE_ASSIST_PROFILE_ID,
+                "/request/tools/0/functionDeclarations/0/parameters",
+                "/request/contents/1/parts/0/functionCall/args",
+                "/request/contents/2/parts/0/functionResponse/id",
+            ),
+        ];
+        for (profile_id, schema_pointer, arguments_pointer, output_id_pointer) in cases {
+            // route is an isolated encoding fixture, not a change to any provider manifest.
+            // route 是隔离的编码夹具，不修改任何供应商清单。
+            let mut route = pinned_openrouter_route(OPENAI_CHAT_PROFILE_ID);
+            route.protocol_route.protocol_profile_id = profile_id.to_string();
+            let mut request = minimal_request();
+            request.tools = vec![vulcan_ai_contract::ToolDefinition {
+                name: String::from("apply_patch"),
+                description: String::from("Apply an atomic patch."),
+                input_schema: schema.clone(),
+                strict: false,
+            }];
+            let fresh = client
+                .encode_request(&route, &request)
+                .unwrap_or_else(|error| panic!("fresh {profile_id}: {error:?}"));
+            assert_eq!(
+                fresh.body.pointer(schema_pointer),
+                Some(&schema),
+                "{profile_id}"
+            );
+            for legacy in [false, true] {
+                // replay starts from the same user prompt with either canonical or persisted custom call history.
+                // replay 从同一用户提示开始，分别携带规范调用或持久化 custom 调用历史。
+                let mut replay = request.clone();
+                replay.messages.push(AiMessage {
+                    role: MessageRole::Assistant,
+                    content: if legacy { Vec::new() } else { vec![ContentItem::ToolCall {
+                        call: vulcan_ai_contract::ToolCall {
+                            id: String::from("patch-1"), name: String::from("apply_patch"),
+                            arguments: json!({"patch":patch}), signature: None,
+                        },
+                    }] },
+                    provider_context_items: if legacy { vec![json!({"type":"custom_tool_call","id":"legacy-item","call_id":"patch-1","name":"apply_patch","input":patch})] } else { Vec::new() },
+                });
+                replay.messages.push(AiMessage {
+                    role: MessageRole::Tool,
+                    content: vec![ContentItem::ToolResult {
+                        result: vulcan_ai_contract::ToolResult {
+                            call_id: String::from("patch-1"),
+                            is_error: false,
+                            content: json!({"ok":true}),
+                        },
+                    }],
+                    provider_context_items: Vec::new(),
+                });
+                let encoded = client
+                    .encode_request(&route, &replay)
+                    .unwrap_or_else(|error| {
+                        panic!("replay {profile_id}, legacy={legacy}: {error:?}")
+                    });
+                assert_eq!(
+                    encoded.body.pointer(schema_pointer),
+                    Some(&schema),
+                    "{profile_id}"
+                );
+                let arguments = encoded
+                    .body
+                    .pointer(arguments_pointer)
+                    .expect("tool arguments must survive");
+                // Responses and Chat serialize arguments, while Anthropic and Gemini use JSON objects.
+                // Responses 与 Chat 序列化参数，Anthropic 与 Gemini 使用 JSON 对象。
+                let arguments = if matches!(
+                    profile_id,
+                    OPENAI_RESPONSES_PROFILE_ID
+                        | OPENAI_CODEX_RESPONSES_PROFILE_ID
+                        | OPENAI_CHAT_PROFILE_ID
+                ) {
+                    serde_json::from_str::<Value>(arguments.as_str().expect("serialized arguments"))
+                        .unwrap()
+                } else {
+                    arguments.clone()
+                };
+                assert_eq!(arguments, json!({"patch":patch}), "{profile_id}");
+                assert_eq!(
+                    encoded.body.pointer(output_id_pointer),
+                    Some(&json!("patch-1")),
+                    "{profile_id}"
+                );
+                assert!(
+                    !encoded.body.to_string().contains("custom_tool_call"),
+                    "{profile_id}"
+                );
+            }
+        }
+    }
+
     /// Verifies native Gemini routing preserves its dynamic model path and generation controls.
     /// 验证原生 Gemini 路由保留动态模型路径与生成控制参数。
     #[test]

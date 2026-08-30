@@ -73,6 +73,9 @@ impl MockProviderAdapter {
 /// 持有预先规划的流式 Provider 响应，并在返回最终规范化响应前发出缓冲回合增量。
 #[derive(Debug, Clone)]
 struct MockStreamingProviderAdapter {
+    /// Signals a pre-dispatch configuration change instead of consuming a planned response.
+    /// 发出派发前配置变更信号，不消耗预设响应。
+    configuration_changed: bool,
     /// Stable provider identifier exposed by the mock streaming adapter.
     /// 由模拟流式适配器暴露的稳定 Provider 标识。
     provider_id: String,
@@ -92,6 +95,7 @@ impl MockStreamingProviderAdapter {
     /// 根据计划中的回合序列创建一个模拟流式 Provider 适配器。
     fn new(planned_turns: Vec<PlannedStreamingTurn>) -> Self {
         Self {
+            configuration_changed: false,
             provider_id: String::from("mock-openai-streaming"),
             model_id: String::from("mock-model"),
             planned_turns: Arc::new(Mutex::new(VecDeque::from(planned_turns))),
@@ -249,6 +253,11 @@ impl VulcanStreamingProviderAdapter for MockStreamingProviderAdapter {
     where
         S: VulcanProviderDeltaSink,
     {
+        if self.configuration_changed {
+            return Err(CoreError::ProviderRouteSwitchRequired {
+                message: String::from("selection changed before dispatch"),
+            });
+        }
         let (deltas, response) = self
             .planned_turns
             .lock()

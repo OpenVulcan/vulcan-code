@@ -378,6 +378,17 @@ export type TranslationKey =
   | "conversation.providerRetry.failed"
   | "conversation.modelSwitch.title"
   | "conversation.modelSwitch.changed"
+  | "conversation.goalNotice.saved"
+  | "conversation.goalNotice.resumed"
+  | "conversation.goalNotice.paused"
+  | "conversation.goalNotice.blocked"
+  | "conversation.goalNotice.completed"
+  | "conversation.goalNotice.cleared"
+  | "conversation.goalNotice.budgetExhausted"
+  | "conversation.goalNotice.usageLimited"
+  | "conversation.goalNotice.usageUnknown"
+  | "conversation.goalNotice.updated"
+  | "composer.draft.retry"
   | "conversation.modelSwitch.help"
   | "conversation.modelSwitch.warning"
   | "conversation.reasoningSwitch.title"
@@ -3267,6 +3278,17 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.providerRetry.failed": "重试失败",
     "conversation.modelSwitch.title": "模型切换",
     "conversation.modelSwitch.changed": "模型已从 {previous} 切换为 {current}。",
+    "conversation.goalNotice.saved": "目标已保存",
+    "conversation.goalNotice.resumed": "目标已恢复，继续执行",
+    "conversation.goalNotice.paused": "目标已暂停",
+    "conversation.goalNotice.blocked": "目标受阻，已暂停自动续跑",
+    "conversation.goalNotice.completed": "目标已完成",
+    "conversation.goalNotice.cleared": "目标已移除",
+    "conversation.goalNotice.budgetExhausted": "目标预算已用尽，已暂停",
+    "conversation.goalNotice.usageLimited": "目标用量受限，已暂停",
+    "conversation.goalNotice.usageUnknown": "目标用量暂不可核算，已暂停",
+    "conversation.goalNotice.updated": "目标状态已更新",
+    "composer.draft.retry": "重试加载草稿",
     "conversation.modelSwitch.help": "模型切换说明",
     "conversation.modelSwitch.warning": "在对话中途切换模型可能降低性能表现。背景信息可能会自动压缩。",
     "conversation.reasoningSwitch.title": "思考强度",
@@ -6154,6 +6176,17 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.providerRetry.failed": "Retry failed",
     "conversation.modelSwitch.title": "Model changed",
     "conversation.modelSwitch.changed": "Model changed from {previous} to {current}.",
+    "conversation.goalNotice.saved": "Goal saved",
+    "conversation.goalNotice.resumed": "Goal resumed",
+    "conversation.goalNotice.paused": "Goal paused",
+    "conversation.goalNotice.blocked": "Goal blocked; automatic continuation paused",
+    "conversation.goalNotice.completed": "Goal completed",
+    "conversation.goalNotice.cleared": "Goal removed",
+    "conversation.goalNotice.budgetExhausted": "Goal budget exhausted; paused",
+    "conversation.goalNotice.usageLimited": "Goal usage limited; paused",
+    "conversation.goalNotice.usageUnknown": "Goal usage unavailable; paused",
+    "conversation.goalNotice.updated": "Goal status updated",
+    "composer.draft.retry": "Retry loading draft",
     "conversation.modelSwitch.help": "About model changes",
     "conversation.modelSwitch.warning": "Switching models during a conversation may reduce performance. Background context may be compacted automatically.",
     "conversation.reasoningSwitch.title": "Reasoning effort",

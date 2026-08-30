@@ -296,6 +296,94 @@ pub(crate) fn set_pending_model_request_v1(
     Ok(receipt.changed)
 }
 
+/// Binds the next main-session request to its durable pending selection, or its durable active selection.
+/// 将主会话下一请求绑定到可靠的待生效选择；没有待生效选择时使用可靠活动选择。
+/// `handle` owns the configuration, `runtime` owns process route leases, and `runtime_state` is only a request-local mirror.
+/// `handle` 持有配置，`runtime` 持有进程路由租约，`runtime_state` 仅为请求局部镜像。
+/// Returns after replacing stale mirror fields; the existing API-start boundary still publishes the switch record.
+/// 替换过期镜像字段后返回；切换记录仍由既有 API 开始边界发布。
+pub(crate) fn synchronize_v1_dispatch_model_selection(
+    handle: &SessionHandle,
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    runtime_state: &mut SessionRuntimeStateEntry,
+) -> Result<(), String> {
+    // One document read selects the complete route; a pending request is a full snapshot, not independent fallback fields.
+    // 单次文档读取选择完整路由；待生效请求是完整快照，而不是可独立回退的字段。
+    let (session_id, route) = handle
+        .read(|document| {
+            let route = match document.metadata.config.pending_request.as_ref() {
+                Some(pending) => ActiveRequestConfig {
+                    provider: pending.provider.clone(),
+                    connection_id: pending.connection_id.clone(),
+                    model: pending.model.clone(),
+                    thinking_level: pending.thinking_level.clone(),
+                    temperature: pending.temperature,
+                },
+                None => document.metadata.config.active_request.clone(),
+            };
+            (document.metadata.session_id.clone(), route)
+        })
+        .map_err(|error| format!("Read V1 dispatch model selection failed: {error}"))?;
+    // Controls and route come from one revision so a simultaneous picker change cannot mix configurations.
+    // 控制项和路由来自同一修订，避免同时发生的选择器变更混合配置。
+    let ActiveRequestConfig {
+        provider,
+        connection_id,
+        model,
+        thinking_level,
+        temperature,
+    } = route;
+    let reasoning_effort = thinking_level
+        .as_deref()
+        .map(|level| {
+            crate::workspace_persistence_versions::parse_reasoning_effort(level)
+                .ok_or_else(|| format!("Invalid V1 reasoning level: {level}"))
+        })
+        .transpose()?;
+    // An empty route is valid only for a fresh session whose first API will capture the selected global default.
+    // 空路由仅用于尚未初始化的会话，其首次 API 会捕获已选择的全局默认值。
+    if provider.is_some() != model.is_some() || (provider.is_none() && connection_id.is_some()) {
+        return Err(String::from(
+            "The V1 dispatch model selection is incomplete.",
+        ));
+    }
+    // A changed tuple is an authorized model switch, never a reason to reject the next request.
+    // 三元组变化代表已授权模型切换，绝不是拒绝下一请求的理由。
+    let mirror_changed = runtime_state.active_provider_id != provider
+        || runtime_state.active_connection_id != connection_id
+        || runtime_state.active_model_id != model;
+    let lease = runtime.session_selection_lease(&session_id)?;
+    let lease_changed = lease.as_ref().is_some_and(|lease| {
+        Some(lease.route.provider.id.as_str()) != provider.as_deref()
+            || Some(lease.model.id.as_str()) != model.as_deref()
+            || connection_id
+                .as_deref()
+                .is_some_and(|id| id != lease.route.connection.id)
+    });
+    if lease_changed {
+        runtime.clear_session_selection_leases(&session_id)?;
+    }
+    if lease_changed || (mirror_changed && lease.is_none()) {
+        runtime_state.provider_route_lease = None;
+    } else if let Some(lease) = lease {
+        // A matching live lease remains immutable even if an older process mirror still names the previous model.
+        // 即使旧进程镜像仍标记先前模型，匹配的实时租约也保持不可变。
+        runtime_state.provider_route_lease = Some(
+            vulcan_agent_runtime::agent_runtime::provider::provider_route_lease_identity(&lease),
+        );
+    }
+    runtime_state.active_provider_id = provider;
+    runtime_state.active_connection_id = connection_id;
+    runtime_state.active_model_id = model;
+    if runtime_state.active_provider_id.is_some() {
+        runtime_state.active_reasoning_effort =
+            Some(reasoning_effort.unwrap_or(ReasoningEffortLevel::Off));
+        runtime_state.active_temperature = temperature.map(|value| value as f32);
+    }
+    runtime_state.pending_model_selection = None;
+    Ok(())
+}
+
 /// Durably records a complete next-request reasoning selection while preserving its route.
 /// 可靠记录完整的下一请求思考选择，同时保留其路由。
 ///
@@ -777,6 +865,166 @@ mod tests {
         assert_eq!(pending.thinking_level.as_deref(), Some("high"));
         assert_eq!(pending.temperature, Some(0.25));
         assert_eq!(backend.flush_count.load(Ordering::SeqCst), 1);
+    }
+
+    /// Exercises changed providers, models and accounts through the same V1 promotion and API validation used by dispatch.
+    /// 使用分发采用的同一 V1 提升与 API 校验，验证供应商、模型和账号变化。
+    /// Returns nothing; each case proves the old mirror fails and the synchronized selection starts with one switch record.
+    /// 无返回值；每个场景证明旧镜像失败，而同步后的选择可启动并仅生成一条切换记录。
+    #[test]
+    fn v1_dispatch_model_switch_replaces_stale_mirror_and_starts_api() {
+        use vulcan_session_core::v1::context::LockedBaselineProjection;
+        use vulcan_session_core::v1::event::ApiRequestSnapshot;
+        use vulcan_session_core::v1::projection::provider_visible_fingerprint;
+        use vulcan_session_core::v1::{
+            ApiPurposeKind, ClientActionId, ClientInputSubmission, EventBody,
+            PrepareAndStartApiInput, ProviderProjectionProof, Seq,
+        };
+        // These tuples cover both reported directions and same-provider model/account changes.
+        // 这些三元组覆盖报告中的双向切换，以及同供应商的模型和账号变化。
+        let cases = [
+            (
+                ("opencode-go", "go-account", "deepseek-v4-flash-vision-exp"),
+                (
+                    "deepseek",
+                    "deepseek-account",
+                    "deepseek-v4-flash-vision-exp",
+                ),
+            ),
+            (
+                (
+                    "deepseek",
+                    "deepseek-account",
+                    "deepseek-v4-flash-vision-exp",
+                ),
+                ("opencode-go", "go-account", "deepseek-v4-flash-vision-exp"),
+            ),
+            (
+                ("deepseek", "deepseek-account", "deepseek-v4-flash"),
+                ("deepseek", "deepseek-account", "deepseek-v4-pro"),
+            ),
+            (
+                ("deepseek", "account-a", "deepseek-v4-flash"),
+                ("deepseek", "account-b", "deepseek-v4-flash"),
+            ),
+        ];
+        for (previous, selected) in cases {
+            // The process mirror deliberately remains on the previous selection after the durable picker write.
+            // 可靠选择器写入后，故意让进程镜像仍停留在先前选择。
+            let session_id = SessionId::new_v4();
+            let (handle, _) = request_config_handle(
+                session_id,
+                ActiveRequestConfig {
+                    provider: Some(previous.0.into()),
+                    connection_id: Some(previous.1.into()),
+                    model: Some(previous.2.into()),
+                    thinking_level: Some("max".into()),
+                    temperature: None,
+                },
+            );
+            let mut mirror = SessionRuntimeStateEntry {
+                active_provider_id: Some(previous.0.into()),
+                active_connection_id: Some(previous.1.into()),
+                active_model_id: Some(previous.2.into()),
+                ..Default::default()
+            };
+            set_pending_model_request_v1(
+                &handle,
+                selected.0.into(),
+                selected.1.into(),
+                selected.2.into(),
+                SessionRequestFallback::default(),
+                2,
+            )
+            .unwrap();
+            let runtime = vulcan_provider_adapters::PublicAiRuntime::unavailable().unwrap();
+            synchronize_v1_dispatch_model_selection(&handle, &runtime, &mut mirror).unwrap();
+            assert_eq!(mirror.active_provider_id.as_deref(), Some(selected.0));
+            assert_eq!(mirror.active_connection_id.as_deref(), Some(selected.1));
+            assert_eq!(mirror.active_model_id.as_deref(), Some(selected.2));
+            // A detached document runs the production promotion and API admission without any network or user-file writes.
+            // 分离文档运行生产提升与 API 准入，不发网络请求、不写用户文件。
+            let mut document = handle.read(Clone::clone).unwrap();
+            document
+                .submit_root_input(
+                    ClientInputSubmission::new(
+                        ClientActionId::try_new("switch-root").unwrap(),
+                        "continue",
+                        vec![],
+                    ),
+                    3,
+                )
+                .unwrap();
+            let turn_id = document.active_turn().unwrap().turn_id;
+            document.promote_pending_request(Some(turn_id), 4).unwrap();
+            let through_seq = document.events().last().unwrap().seq;
+            let input = PrepareAndStartApiInput {
+                purpose: ApiPurposeKind::MainGeneration,
+                request: ApiRequestSnapshot {
+                    provider: mirror.active_provider_id.clone().unwrap(),
+                    profile: None,
+                    connection_id: mirror.active_connection_id.clone(),
+                    model: mirror.active_model_id.clone().unwrap(),
+                    thinking_level: Some("max".into()),
+                    temperature: None,
+                },
+                request_budget_evidence:
+                    crate::session_runtime_registry_v1::test_provider_request_budget_evidence(),
+                projection: ProviderProjectionProof {
+                    segment_generation: document.segment_generation(),
+                    document_revision: document.memory_revision(),
+                    retained_from_seq: Seq::try_new(1).unwrap(),
+                    through_seq,
+                    fingerprint_sha256: provider_visible_fingerprint(
+                        document.events(),
+                        through_seq,
+                    )
+                    .unwrap(),
+                },
+                locked_baseline: LockedBaselineProjection::empty(),
+                continuation_action_id: None,
+                now_ms: 5,
+            };
+            let mut stale = input.clone();
+            stale.request.provider = previous.0.into();
+            stale.request.connection_id = Some(previous.1.into());
+            stale.request.model = previous.2.into();
+            assert!(document.prepare_and_start_api(stale).is_err());
+            document.prepare_and_start_api(input).unwrap();
+            assert_eq!(
+                document
+                    .events()
+                    .iter()
+                    .filter(|event| matches!(event.event, EventBody::RequestConfigChanged(_)))
+                    .count(),
+                1
+            );
+            assert_eq!(document.active_api().unwrap().request.provider, selected.0);
+        }
+    }
+
+    /// An already-promoted durable choice repairs a stale cache on the next user turn too.
+    /// 已提升的可靠选择在下一用户回合也能修正过期缓存。
+    #[test]
+    fn v1_dispatch_restores_active_model_without_pending_or_global_fallback() {
+        let (handle, _) = request_config_handle(
+            SessionId::new_v4(),
+            ActiveRequestConfig {
+                provider: Some("deepseek".into()),
+                connection_id: Some("account".into()),
+                model: Some("model".into()),
+                ..Default::default()
+            },
+        );
+        let mut mirror = SessionRuntimeStateEntry {
+            active_provider_id: Some("opencode-go".into()),
+            ..Default::default()
+        };
+        let runtime = vulcan_provider_adapters::PublicAiRuntime::unavailable().unwrap();
+        synchronize_v1_dispatch_model_selection(&handle, &runtime, &mut mirror).unwrap();
+        assert_eq!(mirror.active_provider_id.as_deref(), Some("deepseek"));
+        assert_eq!(mirror.active_model_id.as_deref(), Some("model"));
+        assert_eq!(handle.read(|document| document.events().len()).unwrap(), 0);
     }
 
     /// Verifies reasoning selection preserves the pending route and does not mutate the active request.

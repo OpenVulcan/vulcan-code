@@ -77,6 +77,9 @@ pub(super) async fn handle_finished_stream_event(
     // The report session is the sole owner key for all terminal mutations.
     // 报告会话是全部终态变更的唯一所有权键。
     let finished_session_id = report.session_id;
+    // Preserve the runtime's original terminal error before the memory-only report projection consumes it.
+    // 在仅内存报告投影消费报告前保留运行时原始终态错误，避免 V1 历史只剩通用收尾标记。
+    let terminal_error = report.error.clone();
     webui_trace(
         "stream_finished",
         format!(
@@ -152,6 +155,14 @@ pub(super) async fn handle_finished_stream_event(
         );
         return FinishedStreamEventOutcome::StaleOwner;
     };
+    // Retain the producer-safe error in the console as well, even if terminal persistence subsequently fails.
+    // 控制台也保留生产端安全处理后的错误，即使随后终态持久化失败仍可定位原始原因。
+    if let Some(error) = terminal_error.as_deref() {
+        eprintln!(
+            "[webui-service] execution failed: session={finished_session_id} provider_requests={} error={error}",
+            report.provider_request_count
+        );
+    }
     // terminalPersistenceOwner blocks every replacement Continue, prompt, Stop, and kernel turn until persistence settles.
     // terminalPersistenceOwner 在持久化结算前阻止全部替代 Continue、提示词、Stop 与 kernel 回合。
     let terminal_persistence_owner = match SessionTerminalPersistenceOwnerGuard::adopt_registered(
@@ -264,6 +275,7 @@ pub(super) async fn handle_finished_stream_event(
         finished_session_id,
         v1_api_terminal_receipt.is_some(),
         "stream_finished_without_v1_api_terminal",
+        terminal_error,
         terminal_persistence_owner,
     )
     .await;

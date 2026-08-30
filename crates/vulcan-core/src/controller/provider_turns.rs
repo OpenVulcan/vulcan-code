@@ -62,6 +62,12 @@ impl VulcanCoreController {
                 Ok((response, sink.deltas))
             }
             Err(error) => {
+                // A changed pre-dispatch selection is control flow, not a failed Provider execution.
+                // 派发前选择变更属于控制流，不是 Provider 执行失败。
+                if matches!(&error, CoreError::ProviderRouteSwitchRequired { .. }) {
+                    self.phase = ControllerPhase::Idle;
+                    return Err(error);
+                }
                 self.mark_failed(error.to_string());
                 Err(error)
             }

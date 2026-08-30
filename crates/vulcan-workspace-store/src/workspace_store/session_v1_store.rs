@@ -1099,6 +1099,28 @@ pub fn load_session_v1_tail(
     })
 }
 
+/// Reads a runtime candidate from `locator`, allowing only proven active-tail Goal ownership recovery.
+/// 从 `locator` 读取运行时候选，仅允许已证实的活动尾段目标归属恢复。
+/// Returns an unpublished document; the unique owner must flush dirty recovery before registration.
+/// 返回尚未发布的文档；唯一 owner 必须在注册前 flush 待写恢复。
+pub fn load_session_v1_for_runtime(
+    locator: &SessionV1StorageLocator,
+) -> Result<LoadedSessionV1, SessionV1StoreError> {
+    let (loaded, report) =
+        super::session_v1::loader::load_session_tail_for_runtime(&locator.layout)?;
+    Ok(LoadedSessionV1 {
+        locator: locator.clone(),
+        metadata: loaded.metadata,
+        document: loaded.document,
+        report: SessionV1LoadReport {
+            opened_segment_files: report.opened_segment_files,
+            parsed_event_count: report.parsed_event_count,
+            resident_event_count: report.resident_event_count,
+            catalog_entries: report.catalog_entries,
+        },
+    })
+}
+
 /// Fully loads one session from its already resolved exact locator.
 /// 从已解析的精确定位器完整加载一个会话。
 ///

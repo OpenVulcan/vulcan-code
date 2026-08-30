@@ -2885,6 +2885,42 @@ mod tests {
         )));
     }
 
+    /// Verifies standard function deltas produce the exact Apply Patch JSON object without custom wrapping.
+    /// 验证标准函数增量生成精确 Apply Patch JSON 对象，不进行 custom 封装。
+    #[test]
+    fn responses_apply_patch_function_stream_preserves_json_arguments() {
+        // decoder consumes standard Responses function events, as returned for the new tool declaration.
+        // decoder 消费新工具声明对应的标准 Responses 函数事件。
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        decoder.push_sse(Some("response.output_item.added"),
+            r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"item","call_id":"call","name":"apply_patch","arguments":""}}"#
+        ).expect("function should start");
+        // arguments deliberately include characters whose escaping must survive streamed JSON decoding.
+        // arguments 特意包含必须经过流式 JSON 解码保留转义的字符。
+        let arguments = json!({"patch":"*** Begin Patch\n*** Add File: note.txt\n+你好 \"quoted\" C:\\workspace\n*** End Patch"});
+        let argument_text = arguments.to_string();
+        let deltas = decoder.push_sse(Some("response.function_call_arguments.delta"),
+            &json!({"type":"response.function_call_arguments.delta","output_index":0,"item_id":"item","call_id":"call","delta":argument_text}).to_string()
+        ).expect("standard argument delta");
+        assert!(deltas.iter().any(|event| matches!(event,
+            AiStreamEvent::ToolCallArgumentsDelta { delta, .. } if delta == &argument_text
+        )));
+        let completed = decoder.push_sse(Some("response.output_item.done"),
+            &json!({"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"item","call_id":"call","name":"apply_patch","arguments":argument_text}}).to_string()
+        ).expect("standard function completion");
+        assert_eq!(
+            completed
+                .iter()
+                .filter(|event| matches!(event, AiStreamEvent::ToolCallCompleted { .. }))
+                .count(),
+            1
+        );
+        assert!(completed.iter().any(|event| matches!(event,
+            AiStreamEvent::ToolCallCompleted { call, .. }
+                if call.id == "call" && call.name == "apply_patch" && call.arguments == arguments
+        )));
+    }
+
     /// Verifies a buffered custom tool can complete without input delta events.
     /// 验证缓冲自定义工具可在没有输入增量事件时完成。
     #[test]

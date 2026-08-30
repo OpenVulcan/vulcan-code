@@ -177,6 +177,20 @@ pub struct ActiveRequestConfig {
     pub temperature: Option<f64>,
 }
 
+/// Returns the canonical comparison key for the reasoning encodings emitted by session settings and API facts.
+/// 返回会话设置与 API 事实已使用的思考编码对应的规范比较键。
+/// `level` is the optional persisted key; `off` equals absence and legacy `xhigh` equals `x-high`.
+/// `level` 为可选持久化键；`off` 等价于缺省，旧 `xhigh` 等价于 `x-high`。
+/// All other keys retain their exact identity; this does not rewrite persisted request facts.
+/// 其他键保持精确身份；该函数不会改写持久化请求事实。
+pub fn canonical_request_thinking_level(level: Option<&str>) -> Option<&str> {
+    match level {
+        Some("off") | None => None,
+        Some("xhigh") => Some("x-high"),
+        other => other,
+    }
+}
+
 /// Pending request-configuration change applied at the next safe API boundary.
 /// 将在下一个安全 API 边界生效的请求配置变更。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

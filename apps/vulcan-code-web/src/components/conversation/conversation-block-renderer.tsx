@@ -10,6 +10,7 @@ import {
 
 import { StatusPill } from "@/components/shared/status";
 import { ModelSwitchNotice } from "./conversation-model-switch";
+import { GoalStatusNotice } from "./conversation-goal-notice";
 import { metadataString } from "./conversation-metadata";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
@@ -300,6 +301,9 @@ function SpecialConversationBlock(props: {
   // V1 适配器在此精确提示类别中保留前后显示标签。
   if (props.block.kind === "notice" && metadataString(props.block.rawMetadata, ["notice_kind"]) === "model_switch") {
     return <ModelSwitchNotice summary={props.block.summary} />;
+  }
+  if (props.block.kind === "notice" && metadataString(props.block.rawMetadata, ["notice_kind"]) === "goal_status") {
+    return <GoalStatusNotice reasonCode={metadataString(props.block.rawMetadata, ["reason_code"]) ?? ""} />;
   }
 
   if (props.block.kind === "turn-stats") {

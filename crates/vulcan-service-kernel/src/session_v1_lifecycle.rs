@@ -780,7 +780,8 @@ pub(crate) async fn get_or_load_session_v1(
     let locator = locate_session_v1_storage(controller, &session_id.to_string()).await?;
     registry
         .get_or_load(session_id, move || {
-            let loaded = load_session_v1_tail(&locator)?;
+            let loaded =
+                vulcan_workspace_store::workspace_store::load_session_v1_for_runtime(&locator)?;
             let actual_session_id = loaded.metadata.session_id.clone();
             if actual_session_id != session_id.to_string() {
                 return Err(SessionRuntimeError::LoadedSessionDocumentIdentityMismatch {
@@ -793,10 +794,18 @@ pub(crate) async fn get_or_load_session_v1(
             // its interrupted projection must become durable before publication.
             // document 在重启后可能包含一个已持久化的在途 API；其中断投影必须在发布前落盘。
             let mut document = loaded.document;
+            // A corrected legacy tail must be durable even when no running API needs interruption.
+            // 即使没有运行中的 API 需要中断，纠正后的旧尾段也必须可靠落盘。
+            let recovered_goal_owners = document.memory_revision() != document.durable_revision();
             let projected = document.project_persisted_interruptions()?;
             let handle = SessionHandle::new(session_id, loaded.locator, document);
-            if projected > 0 {
+            if projected > 0 || recovered_goal_owners {
                 handle.flush_all()?;
+            }
+            if recovered_goal_owners {
+                eprintln!(
+                    "[webui-service] recovered persisted Goal event ownership: session={session_id}"
+                );
             }
             Ok(handle)
         })

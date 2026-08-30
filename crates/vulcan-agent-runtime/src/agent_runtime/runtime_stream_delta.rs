@@ -726,6 +726,9 @@ pub(crate) fn process_provider_stream_delta(
             conversation_state,
             reason,
         }) => {
+            // A configuration change can supersede a candidate before its permit; it never consumes an API attempt.
+            // 配置变更可以在许可前取代候选请求；尚未派发的候选不会消耗 API 尝试次数。
+            state.provider_request_telemetry.reject_prepared_request();
             // providerRequestContinuation is captured from the telemetry owner after the previous physical request closed.
             // providerRequestContinuation 在前一次物理请求收口后从遥测所有者捕获。
             let provider_request_continuation = match state
@@ -1667,6 +1670,33 @@ mod tests {
         );
     }
 
+    /// Verifies a superseded first candidate keeps attempt zero and never becomes a terminal failure.
+    /// 验证被新选择取代的首次候选保持尝试编号零，不会成为终止失败。
+    #[test]
+    fn provider_route_switch_before_first_permit_preserves_attempt_identity() {
+        // Only preparation has happened; no durable API or network dispatch exists.
+        // 此时仅完成候选准备，尚无可靠 API 或网络派发。
+        let mut state = build_delta_state_with_telemetry();
+        state
+            .provider_request_telemetry
+            .prepare_request(&build_request_snapshot(), None)
+            .unwrap();
+        let events = process_provider_stream_delta(
+            Uuid::nil(),
+            &mut state,
+            Ok(ProviderStreamDelta::ProviderRouteSwitchRequired {
+                conversation_state: SessionConversationState::default(),
+                reason: String::from("request configuration changed"),
+            }),
+        );
+        assert!(events.is_empty());
+        assert!(!state.has_terminal_error());
+        assert_eq!(state.provider_request_count, 0);
+        let (_, _, continuation) = state.take_provider_route_switch_required().unwrap();
+        assert_eq!(continuation.logical_request_id, "execution-1");
+        assert_eq!(continuation.next_provider_attempt_index, 0);
+    }
+
     /// Verifies the exact-route switch delta is retained as host control state rather than a stream failure.
     /// 验证精确路由切换增量会保留为宿主控制状态，而不是流失败。
     #[test]
@@ -1709,6 +1739,12 @@ mod tests {
                 if event.kind == ProviderRequestTelemetryEventKind::Completed
         ));
 
+        // The next candidate may already be waiting at the permit when the user switches models.
+        // 用户切换模型时，下一候选可能已经在等待许可。
+        state
+            .provider_request_telemetry
+            .prepare_request(&build_request_snapshot(), None)
+            .unwrap();
         let events = process_provider_stream_delta(
             session_id,
             &mut state,

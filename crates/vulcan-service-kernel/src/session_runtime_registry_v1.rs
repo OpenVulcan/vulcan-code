@@ -1383,10 +1383,12 @@ impl SessionHandle {
     ///
     /// # Returns
     /// 返回值
-    /// Returns only after prior dirty state, `api_started`, and any fresh runtime baseline are all
-    /// durable. The complete prepare boundary is serialized by `mutation_publisher`.
-    /// 仅在先前脏状态、`api_started` 与任何首次运行时基线全部可靠落盘后返回；完整准备边界
-    /// 由 `mutation_publisher` 串行化。
+    /// Returns a receipt only after prior state, `api_started`, and any fresh baseline are durable.
+    /// 仅在先前状态、`api_started` 与首次基线全部可靠落盘后返回回执。
+    /// Returns `None` when a newer pending selection requires rebuilding the undispatched candidate.
+    /// 新的待生效选择要求重建尚未派发的候选时返回 `None`。
+    /// The complete prepare boundary is serialized by `mutation_publisher`.
+    /// 完整准备边界由 `mutation_publisher` 串行化。
     pub(crate) fn prepare_physical_api_durable<T>(
         &self,
         purpose: ApiPurposeKind,
@@ -1397,8 +1399,10 @@ impl SessionHandle {
         build: impl FnOnce(
             SessionProviderProjectionSnapshot,
         ) -> Result<SessionPreparedPhysicalRequest<T>, SessionRuntimeError>,
-    ) -> Result<SessionConditionalMutationReceipt<SessionPreparedPhysicalApi<T>>, SessionRuntimeError>
-    {
+    ) -> Result<
+        Option<SessionConditionalMutationReceipt<SessionPreparedPhysicalApi<T>>>,
+        SessionRuntimeError,
+    > {
         self.ensure_admitted(SessionMutationAdmission::ExistingTurn)?;
         let _writer = self
             .writer
@@ -1414,6 +1418,30 @@ impl SessionHandle {
             .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?
             .memory_revision();
         self.flush_through_with_writer_and_publisher_locked(prior_revision)?;
+        // A picker write may arrive after construction. Rebuild before promotion, without a failed API or a false switch record.
+        // 选择器写入可能晚于请求构建；必须在提升前重建，不制造失败 API 或虚假切换记录。
+        let selection_changed = self
+            .document
+            .lock()
+            .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?
+            .metadata
+            .config
+            .pending_request
+            .as_ref()
+            .is_some_and(|pending| {
+                pending.provider.as_deref() != Some(request.provider.as_str())
+                    || pending.connection_id != request.connection_id
+                    || pending.model.as_deref() != Some(request.model.as_str())
+                    || vulcan_session_core::v1::config::canonical_request_thinking_level(
+                        pending.thinking_level.as_deref(),
+                    ) != vulcan_session_core::v1::config::canonical_request_thinking_level(
+                        request.thinking_level.as_deref(),
+                    )
+                    || pending.temperature != request.temperature
+            });
+        if selection_changed {
+            return Ok(None);
+        }
         // pendingPromotion is owned by the same serialized Provider permit boundary that captures
         // the projection and starts the next physical API. No legacy runtime document participates.
         // pendingPromotion 由捕获投影并启动下一次物理 API 的同一串行 Provider permit 边界拥有；
@@ -1498,7 +1526,7 @@ impl SessionHandle {
             },
         )?;
         self.flush_through_with_writer_and_publisher_locked(receipt.revision)?;
-        Ok(receipt)
+        Ok(Some(receipt))
     }
 
     /// Captures one durable Provider projection for context-compaction planning.
@@ -4049,115 +4077,163 @@ mod tests {
     /// 物理 Provider 许可会在捕获请求前提升精确待生效配置。
     #[test]
     fn physical_provider_permit_promotes_pending_thinking_before_api_start() {
-        let temporary = tempfile::tempdir().expect("temporary session root");
-        let session_id = SessionId::new_v4();
-        let locator =
-            create_session_v1_storage_fixture(temporary.path(), &session_id.to_string(), 1)
-                .expect("create exact V1 session fixture");
-        let loaded = load_session_v1_full(&locator).expect("load complete initial session");
-        let handle = SessionHandle::new(session_id, locator, loaded.document);
-        handle
-            .mutate_durable_if_changed(
-                SessionMutationAdmission::MetadataOnly,
-                SessionFlushReason::MetadataChanged,
-                |document| {
-                    document.metadata.config.active_request = ActiveRequestConfig {
-                        provider: Some(String::from("provider-1")),
-                        connection_id: Some(String::from("connection-1")),
-                        model: Some(String::from("model-1")),
-                        thinking_level: Some(String::from("high")),
-                        temperature: Some(0.2),
-                    };
-                    let changed = document.set_pending_request(
-                        PendingRequestConfig {
+        // Both historical encodings are accepted as the same setting, not a perpetual route change.
+        // 两种历史编码均作为同一设置接受，不能造成永久路由切换循环。
+        for (stored_level, request_level) in [
+            ("max", Some("max")),
+            ("off", None),
+            ("xhigh", Some("x-high")),
+            ("x-high", Some("xhigh")),
+        ] {
+            let temporary = tempfile::tempdir().expect("temporary session root");
+            let session_id = SessionId::new_v4();
+            let locator =
+                create_session_v1_storage_fixture(temporary.path(), &session_id.to_string(), 1)
+                    .expect("create exact V1 session fixture");
+            let loaded = load_session_v1_full(&locator).expect("load complete initial session");
+            let handle = SessionHandle::new(session_id, locator, loaded.document);
+            handle
+                .mutate_durable_if_changed(
+                    SessionMutationAdmission::MetadataOnly,
+                    SessionFlushReason::MetadataChanged,
+                    |document| {
+                        document.metadata.config.active_request = ActiveRequestConfig {
                             provider: Some(String::from("provider-1")),
                             connection_id: Some(String::from("connection-1")),
                             model: Some(String::from("model-1")),
-                            thinking_level: Some(String::from("max")),
+                            thinking_level: Some(String::from("high")),
                             temperature: Some(0.2),
-                            set_at_ms: 2,
-                        },
-                        2,
-                    )?;
-                    assert!(changed, "pending request fixture must change metadata");
-                    Ok(SessionMutationChange::Changed(()))
-                },
-            )
-            .expect("publish active and pending request fixture");
-        handle
-            .submit_root_input(
-                test_client_input("registry-pending-thinking-root", "root"),
-                3,
-            )
-            .expect("submit root input");
-        let fingerprint_sha256 = handle
-            .read(|document| {
-                let through_seq = document.events().last().expect("root event").seq();
-                provider_visible_fingerprint(document.events(), through_seq)
-            })
-            .expect("read provider projection")
-            .expect("fingerprint provider projection");
-        let request = ApiRequestSnapshot {
-            provider: String::from("provider-1"),
-            profile: None,
-            model: String::from("model-1"),
-            connection_id: Some(String::from("connection-1")),
-            thinking_level: Some(String::from("max")),
-            temperature: Some(0.2),
-        };
-
-        let receipt = handle
-            .prepare_physical_api_durable(
-                ApiPurposeKind::MainGeneration,
-                request.clone(),
-                LockedBaselineProjection::empty(),
-                None,
-                4,
-                move |snapshot| {
-                    Ok(SessionPreparedPhysicalRequest {
-                        transport: (),
-                        projection: ProviderProjectionProof {
-                            segment_generation: snapshot.segment_generation,
-                            document_revision: snapshot.document_revision,
-                            retained_from_seq: snapshot.retained_from_seq,
-                            through_seq: snapshot.through_seq,
-                            fingerprint_sha256,
-                        },
-                        request_budget_evidence: test_provider_request_budget_evidence(),
-                    })
-                },
-            )
-            .expect("prepare physical API after pending promotion");
-
-        assert!(receipt.changed);
-        handle
-            .read(|document| {
-                assert!(document.metadata.config.pending_request.is_none());
-                assert_eq!(
-                    document
-                        .metadata
-                        .config
-                        .active_request
-                        .thinking_level
-                        .as_deref(),
-                    Some("max")
-                );
-                assert!(document.events().iter().any(|event| {
-                    matches!(
-                        &event.event,
-                        EventBody::ApiStarted(started)
-                            if started.api_call_id == receipt.value.core_start.api_call_id
-                                && started.request == request
-                    )
-                }));
-            })
-            .expect("read promoted request facts");
-        assert_eq!(
+                        };
+                        let changed = document.set_pending_request(
+                            PendingRequestConfig {
+                                provider: Some(String::from("provider-1")),
+                                connection_id: Some(String::from("connection-1")),
+                                model: Some(String::from("model-1")),
+                                thinking_level: Some(String::from(stored_level)),
+                                temperature: Some(0.2),
+                                set_at_ms: 2,
+                            },
+                            2,
+                        )?;
+                        assert!(changed, "pending request fixture must change metadata");
+                        Ok(SessionMutationChange::Changed(()))
+                    },
+                )
+                .expect("publish active and pending request fixture");
             handle
-                .read(|document| document.memory_revision() == document.durable_revision())
-                .expect("read durable revision"),
-            true
-        );
+                .submit_root_input(
+                    test_client_input("registry-pending-thinking-root", "root"),
+                    3,
+                )
+                .expect("submit root input");
+            let fingerprint_sha256 = handle
+                .read(|document| {
+                    let through_seq = document.events().last().expect("root event").seq();
+                    provider_visible_fingerprint(document.events(), through_seq)
+                })
+                .expect("read provider projection")
+                .expect("fingerprint provider projection");
+            let request = ApiRequestSnapshot {
+                provider: String::from("provider-1"),
+                profile: None,
+                model: String::from("model-1"),
+                connection_id: Some(String::from("connection-1")),
+                thinking_level: request_level.map(String::from),
+                temperature: Some(0.2),
+            };
+
+            // Simulate a picker write overtaking construction for every request control.
+            // 模拟选择器写入超越请求构建，覆盖每一种请求控制项。
+            let revision_before = handle.read(|document| document.memory_revision()).unwrap();
+            for field in 0..5 {
+                let mut stale = request.clone();
+                match field {
+                    0 => stale.provider = String::from("old-provider"),
+                    1 => stale.connection_id = Some(String::from("old-connection")),
+                    2 => stale.model = String::from("old-model"),
+                    3 => stale.thinking_level = Some(String::from("high")),
+                    _ => stale.temperature = Some(0.1),
+                }
+                let receipt = handle
+                    .prepare_physical_api_durable::<()>(
+                        ApiPurposeKind::MainGeneration,
+                        stale,
+                        LockedBaselineProjection::empty(),
+                        None,
+                        4,
+                        |_| {
+                            panic!("stale candidate must be rebuilt before projection or promotion")
+                        },
+                    )
+                    .unwrap();
+                assert!(receipt.is_none());
+                handle
+                    .read(|document| {
+                        assert_eq!(document.memory_revision(), revision_before);
+                        assert!(document.metadata.config.pending_request.is_some());
+                        assert!(document.active_api().is_none());
+                        assert!(!document.events().iter().any(|event| matches!(
+                            &event.event,
+                            EventBody::RequestConfigChanged(_) | EventBody::DisplayNote(_)
+                        )));
+                    })
+                    .unwrap();
+            }
+
+            let receipt = handle
+                .prepare_physical_api_durable(
+                    ApiPurposeKind::MainGeneration,
+                    request.clone(),
+                    LockedBaselineProjection::empty(),
+                    None,
+                    4,
+                    move |snapshot| {
+                        Ok(SessionPreparedPhysicalRequest {
+                            transport: (),
+                            projection: ProviderProjectionProof {
+                                segment_generation: snapshot.segment_generation,
+                                document_revision: snapshot.document_revision,
+                                retained_from_seq: snapshot.retained_from_seq,
+                                through_seq: snapshot.through_seq,
+                                fingerprint_sha256,
+                            },
+                            request_budget_evidence: test_provider_request_budget_evidence(),
+                        })
+                    },
+                )
+                .expect("prepare physical API after pending promotion")
+                .expect("candidate matches pending selection");
+
+            assert!(receipt.changed);
+            handle
+                .read(|document| {
+                    assert!(document.metadata.config.pending_request.is_none());
+                    assert_eq!(
+                        document
+                            .metadata
+                            .config
+                            .active_request
+                            .thinking_level
+                            .as_deref(),
+                        Some(stored_level)
+                    );
+                    assert!(document.events().iter().any(|event| {
+                        matches!(
+                            &event.event,
+                            EventBody::ApiStarted(started)
+                                if started.api_call_id == receipt.value.core_start.api_call_id
+                                    && started.request == request
+                        )
+                    }));
+                })
+                .expect("read promoted request facts");
+            assert_eq!(
+                handle
+                    .read(|document| document.memory_revision() == document.durable_revision())
+                    .expect("read durable revision"),
+                true
+            );
+        }
     }
 
     /// Builds one retryable network terminal that can end before transport observation.

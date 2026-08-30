@@ -166,7 +166,7 @@ function TurnStatsUsageRows(props: {
 // 参数：左右标签和值分别描述当前行的两项统计。
 // Returns one two-column metric row.
 // 返回一行双列统计项。
-function TurnStatsMetricRow(props: {
+export function TurnStatsMetricRow(props: {
   // Label for the left metric.
   // 左侧统计标签。
   leftLabel: string;
@@ -350,7 +350,7 @@ function turnStatsCacheHitPercent(usage: TurnStatsUsageSnapshot): number | null 
 // 参数：value 是非负统计值，locale 是当前界面语言。
 // Returns a locale-grouped decimal string.
 // 返回按语言分组的十进制字符串。
-function formatTurnStatsNumber(value: number, locale: "zh-CN" | "en-US"): string {
+export function formatTurnStatsNumber(value: number, locale: "zh-CN" | "en-US"): string {
   return value.toLocaleString(locale);
 }
 

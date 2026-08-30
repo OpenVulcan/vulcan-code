@@ -24,8 +24,7 @@ use vulcan_session_core::v1::{ClientActionId, ClientInputSubmission, Continuatio
 use vulcan_workbench_model::SessionState;
 use vulcan_workbench_model::{
     PendingSessionPromptSource, SessionId, SessionKnowledgeLibrarySelection,
-    SessionKnowledgeLibrarySelectionMode, SessionPendingModelSelection,
-    SessionProviderToolTargetSelection, SessionRunPhase, SessionRuntimeStateEntry,
+    SessionKnowledgeLibrarySelectionMode, SessionProviderToolTargetSelection, SessionRunPhase,
 };
 use vulcan_workspace_store::workspace_store::{WorkspaceSnapshot, locate_session_v1_storage};
 
@@ -900,86 +899,6 @@ fn validate_recovery_submission_model_selection(
         .map_err(|_| String::from("ERR_CONVERSATION_CONTINUE_MODEL_SELECTION_MISMATCH"))
 }
 
-/// Promotes the exact pending session selection at the boundary immediately before a real Provider request.
-/// 在真实 Provider 请求之前的边界提升精确的会话待生效选择。
-///
-/// # Parameters
-/// 参数
-/// `runtime` owns the installed route catalog, `workspace_snapshot` owns the session authority,
-/// and `session_id` selects the exact pending route.
-/// `runtime` 持有已安装路由目录，`workspace_snapshot` 持有会话权威，`session_id` 选择精确待生效路由。
-///
-/// # Returns
-/// 返回值
-/// The exact promoted selection after validation, or an error that leaves the pending workspace authority unchanged.
-/// 校验通过后返回精确的已提升选择；失败时保持工作区待生效权威不变。
-/// Validates and returns one pending exact model selection without mutating retained state.
-/// 在不修改保留状态的情况下校验并返回一个待生效精确模型选择。
-///
-/// # Parameters
-/// 参数
-/// `runtime` owns the installed provider and model configuration.
-/// `runtime` 持有已安装供应商与模型配置。
-/// `runtime_state` owns the exact pending session tuple to validate.
-/// `runtime_state` 持有需要校验的精确待生效会话三元组。
-///
-/// # Returns
-/// 返回值
-/// The validated pending tuple, or an explicit missing or unavailable-route error.
-/// 返回已校验的待生效三元组，或明确的缺失与路由不可用错误。
-pub(crate) fn validated_pending_model_selection_for_provider_request(
-    runtime: &vulcan_provider_adapters::PublicAiRuntime,
-    runtime_state: &SessionRuntimeStateEntry,
-) -> Result<SessionPendingModelSelection, String> {
-    let pending_selection = runtime_state
-        .pending_model_selection
-        .clone()
-        .ok_or_else(|| {
-            String::from("The session has no pending model selection at the Provider boundary.")
-        })?;
-    let selection = SubmissionModelSelection {
-        provider_id: pending_selection.provider_id.clone(),
-        model_id: pending_selection.model_id.clone(),
-        connection_id: pending_selection.connection_id.clone(),
-    };
-    // Validation is pure and therefore cannot expose a candidate route before durable publication.
-    // 校验是纯操作，因此不会在可靠发布前暴露候选路由。
-    let configuration = validated_submission_model_selection_configuration(runtime, &selection)?;
-    let _resolved_selection =
-        resolve_enabled_submission_model_selection(runtime, &configuration, &selection)?;
-    Ok(pending_selection)
-}
-
-#[cfg(test)]
-pub(crate) fn apply_pending_model_selection_for_provider_request(
-    runtime: &vulcan_provider_adapters::PublicAiRuntime,
-    workspace_snapshot: &mut WorkspaceSnapshot,
-    session_id: SessionId,
-) -> Result<SessionPendingModelSelection, String> {
-    let runtime_state = workspace_snapshot
-        .session_runtime_state
-        .get(&session_id)
-        .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
-    let pending_selection =
-        validated_pending_model_selection_for_provider_request(runtime, runtime_state)?;
-    let runtime_state = workspace_snapshot
-        .session_runtime_state
-        .get_mut(&session_id)
-        .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
-    // A pending picker record is created only for a changed future tuple; promotion therefore clears
-    // the old persisted route identity while leaving process-local lease revocation to the caller's
-    // durability transaction.
-    // 只有未来三元组变化时才会创建待生效选择记录；因此提升会清除旧持久路由身份，
-    // 而进程内租约撤销由调用方的可靠事务负责。
-    runtime_state.active_provider_id = Some(pending_selection.provider_id.clone());
-    runtime_state.active_connection_id = Some(pending_selection.connection_id.clone());
-    runtime_state.active_model_id = Some(pending_selection.model_id.clone());
-    runtime_state.pending_model_selection = None;
-    runtime_state.provider_route_lease = None;
-    runtime_state.updated_at = current_unix_millis_text();
-    Ok(pending_selection)
-}
-
 #[cfg(test)]
 mod submission_model_selection_tests {
     use std::collections::{BTreeMap, BTreeSet};
@@ -1233,73 +1152,26 @@ mod submission_model_selection_tests {
             Some(&pending_selection)
         );
 
-        // activeLease models the immutable route already owned by the physical Provider call.
-        // activeLease 模拟当前物理 Provider 调用已经持有的不可变路由。
-        let configuration = runtime
-            .configuration_snapshot()
-            .expect("test configuration should remain readable");
-        let active_lease = runtime
-            .resolve_connection_model_selection(
-                &configuration,
-                "openrouter-account",
-                "openrouter",
-                "openai/gpt-5.6-terra",
-            )
-            .expect("active test route should resolve");
-        runtime
-            .lease_session_selection(session_id.to_string(), active_lease)
-            .expect("active test route should lease");
-        // promotedCandidate is detached so Provider-boundary validation cannot mutate retained memory before persistence.
-        // promotedCandidate 保持分离，使 Provider 边界校验不能在持久化前修改保留内存。
-        let mut promoted_candidate = workspace_snapshot.clone();
-        let promoted_selection = apply_pending_model_selection_for_provider_request(
+        // The admitted submitted snapshot follows the picker; V1 promotion is tested through the real permit separately.
+        // 已准入提交快照跟随选择器；V1 提升通过真实许可边界单独验证。
+        let selection = SubmissionModelSelection {
+            provider_id: pending_selection.provider_id.clone(),
+            connection_id: pending_selection.connection_id.clone(),
+            model_id: pending_selection.model_id.clone(),
+        };
+        apply_submission_model_selection(
             &runtime,
-            &mut promoted_candidate,
+            &mut workspace_snapshot,
             session_id,
+            Some(&selection),
         )
-        .expect("exact pending selection should promote");
-        assert_eq!(promoted_selection, pending_selection);
-        // retainedOriginal and processLease prove staging changed neither authority before the caller commits durability.
-        // retainedOriginal 与 processLease 证明调用方提交可靠性前，暂存不会修改任一权威状态。
-        let retained_original = workspace_snapshot
-            .session_runtime_state
-            .get(&session_id)
-            .expect("retained original runtime state should remain present");
+        .expect("the selected new model is accepted");
         assert_eq!(
-            retained_original.active_model_id.as_deref(),
-            Some("openai/gpt-5.6-terra")
-        );
-        assert_eq!(
-            retained_original.pending_model_selection.as_ref(),
-            Some(&pending_selection)
-        );
-        assert_eq!(
-            runtime
-                .session_selection_lease(session_id.to_string().as_str())
-                .expect("process route lease should remain readable")
-                .as_ref()
-                .map(|selection| selection.model.id.as_str()),
-            Some("openai/gpt-5.6-terra")
-        );
-        // promotedState proves the pending authority became active exactly once.
-        // promotedState 证明待生效权威恰好提升为活动选择一次。
-        let promoted_state = promoted_candidate
-            .session_runtime_state
-            .get(&session_id)
-            .expect("promoted runtime state should remain present");
-        assert_eq!(
-            promoted_state.active_provider_id.as_deref(),
-            Some("openrouter")
-        );
-        assert_eq!(
-            promoted_state.active_connection_id.as_deref(),
-            Some("openrouter-account")
-        );
-        assert_eq!(
-            promoted_state.active_model_id.as_deref(),
+            workspace_snapshot.session_runtime_state[&session_id]
+                .active_model_id
+                .as_deref(),
             Some("openai/gpt-5.6-sol")
         );
-        assert!(promoted_state.pending_model_selection.is_none());
     }
 
     /// Verifies a new session rebinds an invalid global account to the preferred account for the same model.
@@ -2687,6 +2559,33 @@ async fn service_start_conversation_execution(
             materialized_session.session_id,
             model_selection.as_ref(),
         )?;
+        // A submitted picker choice must reach the same durable pending configuration as the explicit picker RPC.
+        // 提交携带的模型选择必须进入与显式选择 RPC 相同的可靠待生效配置，不能只修改内存。
+        if let Some(selection) = model_selection.as_ref() {
+            let handle = crate::session_goal_lifecycle::registered_session_v1_handle_from_state(
+                &state,
+                materialized_session.session_id,
+            )?;
+            let runtime_state = workspace_snapshot
+                .session_runtime_state
+                .get(&materialized_session.session_id)
+                .ok_or_else(|| {
+                    format!(
+                        "Session `{}` has no admitted runtime state.",
+                        materialized_session.session_id
+                    )
+                })?;
+            crate::session_request_config_v1::set_pending_model_request_v1(
+                handle.as_ref(),
+                selection.provider_id.clone(),
+                selection.connection_id.clone(),
+                selection.model_id.clone(),
+                crate::session_request_config_v1::SessionRequestFallback::from_runtime_state(
+                    runtime_state,
+                ),
+                crate::current_v1_unix_millis()?,
+            )?;
+        }
     }
     if session_settings.is_some()
         && materialized_session.kind != PromptSessionMaterializationKind::Created

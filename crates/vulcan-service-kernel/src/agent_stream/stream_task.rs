@@ -101,6 +101,8 @@ mod rejected_provider_boundary_tests {
 /// session. `reason_code` is a stable redacted diagnostic identifier.
 /// `task_state` 解析精确的已注册会话所有者，`session_id` 选择失败会话；`reason_code`
 /// 是稳定且已脱敏的诊断标识。
+/// `redacted_detail` retains the producer-sanitized failure when the runtime supplied one.
+/// 运行时提供原始失败时，`redacted_detail` 保留生产端已脱敏的错误。
 ///
 /// # Returns
 /// 返回值
@@ -111,6 +113,7 @@ pub(crate) async fn persist_v1_execution_failure_boundary(
     task_state: &SharedServiceBridgeState,
     session_id: SessionId,
     reason_code: &'static str,
+    redacted_detail: Option<String>,
 ) -> Result<(), String> {
     let handle = crate::session_goal_lifecycle::registered_session_v1_handle_from_state(
         task_state, session_id,
@@ -126,41 +129,19 @@ pub(crate) async fn persist_v1_execution_failure_boundary(
                         crate::session_runtime_registry_v1::SessionMutationChange::Changed(()),
                     );
                 }
-                let turn_id = document.active_turn().map(|turn| turn.turn_id);
-                let already_persisted = document.events().iter().rev().any(|event| {
-                    if event.turn_id != turn_id {
-                        return false;
-                    }
-                    match &event.event {
-                        vulcan_session_core::v1::EventBody::ApiStats(stats) => {
-                            stats.end_reason
-                                == Some(vulcan_session_core::v1::ApiEndReason::ProcessInterrupted)
-                        }
-                        vulcan_session_core::v1::EventBody::DisplayNote(note) => {
-                            note.notice_kind
-                                == vulcan_session_core::v1::DisplayNoticeKind::SystemError
-                                && note.reason_code == reason_code
-                        }
-                        _ => false,
-                    }
-                });
-                if already_persisted {
-                    return Ok(
-                        crate::session_runtime_registry_v1::SessionMutationChange::Unchanged(()),
-                    );
-                }
-                document.append_display_note(
-                    turn_id,
-                    vulcan_session_core::v1::DisplayNoticeKind::SystemError,
-                    vulcan_session_core::v1::NoticeSeverity::Error,
-                    reason_code,
-                    Some(reason_code.to_string()),
-                    None,
-                    None,
-                    None,
-                    now_ms,
-                )?;
-                Ok(crate::session_runtime_registry_v1::SessionMutationChange::Changed(()))
+                // The error and Turn closure are one revision; releasing only the stream owner leaves root input blocked.
+                // 错误与回合闭合属于同一修订；仅释放流 owner 会让根输入继续被阻塞。
+                Ok(
+                    if document.fail_turn_without_active_api(
+                        reason_code,
+                        redacted_detail.as_deref(),
+                        now_ms,
+                    )? {
+                        crate::session_runtime_registry_v1::SessionMutationChange::Changed(())
+                    } else {
+                        crate::session_runtime_registry_v1::SessionMutationChange::Unchanged(())
+                    },
+                )
             },
         )
         .await
@@ -181,6 +162,8 @@ pub(crate) async fn persist_v1_execution_failure_boundary(
 /// `v1_api_terminal_persisted` 表示 Provider 处理是否已经生成可靠 API 终态。
 /// `fallback_reason_code` is the stable redacted fact used only when no API terminal exists.
 /// `fallback_reason_code` 是仅在不存在 API 终态时使用的稳定脱敏事实。
+/// `redacted_detail` preserves a producer-owned original failure instead of replacing it with that fallback code.
+/// `redacted_detail` 保留生产端持有的原始失败，避免用该回退编号替代它。
 /// `terminal_persistence_owner` is the exact owner adopted after removing the active stream task.
 /// `terminal_persistence_owner` 是移除活动流任务后接管的精确 owner。
 ///
@@ -193,6 +176,7 @@ pub(crate) async fn settle_stream_terminal_authority(
     session_id: SessionId,
     v1_api_terminal_persisted: bool,
     fallback_reason_code: &'static str,
+    redacted_detail: Option<String>,
     terminal_persistence_owner: SessionTerminalPersistenceOwnerGuard,
 ) -> bool {
     // A pre-ApiStarted failure has no ApiStats receipt, so the same V1 owner must append a permanent error before admission reopens.
@@ -200,8 +184,13 @@ pub(crate) async fn settle_stream_terminal_authority(
     let terminal_state_persisted = if v1_api_terminal_persisted {
         true
     } else {
-        match persist_v1_execution_failure_boundary(task_state, session_id, fallback_reason_code)
-            .await
+        match persist_v1_execution_failure_boundary(
+            task_state,
+            session_id,
+            fallback_reason_code,
+            redacted_detail,
+        )
+        .await
         {
             Ok(()) => true,
             Err(error) => {
@@ -238,6 +227,8 @@ pub(crate) async fn settle_stream_terminal_authority(
 /// `task_state` 持有精确失败会话状态。
 /// `session_id` selects the failed launch and `reason_code` identifies its stable display fact.
 /// `session_id` 选择失败的启动，`reason_code` 标识其稳定显示事实。
+/// `redacted_detail` carries the safe original failure when available.
+/// 存在安全处理后的原始失败时由 `redacted_detail` 携带。
 /// `terminal_persistence_owner` binds cleanup to the exact marker installed before active ownership was released.
 /// `terminal_persistence_owner` 将清理绑定到释放活动所有权前安装的精确标记。
 /// # Returns
@@ -249,6 +240,7 @@ async fn finalize_failed_execution_stream_retry_lifecycle(
     session_id: SessionId,
     terminal_persistence_owner: SessionTerminalPersistenceOwner,
     reason_code: &'static str,
+    redacted_detail: Option<String>,
 ) {
     // terminal_persistence_guard keeps Continue, prompts, Stop, and kernel turns closed through every early return.
     // terminal_persistence_guard 在所有提前返回路径中持续阻塞 Continue、提示词、Stop 与 kernel 回合。
@@ -270,6 +262,7 @@ async fn finalize_failed_execution_stream_retry_lifecycle(
         session_id,
         false,
         reason_code,
+        redacted_detail,
         terminal_persistence_guard,
     )
     .await;
@@ -365,6 +358,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                                     kernel_generation,
                                 ),
                                 "runtime_event_hook_correlation_rejected",
+                                Some(error.clone()),
                             ));
                         } else {
                             eprintln!(
@@ -1028,6 +1022,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                                         active_stream_task_id,
                                     ),
                                     "context_compaction_policy_refresh_failed",
+                                    Some(error),
                                 )
                                 .await;
                             }
@@ -1101,6 +1096,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                                         active_stream_task_id,
                                     ),
                                     "pending_provider_route_activation_failed",
+                                    Some(error),
                                 )
                                 .await;
                             }
@@ -1130,6 +1126,9 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                                 session_id,
                                 SessionTerminalPersistenceOwner::StreamTask(active_stream_task_id),
                                 "context_compaction_retry_limit_reached",
+                                Some(format!(
+                                    "Repeated context compaction was rejected: {reason}"
+                                )),
                             )
                             .await;
                         }
@@ -1149,6 +1148,9 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                                 session_id,
                                 SessionTerminalPersistenceOwner::StreamTask(active_stream_task_id),
                                 "context_compaction_preparation_missing",
+                                Some(String::from(
+                                    "Context compaction requires an active execution preparation.",
+                                )),
                             )
                             .await;
                         }
@@ -1221,6 +1223,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                                         active_stream_task_id,
                                     ),
                                     "context_compaction_request_missing",
+                                    Some(error),
                                 )
                                 .await;
                             }
@@ -1245,6 +1248,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                                         active_stream_task_id,
                                     ),
                                     "context_compaction_failed",
+                                    Some(error),
                                 )
                                 .await;
                             }
@@ -1327,6 +1331,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                 session_id,
                 false,
                 reason_code,
+                None,
                 terminal_persistence_guard,
             )
             .await;
@@ -1369,6 +1374,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                             session_id,
                             SessionTerminalPersistenceOwner::KernelGeneration(kernel_generation),
                             "stream_task_registration_failed",
+                            Some(error.to_string()),
                         ));
                     } else {
                         eprintln!(

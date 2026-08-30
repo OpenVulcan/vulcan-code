@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { translations } from "@/i18n-messages";
+import { parseConversationBlocks } from "./conversation-transcript-parser";
+import { parseSystemProviderError } from "./conversation-system-error-card";
 
 import { projectConversationBranchPresentationV1 } from "./conversation-branch-presentation-v1";
 import type { ConversationEventSummary } from "@/service/conversation-event-window-store";
@@ -31,6 +34,44 @@ function requestConfigSummary(
 }
 
 describe("V1 branch request configuration presentation", () => {
+  // A pre-API host failure must retain its original message without claiming unknown dispatch facts.
+  // API 前宿主失败必须保留原始消息，不得声称未知的派发事实。
+  it("does not manufacture dispatched provider identity for a host failure", () => {
+    const presentation = projectConversationBranchPresentationV1("session-request-config", [{
+      seq: 1, turn_id: 1, created_at_ms: 1, updated_at_ms: 1, event_revision: 1, visibility: "ui_only",
+      event: { kind: "display_note", notice_kind: "system_error", severity: "error", reason_code: "stream_finished_without_v1_api_terminal", redacted_detail: "Original request preparation failed." },
+    }], EMPTY_RESOURCES, (key) => translations["zh-CN"][key]);
+    const error = parseSystemProviderError(presentation.messages[0]!.body)!;
+    expect(error.message).toBe("Original request preparation failed.");
+    expect(error.dispatchOutcome).toBe("unknown");
+    expect(error.structured).not.toHaveProperty("provider_id");
+    expect(error.structured).not.toHaveProperty("model_id");
+  });
+
+  // The runtime's existing public-contract failure is the sole authority for the expanded JSON card.
+  // 运行时既有公共契约失败是展开 JSON 错误卡的唯一权威。
+  it("preserves structured producer errors without nesting or losing their route", () => {
+    const detail = 'Vulcan 公共契约流式执行失败：provider example failure: {"category":"invalid_request","stage":"prepare","dispatch_outcome":"not_dispatched","semantic_output_observed":false,"side_effect_observed":false,"terminal":true,"retryable":false,"provider_id":"example","model_id":"model-a","message":"Exact original failure."}';
+    const presentation = projectConversationBranchPresentationV1("session-request-config", [{
+      seq: 1, turn_id: 1, created_at_ms: 1, updated_at_ms: 1, event_revision: 1, visibility: "ui_only",
+      event: { kind: "display_note", notice_kind: "system_error", severity: "error", reason_code: "stream_finished_without_v1_api_terminal", redacted_detail: detail },
+    }], EMPTY_RESOURCES, (key) => translations["zh-CN"][key]);
+    expect(presentation.messages[0]!.body).toBe(detail);
+    expect(parseSystemProviderError(presentation.messages[0]!.body)?.modelId).toBe("model-a");
+    expect(parseConversationBlocks(presentation.messages[0]!)[0]?.kind).toBe("notice");
+  });
+  // The real branch adapter and parser must select the notice-card path for historical Goal events too.
+  // 真实分支适配器与解析器也必须为历史目标事件选择提示卡路径。
+  it("routes goal states into localized notice blocks", () => {
+    const presentation = projectConversationBranchPresentationV1("session-request-config", [{
+      seq: 1, turn_id: null, created_at_ms: 1, updated_at_ms: 1, event_revision: 1, visibility: "ui_only",
+      event: {kind: "display_note", notice_kind: "goal_status", severity: "info", reason_code: "goal_resumed"},
+    }], EMPTY_RESOURCES, (key) => translations["zh-CN"][key]);
+    const message = presentation.messages[0]!;
+    expect(message.body).toContain("目标已恢复");
+    expect(message.body).not.toContain("goal_resumed");
+    expect(parseConversationBlocks(message)[0]?.kind).toBe("notice");
+  });
   // Parameters: none. Returns: none; tests the actual branch adapter's initial suppression and display-name fields.
   // 参数：无。返回值：无；测试真实分支适配器对首次提示的抑制以及展示名称字段。
   it("projects configured names and omits initial route notices in the branch UI", () => {

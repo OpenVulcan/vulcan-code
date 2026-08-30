@@ -1021,7 +1021,7 @@ fn reasoning_level_key(level: ReasoningEffortLevel) -> Option<String> {
         ReasoningEffortLevel::Low => "low",
         ReasoningEffortLevel::Medium => "medium",
         ReasoningEffortLevel::High => "high",
-        ReasoningEffortLevel::XHigh => "xhigh",
+        ReasoningEffortLevel::XHigh => "x-high",
         ReasoningEffortLevel::Max => "max",
         ReasoningEffortLevel::Ultra => "ultra",
     };

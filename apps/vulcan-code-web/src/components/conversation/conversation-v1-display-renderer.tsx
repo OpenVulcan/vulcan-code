@@ -35,6 +35,7 @@ import type { ConversationEventSummary, ExternalResourceRef, ResourceId } from "
 import type { SessionResourceRpcV1 } from "@/service/conversation-session-resources-v1";
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import { useI18n } from "@/i18n";
+import { GoalStatusNotice } from "./conversation-goal-notice";
 import { useConversationEventWindowSnapshot } from "@/state/conversation-event-window-react";
 import {
   useConversationSessionResourcesV1,
@@ -691,6 +692,9 @@ function RequestConfigChangedEventView(props: { item: RequestConfigChangedDispla
  * 通过共享状态卡界面渲染一条固定 display-note 事件。 */
 function ConversationV1DisplayNoteView(props: { node: ConversationDisplayNoteTranscriptNode }) {
   const event = props.node.item.event;
+  if (event.notice_kind === "goal_status") {
+    return <GoalStatusNotice reasonCode={event.reason_code} seq={props.node.seq} />;
+  }
   return (
     <aside
       className={`conversation-v1-display-note conversation-v1-display-note-${event.severity}`}

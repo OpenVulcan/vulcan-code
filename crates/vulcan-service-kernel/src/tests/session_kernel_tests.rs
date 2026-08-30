@@ -2560,6 +2560,7 @@ async fn finished_pre_api_failure_persists_error_and_reopens_admission() {
             session_id,
             false,
             "stream_finished_without_v1_api_terminal",
+            Some("original preparation failure".to_owned()),
             first_guard,
         )
         .await
@@ -2590,12 +2591,34 @@ async fn finished_pre_api_failure_persists_error_and_reopens_admission() {
                             if note.notice_kind
                                 == vulcan_session_core::v1::DisplayNoticeKind::SystemError
                                 && note.reason_code == "stream_finished_without_v1_api_terminal"
+                                && note.redacted_detail.as_deref() == Some("original preparation failure")
                     )
                 })
                 .count()
         })
         .expect("V1 error projection should remain readable");
     assert_eq!(matching_notes, 1);
+
+    // Kernel-owner release alone is insufficient: the durable logical Turn must be closed too.
+    // 仅释放 kernel owner 不够：可靠逻辑回合也必须闭合。
+    handle
+        .read(|document| {
+            assert!(document.active_turn().is_none_or(|turn| turn.closed));
+            let mut reloaded = document.clone();
+            reloaded.rebuild_derived_state().unwrap();
+            reloaded
+                .submit_root_input(
+                    vulcan_session_core::v1::ClientInputSubmission::new(
+                        vulcan_session_core::v1::ClientActionId::try_new("after-pre-api-failure")
+                            .unwrap(),
+                        "new prompt",
+                        Vec::new(),
+                    ),
+                    10,
+                )
+                .unwrap();
+        })
+        .unwrap();
 
     let second_owner = SessionTerminalPersistenceOwner::StreamTask(Uuid::new_v4());
     {
@@ -2615,6 +2638,7 @@ async fn finished_pre_api_failure_persists_error_and_reopens_admission() {
             session_id,
             false,
             "stream_finished_without_v1_api_terminal",
+            Some("original preparation failure".to_owned()),
             second_guard,
         )
         .await

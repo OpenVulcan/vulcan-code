@@ -1468,6 +1468,11 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                     ),
                 )
             })? {
+            PreparedPhysicalApi::RequestConfigurationChanged => {
+                return Err(VulcanCoreError::ProviderRouteSwitchRequired {
+                    message: String::from("The session request configuration changed before dispatch."),
+                });
+            }
             PreparedPhysicalApi::SessionV1 {
                 exact_request,
                 controller_config,

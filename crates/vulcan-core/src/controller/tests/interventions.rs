@@ -416,6 +416,44 @@ fn run_user_turn_streaming_intervention_waits_for_full_tool_batch() {
     });
 }
 
+/// Verifies a preparation-permit switch preserves the prompt without writing a controller error.
+/// 验证准备许可处的切换保留提示词，且不写入控制器错误。
+#[test]
+fn provider_route_switch_at_preparation_keeps_controller_resumable() {
+    // The adapter models the production permit response, before any transport or tool execution.
+    // 适配器模拟生产许可响应，此时尚无传输或工具执行。
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let mut adapter = MockStreamingProviderAdapter::new(vec![]);
+        adapter.configuration_changed = true;
+        let mut controller =
+            VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default())
+                .unwrap();
+        let error = controller
+            .run_user_turn_streaming(
+                &adapter,
+                &MockToolExecutor::new(),
+                &AllowAllToolPolicy,
+                "keep this prompt",
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            CoreError::ProviderRouteSwitchRequired { .. }
+        ));
+        assert_eq!(controller.phase(), ControllerPhase::Idle);
+        assert!(
+            !controller
+                .events()
+                .iter()
+                .any(|event| matches!(event.kind, CoreEventKind::Error))
+        );
+        assert_eq!(controller.snapshot().messages.len(), 1);
+        assert_eq!(adapter.built_requests().len(), 1);
+    });
+}
+
 /// Verifies a route-switch control boundary preserves the stable tool checkpoint without failing Core.
 /// 验证路由切换控制边界会保留稳定工具检查点，并且不会把 Core 标记为失败。
 #[test]

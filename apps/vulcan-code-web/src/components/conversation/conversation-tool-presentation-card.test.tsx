@@ -191,6 +191,38 @@ const WAIT_AGENT_PRESENTATION: SubagentOrchestrationPresentation = {
 };
 
 describe("ToolPresentationCard file access icons", () => {
+  // Goal operations share Target, TODO uses the Plan icon, and unrelated native tools stay unchanged.
+  // 目标操作共用靶心，TODO 使用方案图标，其他原生工具保持不变。
+  it.each([
+    [GET_GOAL_PRESENTATION, "lucide-target"],
+    [{ ...GET_GOAL_PRESENTATION, toolId: "create_goal" as const, titleKey: "toolPresentation.native.createGoal" as const }, "lucide-target"],
+    [{ ...GET_GOAL_PRESENTATION, toolId: "update_goal" as const, titleKey: "toolPresentation.native.updateGoal" as const }, "lucide-target"],
+    [TODO_PRESENTATION, "lucide-list-checks"],
+    [SKILL_PRESENTATION, "lucide-braces"],
+  ] as const)("renders %o with its semantic icon %s", (presentation, iconClass) => {
+    // Both active and finished calls retain the same business icon.
+    // 执行中和已完成调用保持同一个业务图标。
+    for (const state of ["running", "completed"] as const) {
+      const markup = renderToStaticMarkup(
+        <I18nProvider initialLocale="zh-CN">
+          <ToolPresentationCard
+            expanded={false}
+            expandedToolPresentationIds={new Set()}
+            presentation={{ ...presentation, state }}
+            requestProgress={null}
+            detailLoadEnabled={false}
+            onExpandedChange={() => undefined}
+            onLoadToolDetail={async () => null}
+          />
+        </I18nProvider>,
+      );
+      expect(markup).toContain(iconClass);
+      if (presentation.family === "goal" || presentation.family === "todo") {
+        expect(markup).not.toContain("lucide-braces");
+      }
+    }
+  });
+
   // Raw invocation belongs only to expanded non-native content.
   // 原始调用只属于已展开的非原生内容。
   it("renders raw invocation only inside expanded non-native cards", () => {
@@ -506,6 +538,16 @@ describe("ToolPresentationCard file access icons", () => {
     expect(markup).toContain("2 次调用 · 0 个工具 · 38348 tokens · 缓存 30000 tokens");
     expect(markup).toContain('data-subagent-usage-tooltip="true"');
     expect(markup).toContain('tabindex="0"');
+    // The dark tooltip uses the shared label/value contrast, not the page's muted text color.
+    // 深色弹窗使用共用标签/数值对比样式，不沿用页面的弱化文字色。
+    expect(markup).toContain('class="context-usage-card-header turn-stats-card-header"');
+    expect(markup).toContain('class="turn-stats-metric-grid"');
+    expect(markup.match(/class="turn-stats-metric"/g)).toHaveLength(4);
+    expect(markup).toContain('<span>总请求次数</span><strong>2</strong>');
+    expect(markup).toContain('<span>工具调用次数</span><strong>0</strong>');
+    expect(markup).toContain('<span>缓存 Tokens</span><strong>30,000</strong>');
+    expect(markup).toContain('<span>合计 Tokens</span><strong>38,348</strong>');
+    expect(markup).not.toContain("subagent-orchestration-usage-tooltip-grid");
   });
 
   // Every folded orchestration card keeps the operation name before its concrete agent or outcome.

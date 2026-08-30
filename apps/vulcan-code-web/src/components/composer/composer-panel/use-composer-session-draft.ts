@@ -239,7 +239,9 @@ export function useComposerSessionDraft(
     ) {
       return;
     }
-    if (ownerInitializedRef.current) {
+    // An unresolved read must never save the temporary empty UI over its authoritative draft.
+    // 未完成的读取绝不能把临时空界面保存并覆盖权威草稿。
+    if (ownerInitializedRef.current && hydratingOwnerKeyRef.current !== previousOwner.draftSlotKey) {
       persistDraftOwner(previousOwner, inputRef.current, attachmentsRef.current);
     }
 
@@ -279,36 +281,50 @@ export function useComposerSessionDraft(
     attachmentsRef.current = [];
     setDraftInput("");
     setAttachments([]);
-    void sessionDraftClientV1.read(nextOwner.sessionId).then((restoredDraft) => {
-      const currentOwner = activeOwnerRef.current;
-      if (
-        hydrationGenerationRef.current !== generation
-        || currentOwner.draftSlotKey !== nextOwner.draftSlotKey
-        || currentOwner.sessionId !== nextOwner.sessionId
-      ) {
-        return;
-      }
-      const expected: ExpectedComposerDraftStateV1 = {
-        draftSlotKey: nextOwner.draftSlotKey,
-        input: restoredDraft.text,
-        attachments: cloneAttachments(restoredDraft.attachments),
-      };
-      hydratingOwnerKeyRef.current = null;
-      ownerApplyBlockRef.current = expected;
-      inputRef.current = expected.input;
-      attachmentsRef.current = expected.attachments;
-      setDraftInput(expected.input);
-      setAttachments(expected.attachments);
-    }).catch(() => {
-      const currentOwner = activeOwnerRef.current;
-      if (
-        hydrationGenerationRef.current === generation
-        && currentOwner.draftSlotKey === nextOwner.draftSlotKey
-        && currentOwner.sessionId === nextOwner.sessionId
-      ) {
-        toast.error(t("composer.error.draftLoadFailed"));
-      }
-    });
+    // The earlier new-draft branch returned, so this is an exact materialized session identity.
+    // 前面的新草稿分支已经返回，因此这里是精确的已物化会话身份。
+    const hydratedSessionId = nextOwner.sessionId;
+    // Retry the same owner-bound read; preserve edits made while the draft was unavailable.
+    // 重试同一 owner 的读取；保留草稿不可用期间输入的新内容。
+    const hydrate = () => {
+      if (hydrationGenerationRef.current !== generation || activeOwnerRef.current.sessionId !== nextOwner.sessionId) return;
+      void sessionDraftClientV1.read(hydratedSessionId).then((restoredDraft) => {
+        const currentOwner = activeOwnerRef.current;
+        if (
+          hydrationGenerationRef.current !== generation
+          || currentOwner.draftSlotKey !== nextOwner.draftSlotKey
+          || currentOwner.sessionId !== nextOwner.sessionId
+        ) {
+          return;
+        }
+        const expected: ExpectedComposerDraftStateV1 = {
+          draftSlotKey: nextOwner.draftSlotKey,
+          // Non-empty local values can only be new user edits after the initial hydration reset.
+          // 初次加载清空后，非空本地值只可能是用户新输入的内容。
+          input: inputRef.current || restoredDraft.text,
+          attachments: cloneAttachments(attachmentsRef.current.length ? attachmentsRef.current : restoredDraft.attachments),
+        };
+        hydratingOwnerKeyRef.current = null;
+        ownerApplyBlockRef.current = expected;
+        inputRef.current = expected.input;
+        attachmentsRef.current = expected.attachments;
+        setDraftInput(expected.input);
+        setAttachments(expected.attachments);
+      }).catch((reason: unknown) => {
+        const currentOwner = activeOwnerRef.current;
+        if (
+          hydrationGenerationRef.current === generation
+          && currentOwner.draftSlotKey === nextOwner.draftSlotKey
+          && currentOwner.sessionId === nextOwner.sessionId
+        ) {
+          toast.error(t("composer.error.draftLoadFailed"), {
+            description: reason instanceof Error ? reason.message : String(reason),
+            action: { label: t("composer.draft.retry"), onClick: hydrate },
+          });
+        }
+      });
+    };
+    hydrate();
   }, [draftKey, options.conversationId, setAttachments, t]);
 
   React.useEffect(() => {

@@ -43,6 +43,7 @@ use crate::v1::stats::{StatBucket, TurnStatBuckets, UsageSnapshot, goal_budget_t
 use vulcan_change_set::{PersistentChangeSet, validate_persistent_change_set};
 
 mod generation;
+mod recovery;
 
 pub use generation::{
     EditGenerationInput, ForkGenerationInput, GenerationBuildOutput, RootInputReplacement,
@@ -6461,6 +6462,26 @@ impl SessionDocument {
         } else {
             0
         };
+        // Legacy pre-API failure notes left an open Turn even when the goal was already blocked.
+        // 旧 API 前失败提示曾遗留开放回合，即便目标已经受阻。
+        let orphaned_pre_api_failure = self.active_turn.as_ref().filter(|turn| !turn.closed)
+            .is_some_and(|turn| {
+                self.active_api.is_none()
+                    && !self.events.iter().any(|event| event.turn_id == Some(turn.turn_id)
+                        && matches!(event.event, EventBody::ApiStarted(_)))
+                    && self.events.iter().any(|event| event.turn_id == Some(turn.turn_id)
+                        && matches!(&event.event, EventBody::DisplayNote(note)
+                            if note.notice_kind == DisplayNoticeKind::SystemError && note.api_call_id.is_none()
+                                && note.reason_code == "stream_finished_without_v1_api_terminal"))
+            });
+        if orphaned_pre_api_failure && !pause_restarted_goal {
+            self.fail_turn_without_active_api(
+                "stream_finished_without_v1_api_terminal",
+                None,
+                now_ms,
+            )?;
+            projected += 2;
+        }
         if pause_restarted_goal {
             if let Some(turn) = self.active_turn.as_ref().filter(|turn| !turn.closed) {
                 let started_at_ms = self
@@ -7578,6 +7599,18 @@ impl SessionDocument {
         body: EventBody,
         now_ms: i64,
     ) -> Result<Seq, DomainError> {
+        // Generic append never creates Turns; only the staging APIs may allocate a new owner.
+        // 通用追加绝不创建回合；只有暂存 API 才能分配新的 owner。
+        if let Some(turn_id) = turn_id
+            && self
+                .active_turn
+                .as_ref()
+                .is_none_or(|turn| turn.closed || turn.turn_id != turn_id)
+        {
+            return Err(DomainError::TurnClosureMismatch {
+                turn_id: turn_id.value(),
+            });
+        }
         self.ensure_transition_capacity(1, 0)?;
         let mut staged_allocator = self.id_allocator;
         let mut staged_events = Vec::with_capacity(1);
@@ -7606,6 +7639,16 @@ impl SessionDocument {
         body: EventBody,
         now_ms: i64,
     ) -> Result<Seq, DomainError> {
+        // IDs are monotonic: a previous or closed current Turn cannot own a new event.
+        // ID 单调递增：更早回合或已结束的当前回合不能拥有新事件。
+        if let Some(turn_id) = turn_id
+            && let Some(current) = &self.active_turn
+            && (turn_id < current.turn_id || (turn_id == current.turn_id && current.closed))
+        {
+            return Err(DomainError::TurnClosureMismatch {
+                turn_id: turn_id.value(),
+            });
+        }
         if let EventBody::SystemContext(context) = &body {
             validate_system_context_event(context)?;
         }
@@ -9791,8 +9834,8 @@ fn validate_request_against_active_config(
     ensure_api_request_field("active.model", &active.model, &requested.model)?;
     ensure_api_request_field(
         "active.thinking_level",
-        &active.thinking_level,
-        &requested.thinking_level,
+        &crate::v1::config::canonical_request_thinking_level(active.thinking_level.as_deref()),
+        &crate::v1::config::canonical_request_thinking_level(requested.thinking_level.as_deref()),
     )?;
     ensure_api_request_field(
         "active.temperature",

@@ -580,6 +580,14 @@ query/fragment 的 HTTPS URL，endpoint path 必须保持同源；输入 JSON Sc
 模型一律省略字段并继承轻量模式。自定义模型只在高级设置中提供三档选择，默认同样为轻量模式。
 不得把 Gemini 的严格关键字过滤扩散到其他模型，也不得按供应商或模型名称硬编码单个工具修复。
 
+`apply_patch` 与其他宿主工具使用同一个标准函数调用契约：输入为含必填字符串 `patch` 的 JSON
+对象，补丁语法由工具说明与宿主执行器校验。Responses（含 Codex）同样声明 `type: function`，
+不得因工具名把它改写为 `custom`/Lark Grammar；协议兼容不能仅凭“支持 Responses”推断支持
+自定义语法工具。规范调用与结果重放使用 `function_call`/`function_call_output`，再由公共转换链
+映射至 Chat、Anthropic 或 Gemini。旧版 `apply_patch` custom 历史仅在请求副本中转为标准函数项，
+不改写会话文件；若 Codex 延续游标已持有原 custom 调用，其未提交结果仍须保留原配对类型。
+该历史配对例外不得用于重新暴露 custom 工具，且无关供应商原生重放项保持原样。
+
 ## 8. Fixtures 与测试证据
 
 fixtures 不是“JSON 能解析”的占位文件，而是走生产编译器与消费者的可执行证据。当前支持两类：

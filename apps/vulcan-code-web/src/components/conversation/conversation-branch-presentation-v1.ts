@@ -17,6 +17,8 @@ import type {
 import type { ConversationSessionResourceCatalogV1 } from "@/state/conversation-session-resources-v1";
 import { requestConfigChangeKind } from "@/service/conversation-event-display-projection";
 import { modelSwitchRouteLabel } from "./conversation-model-switch";
+import { goalNoticeTitle } from "./conversation-goal-notice";
+import { parseSystemProviderError } from "./conversation-system-error-card";
 
 // V1RootInputPresentationMetadata stores the exact generation anchor used by restored edit and fork actions.
 // V1RootInputPresentationMetadata 保存恢复后的编辑与分叉操作使用的精确 generation 锚点。
@@ -105,6 +107,7 @@ export function projectConversationBranchPresentationV1(
       apiStatsByCall,
       resources,
       providers,
+      t,
     ));
   }
 
@@ -123,6 +126,7 @@ function conversationMessagesForV1Event(
   apiStatsByCall: ReadonlyMap<number, ApiStatsBody>,
   resources: ConversationSessionResourceCatalogV1,
   providers: readonly ProviderSummary[],
+  t: Translation,
 ): ConversationMessage[] {
   const base = conversationMessageBase(sessionId, summary, rootInput);
   switch (summary.event.kind) {
@@ -170,7 +174,7 @@ function conversationMessagesForV1Event(
         },
       }];
     case "display_note":
-      return [displayNoteMessage(base, summary, summary.event, rootInput, apiStatsByCall)];
+      return [displayNoteMessage(base, summary, summary.event, rootInput, apiStatsByCall, t)];
     case "request_config_changed": {
       // changeKind is derived from exact persisted fields, never from a display label.
       // changeKind 从精确持久化字段派生，绝不依赖展示文案。
@@ -479,23 +483,31 @@ function displayNoteMessage(
   event: Extract<ConversationEventBody, { kind: "display_note" }>,
   rootInput: V1RootInputPresentationMetadata | undefined,
   apiStatsByCall: ReadonlyMap<number, ApiStatsBody>,
+  t: Translation,
 ): ConversationMessage {
   const apiStats = event.api_call_id === undefined ? undefined : apiStatsByCall.get(event.api_call_id);
   if (event.severity === "error") {
+    // A producer-owned structured error already contains dispatch, route and stage facts; never wrap it in invented defaults.
+    // 生产端结构化错误已经包含派发、路由与阶段事实，不能再用推测的默认值包裹它。
+    if (event.redacted_detail !== undefined && parseSystemProviderError(event.redacted_detail)) {
+      return { ...base, role: "system", recordKind: "transcript", body: event.redacted_detail, metadata: presentationMetadata(summary, rootInput) };
+    }
     const provider = apiStats?.provider ?? "unknown";
     const error = apiStats?.error;
     const payload = {
       category: error?.category ?? event.notice_kind,
       stage: "terminal",
-      dispatch_outcome: apiStats?.status === "prepared" ? "not_dispatched" : "dispatched",
+      // An absent API receipt is not evidence that an external request was sent.
+      // 缺少 API 回执不能作为外部请求已经发出的证据。
+      dispatch_outcome: apiStats === undefined ? "unknown" : apiStats.status === "prepared" ? "not_dispatched" : "dispatched",
       semantic_output_observed: false,
       side_effect_observed: false,
       terminal: true,
       retryable: apiStats?.continuation_eligibility === "allowed",
       upstream_code: error?.error_code ?? event.reason_code,
       upstream_message: event.redacted_detail ?? error?.message ?? "",
-      provider_id: provider,
-      model_id: apiStats?.model ?? "",
+      provider_id: apiStats?.provider,
+      model_id: apiStats?.model,
       message: event.redacted_detail ?? error?.message ?? event.reason_code,
     };
     return {
@@ -511,7 +523,7 @@ function displayNoteMessage(
     role: "assistant",
     recordKind: "display-note",
     title: event.notice_kind,
-    body: event.redacted_detail ?? event.reason_code,
+    body: event.notice_kind === "goal_status" ? goalNoticeTitle(event.reason_code, t) : event.redacted_detail ?? event.reason_code,
     metadata: {
       ...presentationMetadata(summary, rootInput),
       notice_kind: event.notice_kind === "retry_started" || event.notice_kind === "retry_exhausted"
@@ -523,7 +535,7 @@ function displayNoteMessage(
       retry_count: event.retry_count,
       retry_limit: event.retry_limit,
       reason_code: event.reason_code,
-      summary: event.redacted_detail ?? event.reason_code,
+      summary: event.notice_kind === "goal_status" ? goalNoticeTitle(event.reason_code, t) : event.redacted_detail ?? event.reason_code,
       status: event.severity,
     },
   };
