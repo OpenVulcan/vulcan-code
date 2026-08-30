@@ -1606,7 +1606,7 @@ function SubagentOrchestrationPresentationCard(props: {
       >
         <Bot className="subagent-orchestration-icon" size={15} />
         {status ? <span className="tool-presentation-state shimmer">{status}</span> : null}
-        <span className="tool-presentation-command"><span className="tool-presentation-command-text">{subagentSummaryText(hydratedPresentation, t)}</span></span>
+        <span className="tool-presentation-command"><span className="tool-presentation-command-text">{subagentCardSummaryText(hydratedPresentation, t)}</span></span>
         {canExpand ? (
           expanded ? (
             <ChevronDown className="tool-presentation-toggle" size={15} />
@@ -2012,6 +2012,25 @@ function subagentSummaryText(
   return presentation.title;
 }
 
+// subagentCardSummaryText keeps the orchestration operation visible beside its specific target or outcome.
+// subagentCardSummaryText 在具体目标或结果旁始终保留调度操作名称。
+function subagentCardSummaryText(
+  // Presentation model.
+  // 展示模型。
+  presentation: SubagentOrchestrationPresentation,
+  // Translation helper.
+  // 翻译辅助函数。
+  t: (key: TranslationKey) => string,
+): string {
+  // operationLabel is the stable user-facing action that must never be replaced by an agent name.
+  // operationLabel 是稳定的用户可见操作，不得被智能体名称替代。
+  const operationLabel = subagentOperationLabel(presentation, t);
+  // detailText retains the concrete agent, count, or wait result for this invocation.
+  // detailText 保留本次调用的具体智能体、数量或等待结果。
+  const detailText = subagentSummaryText(presentation, t);
+  return detailText === operationLabel ? operationLabel : `${operationLabel} · ${detailText}`;
+}
+
 // subagentWaitStatusText maps wait_agent activity to a non-misleading compact label.
 // subagentWaitStatusText 将 wait_agent 活动映射为不误导的紧凑文案。
 function subagentWaitStatusText(
@@ -2022,6 +2041,9 @@ function subagentWaitStatusText(
   // 翻译辅助函数。
   t: (key: TranslationKey) => string,
 ): string {
+  if (presentation.noActiveAgents) {
+    return t("conversation.subagent.detail.noOpenAgents");
+  }
   if (presentation.timedOut) {
     return t("conversation.subagent.detail.waitTimedOut");
   }

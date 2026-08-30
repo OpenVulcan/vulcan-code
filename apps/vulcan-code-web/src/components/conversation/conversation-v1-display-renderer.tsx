@@ -1,4 +1,6 @@
 import React from "react";
+import { ModelSwitchNotice, modelSwitchRouteLabel } from "./conversation-model-switch";
+import type { ProviderSummary } from "@/types";
 import {
   BrainCircuit,
   Check,
@@ -39,27 +41,36 @@ import {
   type ConversationSessionResourceCatalogV1,
 } from "@/state/conversation-session-resources-v1";
 
-/** Root-input generation action emitted directly from one V1 user-input event.
- * 直接从一条 V1 用户输入事件发出的根输入 generation 动作。
+/** Generation action with distinct edit-root and completed-Turn fork anchors.
+ * 使用独立编辑根锚点与完整回合分叉锚点的 generation 动作。
  */
-export interface ConversationV1RootInputGenerationAction {
-  /** Requested immutable action kind.
-   * 请求的不可变动作类型。
-   */
-  kind: "edit" | "fork";
-  /** Persisted root-input seq used as the only action anchor.
-   * 作为唯一动作锚点的持久化根输入 seq。
-   */
-  seq: number;
-  /** Persisted root-input text shown by the action dialog.
-   * 动作对话框展示的持久化根输入正文。
-   */
-  text: string;
-}
+export type ConversationV1GenerationAction =
+  | {
+    /** Edit replaces one persisted root input and restarts that Turn.
+     * 编辑会替换一条持久化根输入并重新启动该回合。 */
+    kind: "edit";
+    /** Exact persisted root-input seq.
+     * 精确的持久化根输入 seq。 */
+    targetSeq: number;
+    /** Exact persisted root-input text.
+     * 精确的持久化根输入正文。 */
+    text: string;
+  }
+  | {
+    /** Fork copies history through one completed Turn without starting another Turn.
+     * 分叉复制到一个完整回合结束，且不会启动另一个回合。 */
+    kind: "fork";
+    /** Exact terminal TurnStats seq of the copied Turn.
+     * 被复制回合的精确终态 TurnStats seq。 */
+    sourceTurnEndSeq: number;
+  };
 
 /** Props for the V1 event-native conversation renderer.
  * V1 事件原生会话渲染器的属性。 */
 export interface ConversationV1DisplayRendererProps {
+  /** Configured provider/model display catalog, absent in isolated hosts without configuration.
+   * 已配置的供应商和模型显示目录；不带配置的隔离宿主可省略。 */
+  providers?: readonly ProviderSummary[];
   /** Complete canonical window including HostOnly events in strict seq order.
    * 包含 HostOnly 事件且按严格 seq 排序的完整 canonical 窗口。 */
   events: readonly ConversationEventSummary[];
@@ -87,10 +98,10 @@ export interface ConversationV1DisplayRendererProps {
   /** Persisted reasoning presentation mode selected for the current session.
    * 当前会话选择的持久化思考展示模式。 */
   reasoningDisplayMode?: ThinkingDisplayMode;
-  /** Receives edit or fork actions anchored only by one V1 root-input seq.
-   * 接收仅由一条 V1 根输入 seq 锚定的编辑或分叉动作。
+  /** Receives edit-root or completed-Turn fork actions with distinct anchors.
+   * 接收锚点彼此独立的编辑根操作或完整回合分叉操作。
    */
-  onRootInputGenerationAction?: (action: ConversationV1RootInputGenerationAction) => void;
+  onRootInputGenerationAction?: (action: ConversationV1GenerationAction) => void;
   /** Whether root-input generation actions are temporarily unavailable.
    * 根输入 generation 动作当前是否暂不可用。
    */
@@ -122,6 +133,7 @@ export function ConversationV1EventWindowView(props: ConversationV1EventWindowVi
   const snapshot = useConversationEventWindowSnapshot(props.controller);
   return (
     <ConversationV1SessionDisplayRenderer
+      providers={props.providers}
       defaultExpandedTools={props.defaultExpandedTools}
       events={snapshot.events}
       availableExternalRefKeys={props.availableExternalRefKeys}
@@ -171,6 +183,7 @@ export function ConversationV1SessionDisplayRenderer(
   );
   return (
     <ConversationV1DisplayRenderer
+      providers={props.providers}
       defaultExpandedTools={props.defaultExpandedTools}
       events={props.events}
       availableExternalRefKeys={props.availableExternalRefKeys}
@@ -210,6 +223,7 @@ export function ConversationV1DisplayRenderer(props: ConversationV1DisplayRender
       <div className="conversation-v1-display" data-conversation-v1-display="true">
         {transcriptNodes.map((node) => (
           <ConversationV1TranscriptNodeView
+            providers={props.providers}
             defaultExpandedTools={props.defaultExpandedTools}
             node={node}
             availableExternalRefKeys={props.availableExternalRefKeys}
@@ -230,6 +244,9 @@ export function ConversationV1DisplayRenderer(props: ConversationV1DisplayRender
 /** Props for rendering one visual transcript node derived from canonical events.
  * 渲染一个从 canonical 事件派生的视觉转录节点所需属性。 */
 interface ConversationV1TranscriptNodeViewProps {
+  /** Provider/model display catalog owned by the containing surface.
+   * 所属界面持有的供应商和模型显示目录。 */
+  providers?: readonly ProviderSummary[];
   /** Exact visual transcript node.
    * 精确的视觉转录节点。 */
   node: ConversationTranscriptDisplayNode;
@@ -254,7 +271,7 @@ interface ConversationV1TranscriptNodeViewProps {
   /** Optional V1 root-input action callback.
    * 可选的 V1 根输入动作回调。
    */
-  onRootInputGenerationAction?: (action: ConversationV1RootInputGenerationAction) => void;
+  onRootInputGenerationAction?: (action: ConversationV1GenerationAction) => void;
   /** Whether root-input actions are temporarily disabled.
    * 根输入动作当前是否暂时禁用。
    */
@@ -274,7 +291,7 @@ function ConversationV1TranscriptNodeView(props: ConversationV1TranscriptNodeVie
     case "turn_stats":
       return <ConversationV1TurnStatsView node={props.node} />;
     case "request_config_changed":
-      return <RequestConfigChangedEventView item={props.node.item} />;
+      return <RequestConfigChangedEventView item={props.node.item} providers={props.providers} />;
     case "display_note":
       return <ConversationV1DisplayNoteView node={props.node} />;
   }
@@ -367,11 +384,11 @@ function ConversationV1UserInputView(
             aria-label={t("conversation.userPrompt.edit")}
             className="user-message-copy"
             disabled={props.rootInputGenerationActionsDisabled}
-            onClick={() => props.onRootInputGenerationAction?.({
-              kind: "edit",
-              seq: props.node.seq,
-              text: event.text,
-            })}
+              onClick={() => props.onRootInputGenerationAction?.({
+                kind: "edit",
+                targetSeq: props.node.seq,
+                text: event.text,
+              })}
             title={t("conversation.userPrompt.edit")}
             type="button"
           >
@@ -602,15 +619,14 @@ function ConversationV1AssistantView(
               {copied ? <Check aria-hidden="true" size={13} /> : <Copy aria-hidden="true" size={13} />}
             </button>
           ) : null}
-          {props.node.root_input && props.onRootInputGenerationAction ? (
+          {props.node.turn_end_seq !== null && props.onRootInputGenerationAction ? (
             <button
               aria-label={t("conversation.action.fork")}
               className="assistant-final-meta-button"
               disabled={props.rootInputGenerationActionsDisabled}
               onClick={() => props.onRootInputGenerationAction?.({
                 kind: "fork",
-                seq: props.node.root_input!.seq,
-                text: props.node.root_input!.text,
+                sourceTurnEndSeq: props.node.turn_end_seq!,
               })}
               title={t("conversation.action.fork")}
               type="button"
@@ -635,7 +651,7 @@ function ConversationV1TurnStatsView(props: { node: ConversationTurnStatsTranscr
 
 /** Renders one explicit request-configuration transition without reading current settings.
  * 在不读取当前设置的情况下渲染一条明确的请求配置切换。 */
-function RequestConfigChangedEventView(props: { item: RequestConfigChangedDisplayItem }) {
+function RequestConfigChangedEventView(props: { item: RequestConfigChangedDisplayItem; providers?: readonly ProviderSummary[] }) {
   // t localizes the exact category reported by the persisted change fields.
   // t 本地化由持久化变化字段确定的精确分类。
   const { t } = useI18n();
@@ -645,23 +661,27 @@ function RequestConfigChangedEventView(props: { item: RequestConfigChangedDispla
   if (changeKind === "none") {
     return null;
   }
+  if (changeKind === "route") {
+    // summary resolves only provider/model display names, never connection identifiers.
+    // summary 仅解析供应商和模型显示名称，绝不展示连接标识。
+    const summary = t("conversation.modelSwitch.changed")
+      .replaceAll("{previous}", modelSwitchRouteLabel(props.item.request_config_changed.previous, props.providers ?? []))
+      .replaceAll("{current}", modelSwitchRouteLabel(props.item.request_config_changed.current, props.providers ?? []));
+    return <ModelSwitchNotice summary={summary} seq={props.item.seq} />;
+  }
   // previousLabel is derived only from the persisted previous request configuration.
   // previousLabel 仅从持久化的上一请求配置派生。
-  const previousLabel = changeKind === "thinking"
-    ? props.item.request_config_changed.previous.thinking_level ?? "—"
-    : requestConfigLabel(props.item.request_config_changed.previous);
+  const previousLabel = props.item.request_config_changed.previous.thinking_level ?? "—";
   // currentLabel is derived only from the persisted current request configuration.
   // currentLabel 仅从持久化的当前请求配置派生。
-  const currentLabel = changeKind === "thinking"
-    ? props.item.request_config_changed.current.thinking_level ?? "—"
-    : requestConfigLabel(props.item.request_config_changed.current);
+  const currentLabel = props.item.request_config_changed.current.thinking_level ?? "—";
   return (
     <section
       className="conversation-v1-event conversation-v1-request-config"
       data-event-kind="request_config_changed"
       data-seq={props.item.seq}
     >
-      <strong>{changeKind === "thinking" ? t("conversation.reasoningSwitch.title") : t("conversation.modelSwitch.title")}</strong>
+      <strong>{t("conversation.reasoningSwitch.title")}</strong>
       <span>{previousLabel} → {currentLabel}</span>
     </section>
   );
@@ -708,12 +728,6 @@ export function collectConversationResourceIdsV1(
     }
   }
   return values;
-}
-
-/** Formats one persisted request configuration without consulting mutable global state.
- * 在不查询可变全局状态的情况下格式化一份持久化请求配置。 */
-function requestConfigLabel(config: RequestConfigChangedDisplayItem["request_config_changed"]["current"]): string {
-  return [config.provider, config.model, config.thinking_level].filter(Boolean).join(" · ");
 }
 
 /** Formats one persisted event timestamp in the current interface locale.

@@ -45,8 +45,7 @@ fn cached_navigation_lists_unclosed_subagent_tree() {
         cached_navigation_test_state(nested_parent_task_id, nested_task_id, "mirror_tool_probe"),
     ];
     cache_test_subagent_surface_detail_states(&mut guard, &task_states);
-    let _registry_fixture =
-        seed_test_subagent_registry_from_panel_states(&mut guard, root_session_id, &task_states);
+    seed_test_subagent_registry_from_panel_states(&mut guard, root_session_id, &task_states);
     let workspace_snapshot = guard
         .workspace_snapshot
         .clone()
@@ -233,7 +232,10 @@ fn registry_terminal_status_remains_visible_after_stale_listener_is_suppressed()
         live_context_budgets: BTreeMap::new(),
         session_goal_summaries: BTreeMap::new(),
         subagent_surface_detail_cache: BTreeMap::new(),
-        session_subagent_navigation_rounds: BTreeSet::from([parent_session_id]),
+        session_subagent_navigation_rounds: BTreeMap::from([(
+            parent_session_id,
+            BTreeSet::from([task_session_id]),
+        )]),
         active_subagent_panel: None,
         detached_subagent_task_listeners: BTreeMap::from([(
             task_session_id,
@@ -256,8 +258,7 @@ fn registry_terminal_status_remains_visible_after_stale_listener_is_suppressed()
         "agent-alpha",
     )];
     cache_test_subagent_surface_detail_states(&mut guard, &task_states);
-    let _registry_fixture =
-        seed_test_subagent_registry_from_panel_states(&mut guard, parent_session_id, &task_states);
+    seed_test_subagent_registry_from_panel_states(&mut guard, parent_session_id, &task_states);
     let workspace_snapshot = WorkspaceSnapshot {
         task_projects: Vec::new(),
         archived_task_projects: Vec::new(),
@@ -297,6 +298,209 @@ fn registry_terminal_status_remains_visible_after_stale_listener_is_suppressed()
     assert_eq!(navigation.tasks[0].task_id, task_session_id.to_string());
     assert_eq!(navigation.tasks[0].run_state, "completed");
     assert!(!navigation.tasks[0].is_running);
+}
+
+/// Verifies closed child rows remain visible for the current parent turn and disappear at the next turn boundary.
+/// 验证已关闭子代理行在当前父回合内保持可见，并在下一回合边界消失。
+#[test]
+fn closed_subagent_navigation_is_retained_only_for_the_owning_round() {
+    // parent_session_id owns both the archived child and the current navigation round.
+    // parent_session_id 同时拥有已归档子代理与当前导航轮次。
+    let parent_session_id = SessionId::new_v4();
+    // task_session_id identifies the archived child row retained for inspection.
+    // task_session_id 标识为查看而保留的已归档子代理行。
+    let task_session_id = SessionId::new_v4();
+    // closed_state seeds the authoritative registry with an archived lifecycle status.
+    // closed_state 使用已归档生命周期状态填充权威注册表。
+    let mut closed_state =
+        cached_navigation_test_state(parent_session_id, task_session_id, "closed-worker");
+    closed_state.run_state = SubagentTaskRunState::Closed;
+    // guard owns the registry and the explicit current-turn visibility marker.
+    // guard 持有注册表与显式的当前回合可见标记。
+    let mut guard = test_service_state_with_parent_session(parent_session_id);
+    seed_test_live_subagent_registry_from_panel_states(
+        &mut guard,
+        parent_session_id,
+        std::slice::from_ref(&closed_state),
+    );
+    guard
+        .session_subagent_navigation_rounds
+        .insert(parent_session_id, BTreeSet::from([task_session_id]));
+
+    let current_round_navigation = subagent_navigation_snapshot_for_parent_from_cached_state(
+        &mut guard,
+        parent_session_id,
+        true,
+    )
+    .expect("current round navigation should project")
+    .expect("closed row should remain visible in its owning round");
+
+    assert_eq!(current_round_navigation.tasks.len(), 1);
+    assert_eq!(
+        current_round_navigation.tasks[0].task_id,
+        task_session_id.to_string()
+    );
+    assert_eq!(current_round_navigation.tasks[0].run_state, "closed");
+    assert!(!current_round_navigation.tasks[0].is_running);
+
+    // workspace_snapshot supplies the selected parent used by the read-only click route.
+    // workspace_snapshot 提供只读点击路由使用的已选父会话。
+    let workspace_snapshot = guard
+        .workspace_snapshot
+        .clone()
+        .expect("closed row route requires a workspace snapshot");
+    // route_response proves clicking a closed row retains the same authoritative navigation membership.
+    // route_response 证明点击已关闭行会保留同一份权威导航成员关系。
+    let route_response = build_readonly_subagent_panel_route_response_for_task_locked(
+        &mut guard,
+        &workspace_snapshot,
+        parent_session_id,
+        task_session_id,
+    )
+    .expect("closed row should open without mutating navigation membership");
+    let routed_navigation = route_response
+        .subagent_navigation
+        .expect("closed row click should return the retained navigation");
+    assert_eq!(routed_navigation.tasks.len(), 1);
+    assert_eq!(routed_navigation.tasks[0].run_state, "closed");
+
+    guard
+        .session_subagent_navigation_rounds
+        .remove(&parent_session_id);
+    let next_round_navigation = subagent_navigation_snapshot_for_parent_from_cached_state(
+        &mut guard,
+        parent_session_id,
+        true,
+    )
+    .expect("next round navigation should project");
+
+    assert!(next_round_navigation.is_none());
+
+    // new_task_id belongs to a later round and must not re-admit the previously dismissed closed child.
+    // new_task_id 属于后续回合，不得重新准入此前已移除的关闭子任务。
+    let new_task_id = SessionId::new_v4();
+    // new_state models a newly created child alongside the archived registry history.
+    // new_state 模拟与已归档注册表历史并存的新建子任务。
+    let new_state = cached_navigation_test_state(parent_session_id, new_task_id, "new-worker");
+    seed_test_live_subagent_registry_from_panel_states(
+        &mut guard,
+        parent_session_id,
+        std::slice::from_ref(&new_state),
+    );
+    guard
+        .session_subagent_navigation_rounds
+        .insert(parent_session_id, BTreeSet::from([new_task_id]));
+    // reopened_navigation is rebuilt by the same path used after the next spawn event.
+    // reopened_navigation 通过下一次创建事件后使用的同一路径重建。
+    let reopened_navigation = subagent_navigation_snapshot_for_parent_from_cached_state(
+        &mut guard,
+        parent_session_id,
+        true,
+    )
+    .expect("later round should project")
+    .expect("new child should be visible");
+    assert_eq!(reopened_navigation.tasks.len(), 1);
+    assert_eq!(
+        reopened_navigation.tasks[0].task_id,
+        new_task_id.to_string()
+    );
+
+    // historical_route loads the old child's persisted view without changing the new round membership.
+    // historical_route 载入旧子任务的持久化视图，但不改变新回合成员关系。
+    let historical_route = build_readonly_subagent_panel_route_response_for_task_locked(
+        &mut guard,
+        &workspace_snapshot,
+        parent_session_id,
+        task_session_id,
+    )
+    .expect("historical route should remain readable");
+    let historical_navigation = historical_route
+        .subagent_navigation
+        .expect("new child remains visible");
+    assert_eq!(historical_navigation.tasks.len(), 1);
+    assert_eq!(
+        historical_navigation.tasks[0].task_id,
+        new_task_id.to_string()
+    );
+}
+
+/// Verifies stopping another child does not dismiss closed rows before the next user turn.
+/// 验证停止另一个子任务不会在下一用户回合前移除已关闭行。
+/// Parameters: none. Returns: none; asserts current-round membership survives stop cleanup.
+/// 参数：无。返回值：无；断言停止清理不会破坏当前回合成员关系。
+#[test]
+fn subagent_navigation_stop_preserves_closed_siblings() {
+    // parent_id owns the two child lifecycle records in the same turn.
+    // parent_id 拥有同一回合中的两个子任务生命周期记录。
+    let parent_id = SessionId::new_v4();
+    // closed_id is retained for inspection; stopped_id is independently stopped.
+    // closed_id 为查看而保留；stopped_id 被独立停止。
+    let closed_id = SessionId::new_v4();
+    let stopped_id = SessionId::new_v4();
+    // closed and stopped seed the authoritative registry after both lifecycle transitions.
+    // closed 和 stopped 填充两次生命周期变化后的权威注册表。
+    let mut closed = cached_navigation_test_state(parent_id, closed_id, "closed");
+    closed.run_state = SubagentTaskRunState::Closed;
+    let mut stopped = cached_navigation_test_state(parent_id, stopped_id, "stopped");
+    stopped.run_state = SubagentTaskRunState::Stopped;
+    // guard retains the closed sibling admitted earlier in this user turn.
+    // guard 保留本用户回合此前准入的已关闭兄弟任务。
+    let mut guard = test_service_state_with_parent_session(parent_id);
+    seed_test_live_subagent_registry_from_panel_states(&mut guard, parent_id, &[closed, stopped]);
+    guard
+        .session_subagent_navigation_rounds
+        .insert(parent_id, BTreeSet::from([closed_id, stopped_id]));
+    mark_webui_subagent_tasks_stopped_in_state(&mut guard, &[(parent_id, stopped_id)]);
+    // navigation must retain both rows until a genuine new-turn boundary clears the closed one.
+    // navigation 必须保留两行，直到真正的新回合边界清除已关闭行。
+    let navigation =
+        subagent_navigation_snapshot_for_parent_from_cached_state(&mut guard, parent_id, true)
+            .expect("stop projection succeeds")
+            .expect("current round is retained");
+    assert_eq!(navigation.tasks.len(), 2);
+    assert!(
+        navigation
+            .tasks
+            .iter()
+            .any(|task| task.task_id == closed_id.to_string() && task.run_state == "closed")
+    );
+}
+
+/// Verifies late completed feedback cannot re-admit archived history after a new turn starts.
+/// 验证新回合开始后迟到的完成反馈不能重新准入归档历史。
+/// Parameters: none. Returns: none; asserts the event leaves navigation empty.
+/// 参数：无。返回值：无；断言事件处理后导航仍为空。
+#[test]
+fn subagent_navigation_late_completion_cannot_readmit_dismissed_child() {
+    // parent_id and child_id identify an archived child from a previous turn.
+    // parent_id 和 child_id 标识此前回合中已归档的子任务。
+    let parent_id = SessionId::new_v4();
+    let child_id = SessionId::new_v4();
+    // closed seeds history without any current-turn navigation admission.
+    // closed 填充历史记录，不授予任何当前回合导航准入。
+    let mut closed = cached_navigation_test_state(parent_id, child_id, "closed");
+    closed.run_state = SubagentTaskRunState::Closed;
+    // guard owns the real registry queried by the event projection.
+    // guard 持有事件投影查询的真实注册表。
+    let mut guard = test_service_state_with_parent_session(parent_id);
+    seed_test_live_subagent_registry_from_panel_states(&mut guard, parent_id, &[closed]);
+    // runtime supplies the production ingest interface without starting provider work.
+    // runtime 提供生产摄取接口，但不启动供应商执行。
+    let runtime = guard.agent_runtime.clone().expect("seeded runtime");
+    // state and app run the late callback through the real ingest and navigation emission path.
+    // state 和 app 让迟到回调通过真实摄取与导航发射路径。
+    let state = Arc::new(Mutex::new(guard));
+    let app = ServiceEventEmitter::new(Vec::new());
+    let event = test_delegate_finished_event(child_id, "closed", "finished before close");
+    ingest_webui_subagent_runtime_event(&app, &state, &runtime, parent_id, &event)
+        .expect("late event handled");
+    let mut guard = state.lock().expect("service state lock");
+    assert!(!guard.subagent_surface_detail_cache.contains_key(&child_id));
+    assert!(
+        subagent_navigation_snapshot_for_parent_from_cached_state(&mut guard, parent_id, true)
+            .expect("late event navigation projection")
+            .is_none()
+    );
 }
 
 /// Verifies a same-parent inactive subagent panel falls back to the parent surface.

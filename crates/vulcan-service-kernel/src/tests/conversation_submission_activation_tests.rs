@@ -145,9 +145,10 @@ fn existing_session_activation_commits_summary_and_own_navigation_cleanup() {
     // service_state owns the workbench and navigation state committed under one lock.
     // service_state 持有在同一锁内提交的工作台与导航状态。
     let mut service_state = test_service_state_with_parent_session(session_id);
-    service_state
-        .session_subagent_navigation_rounds
-        .extend([session_id, unrelated_session_id]);
+    service_state.session_subagent_navigation_rounds.extend([
+        (session_id, BTreeSet::from([task_id])),
+        (unrelated_session_id, BTreeSet::new()),
+    ]);
     service_state.active_subagent_panel = Some(SelectedSubagentTaskPanel {
         parent_session_id: session_id,
         task_id,
@@ -170,9 +171,14 @@ fn existing_session_activation_commits_summary_and_own_navigation_cleanup() {
         workspace_path: String::new(),
         kind: PromptSessionMaterializationKind::Existing,
     };
-    // app discards the emitted event while preserving the production activation path.
-    // app 丢弃发送事件，同时保留生产激活路径。
-    let app = ServiceEventEmitter::new(Vec::new());
+    // emitted_events records the summary delta followed by the exact navigation cleanup delta.
+    // emitted_events 记录摘要增量及其后的精确导航清理增量。
+    let emitted_events = Arc::new(Mutex::new(Vec::<ServiceEvent>::new()));
+    // app preserves production event ordering for the simulated WebUI client.
+    // app 为模拟 WebUI 客户端保留生产事件顺序。
+    let app = ServiceEventEmitter::new(vec![Arc::new(CapturingActivationEventSink {
+        events: Arc::clone(&emitted_events),
+    })]);
 
     // Preparation initializes only the detached workspace and cannot publish sidebar state.
     // 准备阶段只初始化分离工作区，不能发布侧栏状态。
@@ -186,12 +192,12 @@ fn existing_session_activation_commits_summary_and_own_navigation_cleanup() {
         assert!(
             guard
                 .session_subagent_navigation_rounds
-                .contains(&session_id)
+                .contains_key(&session_id)
         );
         assert!(guard.active_subagent_panel.is_some());
     }
-    // revision is the single workbench generation committed by post-workspace activation.
-    // revision 是工作区提交后激活阶段提交的唯一工作台代际。
+    // revision includes both the summary update and the focused navigation cleanup.
+    // revision 同时包含摘要更新与聚焦导航清理。
     let revision = commit_materialized_submission_activation(
         &app,
         &state,
@@ -200,7 +206,7 @@ fn existing_session_activation_commits_summary_and_own_navigation_cleanup() {
     )
     .expect("existing session activation should succeed");
 
-    assert_eq!(revision, 1);
+    assert_eq!(revision, 2);
     assert!(
         workspace_snapshot
             .session_runtime_state
@@ -212,12 +218,12 @@ fn existing_session_activation_commits_summary_and_own_navigation_cleanup() {
     assert!(
         !guard
             .session_subagent_navigation_rounds
-            .contains(&session_id)
+            .contains_key(&session_id)
     );
     assert!(
         guard
             .session_subagent_navigation_rounds
-            .contains(&unrelated_session_id)
+            .contains_key(&unrelated_session_id)
     );
     assert_eq!(guard.active_subagent_panel, None);
     assert_eq!(
@@ -225,6 +231,28 @@ fn existing_session_activation_commits_summary_and_own_navigation_cleanup() {
         Some(session_id.to_string().as_str())
     );
     assert_eq!(guard.workbench.conversations[0].id, session_id.to_string());
+    drop(guard);
+    let events = emitted_events
+        .lock()
+        .expect("activation event buffer should lock");
+    assert_eq!(events.len(), 2);
+    assert!(matches!(
+        &events[0],
+        ServiceEvent::WorkbenchDelta(envelope)
+            if matches!(&envelope.delta, WorkbenchDelta::ConversationSummaryChanged(_))
+    ));
+    assert!(matches!(
+        &events[1],
+        ServiceEvent::WorkbenchDelta(envelope)
+            if envelope.generation == revision
+                && matches!(
+                    &envelope.delta,
+                    WorkbenchDelta::SubagentNavigationChanged(delta)
+                        if delta.parent_conversation_id.as_deref()
+                            == Some(session_id.to_string().as_str())
+                            && delta.subagent_navigation.is_none()
+                )
+    ));
 }
 
 /// Verifies existing-session activation preserves a child panel owned by another parent.

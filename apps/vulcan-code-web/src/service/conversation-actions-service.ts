@@ -161,10 +161,10 @@ export interface ConversationForkGenerationV1Request extends Record<string, unkn
    * 分叉前观察到的父事件窗口代次。
    */
   expectedWindowGeneration: number;
-  /** Parent root-input seq retained by the child.
-   * 子会话保留的父根输入 seq。
+  /** Parent terminal TurnStats seq retained as the child's inclusive history boundary.
+   * 作为子会话包含式历史边界保留的父级终态 TurnStats seq。
    */
-  targetSeq: number;
+  sourceTurnEndSeq: number;
   /** Stable child identity reused after response loss.
    * 响应丢失后复用的稳定子会话身份。
    */
@@ -191,10 +191,10 @@ export interface ConversationForkGenerationV1Response {
    * 当前请求是否物理创建了子会话。
    */
   created: boolean;
-  /** Parent root-input seq retained by the child.
-   * 子会话保留的父根输入 seq。
+  /** Parent terminal TurnStats seq retained by the child.
+   * 子会话保留的父级终态 TurnStats seq。
    */
-  sourceTargetSeq: number;
+  sourceTurnEndSeq: number;
   /** Child event-window generation.
    * 子事件窗口代次。
    */
@@ -203,10 +203,6 @@ export interface ConversationForkGenerationV1Response {
    * 子会话完整文档修订号。
    */
   documentRevision: number;
-  /** Whether the exact child Turn entered physical dispatch.
-   * 精确子回合是否已进入物理分发。
-   */
-  dispatchStarted: boolean;
 }
 
 /** Creates or exactly retries one V1 conversation fork.

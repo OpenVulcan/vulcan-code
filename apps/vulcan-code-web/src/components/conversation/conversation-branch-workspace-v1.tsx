@@ -2,6 +2,7 @@ import * as React from "react";
 
 import type { GeneratedMediaAttachment, GeneratedMediaKind } from "@/components/media/generated-media";
 import {
+  completedTurnEndSeqForPresentation,
   projectConversationBranchPresentationV1,
   rootInputPresentationMetadata,
 } from "@/components/conversation/conversation-branch-presentation-v1";
@@ -28,21 +29,31 @@ import type {
   ComposerAttachmentSummary,
   ConversationMessage,
   ConversationSummary,
+  ProviderSummary,
 } from "@/types";
 
-// ConversationBranchRootInputGenerationActionV1 describes one exact edit or fork anchored by a V1 root input.
-// ConversationBranchRootInputGenerationActionV1 描述由 V1 根输入精确锚定的一次编辑或分叉。
-export interface ConversationBranchRootInputGenerationActionV1 {
-  // Requested immutable-generation operation.
-  // 请求的不变 generation 操作。
-  kind: "edit" | "fork";
-  // Canonical root-input sequence.
-  // 规范根输入序号。
-  seq: number;
-  // Persisted root-input text shown in the generation dialog.
-  // 在 generation 对话框中显示的持久化根输入正文。
-  text: string;
-}
+// ConversationBranchGenerationActionV1 keeps edit and fork anchors structurally distinct.
+// ConversationBranchGenerationActionV1 在结构上严格区分编辑锚点与分叉锚点。
+export type ConversationBranchGenerationActionV1 =
+  | {
+    // Edit replaces one canonical root input and restarts its Turn.
+    // 编辑替换一条规范根输入并重新启动其回合。
+    kind: "edit";
+    // Canonical root-input sequence.
+    // 规范根输入序号。
+    targetSeq: number;
+    // Persisted root-input text shown in the generation dialog.
+    // 在 generation 对话框中显示的持久化根输入正文。
+    text: string;
+  }
+  | {
+    // Fork retains one completed Turn and starts no successor Turn.
+    // 分叉保留一个完整回合，且不启动后继回合。
+    kind: "fork";
+    // Canonical terminal TurnStats seq of the retained Turn.
+    // 被保留回合的规范终态 TurnStats seq。
+    sourceTurnEndSeq: number;
+  };
 
 // ConversationBranchOptimisticUserInputV1 describes one process-local prompt before its canonical V1 event arrives.
 // ConversationBranchOptimisticUserInputV1 描述规范 V1 事件到达前的一条进程内提示词。
@@ -61,6 +72,9 @@ export interface ConversationBranchOptimisticUserInputV1 {
 // ConversationBranchWorkspaceV1Props binds the restored branch presentation to one authoritative V1 owner.
 // ConversationBranchWorkspaceV1Props 把恢复后的分支展示绑定到一个权威 V1 所有者。
 export interface ConversationBranchWorkspaceV1Props {
+  // Live provider/model catalog; absence represents an isolated host without configuration.
+  // 实时供应商和模型目录；缺失表示不带配置的隔离宿主。
+  providers?: readonly ProviderSummary[];
   // Exact selected persisted session identity.
   // 精确选中的持久化会话身份。
   sessionId: string;
@@ -79,9 +93,6 @@ export interface ConversationBranchWorkspaceV1Props {
   // Current reasoning display preference.
   // 当前思考展示偏好。
   reasoningDisplayMode: ThinkingDisplayMode;
-  // Current floating reasoning block identity, when one is visible.
-  // 当前可见浮动思考块的身份。
-  visibleThinkingOverlayBlockId?: string | null;
   // Whether the owning session is executing.
   // 所属会话当前是否正在执行。
   sessionRunning: boolean;
@@ -126,7 +137,7 @@ export interface ConversationBranchWorkspaceV1Props {
   onCopyText: (text: string) => Promise<void> | void;
   // Receives an edit or fork action anchored by a canonical root input.
   // 接收由规范根输入锚定的编辑或分叉操作。
-  onRootInputGenerationAction?: (action: ConversationBranchRootInputGenerationActionV1) => void;
+  onRootInputGenerationAction?: (action: ConversationBranchGenerationActionV1) => void;
   // Request-local reasoning status shown after durable events.
   // 显示在可靠事件之后的请求局部思考状态。
   transientReasoningStatus?: React.ReactNode;
@@ -163,8 +174,8 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
   // canonicalPresentation is a pure display projection and never becomes storage or RPC authority.
   // canonicalPresentation 是纯展示投影，绝不成为存储或 RPC 权威。
   const canonicalPresentation = React.useMemo(
-    () => projectConversationBranchPresentationV1(props.sessionId, events, resources, t),
-    [events, props.sessionId, resources, t],
+    () => projectConversationBranchPresentationV1(props.sessionId, events, resources, t, props.providers),
+    [events, props.sessionId, props.providers, resources, t],
   );
   // messages appends only the process-local optimistic bubble after canonical V1 facts.
   // messages 仅在规范 V1 事实之后追加进程内乐观气泡。
@@ -189,9 +200,8 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
     () => hiddenThinkingBlockIdsForDisplayMode(
       props.reasoningDisplayMode,
       renderItems,
-      props.visibleThinkingOverlayBlockId ?? null,
     ),
-    [props.reasoningDisplayMode, props.visibleThinkingOverlayBlockId, renderItems],
+    [props.reasoningDisplayMode, renderItems],
   );
 
   React.useEffect(() => {
@@ -215,20 +225,30 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
   const handleEditUserPrompt = React.useCallback((message: ConversationMessage): void => {
     const rootInput = rootInputPresentationMetadata(message);
     if (!rootInput || props.sessionRunning) return;
-    props.onRootInputGenerationAction?.({ kind: "edit", ...rootInput });
+    props.onRootInputGenerationAction?.({
+      kind: "edit",
+      targetSeq: rootInput.seq,
+      text: rootInput.text,
+    });
   }, [props.onRootInputGenerationAction, props.sessionRunning]);
 
-  // handleForkConversation maps the Turn-end fork icon back to its owning root input.
-  // handleForkConversation 把 Turn 末尾分叉图标映射回其所属根输入。
+  // handleForkConversation maps the Turn-end fork icon to the same Turn's terminal statistics seq.
+  // handleForkConversation 把 Turn 末尾分叉图标映射到同一回合的终态统计 seq。
   const handleForkConversation = React.useCallback((
     _conversationId: string,
     anchorMessageId?: string,
   ): boolean => {
     if (!anchorMessageId || props.sessionRunning) return false;
     const sourceMessage = canonicalPresentation.messages.find((message) => message.id === anchorMessageId);
-    const rootInput = rootInputPresentationMetadata(sourceMessage);
-    if (!rootInput || !props.onRootInputGenerationAction) return false;
-    props.onRootInputGenerationAction({ kind: "fork", ...rootInput });
+    const sourceTurnEndSeq = completedTurnEndSeqForPresentation(
+      canonicalPresentation.messages,
+      sourceMessage,
+    );
+    if (sourceTurnEndSeq === null || !props.onRootInputGenerationAction) return false;
+    props.onRootInputGenerationAction({
+      kind: "fork",
+      sourceTurnEndSeq,
+    });
     return true;
   }, [canonicalPresentation.messages, props.onRootInputGenerationAction, props.sessionRunning]);
 

@@ -163,6 +163,18 @@ pub(crate) struct SessionConditionalMutationReceipt<T> {
     pub(crate) flush_reason: SessionFlushReason,
 }
 
+/// Atomic choice between closing a successful turn and consuming a newly arrived child result.
+/// 关闭成功回合与消费新到达子任务结果之间的原子选择。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SuccessfulTurnSettlement {
+    /// The logical turn closed and selected its normal successor.
+    /// 逻辑回合已关闭并选择正常后继。
+    Completed(TurnCompletionTransition),
+    /// A durable return keeps the logical turn open for one more physical request.
+    /// 可靠回流保持逻辑回合开放，以便继续一次物理请求。
+    SubagentReturn,
+}
+
 /// Immutable V1 ledger projection captured by the unique session owner before API start.
 /// 在 API 启动前由唯一会话 owner 捕获的不可变 V1 账本投影。
 #[derive(Debug, Clone)]
@@ -1929,29 +1941,41 @@ impl SessionHandle {
     ///
     /// # Parameters
     /// 参数
-    /// `duration_ms` is the complete logical Turn duration and `now_ms` is the
-    /// final assistant observation time.
-    /// `duration_ms` 是完整逻辑回合耗时，`now_ms` 是最终 assistant 观测时间。
+    /// `now_ms` is the final assistant observation time.
+    /// `now_ms` 是最终 assistant 观测时间。
     ///
     /// # Returns
     /// 返回值
-    /// Returns only after the Turn boundary, unique statistics, and optional queued-user or
-    /// Goal-continuation successor are published by the same durable revision.
-    /// 仅在 Turn 边界、唯一统计及可选的排队用户或 Goal 后继由同一可靠修订发布后返回。
+    /// Returns a pending-child decision without closure, or one durable closure and successor receipt.
+    /// 返回不闭合回合的待处理子任务决策，或一份可靠回合闭合及后继回执。
     pub(crate) async fn complete_successful_turn(
         self: &Arc<Self>,
         now_ms: i64,
-    ) -> Result<SessionMutationReceipt<TurnCompletionTransition>, SessionRuntimeError> {
+    ) -> Result<SessionConditionalMutationReceipt<SuccessfulTurnSettlement>, SessionRuntimeError>
+    {
         self.clone()
-            .mutate_durable_async(
+            .mutate_durable_if_changed_async(
                 SessionMutationAdmission::ExistingTurn,
                 SessionFlushReason::TurnCompleted,
                 move |document| {
+                    // Check under the same writer lock as closure, so no return can land between the two.
+                    // 在关闭事务的同一写锁下检查，防止回流落在检查与关闭之间。
+                    if document.pending_subagent_return_dispatch()?.is_some() {
+                        return Ok(SessionMutationChange::Unchanged(
+                            SuccessfulTurnSettlement::SubagentReturn,
+                        ));
+                    }
                     let expected_turn_id = document
                         .active_turn()
                         .map(|turn| turn.turn_id)
                         .ok_or(DomainError::NoActiveTurn)?;
-                    document.complete_turn_and_select_successor(expected_turn_id, now_ms)
+                    document
+                        .complete_turn_and_select_successor(expected_turn_id, now_ms)
+                        .map(|transition| {
+                            SessionMutationChange::Changed(SuccessfulTurnSettlement::Completed(
+                                transition,
+                            ))
+                        })
                 },
             )
             .await
@@ -3209,6 +3233,9 @@ struct SessionRuntimeRegistryState {
 /// 竞争加载同一精确会话的调用方共享的等待门。
 #[derive(Default)]
 struct SessionLoadGate {
+    /// Configuration-only reservations publish no handle; waiting loaders must retry admission.
+    /// 纯配置预留不发布句柄；等待的加载器必须重新申请准入。
+    retry_after_completion: bool,
     /// Whether the unique loader has finished its publication attempt.
     /// 唯一加载器是否已完成发布尝试。
     completed: Mutex<bool>,
@@ -3501,28 +3528,31 @@ impl SessionRuntimeRegistry {
         session_id: SessionId,
         loader: impl FnOnce() -> Result<Arc<SessionHandle>, SessionRuntimeError>,
     ) -> Result<Arc<SessionHandle>, SessionRuntimeError> {
-        let (gate, owns_load) = {
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| SessionRuntimeError::RegistryLockPoisoned)?;
-            if let Some(handle) = state.handles.get(&session_id) {
-                return Ok(Arc::clone(handle));
-            }
-            if state.shutting_down {
-                return Err(SessionRuntimeError::ShuttingDown);
-            }
-            match state.loading.get(&session_id) {
-                Some(gate) => (Arc::clone(gate), false),
-                None => {
-                    let gate = Arc::new(SessionLoadGate::default());
-                    state.loading.insert(session_id, Arc::clone(&gate));
-                    (gate, true)
+        let gate = loop {
+            let (gate, owns_load) = {
+                let mut state = self
+                    .state
+                    .lock()
+                    .map_err(|_| SessionRuntimeError::RegistryLockPoisoned)?;
+                if let Some(handle) = state.handles.get(&session_id) {
+                    return Ok(Arc::clone(handle));
                 }
-            }
-        };
+                if state.shutting_down {
+                    return Err(SessionRuntimeError::ShuttingDown);
+                }
+                match state.loading.get(&session_id) {
+                    Some(gate) => (Arc::clone(gate), false),
+                    None => {
+                        let gate = Arc::new(SessionLoadGate::default());
+                        state.loading.insert(session_id, Arc::clone(&gate));
+                        (gate, true)
+                    }
+                }
+            };
 
-        if !owns_load {
+            if owns_load {
+                break gate;
+            }
             let mut completed = gate
                 .completed
                 .lock()
@@ -3534,10 +3564,13 @@ impl SessionRuntimeRegistry {
                     .map_err(|_| SessionRuntimeError::RegistryLockPoisoned)?;
             }
             drop(completed);
+            if gate.retry_after_completion {
+                continue;
+            }
             return self
                 .get(session_id)
                 .map_err(|_| SessionRuntimeError::ConcurrentSessionLoadFailed(session_id));
-        }
+        };
 
         let loaded = loader().and_then(|handle| {
             let actual = handle.session_id();
@@ -3574,6 +3607,68 @@ impl SessionRuntimeRegistry {
         gate.changed.notify_all();
         drop(completed);
         publication.and(loaded)
+    }
+
+    /// Executes configuration access through the resident owner or an exclusive unloaded slot.
+    /// 通过常驻 owner 或独占的未加载槽执行配置访问。
+    /// `session_id` selects one exact owner; `resident` and `unloaded` return the same result type.
+    /// `session_id` 选择精确 owner；`resident` 与 `unloaded` 返回相同结果类型。
+    /// Returns the callback result without invoking a loader or propagating Turn restoration errors.
+    /// 返回回调结果，不调用加载器，也不传播回合恢复错误。
+    pub(crate) fn with_configuration_access<T>(
+        &self,
+        session_id: SessionId,
+        resident: impl FnOnce(&SessionHandle) -> Result<T, String>,
+        unloaded: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        loop {
+            // Admission shares the creation/load map so a cold write cannot race a new owner.
+            // 准入共用创建/加载映射，确保冷写入不会与新 owner 竞争。
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| SessionRuntimeError::RegistryLockPoisoned.to_string())?;
+            if state.shutting_down {
+                return Err(SessionRuntimeError::ShuttingDown.to_string());
+            }
+            if let Some(handle) = state.handles.get(&session_id).cloned() {
+                drop(state);
+                return resident(&handle);
+            }
+            if let Some(gate) = state.loading.get(&session_id).cloned() {
+                drop(state);
+                // Failed runtime loads do not invalidate independent configuration metadata.
+                // 运行时加载失败并不使独立配置元数据失效。
+                let mut completed = gate
+                    .completed
+                    .lock()
+                    .map_err(|_| SessionRuntimeError::RegistryLockPoisoned.to_string())?;
+                while !*completed {
+                    completed = gate
+                        .changed
+                        .wait(completed)
+                        .map_err(|_| SessionRuntimeError::RegistryLockPoisoned.to_string())?;
+                }
+                continue;
+            }
+            // The RAII reservation wakes waiters even if configuration I/O fails.
+            // 即使配置 I/O 失败，RAII 预留也会唤醒等待方。
+            let gate = Arc::new(SessionLoadGate {
+                retry_after_completion: true,
+                ..Default::default()
+            });
+            state.loading.insert(session_id, Arc::clone(&gate));
+            let reservation = SessionCreationReservation {
+                registry: self,
+                session_id,
+                gate,
+                published: false,
+            };
+            drop(state);
+            let result = unloaded();
+            drop(reservation);
+            return result;
+        }
     }
 
     /// Closes root admission and returns a stable handle snapshot for shutdown.
@@ -6100,6 +6195,101 @@ mod tests {
             assert!(Arc::ptr_eq(&caller.join().unwrap(), &handle));
         }
         assert_eq!(load_count.load(Ordering::SeqCst), 1);
+    }
+
+    /// A waiting physical loader resumes after metadata-only publication without a false load failure.
+    /// 等待的物理加载器在纯元数据发布后继续，不产生虚假的加载失败。
+    #[test]
+    fn capability_metadata_serializes_cold_save_and_physical_load() {
+        // Channels hold the metadata writer at a deterministic pre-publication boundary.
+        // 通道将元数据写入器固定在确定性的发布前边界。
+        let (_, handle) = recording_handle();
+        let session_id = handle.session_id();
+        let registry = Arc::new(SessionRuntimeRegistry::default());
+        let published = Arc::new(AtomicUsize::new(0));
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let writer_registry = registry.clone();
+        let writer_published = published.clone();
+        let writer = thread::spawn(move || {
+            writer_registry.with_configuration_access(
+                session_id,
+                |_| panic!("cold configuration must not have a resident owner"),
+                || {
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                    writer_published.store(1, Ordering::SeqCst);
+                    Ok(())
+                },
+            )
+        });
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let loader_registry = registry.clone();
+        let loader_handle = handle.clone();
+        let loader = thread::spawn(move || {
+            loader_registry.get_or_load(session_id, || {
+                assert_eq!(published.load(Ordering::SeqCst), 1);
+                Ok(loader_handle)
+            })
+        });
+        // Three references prove the loader acquired the same gate before it is released.
+        // 三个引用证明加载器在门控释放前已取得同一门控。
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if Arc::strong_count(&registry.state.lock().unwrap().loading[&session_id]) >= 3 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "loader did not reach configuration gate"
+            );
+            thread::yield_now();
+        }
+        release_tx.send(()).unwrap();
+        writer.join().unwrap().unwrap();
+        assert!(Arc::ptr_eq(&loader.join().unwrap().unwrap(), &handle));
+        assert!(registry.state.lock().unwrap().loading.is_empty());
+    }
+
+    /// Failed metadata publication releases admission and never poisons the session registry.
+    /// 元数据发布失败会释放准入，绝不污染会话注册表。
+    #[test]
+    fn capability_metadata_failure_releases_unloaded_slot() {
+        let (_, handle) = recording_handle();
+        let session_id = handle.session_id();
+        let registry = SessionRuntimeRegistry::default();
+        assert!(
+            registry
+                .with_configuration_access::<()>(
+                    session_id,
+                    |_| panic!("unexpected resident"),
+                    || Err(String::from("atomic write failed"))
+                )
+                .is_err()
+        );
+        assert!(registry.state.lock().unwrap().loading.is_empty());
+        assert_eq!(
+            registry
+                .with_configuration_access(session_id, |_| panic!("unexpected resident"), || Ok(42))
+                .unwrap(),
+            42
+        );
+        assert!(Arc::ptr_eq(
+            &registry
+                .get_or_load(session_id, || Ok(handle.clone()))
+                .unwrap(),
+            &handle
+        ));
+        assert_eq!(
+            registry
+                .with_configuration_access(
+                    session_id,
+                    |_| Ok(43),
+                    || panic!("must use resident owner")
+                )
+                .unwrap(),
+            43
+        );
     }
 
     /// The physical API start is recoverable before any Provider output exists.

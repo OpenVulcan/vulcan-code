@@ -86,27 +86,27 @@ pub(crate) async fn service_edit_conversation_generation_v1(
     })
 }
 
-/// Creates or exactly replays one immutable V1 fork and starts its retained root Turn once.
-/// 创建或精确重放一个不可变 V1 分叉，并且只启动一次其保留的根回合。
+/// Creates or exactly replays one immutable V1 fork at a completed-Turn boundary.
+/// 在完整回合结束边界创建或精确重放一个不可变 V1 分叉。
 ///
 /// # Parameters
 /// 参数
-/// `request` carries the immutable parent generation, target seq, stable child id, and child title.
-/// `request` 携带不可变父 generation、目标 seq、稳定子会话 ID 与子会话标题。
+/// `request` carries the immutable parent generation, terminal TurnStats seq, stable child id, and child title.
+/// `request` 携带不可变父 generation、终态 TurnStats seq、稳定子会话 ID 与子会话标题。
 ///
 /// # Returns
 /// 返回值
-/// Returns the exact child generation and dispatch state after indexed publication or immutable retry.
-/// 在索引发布或不可变重试后返回精确的子 generation 与分发状态。
+/// Returns the exact dormant child generation after indexed publication or immutable retry.
+/// 在索引发布或不可变重试后返回精确的静止子 generation。
 pub(crate) async fn service_fork_conversation_generation_v1(
-    app: ServiceEventEmitter,
+    _app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: ConversationForkGenerationV1Request,
 ) -> Result<ConversationForkGenerationV1Response, String> {
     let source_session_id = parse_session_id(&request.source_session_id)?;
     let child_session_id = parse_session_id(&request.child_session_id)?;
-    let target_seq = checked_seq(request.target_seq, "targetSeq")?;
-    let (controller, agent_runtime, _, _, _) = runtime_parts_from_state(&state)?;
+    let source_turn_end_seq = checked_seq(request.source_turn_end_seq, "sourceTurnEndSeq")?;
+    let (controller, _, _, _, _) = runtime_parts_from_state(&state)?;
     let registry = session_registry_from_state(&state)?;
     let created = create_or_get_forked_session_v1(
         &controller,
@@ -116,25 +116,17 @@ pub(crate) async fn service_fork_conversation_generation_v1(
             expected_source_generation: request.expected_window_generation,
             child_session_id,
             title: request.title,
-            target_seq,
+            source_turn_end_seq,
             now_ms: current_v1_goal_unix_millis()?,
         },
     )
     .await
     .map_err(|error| error.to_string())?;
-    // The child is already durable and indexed, but physical admission consumes the retained
-    // process projection. Refresh that exact child before asking the admission adapter to start it.
-    // 子会话已可靠落盘并进入索引，但物理准入消费保留的进程投影；因此必须先刷新该精确子会话，再请求准入适配器启动。
+    // The child is durable and indexed with no open Turn. Refresh only the selected Workbench
+    // projection; the next user submission is the sole authority allowed to start new work.
+    // 子会话已可靠落盘并进入索引，且不存在开放回合。这里只刷新选中的工作台投影；下一次用户提交
+    // 是唯一允许启动新工作的权威。
     refresh_workbench_snapshot_for_selected_session(state.clone(), child_session_id).await?;
-    let dispatch_started = start_exact_generation_root(
-        &app,
-        &state,
-        &controller,
-        &agent_runtime,
-        created.handle.as_ref(),
-        created.source_target_seq,
-    )
-    .await?;
     let (window_generation, document_revision) = created
         .handle
         .read(|document| {
@@ -148,10 +140,9 @@ pub(crate) async fn service_fork_conversation_generation_v1(
         source_session_id: source_session_id.to_string(),
         child_session_id: child_session_id.to_string(),
         created: created.created,
-        source_target_seq: created.source_target_seq.value(),
+        source_turn_end_seq: created.source_turn_end_seq.value(),
         window_generation,
         document_revision,
-        dispatch_started,
     })
 }
 

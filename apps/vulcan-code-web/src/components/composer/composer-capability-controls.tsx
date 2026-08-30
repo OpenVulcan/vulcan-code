@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   FileSearch,
   Image,
+  LoaderCircle,
   LockKeyhole,
   Music,
   Search,
@@ -48,6 +49,7 @@ import {
 } from "@/lib/provider-tool-capabilities";
 import {
   loadPublicAiSessionProviderToolSelections,
+  rebuildPublicAiSessionProviderToolSelections,
   loadPublicAiSettings,
   savePublicAiSessionProviderToolSelections,
 } from "@/service/settings-actions-service";
@@ -475,9 +477,31 @@ export function ComposerAiCapabilityControl(props: {
   const [baselineSignature, setBaselineSignature] = React.useState("{}");
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  // loadState binds availability to its owning conversation; stale settings must never be saved to another session.
+  // loadState 将可用性绑定到所属会话；旧设置绝不能保存到另一个会话。
+  const [loadState, setLoadState] = React.useState<{
+    conversationId: string | null;
+    status: "loading" | "ready" | "failed";
+  }>({ conversationId: props.conversationId, status: "loading" });
+  // reloadVersion retries the same authoritative reads without replacing session settings with empty defaults.
+  // reloadVersion 重试相同的权威读取，不用空默认值替换会话设置。
+  const [reloadVersion, setReloadVersion] = React.useState(0);
+  // saveGeneration rejects late save responses after the settings owner or load generation changes.
+  // saveGeneration 拒绝设置归属或加载代次变化后迟到的保存响应。
+  const saveGeneration = React.useRef(0);
+  // loadStatus invalidates the previous owner synchronously, before the next effect can start.
+  // loadStatus 在下一次 effect 启动前同步使上一个会话的状态失效。
+  const loadStatus = loadState.conversationId === props.conversationId ? loadState.status : "loading";
+  // settingsReady is required both by the UI and the save callback to prevent destructive empty writes after read errors.
+  // settingsReady 同时约束界面与保存回调，防止读取失败后用空配置覆盖原设置。
+  const settingsReady = loadStatus === "ready";
 
   React.useEffect(() => {
     let active = true;
+    saveGeneration.current += 1;
+    setSaving(false);
+    setLoadState({ conversationId: props.conversationId, status: "loading" });
+    setError(null);
     void Promise.all([
       loadPublicAiSettings(),
       props.conversationId
@@ -512,18 +536,21 @@ export function ComposerAiCapabilityControl(props: {
           capabilities.includes(current) ? current : capabilities[0] ?? "web_search"
         ));
         setError(null);
+        setLoadState({ conversationId: props.conversationId, status: "ready" });
       })
       .catch((reason) => {
         if (active) {
           setError(errorMessage(reason));
+          setLoadState({ conversationId: props.conversationId, status: "failed" });
         }
       });
     return () => {
       active = false;
+      saveGeneration.current += 1;
     };
-  }, [open, props.conversationId, props.draftSettings, props.onDraftSettingsChange]);
+  }, [open, props.conversationId, props.draftSettings, props.onDraftSettingsChange, reloadVersion]);
 
-  const capabilities = snapshot ? orderedProviderToolCapabilities(snapshot) : [];
+  const capabilities = settingsReady && snapshot ? orderedProviderToolCapabilities(snapshot) : [];
   const capabilityTargets = snapshot?.providerToolTargets.filter(
     (target) => target.target.contract.capability === selectedCapability
       && (!isModelExtensionCapability(selectedCapability)
@@ -560,12 +587,15 @@ export function ComposerAiCapabilityControl(props: {
   // enabledCount 合并直连已启用能力与非空扩展集合。
   const enabledCount = draft.enabledCapabilities.length + Object.values(draft.extensionTargetSets)
     .filter((selections) => selections && selections.length > 0).length;
-  const hasUnsavedChanges =
-    providerToolSettingsSignature(draft) !== baselineSignature;
+  const hasUnsavedChanges = settingsReady
+    && providerToolSettingsSignature(draft) !== baselineSignature;
   React.useEffect(() => {
-    props.onConflictChange?.(conflicts.length > 0);
-  }, [conflicts.length, props.onConflictChange]);
+    props.onConflictChange?.(!settingsReady || conflicts.length > 0);
+  }, [settingsReady, conflicts.length, props.onConflictChange]);
   const save = React.useCallback(async () => {
+    if (!settingsReady || saving) {
+      return;
+    }
     if (!props.conversationId) {
       props.onDraftSettingsChange?.(draft);
       setBaselineSignature(providerToolSettingsSignature(draft));
@@ -573,6 +603,9 @@ export function ComposerAiCapabilityControl(props: {
       return;
     }
     setSaving(true);
+    // generation pins this response to the exact settings view that initiated the save.
+    // generation 将响应固定到发起保存的精确设置视图。
+    const generation = ++saveGeneration.current;
     try {
       const next = await savePublicAiSessionProviderToolSelections({
         conversationId: props.conversationId,
@@ -581,6 +614,9 @@ export function ComposerAiCapabilityControl(props: {
         extensionTargetSets: draft.extensionTargetSets,
         mediaUnderstandingModes: draft.mediaUnderstandingModes,
       });
+      if (generation !== saveGeneration.current) {
+        return;
+      }
       const nextDraft = {
         enabledCapabilities: next.enabledCapabilities,
         selections: next.selections,
@@ -592,15 +628,48 @@ export function ComposerAiCapabilityControl(props: {
       setError(null);
       setOpen(false);
     } catch (reason) {
-      setError(errorMessage(reason));
+      if (generation === saveGeneration.current) {
+        setError(errorMessage(reason));
+      }
     } finally {
-      setSaving(false);
+      if (generation === saveGeneration.current) {
+        setSaving(false);
+      }
     }
   }, [
     draft,
+    settingsReady,
+    saving,
     props.conversationId,
     props.onDraftSettingsChange,
   ]);
+
+  // Rebuild only the selected conversation's addon after an explicit click; ignore stale responses.
+  // 仅在显式点击后重建当前会话附加项；忽略过期响应。
+  // Returns after the write, then reloads authoritative settings without closing the recovery view.
+  // 写入完成后返回，并重新加载权威设置，不关闭恢复视图。
+  const rebuild = React.useCallback(async () => {
+    if (!props.conversationId || saving) {
+      return;
+    }
+    const generation = ++saveGeneration.current;
+    setSaving(true);
+    setError(null);
+    try {
+      await rebuildPublicAiSessionProviderToolSelections(props.conversationId);
+      if (generation === saveGeneration.current) {
+        setReloadVersion((current) => current + 1);
+      }
+    } catch (reason) {
+      if (generation === saveGeneration.current) {
+        setError(errorMessage(reason));
+      }
+    } finally {
+      if (generation === saveGeneration.current) {
+        setSaving(false);
+      }
+    }
+  }, [props.conversationId, saving]);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -613,7 +682,9 @@ export function ComposerAiCapabilityControl(props: {
               type="button"
             >
               <span className="composer-select-icon">
-                {conflicts.length ? <AlertTriangle size={15} /> : <SlidersHorizontal size={15} />}
+                {loadStatus === "loading" ? <LoaderCircle size={15} className="animate-spin" />
+                  : loadStatus === "failed" || conflicts.length ? <AlertTriangle size={15} />
+                    : <SlidersHorizontal size={15} />}
               </span>
               <span className="composer-select-copy">
                 <span className="composer-capability-icon-row">
@@ -639,7 +710,8 @@ export function ComposerAiCapabilityControl(props: {
         <TooltipContent className="composer-control-tooltip" side="top">
           <strong>{t("composer.capability.tooltipTitle")}</strong>
           <span>
-            {conflicts.length ? t("composer.capability.conflict.tooltip") : `${enabledCount} / ${capabilities.length}`}
+            {!settingsReady ? t(loadStatus === "failed" ? "composer.capability.loadFailed" : "composer.capability.loading")
+              : conflicts.length ? t("composer.capability.conflict.tooltip") : `${enabledCount} / ${capabilities.length}`}
           </span>
         </TooltipContent>
       </Tooltip>
@@ -650,14 +722,29 @@ export function ComposerAiCapabilityControl(props: {
             {t("composer.capability.dialogDescription")}
           </DialogDescription>
         </DialogHeader>
-        {error ? <p className="settings-muted-line settings-error-text">{error}</p> : null}
-        {conflicts.length ? (
+        {loadState.conversationId === props.conversationId && error
+          ? <p className="settings-muted-line settings-error-text" role="alert">{error}</p> : null}
+        {loadStatus === "loading" ? <p role="status">{t("composer.capability.loading")}</p> : null}
+        {loadStatus === "failed" ? (
+          <div>
+            {props.conversationId ? <p className="settings-muted-line">{t("composer.capability.rebuildHint")}</p> : null}
+            <div className="flex gap-2">
+              <button className="skill-action-button" type="button" disabled={saving} onClick={() => setReloadVersion((current) => current + 1)}>
+                {t("composer.capability.retry")}
+              </button>
+              {props.conversationId ? <button className="skill-action-button" type="button" disabled={saving} onClick={() => void rebuild()}>
+                {t(saving ? "composer.capability.rebuilding" : "composer.capability.rebuild")}
+              </button> : null}
+            </div>
+          </div>
+        ) : null}
+        {settingsReady && conflicts.length ? (
           <div className="composer-capability-conflict-banner">
             <AlertTriangle aria-hidden="true" size={16} />
             <span>{t("composer.capability.conflict.banner")}</span>
           </div>
         ) : null}
-        <div className="composer-capability-dialog-grid">
+        {settingsReady ? <div className="composer-capability-dialog-grid">
           <aside className="composer-capability-dialog-left">
             {capabilities.map((capability) => {
               // directMode controls whether the capability uses one selected route and a switch.
@@ -1000,20 +1087,22 @@ export function ComposerAiCapabilityControl(props: {
               </div>
             )}
           </section>
-        </div>
+        </div> : null}
         <DialogFooter className="composer-capability-dialog-footer">
           <span className="composer-capability-dialog-save-hint">
-            {hasUnsavedChanges
+            {!settingsReady
+              ? t(loadStatus === "failed" ? "composer.capability.loadFailed" : "composer.capability.loading")
+              : hasUnsavedChanges
               ? t("composer.capability.saveHint.unsaved")
               : t("composer.capability.saveHint.clean")}
           </span>
           <button
             className="skill-action-button"
-            disabled={saving || !hasUnsavedChanges || conflicts.length > 0}
+            disabled={!settingsReady || saving || !hasUnsavedChanges || conflicts.length > 0}
             onClick={() => void save()}
             type="button"
           >
-            {saving
+            {saving && settingsReady
               ? t("composer.capability.save.saving")
               : t("composer.capability.save")}
           </button>

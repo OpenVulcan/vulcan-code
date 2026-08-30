@@ -937,6 +937,168 @@ fn goal_lifecycle_transitions_publish_complete_fact_groups() -> Result<(), Domai
     Ok(())
 }
 
+/// Verifies blocked goals remain stopped until explicit resume opens a continuation without another user prompt.
+/// 验证受阻目标保持停止，直到显式恢复开启续跑，无需另一条用户提示词。
+/// Parameters: none. Returns: success when the blocked, resume, and next-API boundaries satisfy the domain contract.
+/// 参数：无。返回值：受阻、恢复与下一次 API 边界满足领域契约时成功。
+#[test]
+fn blocked_goal_resumes_from_play_into_a_new_continuation() -> Result<(), DomainError> {
+    // document models a goal that blocks after its third step while preserving the completed history.
+    // document 模拟第三步后受阻的目标，同时保留已完成历史。
+    let mut document = new_document();
+    document.create_goal("Finish five steps", Some(20_000), "Finish five steps", T0)?;
+    // blocked_turn_id identifies the run that must not automatically continue after blocking.
+    // blocked_turn_id 标识受阻后不得自动续跑的回合。
+    let blocked_turn_id = document.active_turn().expect("created goal turn").turn_id;
+    // api belongs to the physical request that reports the blocking condition.
+    // api 属于报告阻碍条件的物理请求。
+    let api = document.start_api(
+        ApiPurposeKind::MainGeneration,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        T0 + 1,
+    )?;
+    document.append_assistant_text(api, "Step 3/5", AssistantSemanticStatus::Completed, T0 + 2)?;
+    document.block_goal("goal_blocked", T0 + 3)?;
+    complete_ok(&mut document, api, None, T0 + 4)?;
+    assert_eq!(
+        document
+            .complete_turn_and_select_successor(blocked_turn_id, T0 + 5)?
+            .successor,
+        TurnSuccessor::None,
+    );
+    assert_eq!(document.metadata.mode.goal.state, GoalState::Blocked);
+    assert!(document.metadata.open_turn_start_seq.is_none());
+
+    // blocked_snapshot proves an incorrect pause command remains rejected without erasing the blocked reason.
+    // blocked_snapshot 证明错误暂停命令仍被拒绝，并且不会抹掉受阻原因。
+    let blocked_snapshot = document.clone();
+    assert!(document.pause_goal("pause again", T0 + 6).is_err());
+    assert_eq!(document, blocked_snapshot);
+    // resumed is the same transition selected by the WebUI's explicit active status request.
+    // resumed 是 WebUI 显式请求 active 状态时选择的同一个转换。
+    let resumed = document.resume_goal(
+        "Finish five steps",
+        Some(20_000),
+        "Finish five steps",
+        T0 + 7,
+    )?;
+    // continuation is a new goal-owned turn, never a replay of the completed user prompt.
+    // continuation 是新的目标所属回合，绝不是重放已经完成的用户提示词。
+    let continuation = document.active_turn().expect("resumed goal turn");
+    assert_eq!(Some(continuation.turn_id), resumed.continuation_turn_id);
+    assert_ne!(continuation.turn_id, blocked_turn_id);
+    assert_eq!(continuation.origin, TurnOrigin::GoalContinuation);
+    assert!(!continuation.closed);
+    assert_eq!(document.metadata.mode.goal.state, GoalState::Active);
+    assert_eq!(document.metadata.mode.goal.objective, "Finish five steps");
+    assert_eq!(document.metadata.mode.goal.budget_tokens, Some(20_000));
+    assert!(
+        !document
+            .events()
+            .iter()
+            .any(|event| matches!(event.event, EventBody::UserInput(_)))
+    );
+    assert!(
+        document
+            .start_api(
+                ApiPurposeKind::MainGeneration,
+                ApiRequestSnapshot::new("openai", "gpt-5"),
+                T0 + 8,
+            )
+            .is_ok()
+    );
+    Ok(())
+}
+
+/// Replays goal wall time across edits, pauses, blocked intervals, and a process restart without counting offline time.
+/// 跨编辑、暂停、受阻及进程重启重放目标墙钟时长，不计入离线时间。
+#[test]
+fn goal_work_clock_survives_pause_block_and_restart() -> Result<(), DomainError> {
+    use crate::v1::goal::goal_work_time;
+    let mut document = new_document();
+    document.create_goal("work", None, "work", T0)?;
+    let origin = document.metadata.mode.goal.origin_seq;
+    document.pause_goal("paused", T0 + 2_650)?;
+    document.update_goal_definition("edited", None, "edited", T0 + 50_000)?;
+    assert_eq!(goal_work_time(&document).unwrap().elapsed_ms, 2_650);
+    document.resume_goal("edited", None, "edited", T0 + 100_000)?;
+    document.block_goal("goal_blocked", T0 + 103_250)?;
+    assert_eq!(goal_work_time(&document).unwrap().elapsed_ms, 5_900);
+    document.resume_goal("edited", None, "edited", T0 + 200_000)?;
+    assert_eq!(document.metadata.mode.goal.origin_seq, origin);
+    // A real API-start fact supplies the final durable checkpoint before the crash.
+    // 真实 API 开始事实提供闪退前最后一个持久化检查点。
+    document.start_api(
+        ApiPurposeKind::MainGeneration,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        T0 + 203_100,
+    )?;
+    document.project_persisted_interruptions()?;
+    assert_eq!(document.metadata.mode.goal.state, GoalState::Paused);
+    assert!(document.active_turn().is_none_or(|turn| turn.closed));
+    assert_eq!(goal_work_time(&document).unwrap().elapsed_ms, 9_000);
+    assert_eq!(document.project_persisted_interruptions()?, 0);
+    // Loading much later still replays the stopped timestamp, not the time of reopening.
+    // 很久之后加载仍重放停止时间戳，而不是重新打开的时间。
+    let mut restored = SessionDocument::from_parts(
+        document.metadata.clone(),
+        initialized_runtime_lock(),
+        Vec::new(),
+        Vec::new(),
+        document.events().to_vec(),
+    )?;
+    assert_eq!(goal_work_time(&restored).unwrap().elapsed_ms, 9_000);
+    let resumed = restored.resume_goal("edited", None, "edited", T0 + 1_000_000)?;
+    assert!(resumed.continuation_turn_id.is_some());
+    restored.complete_goal(T0 + 1_001_000)?;
+    assert_eq!(goal_work_time(&restored).unwrap().elapsed_ms, 10_000);
+    Ok(())
+}
+
+/// Recovering between requests pauses a goal too, and closed-turn updates remain reloadable.
+/// 请求间隙恢复也会暂停目标，已闭合回合后的状态更新仍可重载。
+#[test]
+fn goal_restart_between_requests_pauses_and_remains_reloadable() -> Result<(), DomainError> {
+    let mut document = new_document();
+    document.create_goal("work", None, "work", T0)?;
+    assert_eq!(document.project_persisted_interruptions()?, 4);
+    assert_eq!(document.metadata.mode.goal.state, GoalState::Paused);
+    document.update_goal_definition("edited", None, "edited", T0 + 5)?;
+    document.complete_goal(T0 + 10)?;
+    document.clear_goal("clear", T0 + 15)?;
+    SessionDocument::from_parts(
+        document.metadata.clone(),
+        initialized_runtime_lock(),
+        Vec::new(),
+        Vec::new(),
+        document.events().to_vec(),
+    )?;
+    Ok(())
+}
+
+/// Legacy paused goals whose origin was rewritten must not gain working time from unrelated metadata updates.
+/// 旧版暂停期间改写过起点的目标，不得因无关元数据更新增加工作时长。
+#[test]
+fn legacy_paused_goal_clock_never_extrapolates() -> Result<(), DomainError> {
+    let mut document = new_document();
+    document.create_goal("work", None, "work", T0)?;
+    document.pause_goal("paused", T0 + 1_000)?;
+    let edited = document
+        .update_goal_definition("edited", None, "edited", T0 + 100_000)?
+        .unwrap();
+    // Older resume/edit implementations moved origin_seq to the saved context even while paused.
+    // 旧版恢复、编辑实现即使暂停也会将 origin_seq 移至保存上下文。
+    document.metadata.mode.goal.origin_seq = edited.context_seq;
+    document.metadata.updated_at_ms = T0 + 10_000_000;
+    assert_eq!(
+        crate::v1::goal::goal_work_time(&document)
+            .unwrap()
+            .elapsed_ms,
+        0
+    );
+    Ok(())
+}
+
 /// Saving over a completed Goal creates a fresh active identity and resets its accounting origin.
 /// 在已完成 Goal 上保存会创建新的活动身份，并重置其记账起点。
 #[test]
@@ -3738,6 +3900,40 @@ fn identical_pending_request_clears_without_switch_notice() -> Result<(), Domain
     Ok(())
 }
 
+/// Initializes the first route without appending a misleading model-switch event.
+/// 初始化首次路线，不追加误导的模型切换事件。
+/// Parameters: none. Returns: success after checking metadata and unchanged event history.
+/// 参数：无。返回值：检查元数据与未改变的事件历史后返回成功。
+#[test]
+fn initial_pending_request_initializes_without_switch_notice() -> Result<(), DomainError> {
+    // doc starts with the production default empty active route.
+    // doc 使用生产默认的空活动路线初始化。
+    let mut doc = new_document();
+    doc.set_pending_request(
+        PendingRequestConfig {
+            provider: Some("configured-provider".to_string()),
+            connection_id: Some("configured-account".to_string()),
+            model: Some("configured-model".to_string()),
+            thinking_level: Some("high".to_string()),
+            temperature: None,
+            set_at_ms: T0,
+        },
+        T0,
+    )?;
+    assert_eq!(doc.promote_pending_request(None, T0 + 1)?, None);
+    assert_eq!(
+        doc.metadata.config.active_request.provider.as_deref(),
+        Some("configured-provider")
+    );
+    assert_eq!(
+        doc.metadata.config.active_request.model.as_deref(),
+        Some("configured-model")
+    );
+    assert!(doc.metadata.config.pending_request.is_none());
+    assert!(doc.events().is_empty());
+    Ok(())
+}
+
 /// A real safe-boundary request switch atomically updates metadata and appends
 /// the exact permanent before/after request-config event.
 /// 真实安全边界请求切换会原子更新 metadata，并追加精确的永久请求配置前后值事件。
@@ -5585,6 +5781,178 @@ fn subagent_return_round_trips_and_exact_retry_is_idempotent() -> Result<(), Dom
     Ok(())
 }
 
+/// A late return opens a non-user successor without altering the closed parent history.
+/// 迟到回流开启非用户后继，不改变已关闭的父回合历史。
+/// Parameters: none. Returns: domain errors, with persistence and idempotency assertions.
+/// 参数：无。返回值：领域错误，并断言持久化与幂等性。
+#[test]
+fn subagent_return_after_parent_completion_opens_durable_successor() -> Result<(), DomainError> {
+    // input is built from the exact durable child final answer, not a synthetic root prompt.
+    // input 来源于精确可靠的子任务最终回答，而不是合成根提示词。
+    let (child, child_turn_id, source_assistant_text_seq) = durable_child_return_fixture()?;
+    let input = child.build_subagent_return_input(SubagentReturnBuildRequest {
+        final_turn_id: child_turn_id,
+        child_task_id: SubagentTaskId::try_new("late-child")?,
+        source_assistant_text_seq,
+    })?;
+    // parent has already finished the user turn before the child's final result arrives.
+    // parent 在子任务最终结果到达前已经结束用户回合。
+    let mut parent = new_document();
+    let original_turn = parent.submit_root_input_fixture("delegate", Vec::new(), T0)?;
+    parent.close_turn(TurnOutcome::Completed, 1, T0 + 1)?;
+    let original_events = parent.events.clone();
+    let receipt = parent
+        .append_subagent_return_with_stats(input.clone(), T0 + 2)?
+        .into_value();
+    assert_ne!(receipt.parent_turn_id, original_turn);
+    assert_eq!(
+        &parent.events[..original_events.len()],
+        original_events.as_slice()
+    );
+    assert_eq!(
+        parent.metadata.open_turn_start_seq,
+        Some(receipt.return_seq)
+    );
+    assert_eq!(
+        parent.pending_subagent_return_dispatch()?,
+        Some(receipt.clone())
+    );
+    advance_fixture_durable(&mut parent)?;
+    // restored must infer the successor from the return itself and dispatch without a new user input.
+    // restored 必须从回流自身重建后继，并在没有新用户输入时分发。
+    let mut restored = SessionDocument::from_parts(
+        parent.metadata.clone(),
+        parent.runtime_lock.clone(),
+        parent.compactions.clone(),
+        parent.segment_catalog.clone(),
+        parent.events.clone(),
+    )?;
+    assert_eq!(restored.active_turn(), parent.active_turn());
+    // A real next prompt supersedes an undispatched return instead of failing with an open-turn error.
+    // 真实下一条提示词取代未分发回流，而不是因开放回合报错。
+    let mut user_resume = restored.clone();
+    let next_user_turn = user_resume.submit_root_input_fixture(
+        "continue with my instruction",
+        Vec::new(),
+        T0 + 3,
+    )?;
+    assert_ne!(next_user_turn, receipt.parent_turn_id);
+    assert_eq!(
+        user_resume.active_turn().unwrap().origin,
+        TurnOrigin::UserRoot
+    );
+    assert_eq!(
+        user_resume
+            .events
+            .iter()
+            .filter(|event| matches!(&event.event, EventBody::SubagentReturn(_)))
+            .count(),
+        1
+    );
+    advance_fixture_durable(&mut user_resume)?;
+    SessionDocument::from_parts(
+        user_resume.metadata,
+        user_resume.runtime_lock,
+        user_resume.compactions,
+        user_resume.segment_catalog,
+        user_resume.events,
+    )?;
+    restored.close_turn(TurnOutcome::Completed, 1, T0 + 3)?;
+    let after_completion = restored.clone();
+    assert!(
+        !restored
+            .append_subagent_return_with_stats(input, T0 + 4)?
+            .changed()
+    );
+    assert_eq!(restored, after_completion);
+    assert_eq!(
+        restored
+            .events
+            .iter()
+            .filter(|event| matches!(&event.event, EventBody::UserInput(_)))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+/// Distinct completions from a retained child remain deliverable in the same parent turn.
+/// 保持开放的子任务在同一父回合中的不同完成结果均可投递。
+/// Parameters: none. Returns: domain errors; asserts exact retry identity and reload validation.
+/// 参数：无。返回值：领域错误；断言精确重试身份与重载校验。
+#[test]
+fn subagent_return_distinguishes_multiple_child_completions() -> Result<(), DomainError> {
+    // The first delivery uses the child's initial durable completion.
+    // 第一次投递使用子任务最初的可靠完成结果。
+    let (mut child, first_turn, first_text) = durable_child_return_fixture()?;
+    let first_input = child.build_subagent_return_input(SubagentReturnBuildRequest {
+        final_turn_id: first_turn,
+        child_task_id: SubagentTaskId::try_new("retained-child")?,
+        source_assistant_text_seq: first_text,
+    })?;
+    // A later instruction produces a different completed child turn under the same task identity.
+    // 后续指令在相同任务身份下产生不同的已完成子回合。
+    let second_turn = child.submit_root_input_fixture("follow up", Vec::new(), T0 + 10)?;
+    let second_api = child.start_api(
+        ApiPurposeKind::MainGeneration,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        T0 + 11,
+    )?;
+    let second_text = child
+        .append_assistant_text(
+            second_api,
+            "follow-up child result",
+            AssistantSemanticStatus::Completed,
+            T0 + 12,
+        )?
+        .into_value();
+    complete_with_usage(&mut child, second_api, usage(2, 3), T0 + 13)?;
+    child.close_turn(TurnOutcome::Completed, 4, T0 + 14)?;
+    advance_fixture_durable(&mut child)?;
+    // The child's statistics sequence distinguishes completions without changing the task ID.
+    // 子任务统计序号在不改变任务 ID 的情况下区分完成结果。
+    let second_input = child.build_subagent_return_input(SubagentReturnBuildRequest {
+        final_turn_id: second_turn,
+        child_task_id: SubagentTaskId::try_new("retained-child")?,
+        source_assistant_text_seq: second_text,
+    })?;
+    assert_ne!(
+        first_input.child_turn_stats_seq,
+        second_input.child_turn_stats_seq
+    );
+    // Both deliveries belong to one still-open parent turn and survive exact retries independently.
+    // 两次投递属于同一仍开放的父回合，且各自的精确重试均保持幂等。
+    let mut parent = new_document();
+    parent.submit_root_input_fixture("delegate and follow up", Vec::new(), T0)?;
+    let first = parent
+        .append_subagent_return_with_stats(first_input.clone(), T0 + 15)?
+        .into_value();
+    let second = parent
+        .append_subagent_return_with_stats(second_input.clone(), T0 + 16)?
+        .into_value();
+    assert_eq!(first.parent_turn_id, second.parent_turn_id);
+    assert_ne!(first.return_seq, second.return_seq);
+    assert!(
+        !parent
+            .append_subagent_return_with_stats(first_input, T0 + 17)?
+            .changed()
+    );
+    assert!(
+        !parent
+            .append_subagent_return_with_stats(second_input, T0 + 18)?
+            .changed()
+    );
+    advance_fixture_durable(&mut parent)?;
+    SessionDocument::from_parts(
+        parent.metadata,
+        parent.runtime_lock,
+        parent.compactions,
+        parent.segment_catalog,
+        parent.events,
+    )?;
+    Ok(())
+}
+
 /// Child return selection rejects non-durable state and an imprecise final text seq.
 /// 子代理回流选择会拒绝未可靠状态与不精确的最终正文 seq。
 #[test]
@@ -6532,6 +6900,68 @@ fn prepared_tool_batch_receipt_is_exact_and_restart_idempotent() -> Result<(), D
         })
     ));
     assert_eq!(restored, before_drift);
+    Ok(())
+}
+
+/// Goal creation requires its exact running tool when an API is active, preserving other mode gates.
+/// API 活动期间，Goal 创建要求对应工具正在运行，同时保留其他模式闸门。
+/// Parameters: none. Returns: domain errors; checks rejection atomicity and successful round-trip.
+/// 参数：无。返回值：领域错误；检查拒绝原子性以及成功往返。
+#[test]
+fn create_goal_requires_running_native_tool_during_api() -> Result<(), DomainError> {
+    // doc starts with a physical API but no native Goal tool authority.
+    // doc 初始持有物理 API，但没有原生 Goal 工具权威。
+    let mut doc = new_document();
+    doc.submit_root_input_fixture("create a goal", Vec::new(), T0)?;
+    let api = doc.start_api(
+        ApiPurposeKind::MainGeneration,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        T0 + 1,
+    )?;
+    let before = doc.clone();
+    assert!(matches!(
+        doc.create_goal("goal", None, "goal", T0 + 2),
+        Err(DomainError::ModeTransitionWhileApiActive { .. })
+    ));
+    assert_eq!(doc, before);
+    let tool = doc.prepare_tool(
+        api,
+        RequestStreamId::try_new("goal-stream")?,
+        "create_goal",
+        ToolPayload::try_new(serde_json::json!({"objective": "goal"}))?,
+        Some(String::from("goal-tool")),
+        T0 + 3,
+    )?;
+    assert!(matches!(
+        doc.create_goal("goal", None, "goal", T0 + 4),
+        Err(DomainError::ModeTransitionWhileApiActive { .. })
+    ));
+    doc.start_prepared_tool(api, tool, T0 + 5)?;
+    let transition = doc.create_goal("goal", Some(100), "goal", T0 + 6)?;
+    assert!(transition.continuation_turn_id.is_none());
+    assert_eq!(doc.active_api().unwrap().api_call_id, api);
+    assert!(matches!(
+        doc.pause_goal("paused", T0 + 7),
+        Err(DomainError::ModeTransitionWhileApiActive { .. })
+    ));
+    doc.finish_tool(
+        api,
+        tool,
+        tool_completion(
+            Some(ToolPayload::try_new(serde_json::json!({"ok": true}))?),
+            ToolCallStatus::Completed,
+            T0 + 8,
+        ),
+    )?;
+    advance_fixture_durable(&mut doc)?;
+    let restored = SessionDocument::from_parts(
+        doc.metadata.clone(),
+        doc.runtime_lock.clone(),
+        doc.compactions.clone(),
+        doc.segment_catalog.clone(),
+        doc.events.clone(),
+    )?;
+    assert_eq!(restored.metadata.mode.goal, doc.metadata.mode.goal);
     Ok(())
 }
 

@@ -2,7 +2,7 @@ import * as React from "react";
 
 import {
   ConversationV1SessionDisplayRenderer,
-  type ConversationV1RootInputGenerationAction,
+  type ConversationV1GenerationAction,
 } from "@/components/conversation/conversation-v1-display-renderer";
 import {
   PlanArtifactBlock,
@@ -92,10 +92,10 @@ export interface ConversationV1WorkspaceProps {
   /** Opens one currently available external resource.
    * 打开一个当前可用的外部资源。 */
   onOpenExternalRef?: (reference: ExternalResourceRef) => void;
-  /** Receives one edit or fork action anchored by a canonical root-input seq.
-   * 接收一个由 canonical 根输入 seq 锚定的编辑或分叉动作。
+  /** Receives distinct edit-root and completed-Turn fork actions.
+   * 接收彼此独立的编辑根操作与完整回合分叉操作。
    */
-  onRootInputGenerationAction?: (action: ConversationV1RootInputGenerationAction) => void;
+  onRootInputGenerationAction?: (action: ConversationV1GenerationAction) => void;
 }
 
 /** Renders the production transcript from one V1 event window and no legacy messages.

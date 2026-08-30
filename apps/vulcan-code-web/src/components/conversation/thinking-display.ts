@@ -66,17 +66,22 @@ export function activeThinkingOverlayBlock(
 
 // hiddenThinkingBlockIdsForDisplayMode resolves thinking blocks filtered from the main transcript.
 // hiddenThinkingBlockIdsForDisplayMode 解析需要从主会话面板过滤掉的思考块。
+// Parameters: mode is the current display preference; renderItems contains both live and historical rows.
+// 参数：mode 是当前展示偏好；renderItems 包含实时记录与历史记录。
+// Returns: display-only hidden identities without changing stored reasoning or requiring a live overlay.
+// 返回值：仅用于展示的隐藏身份，不修改已存思考，也不依赖实时浮层。
 export function hiddenThinkingBlockIdsForDisplayMode(
   mode: ThinkingDisplayMode,
   renderItems: ConversationRenderItem[],
-  visibleOverlayBlockId: string | null,
 ): Set<string> {
   const thinkingBlocks = collectThinkingBlockVisibility(renderItems);
   if (mode === "inline_output") {
     return new Set();
   }
   if (mode === "popup_only") {
-    return visibleOverlayBlockId ? new Set([visibleOverlayBlockId]) : new Set();
+    // Popup-only is a transcript preference even after the active stream has finished.
+    // 即使活动流已经结束，纯弹窗模式仍是整个转录的展示偏好。
+    return new Set(thinkingBlocks.all);
   }
   const hidden = new Set(thinkingBlocks.all.filter((id) => !thinkingBlocks.firstByProcess.has(id)));
   return hidden;

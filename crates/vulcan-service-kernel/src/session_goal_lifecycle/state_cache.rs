@@ -192,7 +192,10 @@ fn apply_session_v1_runtime_projection(
     runtime_state.active_reasoning_effort = projection.selected_reasoning_effort;
     runtime_state.active_reasoning_effort_explicit = projection.selected_reasoning_effort.is_some();
     runtime_state.active_temperature = projection.active_temperature;
-    apply_provider_tool_selection_v1(runtime_state, &projection.provider_tools);
+    crate::session_request_config_v1::apply_provider_tool_selection_v1(
+        runtime_state,
+        &projection.provider_tools,
+    );
     runtime_state.knowledge_library_selection = SessionKnowledgeLibrarySelection {
         mode: match projection.knowledge_libraries.mode {
             KnowledgeLibrarySelectionMode::Inherit => SessionKnowledgeLibrarySelectionMode::Inherit,
@@ -236,70 +239,6 @@ fn upsert_session_v1_runtime_projection(
 ) {
     let runtime_state = runtime_states.entry(session_id).or_default();
     apply_session_v1_runtime_projection(runtime_state, projection);
-}
-
-/// Applies one initialized V1 Provider-tool selection to the temporary runtime projection.
-/// 把一份已初始化的 V1 Provider 工具选择应用到阶段内运行态投影。
-fn apply_provider_tool_selection_v1(
-    runtime_state: &mut vulcan_workbench_model::SessionRuntimeStateEntry,
-    selection: &vulcan_session_core::v1::config::ProviderToolSelectionConfig,
-) {
-    if !selection.initialized {
-        return;
-    }
-    runtime_state.provider_tool_selections = selection
-        .selections
-        .iter()
-        .map(|entry| {
-            (
-                entry.capability.clone(),
-                vulcan_workbench_model::SessionProviderToolTargetSelection {
-                    connection_id: entry.target.connection_id.clone(),
-                    target_id: entry.target.target_id.clone(),
-                },
-            )
-        })
-        .collect();
-    runtime_state.provider_tool_enabled_capabilities =
-        selection.enabled_capabilities.iter().cloned().collect();
-    runtime_state.media_understanding_modes = selection
-        .media_understanding_modes
-        .iter()
-        .map(|entry| {
-            (
-                entry.capability.clone(),
-                match entry.mode {
-                    vulcan_session_core::v1::config::ProviderMediaUnderstandingMode::ProviderTool => {
-                        vulcan_workbench_model::SessionMediaUnderstandingMode::ProviderTool
-                    }
-                    vulcan_session_core::v1::config::ProviderMediaUnderstandingMode::ModelReplacement => {
-                        vulcan_workbench_model::SessionMediaUnderstandingMode::ModelReplacement
-                    }
-                },
-            )
-        })
-        .collect();
-    runtime_state.provider_extension_target_sets = selection
-        .extension_target_sets
-        .iter()
-        .map(|entry| {
-            (
-                entry.capability.clone(),
-                entry
-                    .targets
-                    .iter()
-                    .map(
-                        |target| vulcan_workbench_model::SessionProviderToolTargetSelection {
-                            connection_id: target.connection_id.clone(),
-                            target_id: target.target_id.clone(),
-                        },
-                    )
-                    .collect(),
-            )
-        })
-        .collect();
-    runtime_state.provider_tool_settings_initialized = true;
-    runtime_state.provider_tool_selections_overridden = selection.overridden;
 }
 
 /// Returns the current Unix millisecond timestamp in the V1 domain width.
@@ -641,7 +580,9 @@ fn session_goal_summary_from_document(
     let mut subagent_samples = Vec::new();
     let mut subagent_api_count = 0u64;
     let mut counted_subagent_stats = BTreeSet::new();
-    let mut time_used_ms = 0u64;
+    // The goal clock covers active wall time, including tool execution and turn handoffs.
+    // 目标时钟覆盖活动墙钟时间，包括工具执行与回合交接。
+    let work_time = vulcan_session_core::v1::goal::goal_work_time(document);
     let mut updated_at_ms = document.metadata.updated_at_ms;
     for event in document
         .events()
@@ -655,13 +596,6 @@ fn session_goal_summary_from_document(
             EventBody::ApiStats(api) => {
                 direct_api_count = direct_api_count.saturating_add(1);
                 direct_usages.push(&api.usage);
-                if let (Some(prepared_at_ms), Some(completed_at_ms)) =
-                    (api.timing.prepared_at_ms, api.timing.completed_at_ms)
-                {
-                    time_used_ms = time_used_ms.saturating_add(
-                        completed_at_ms.saturating_sub(prepared_at_ms).max(0) as u64,
-                    );
-                }
             }
             EventBody::ToolCall(_) => {
                 direct_tool_count = direct_tool_count.saturating_add(1);
@@ -720,7 +654,13 @@ fn session_goal_summary_from_document(
         output_tokens: saturating_u64_to_i64(usage.output_tokens.unwrap_or_default()),
         reasoning_tokens: saturating_u64_to_i64(usage.reasoning_tokens.unwrap_or_default()),
         total_tokens: saturating_u64_to_i64(usage.total_tokens.unwrap_or_default()),
-        time_used_seconds: saturating_u64_to_i64(time_used_ms / 1_000),
+        time_used_seconds: saturating_u64_to_i64(
+            work_time.map_or(0, |clock| clock.elapsed_ms / 1_000),
+        ),
+        work_time: work_time.map(|clock| vulcan_service_api::SessionGoalWorkTime {
+            elapsed_ms: clock.elapsed_ms,
+            observed_at_ms: clock.observed_at_ms,
+        }),
         created_at_ms,
         updated_at_ms,
     })

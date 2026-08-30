@@ -76,6 +76,9 @@ pub enum TurnOrigin {
     /// Goal auto-continue opened the turn.
     /// Goal 自动续跑开启回合。
     GoalContinuation,
+    /// A durable child result opened a follow-up turn after the parent had finished.
+    /// 父回合结束后，可靠子任务结果开启后续处理回合。
+    SubagentReturn,
 }
 
 /// Expected semantic kind of one resident event owned by the active API.
@@ -1358,20 +1361,52 @@ impl SessionDocument {
         }
         self.require_client_action_unused(&client_action_id)?;
         let text = validate_user_input(text, &resource_ids)?;
+        // A user can supersede a retained late return that has not started inference, including after Stop.
+        // 用户可取代尚未启动推理的迟到回流，包括停止后保留的回流。
+        let undispatched_return = self
+            .active_turn
+            .as_ref()
+            .filter(|turn| {
+                !turn.closed
+                    && turn.origin == TurnOrigin::SubagentReturn
+                    && self.active_api.is_none()
+                    && !self.events.iter().any(|event| {
+                        event.turn_id == Some(turn.turn_id)
+                            && matches!(&event.event, EventBody::ApiStarted(_))
+                    })
+            })
+            .cloned();
         if let Some(turn) = &self.active_turn
             && !turn.closed
+            && undispatched_return.is_none()
         {
             return Err(DomainError::RootInputWhileTurnOpen {
                 turn_id: turn.turn_id.value(),
             });
         }
-        self.ensure_transition_capacity(1, 2)?;
+        self.ensure_transition_capacity(if undispatched_return.is_some() { 3 } else { 1 }, 2)?;
         let mut staged_allocator = self.id_allocator;
         let input_id = PendingInputId::try_new(staged_allocator.next_local_id()?)?;
         let turn_id = TurnId::try_new(staged_allocator.next_local_id()?)?;
         let mut staged_events = Vec::with_capacity(1);
         let mut staged_metadata = self.metadata.clone();
         consume_matching_draft(&mut staged_metadata, &text, &resource_ids);
+        if let Some(return_turn) = undispatched_return {
+            // Preserve the return and its statistics as history before admitting the actual user root.
+            // 准入真实用户根输入前，将回流及其统计完整保留为历史。
+            let buckets =
+                self.aggregate_turn_buckets(return_turn.turn_id, return_turn.start_seq)?;
+            self.stage_turn_closure(
+                &mut staged_allocator,
+                &mut staged_events,
+                return_turn.turn_id,
+                return_turn.start_seq,
+                TurnOutcome::Stopped,
+                0,
+                now_ms,
+                buckets,
+            )?;
+        }
         let seq = self.stage_event(
             &mut staged_allocator,
             &mut staged_events,
@@ -1386,6 +1421,12 @@ impl SessionDocument {
             }),
             now_ms,
         )?;
+        // changed_event_seqs also carries a superseded return boundary when one was closed above.
+        // changed_event_seqs 同时携带上方被取代的回流闭合边界。
+        let changed_event_seqs = staged_events
+            .iter()
+            .map(ConversationEvent::seq)
+            .collect::<Vec<_>>();
         self.id_allocator = staged_allocator;
         self.metadata = staged_metadata;
         self.events.extend(staged_events);
@@ -1399,7 +1440,7 @@ impl SessionDocument {
         self.bump_revision(
             &[DirtyFile::Metadata, DirtyFile::ActiveTail],
             now_ms,
-            &[seq],
+            &changed_event_seqs,
         );
         Ok(IdempotentMutation::Committed(turn_id))
     }
@@ -4080,7 +4121,7 @@ impl SessionDocument {
                 actual_enabled: true,
             });
         }
-        self.require_no_active_api_for_mode_transition()?;
+        self.require_goal_creation_boundary()?;
         let needs_turn = self.active_turn.as_ref().is_none_or(|turn| turn.closed);
         self.ensure_transition_capacity(2, u64::from(needs_turn))?;
 
@@ -4210,7 +4251,7 @@ impl SessionDocument {
                 active: "plan",
             });
         }
-        self.require_no_active_api_for_mode_transition()?;
+        self.require_goal_creation_boundary()?;
         let needs_turn = self.active_turn.as_ref().is_none_or(|turn| turn.closed);
         self.ensure_transition_capacity(2, u64::from(needs_turn))?;
 
@@ -4314,7 +4355,11 @@ impl SessionDocument {
         }
         self.require_no_active_api_for_mode_transition()?;
         self.ensure_transition_capacity(2, 0)?;
-        let turn_id = self.active_turn.as_ref().map(|turn| turn.turn_id);
+        let turn_id = self
+            .active_turn
+            .as_ref()
+            .filter(|turn| !turn.closed)
+            .map(|turn| turn.turn_id);
         let mut staged_allocator = self.id_allocator;
         let mut staged_events = Vec::with_capacity(2);
         let context_seq = self.stage_event(
@@ -4342,10 +4387,8 @@ impl SessionDocument {
         staged_metadata.mode.goal.budget_tokens = budget_tokens;
         staged_metadata.mode.goal.budget_cache = None;
         staged_metadata.updated_at_ms = staged_metadata.updated_at_ms.max(now_ms);
-        if let Some(turn_id) = turn_id {
-            staged_metadata.mode.goal.origin_turn_id = Some(turn_id);
-            staged_metadata.mode.goal.origin_seq = Some(context_seq);
-        }
+        // Editing the same goal must preserve its lifetime and cumulative budget origin.
+        // 编辑同一目标必须保留生命周期与累计预算起点。
         self.commit_goal_transition(
             staged_metadata,
             staged_allocator,
@@ -4403,7 +4446,11 @@ impl SessionDocument {
         };
         self.ensure_transition_capacity(appended_event_count, 0)?;
 
-        let turn_id = self.active_turn.as_ref().map(|turn| turn.turn_id);
+        let turn_id = self
+            .active_turn
+            .as_ref()
+            .filter(|turn| !turn.closed)
+            .map(|turn| turn.turn_id);
         let mut staged_allocator = self.id_allocator;
         let mut staged_events = Vec::with_capacity(appended_event_count as usize);
         let context_seq = self.stage_event(
@@ -4474,7 +4521,13 @@ impl SessionDocument {
         self.require_no_active_api_for_mode_transition()?;
         let removal_context = validate_system_context_content(removal_context.into())?;
         self.ensure_transition_capacity(2, 0)?;
-        let turn_id = self.active_turn.as_ref().map(|turn| turn.turn_id);
+        // Goal state is session-scoped once the last turn has closed.
+        // 最后回合关闭后，目标状态归属于会话，不得再向已闭合回合追加事件。
+        let turn_id = self
+            .active_turn
+            .as_ref()
+            .filter(|turn| !turn.closed)
+            .map(|turn| turn.turn_id);
         let mut staged_allocator = self.id_allocator;
         let mut staged_events = Vec::with_capacity(2);
         let context_seq = self.stage_event(
@@ -4526,7 +4579,13 @@ impl SessionDocument {
         self.require_no_active_api_for_mode_transition()?;
         let removal_context = validate_system_context_content(removal_context.into())?;
         self.ensure_transition_capacity(2, 0)?;
-        let turn_id = self.active_turn.as_ref().map(|turn| turn.turn_id);
+        // Goal state is session-scoped once the last turn has closed.
+        // 最后回合关闭后，目标状态归属于会话，不得再向已闭合回合追加事件。
+        let turn_id = self
+            .active_turn
+            .as_ref()
+            .filter(|turn| !turn.closed)
+            .map(|turn| turn.turn_id);
         let mut staged_allocator = self.id_allocator;
         let mut staged_events = Vec::with_capacity(2);
         let context_seq = self.stage_event(
@@ -4640,8 +4699,8 @@ impl SessionDocument {
         let mut staged_metadata = self.metadata.clone();
         staged_metadata.mode.goal.objective = objective;
         staged_metadata.mode.goal.budget_tokens = budget_tokens;
-        staged_metadata.mode.goal.origin_turn_id = turn_id;
-        staged_metadata.mode.goal.origin_seq = Some(context_seq);
+        // Resumption is not creation: keep earlier work and accounting in the same goal.
+        // 恢复不是创建：之前的工作与核算仍属于同一个目标。
         staged_metadata.mode.goal.state = GoalState::Active;
         staged_metadata.mode.goal.budget_cache = None;
         staged_metadata.updated_at_ms = staged_metadata.updated_at_ms.max(now_ms);
@@ -4887,7 +4946,8 @@ impl SessionDocument {
         let goal_objective = (queued_successor.is_none() && decision.should_continue)
             .then(|| self.metadata.mode.goal.objective.clone());
         let has_successor = queued_successor.is_some() || goal_objective.is_some();
-        let appended_event_count = if has_successor { 3 } else { 2 };
+        let appended_event_count =
+            if has_successor { 3 } else { 2 } + u64::from(next_goal_state.is_some());
         self.ensure_transition_capacity(appended_event_count, u64::from(has_successor))?;
         let buckets = self.aggregate_turn_buckets(expected_turn_id, turn.start_seq)?;
         // Stage the boundary, the unique turn statistics, and the optional successor before
@@ -4919,6 +4979,20 @@ impl SessionDocument {
                 });
             if let Some(state) = next_goal_state {
                 staged_metadata.mode.goal.state = state;
+                // Persist the stop boundary with the decision so working time can be replayed after restart.
+                // 将停止边界与决策一起持久化，使重启后可重放工作时长。
+                self.stage_event(
+                    &mut staged_allocator,
+                    &mut staged_events,
+                    None,
+                    EventVisibility::UiOnly,
+                    goal_notice_event(if state == GoalState::BudgetExhausted {
+                        "goal_budget_exhausted"
+                    } else {
+                        "goal_usage_unknown"
+                    }),
+                    now_ms,
+                )?;
             }
         }
         let successor = if let Some(queued) = queued_successor {
@@ -5196,16 +5270,22 @@ impl SessionDocument {
 
     /// Atomically appends one final subagent body and its complete inclusive statistics.
     /// 原子追加一份最终子代理正文及其完整包容性统计。
+    /// Parameters: input contains exact durable child facts; now_ms is the parent observation time.
+    /// 参数：input 包含精确可靠的子任务事实；now_ms 是父会话观测时间。
+    /// Returns: the exact receipt, opening a return-owned successor only when no parent turn remains open.
+    /// 返回值：精确回执；仅在父回合已结束时开启由回流拥有的后继。
     pub fn append_subagent_return_with_stats(
         &mut self,
         input: SubagentReturnInput,
         now_ms: i64,
     ) -> Result<IdempotentMutation<SubagentReturnReceipt>, DomainError> {
-        let parent_turn_id = self.require_open_turn()?.turn_id;
-        if let Some(receipt) = self.existing_subagent_return(parent_turn_id, &input)? {
+        if let Some(receipt) = self.existing_subagent_return(&input)? {
             return Ok(IdempotentMutation::Idempotent(receipt));
         }
-        self.ensure_transition_capacity(2, 0)?;
+        // A child may outlive its parent turn; its return is the successor's own root semantic.
+        // 子任务可能晚于父回合结束；回流自身就是后继回合的根语义。
+        let needs_turn = self.active_turn.as_ref().is_none_or(|turn| turn.closed);
+        self.ensure_transition_capacity(2, u64::from(needs_turn))?;
         let returned = SubagentReturnEvent {
             child_session_id: input.child_session_id.clone(),
             child_task_id: input.child_task_id.clone(),
@@ -5224,6 +5304,13 @@ impl SessionDocument {
         };
         validate_subagent_return_pair(&returned, &stats)?;
         let mut staged_allocator = self.id_allocator;
+        // parent_turn_id is allocated in the same atomic transition as the return and statistics.
+        // parent_turn_id 与回流及统计在同一个原子事务中分配。
+        let parent_turn_id = if needs_turn {
+            TurnId::try_new(staged_allocator.next_local_id()?)?
+        } else {
+            self.require_open_turn()?.turn_id
+        };
         let mut staged_events = Vec::with_capacity(2);
         let return_seq = self.stage_event(
             &mut staged_allocator,
@@ -5244,7 +5331,20 @@ impl SessionDocument {
         let changed_event_seqs = vec![return_seq, stats_seq];
         self.id_allocator = staged_allocator;
         self.events.extend(staged_events);
-        self.bump_revision(&[DirtyFile::ActiveTail], now_ms, &changed_event_seqs);
+        if needs_turn {
+            self.active_turn = Some(ActiveTurnState {
+                turn_id: parent_turn_id,
+                origin: TurnOrigin::SubagentReturn,
+                start_seq: return_seq,
+                closed: false,
+            });
+            self.metadata.open_turn_start_seq = Some(return_seq);
+        }
+        self.bump_revision(
+            &[DirtyFile::Metadata, DirtyFile::ActiveTail],
+            now_ms,
+            &changed_event_seqs,
+        );
         Ok(IdempotentMutation::Committed(SubagentReturnReceipt {
             parent_turn_id,
             return_seq,
@@ -5939,6 +6039,11 @@ impl SessionDocument {
                             .or_insert((event.seq.value(), TurnOrigin::UserRoot));
                     }
                 }
+                EventBody::SubagentReturn(_) if let Some(turn_id) = event.turn_id => {
+                    turn_state
+                        .entry(turn_id.value())
+                        .or_insert((event.seq.value(), TurnOrigin::SubagentReturn));
+                }
                 EventBody::SystemContext(context)
                     if (context.context_key == "goal_continuation"
                         || (context.context_key == "goal_state"
@@ -6323,10 +6428,13 @@ impl SessionDocument {
     /// dirty；调用方必须通过一次正常显式 flush 固化该转换。幂等：第二次调用不再
     /// 投影任何内容。
     pub fn project_persisted_interruptions(&mut self) -> Result<u32, DomainError> {
-        let Some(active_api) = self.active_api.as_ref() else {
-            return Ok(0);
-        };
-        if active_api.purpose == ApiPurposeKind::Continue
+        // A restarted active goal requires explicit user resumption, even between physical requests.
+        // 重启后的活动目标必须由用户显式恢复，即使退出发生在两个物理请求之间。
+        let pause_restarted_goal =
+            self.metadata.mode.goal.enabled && self.metadata.mode.goal.state == GoalState::Active;
+        if !pause_restarted_goal
+            && let Some(active_api) = self.active_api.as_ref()
+            && active_api.purpose == ApiPurposeKind::Continue
             && !self.api_transport_was_observed(active_api.api_call_id)
         {
             // A Continue that was durably prepared but never observed by
@@ -6338,14 +6446,45 @@ impl SessionDocument {
             // exactly-once 绑定无法恢复。
             return Ok(0);
         }
+        // Recover only through the last persisted observation; wall time at reload includes offline time.
+        // 仅恢复至最后持久化观察点；重新加载时的墙钟包含离线时间。
         let now_ms = self
             .events
             .iter()
             .map(|event| event.updated_at_ms)
             .max()
-            .unwrap_or(0);
-        let (projected, _) =
-            self.interrupt_active_api_state(now_ms, ApiEndReason::ProcessInterrupted, false)?;
+            .unwrap_or(self.metadata.updated_at_ms)
+            .max(self.metadata.updated_at_ms);
+        let mut projected = if self.active_api.is_some() {
+            self.interrupt_active_api_state(now_ms, ApiEndReason::ProcessInterrupted, false)?
+                .0
+        } else {
+            0
+        };
+        if pause_restarted_goal {
+            if let Some(turn) = self.active_turn.as_ref().filter(|turn| !turn.closed) {
+                let started_at_ms = self
+                    .events
+                    .iter()
+                    .find(|event| event.seq == turn.start_seq)
+                    .ok_or(DomainError::ReferenceViolation {
+                        kind: "turn_start_event",
+                        value: turn.start_seq.value(),
+                    })?
+                    .created_at_ms;
+                self.close_turn(
+                    TurnOutcome::Stopped,
+                    now_ms.saturating_sub(started_at_ms).max(0),
+                    now_ms,
+                )?;
+                projected += 2;
+            }
+            self.pause_goal(
+                "The process exited. Goal execution is paused until the user resumes it.",
+                now_ms,
+            )?;
+            projected += 2;
+        }
         Ok(projected)
     }
 
@@ -6674,11 +6813,8 @@ impl SessionDocument {
         Ok(true)
     }
 
-    /// Promotes the pending request configuration at one safe API boundary and
-    /// appends a permanent model-switch notice only when the effective config
-    /// actually changes (plan 7.6.3).
-    /// 在安全 API 边界提升待生效请求配置，并且只在生效配置确实变化时追加永久
-    /// 模型切换通知(计划 7.6.3)。
+    /// Promotes pending configuration at a safe API boundary; only changes to an established route emit notices.
+    /// 在安全 API 边界提升待生效配置；只有已建立路线发生变化才发出通知，首次初始化不提示切换。
     ///
     /// `turn_id` explicitly scopes the display fact when the boundary belongs
     /// to an open turn; `None` records a session-level boundary. The method
@@ -6713,6 +6849,10 @@ impl SessionDocument {
         };
         let previous_active = self.metadata.config.active_request.clone();
         let changed = previous_active != next_active;
+        // Initial selection initializes the route; only an established previous route can produce a switch notice.
+        // 首次选择只初始化路线；只有已建立的上一条路线才能产生切换提示。
+        let emits_notice =
+            changed && (previous_active.provider.is_some() || previous_active.model.is_some());
         if changed {
             if let Some(expected_turn_id) = turn_id {
                 let actual_turn_id = self.require_open_turn()?.turn_id;
@@ -6723,12 +6863,14 @@ impl SessionDocument {
                     });
                 }
             }
-            self.ensure_transition_capacity(1, 0)?;
+            if emits_notice {
+                self.ensure_transition_capacity(1, 0)?;
+            }
         }
         let mut staged_metadata = self.metadata.clone();
         staged_metadata.config.active_request = next_active.clone();
         staged_metadata.config.pending_request = None;
-        if !changed {
+        if !emits_notice {
             self.metadata = staged_metadata;
             self.bump_revision(&[DirtyFile::Metadata], now_ms, &[]);
             return Ok(None);
@@ -7339,7 +7481,6 @@ impl SessionDocument {
     /// 在不修改文档的情况下重建一份精确子代理回流 receipt。
     fn existing_subagent_return(
         &self,
-        parent_turn_id: TurnId,
         input: &SubagentReturnInput,
     ) -> Result<Option<SubagentReturnReceipt>, DomainError> {
         validate_exact_external_identity("child_session_id", &input.child_session_id)?;
@@ -7348,13 +7489,13 @@ impl SessionDocument {
             .events
             .iter()
             .filter(|event| {
-                event.turn_id == Some(parent_turn_id)
-                    && matches!(
-                        &event.event,
-                        EventBody::SubagentReturn(returned)
-                            if returned.child_session_id == input.child_session_id
-                                && returned.child_task_id == input.child_task_id
-                    )
+                matches!(
+                    &event.event,
+                    EventBody::SubagentReturn(returned)
+                        if returned.child_session_id == input.child_session_id
+                            && returned.child_task_id == input.child_task_id
+                            && returned.child_turn_stats_seq == input.child_turn_stats_seq
+                )
             })
             .collect();
         if matching_returns.is_empty() {
@@ -7366,6 +7507,11 @@ impl SessionDocument {
             });
         }
         let return_event = matching_returns[0];
+        // Delivery identity belongs to a child completion, not to the currently open parent turn.
+        // 投递身份属于一次子任务完成，而不属于当前开放的父回合。
+        let parent_turn_id = return_event.turn_id.ok_or(DomainError::InvalidStatistics {
+            field: "subagent_return.parent_turn",
+        })?;
         let stats_event = self
             .events
             .iter()
@@ -7790,6 +7936,29 @@ impl SessionDocument {
             return Err(client_action_conflict(client_action_id));
         }
         Ok(())
+    }
+
+    /// Admits Goal creation while idle or inside its already-started native tool boundary.
+    /// 在空闲状态或已经启动的原生创建工具边界中准入 Goal 创建。
+    /// Parameters: none. Returns: success only for idle state or a running create_goal in the owning API.
+    /// 参数：无。返回值：仅在空闲或所属 API 存在运行中的 create_goal 时成功。
+    fn require_goal_creation_boundary(&self) -> Result<(), DomainError> {
+        // The prepared/running V1 lifecycle is authority; a historical tool with this name cannot admit a write.
+        // V1 准备/运行生命周期是权威；同名历史工具不能准入写入。
+        if let Some(api) = &self.active_api
+            && api.tool_seqs.iter().any(|seq| {
+                self.events.iter().any(|event| {
+                    event.seq == *seq
+                        && matches!(&event.event, EventBody::ToolCall(tool)
+                    if tool.api_call_id == api.api_call_id
+                        && tool.tool_name == "create_goal"
+                        && tool.status == ToolCallStatus::Running)
+                })
+            })
+        {
+            return Ok(());
+        }
+        self.require_no_active_api_for_mode_transition()
     }
 
     /// Requires no physical Provider API to be active before a mode transition.
@@ -8252,9 +8421,9 @@ fn validate_subagent_return_history(events: &[ConversationEvent]) -> Result<(), 
                 }
                 validate_subagent_return_pair(returned, stats)?;
                 if !identities.insert((
-                    event.turn_id,
                     returned.child_session_id.clone(),
                     returned.child_task_id.clone(),
+                    returned.child_turn_stats_seq,
                 )) {
                     return Err(DomainError::InvalidStatistics {
                         field: "subagent_return.identity_unique",
@@ -9480,7 +9649,7 @@ fn validate_provider_extension_target_sets(
 
 /// Validates the complete session-owned Provider tool selection at commit and reload boundaries.
 /// 在提交与重载边界校验当前会话持有的完整 Provider 工具选择。
-fn validate_provider_tool_selection_config(
+pub(super) fn validate_provider_tool_selection_config(
     config: &ProviderToolSelectionConfig,
 ) -> Result<(), DomainError> {
     if !config.initialized && !config.is_empty() {

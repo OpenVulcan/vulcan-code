@@ -881,9 +881,17 @@ mod tests {
     /// 验证共享 Rust 服务契约与 TypeScript 控制器测试消费的已检入 JSON fixture 一致。
     #[test]
     fn rust_window_response_matches_typescript_golden_fixture() {
+        // response is the canonical Rust projection serialized for the shared fixture comparison.
+        // response 是为共享夹具比较而序列化的规范 Rust 投影。
         let response = golden_window_response();
-        let actual = serde_json::to_string_pretty(&response).unwrap();
-        let expected = include_str!("../tests/fixtures/conversation_event_window_v1.golden.json");
+        // actual must serialize successfully because every field belongs to the public API contract.
+        // actual 必须成功序列化，因为每个字段都属于公共 API 契约。
+        let actual = serde_json::to_string_pretty(&response)
+            .expect("golden conversation event window should serialize");
+        // expected normalizes checkout-specific CRLF without weakening byte-for-byte JSON content comparison.
+        // expected 归一化检出环境特有的 CRLF，同时不弱化逐字节 JSON 内容比较。
+        let expected = include_str!("../tests/fixtures/conversation_event_window_v1.golden.json")
+            .replace("\r\n", "\n");
         assert_eq!(actual.trim(), expected.trim());
     }
 

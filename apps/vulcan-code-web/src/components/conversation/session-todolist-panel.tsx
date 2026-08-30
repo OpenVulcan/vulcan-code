@@ -397,8 +397,8 @@ export function ConversationSessionTodolistPanel(props: {
     [props.terminalSessions],
   );
   const hasTerminalSessions = terminalSessions.length > 0;
-  // subagentTasks mirrors the backend unclosed-agent navigation list.
-  // subagentTasks 镜像后端未关闭代理导航列表。
+  // subagentTasks mirrors the backend navigation rows retained for the current parent turn.
+  // subagentTasks 镜像后端为当前父级回合保留的导航行。
   const subagentTasks = React.useMemo(
     () => props.subagentNavigation?.tasks ?? [],
     [props.subagentNavigation?.tasks],
@@ -530,7 +530,10 @@ export function ConversationSessionTodolistPanel(props: {
       )}
       aria-label={t("sessionTools.menu")}
     >
-      <div className="conversation-session-tool-panel-header">
+      <div className={cn(
+        "conversation-session-tool-panel-header",
+        !hasReviewSummary && "conversation-session-tool-panel-header-inline",
+      )}>
         {showReviewRepositoryManager ? (
           <ConversationSessionReviewMonitoringManager
             repositories={orderedReviewRepositories}
@@ -1387,8 +1390,8 @@ function ConversationSessionSubagentSection(props: {
   );
 }
 
-// conversationSessionSubagentTooltip builds a detailed hover summary for one unclosed agent row.
-// conversationSessionSubagentTooltip 为单条未关闭智能体行构建详细悬浮摘要。
+// conversationSessionSubagentTooltip builds a detailed hover summary for one retained agent row.
+// conversationSessionSubagentTooltip 为单条保留的智能体行构建详细悬浮摘要。
 function conversationSessionSubagentTooltip(
   // Task row from the backend navigation snapshot.
   // 后端导航快照中的任务行。
@@ -1458,6 +1461,8 @@ function conversationSessionSubagentRunStateLabel(
       return t("conversation.subagent.state.stopped");
     case "failed":
       return t("conversation.subagent.state.failed");
+    case "closed":
+      return t("conversation.subagent.state.closed");
     case "completed":
     default:
       return t("conversation.subagent.state.completed");

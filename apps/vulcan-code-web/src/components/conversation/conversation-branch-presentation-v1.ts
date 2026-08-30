@@ -2,6 +2,7 @@ import type { TranslationKey } from "@/i18n-messages";
 import type {
   ComposerAttachmentSummary,
   ConversationMessage,
+  ProviderSummary,
 } from "@/types";
 import type {
   ConversationRenderItem,
@@ -15,6 +16,7 @@ import type {
 } from "@/service/conversation-event-window-store";
 import type { ConversationSessionResourceCatalogV1 } from "@/state/conversation-session-resources-v1";
 import { requestConfigChangeKind } from "@/service/conversation-event-display-projection";
+import { modelSwitchRouteLabel } from "./conversation-model-switch";
 
 // V1RootInputPresentationMetadata stores the exact generation anchor used by restored edit and fork actions.
 // V1RootInputPresentationMetadata 保存恢复后的编辑与分叉操作使用的精确 generation 锚点。
@@ -65,6 +67,9 @@ export function projectConversationBranchPresentationV1(
   events: readonly ConversationEventSummary[],
   resources: ConversationSessionResourceCatalogV1,
   t: Translation,
+  // Configured display catalog; isolated hosts may have no provider configuration.
+  // 已配置的显示目录；隔离宿主可以不带供应商配置。
+  providers: readonly ProviderSummary[] = [],
 ): ConversationBranchPresentationV1 {
   // apiStatsByCall makes terminal request facts available without changing event display order.
   // apiStatsByCall 让终态请求事实可供读取，同时不改变事件显示顺序。
@@ -99,6 +104,7 @@ export function projectConversationBranchPresentationV1(
       rootInput,
       apiStatsByCall,
       resources,
+      providers,
     ));
   }
 
@@ -116,6 +122,7 @@ function conversationMessagesForV1Event(
   rootInput: V1RootInputPresentationMetadata | undefined,
   apiStatsByCall: ReadonlyMap<number, ApiStatsBody>,
   resources: ConversationSessionResourceCatalogV1,
+  providers: readonly ProviderSummary[],
 ): ConversationMessage[] {
   const base = conversationMessageBase(sessionId, summary, rootInput);
   switch (summary.event.kind) {
@@ -196,10 +203,8 @@ function conversationMessagesForV1Event(
         metadata: {
           ...presentationMetadata(summary, rootInput),
           notice_kind: "model_switch",
-          activation: "next_provider_request",
-          provider_id: summary.event.current.provider,
-          connection_id: summary.event.current.connection_id,
-          model_id: summary.event.current.model,
+          previous_model_label: modelSwitchRouteLabel(summary.event.previous, providers),
+          current_model_label: modelSwitchRouteLabel(summary.event.current, providers),
         },
       }];
     }
@@ -597,5 +602,49 @@ export function rootInputPresentationMetadata(
       seq: metadata.v1_root_input_seq as number,
       text: metadata.v1_root_input_text,
     }
+    : null;
+}
+
+// completedTurnEndSeqForPresentation resolves the terminal TurnStats seq for one exact displayed Turn.
+// completedTurnEndSeqForPresentation 为一个精确展示回合解析终态 TurnStats seq。
+// Parameters: messages are canonical V1 projections and sourceMessage is the Turn-end action owner.
+// 参数：messages 是规范 V1 投影，sourceMessage 是回合末尾操作的拥有者。
+// Returns: the exact terminal seq, or null when the Turn has not completed.
+// 返回值：精确终态 seq；回合尚未完成时返回 null。
+export function completedTurnEndSeqForPresentation(
+  messages: readonly ConversationMessage[],
+  sourceMessage: ConversationMessage | undefined,
+): number | null {
+  if (
+    !sourceMessage?.metadata
+    || typeof sourceMessage.metadata !== "object"
+    || Array.isArray(sourceMessage.metadata)
+  ) {
+    return null;
+  }
+  const sourceMetadata = sourceMessage.metadata as Record<string, unknown>;
+  if (!Number.isSafeInteger(sourceMetadata.v1_turn_id)) return null;
+  const turnStatsMessage = messages.find((message) => {
+    if (
+      message.recordKind !== "turn-stats"
+      || !message.metadata
+      || typeof message.metadata !== "object"
+      || Array.isArray(message.metadata)
+    ) {
+      return false;
+    }
+    const metadata = message.metadata as Record<string, unknown>;
+    return metadata.v1_turn_id === sourceMetadata.v1_turn_id;
+  });
+  if (
+    !turnStatsMessage?.metadata
+    || typeof turnStatsMessage.metadata !== "object"
+    || Array.isArray(turnStatsMessage.metadata)
+  ) {
+    return null;
+  }
+  const turnStatsMetadata = turnStatsMessage.metadata as Record<string, unknown>;
+  return Number.isSafeInteger(turnStatsMetadata.v1_seq)
+    ? turnStatsMetadata.v1_seq as number
     : null;
 }

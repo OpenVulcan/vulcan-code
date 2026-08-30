@@ -2,6 +2,7 @@
 //! subagent event ingest 辅助逻辑。
 
 use super::*;
+use vulcan_session_core::SubagentStatus;
 
 /// Consumes one delegate runtime event into the WebUI subagent cache and child transcript state.
 /// 将一条委派运行时事件吸收到 WebUI 子代理缓存与子会话转录状态中。
@@ -19,7 +20,6 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
         parent_session_id,
         event,
         None,
-        true,
     )
 }
 
@@ -32,7 +32,6 @@ pub(crate) fn ingest_webui_subagent_runtime_event_for_listener_execution(
     parent_session_id: SessionId,
     event: &RuntimeEvent,
     listener_execution_id: Option<&str>,
-    _project_parent_feedback: bool,
 ) -> Result<bool, String> {
     if !matches!(
         event.kind,
@@ -75,6 +74,22 @@ pub(crate) fn ingest_webui_subagent_runtime_event_for_listener_execution(
         if guard.workspace_snapshot.is_none() {
             return Err(String::from("workspace snapshot is not ready"));
         }
+        // Archived lifecycle wins over delayed feedback, including detail-cache residency.
+        // 归档生命周期优先于延迟反馈，也约束详情缓存驻留。
+        // A closed child can be read explicitly from its file, but old execution events must not reload it.
+        // 已关闭子任务可通过文件显式回读，但旧执行事件不得重新载入它。
+        if let Some(runtime) = guard.agent_runtime.as_ref()
+            && runtime
+                .task_runtime
+                .subagent_registry_entries_for_parent_tree(parent_session_id, true)?
+                .iter()
+                .any(|entry| {
+                    entry.session_id.as_uuid() == panel_state.task_id
+                        && entry.status == SubagentStatus::Archived
+                })
+        {
+            return Ok(true);
+        }
         // normalizedState remains transaction-local until workspace preflight and projection succeed.
         // normalizedState 在工作区预检与投影成功前始终保持为事务局部状态。
         let normalized_state = if is_finished {
@@ -92,11 +107,8 @@ pub(crate) fn ingest_webui_subagent_runtime_event_for_listener_execution(
                 normalized_state.result_text.chars().count()
             ),
         );
-        // Shared navigation and listener ownership are committed only after every fallible projection step has succeeded.
-        // 共享导航与监听器所有权仅在全部可失败投影步骤成功后提交。
-        guard
-            .session_subagent_navigation_rounds
-            .insert(parent_session_id);
+        // Registry projection alone admits navigation members; late feedback cannot revive archived history.
+        // 仅注册表投影准入导航成员；迟到反馈不能恢复已归档历史。
         if is_finished && listener_execution_id.is_none() {
             guard
                 .detached_subagent_task_listeners

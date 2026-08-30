@@ -65,7 +65,10 @@ fn registered_native_goal_runtime(
         .expect("V1 Goal test handle should register");
     let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
     (
-        crate::session_goals::session_v1_native_goal_runtime(state.clone()),
+        crate::session_goals::session_v1_native_goal_runtime(
+            state.clone(),
+            ServiceEventEmitter::new(Vec::new()),
+        ),
         handle,
         backend,
         state,
@@ -121,6 +124,75 @@ async fn native_goal_runtime_get_create_block_and_complete_use_v1() {
         vulcan_session_core::v1::config::GoalState::Completed
     );
     assert_eq!(backend.flush_count.load(Ordering::SeqCst), 3);
+}
+
+/// Observes Goal deltas at emission time and verifies their source is already durable.
+/// 在 Goal 增量发送时观察状态，并验证其来源已经可靠落盘。
+struct NativeGoalEventCapture {
+    /// Exact V1 owner whose state must precede each emitted delta.
+    /// 状态必须先于每条增量提交的精确 V1 所有者。
+    handle: Arc<SessionHandle>,
+    /// Committed statuses received through the same event interface as the WebSocket bus.
+    /// 经由与 WebSocket 总线相同事件接口接收的已提交状态。
+    statuses: Mutex<Vec<SessionGoalStatus>>,
+}
+
+impl vulcan_service_api::ServiceEventSink for NativeGoalEventCapture {
+    /// Records the incoming Goal delta after checking durability; returns no value.
+    /// 检查可靠性后记录传入的 Goal 增量；无返回值。
+    fn emit_service_event(&self, event: ServiceEvent) {
+        if let ServiceEvent::WorkbenchDelta(envelope) = event
+            && let WorkbenchDelta::SessionAddonsChanged(delta) = envelope.delta
+            && let Some(goal) = delta.session_goal
+        {
+            self.handle
+                .read(|document| {
+                    assert_eq!(document.memory_revision(), document.durable_revision())
+                })
+                .unwrap();
+            self.statuses.lock().unwrap().push(goal.status);
+        }
+    }
+}
+
+/// Verifies native mutations push current Goal status without opening a panel or sending another prompt.
+/// 验证原生修改无需打开面板或发送下一条提示词即可推送当前 Goal 状态。
+/// Parameters: none. Returns: none; asserts the ordered creation/completion/replacement events.
+/// 参数：无。返回值：无；断言创建、完成、替换的有序事件。
+#[tokio::test]
+async fn native_goal_runtime_pushes_committed_state_immediately() {
+    // Fixture and capture share the same registered V1 document.
+    // 夹具与观察器共享同一已注册 V1 文档。
+    let session_id = SessionId::new_v4();
+    let (_, handle, _, state) = registered_native_goal_runtime(session_id);
+    let capture = Arc::new(NativeGoalEventCapture {
+        handle,
+        statuses: Default::default(),
+    });
+    let runtime = crate::session_goals::session_v1_native_goal_runtime(
+        state,
+        ServiceEventEmitter::new(vec![capture.clone()]),
+    );
+    runtime
+        .create_goal(session_id, String::from("first"), None)
+        .await
+        .unwrap();
+    runtime
+        .update_goal_status(session_id, NativeGoalTerminalStatus::Complete)
+        .await
+        .unwrap();
+    runtime
+        .create_goal(session_id, String::from("next"), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        *capture.statuses.lock().unwrap(),
+        vec![
+            SessionGoalStatus::Active,
+            SessionGoalStatus::Complete,
+            SessionGoalStatus::Active
+        ]
+    );
 }
 
 /// Verifies saving after completion creates one new active Goal generation atomically.
@@ -220,6 +292,7 @@ fn goal_continuation_prompt_keeps_codex_audit_details() {
         reasoning_tokens: 0,
         total_tokens: 0,
         time_used_seconds: 56,
+        work_time: None,
         created_at_ms: 1_000,
         updated_at_ms: 2_000,
     });
@@ -256,6 +329,7 @@ fn goal_execution_context_binds_prompt_to_goal_identity() {
         reasoning_tokens: 0,
         total_tokens: 0,
         time_used_seconds: 0,
+        work_time: None,
         created_at_ms: 1_000,
         updated_at_ms: 1_000,
     };
@@ -337,6 +411,7 @@ fn goal_context_attaches_only_to_the_exact_creation_boundary() {
         reasoning_tokens: 0,
         total_tokens: 0,
         time_used_seconds: 0,
+        work_time: None,
         created_at_ms: 1_000,
         updated_at_ms: 1_000,
     };
@@ -436,6 +511,7 @@ fn mailbox_goal_context_attaches_to_concrete_agent_message_payloads() {
         reasoning_tokens: 100,
         total_tokens: 9_234,
         time_used_seconds: 10,
+        work_time: None,
         created_at_ms: 1_000,
         updated_at_ms: 2_000,
     };
@@ -539,6 +615,7 @@ fn goal_turn_usage_is_append_only_and_omits_zero_usage() {
         reasoning_tokens: 0,
         total_tokens: 0,
         time_used_seconds: 0,
+        work_time: None,
         created_at_ms: 1_000,
         updated_at_ms: 1_000,
     };
@@ -586,6 +663,7 @@ fn goal_objective_updated_prompt_supersedes_previous_goal() {
         reasoning_tokens: 0,
         total_tokens: 0,
         time_used_seconds: 56,
+        work_time: None,
         created_at_ms: 1_000,
         updated_at_ms: 2_000,
     });
@@ -619,6 +697,7 @@ fn goal_budget_limited_prompt_waits_for_user_resume() {
         reasoning_tokens: 0,
         total_tokens: 2_445,
         time_used_seconds: 60,
+        work_time: None,
         created_at_ms: 1_000,
         updated_at_ms: 2_000,
     });
@@ -649,6 +728,7 @@ fn budget_limited_goal_is_not_regular_prompt_context() {
         reasoning_tokens: 0,
         total_tokens: 0,
         time_used_seconds: 60,
+        work_time: None,
         created_at_ms: 1_000,
         updated_at_ms: 2_000,
     };

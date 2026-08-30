@@ -145,9 +145,7 @@ use vulcan_workbench_model::{
     build_session_record_message_id, parse_subagent_task_panel_metadata,
     subagent_close_agent_projection_from_host_result,
     subagent_close_agent_projection_from_tool_metadata,
-    subagent_feedback_execution_id_from_tool_metadata,
-    subagent_navigation_round_should_remain_visible, subagent_navigation_surface_is_visible,
-    subagent_navigation_task_label,
+    subagent_feedback_execution_id_from_tool_metadata, subagent_navigation_task_label,
 };
 use vulcan_workspace_store::{
     data_plane::ControllerRuntimeHandle, workspace_store::WorkspaceSnapshot,
@@ -441,7 +439,7 @@ pub fn create_service_bridge_state(
         live_context_budgets: BTreeMap::new(),
         session_goal_summaries: BTreeMap::new(),
         subagent_surface_detail_cache: BTreeMap::new(),
-        session_subagent_navigation_rounds: BTreeSet::new(),
+        session_subagent_navigation_rounds: BTreeMap::new(),
         active_subagent_panel: None,
         detached_subagent_task_listeners: BTreeMap::new(),
         subagent_completion_gate_ignored_tasks: BTreeSet::new(),

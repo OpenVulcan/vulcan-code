@@ -9,6 +9,8 @@ import {
 } from "lucide-react";
 
 import { StatusPill } from "@/components/shared/status";
+import { ModelSwitchNotice } from "./conversation-model-switch";
+import { metadataString } from "./conversation-metadata";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import { StreamingMarkdownDocument } from "@/components/conversation/streaming-markdown-document";
@@ -292,6 +294,12 @@ function SpecialConversationBlock(props: {
     : null;
   if (providerRetryState) {
     return <ProviderRetryCard block={props.block} state={providerRetryState} />;
+  }
+
+  // The V1 adapter preserves before/after labels in this exact notice category.
+  // V1 适配器在此精确提示类别中保留前后显示标签。
+  if (props.block.kind === "notice" && metadataString(props.block.rawMetadata, ["notice_kind"]) === "model_switch") {
+    return <ModelSwitchNotice summary={props.block.summary} />;
   }
 
   if (props.block.kind === "turn-stats") {

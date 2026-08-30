@@ -69,6 +69,7 @@ export function resolveSubagentOrchestrationPresentation(
     stoppedTaskIds: operationStopsAgents ? stoppedTaskIds(payload) : [],
     target: subagentTarget(args, payload),
     timedOut: operation === "wait" ? booleanValue(payload?.timed_out ?? payload?.timedOut) : null,
+    noActiveAgents: operation === "wait" ? subagentWaitHasNoActiveAgents(payload) : false,
     interrupted: operation === "wait" ? booleanValue(payload?.interrupted) : null,
     terminalEventReceived: operation === "wait" ? subagentWaitTerminalEventReceived(payload) : false,
     title,
@@ -131,6 +132,9 @@ function mergeSubagentPayload(
     timedOut: presentation.operation === "wait"
       ? booleanValue(payload.timed_out ?? payload.timedOut) ?? presentation.timedOut
       : presentation.timedOut,
+    noActiveAgents: presentation.operation === "wait"
+      ? subagentWaitHasNoActiveAgents(payload) || presentation.noActiveAgents
+      : presentation.noActiveAgents,
     interrupted: presentation.operation === "wait"
       ? booleanValue(payload.interrupted) ?? presentation.interrupted
       : presentation.interrupted,
@@ -524,6 +528,20 @@ function subagentWaitTerminalEventReceived(
     const agent = objectValue(rawAgent);
     return booleanValue(agent?.terminal) === true || subagentAgentHasTerminalState(agent);
   });
+}
+
+// subagentWaitHasNoActiveAgents recognizes the authoritative immediate wait completion state.
+// subagentWaitHasNoActiveAgents 识别权威的无活动子代理即时等待完成状态。
+function subagentWaitHasNoActiveAgents(
+  // Host or body payload.
+  // 宿主或正文载荷。
+  payload: Record<string, unknown> | null,
+): boolean {
+  if (booleanValue(payload?.no_active_agents ?? payload?.noActiveAgents) === true) {
+    return true;
+  }
+  return stringValue(payload?.activity_status ?? payload?.activityStatus)?.toLowerCase()
+    === "no_active_agents";
 }
 
 // subagentAgentHasTerminalState recognizes terminal wait_agent rows from compact agent state.

@@ -158,7 +158,7 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
         live_context_budgets: BTreeMap::new(),
         session_goal_summaries: BTreeMap::new(),
         subagent_surface_detail_cache: BTreeMap::new(),
-        session_subagent_navigation_rounds: BTreeSet::new(),
+        session_subagent_navigation_rounds: BTreeMap::new(),
         active_subagent_panel: None,
         detached_subagent_task_listeners: BTreeMap::new(),
         subagent_completion_gate_ignored_tasks: BTreeSet::new(),
@@ -1062,7 +1062,7 @@ fn delegate_started_cache_without_registry_does_not_create_navigation_membership
     cache_test_subagent_surface_detail_states(&mut guard, &task_states);
     guard
         .session_subagent_navigation_rounds
-        .insert(parent_session_id);
+        .insert(parent_session_id, BTreeSet::new());
     let workspace_snapshot = guard
         .workspace_snapshot
         .as_ref()
@@ -1098,7 +1098,7 @@ fn webui_detached_listener_keeps_running_subagent_navigation_visible() {
     seed_test_live_subagent_registry_from_panel_states(&mut guard, parent_session_id, &task_states);
     guard
         .session_subagent_navigation_rounds
-        .insert(parent_session_id);
+        .insert(parent_session_id, BTreeSet::new());
     guard.detached_subagent_task_listeners.insert(
         task_session_id,
         String::from("navigation-visible-execution"),
@@ -1201,7 +1201,6 @@ fn stale_detached_terminal_event_skips_replacement_projection() {
         parent_session_id,
         &event,
         Some("execution-old"),
-        true,
     )
     .expect("stale listener event should be safely consumed");
 
@@ -1259,7 +1258,6 @@ fn subagent_ingest_workspace_preflight_failure_has_no_partial_state_commit() {
         parent_session_id,
         &event,
         Some(execution_id.as_str()),
-        true,
     )
     .expect_err("missing workspace should reject subagent ingest");
 
@@ -1277,7 +1275,7 @@ fn subagent_ingest_workspace_preflight_failure_has_no_partial_state_commit() {
     assert!(
         !guard
             .session_subagent_navigation_rounds
-            .contains(&parent_session_id)
+            .contains_key(&parent_session_id)
     );
     assert!(!guard.subagent_surface_detail_cache.contains_key(&task_id));
 }
@@ -1326,7 +1324,7 @@ fn terminal_listener_cleanup_emits_non_running_subagent_navigation_delta() {
         );
         guard
             .session_subagent_navigation_rounds
-            .insert(parent_session_id);
+            .insert(parent_session_id, BTreeSet::new());
         guard.active_subagent_panel = Some(SelectedSubagentTaskPanel {
             parent_session_id,
             task_id: task_session_id,
@@ -1348,8 +1346,6 @@ fn terminal_listener_cleanup_emits_non_running_subagent_navigation_delta() {
             .detached_subagent_task_listeners
             .remove(&task_session_id);
     }
-    refresh_webui_subagent_navigation_round_visibility(&state, parent_session_id)
-        .expect("terminal cleanup should refresh navigation visibility");
     let navigation =
         emit_webui_subagent_navigation_changed_delta_for_parent(&app, &state, parent_session_id)
             .expect("terminal cleanup should emit navigation")
@@ -1498,7 +1494,7 @@ fn webui_completion_gate_clears_after_two_detached_subagents_finish() {
     seed_test_live_subagent_registry_from_panel_states(&mut guard, parent_session_id, &task_states);
     guard
         .session_subagent_navigation_rounds
-        .insert(parent_session_id);
+        .insert(parent_session_id, BTreeSet::new());
     guard.detached_subagent_task_listeners.extend([
         (
             first_task_session_id,
@@ -1616,7 +1612,7 @@ fn delegate_finished_ingest_terminalizes_stale_running_payload() {
 /// Verifies close-agent cleanup removes closed tasks while preserving other unclosed agents.
 /// 验证关闭代理清理会移除已关闭任务，同时保留其他未关闭代理。
 #[test]
-fn close_agent_cleanup_removes_closed_webui_subagent_cache_entries() {
+fn close_agent_cleanup_unloads_runtime_state_and_retains_current_navigation_round() {
     let parent_session_id = SessionId::new_v4();
     let closed_task_id = SessionId::new_v4();
     let retained_task_id = SessionId::new_v4();
@@ -1639,8 +1635,11 @@ fn close_agent_cleanup_removes_closed_webui_subagent_cache_entries() {
         parent_session_id,
         task_id: closed_task_id,
     });
+    guard
+        .session_subagent_navigation_rounds
+        .insert(parent_session_id, BTreeSet::from([closed_task_id]));
 
-    assert!(remove_webui_closed_subagent_tasks_in_state(
+    assert!(unload_webui_closed_subagent_runtime_state(
         &mut guard,
         &[closed_task_id]
     ));
@@ -1661,6 +1660,96 @@ fn close_agent_cleanup_removes_closed_webui_subagent_cache_entries() {
             .contains_key(&closed_task_id)
     );
     assert!(guard.active_subagent_panel.is_none());
+    assert!(
+        guard
+            .session_subagent_navigation_rounds
+            .contains_key(&parent_session_id)
+    );
+}
+
+/// Verifies a close tool event immediately publishes closed status for a child carried across turns.
+/// 验证关闭工具事件会立即为跨回合保留的子任务发布已关闭状态。
+/// Parameters: none. Returns: none; asserts archive authority beats stale completed detail.
+/// 参数：无。返回值：无；断言归档权威优先于陈旧的已完成详情。
+#[test]
+fn close_agent_event_emits_closed_subagent_navigation_for_carried_child() {
+    // parent_id owns the child that completed earlier but remained open into this turn.
+    // parent_id 拥有此前已完成、但保持开放进入当前回合的子任务。
+    let parent_id = SessionId::new_v4();
+    // child_id is the exact target archived by the close tool result.
+    // child_id 是关闭工具结果归档的精确目标。
+    let child_id = SessionId::new_v4();
+    // completed intentionally leaves stale completed detail until production close cleanup removes it.
+    // completed 刻意保留陈旧已完成详情，直到生产关闭清理将其移除。
+    let mut completed = test_completed_subagent_panel_state(parent_id, child_id);
+    // guard contains the live registry and lightweight navigation membership.
+    // guard 包含实时注册表和轻量导航成员关系。
+    let mut guard = test_service_state_with_parent_session(parent_id);
+    cache_test_subagent_surface_detail_states(&mut guard, std::slice::from_ref(&completed));
+    seed_test_live_subagent_registry_from_panel_states(
+        &mut guard,
+        parent_id,
+        std::slice::from_ref(&completed),
+    );
+    assert!(
+        subagent_navigation_snapshot_for_parent_from_cached_state(&mut guard, parent_id, true)
+            .expect("initial navigation")
+            .is_some()
+    );
+    guard.session_subagent_navigation_rounds.remove(&parent_id);
+    assert!(
+        subagent_navigation_snapshot_for_parent_from_cached_state(&mut guard, parent_id, true)
+            .expect("unclosed child carries into next turn")
+            .is_some()
+    );
+    completed.run_state = SubagentTaskRunState::Closed;
+    seed_test_live_subagent_registry_from_panel_states(&mut guard, parent_id, &[completed]);
+    // state exposes the committed registry archive to the same projection path as real ToolFinished events.
+    // state 将已提交的注册表归档暴露给真实 ToolFinished 事件使用的投影路径。
+    let state = Arc::new(Mutex::new(guard));
+    // emitted_events and app capture the delta without requiring a user click or refresh.
+    // emitted_events 和 app 捕获增量，不要求用户点击或刷新。
+    let emitted_events = Arc::new(Mutex::new(Vec::<ServiceEvent>::new()));
+    let app = ServiceEventEmitter::new(vec![Arc::new(CapturingServiceEventSink {
+        events: Arc::clone(&emitted_events),
+    })]);
+    // event uses the canonical close-agent host result fields consumed by production projection.
+    // event 使用生产投影消费的规范关闭智能体宿主结果字段。
+    let event = RuntimeEvent::new(RuntimeEventKind::ToolFinished, "close_agent", "closed")
+        .with_metadata(Some(json!({
+            "tool_name": "close_agent",
+            "host_result": {
+                "kind": "subagent_control",
+                "payload": {
+                    "tool": "close_agent",
+                    "matched_agents": [{ (SUBAGENT_TASK_ID_KEY): child_id.to_string() }],
+                    "stopped_subagent_task_ids": []
+                }
+            }
+        })));
+    append_runtime_event_projection(&app, &state, parent_id, &event)
+        .expect("close event projection");
+    // events must include the closed row even though the last execution phase was completed.
+    // events 必须包含已关闭行，即使最近执行阶段为已完成。
+    let events = emitted_events.lock().expect("event sink lock");
+    assert!(events.iter().any(|event| matches!(event,
+        ServiceEvent::WorkbenchDelta(envelope)
+            if matches!(&envelope.delta, WorkbenchDelta::SubagentNavigationChanged(delta)
+                if delta.subagent_navigation.as_ref().is_some_and(|navigation|
+                    navigation.tasks.len() == 1 && navigation.tasks[0].run_state == "closed"
+                        && !navigation.tasks[0].is_running))
+    )));
+    // guard confirms only lightweight navigation survives; the child detail is unloaded.
+    // guard 确认仅轻量导航保留，子任务详情已卸载。
+    let guard = state.lock().expect("service state lock");
+    assert!(!guard.subagent_surface_detail_cache.contains_key(&child_id));
+    assert!(
+        guard
+            .session_subagent_navigation_rounds
+            .get(&parent_id)
+            .expect("current round")
+            .contains(&child_id)
+    );
 }
 
 /// Verifies the WebUI close path cannot reintroduce the removed cascade argument.

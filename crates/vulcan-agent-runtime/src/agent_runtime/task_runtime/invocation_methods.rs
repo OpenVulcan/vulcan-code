@@ -151,13 +151,42 @@ impl TaskRuntime {
             let actionable_events =
                 self.take_matching_subagent_events_for_parent(parent_thread_id, |event| {
                     wait_agent_mailbox_event_is_actionable(event.kind)
-                        && wait_target_session_ids.contains(&event.child_thread_id)
+                        && (!explicit_targets
+                            || wait_target_session_ids.contains(&event.child_thread_id))
                 })?;
             if !actionable_events.is_empty() {
                 for event in actionable_events {
                     satisfied_target_session_ids.insert(event.child_thread_id);
                     collected_events.push(event);
                 }
+            }
+            // Every wait owns its target observation, even when another waiter claims the mailbox first.
+            // 即使另一等待调用先认领 mailbox，每个等待仍拥有对其目标的状态观察责任。
+            let cached_terminal_events = self.wait_agent_cached_terminal_events(
+                current_session_id,
+                &wait_target_session_ids,
+                &satisfied_target_session_ids,
+            )?;
+            for event in cached_terminal_events {
+                satisfied_target_session_ids.insert(event.child_thread_id);
+                collected_events.push(event);
+            }
+            if !explicit_targets
+                && collected_events.is_empty()
+                && self
+                    .wait_agent_running_target_session_ids(current_session_id)?
+                    .is_empty()
+            {
+                let result =
+                    build_wait_agent_no_active_agents_tool_result(current_session_id, timeout_ms);
+                task_runtime_trace(
+                    "subagent_wait_agent_return",
+                    format!(
+                        "parent={current_session_id} source=no_active_agents elapsed_ms={}",
+                        current_unix_millis_u64().saturating_sub(trace_started_at)
+                    ),
+                );
+                return Ok(result);
             }
             let wait_complete = !collected_events.is_empty()
                 && (!explicit_targets
@@ -284,8 +313,8 @@ impl TaskRuntime {
         self.wait_agent_explicit_target_session_ids(current_session_id, target_selectors)
     }
 
-    /// Resolves the default wait scope to currently running open child agents.
-    /// 将默认等待范围解析为当前正在运行且未关闭的子智能体。
+    /// Resolves the default wait scope from open children and their active, starting, or queued execution ownership.
+    /// 根据未关闭子代理及其活动、启动或排队执行所有权解析默认等待范围。
     ///
     /// # Parameters
     /// 参数
@@ -301,13 +330,27 @@ impl TaskRuntime {
         current_session_id: SessionId,
     ) -> Result<BTreeSet<SessionNodeId>, String> {
         let parent_session_id = SessionNodeId::from(current_session_id);
-        Ok(self
+        // session_ids includes admitted successors whose previous registry outcome is still terminal.
+        // session_ids 包含已准入但注册表仍保留上一执行终态的后继任务。
+        let mut session_ids = BTreeSet::new();
+        for entry in self
             .subagent_registry_snapshot()?
             .list_for_parent(parent_session_id)
-            .into_iter()
-            .filter(|entry| entry.status.is_running())
-            .map(|entry| entry.session_id)
-            .collect())
+        {
+            if entry.status == SubagentStatus::Archived {
+                continue;
+            }
+            // task_id addresses the same authoritative ownership and inbox used by cached-terminal checks.
+            // task_id 定位与缓存终态检查相同的权威运行所有权及 inbox。
+            let task_id = SessionId::from(entry.session_id);
+            if entry.status.is_running()
+                || self.task_has_active_or_starting_run(task_id)?
+                || self.inter_agent_message_count_for_task(task_id)? > 0
+            {
+                session_ids.insert(entry.session_id);
+            }
+        }
+        Ok(session_ids)
     }
 
     /// Resolves explicit wait_agent selectors against open child agents.
@@ -348,6 +391,85 @@ impl TaskRuntime {
             session_ids.insert(entry.session_id);
         }
         Ok(session_ids)
+    }
+
+    /// Builds immediate terminal feedback for observed children whose mailbox event was already consumed.
+    /// 为 mailbox 终态事件已被消费的目标子代理构建即时终态反馈。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `current_session_id` is the direct parent that owns the requested children.
+    /// `current_session_id` 是拥有目标子代理的直接父会话。
+    /// `target_session_ids` are the exact child sessions requested by this wait call.
+    /// `target_session_ids` 是本次等待调用明确请求的子会话集合。
+    /// `satisfied_session_ids` are targets already satisfied by newly claimed mailbox events.
+    /// `satisfied_session_ids` 是已经由本次新认领 mailbox 事件满足的目标集合。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Synthetic terminal events backed by authoritative registry state for still-unsatisfied targets.
+    /// 返回由权威注册表状态支撑、用于尚未满足目标的合成终态事件。
+    pub(super) fn wait_agent_cached_terminal_events(
+        &self,
+        current_session_id: SessionId,
+        target_session_ids: &BTreeSet<SessionNodeId>,
+        satisfied_session_ids: &BTreeSet<SessionNodeId>,
+    ) -> Result<Vec<SubagentMailboxEvent>, String> {
+        let parent_session_id = SessionNodeId::from(current_session_id);
+        let mut cached_terminal_events = Vec::new();
+        for entry in self
+            .subagent_registry_snapshot()?
+            .list_for_parent(parent_session_id)
+        {
+            if !target_session_ids.contains(&entry.session_id)
+                || satisfied_session_ids.contains(&entry.session_id)
+                || !entry.status.is_terminal()
+            {
+                continue;
+            }
+            let task_id = SessionId::from(entry.session_id);
+            // A queued or starting successor owns the next terminal result, so the previous registry terminal cannot satisfy this wait.
+            // 已排队或正在启动的后继执行拥有下一条终态结果，因此旧注册表终态不能满足本次等待。
+            if self.inter_agent_message_count_for_task(task_id)? > 0
+                || self.task_has_active_or_starting_run(task_id)?
+            {
+                continue;
+            }
+            // terminal_kind and status_label preserve the exact registry terminal state in the wait contract.
+            // terminal_kind 与 status_label 在等待契约中保留精确的注册表终态。
+            let (terminal_kind, status_label) = match entry.status {
+                SubagentStatus::Completed => (SubagentMailboxEventKind::Completed, "completed"),
+                SubagentStatus::Failed => (SubagentMailboxEventKind::Failed, "failed"),
+                SubagentStatus::Stopped => (SubagentMailboxEventKind::Stopped, "stopped"),
+                _ => unreachable!("terminal registry filter admitted a non-terminal status"),
+            };
+            // result_text and error_text keep successful/stopped summaries separate from failures.
+            // result_text 与 error_text 将成功/停止摘要和失败错误分开。
+            let (result_text, error_text) = if terminal_kind == SubagentMailboxEventKind::Failed {
+                (None, entry.result_summary.clone())
+            } else {
+                (entry.result_summary.clone(), None)
+            };
+            cached_terminal_events.push(SubagentMailboxEvent {
+                parent_thread_id: parent_session_id,
+                parent_turn_id: entry.parent_turn_id.clone(),
+                child_thread_id: entry.session_id,
+                kind: terminal_kind,
+                timestamp_ms: entry.updated_at_ms,
+                payload: json!({
+                    "child_thread_id": entry.session_id.to_string(),
+                    "public_id": entry.agent_id,
+                    "parent_thread_id": parent_session_id.to_string(),
+                    "status": status_label,
+                    "task_status": status_label,
+                    "display_title": entry.agent_id,
+                    "result_text": result_text,
+                    "error_text": error_text,
+                    "cached_terminal_result": true,
+                }),
+            });
+        }
+        Ok(cached_terminal_events)
     }
 
     /// Lists known child agents for the current direct parent without touching execution state.
@@ -405,8 +527,35 @@ impl TaskRuntime {
         &self,
         current_session_id: SessionId,
     ) -> Result<Vec<SubagentRegistryEntry>, String> {
+        self.subagent_registry_entries_for_parent_tree(current_session_id, false)
+    }
+
+    /// Lists authoritative child-agent registry entries for one parent tree with explicit closed-entry admission.
+    /// 按显式的已关闭条目准入规则列出一个父级树中的权威子代理注册表条目。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `current_session_id` is the root or nested parent whose complete child tree is requested.
+    /// `current_session_id` 是请求完整子级树的根会话或嵌套父会话。
+    /// `include_closed` admits archived entries only when the current UI coordination round still owns them.
+    /// `include_closed` 仅在当前界面协调轮次仍持有已归档条目时准入这些条目。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Authoritative registry entries matching the requested open-or-visible-closed scope.
+    /// 返回匹配所请求的未关闭或本轮可见已关闭范围的权威注册表条目。
+    pub fn subagent_registry_entries_for_parent_tree(
+        &self,
+        current_session_id: SessionId,
+        include_closed: bool,
+    ) -> Result<Vec<SubagentRegistryEntry>, String> {
+        let arguments = if include_closed {
+            json!({ "include_closed": true })
+        } else {
+            json!({})
+        };
         Ok(self
-            .subagent_registry_entries_for_list_request(current_session_id, &json!({}))?
+            .subagent_registry_entries_for_list_request(current_session_id, &arguments)?
             .into_iter()
             .map(|(_, entry)| entry)
             .collect())

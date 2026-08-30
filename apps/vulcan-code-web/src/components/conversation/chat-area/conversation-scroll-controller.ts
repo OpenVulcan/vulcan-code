@@ -112,6 +112,22 @@ export function conversationResizeCorrectionMode(
   return followTail ? "tail" : "none";
 }
 
+// reconcileConversationNativeScrollClamp acknowledges a position clipped by a shrinking native scroll range.
+// reconcileConversationNativeScrollClamp 确认因原生滚动范围缩小而被截断的位置。
+// Parameters: previousTop is the ledger position; actualTop and maxScrollTop describe the current native geometry.
+// 参数：previousTop 是账本位置；actualTop 与 maxScrollTop 描述当前原生几何。
+// Returns: the clipped observation only at the reduced boundary; otherwise preserves the reader-movement baseline.
+// 返回值：仅在缩小后的边界返回截断观察值；否则保留用于识别阅读者移动的基准。
+export function reconcileConversationNativeScrollClamp(
+  previousTop: number,
+  actualTop: number,
+  maxScrollTop: number,
+): number {
+  return previousTop > maxScrollTop && Math.abs(actualTop - maxScrollTop) <= 1
+    ? actualTop
+    : previousTop;
+}
+
 // classifyConversationObservedScrollMovement compares native motion with the controller's explicit target ledger.
 // classifyConversationObservedScrollMovement 将原生位移与控制器显式目标账本进行比较。
 // Parameters: previousTop and actualTop are consecutive observations; targetTop is the owned destination or null.
@@ -279,6 +295,22 @@ export function useConversationScrollController(
     snapshot: ConversationScrollSnapshot,
     revision: number | null = null,
   ): void => {
+    // currentOptions and element bind the synchronous geometry observation to the scheduled surface.
+    // currentOptions 与 element 将同步几何观察绑定到已调度界面。
+    const currentOptions = latestOptionsRef.current;
+    const element = currentOptions.scrollRef.current;
+    if (currentOptions.active && currentOptions.surfaceId === surfaceId
+      && element?.dataset.conversationSurfaceId === surfaceId) {
+      // Composer shrink can clip scrollTop before the prompt grows the range again, ahead of the native scroll event.
+      // 输入区收缩可能先截断 scrollTop，随后提示词再次增大范围，而原生滚动事件尚未到达。
+      // Record that exact clipping now so the delayed event cannot cancel tail ownership as a supposed reader move.
+      // 立即记录这次精确截断，防止延迟事件将其当成阅读者移动并取消尾部所有权。
+      observedScrollTopRef.current = reconcileConversationNativeScrollClamp(
+        observedScrollTopRef.current,
+        element.scrollTop,
+        Math.max(0, element.scrollHeight - element.clientHeight),
+      );
+    }
     cancelPendingFrame();
     pendingFrameRef.current = window.requestAnimationFrame(() => {
       pendingFrameRef.current = null;
@@ -346,7 +378,11 @@ export function useConversationScrollController(
     const actualTop = element.scrollTop;
     // previousTop is the last ledger position used to infer motion toward or away from an owned target.
     // previousTop 是账本最后位置，用于推断位移是朝向还是背离已拥有目标。
-    const previousTop = observedScrollTopRef.current;
+    const previousTop = reconcileConversationNativeScrollClamp(
+      observedScrollTopRef.current,
+      actualTop,
+      Math.max(0, element.scrollHeight - element.clientHeight),
+    );
     // target is non-null only while a controller-owned operation is in flight.
     // target 仅在控制器拥有的操作进行中时非空。
     const target = programmaticTargetRef.current;

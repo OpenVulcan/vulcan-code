@@ -150,7 +150,7 @@ export interface ChatAreaProps {
   onForkConversationGeneration: (
     sourceSessionId: string,
     expectedWindowGeneration: number,
-    targetSeq: number,
+    sourceTurnEndSeq: number,
     childSessionId: string,
     title: string,
   ) => Promise<string | null>;

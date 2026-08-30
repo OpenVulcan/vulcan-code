@@ -16,7 +16,7 @@ use crate::{
     conversation_submission::{
         effective_pending_prompt_reasoning_effort, exact_v1_dispatch_runtime_options,
     },
-    prepare_submission_media,
+    emit_webui_subagent_navigation_changed_delta_for_parent, prepare_submission_media,
     project_conversation_services::try_begin_pending_prompt_dispatch_exclusion,
     session_goal_lifecycle::{
         SessionGoalDispatchAuthority, registered_session_v1_handle_from_state,
@@ -190,8 +190,8 @@ pub(crate) fn pending_in_turn_dispatch_authority_from_v1_handle(
 /// 已经持有开放回合的一条根用户输入的精确 V1 权威。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SessionUserRootDispatchAuthority {
-    /// Open UserRoot Turn rebuilt by edit or fork generation publication.
-    /// 由编辑或分叉代次发布重建的开放 UserRoot 回合。
+    /// Open UserRoot Turn created by a new submission or rebuilt by edit publication.
+    /// 由新提交创建或由编辑代次发布重建的开放 UserRoot 回合。
     pub(crate) turn_id: TurnId,
     /// Session-local input identity retained by the rewritten event.
     /// 已重写事件保留的会话本地输入身份。
@@ -507,8 +507,8 @@ enum ExactPendingPromptDispatch {
         /// 由该权威构建且不持久化的执行适配对象。
         entry: PendingSessionPromptEntry,
     },
-    /// One root user input published by a new, edited, or forked generation.
-    /// 由新建、编辑或分叉代际发布的一条根用户输入。
+    /// One root user input published by a new submission or edited generation.
+    /// 由新提交或编辑代际发布的一条根用户输入。
     Root {
         /// Exact durable root-input identity.
         /// 精确可靠的根输入身份。
@@ -880,17 +880,27 @@ async fn prepare_webui_pending_prompt(
             entry.attachments.len()
         ),
     );
-    if entry.source.starts_user_parent_turn() {
+    let subagent_navigation_state_changed = if entry.source.starts_user_parent_turn() {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        guard.session_subagent_navigation_rounds.remove(&session_id);
+        let mut changed = guard
+            .session_subagent_navigation_rounds
+            .remove(&session_id)
+            .is_some();
         if guard
             .active_subagent_panel
             .is_some_and(|selection| selection.parent_session_id == session_id)
         {
             guard.active_subagent_panel = None;
+            changed = true;
         }
+        changed
+    } else {
+        false
+    };
+    if subagent_navigation_state_changed {
+        emit_webui_subagent_navigation_changed_delta_for_parent(app, state, session_id)?;
     }
     let workspace_path = workspace_path_for_session(&workspace_snapshot, session_id);
     let runtime_options = entry.runtime_options.clone();

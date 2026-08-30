@@ -95,7 +95,7 @@ pub(super) fn seed_test_subagent_registry_from_panel_states(
 /// `root_session_id` 是子代理树的根父会话。
 /// `states` are fixture states converted into resident TaskRuntime entries.
 /// `states` 是转换为常驻 TaskRuntime 条目的夹具状态。
-pub(super) fn seed_test_live_subagent_registry_from_panel_states(
+pub(crate) fn seed_test_live_subagent_registry_from_panel_states(
     guard: &mut ServiceBridgeState,
     root_session_id: SessionId,
     states: &[SubagentTaskPanelState],
@@ -170,7 +170,49 @@ fn test_task_session_status_from_panel_state(
         SubagentTaskRunState::Stopped => vulcan_task_session::TaskSessionStatus::Stopped,
         SubagentTaskRunState::Completed => vulcan_task_session::TaskSessionStatus::Completed,
         SubagentTaskRunState::Failed => vulcan_task_session::TaskSessionStatus::Failed,
+        SubagentTaskRunState::Closed => vulcan_task_session::TaskSessionStatus::Archived,
     }
+}
+
+/// Seeds one authoritative running child for wait-agent coordination tests.
+/// 为 wait-agent 协调测试播种一个权威的运行中子代理。
+///
+/// # Parameters
+/// 参数
+/// `guard` owns the process-local task runtime registry.
+/// `guard` 持有进程内任务运行时注册表。
+/// `parent_session_id` is the direct parent whose wait scope observes the child.
+/// `parent_session_id` 是等待范围观察该子代理的直接父会话。
+///
+/// # Returns
+/// 返回值
+/// The stable child session identifier inserted into the registry.
+/// 返回插入注册表的稳定子会话标识。
+pub(super) fn seed_test_running_subagent_for_parent(
+    guard: &mut ServiceBridgeState,
+    parent_session_id: SessionId,
+) -> SessionId {
+    // task_id identifies the active child observed by wait_agent.
+    // task_id 标识 wait_agent 观察的活动子代理。
+    let task_id = SessionId::new_v4();
+    // state carries the exact running lifecycle projection consumed by the registry seeder.
+    // state 携带注册表播种器消费的精确运行中生命周期投影。
+    let state = SubagentTaskPanelState {
+        task_id,
+        public_task_id: format!("wait-child-{task_id}"),
+        parent_session_id,
+        subagent_label: String::from("wait-child"),
+        description: Some(String::from("wait coordination fixture")),
+        run_state: SubagentTaskRunState::Running,
+        result_text: String::new(),
+        conversation_state: None,
+    };
+    seed_test_live_subagent_registry_from_panel_states(
+        guard,
+        parent_session_id,
+        std::slice::from_ref(&state),
+    );
+    task_id
 }
 
 /// Test shell host that rejects interactive shell operations.
@@ -251,7 +293,7 @@ pub(crate) fn test_service_state_with_parent_session(
         live_context_budgets: BTreeMap::new(),
         session_goal_summaries: BTreeMap::new(),
         subagent_surface_detail_cache: BTreeMap::new(),
-        session_subagent_navigation_rounds: BTreeSet::new(),
+        session_subagent_navigation_rounds: BTreeMap::new(),
         active_subagent_panel: None,
         detached_subagent_task_listeners: BTreeMap::new(),
         subagent_completion_gate_ignored_tasks: BTreeSet::new(),

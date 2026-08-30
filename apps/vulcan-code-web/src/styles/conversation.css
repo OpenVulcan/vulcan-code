@@ -1,3 +1,43 @@
+/* Model changes share a single muted separator row; long labels stay on one line.
+ * 模型切换共用单条弱化分隔行；长标签始终保持单行。 */
+.conversation-model-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding-block: 12px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.conversation-model-switch::before,
+.conversation-model-switch::after {
+  content: "";
+  flex: 1 1 24px;
+  min-width: 12px;
+  height: 1px;
+  background: var(--border);
+}
+
+.conversation-model-switch-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-model-switch > svg,
+.conversation-model-switch-help {
+  flex-shrink: 0;
+}
+
+.conversation-model-switch-help {
+  display: inline-flex;
+  padding: 2px;
+  color: inherit;
+  cursor: help;
+}
+
 .conversation-panel {
   position: absolute;
   inset: 0;

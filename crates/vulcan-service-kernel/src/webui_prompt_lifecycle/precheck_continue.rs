@@ -484,6 +484,7 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
     // 原生 Goal 工具取得精确请求会话的 V1 领域端口；不再暴露 SQLite 存储。
     request.native_goal_runtime = Some(crate::session_goals::session_v1_native_goal_runtime(
         state.clone(),
+        app.clone(),
     ));
     // managedCodebaseMemory is resolved from the live controller authorization table without any workspace-path fallback.
     // managedCodebaseMemory 从实时控制器授权表解析，绝不使用工作区路径回退。

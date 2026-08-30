@@ -377,8 +377,9 @@ export type TranslationKey =
   | "conversation.providerRetry.succeeded"
   | "conversation.providerRetry.failed"
   | "conversation.modelSwitch.title"
-  | "conversation.modelSwitch.immediate"
-  | "conversation.modelSwitch.nextProviderRequest"
+  | "conversation.modelSwitch.changed"
+  | "conversation.modelSwitch.help"
+  | "conversation.modelSwitch.warning"
   | "conversation.reasoningSwitch.title"
   | "conversation.reasoningSwitch.nextProviderRequest"
   | "conversation.continue"
@@ -503,6 +504,12 @@ export type TranslationKey =
   | "composer.capability.basic.subtitle"
   | "composer.capability.enabledCount"
   | "composer.capability.tooltipTitle"
+  | "composer.capability.loading"
+  | "composer.capability.loadFailed"
+  | "composer.capability.retry"
+  | "composer.capability.rebuild"
+  | "composer.capability.rebuilding"
+  | "composer.capability.rebuildHint"
   | "composer.capability.tooltipEmpty"
   | "composer.capability.dialogTitle"
   | "composer.capability.dialogDescription"
@@ -603,6 +610,11 @@ export type TranslationKey =
   | "composer.goal.status.active"
   | "composer.goal.status.paused"
   | "composer.goal.status.blocked"
+  | "composer.goal.duration"
+  | "composer.goal.usage"
+  | "composer.goal.requests"
+  | "composer.goal.tools"
+  | "composer.goal.cacheHit"
   | "composer.goal.status.usageLimited"
   | "composer.goal.status.budgetLimited"
   | "composer.goal.status.completed"
@@ -1067,6 +1079,7 @@ export type TranslationKey =
   | "conversation.subagent.state.stopped"
   | "conversation.subagent.state.failed"
   | "conversation.subagent.state.completed"
+  | "conversation.subagent.state.closed"
   | "conversation.subagent.detail.createdTask"
   | "conversation.subagent.detail.name"
   | "conversation.subagent.detail.description"
@@ -3252,9 +3265,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.providerRetry.retrying": "正在重试",
     "conversation.providerRetry.succeeded": "重试成功",
     "conversation.providerRetry.failed": "重试失败",
-    "conversation.modelSwitch.title": "模型选择",
-    "conversation.modelSwitch.immediate": "已选择 {provider} / {account} / {model}。",
-    "conversation.modelSwitch.nextProviderRequest": "已选择 {provider} / {account} / {model}；当前正在进行的 Provider 请求保持冻结，该选择从下一次真实 Provider 请求开始生效。",
+    "conversation.modelSwitch.title": "模型切换",
+    "conversation.modelSwitch.changed": "模型已从 {previous} 切换为 {current}。",
+    "conversation.modelSwitch.help": "模型切换说明",
+    "conversation.modelSwitch.warning": "在对话中途切换模型可能降低性能表现。背景信息可能会自动压缩。",
     "conversation.reasoningSwitch.title": "思考强度",
     "conversation.reasoningSwitch.nextProviderRequest": "思考强度已从 {previous} 调整为 {current}；当前正在进行的 Provider 请求保持冻结，新强度从下一次真实 Provider 请求开始生效。",
     "conversation.continue": "继续",
@@ -3379,6 +3393,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.capability.basic.subtitle": "仅文本与代码",
     "composer.capability.enabledCount": "{enabled}/{total} 已启用",
     "composer.capability.tooltipTitle": "点击设置扩展能力",
+    "composer.capability.loading": "正在加载会话能力…",
+    "composer.capability.loadFailed": "会话能力加载失败",
+    "composer.capability.retry": "重新加载",
+    "composer.capability.rebuild": "重建为默认配置",
+    "composer.capability.rebuilding": "正在重建…",
+    "composer.capability.rebuildHint": "可重新加载，或将当前会话的扩展能力设置重建为全局默认配置。重建会清除能力自定义选择，不影响对话记录、目标及其他配置。",
     "composer.capability.tooltipEmpty": "暂无已启用模块",
     "composer.capability.dialogTitle": "当前会话能力设置",
     "composer.capability.dialogDescription": "每项能力只选择一个目标；点击保存后写入当前会话，并从下一次对话开始生效。",
@@ -3462,7 +3482,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.goalDialog.save": "保存",
     "composer.goal.status.active": "进行中的目标",
     "composer.goal.status.paused": "已暂停的目标",
-    "composer.goal.status.blocked": "受阻的目标",
+  "composer.goal.status.blocked": "受阻的目标（已暂停）",
+  "composer.goal.duration": "工作时长",
+  "composer.goal.usage": "目标用量",
+  "composer.goal.requests": "总请求次数",
+  "composer.goal.tools": "工具调用次数",
+  "composer.goal.cacheHit": "缓存命中率",
     "composer.goal.status.usageLimited": "受限的目标",
     "composer.goal.status.budgetLimited": "预算用尽",
     "composer.goal.status.completed": "已完成的目标",
@@ -3921,6 +3946,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.subagent.state.stopped": "已停止",
     "conversation.subagent.state.failed": "失败",
     "conversation.subagent.state.completed": "待命",
+    "conversation.subagent.state.closed": "已关闭",
     "conversation.subagent.detail.createdTask": "已创建智能体任务",
     "conversation.subagent.detail.name": "名称",
     "conversation.subagent.detail.description": "描述",
@@ -6126,9 +6152,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.providerRetry.retrying": "Retrying",
     "conversation.providerRetry.succeeded": "Retry succeeded",
     "conversation.providerRetry.failed": "Retry failed",
-    "conversation.modelSwitch.title": "Model selection",
-    "conversation.modelSwitch.immediate": "Selected {provider} / {account} / {model}.",
-    "conversation.modelSwitch.nextProviderRequest": "Selected {provider} / {account} / {model}; the current Provider request keeps its frozen route, and this selection applies to the next real Provider request.",
+    "conversation.modelSwitch.title": "Model changed",
+    "conversation.modelSwitch.changed": "Model changed from {previous} to {current}.",
+    "conversation.modelSwitch.help": "About model changes",
+    "conversation.modelSwitch.warning": "Switching models during a conversation may reduce performance. Background context may be compacted automatically.",
     "conversation.reasoningSwitch.title": "Reasoning effort",
     "conversation.reasoningSwitch.nextProviderRequest": "Reasoning effort changed from {previous} to {current}; the current Provider request remains frozen, and the new effort applies to the next real Provider request.",
     "conversation.continue": "Continue",
@@ -6253,6 +6280,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.capability.basic.subtitle": "Text and code only",
     "composer.capability.enabledCount": "{enabled}/{total} enabled",
     "composer.capability.tooltipTitle": "Configure extended capabilities",
+    "composer.capability.loading": "Loading session capabilities…",
+    "composer.capability.loadFailed": "Failed to load session capabilities",
+    "composer.capability.retry": "Reload",
+    "composer.capability.rebuild": "Rebuild default settings",
+    "composer.capability.rebuilding": "Rebuilding…",
+    "composer.capability.rebuildHint": "Reload, or rebuild this conversation's capability settings from global defaults. Rebuilding clears custom capability choices without changing history, goals, or other settings.",
     "composer.capability.tooltipEmpty": "No enabled modules",
     "composer.capability.dialogTitle": "Current session capabilities",
     "composer.capability.dialogDescription": "Changes are saved to this session only after you click Save, and affect the next turn's cache hit rate.",
@@ -6336,7 +6369,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.goalDialog.save": "Save",
     "composer.goal.status.active": "Active goal",
     "composer.goal.status.paused": "Paused goal",
-    "composer.goal.status.blocked": "Blocked goal",
+  "composer.goal.status.blocked": "Blocked goal (paused)",
+  "composer.goal.duration": "Working time",
+  "composer.goal.usage": "Goal usage",
+  "composer.goal.requests": "Requests",
+  "composer.goal.tools": "Tool calls",
+  "composer.goal.cacheHit": "Cache hit rate",
     "composer.goal.status.usageLimited": "Usage-limited goal",
     "composer.goal.status.budgetLimited": "Budget exhausted",
     "composer.goal.status.completed": "Completed goal",
@@ -6795,6 +6833,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.subagent.state.stopped": "Stopped",
     "conversation.subagent.state.failed": "Failed",
     "conversation.subagent.state.completed": "Standby",
+    "conversation.subagent.state.closed": "Closed",
     "conversation.subagent.detail.createdTask": "Created agent task",
     "conversation.subagent.detail.name": "Name",
     "conversation.subagent.detail.description": "Description",

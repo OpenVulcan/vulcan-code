@@ -3,7 +3,7 @@
 
 use vulcan_service_api::{
     ConversationSummary, ConversationSummaryChangedDelta, ServiceEvent, ServiceEventEmitter,
-    WorkbenchDelta, WorkbenchDeltaEnvelope, WorkbenchSnapshot,
+    SubagentNavigationChangedDelta, WorkbenchDelta, WorkbenchDeltaEnvelope, WorkbenchSnapshot,
 };
 use vulcan_workbench_model::{SessionRunPhase, SessionState};
 use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
@@ -14,6 +14,7 @@ use crate::{
     is_active_session_run_phase, pending_question_snapshots_from_agent_runtime,
     refresh_conversation_attention_summary, restore_webui_runtime_controls_for_session,
     session_plan_mode_summary_from_runtime_state, session_summary_project_id_owned,
+    subagent_navigation_snapshot_for_parent_from_cached_state,
     sync_workbench_runtime_control_fields_locked, workspace_session_summary_for_session,
     workspace_session_summary_for_session_mut,
 };
@@ -268,7 +269,7 @@ pub(crate) fn commit_materialized_submission_activation(
     };
     // revision and event payloads are produced from the same exclusive shared-state transaction.
     // revision 与事件载荷由同一个独占共享状态事务产生。
-    let (revision, delta_event, full_workbench_event) = {
+    let (revision, delta_event, full_workbench_event, subagent_navigation_event) = {
         // guard serializes navigation ownership, attention refresh, and workbench generation.
         // guard 串行化导航所有权、注意状态刷新与工作台代际。
         let mut guard = state
@@ -276,15 +277,23 @@ pub(crate) fn commit_materialized_submission_activation(
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         // Existing-session activation starts a new parent coordination round and closes only that parent's child panel.
         // 已有会话激活会开始新的父协调轮次，并且只关闭该父会话的子任务面板。
-        if materialized_session.kind == PromptSessionMaterializationKind::Existing {
-            guard.session_subagent_navigation_rounds.remove(&session_id);
-            if guard
-                .active_subagent_panel
-                .is_some_and(|selection| selection.parent_session_id == session_id)
-            {
-                guard.active_subagent_panel = None;
-            }
-        }
+        let subagent_navigation_state_changed =
+            if materialized_session.kind == PromptSessionMaterializationKind::Existing {
+                let mut changed = guard
+                    .session_subagent_navigation_rounds
+                    .remove(&session_id)
+                    .is_some();
+                if guard
+                    .active_subagent_panel
+                    .is_some_and(|selection| selection.parent_session_id == session_id)
+                {
+                    guard.active_subagent_panel = None;
+                    changed = true;
+                }
+                changed
+            } else {
+                false
+            };
         // pending_questions is the live ask snapshot observed at the committed revision.
         // pending_questions 是已提交版本观察到的实时提问快照。
         let pending_questions =
@@ -337,7 +346,7 @@ pub(crate) fn commit_materialized_submission_activation(
             }
             // The full snapshot makes conversation selection and model projection atomic for the WebUI.
             // 完整快照让会话选中与模型投影在 WebUI 中原子生效。
-            (revision, None, Some(guard.workbench.clone()))
+            (revision, None, Some(guard.workbench.clone()), None)
         } else {
             // Existing-session activation changes only the conversation summary and remains a compact delta.
             // 已有会话激活只改变会话摘要，继续使用紧凑增量。
@@ -350,7 +359,35 @@ pub(crate) fn commit_materialized_submission_activation(
                     },
                 ),
             };
-            (revision, Some(event), None::<WorkbenchSnapshot>)
+            if subagent_navigation_state_changed {
+                // subagent_navigation is rebuilt after the old round loses closed-entry admission.
+                // subagent_navigation 在旧轮次失去已关闭条目准入后重新构建。
+                let subagent_navigation =
+                    subagent_navigation_snapshot_for_parent_from_cached_state(
+                        &mut guard, session_id, true,
+                    )?;
+                guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+                let navigation_revision = guard.workbench_generation;
+                guard.workbench.revision = navigation_revision;
+                guard.workbench.subagent_navigation = subagent_navigation.clone();
+                let navigation_event = WorkbenchDeltaEnvelope {
+                    generation: navigation_revision,
+                    delta: WorkbenchDelta::SubagentNavigationChanged(
+                        SubagentNavigationChangedDelta {
+                            parent_conversation_id: Some(session_id.to_string()),
+                            subagent_navigation,
+                        },
+                    ),
+                };
+                (
+                    navigation_revision,
+                    Some(event),
+                    None::<WorkbenchSnapshot>,
+                    Some(navigation_event),
+                )
+            } else {
+                (revision, Some(event), None::<WorkbenchSnapshot>, None)
+            }
         }
     };
     if let Some(workbench) = full_workbench_event {
@@ -360,6 +397,13 @@ pub(crate) fn commit_materialized_submission_activation(
         emit_service_event_with_trace(
             app,
             "workbench_conversation_summary_delta_emit",
+            ServiceEvent::WorkbenchDelta(Box::new(event)),
+        );
+    }
+    if let Some(event) = subagent_navigation_event {
+        emit_service_event_with_trace(
+            app,
+            "workbench_subagent_navigation_round_cleanup_delta_emit",
             ServiceEvent::WorkbenchDelta(Box::new(event)),
         );
     }

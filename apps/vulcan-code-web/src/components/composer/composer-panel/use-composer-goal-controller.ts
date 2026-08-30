@@ -2,6 +2,7 @@ import React from "react";
 import { toast } from "sonner";
 import { useI18n } from "@/i18n";
 import type { SessionGoalSummary, SessionGoalUserStatusUpdate } from "@/types";
+import { composerGoalToggleTarget } from "./goal-status-action";
 
 // ComposerGoalDialogMode identifies whether the dialog edits the current goal or resumes a stopped goal.
 // ComposerGoalDialogMode 标识弹窗是在编辑当前目标，还是继续一个已停止目标。
@@ -213,7 +214,10 @@ export function useComposerGoalController(options: UseComposerGoalControllerOpti
     }
     // nextStatus is the explicit persisted lifecycle transition requested by the user.
     // nextStatus 是用户请求的显式持久化生命周期转换。
-    const nextStatus: SessionGoalUserStatusUpdate = options.goal.status === "paused" ? "active" : "paused";
+    const nextStatus = composerGoalToggleTarget(options.goal.status);
+    if (nextStatus === null) {
+      return;
+    }
     setSaving(true);
     try {
       await options.onUpdateGoalStatus(nextStatus);

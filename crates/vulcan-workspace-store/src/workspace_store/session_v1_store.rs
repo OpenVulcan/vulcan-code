@@ -132,6 +132,160 @@ pub struct SessionV1StorageLocator {
 }
 
 impl SessionV1StorageLocator {
+    /// Reads only the exact metadata file, validating its contract and locator identity.
+    /// 仅读取精确 metadata 文件，校验契约及定位器身份。
+    /// Returns metadata without reading runtime, compactions, or interaction segments.
+    /// 返回元数据，不读取运行时、压缩文档或交互分片。
+    fn read_configuration_metadata(&self) -> Result<MetadataDocument, SessionV1StoreError> {
+        // Metadata is the sole configuration authority; event replay is deliberately excluded.
+        // metadata 是唯一配置权威；此处刻意排除事件重放。
+        let metadata = super::session_v1::documents::read_metadata(&self.layout.metadata_path())?;
+        if metadata.session_id != self.session_id {
+            return Err(SessionIndexV1Error::InvalidLocator {
+                session_id: Some(self.session_id.clone()),
+                detail: String::from("V1 configuration metadata owner does not match its locator"),
+            }
+            .into());
+        }
+        metadata
+            .config
+            .selection
+            .provider_tools
+            .validate()
+            .map_err(|error| {
+                SessionV1StorageError::corrupt(
+                    SessionV1StorageErrorCode::MetadataCorrupt,
+                    self.layout.metadata_path(),
+                    format!("provider tool configuration: {error}"),
+                )
+            })?;
+        Ok(metadata)
+    }
+
+    /// Reads session-owned capability settings without constructing a runtime session.
+    /// 读取会话自有能力设置，不构建运行时会话。
+    /// Returns the persisted selection; inherited defaults are resolved by the caller in memory.
+    /// 返回持久化选择；继承默认值由调用方在内存中解析。
+    pub fn read_provider_tool_selection(
+        &self,
+    ) -> Result<vulcan_session_core::v1::config::ProviderToolSelectionConfig, SessionV1StoreError>
+    {
+        Ok(self
+            .read_configuration_metadata()?
+            .config
+            .selection
+            .provider_tools)
+    }
+
+    /// Atomically changes capability settings for an unloaded session under its registry gate.
+    /// 在注册表门控内原子修改尚未加载会话的能力设置。
+    /// `selection` is canonical; `now_ms` is the nonnegative mutation timestamp.
+    /// `selection` 为规范选择；`now_ms` 为非负修改时间戳。
+    /// Returns whether metadata changed, preserving all unrelated fields and interaction files.
+    /// 返回元数据是否变化，保留全部无关字段和交互文件。
+    /// The caller must exclude physical loading and all other writes for this session.
+    /// 调用方必须排除该会话的物理加载及其他写入。
+    pub fn save_unloaded_provider_tool_selection(
+        &self,
+        selection: vulcan_session_core::v1::config::ProviderToolSelectionConfig,
+        now_ms: i64,
+    ) -> Result<bool, SessionV1StoreError> {
+        // Validate even a no-op call; idempotence must not bypass the timestamp contract.
+        // 即便无操作调用也必须校验；幂等不能绕过时间戳契约。
+        if now_ms < 0 {
+            return Err(SessionV1StorageError::corrupt(
+                SessionV1StorageErrorCode::MetadataCorrupt,
+                self.layout.metadata_path(),
+                "configuration timestamp must be nonnegative",
+            )
+            .into());
+        }
+        selection.validate().map_err(|error| {
+            SessionV1StorageError::corrupt(
+                SessionV1StorageErrorCode::MetadataCorrupt,
+                self.layout.metadata_path(),
+                format!("provider tool configuration: {error}"),
+            )
+        })?;
+        // Read within the exclusive gate, never overwrite a metadata snapshot captured earlier.
+        // 在独占门控内读取，绝不覆盖此前捕获的旧元数据快照。
+        let mut metadata = self.read_configuration_metadata()?;
+        if metadata.config.selection.provider_tools == selection {
+            return Ok(false);
+        }
+        metadata.config.selection.provider_tools = selection;
+        self.commit_provider_tool_metadata(metadata, now_ms)
+    }
+
+    /// Rebuilds only capability settings with `selection` at `now_ms` under exclusive admission.
+    /// 在独占准入内于 `now_ms` 使用 `selection` 仅重建能力设置。
+    /// Returns a durable metadata change without reading interaction files or accepting other corruption.
+    /// 返回可靠元数据变更，不读取交互文件，也不放行其他损坏。
+    pub fn rebuild_unloaded_provider_tool_selection(
+        &self,
+        selection: vulcan_session_core::v1::config::ProviderToolSelectionConfig,
+        now_ms: i64,
+    ) -> Result<bool, SessionV1StoreError> {
+        let metadata = super::session_v1::documents::read_metadata_for_provider_tool_rebuild(
+            &self.layout.metadata_path(),
+            &selection,
+        )?;
+        self.commit_provider_tool_metadata(metadata, now_ms)
+    }
+
+    /// Commits a capability-only candidate; `metadata` must come from this locator's guarded read.
+    /// 提交仅能力变更候选；`metadata` 必须来自本定位器的受保护读取。
+    /// Validates ownership, selection and `now_ms`; returns true after atomic publication.
+    /// 校验归属、选择及 `now_ms`；原子发布后返回 true。
+    fn commit_provider_tool_metadata(
+        &self,
+        mut metadata: MetadataDocument,
+        now_ms: i64,
+    ) -> Result<bool, SessionV1StoreError> {
+        if metadata.session_id != self.session_id {
+            return Err(SessionIndexV1Error::InvalidLocator {
+                session_id: Some(self.session_id.clone()),
+                detail: String::from("V1 configuration metadata owner does not match its locator"),
+            }
+            .into());
+        }
+        metadata
+            .config
+            .selection
+            .provider_tools
+            .validate()
+            .map_err(|error| {
+                SessionV1StorageError::corrupt(
+                    SessionV1StorageErrorCode::MetadataCorrupt,
+                    self.layout.metadata_path(),
+                    format!("provider tool configuration: {error}"),
+                )
+            })?;
+        if now_ms < 0 {
+            return Err(SessionV1StorageError::corrupt(
+                SessionV1StorageErrorCode::MetadataCorrupt,
+                self.layout.metadata_path(),
+                "configuration timestamp must be nonnegative",
+            )
+            .into());
+        }
+        metadata.document_revision =
+            metadata.document_revision.checked_add(1).ok_or_else(|| {
+                SessionV1StorageError::corrupt(
+                    SessionV1StorageErrorCode::MetadataCorrupt,
+                    self.layout.metadata_path(),
+                    "configuration document revision overflow",
+                )
+            })?;
+        metadata.updated_at_ms = metadata.updated_at_ms.max(now_ms);
+        super::session_v1::documents::write_json_document(
+            &self.layout.metadata_path(),
+            &metadata,
+            "metadata",
+        )?;
+        Ok(true)
+    }
+
     /// Returns the cross-system session id.
     /// 返回跨系统会话 ID。
     pub fn session_id(&self) -> &str {
@@ -1366,7 +1520,212 @@ fn remove_exact_session_directory(
 
 #[cfg(test)]
 mod tests {
+    /// Verifies metadata reads and writes remain independent of corrupt or absent interactions.
+    /// 验证元数据读写独立于损坏或缺失的交互内容。
+    #[test]
+    fn capability_metadata_ignores_interaction_storage() {
+        use vulcan_session_core::v1::config::ProviderToolSelectionConfig;
+        // Each case owns an isolated real V1 directory, never user session data.
+        // 每个用例拥有独立真实 V1 目录，绝不使用用户会话数据。
+        for remove_context in [false, true] {
+            let temporary = tempfile::tempdir().unwrap();
+            let locator = super::create_session_v1_storage_fixture(
+                temporary.path(),
+                "capability-metadata",
+                1,
+            )
+            .unwrap();
+            let before = locator.read_configuration_metadata().unwrap();
+            let original_bytes = std::fs::read(locator.layout.metadata_path()).unwrap();
+            let tail = locator
+                .layout
+                .segment_entry_path(before.segment_generation, &before.split_list[0].file_name);
+            if remove_context {
+                std::fs::remove_file(&tail).unwrap();
+                std::fs::remove_dir_all(locator.layout.session_dir().join("context")).unwrap();
+            } else {
+                std::fs::write(&tail, b"invalid interaction JSON\n").unwrap();
+            }
+            assert!(super::load_session_v1_tail(&locator).is_err());
+            assert_eq!(
+                locator.read_provider_tool_selection().unwrap(),
+                ProviderToolSelectionConfig::default()
+            );
+            assert_eq!(
+                std::fs::read(locator.layout.metadata_path()).unwrap(),
+                original_bytes
+            );
+            // Only the explicit selection and its metadata revision/time may change.
+            // 仅显式选择及其元数据修订/时间允许变化。
+            let selection = ProviderToolSelectionConfig {
+                initialized: true,
+                overridden: true,
+                enabled_capabilities: vec![String::from("search")],
+                ..Default::default()
+            };
+            assert!(
+                locator
+                    .save_unloaded_provider_tool_selection(selection.clone(), 3)
+                    .unwrap()
+            );
+            let mut expected = before;
+            expected.config.selection.provider_tools = selection.clone();
+            expected.updated_at_ms = 3;
+            expected.document_revision += 1;
+            assert_eq!(locator.read_configuration_metadata().unwrap(), expected);
+            assert_eq!(locator.read_provider_tool_selection().unwrap(), selection);
+            let saved_bytes = std::fs::read(locator.layout.metadata_path()).unwrap();
+            assert!(
+                !locator
+                    .save_unloaded_provider_tool_selection(selection, 5)
+                    .unwrap()
+            );
+            assert_eq!(
+                std::fs::read(locator.layout.metadata_path()).unwrap(),
+                saved_bytes
+            );
+            assert!(super::load_session_v1_tail(&locator).is_err());
+            if !remove_context {
+                assert_eq!(std::fs::read(&tail).unwrap(), b"invalid interaction JSON\n");
+            }
+        }
+    }
+
+    /// Invalid selections fail before publication and are classified as configuration errors.
+    /// 非法选择在发布前失败，并归类为配置错误。
+    #[test]
+    fn capability_metadata_rejects_invalid_write_without_changing_bytes() {
+        // The baseline includes all unrelated metadata fields preserved by the narrow writer.
+        // 基线包含窄写入器必须保留的全部无关元数据字段。
+        let temporary = tempfile::tempdir().unwrap();
+        let locator =
+            super::create_session_v1_storage_fixture(temporary.path(), "invalid-capability", 1)
+                .unwrap();
+        let before = std::fs::read(locator.layout.metadata_path()).unwrap();
+        assert!(
+            locator
+                .save_unloaded_provider_tool_selection(Default::default(), -1)
+                .is_err()
+        );
+        let invalid = vulcan_session_core::v1::config::ProviderToolSelectionConfig {
+            initialized: true,
+            enabled_capabilities: vec![String::from("search"), String::from("search")],
+            ..Default::default()
+        };
+        let error = locator
+            .save_unloaded_provider_tool_selection(invalid, 2)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("metadata_corrupt"));
+        assert!(!error.contains("segment_corrupt"));
+        assert_eq!(
+            std::fs::read(locator.layout.metadata_path()).unwrap(),
+            before
+        );
+    }
+
     use super::*;
+
+    /// Rebuild accepts damage confined to the capability subtree and preserves every other fact.
+    /// 重建接受仅限能力子树的损坏，并保留全部其他事实。
+    #[test]
+    fn capability_metadata_rebuild_replaces_only_the_addon() {
+        use vulcan_session_core::v1::config::ProviderToolSelectionConfig;
+        // Cover valid overrides, invalid semantics, malformed shape and the absent optional addon.
+        // 覆盖合法覆盖、语义错误、结构损坏和可选附加项缺失。
+        for damaged in [
+            Some(
+                serde_json::json!({"initialized": true, "overridden": true, "enabled_capabilities": ["search"]}),
+            ),
+            Some(
+                serde_json::json!({"initialized": true, "enabled_capabilities": ["search", "search"]}),
+            ),
+            Some(serde_json::json!("broken capability configuration")),
+            None,
+        ] {
+            let temporary = tempfile::tempdir().unwrap();
+            let locator =
+                create_session_v1_storage_fixture(temporary.path(), "rebuild-addon", 1).unwrap();
+            let path = locator.layout.metadata_path();
+            let mut expected = locator.read_configuration_metadata().unwrap();
+            let tail = locator.layout.segment_entry_path(
+                expected.segment_generation,
+                &expected.split_list[0].file_name,
+            );
+            let tail_bytes = std::fs::read(&tail).unwrap();
+            let mut raw = serde_json::to_value(&expected).unwrap();
+            let selections = raw
+                .pointer_mut("/config/selection")
+                .unwrap()
+                .as_object_mut()
+                .unwrap();
+            match damaged {
+                Some(value) => {
+                    selections.insert("provider_tools".into(), value);
+                }
+                None => {
+                    selections.remove("provider_tools");
+                }
+            }
+            std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+            let defaults = ProviderToolSelectionConfig {
+                initialized: true,
+                ..Default::default()
+            };
+            locator
+                .rebuild_unloaded_provider_tool_selection(defaults.clone(), 7)
+                .unwrap();
+            expected.config.selection.provider_tools = defaults;
+            expected.document_revision += 1;
+            expected.updated_at_ms = 7;
+            assert_eq!(locator.read_configuration_metadata().unwrap(), expected);
+            assert_eq!(std::fs::read(&tail).unwrap(), tail_bytes);
+            assert!(load_session_v1_tail(&locator).is_ok());
+        }
+    }
+
+    /// Recovery refuses unrelated damage and invalid timestamps without changing any bytes.
+    /// 恢复拒绝无关损坏及非法时间戳，不改变任何字节。
+    #[test]
+    fn capability_metadata_rebuild_refuses_unrelated_corruption() {
+        // Each exact JSON pointer addresses an existing frozen metadata field outside the addon.
+        // 每个精确 JSON 指针都指向附加项之外已有的冻结元数据字段。
+        for (pointer, value) in [
+            ("/session_id", serde_json::json!("another-session")),
+            ("/schema_version", serde_json::json!(99)),
+            ("/mode/goal", serde_json::json!("broken goal")),
+            ("/config/selection", serde_json::Value::Null),
+        ] {
+            let temporary = tempfile::tempdir().unwrap();
+            let locator =
+                create_session_v1_storage_fixture(temporary.path(), "reject-rebuild", 1).unwrap();
+            let path = locator.layout.metadata_path();
+            let mut raw: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            *raw.pointer_mut(pointer).unwrap() = value;
+            let before = serde_json::to_vec(&raw).unwrap();
+            std::fs::write(&path, &before).unwrap();
+            assert!(
+                locator
+                    .rebuild_unloaded_provider_tool_selection(Default::default(), 7)
+                    .is_err()
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+        }
+        let temporary = tempfile::tempdir().unwrap();
+        let locator =
+            create_session_v1_storage_fixture(temporary.path(), "reject-timestamp", 1).unwrap();
+        let before = std::fs::read(locator.layout.metadata_path()).unwrap();
+        assert!(
+            locator
+                .rebuild_unloaded_provider_tool_selection(Default::default(), -1)
+                .is_err()
+        );
+        assert_eq!(
+            std::fs::read(locator.layout.metadata_path()).unwrap(),
+            before
+        );
+    }
     use crate::data_plane::ControllerRuntimeMetadata;
     use std::io::{BufRead, BufReader, Write};
     use std::process::{Child, Command, Stdio};

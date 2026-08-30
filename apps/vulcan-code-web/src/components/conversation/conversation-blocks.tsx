@@ -339,20 +339,20 @@ export function ThinkingBlock(props: {
   // thinkingViewport 为内联思考正文提供受限滚动行为。
   const thinkingViewport = useStreamingThinkingViewport({ enabled: useStreamingMarkdown });
   const wasStreamingRef = React.useRef(props.streaming);
+  // wasAutoExpandedRef distinguishes a real live-mode transition from remounting retained history.
+  // wasAutoExpandedRef 区分真实的实时模式转换与保留历史的重新挂载。
+  const wasAutoExpandedRef = React.useRef(shouldAutoExpand);
 
   React.useEffect(() => {
-    wasStreamingRef.current = props.streaming;
-    setExpanded(shouldAutoExpand, { manual: false });
-  }, [props.block.id, setExpanded, shouldAutoExpand]);
-
-  React.useEffect(() => {
-    if (shouldAutoExpand) {
-      setExpanded(true, { manual: false });
-    }
+    // Restored expansion already belongs to the shared memory; only lifecycle changes may override it.
+    // 已恢复的展开状态由共享记忆拥有；只有生命周期变化才允许覆盖它。
     if (wasStreamingRef.current && !props.streaming) {
       setExpanded(false, { manual: false });
+    } else if (wasAutoExpandedRef.current !== shouldAutoExpand) {
+      setExpanded(shouldAutoExpand, { manual: false });
     }
     wasStreamingRef.current = props.streaming;
+    wasAutoExpandedRef.current = shouldAutoExpand;
   }, [props.streaming, setExpanded, shouldAutoExpand]);
 
   const durationLabel = props.streaming ? t("contextCompaction.thinkingActive") : thinkingDurationLabel(props.block, locale, t);

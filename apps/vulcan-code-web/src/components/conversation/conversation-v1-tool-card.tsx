@@ -13,7 +13,9 @@ import {
 
 import { ConversationMeasuredCollapse, useConversationMeasuredExpansion } from "@/components/conversation/conversation-measured-collapse";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
+import { ToolPresentationCard } from "@/components/conversation/conversation-tool-presentation-card";
 import { ConversationV1GeneratedResourceList } from "@/components/conversation/conversation-v1-resource-list";
+import { resolveV1SubagentOrchestrationPresentation } from "@/components/conversation/tool-presentations/v1-subagent-orchestration-presentation";
 import type {
   V1ChangeSetFilePresentation,
   V1ChangeSetRow,
@@ -48,9 +50,21 @@ export interface ConversationV1ToolCardProps {
   resourceCatalog?: ConversationSessionResourceCatalogV1 | null;
 }
 
+/** Confirms that event-native V1 cards never require legacy supplemental detail loading.
+ * 确认事件原生 V1 卡片绝不需要旧式补充详情加载。 */
+async function loadNoV1SupplementalToolDetail(): Promise<null> {
+  return null;
+}
+
 /** Renders one self-contained V1 tool card without requesting supplemental data.
  * 在不请求补充数据的情况下渲染一张自包含 V1 工具卡。 */
 export function ConversationV1ToolCard(props: ConversationV1ToolCardProps) {
+  // subagentPresentation reuses the complete orchestration card only for an exact recognized tool contract.
+  // subagentPresentation 仅对精确识别的工具契约复用完整调度卡片。
+  const subagentPresentation = React.useMemo(
+    () => resolveV1SubagentOrchestrationPresentation(props.item),
+    [props.item],
+  );
   // presentation is a pure projection of the one authoritative tool event.
   // presentation 是单条权威工具事件的纯投影。
   const presentation = React.useMemo(
@@ -60,12 +74,46 @@ export function ConversationV1ToolCard(props: ConversationV1ToolCardProps) {
   // expanded is scoped by the stable event seq rather than a legacy string call id.
   // expanded 以稳定事件 seq 为作用域，而不是旧字符串调用标识。
   const [expanded, setExpanded] = useConversationMeasuredExpansion(
-    presentation.id,
+    subagentPresentation?.id ?? presentation.id,
     props.defaultExpanded ?? false,
   );
+  // expandedPresentationIds preserves the shared card contract without creating hidden detail state.
+  // expandedPresentationIds 保留共享卡片契约，且不创建隐藏详情状态。
+  const expandedPresentationIds = React.useMemo(
+    () => expanded
+      ? new Set([subagentPresentation?.id ?? presentation.id])
+      : new Set<string>(),
+    [expanded, presentation.id, subagentPresentation?.id],
+  );
+  // handleSubagentExpandedChange forwards the established rich-card toggle to the V1 collapse store.
+  // handleSubagentExpandedChange 将既有富卡片开关转发到 V1 折叠存储。
+  const handleSubagentExpandedChange = React.useCallback((
+    // Stable rich-card presentation id retained by the callback contract.
+    // 回调契约保留的稳定富卡片展示标识。
+    _presentationId: string,
+    // Requested expansion state.
+    // 请求的展开状态。
+    nextExpanded: boolean,
+  ): void => {
+    setExpanded(nextExpanded);
+  }, [setExpanded]);
   // summary is derived once from the same model used by the expanded body.
   // summary 从展开正文使用的同一模型中仅派生一次。
   const summary = presentationSummary(presentation);
+
+  if (subagentPresentation) {
+    return (
+      <ToolPresentationCard
+        detailLoadEnabled={false}
+        expanded={expanded}
+        expandedToolPresentationIds={expandedPresentationIds}
+        presentation={subagentPresentation}
+        requestProgress={null}
+        onExpandedChange={handleSubagentExpandedChange}
+        onLoadToolDetail={loadNoV1SupplementalToolDetail}
+      />
+    );
+  }
 
   return (
     <article

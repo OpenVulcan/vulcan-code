@@ -19,7 +19,8 @@ pub fn subagent_run_state_from_execution_status(
         "created" | "running" | "waiting_children" | "waiting_followup" | "compacting" => {
             Some(SubagentTaskRunState::Running)
         }
-        "completed" | "archived" => Some(SubagentTaskRunState::Completed),
+        "completed" => Some(SubagentTaskRunState::Completed),
+        "archived" => Some(SubagentTaskRunState::Closed),
         "stopped" => Some(SubagentTaskRunState::Stopped),
         "failed" => Some(SubagentTaskRunState::Failed),
         _ => None,

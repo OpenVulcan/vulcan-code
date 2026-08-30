@@ -1,12 +1,14 @@
 import { Edit3, ListChecks, PauseCircle, PlayCircle, Target, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { SessionGoalSummary } from "@/types";
-import {
-  formatCompactGoalTokenCount,
-  formatFullGoalTokenCount,
-} from "@/components/composer/composer-panel/goal-token-format";
+import { composerGoalToggleTarget } from "./goal-status-action";
+import { ComposerGoalDetails } from "./goal-details";
+import { useGoalWorkDuration } from "./goal-work-duration";
+
+// ComposerGoalStrip renders the objective and lifecycle controls; props supply the authoritative goal and actions.
+// ComposerGoalStrip 渲染目标与生命周期控件；props 提供权威目标及操作，返回紧凑目标条。
 export function ComposerGoalStrip(props: {
   // Current persisted goal.
   // 当前持久化目标。
@@ -29,86 +31,28 @@ export function ComposerGoalStrip(props: {
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
-  const { t, locale } = useI18n();
-  // newInputTokens is the normalized non-cached input persisted for the goal.
-  // newInputTokens 是为目标持久化的标准化非缓存输入。
-  const newInputTokens = Math.max(0, props.goal.inputTokens ?? 0);
-  // cachedInputTokens is the cache-hit input detail excluded from the visible budget usage.
-  // cachedInputTokens 是不计入可见预算用量的缓存命中输入明细。
-  const cachedInputTokens = Math.max(0, props.goal.cachedInputTokens ?? 0);
-  // outputTokens is complete model output and already contains reasoning where the Provider reports it as a subset.
-  // outputTokens 是完整模型输出；Provider 将思考报告为子集时已包含该部分。
-  const outputTokens = Math.max(0, props.goal.outputTokens ?? 0);
-  // reasoningTokens is the separately reported reasoning detail inside complete output.
-  // reasoningTokens 是完整输出中单独报告的思考明细。
-  const reasoningTokens = Math.max(0, props.goal.reasoningTokens ?? 0);
-  // totalTokens preserves the cumulative Provider-reported total.
-  // totalTokens 保留累计的 Provider 报告总量。
-  const totalTokens = Math.max(0, props.goal.totalTokens ?? 0);
-  // usageTokens is derived directly from the required new-input plus complete-output contract.
-  // usageTokens 直接由要求的新增输入加完整输出契约派生。
-  const usageTokens = newInputTokens + outputTokens;
-  // budgetText is the compact goal usage label without a redundant token suffix.
-  // budgetText 是不带冗余 token 后缀的紧凑目标用量标签。
-  const budgetText = props.goal.tokenBudget
-    ? `${formatCompactGoalTokenCount(usageTokens)} / ${formatCompactGoalTokenCount(props.goal.tokenBudget)}`
-    : formatCompactGoalTokenCount(usageTokens);
-  // usageAriaLabel exposes the same five exact Tooltip details to assistive technology.
-  // usageAriaLabel 向辅助技术公开与 Tooltip 相同的五项精确明细。
-  const usageAriaLabel = [
-    `${t("composer.goal.tooltip.input")}: ${formatFullGoalTokenCount(newInputTokens, locale)}`,
-    `${t("composer.goal.tooltip.cache")}: ${formatFullGoalTokenCount(cachedInputTokens, locale)}`,
-    `${t("composer.goal.tooltip.output")}: ${formatFullGoalTokenCount(outputTokens, locale)}`,
-    `${t("composer.goal.tooltip.reasoning")}: ${formatFullGoalTokenCount(reasoningTokens, locale)}`,
-    `${t("composer.goal.tooltip.total")}: ${formatFullGoalTokenCount(totalTokens, locale)}`,
-  ].join(", ");
-  // usageTriggerAriaLabel preserves the visible used/budget value before the detailed breakdown.
-  // usageTriggerAriaLabel 在详细明细前保留可见的已用量与预算值。
-  const usageTriggerAriaLabel = `${budgetText}. ${usageAriaLabel}`;
+  const { t } = useI18n();
+  // toggleTarget owns both the icon and command semantics without overwriting the persisted blocked reason.
+  // toggleTarget 同时决定图标与命令语义，不覆盖持久化的受阻原因。
+  const toggleTarget = composerGoalToggleTarget(props.goal.status);
+  // duration updates only this display clock; persistence belongs to backend lifecycle events.
+  // duration 仅更新展示时钟；持久化由后端生命周期事件负责。
+  const duration = useGoalWorkDuration(props.goal);
   return (
     <div className="composer-goal-strip">
       <Target size={15} />
       <span className="composer-goal-strip-status">{composerGoalStatusLabel(props.goal.status, t)}</span>
-      <span className="composer-goal-strip-objective">{props.goal.objective}</span>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span
-            aria-label={usageTriggerAriaLabel}
-            className="composer-goal-strip-budget"
-            tabIndex={0}
-          >
-            {budgetText}
-          </span>
-        </TooltipTrigger>
-        <TooltipContent
-          className="composer-goal-usage-tooltip"
-          side="top"
-          sideOffset={6}
-        >
-          <dl>
-            <div>
-              <dt>{t("composer.goal.tooltip.input")}</dt>
-              <dd>{formatFullGoalTokenCount(newInputTokens, locale)}</dd>
-            </div>
-            <div>
-              <dt>{t("composer.goal.tooltip.cache")}</dt>
-              <dd>{formatFullGoalTokenCount(cachedInputTokens, locale)}</dd>
-            </div>
-            <div>
-              <dt>{t("composer.goal.tooltip.output")}</dt>
-              <dd>{formatFullGoalTokenCount(outputTokens, locale)}</dd>
-            </div>
-            <div>
-              <dt>{t("composer.goal.tooltip.reasoning")}</dt>
-              <dd>{formatFullGoalTokenCount(reasoningTokens, locale)}</dd>
-            </div>
-            <div>
-              <dt>{t("composer.goal.tooltip.total")}</dt>
-              <dd>{formatFullGoalTokenCount(totalTokens, locale)}</dd>
-            </div>
-          </dl>
-        </TooltipContent>
-      </Tooltip>
+      <TooltipProvider delayDuration={500} skipDelayDuration={0}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="composer-goal-strip-objective" tabIndex={0}>{props.goal.objective}</span>
+          </TooltipTrigger>
+          <TooltipContent className="context-usage-tooltip composer-goal-details-tooltip" side="top" sideOffset={6} showArrow={false}>
+            <ComposerGoalDetails goal={props.goal} />
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+      <span className="composer-goal-strip-duration" aria-label={`${t("composer.goal.duration")}: ${duration}`}>{duration}</span>
       <Button aria-label={t("composer.goal.action.edit")} className="composer-goal-strip-button" disabled={props.disabled} onClick={props.onEdit} size="icon-sm" type="button" variant="ghost">
         <Edit3 size={14} />
       </Button>
@@ -117,11 +61,11 @@ export function ComposerGoalStrip(props: {
           <PlayCircle size={14} />
           <span>{t("composer.goal.action.resumeTask")}</span>
         </Button>
-      ) : (
-        <Button aria-label={props.goal.status === "paused" ? t("composer.goal.action.resume") : t("composer.goal.action.pause")} className="composer-goal-strip-button" disabled={props.disabled} onClick={props.onToggleStatus} size="icon-sm" type="button" variant="ghost">
-          {props.goal.status === "paused" ? <PlayCircle size={14} /> : <PauseCircle size={14} />}
+      ) : toggleTarget !== null ? (
+        <Button aria-label={toggleTarget === "active" ? t("composer.goal.action.resume") : t("composer.goal.action.pause")} className="composer-goal-strip-button" disabled={props.disabled} onClick={props.onToggleStatus} size="icon-sm" type="button" variant="ghost">
+          {toggleTarget === "active" ? <PlayCircle size={14} /> : <PauseCircle size={14} />}
         </Button>
-      )}
+      ) : null}
       <Button aria-label={t("composer.goal.action.clear")} className="composer-goal-strip-button" disabled={props.disabled} onClick={props.onClear} size="icon-sm" type="button" variant="ghost">
         <Trash2 size={14} />
       </Button>

@@ -44,8 +44,8 @@ pub struct ConversationEditGenerationV1Response {
     pub dispatch_started: bool,
 }
 
-/// Creates or exactly retries one immutable child session at a root-input boundary.
-/// 在根输入边界创建或精确重试一个不可变子会话。
+/// Creates or exactly retries one immutable child session at a completed-Turn boundary.
+/// 在完整回合结束边界创建或精确重试一个不可变子会话。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationForkGenerationV1Request {
@@ -55,9 +55,9 @@ pub struct ConversationForkGenerationV1Request {
     /// Parent event generation observed before the fork action.
     /// 分叉动作前观察到的父事件代次。
     pub expected_window_generation: u64,
-    /// Parent root-input seq retained by the child.
-    /// 子会话保留的父根输入 seq。
-    pub target_seq: u64,
+    /// Parent terminal TurnStats seq retained as the child's inclusive history boundary.
+    /// 作为子会话包含式历史边界保留的父级终态 TurnStats seq。
+    pub source_turn_end_seq: u64,
     /// Stable browser-generated child identity reused after response loss.
     /// 响应丢失后复用的稳定浏览器生成子会话身份。
     pub child_session_id: String,
@@ -80,18 +80,15 @@ pub struct ConversationForkGenerationV1Response {
     /// Whether this request physically created the child rather than validating a retry.
     /// 当前请求是否物理创建子会话，而非校验一次重试。
     pub created: bool,
-    /// Parent root-input seq retained by the child.
-    /// 子会话保留的父根输入 seq。
-    pub source_target_seq: u64,
+    /// Parent terminal TurnStats seq retained by the child.
+    /// 子会话保留的父级终态 TurnStats seq。
+    pub source_turn_end_seq: u64,
     /// Child event-window generation.
     /// 子会话事件窗口代次。
     pub window_generation: u64,
     /// Child complete document revision.
     /// 子会话完整文档修订号。
     pub document_revision: u64,
-    /// Whether the exact open child root Turn entered process-local physical dispatch.
-    /// 精确开放子根回合是否进入进程内物理分发。
-    pub dispatch_started: bool,
 }
 
 #[cfg(test)]
@@ -99,7 +96,10 @@ mod tests {
     //! Strict edit and fork wire-contract tests.
     //! 严格编辑与分叉线协议契约测试。
 
-    use super::{ConversationEditGenerationV1Request, ConversationForkGenerationV1Request};
+    use super::{
+        ConversationEditGenerationV1Request, ConversationForkGenerationV1Request,
+        ConversationForkGenerationV1Response,
+    };
 
     /// Rejects unknown edit fields so no legacy message identity can silently re-enter V1.
     /// 拒绝未知编辑字段，防止旧消息身份静默重新进入 V1。
@@ -117,20 +117,56 @@ mod tests {
         assert!(error.to_string().contains("unknown field"));
     }
 
-    /// Rejects unknown fork anchors so the immutable source seq remains the only boundary.
-    /// 拒绝未知分叉锚点，使不可变来源 seq 保持唯一边界。
+    /// Rejects root-input fork anchors so only one completed-Turn boundary can enter V1.
+    /// 拒绝根输入分叉锚点，确保只有完整回合边界可以进入 V1。
     #[test]
     fn fork_request_rejects_legacy_anchor_message() {
         let error =
             serde_json::from_value::<ConversationForkGenerationV1Request>(serde_json::json!({
                 "sourceSessionId": "4c751b3e-b8de-4ae1-866a-46fa4a093404",
                 "expectedWindowGeneration": 1,
-                "targetSeq": 1,
+                "sourceTurnEndSeq": 8,
                 "childSessionId": "8da7f088-04da-444b-918b-a52001dfc3d1",
                 "title": "fork",
-                "anchorMessageId": "legacy-message"
+                "targetSeq": 1
             }))
-            .expect_err("legacy fork anchor must be rejected");
+            .expect_err("root-input fork anchor must be rejected");
         assert!(error.to_string().contains("unknown field"));
+    }
+
+    /// Fork wire contracts expose only a completed-Turn anchor and no dispatch acknowledgement.
+    /// 分叉线协议只暴露完整回合锚点，且不包含分发确认。
+    #[test]
+    fn fork_wire_contract_uses_completed_turn_without_dispatch() {
+        let request = ConversationForkGenerationV1Request {
+            source_session_id: String::from("4c751b3e-b8de-4ae1-866a-46fa4a093404"),
+            expected_window_generation: 1,
+            source_turn_end_seq: 8,
+            child_session_id: String::from("8da7f088-04da-444b-918b-a52001dfc3d1"),
+            title: String::from("fork"),
+        };
+        let response = ConversationForkGenerationV1Response {
+            source_session_id: request.source_session_id.clone(),
+            child_session_id: request.child_session_id.clone(),
+            created: true,
+            source_turn_end_seq: request.source_turn_end_seq,
+            window_generation: 2,
+            document_revision: 3,
+        };
+
+        assert_eq!(
+            serde_json::to_value(request).expect("serialize completed-Turn fork request"),
+            serde_json::json!({
+                "sourceSessionId": "4c751b3e-b8de-4ae1-866a-46fa4a093404",
+                "expectedWindowGeneration": 1,
+                "sourceTurnEndSeq": 8,
+                "childSessionId": "8da7f088-04da-444b-918b-a52001dfc3d1",
+                "title": "fork",
+            })
+        );
+        let response_json =
+            serde_json::to_value(response).expect("serialize dormant fork response");
+        assert_eq!(response_json["sourceTurnEndSeq"], 8);
+        assert!(response_json.get("dispatchStarted").is_none());
     }
 }

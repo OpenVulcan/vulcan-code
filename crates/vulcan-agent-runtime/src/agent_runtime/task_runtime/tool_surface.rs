@@ -158,7 +158,7 @@ pub(super) fn build_wait_agent_tool_candidate(
             id: String::from(WAIT_AGENT_TOOL),
             name: String::from(WAIT_AGENT_TOOL),
             description: String::from(
-                "Wait for child-agent mailbox activity and return claimed feedback, an interruption summary, or a timeout summary.",
+                "Wait for child-agent mailbox activity and return claimed feedback, an interruption summary, or a timeout summary. Without explicit targets, queued feedback is claimed first; when no child is active and no feedback remains, the tool returns immediately and must not be polled again until a child is started.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
@@ -1127,7 +1127,8 @@ pub(super) fn build_wait_agent_activity_tool_result(
         "result": feedback_text,
         "timed_out": timed_out,
         "timeout_ms": timeout_ms,
-        "pending_event_count": events.len(),
+        "delivered_event_count": events.len(),
+        "no_active_agents": false,
         "terminal_event_count": terminal_event_count,
         "message_event_count": message_event_count,
         "status_event_count": status_event_count,
@@ -1141,12 +1142,64 @@ pub(super) fn build_wait_agent_activity_tool_result(
         "result": feedback_text,
         "timed_out": timed_out,
         "timeout_ms": timeout_ms,
-        "pending_event_count": events.len(),
+        "delivered_event_count": events.len(),
+        "no_active_agents": false,
         "terminal_event_count": terminal_event_count,
         "message_event_count": message_event_count,
         "status_event_count": status_event_count,
         "agents": host_event_summaries,
     });
+    VulcanToolInvocationResult::from_model_output(model_payload).with_host_result(
+        VulcanToolHostResult {
+            kind: String::from("subagent_wait"),
+            payload: host_payload,
+        },
+    )
+}
+
+/// Builds an immediate `wait_agent` result when the parent has no active child agents or queued feedback.
+/// 当父会话不存在活动子代理或排队反馈时，构建即时 `wait_agent` 结果。
+///
+/// # Parameters
+/// 参数
+/// `current_session_id` is the parent session id that invoked the wait.
+/// `current_session_id` 是发起等待的父会话标识。
+/// `timeout_ms` is echoed for audit parity without actually waiting.
+/// `timeout_ms` 仅为审计一致性回显，实际不会等待。
+///
+/// # Returns
+/// 返回值
+/// A terminal tool result instructing the model not to wait again until a child is started.
+/// 返回终态工具结果，明确告知模型在启动新子代理前不要再次等待。
+pub(super) fn build_wait_agent_no_active_agents_tool_result(
+    current_session_id: SessionId,
+    timeout_ms: u64,
+) -> VulcanToolInvocationResult {
+    // message is deliberately directive because another wait cannot produce new activity without a child agent.
+    // message 使用明确指令，因为没有子代理时再次等待不可能产生新活动。
+    let message = String::from(
+        "No active child agents or queued child-agent feedback remain. Do not call wait_agent again until a child agent is started.",
+    );
+    // model_payload exposes the exact zero-work terminal condition to the provider.
+    // model_payload 向 Provider 暴露精确的零工作终态条件。
+    let model_payload = json!({
+        "tool": WAIT_AGENT_TOOL,
+        "parent_session_id": current_session_id.to_string(),
+        "message": message,
+        "activity_status": "no_active_agents",
+        "result": Value::Null,
+        "timed_out": false,
+        "timeout_ms": timeout_ms,
+        "delivered_event_count": 0,
+        "terminal_event_count": 0,
+        "message_event_count": 0,
+        "status_event_count": 0,
+        "no_active_agents": true,
+        "agents": [],
+    });
+    // host_payload mirrors the same authority for the WebUI presentation layer.
+    // host_payload 为 WebUI 展示层镜像同一份权威状态。
+    let host_payload = model_payload.clone();
     VulcanToolInvocationResult::from_model_output(model_payload).with_host_result(
         VulcanToolHostResult {
             kind: String::from("subagent_wait"),

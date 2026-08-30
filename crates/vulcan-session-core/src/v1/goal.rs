@@ -12,9 +12,87 @@
 
 use crate::v1::config::{GoalConfig, GoalState};
 use crate::v1::document::SessionDocument;
-use crate::v1::event::{EventBody, TurnStatsEvent};
+use crate::v1::event::{DisplayNoticeKind, EventBody, TurnStatsEvent};
 use crate::v1::ids::Seq;
 use crate::v1::stats::goal_budget_tokens;
+
+/// A derived wall-clock checkpoint; the event stream, not a ticking counter, remains authoritative.
+/// 派生的墙钟检查点；权威仍是事件流，而非定时累加的持久化计数器。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GoalWorkTime {
+    /// Active milliseconds accumulated through the observation boundary.
+    /// 截至观察边界累计的活动毫秒数。
+    pub elapsed_ms: u64,
+    /// Last durable document timestamp; offline time must never move this boundary.
+    /// 文档最后持久化时间戳；离线时间绝不能推动此边界。
+    pub observed_at_ms: i64,
+}
+
+/// Replays goal activity intervals from creation, pause, block, resume and completion facts.
+/// 从创建、暂停、受阻、恢复及完成事实重放目标活动区间。
+/// `document` supplies the persisted stream; returns no clock for drafts without a goal origin.
+/// `document` 提供持久化流；没有目标起点的草稿不返回时钟。
+pub fn goal_work_time(document: &SessionDocument) -> Option<GoalWorkTime> {
+    // goal is the metadata authority for enablement and the retained lifetime origin.
+    // goal 是启用状态与保留生命周期起点的元数据权威。
+    let goal = &document.metadata.mode.goal;
+    if !goal.enabled {
+        return None;
+    }
+    // origin remains stable across editing and resumption of the same goal.
+    // origin 在同一目标的编辑与恢复过程中保持稳定。
+    let origin = goal.origin_seq?;
+    // first supplies the authoritative creation timestamp rather than the latest metadata write.
+    // first 提供权威创建时间戳，而非最近一次元数据写入时间。
+    let first = document.events().iter().find(|event| event.seq == origin)?;
+    // observed_at_ms is advanced by existing API/tool/turn/state persistence, never a timer write.
+    // observed_at_ms 由现有 API、工具、回合及状态持久化推进，不由计时器写盘推进。
+    let observed_at_ms = document
+        .events()
+        .iter()
+        .fold(document.metadata.updated_at_ms, |latest, event| {
+            latest.max(event.updated_at_ms)
+        });
+    // running_since is present only while the replayed lifecycle is active.
+    // running_since 仅在重放的生命周期活动时存在。
+    let mut running_since = Some(first.created_at_ms);
+    // elapsed_ms retains fractional seconds across every completed active interval.
+    // elapsed_ms 在每个结束的活动区间之间保留零碎毫秒。
+    let mut elapsed_ms = 0u64;
+    for event in document.events().iter().filter(|event| event.seq >= origin) {
+        if let EventBody::DisplayNote(note) = &event.event
+            && note.notice_kind == DisplayNoticeKind::GoalStatus
+        {
+            match note.reason_code.as_str() {
+                "goal_saved" => {}
+                "goal_resumed" => {
+                    running_since.get_or_insert(event.created_at_ms);
+                }
+                // Every other GoalStatus is emitted by pause, completion, clear or a blocked/budget boundary.
+                // 其他 GoalStatus 均由暂停、完成、清除或受阻、预算边界发出。
+                _ => {
+                    if let Some(start) = running_since.take() {
+                        elapsed_ms =
+                            elapsed_ms.saturating_add(
+                                event.created_at_ms.saturating_sub(start).max(0) as u64,
+                            );
+                    }
+                }
+            }
+        }
+    }
+    // A stopped metadata state never extrapolates an unfinished interval, including legacy origins rewritten while paused.
+    // 已停止的元数据状态绝不外推未闭合区间，包括旧版暂停期间曾被改写的目标起点。
+    if goal.state == GoalState::Active
+        && let Some(start) = running_since
+    {
+        elapsed_ms = elapsed_ms.saturating_add(observed_at_ms.saturating_sub(start).max(0) as u64);
+    }
+    Some(GoalWorkTime {
+        elapsed_ms,
+        observed_at_ms,
+    })
+}
 
 /// Reason why Goal auto-continue should (or should not) schedule a new turn.
 /// Goal 自动续跑应(或不应)调度新回合的原因。

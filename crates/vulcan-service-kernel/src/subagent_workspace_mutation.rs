@@ -3,60 +3,6 @@
 
 use super::*;
 
-/// Hides the selected parent subagent navigation round once service-equivalent blocking work has settled.
-/// 当与服务运行时等价的阻塞工作全部收敛后，隐藏所选父会话的子代理导航轮次。
-///
-/// # Parameters / 参数
-///
-/// - `state`: Shared service state owning runtime and navigation projections.
-///   `state`：持有运行时与导航投影的共享服务状态。
-/// - `parent_session_id`: Exact parent session whose navigation visibility is recomputed.
-///   `parent_session_id`：需要重新计算导航可见性的精确父会话。
-///
-/// # Returns / 返回值
-///
-/// Success after the retained navigation projection is reconciled.
-/// 保留导航投影完成协调后返回成功。
-pub(crate) fn refresh_webui_subagent_navigation_round_visibility(
-    state: &SharedServiceBridgeState,
-    parent_session_id: SessionId,
-) -> Result<(), String> {
-    let mut guard = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    let has_running =
-        !running_webui_subagent_task_states_for_tree_from_live_cache(&mut guard, parent_session_id)
-            .is_empty();
-    let has_active_stream_task = guard.active_stream_tasks.contains_key(&parent_session_id);
-    let has_active_kernel_turn = webui_session_kernel_has_active_turn(&guard, parent_session_id);
-    let has_active_phase = guard
-        .workspace_snapshot
-        .as_ref()
-        .and_then(|workspace_snapshot| {
-            workspace_snapshot
-                .session_run_phases
-                .get(&parent_session_id)
-                .copied()
-        })
-        .is_some_and(is_active_session_run_phase);
-    let should_remain_visible = subagent_navigation_round_should_remain_visible(
-        has_active_stream_task || has_active_kernel_turn || has_active_phase,
-        has_running,
-    );
-    webui_trace(
-        "subagent_navigation_round_visibility",
-        format!(
-            "parent={parent_session_id} has_active_stream_task={has_active_stream_task} has_active_kernel_turn={has_active_kernel_turn} has_active_phase={has_active_phase} has_running={has_running} should_remain_visible={should_remain_visible}"
-        ),
-    );
-    if !should_remain_visible {
-        guard
-            .session_subagent_navigation_rounds
-            .remove(&parent_session_id);
-    }
-    Ok(())
-}
-
 /// Reprojects subagent navigation for one parent conversation and emits a focused navigation delta.
 /// 为单个父会话重新投影子代理导航并发出聚焦导航增量。
 ///

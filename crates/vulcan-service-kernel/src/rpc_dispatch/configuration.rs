@@ -69,6 +69,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_public_ai_provider_tool_capability_enabled",
     "service_public_ai_session_provider_tool_selections",
     "service_save_public_ai_session_provider_tool_selections",
+    "service_rebuild_public_ai_session_provider_tool_selections",
     "service_save_public_ai_default_connection",
     "service_save_git_commit_settings",
     "service_generate_git_commit_message",
@@ -493,6 +494,14 @@ pub(super) async fn dispatch(
                 app,
                 state,
                 rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_rebuild_public_ai_session_provider_tool_selections" => rpc_json_result(
+            service_rebuild_public_ai_session_provider_tool_selections(
+                app,
+                state,
+                rpc_required_param(params, "conversationId")?,
             )
             .await,
         ),

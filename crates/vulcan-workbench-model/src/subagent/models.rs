@@ -21,6 +21,9 @@ pub enum SubagentTaskRunState {
     /// The subagent stopped in a failed state and the panel should surface the latest failure detail.
     /// 子代理以失败状态结束，此时面板应展示最近一次失败说明。
     Failed,
+    /// The subagent lifecycle was explicitly closed and remains visible only for the owning parent turn.
+    /// 子代理生命周期已被显式关闭，并且仅在所属父回合内继续可见。
+    Closed,
 }
 
 impl SubagentTaskRunState {
@@ -38,6 +41,7 @@ impl SubagentTaskRunState {
             Self::Completed => "completed",
             Self::Stopped => "stopped",
             Self::Failed => "failed",
+            Self::Closed => "closed",
         }
     }
 }

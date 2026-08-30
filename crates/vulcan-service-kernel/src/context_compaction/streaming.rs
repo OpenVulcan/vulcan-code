@@ -566,12 +566,15 @@ pub(crate) async fn apply_webui_context_compaction_stream_event(
             )
         }
         ExecutionStreamEvent::RuntimeEvent { event, .. } => {
-            if let Some(boundary) = event.tool_execution_boundary.as_ref() {
+            if event.tool_execution_boundary.is_some() {
                 // nowMs binds the tool mutation to the observed runtime boundary.
                 // nowMs 将工具变更绑定到观测到的运行时边界。
                 let now_ms = i64::try_from(current_unix_millis_value())
                     .map_err(|_| String::from("Current timestamp exceeds the V1 i64 range."))?;
-                let outcome = match provider_v1_sink.apply_tool_boundary(boundary, now_ms).await {
+                let outcome = match provider_v1_sink
+                    .apply_tool_event(app, state, &event, now_ms)
+                    .await
+                {
                     Ok(outcome) => outcome,
                     Err(error) => {
                         let _ = reject_runtime_event_projection_barrier_from_event(&event);

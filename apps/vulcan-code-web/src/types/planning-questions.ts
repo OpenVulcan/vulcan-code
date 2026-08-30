@@ -228,6 +228,16 @@ export interface SessionGoalSummary {
   // Accounted wall-clock time in seconds.
   // 当前目标已记账的墙钟时间秒数。
   timeUsedSeconds: number;
+  // Exact event-derived clock; absent in local drafts and older snapshots, which must not tick.
+  // 精确事件派生时钟；本地草稿及旧快照缺失时不得自行走时。
+  workTime?: {
+    // Active elapsed milliseconds through the durable observation.
+    // 截至持久化观察点的活动累计毫秒数。
+    elapsedMs: number;
+    // Server observation timestamp, independent of client receipt latency.
+    // 服务端观察时间戳，独立于客户端收包延迟。
+    observedAtMs: number;
+  } | null;
   // Creation timestamp in Unix epoch milliseconds.
   // 创建时间的 Unix 纪元毫秒值。
   createdAtMs: number;

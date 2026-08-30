@@ -251,6 +251,26 @@
   background: color-mix(in oklch, var(--card) 94%, var(--muted));
 }
 
+/* Without Git content, share the first section's title row instead of reserving an empty settings row. */
+/* 没有 Git 内容时共享首个区块标题行，不为缺席的设置栏保留空行。 */
+.conversation-session-tool-panel-header-inline {
+  float: right;
+  min-height: 0;
+  padding: 0;
+  margin-left: 8px;
+}
+
+/* Keep the title clear of the collapse control while the section body uses the full panel width. */
+/* 标题为收起控件留出空间，区块正文继续使用完整面板宽度。 */
+.conversation-session-tool-panel-header-inline + .conversation-session-tool-section {
+  margin-top: 0;
+}
+
+.conversation-session-tool-panel-header-inline + .conversation-session-tool-section > .conversation-session-tool-section-title {
+  min-height: 24px;
+  padding-right: 32px;
+}
+
 .conversation-session-review-manager-trigger {
   display: inline-flex;
   align-items: center;
@@ -747,6 +767,7 @@
 }
 
 .conversation-session-subagent-state.failed,
-.conversation-session-subagent-state.stopped {
+.conversation-session-subagent-state.stopped,
+.conversation-session-subagent-state.closed {
   color: var(--destructive);
 }

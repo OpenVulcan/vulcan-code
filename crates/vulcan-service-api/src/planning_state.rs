@@ -167,6 +167,19 @@ impl SessionGoalStatus {
     }
 }
 
+/// Derived working-time checkpoint used for client-only clock interpolation.
+/// 供客户端本地时钟插值使用的派生工作时长检查点。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionGoalWorkTime {
+    /// Active elapsed milliseconds, excluding paused intervals.
+    /// 活动累计毫秒数，不含暂停区间。
+    pub elapsed_ms: u64,
+    /// Durable observation timestamp in Unix milliseconds, not browser receipt time.
+    /// Unix 毫秒格式的持久化观察时间，不是浏览器收包时间。
+    pub observed_at_ms: i64,
+}
+
 /// Describes the current long-running goal for one selected session.
 /// 描述当前选中会话的长生命周期目标。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -191,8 +204,8 @@ pub struct SessionGoalSummary {
     /// Accounted token usage.
     /// 已记账 token 用量。
     pub tokens_used: i64,
-    /// Live usage total displayed by the composer strip.
-    /// 输入区目标条展示的实时用量总数。
+    /// Live usage total displayed inside the goal details hover card.
+    /// 目标详情悬浮卡展示的实时用量总数。
     pub usage_tokens: i64,
     /// Provider API calls observed for the current goal turn.
     /// 当前目标轮次观测到的 Provider API 调用次数。
@@ -219,6 +232,10 @@ pub struct SessionGoalSummary {
     /// Accounted wall-clock usage in seconds.
     /// 已记账墙钟用量秒数。
     pub time_used_seconds: i64,
+    /// Exact event-derived clock; absent only in drafts or older snapshots.
+    /// 精确事件派生时钟；仅草稿或旧快照缺失。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_time: Option<SessionGoalWorkTime>,
     /// Creation timestamp in Unix epoch milliseconds.
     /// Unix 纪元毫秒格式的创建时间。
     pub created_at_ms: i64,

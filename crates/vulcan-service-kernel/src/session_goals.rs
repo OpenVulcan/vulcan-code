@@ -39,6 +39,9 @@ const GOAL_BLOCKED_REASON_CODE: &str = "goal_blocked";
 /// 服务层持有的适配器，用于向原生工具暴露权威 V1 Goal 文档。
 #[derive(Clone)]
 struct SessionV1NativeGoalRuntime {
+    /// Publishes Goal state only after the authoritative mutation is durable.
+    /// 仅在权威修改可靠落盘后发布 Goal 状态。
+    app: ServiceEventEmitter,
     /// Shared service state used only to resolve the exact registered V1 session handle.
     /// 仅用于解析精确已注册 V1 会话句柄的共享服务状态。
     state: SharedServiceBridgeState,
@@ -61,6 +64,8 @@ impl fmt::Debug for SessionV1NativeGoalRuntime {
 /// 参数
 /// `state` owns the exact session registry and the temporary WebUI projection cache.
 /// `state` 持有精确会话注册表与临时 WebUI 投影缓存。
+/// `app` delivers the committed state to connected clients without a new user prompt.
+/// `app` 无需新用户提示词即可向已连接客户端传递已提交状态。
 ///
 /// # Returns
 /// 返回值
@@ -68,8 +73,9 @@ impl fmt::Debug for SessionV1NativeGoalRuntime {
 /// 返回仅通过 V1 会话句柄读写的请求级领域端口。
 pub(crate) fn session_v1_native_goal_runtime(
     state: SharedServiceBridgeState,
+    app: ServiceEventEmitter,
 ) -> Arc<dyn NativeGoalRuntime> {
-    Arc::new(SessionV1NativeGoalRuntime { state })
+    Arc::new(SessionV1NativeGoalRuntime { state, app })
 }
 
 #[async_trait]
@@ -120,7 +126,7 @@ impl NativeGoalRuntime for SessionV1NativeGoalRuntime {
                 },
             )
             .map_err(|error| format!("创建 V1 Goal 失败：{error}"))?;
-        native_goal_snapshot_after_mutation(&self.state, handle.as_ref(), session_id)
+        native_goal_snapshot_after_mutation(&self.app, &self.state, handle.as_ref(), session_id)
     }
 
     /// Applies a model-requested terminal Goal transition through one durable V1 mutation.
@@ -160,7 +166,7 @@ impl NativeGoalRuntime for SessionV1NativeGoalRuntime {
                 },
             )
             .map_err(|error| format!("更新 V1 Goal 状态失败：{error}"))?;
-        native_goal_snapshot_after_mutation(&self.state, handle.as_ref(), session_id)
+        native_goal_snapshot_after_mutation(&self.app, &self.state, handle.as_ref(), session_id)
     }
 }
 
@@ -171,19 +177,22 @@ impl NativeGoalRuntime for SessionV1NativeGoalRuntime {
 /// 参数
 /// `state` owns the temporary UI cache, `handle` owns the V1 document, and `session_id` identifies the Goal owner.
 /// `state` 持有临时 UI 缓存，`handle` 持有 V1 文档，`session_id` 标识 Goal 所有者。
+/// `app` broadcasts the committed Goal projection.
+/// `app` 广播已提交的 Goal 投影。
 ///
 /// # Returns
 /// 返回值
 /// The required native Goal snapshot, or an explicit projection error.
 /// 返回必需的原生 Goal 快照，或显式投影错误。
 fn native_goal_snapshot_after_mutation(
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     handle: &SessionHandle,
     session_id: SessionId,
 ) -> Result<NativeGoalSnapshot, String> {
     let summary = session_goal_summary_from_v1_handle(handle, session_id)?
         .ok_or_else(|| format!("V1 会话 `{session_id}` 的 Goal 修改成功后缺少权威摘要"))?;
-    cache_session_goal_summary(state, session_id, Some(summary.clone()))?;
+    refresh_session_goal_summary_and_emit(app, state, session_id, Some(summary.clone()))?;
     Ok(native_goal_snapshot_from_summary(session_id, summary))
 }
 
@@ -555,7 +564,7 @@ pub(super) async fn service_update_session_goal_status(
         begin_session_turn_start_exclusion(&state, [session_id], "更新目标状态")?;
     let handle = session_v1_handle_from_state(&state, session_id).await?;
     let now_ms = current_v1_goal_unix_millis()?;
-    let receipt = handle
+    handle
         .mutate_durable_if_changed(
             SessionMutationAdmission::MetadataOnly,
             SessionFlushReason::MetadataChanged,
@@ -563,9 +572,9 @@ pub(super) async fn service_update_session_goal_status(
                 if document.metadata.mode.goal.enabled
                     && document.metadata.mode.goal.state == target_status
                 {
-                    return Ok(SessionMutationChange::Unchanged(false));
+                    return Ok(SessionMutationChange::Unchanged(()));
                 }
-                let transition = match target_status {
+                match target_status {
                     GoalState::Active => {
                         let objective = document.metadata.mode.goal.objective.clone();
                         let budget_tokens = document.metadata.mode.goal.budget_tokens;
@@ -576,9 +585,7 @@ pub(super) async fn service_update_session_goal_status(
                     }
                     _ => unreachable!("the WebUI status enum admits only active or paused"),
                 };
-                Ok(SessionMutationChange::Changed(
-                    transition.continuation_turn_id.is_some(),
-                ))
+                Ok(SessionMutationChange::Changed(()))
             },
         )
         .map_err(|error| format!("更新 V1 Goal 状态失败：{error}"))?;
@@ -586,8 +593,9 @@ pub(super) async fn service_update_session_goal_status(
     cache_session_goal_summary(&state, session_id, summary.clone())?;
     drop(goal_transition_guard);
     let response = refresh_session_goal_summary_and_emit(&app, &state, session_id, summary)?;
+    // A paused undispatched Goal turn already exists; resumption must dispatch it too, not only newly created turns.
+    // 暂停且未派发的 Goal 回合可能已存在；恢复也必须派发它，不能只处理新建回合。
     if target_status == GoalState::Active
-        && receipt.value
         && let Err(error) = maybe_start_session_goal_continuation_if_idle(
             &app,
             &state,

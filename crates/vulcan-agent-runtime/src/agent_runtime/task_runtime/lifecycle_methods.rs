@@ -297,7 +297,7 @@ impl TaskRuntime {
 
     /// Collects one task identifier and all known descendant task identifiers from the runtime registry.
     /// 从运行时注册表中收集一个任务标识及其所有已知后代任务标识。
-    fn task_subtree_ids(&self, task_id: SessionId) -> Result<Vec<SessionId>, String> {
+    pub(super) fn task_subtree_ids(&self, task_id: SessionId) -> Result<Vec<SessionId>, String> {
         let sessions = self.sessions.read().map_err(|_| {
             String::from("The task-session registry is locked and cannot inspect descendants.")
         })?;

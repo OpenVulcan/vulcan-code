@@ -291,15 +291,12 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                 .as_ref()
                 .map(|context| context.config.clone())
                 .unwrap_or_else(|| context.config.clone());
-            let prompt_intervention = Some(build_child_agent_prompt_intervention(
-                Arc::clone(&background_task_runtime),
-                background_request.task_id,
-            ));
-            let mut child_event_stream = Box::pin(drive_runtime_stream_provider_loop(
-                config,
-                launch,
-                prompt_intervention,
-            ));
+            // Only the successor execution may drain the child inbox into its durable V1 root input.
+            // 只有后继执行可以取走子代理 inbox 消息，并将其写入可靠 V1 根输入。
+            // Legacy controller intervention is overwritten by V1 physical-request reconstruction.
+            // 旧控制器干预会被 V1 物理请求重建覆盖，不能充当消息消费入口。
+            let mut child_event_stream =
+                Box::pin(drive_runtime_stream_provider_loop(config, launch, None));
             let mut terminal_report = None;
             let mut compaction_state = None;
             let mut checkpoint_provider_requests = 0usize;
@@ -434,11 +431,19 @@ pub(crate) async fn run_task_with_shared_runtime_context(
         let mut active_task_run_guard = Some(active_task_run_guard);
         let _child_run_abort_guard = child_run_abort_guard;
         let child_run_result = child_run_task.await;
-        let resumed_queued_messages = match child_run_result {
+        match child_run_result {
             Ok(Ok(completion)) => {
                 let outcome = completion.outcome;
-                let store_result =
-                    task_runtime.store_task_outcome(request.current_session_id, &request, &outcome);
+                // outcome_committed keeps stale physical executions from publishing deferred terminal feedback.
+                // outcome_committed 防止过期物理执行发布延迟的终态反馈。
+                let mut outcome_committed = false;
+                let store_result = task_runtime
+                    .store_task_outcome_without_parent_mailbox(
+                        request.current_session_id,
+                        &request,
+                        &outcome,
+                    )
+                    .map(|committed| outcome_committed = committed);
                 match combine_task_run_finalization_results(
                     store_result.map_err(|error| {
                         format!(
@@ -457,15 +462,16 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                         let resumed_queued_messages =
                             resume_queued_messages_after_active_run_released(
                                 &task_runtime,
-                                request.current_session_id,
-                                task_id,
+                                &request,
                             )
                             .await;
-                        publish_task_finished_to_parent(
+                        publish_task_finished_to_parent_after_resume_decision(
                             &task_runtime,
                             &request,
                             &outcome,
                             "The subagent task has completed.",
+                            outcome_committed,
+                            resumed_queued_messages,
                         );
                         if completion.should_compact_context {
                             spawn_task_session_context_compaction(
@@ -494,8 +500,16 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                     resolved_config,
                     stopped_snapshot,
                 );
-                let store_result =
-                    task_runtime.store_task_outcome(request.current_session_id, &request, &outcome);
+                // outcome_committed keeps stale stopped executions from publishing deferred terminal feedback.
+                // outcome_committed 防止过期的已停止执行发布延迟终态反馈。
+                let mut outcome_committed = false;
+                let store_result = task_runtime
+                    .store_task_outcome_without_parent_mailbox(
+                        request.current_session_id,
+                        &request,
+                        &outcome,
+                    )
+                    .map(|committed| outcome_committed = committed);
                 match combine_task_run_finalization_results(
                     store_result.map_err(|error| {
                         format!(
@@ -514,15 +528,16 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                         let resumed_queued_messages =
                             resume_queued_messages_after_active_run_released(
                                 &task_runtime,
-                                request.current_session_id,
-                                task_id,
+                                &request,
                             )
                             .await;
-                        publish_task_finished_to_parent(
+                        publish_task_finished_to_parent_after_resume_decision(
                             &task_runtime,
                             &request,
                             &outcome,
                             outcome.final_output_text.as_str(),
+                            outcome_committed,
+                            resumed_queued_messages,
                         );
                         resumed_queued_messages
                     }
@@ -534,8 +549,16 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                 }
             }
             Ok(Err(error)) => {
-                let mark_result =
-                    task_runtime.mark_task_failure(request.current_session_id, &request, &error);
+                // failure_committed keeps stale failed executions from publishing deferred terminal feedback.
+                // failure_committed 防止过期失败执行发布延迟终态反馈。
+                let mut failure_committed = false;
+                let mark_result = task_runtime
+                    .mark_task_failure_without_parent_mailbox(
+                        request.current_session_id,
+                        &request,
+                        &error,
+                    )
+                    .map(|committed| failure_committed = committed);
                 match combine_task_run_finalization_results(
                     mark_result.map_err(|record_error| {
                         format!(
@@ -554,11 +577,16 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                         let resumed_queued_messages =
                             resume_queued_messages_after_active_run_released(
                                 &task_runtime,
-                                request.current_session_id,
-                                task_id,
+                                &request,
                             )
                             .await;
-                        publish_task_failure_to_parent(&task_runtime, &request, &error);
+                        publish_task_failure_to_parent_after_resume_decision(
+                            &task_runtime,
+                            &request,
+                            &error,
+                            failure_committed,
+                            resumed_queued_messages,
+                        );
                         resumed_queued_messages
                     }
                     Err(detail) => {
@@ -578,8 +606,16 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                     resolved_config,
                     stopped_snapshot,
                 );
-                let store_result =
-                    task_runtime.store_task_outcome(request.current_session_id, &request, &outcome);
+                // outcome_committed keeps stale cancelled executions from publishing deferred terminal feedback.
+                // outcome_committed 防止过期的已取消执行发布延迟终态反馈。
+                let mut outcome_committed = false;
+                let store_result = task_runtime
+                    .store_task_outcome_without_parent_mailbox(
+                        request.current_session_id,
+                        &request,
+                        &outcome,
+                    )
+                    .map(|committed| outcome_committed = committed);
                 match combine_task_run_finalization_results(
                     store_result.map_err(|error| {
                         format!(
@@ -598,15 +634,16 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                         let resumed_queued_messages =
                             resume_queued_messages_after_active_run_released(
                                 &task_runtime,
-                                request.current_session_id,
-                                task_id,
+                                &request,
                             )
                             .await;
-                        publish_task_finished_to_parent(
+                        publish_task_finished_to_parent_after_resume_decision(
                             &task_runtime,
                             &request,
                             &outcome,
                             outcome.final_output_text.as_str(),
+                            outcome_committed,
+                            resumed_queued_messages,
                         );
                         resumed_queued_messages
                     }
@@ -623,8 +660,16 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                     task_id,
                     format_task_join_error(&join_error)
                 );
-                let mark_result =
-                    task_runtime.mark_task_failure(request.current_session_id, &request, &error);
+                // failure_committed keeps stale joined executions from publishing deferred terminal feedback.
+                // failure_committed 防止过期的 join 失败执行发布延迟终态反馈。
+                let mut failure_committed = false;
+                let mark_result = task_runtime
+                    .mark_task_failure_without_parent_mailbox(
+                        request.current_session_id,
+                        &request,
+                        &error,
+                    )
+                    .map(|committed| failure_committed = committed);
                 match combine_task_run_finalization_results(
                     mark_result.map_err(|record_error| {
                         format!(
@@ -643,11 +688,16 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                         let resumed_queued_messages =
                             resume_queued_messages_after_active_run_released(
                                 &task_runtime,
-                                request.current_session_id,
-                                task_id,
+                                &request,
                             )
                             .await;
-                        publish_task_failure_to_parent(&task_runtime, &request, &error);
+                        publish_task_failure_to_parent_after_resume_decision(
+                            &task_runtime,
+                            &request,
+                            &error,
+                            failure_committed,
+                            resumed_queued_messages,
+                        );
                         resumed_queued_messages
                     }
                     Err(detail) => {
@@ -658,31 +708,29 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                 }
             }
         };
-        if !resumed_queued_messages {
-            match task_runtime.task_has_active_descendant_runs(task_id) {
-                // A confirmed empty descendant set is the only authority allowed to close this execution stream.
-                // 仅权威确认后代集合为空时，才允许关闭当前执行流。
-                Ok(false) => {
-                    // error exposes terminal stream-close failure because the background task has no caller return channel.
-                    // error 暴露终态流关闭失败，因为后台任务没有调用方返回通道。
-                    if let Err(error) = task_runtime
-                        .close_detached_task_event_stream(task_id, &request.execution_id)
-                    {
-                        eprintln!(
-                            "[task-runtime] detached stream close failed for completed task {task_id}: {error}"
-                        );
-                    }
-                }
-                // Active descendants keep the parent stream available for nested terminal delivery.
-                // 存在活动后代时保留父流，以继续投递嵌套终态事件。
-                Ok(true) => {}
-                // error preserves the unavailable registry fact instead of converting it into a destructive close decision.
-                // error 保留注册表事实不可用的诊断，不将其转换为破坏性关闭决策。
-                Err(error) => {
+        match task_runtime.task_has_active_descendant_runs(task_id) {
+            // A confirmed empty descendant set is the only authority allowed to close this physical execution stream.
+            // 仅权威确认后代集合为空时，才允许关闭当前物理执行流。
+            Ok(false) => {
+                // A queued successor owns a new execution id, so closing this old stream cannot close the resumed run.
+                // 排队后继执行持有新的执行标识，因此关闭该旧流不会关闭续跑。
+                if let Err(error) =
+                    task_runtime.close_detached_task_event_stream(task_id, &request.execution_id)
+                {
                     eprintln!(
-                        "[task-runtime] detached stream remains open because descendant-run state is unavailable for task {task_id}: {error}"
+                        "[task-runtime] detached stream close failed for completed task {task_id}: {error}"
                     );
                 }
+            }
+            // Active descendants keep the parent stream available for nested terminal delivery.
+            // 存在活动后代时保留父流，以继续投递嵌套终态事件。
+            Ok(true) => {}
+            // error preserves the unavailable registry fact instead of converting it into a destructive close decision.
+            // error 保留注册表事实不可用的诊断，不将其转换为破坏性关闭决策。
+            Err(error) => {
+                eprintln!(
+                    "[task-runtime] detached stream remains open because descendant-run state is unavailable for task {task_id}: {error}"
+                );
             }
         }
         task_runtime_trace(
@@ -927,30 +975,69 @@ pub(super) fn combine_task_run_finalization_results(
 /// 参数
 /// `task_runtime` owns the active-run registry and inter-agent inbox.
 /// `task_runtime` 持有活动运行注册表与代理间 inbox。
-/// `current_session_id` is the direct parent that owns the child agent.
-/// `current_session_id` 是拥有该子代理的直接父级。
-/// `task_id` identifies the child agent whose turn just settled.
-/// `task_id` 标识刚刚收敛的子代理。
+/// `request` identifies the exact settled execution and its direct parent.
+/// `request` 标识精确的已收敛执行及其直接父级。
 ///
 /// # Returns
 /// 返回值
-/// `true` when a queued message started another child-agent turn.
-/// 当排队消息已启动另一轮子代理 turn 时返回 `true`。
-async fn resume_queued_messages_after_active_run_released(
+/// `true` when a successor run, pending message, or explicit resume failure owns parent feedback.
+/// 当后继运行、待处理消息或显式续跑失败拥有父级反馈时返回 `true`。
+pub(super) async fn resume_queued_messages_after_active_run_released(
     task_runtime: &Arc<TaskRuntime>,
-    current_session_id: SessionId,
-    task_id: SessionId,
+    request: &TaskExecutionRequest,
 ) -> bool {
     match task_runtime
-        .resume_agent_from_inbox_after_task_settled(current_session_id, task_id)
+        .resume_agent_from_inbox_after_task_settled(request.current_session_id, request.task_id)
         .await
     {
-        Ok(resumed) => resumed,
+        Ok(true) => true,
+        Ok(false) => {
+            // successor_active covers an already-drained inbox whose new execution won the start race.
+            // successor_active 覆盖 inbox 已被取走且新执行赢得启动竞态的情况。
+            let successor_active =
+                match task_runtime.task_has_active_or_starting_run(request.task_id) {
+                    Ok(active) => active,
+                    Err(error) => {
+                        let detail = format!(
+                            "Queued child-agent successor ownership could not be verified: {error}"
+                        );
+                        eprintln!("[subagent-agent-control] {detail}");
+                        publish_task_failure_to_parent(task_runtime, request, &detail);
+                        return true;
+                    }
+                };
+            if successor_active {
+                return true;
+            }
+            // queued_message_count distinguishes a true no-op from an admitted message that failed to start.
+            // queued_message_count 区分真正的空操作与已准入但未能启动的消息。
+            match task_runtime.inter_agent_message_count_for_task(request.task_id) {
+                Ok(0) => false,
+                Ok(queued_message_count) => {
+                    let detail = format!(
+                        "{queued_message_count} queued child-agent message(s) remain after the previous execution settled, but no successor execution started."
+                    );
+                    eprintln!("[subagent-agent-control] {detail}");
+                    publish_task_failure_to_parent(task_runtime, request, &detail);
+                    true
+                }
+                Err(error) => {
+                    let detail = format!(
+                        "Queued child-agent message ownership could not be verified after the previous execution settled: {error}"
+                    );
+                    eprintln!("[subagent-agent-control] {detail}");
+                    publish_task_failure_to_parent(task_runtime, request, &detail);
+                    true
+                }
+            }
+        }
         Err(error) => {
-            eprintln!(
-                "[subagent-agent-control] failed to resume queued messages after task settled: {error}"
+            let detail = format!(
+                "Queued child-agent messages could not resume after the previous execution settled: {error}"
             );
-            false
+            eprintln!("[subagent-agent-control] {detail}");
+            publish_task_failure_to_parent(task_runtime, request, &detail);
+            true
         }
     }
 }

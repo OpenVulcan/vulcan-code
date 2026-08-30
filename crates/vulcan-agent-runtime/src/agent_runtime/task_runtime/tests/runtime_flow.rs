@@ -1,5 +1,4 @@
 use super::*;
-use crate::agent_runtime::RuntimePromptInterventionError;
 
 /// Builds one shared runtime context for task-start lifecycle tests.
 /// 为子任务启动生命周期测试构建共享运行时上下文。
@@ -2357,6 +2356,11 @@ async fn inter_agent_message_queue_resumes_after_running_agent_settles() {
             parent_session_id,
             Arc::new(move |request: TaskExecutionRequest| {
                 backend_calls_for_handler.fetch_add(1, Ordering::SeqCst);
+                assert!(
+                    request.is_resumed,
+                    "queued input must use durable resumed admission"
+                );
+                assert_ne!(request.execution_id, "queue-running-execution");
                 *captured_prompt_for_handler
                     .lock()
                     .expect("captured prompt lock") = Some(request.prompt.clone());
@@ -2414,6 +2418,32 @@ async fn inter_agent_message_queue_resumes_after_running_agent_settles() {
     );
     assert_eq!(backend_calls.load(Ordering::SeqCst), 0);
 
+    task_runtime
+        .invoke_send_message(
+            parent_session_id,
+            json!({
+                "target": "worker-a",
+                "message": "also acknowledge the second queued message",
+                "delivery_mode": "queue"
+            }),
+        )
+        .await
+        .expect("second message should remain behind the active execution");
+    assert!(
+        !task_runtime
+            .resume_agent_from_inbox_after_task_settled(parent_session_id, task_id)
+            .await
+            .expect("active execution must retain its inbox")
+    );
+    assert_eq!(
+        task_runtime
+            .inter_agent_message_count_for_task(task_id)
+            .unwrap(),
+        2,
+        "only successor admission may consume queued messages"
+    );
+    assert_eq!(backend_calls.load(Ordering::SeqCst), 0);
+
     drop(active_guard);
     pending_join.abort();
     let resumed = task_runtime
@@ -2429,6 +2459,12 @@ async fn inter_agent_message_queue_resumes_after_running_agent_settles() {
         .expect("backend should capture prompt");
     assert!(prompt.starts_with("<agent_message>"));
     assert!(prompt.contains("continue after current work"));
+    assert!(prompt.contains("also acknowledge the second queued message"));
+    assert!(
+        prompt.find("continue after current work")
+            < prompt.find("also acknowledge the second queued message"),
+        "durable successor input must preserve delivery order"
+    );
     assert!(!prompt.contains("[Inter-agent messages]"));
     assert!(!prompt.contains("send_message"));
     let snapshot = captured_snapshot
@@ -2538,162 +2574,6 @@ async fn send_message_to_root_enters_parent_mailbox_and_interrupt_rejects_root()
         .await
         .expect_err("interrupt delivery should reject root");
     assert!(error.contains("root"));
-}
-
-/// Verifies child inbox delivery appends provider input and display record through separate paths.
-/// 验证子智能体 inbox 投递会通过独立路径追加 Provider 输入与显示记录。
-#[test]
-fn child_prompt_intervention_appends_display_record_separately_from_provider_input() {
-    let task_runtime = Arc::new(TaskRuntime::new());
-    let task_id = Uuid::new_v4();
-    let parent_session_id = Uuid::new_v4();
-    task_runtime
-        .agent_inboxes
-        .write()
-        .expect("agent inbox should be writable")
-        .insert(
-            task_id,
-            VecDeque::from([QueuedInterAgentMessage {
-                delivery_id: String::from("delivery-visible-1"),
-                author_session_id: parent_session_id,
-                target_task_id: task_id,
-                target_agent_id: String::from("worker-a"),
-                content: String::from("请用中文重新输出结论。"),
-                created_at_ms: 1_780_000_000_000,
-                continues_task_turn: true,
-            }]),
-        );
-    let intervention = build_child_agent_prompt_intervention(Arc::clone(&task_runtime), task_id);
-    let mut controller = vulcan_core::controller::VulcanCoreController::new(
-        build_test_controller_config("Base prompt"),
-        CoreConversationSnapshot::default(),
-    )
-    .expect("valid core conversation snapshot");
-
-    assert!(intervention(task_id, &mut controller).expect("valid child prompt intervention"));
-
-    let snapshot = controller.snapshot();
-    assert_eq!(snapshot.messages.len(), 1);
-    assert!(matches!(
-        &snapshot.messages[0].payload,
-        CoreConversationPayload::AgentMessage {
-            message_type,
-            task_name,
-            sender,
-            recipient,
-            payload,
-            trigger_turn,
-            ..
-        } if message_type == "MESSAGE"
-            && task_name == "worker-a"
-            && sender == &format!("parent:{parent_session_id}")
-            && recipient == "worker-a"
-            && payload == "请用中文重新输出结论。"
-            && *trigger_turn
-    ));
-    let display_record = snapshot
-        .records
-        .iter()
-        .find(|record| record.id == "delivery-visible-1")
-        .expect("display record should be stored with delivery id");
-    assert!(matches!(
-        display_record.record_kind,
-        vulcan_core::types::TranscriptRecordKind::ProjectionOnly
-    ));
-    assert!(display_record.visible);
-    assert_eq!(display_record.title, "智能体消息");
-    assert_eq!(display_record.body, "请用中文重新输出结论。");
-    assert_eq!(
-        display_record
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.get("delivery_id"))
-            .and_then(Value::as_str),
-        Some("delivery-visible-1")
-    );
-}
-
-/// Verifies a rejected child display identity preserves both controller state and the drained inbox.
-/// 验证子显示身份被拒绝时会同时保留控制器状态与已取出的 inbox。
-#[test]
-fn child_prompt_intervention_restores_inbox_on_display_identity_failure() {
-    let task_runtime = Arc::new(TaskRuntime::new());
-    let task_id = Uuid::new_v4();
-    let parent_session_id = Uuid::new_v4();
-    let mut registry_entry = SubagentRegistryEntry::new(
-        "worker-a",
-        SessionNodeId::from(task_id),
-        SessionNodeId::from(parent_session_id),
-        SubagentKind::Clone,
-        current_unix_millis_u64(),
-    );
-    registry_entry.status = SubagentStatus::Running;
-    task_runtime
-        .subagent_registry
-        .write()
-        .expect("subagent registry should be writable")
-        .upsert(registry_entry)
-        .expect("running intervention target should register");
-    // queued_message intentionally reuses the retained display identity to trigger the atomic boundary.
-    // queued_message 故意复用已保留显示身份，以触发原子边界。
-    let queued_message = QueuedInterAgentMessage {
-        delivery_id: String::from("delivery-conflict"),
-        author_session_id: parent_session_id,
-        target_task_id: task_id,
-        target_agent_id: String::from("worker-a"),
-        content: String::from("conflicting delivery"),
-        created_at_ms: 1_780_000_000_000,
-        continues_task_turn: true,
-    };
-    task_runtime
-        .agent_inboxes
-        .write()
-        .expect("agent inbox should be writable")
-        .insert(task_id, VecDeque::from([queued_message]));
-    // retained_record is the existing owner that makes the incoming delivery invalid.
-    // retained_record 是使传入投递无效的既有身份所有者。
-    let retained_record = vulcan_core::types::ConversationRecord {
-        id: String::from("delivery-conflict"),
-        role: vulcan_core::types::TranscriptRole::Assistant,
-        record_kind: vulcan_core::types::TranscriptRecordKind::ProjectionOnly,
-        visible: true,
-        title: String::from("Retained"),
-        body: String::from("retained body"),
-        metadata: None,
-        created_at: String::from("1"),
-    };
-    let mut controller = vulcan_core::controller::VulcanCoreController::new(
-        build_test_controller_config("Base prompt"),
-        CoreConversationSnapshot {
-            records: vec![retained_record],
-            ..CoreConversationSnapshot::default()
-        },
-    )
-    .expect("valid core conversation snapshot");
-    // original_snapshot proves the failed intervention never commits its provider-visible draft.
-    // original_snapshot 证明失败的干预绝不会提交 Provider 可见草稿。
-    let original_snapshot =
-        serde_json::to_value(controller.snapshot()).expect("original snapshot should serialize");
-    let intervention = build_child_agent_prompt_intervention(Arc::clone(&task_runtime), task_id);
-
-    let error = intervention(task_id, &mut controller)
-        .expect_err("display identity conflict must propagate");
-
-    let RuntimePromptInterventionError::ProjectionConflict { message } = error else {
-        panic!("display identity conflict should remain a projection error");
-    };
-    assert!(message.contains("duplicates id \"delivery-conflict\""));
-    assert_eq!(
-        serde_json::to_value(controller.snapshot())
-            .expect("controller snapshot should serialize after rejection"),
-        original_snapshot
-    );
-    assert_eq!(
-        task_runtime
-            .inter_agent_message_count_for_task(task_id)
-            .expect("restored inbox should remain readable"),
-        1
-    );
 }
 
 /// Verifies offline resume projection rejects conflicting retained ownership without partial snapshot mutation.
@@ -2919,6 +2799,280 @@ async fn detached_task_event_stream_replays_buffered_terminal_and_closes() {
         .await
         .expect("closed stream should finish immediately after replay");
     assert!(next_event.is_none());
+}
+
+/// Verifies queued and interrupt successor runs suppress the superseded physical-run terminal event.
+/// 验证排队与插队后继执行会抑制已经被取代的物理执行终态事件。
+#[tokio::test]
+async fn inter_agent_successor_run_suppresses_superseded_terminal_event() {
+    // task_runtime owns the exact detached stream observed by the parent listener.
+    // task_runtime 持有父级监听器观察的精确分离事件流。
+    let task_runtime = TaskRuntime::new();
+    // parent_session_id identifies the parent that must not receive an obsolete completion.
+    // parent_session_id 标识不得接收过期完成事件的父会话。
+    let parent_session_id = Uuid::new_v4();
+    // task_id is shared by the settled execution and its queued-message successor.
+    // task_id 由已收敛执行及其排队消息后继执行共同使用。
+    let task_id = Uuid::new_v4();
+    // request identifies the physical execution whose terminal event is conditionally published.
+    // request 标识其终态事件需要按条件发布的物理执行。
+    let request = build_task_start_test_invocation(
+        parent_session_id,
+        task_id,
+        "superseded-message-execution",
+    );
+    // controller_config supplies the completed outcome's exact runtime configuration.
+    // controller_config 提供完成结果的精确运行时配置。
+    let controller_config = build_test_controller_config("Base prompt");
+    // outcome represents the old physical run that already handed control to queued input.
+    // outcome 表示已经把控制权交给排队输入的旧物理执行。
+    let outcome = TaskExecutionOutcome {
+        task_id,
+        controller_config: controller_config.clone(),
+        resolved_config: test_resolved_config(&controller_config, &request.invocation_config),
+        snapshot: CoreConversationSnapshot::default(),
+        provider_turns_executed: 1,
+        tool_calls_processed: 1,
+        final_assistant_message_id: Some(String::from("assistant-superseded")),
+        final_output_text: String::from("obsolete result"),
+        execution_status: TaskExecutionStatus::Completed,
+        usage_segments: Vec::new(),
+    };
+    // outcome_committed proves terminal persistence can complete without prematurely waking wait_agent.
+    // outcome_committed 证明终态持久化可以完成且不会提前唤醒 wait_agent。
+    let outcome_committed = task_runtime
+        .store_task_outcome_without_parent_mailbox(parent_session_id, &request, &outcome)
+        .expect("superseded terminal projection should store without mailbox publication");
+    assert!(outcome_committed);
+    // deferred_mailbox_events must stay empty until the resume decision authorizes publication.
+    // deferred_mailbox_events 必须保持为空，直到续跑决策授权发布。
+    let deferred_mailbox_events = task_runtime
+        .take_subagent_events_for_parent(SessionNodeId::from(parent_session_id))
+        .expect("deferred parent mailbox should remain readable");
+    assert!(deferred_mailbox_events.is_empty());
+    task_runtime
+        .open_detached_task_event_stream_for_run(task_id, &request.execution_id)
+        .expect("superseded execution stream should open");
+    let mut stream = Box::pin(
+        task_runtime
+            .subscribe_detached_task_events(task_id, &request.execution_id)
+            .expect("superseded execution stream should subscribe"),
+    );
+
+    publish_task_finished_to_parent_after_resume_decision(
+        &task_runtime,
+        &request,
+        &outcome,
+        "obsolete completion",
+        outcome_committed,
+        true,
+    );
+
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), stream.next())
+            .await
+            .is_err(),
+        "a started successor run must keep the obsolete terminal event invisible"
+    );
+    // suppressed_mailbox_events proves wait_agent cannot consume the obsolete terminal through its process-local path.
+    // suppressed_mailbox_events 证明 wait_agent 无法通过进程内路径消费过期终态。
+    let suppressed_mailbox_events = task_runtime
+        .take_subagent_events_for_parent(SessionNodeId::from(parent_session_id))
+        .expect("suppressed parent mailbox should remain readable");
+    assert!(suppressed_mailbox_events.is_empty());
+
+    publish_task_finished_to_parent_after_resume_decision(
+        &task_runtime,
+        &request,
+        &outcome,
+        "final completion",
+        outcome_committed,
+        false,
+    );
+    let event = tokio::time::timeout(std::time::Duration::from_millis(50), stream.next())
+        .await
+        .expect("the final successor completion should publish")
+        .expect("the final successor completion should exist");
+    let DetachedTaskRuntimeEvent::ParentRuntime { event, .. } = event else {
+        panic!("expected parent runtime completion");
+    };
+    assert_eq!(event.kind, RuntimeEventKind::DelegateFinished);
+    // final_mailbox_events proves the true terminal execution wakes wait_agent exactly once.
+    // final_mailbox_events 证明真正终态执行会精确唤醒 wait_agent 一次。
+    let final_mailbox_events = task_runtime
+        .take_subagent_events_for_parent(SessionNodeId::from(parent_session_id))
+        .expect("final parent mailbox should remain readable");
+    assert_eq!(final_mailbox_events.len(), 1);
+    assert_eq!(
+        final_mailbox_events[0].payload["execution_id"],
+        request.execution_id
+    );
+}
+
+/// Verifies a queued successor startup failure replaces the obsolete completion with explicit parent feedback.
+/// 验证排队后继启动失败会用显式父级反馈替代过期完成结果。
+#[tokio::test]
+async fn queued_successor_start_failure_suppresses_obsolete_terminal_feedback() {
+    // task_runtime owns the running child, queued inbox, and parent feedback channels.
+    // task_runtime 持有运行中子任务、排队 inbox 与父级反馈通道。
+    let task_runtime = Arc::new(TaskRuntime::new());
+    // parent_session_id identifies the direct parent without an installed resume backend.
+    // parent_session_id 标识未安装续跑后端的直接父级。
+    let parent_session_id = Uuid::new_v4();
+    // task_id identifies the child whose accepted message must remain queued after startup failure.
+    // task_id 标识启动失败后其已接纳消息必须继续排队的子任务。
+    let task_id = Uuid::new_v4();
+    // running_record supplies the authoritative open child registry entry used by send_message.
+    // running_record 提供 send_message 使用的权威开放子任务注册表条目。
+    let running_record = build_task_session_record(TaskSessionRecordInit {
+        task_id,
+        public_task_id: String::from("worker-a"),
+        origin_session_id: parent_session_id,
+        parent_task_id: None,
+        depth: 1,
+        description: Some(String::from("Worker A")),
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main("initial work"),
+        display_title: String::from("Worker A"),
+        controller_config: None,
+        snapshot: CoreConversationSnapshot::default(),
+        last_prompt: String::from("initial work"),
+        last_status: String::from("running"),
+    });
+    task_runtime
+        .sessions
+        .write()
+        .expect("task session registry should be writable")
+        .insert(task_id, running_record.clone());
+    task_runtime
+        .upsert_subagent_registry_entry(&running_record, TaskSessionStatus::Running, None)
+        .expect("running child should be visible in the native registry");
+    // request identifies the old physical execution whose completion must be suppressed.
+    // request 标识其完成结果必须被抑制的旧物理执行。
+    let request = build_task_start_test_invocation(
+        parent_session_id,
+        task_id,
+        "queued-resume-failure-execution",
+    );
+    task_runtime
+        .open_detached_task_event_stream_for_run(task_id, &request.execution_id)
+        .expect("settled execution stream should open");
+    // stream observes the replacement failure emitted to the visible parent timeline.
+    // stream 观察发往父级可见时间线的替代失败事件。
+    let mut stream = Box::pin(
+        task_runtime
+            .subscribe_detached_task_events(task_id, &request.execution_id)
+            .expect("settled execution stream should subscribe"),
+    );
+    // pending_join models the still-active execution during message admission.
+    // pending_join 模拟消息准入时仍活动的执行。
+    let pending_join = tokio::spawn(async { std::future::pending::<()>().await });
+    // active_guard keeps queue delivery from starting before the test releases the old execution.
+    // active_guard 防止排队投递在测试释放旧执行前启动。
+    let active_guard = install_test_active_task_run(
+        &task_runtime,
+        task_id,
+        request.execution_id.as_str(),
+        pending_join.abort_handle(),
+    );
+    task_runtime
+        .invoke_send_message(
+            parent_session_id,
+            json!({
+                "target": "worker-a",
+                "message": "resume after the current execution",
+                "delivery_mode": "queue"
+            }),
+        )
+        .await
+        .expect("queue message should be admitted while the old execution is active");
+    drop(active_guard);
+    pending_join.abort();
+
+    assert!(
+        resume_queued_messages_after_active_run_released(&task_runtime, &request).await,
+        "explicit resume failure feedback must own the terminal publication decision"
+    );
+    assert_eq!(
+        task_runtime
+            .inter_agent_message_count_for_task(task_id)
+            .expect("failed successor inbox should remain readable"),
+        1
+    );
+    // mailbox_events proves wait_agent receives one explicit failure instead of the obsolete completion.
+    // mailbox_events 证明 wait_agent 收到一条显式失败，而不是过期完成结果。
+    let mailbox_events = task_runtime
+        .take_subagent_events_for_parent(SessionNodeId::from(parent_session_id))
+        .expect("parent mailbox should remain readable");
+    assert_eq!(mailbox_events.len(), 1);
+    assert_eq!(mailbox_events[0].kind, SubagentMailboxEventKind::Failed);
+    // detached_event proves the visible parent timeline receives the same explicit failure.
+    // detached_event 证明父级可见时间线收到同一条显式失败。
+    let detached_event = tokio::time::timeout(std::time::Duration::from_millis(50), stream.next())
+        .await
+        .expect("replacement failure event should publish")
+        .expect("replacement failure event should exist");
+    let DetachedTaskRuntimeEvent::ParentRuntime { event, .. } = detached_event else {
+        panic!("expected parent runtime failure");
+    };
+    assert_eq!(event.kind, RuntimeEventKind::DelegateFinished);
+    assert!(event.detail.contains("could not resume"));
+}
+
+/// Verifies one finalization failure wakes wait_agent and updates the visible parent timeline exactly once.
+/// 验证一次终态处理失败会精确唤醒一次 wait_agent，并更新父级可见时间线。
+#[tokio::test]
+async fn task_finalization_failure_publishes_both_parent_feedback_channels_once() {
+    // task_runtime owns the mailbox and detached stream used by the two parent feedback channels.
+    // task_runtime 持有两条父级反馈通道使用的 mailbox 与分离事件流。
+    let task_runtime = TaskRuntime::new();
+    // parent_session_id identifies the parent waiter receiving the failure.
+    // parent_session_id 标识接收失败的父级等待者。
+    let parent_session_id = Uuid::new_v4();
+    // task_id identifies the child whose finalization failed.
+    // task_id 标识终态处理失败的子任务。
+    let task_id = Uuid::new_v4();
+    // request preserves the exact child execution identity across both publications.
+    // request 在两次通道发布中保留精确的子执行身份。
+    let request = build_task_start_test_invocation(
+        parent_session_id,
+        task_id,
+        "finalization-feedback-execution",
+    );
+    task_runtime
+        .open_detached_task_event_stream_for_run(task_id, &request.execution_id)
+        .expect("failure execution stream should open");
+    // stream observes the visible parent-timeline failure event.
+    // stream 观察父级可见时间线的失败事件。
+    let mut stream = Box::pin(
+        task_runtime
+            .subscribe_detached_task_events(task_id, &request.execution_id)
+            .expect("failure execution stream should subscribe"),
+    );
+
+    publish_task_failure_to_parent(&task_runtime, &request, "finalization failed");
+
+    // detached_event proves the parent timeline receives one failure lifecycle event.
+    // detached_event 证明父级时间线收到一条失败生命周期事件。
+    let detached_event = tokio::time::timeout(std::time::Duration::from_millis(50), stream.next())
+        .await
+        .expect("failure detached event should publish")
+        .expect("failure detached event should exist");
+    let DetachedTaskRuntimeEvent::ParentRuntime { event, .. } = detached_event else {
+        panic!("expected parent runtime failure");
+    };
+    assert_eq!(event.kind, RuntimeEventKind::DelegateFinished);
+    // mailbox_events proves wait_agent receives exactly one matching failure notification.
+    // mailbox_events 证明 wait_agent 精确收到一条匹配的失败通知。
+    let mailbox_events = task_runtime
+        .take_subagent_events_for_parent(SessionNodeId::from(parent_session_id))
+        .expect("failure parent mailbox should remain readable");
+    assert_eq!(mailbox_events.len(), 1);
+    assert_eq!(mailbox_events[0].kind, SubagentMailboxEventKind::Failed);
+    assert_eq!(
+        mailbox_events[0].payload["execution_id"],
+        request.execution_id
+    );
 }
 
 /// Verifies publication rejects an execution that never crossed the explicit stream-open boundary.

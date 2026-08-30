@@ -349,14 +349,16 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                     event.kind
                 ),
             );
-            let v1_return_receipt = if listener_is_current && is_finished {
+            // Keep return persistence errors until lifecycle cleanup and its push have completed.
+            // 回流持久化错误保留到生命周期清理及其推送完成之后再返回。
+            let v1_return_result = if listener_is_current && is_finished {
                 Some(append_exact_v1_subagent_return(
                     state,
                     parent_session_id,
                     task_id,
                     child_handle,
                     provider_v1_sink,
-                )?)
+                ))
             } else {
                 None
             };
@@ -368,7 +370,6 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                     parent_session_id,
                     &event,
                     Some(execution_id),
-                    false,
                 ) {
                     Ok(consumed) => consumed,
                     Err(error) => {
@@ -387,8 +388,12 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                 ),
             );
             if !consumed && !is_finished {
-                append_runtime_event_projection(app, state, parent_session_id, &event)?;
-                release_runtime_event_projection_barrier_after_attempt(&event)?;
+                append_runtime_event_projection_and_release_barrier(
+                    app,
+                    state,
+                    parent_session_id,
+                    &event,
+                )?;
             } else {
                 release_runtime_event_projection_barrier_after_attempt(&event)?;
             }
@@ -402,7 +407,7 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                         task_id,
                         execution_id,
                     );
-                    if !cleaned && v1_return_receipt.is_some() {
+                    if !cleaned && v1_return_result.as_ref().is_some_and(Result::is_ok) {
                         clear_webui_subagent_completion_gate_ignored(
                             &mut guard,
                             task_id,
@@ -412,13 +417,15 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                     cleaned
                 };
                 if cleaned_current_listener {
-                    refresh_webui_subagent_navigation_round_visibility(state, parent_session_id)?;
                     emit_webui_subagent_navigation_changed_delta_for_parent(
                         app,
                         state,
                         parent_session_id,
                     )?;
                 }
+                // Unsuccessful persistence must not leave a terminal child looking active.
+                // 持久化失败不得让终态子任务继续显示为活动状态。
+                let v1_return_receipt = v1_return_result.transpose()?;
                 if let Some(receipt) = v1_return_receipt
                     && parent_is_regular_session
                     && !parent_is_stopped
@@ -437,9 +444,10 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                         format!("parent={parent_session_id} task={task_id} started={started}"),
                     );
                     if !started {
-                        return Err(format!(
-                            "The durable subagent return for parent `{parent_session_id}` was not physically dispatched."
-                        ));
+                        webui_trace(
+                            "detached_parent_event_v1_return_deferred_to_parent_terminal",
+                            format!("parent={parent_session_id} task={task_id}"),
+                        );
                     }
                 }
             }
@@ -597,9 +605,9 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
             {
                 eprintln!("[webui-service] detached runtime event Hook dispatch failed: {error}");
             }
-            if let Some(boundary) = event.tool_execution_boundary.as_ref() {
+            if event.tool_execution_boundary.is_some() {
                 let outcome = provider_v1_sink
-                    .apply_tool_boundary(boundary, current_v1_unix_millis()?)
+                    .apply_tool_event(app, state, &event, current_v1_unix_millis()?)
                     .await
                     .map_err(|error| error.to_string())?;
                 match outcome {

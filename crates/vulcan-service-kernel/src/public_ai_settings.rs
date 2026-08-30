@@ -9155,145 +9155,172 @@ pub(super) async fn service_public_ai_session_provider_tool_selections(
     state: SharedServiceBridgeState,
     conversation_id: String,
 ) -> Result<PublicAiSessionProviderToolSettingsSnapshot, String> {
+    // The global transaction freezes defaults, while metadata remains the session authority.
+    // 全局事务冻结默认值，metadata 始终是会话配置权威。
     let session_id = conversation_id
         .parse::<crate::SessionId>()
         .map_err(|error| format!("Invalid conversation id `{conversation_id}`: {error}"))?;
-    let session_handle =
-        crate::session_goal_lifecycle::session_v1_handle_from_state(&state, session_id).await?;
-    // transaction freezes provider-tool defaults through optional lazy-state publication.
-    // transaction 在可选惰性状态发布期间冻结供应商工具默认值。
     let transaction = begin_public_ai_configuration_transaction().await;
+    let access = crate::session_request_config_v1::SessionProviderToolConfiguration::resolve(
+        &state, session_id,
+    )
+    .await?;
+    let persisted = access.read()?;
     let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
-    // preview determines whether the authoritative session row requires any lazy migration.
-    // preview 判断权威会话行是否需要任何惰性迁移。
-    let (preview, runtime_overridden, runtime_requires_publication) = {
+    let (snapshot, planned) =
+        resolved_session_provider_tool_settings(runtime.as_ref(), &configuration, &persisted)?;
+    // Compare only capability fields, leaving execution, goals and model selection untouched.
+    // 仅比较能力字段，不触碰执行、目标及模型选择。
+    let requires_publication = {
         let guard = state
             .lock()
             .map_err(|error| format!("Failed to lock service state: {error}"))?;
-        let workspace = guard
+        // A missing projection is normal after reopening; it is not missing configuration.
+        // 重开后投影缺失属于正常情况，并不代表配置缺失。
+        guard
             .workspace_snapshot
             .as_ref()
-            .ok_or_else(|| String::from("Workspace is not initialized."))?;
-        // runtimeState contains the authoritative session row whose provider-tool fields are projected below.
-        // runtimeState 包含权威会话记录，其供应商工具字段会在下方投影。
-        let runtime_state = workspace
-            .session_runtime_state
-            .get(&session_id)
-            .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
-        // plannedRuntimeState copies only fields consumed and mutated by provider-tool reconciliation.
-        // plannedRuntimeState 只复制供应商工具协调会消费和修改的字段。
-        let mut planned_runtime_state = vulcan_workbench_model::SessionRuntimeStateEntry {
-            provider_tool_selections: runtime_state.provider_tool_selections.clone(),
-            media_understanding_modes: runtime_state.media_understanding_modes.clone(),
-            provider_tool_enabled_capabilities: runtime_state
-                .provider_tool_enabled_capabilities
-                .clone(),
-            provider_extension_target_sets: runtime_state.provider_extension_target_sets.clone(),
-            provider_tool_settings_initialized: runtime_state.provider_tool_settings_initialized,
-            provider_tool_selections_overridden: runtime_state.provider_tool_selections_overridden,
-            updated_at: runtime_state.updated_at.clone(),
-            ..Default::default()
-        };
-        let (
-            enabled_capabilities,
-            selections,
-            media_understanding_modes,
-            extension_target_sets,
-            state_changed,
-        ) = reconcile_session_provider_tool_settings(&mut planned_runtime_state, &configuration)?;
-        let conflicts = provider_tool_session_conflicts(
+            .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+            .is_some_and(|current| {
+                current.provider_tool_selections != planned.provider_tool_selections
+                    || current.provider_tool_enabled_capabilities
+                        != planned.provider_tool_enabled_capabilities
+                    || current.media_understanding_modes != planned.media_understanding_modes
+                    || current.provider_extension_target_sets
+                        != planned.provider_extension_target_sets
+                    || current.provider_tool_settings_initialized
+                        != planned.provider_tool_settings_initialized
+                    || current.provider_tool_selections_overridden
+                        != planned.provider_tool_selections_overridden
+            })
+    };
+    if requires_publication {
+        // Inheritance is an in-memory view. Merely opening settings must not rewrite user metadata.
+        // 继承只是内存视图；仅打开设置绝不能回写用户元数据。
+        let effective = provider_tool_selection_config_v1(
+            &snapshot,
+            planned.provider_tool_selections_overridden,
+        );
+        publish_public_ai_workbench_with_workspace_reconciliation_and_commit(
+            &app,
+            &state,
             runtime.as_ref(),
             &configuration,
-            &enabled_capabilities,
-            &selections,
-            &media_understanding_modes,
-            &extension_target_sets,
+            |workspace| {
+                Ok(project_session_provider_tool_settings(
+                    workspace, session_id, &effective,
+                ))
+            },
+            false,
+            "provider_tool_settings_projection",
+            || Ok(()),
         )?;
-        let preview = PublicAiSessionProviderToolSettingsSnapshot {
+    }
+    drop(transaction);
+    Ok(snapshot)
+}
+
+/// Resolves `persisted` against global `configuration` and `runtime` without execution state.
+/// 不依赖执行状态，从全局 `configuration` 与 `runtime` 解析 `persisted`。
+/// Returns the API snapshot and its capability-only projection, including inherited defaults.
+/// 返回接口快照及仅能力投影，包含继承的默认值。
+fn resolved_session_provider_tool_settings(
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+    persisted: &vulcan_session_core::v1::config::ProviderToolSelectionConfig,
+) -> Result<
+    (
+        PublicAiSessionProviderToolSettingsSnapshot,
+        vulcan_workbench_model::SessionRuntimeStateEntry,
+    ),
+    String,
+> {
+    let mut planned = vulcan_workbench_model::SessionRuntimeStateEntry::default();
+    crate::session_request_config_v1::apply_provider_tool_selection_v1(&mut planned, persisted);
+    let (enabled_capabilities, selections, media_understanding_modes, extension_target_sets, _) =
+        reconcile_session_provider_tool_settings(&mut planned, configuration)?;
+    let conflicts = provider_tool_session_conflicts(
+        runtime,
+        configuration,
+        &enabled_capabilities,
+        &selections,
+        &media_understanding_modes,
+        &extension_target_sets,
+    )?;
+    Ok((
+        PublicAiSessionProviderToolSettingsSnapshot {
             enabled_capabilities,
             selections,
             media_understanding_modes,
             extension_target_sets,
             conflicts,
-        };
-        (
-            preview,
-            planned_runtime_state.provider_tool_selections_overridden,
-            state_changed,
-        )
+        },
+        planned,
+    ))
+}
+
+/// Updates only an existing capability projection in `workspace` for `session_id` using `selection`.
+/// 使用 `selection` 仅更新 `workspace` 中 `session_id` 已存在的能力投影。
+/// Returns changed projection IDs; an unloaded session needs no adapter and no execution hydration.
+/// 返回变化的投影 ID；未加载会话不需要适配器，也不需要加载执行数据。
+fn project_session_provider_tool_settings(
+    workspace: &mut vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+    session_id: crate::SessionId,
+    selection: &vulcan_session_core::v1::config::ProviderToolSelectionConfig,
+) -> PublicAiWorkspaceReconciliation {
+    let Some(current) = workspace.session_runtime_state.get_mut(&session_id) else {
+        return PublicAiWorkspaceReconciliation::default();
     };
-    let expected_v1_selection = provider_tool_selection_config_v1(&preview, runtime_overridden);
-    let v1_selection_matches = session_handle
-        .read(|document| document.metadata.config.selection.provider_tools == expected_v1_selection)
-        .map_err(|error| format!("读取 V1 Provider 工具选择失败：{error}"))?;
-    let requires_publication = runtime_requires_publication || !v1_selection_matches;
-    if !requires_publication {
-        drop(transaction);
-        return Ok(preview);
-    }
-    // committedSnapshot is written only by the detached reconciliation that wins publication.
-    // committedSnapshot 仅由赢得发布的独立协调写入。
-    let committed_snapshot = std::cell::RefCell::new(None);
-    let provider_tools_updated_at_ms =
-        crate::session_goal_lifecycle::current_v1_goal_unix_millis()?;
+    crate::session_request_config_v1::apply_provider_tool_selection_v1(current, selection);
+    PublicAiWorkspaceReconciliation::workspace_only(BTreeSet::from([session_id]))
+}
+
+/// Rebuilds only `conversation_id` capability settings to inherited global defaults.
+/// 仅将 `conversation_id` 的能力设置重建为继承全局默认值。
+/// Returns the effective settings; conversation history, goals and other metadata stay untouched.
+/// 返回生效设置；会话历史、目标及其他元数据保持不变。
+pub(super) async fn service_rebuild_public_ai_session_provider_tool_selections(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    conversation_id: String,
+) -> Result<PublicAiSessionProviderToolSettingsSnapshot, String> {
+    let session_id = conversation_id
+        .parse::<crate::SessionId>()
+        .map_err(|error| format!("Invalid conversation id `{conversation_id}`: {error}"))?;
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let access = crate::session_request_config_v1::SessionProviderToolConfiguration::resolve(
+        &state, session_id,
+    )
+    .await?;
+    let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
+    // Explicit rebuild replaces the addon only; reading the corrupt old addon would defeat recovery.
+    // 显式重建仅替换附加项；先读取损坏的旧附加项会让恢复无法执行。
+    let (snapshot, _) = resolved_session_provider_tool_settings(
+        runtime.as_ref(),
+        &configuration,
+        &Default::default(),
+    )?;
+    let selection = provider_tool_selection_config_v1(&snapshot, false);
+    let now_ms = crate::session_goal_lifecycle::current_v1_goal_unix_millis()?;
     publish_public_ai_workbench_with_workspace_reconciliation_and_commit(
         &app,
         &state,
         runtime.as_ref(),
         &configuration,
         |workspace| {
-            let runtime_state = workspace
-                .session_runtime_state
-                .get_mut(&session_id)
-                .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
-            let (
-                enabled_capabilities,
-                selections,
-                media_understanding_modes,
-                extension_target_sets,
-                state_changed,
-            ) = reconcile_session_provider_tool_settings(runtime_state, &configuration)?;
-            let conflicts = provider_tool_session_conflicts(
-                runtime.as_ref(),
-                &configuration,
-                &enabled_capabilities,
-                &selections,
-                &media_understanding_modes,
-                &extension_target_sets,
-            )?;
-            committed_snapshot.replace(Some(PublicAiSessionProviderToolSettingsSnapshot {
-                enabled_capabilities,
-                selections,
-                media_understanding_modes,
-                extension_target_sets,
-                conflicts,
-            }));
-            Ok(PublicAiWorkspaceReconciliation::workspace_only(
-                state_changed.then_some(session_id).into_iter().collect(),
+            Ok(project_session_provider_tool_settings(
+                workspace, session_id, &selection,
             ))
         },
         false,
-        "provider_tool_settings_initialize",
+        "provider_tool_settings_rebuild",
         || {
-            let snapshot = committed_snapshot.borrow();
-            let snapshot = snapshot.as_ref().ok_or_else(|| {
-                String::from(
-                    "Provider tool session settings publication produced no committed snapshot.",
-                )
-            })?;
-            let selection = provider_tool_selection_config_v1(snapshot, runtime_overridden);
-            crate::session_request_config_v1::set_provider_tool_selection_v1(
-                session_handle.as_ref(),
-                selection,
-                provider_tools_updated_at_ms,
-            )?;
+            access.rebuild(selection.clone(), now_ms)?;
             Ok(())
         },
     )?;
     drop(transaction);
-    committed_snapshot.into_inner().ok_or_else(|| {
-        String::from("Provider tool session settings publication produced no committed snapshot.")
-    })
+    Ok(snapshot)
 }
 
 /// Reconciles one session's persisted provider-tool fields against current global defaults.
@@ -9322,8 +9349,8 @@ fn reconcile_session_provider_tool_settings(
     ),
     String,
 > {
-    // stateChanged controls both durable persistence and Workbench publication.
-    // stateChanged 同时控制持久化与工作台发布。
+    // stateChanged reports projection changes; callers independently decide whether a write is authorized.
+    // stateChanged 报告投影变化；由调用方独立决定是否获得写入授权。
     let mut state_changed = false;
     // mediaCapabilityKeys identifies legacy direct targets that must never remain in session state.
     // mediaCapabilityKeys 标识绝不能继续保留在会话状态中的历史媒体直连目标。
@@ -9510,11 +9537,15 @@ pub(super) async fn service_save_public_ai_session_provider_tool_selections(
                 request.conversation_id
             )
         })?;
-    let session_handle =
-        crate::session_goal_lifecycle::session_v1_handle_from_state(&state, session_id).await?;
     // transaction keeps target validation and detached workspace publication on one generation.
     // transaction 让目标校验与独立工作区发布保持在同一代际。
     let transaction = begin_public_ai_configuration_transaction().await;
+    // Resolve only metadata ownership, not the execution document or its Turn history.
+    // 仅解析元数据所有权，不解析执行文档及其回合历史。
+    let access = crate::session_request_config_v1::SessionProviderToolConfiguration::resolve(
+        &state, session_id,
+    )
+    .await?;
     let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
     validate_provider_tool_session_settings(
         runtime.as_ref(),
@@ -9533,6 +9564,7 @@ pub(super) async fn service_save_public_ai_session_provider_tool_selections(
         extension_target_sets: request.extension_target_sets,
         conflicts: Vec::new(),
     };
+    let selection = provider_tool_selection_config_v1(&snapshot, true);
     let provider_tools_updated_at_ms =
         crate::session_goal_lifecycle::current_v1_goal_unix_millis()?;
     publish_public_ai_workbench_with_workspace_reconciliation_and_commit(
@@ -9541,58 +9573,14 @@ pub(super) async fn service_save_public_ai_session_provider_tool_selections(
         runtime.as_ref(),
         &configuration,
         |workspace| {
-            let runtime_state = workspace
-                .session_runtime_state
-                .get_mut(&session_id)
-                .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
-            runtime_state.provider_tool_selections = snapshot
-                .selections
-                .iter()
-                .map(|(capability, selection)| {
-                    (
-                        provider_tool_capability_key(*capability),
-                        vulcan_workbench_model::SessionProviderToolTargetSelection {
-                            connection_id: selection.connection_id.clone(),
-                            target_id: selection.target_id.clone(),
-                        },
-                    )
-                })
-                .collect();
-            runtime_state.provider_tool_enabled_capabilities = snapshot
-                .enabled_capabilities
-                .iter()
-                .map(|capability| provider_tool_capability_key(*capability))
-                .collect();
-            runtime_state.media_understanding_modes =
-                session_media_understanding_modes_to_runtime(&snapshot.media_understanding_modes);
-            runtime_state.provider_extension_target_sets = snapshot
-                .extension_target_sets
-                .iter()
-                .map(|(capability, selections)| {
-                    (
-                        provider_tool_capability_key(*capability),
-                        selections
-                            .iter()
-                            .map(session_provider_tool_selection_from_contract)
-                            .collect(),
-                    )
-                })
-                .collect();
-            runtime_state.provider_tool_settings_initialized = true;
-            runtime_state.provider_tool_selections_overridden = true;
-            runtime_state.updated_at = crate::current_unix_millis_text();
-            Ok(PublicAiWorkspaceReconciliation::workspace_only(
-                BTreeSet::from([session_id]),
+            Ok(project_session_provider_tool_settings(
+                workspace, session_id, &selection,
             ))
         },
         false,
         "provider_tool_settings",
         || {
-            crate::session_request_config_v1::set_provider_tool_selection_v1(
-                session_handle.as_ref(),
-                provider_tool_selection_config_v1(&snapshot, true),
-                provider_tools_updated_at_ms,
-            )?;
+            access.save(selection.clone(), provider_tools_updated_at_ms)?;
             Ok(())
         },
     )?;
@@ -13267,6 +13255,35 @@ mod context_compaction_window_node_tests {
 
 #[cfg(test)]
 mod inference_settings_route_tests {
+    /// Rebuilt defaults inherit later global changes; explicit session overrides remain independent.
+    /// 重建后的默认值继承后续全局变化；显式会话覆盖仍保持独立。
+    #[test]
+    fn capability_metadata_defaults_keep_inheritance_after_rebuild() {
+        use super::*;
+        // No model catalog or account is needed to resolve the configuration inheritance contract.
+        // 解析配置继承契约不需要模型目录或账号。
+        let runtime = PublicAiRuntime::unavailable().unwrap();
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .provider_tool_enabled_capabilities
+            .insert(ProviderToolCapabilityKind::WebSearch);
+        let (defaults, _) =
+            resolved_session_provider_tool_settings(&runtime, &configuration, &Default::default())
+                .unwrap();
+        assert_eq!(
+            defaults.enabled_capabilities,
+            BTreeSet::from([ProviderToolCapabilityKind::WebSearch])
+        );
+        let inherited = provider_tool_selection_config_v1(&defaults, false);
+        configuration.provider_tool_enabled_capabilities.clear();
+        let (changed, _) =
+            resolved_session_provider_tool_settings(&runtime, &configuration, &inherited).unwrap();
+        assert!(changed.enabled_capabilities.is_empty());
+        let overridden = provider_tool_selection_config_v1(&defaults, true);
+        let (retained, _) =
+            resolved_session_provider_tool_settings(&runtime, &configuration, &overridden).unwrap();
+        assert_eq!(retained.enabled_capabilities, defaults.enabled_capabilities);
+    }
     use super::*;
 
     /// Verifies a media capability can be enabled with only an admitted model-replacement route.

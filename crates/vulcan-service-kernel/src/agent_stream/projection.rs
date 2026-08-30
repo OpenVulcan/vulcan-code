@@ -1001,8 +1001,8 @@ pub(crate) fn append_active_stream_runtime_event_projection(
     )
 }
 
-/// Projects an event owned by a detached or compaction runtime into retained session state.
-/// 将分离运行时或压缩运行时持有的事件投影到保留会话状态中。
+/// Projects lifecycle state for a durable V1 tool event or an independent detached/compaction event.
+/// 投影已可靠提交的 V1 工具事件或独立的分离、压缩事件所携带的生命周期状态。
 ///
 /// # Parameters
 /// # 参数
@@ -1010,10 +1010,10 @@ pub(crate) fn append_active_stream_runtime_event_projection(
 /// `app` 发出投影提交后生成的 WebUI 增量。
 /// `state` owns the retained projection state.
 /// `state` 持有保留投影状态。
-/// `session_id` identifies the session that owns the independent runtime event.
-/// `session_id` 标识持有独立运行时事件的会话。
-/// `event` is the authoritative detached or compaction runtime event.
-/// `event` 是权威的分离运行时或压缩运行时事件。
+/// `session_id` identifies the event owner; the V1 tool path takes it from the durable sink handle.
+/// `session_id` 标识事件所有者；V1 工具路径从可靠接收器句柄取得该值。
+/// `event` is the exact executor event; V1 callers must commit its typed tool boundary first.
+/// `event` 是执行器的精确事件；V1 调用方必须先提交其强类型工具边界。
 ///
 /// # Returns
 /// # 返回值
@@ -1098,7 +1098,7 @@ fn append_runtime_event_projection_with_authority(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        remove_webui_closed_subagent_tasks_in_state(&mut guard, &closed_subagent_task_ids)
+        unload_webui_closed_subagent_runtime_state(&mut guard, &closed_subagent_task_ids)
     };
 
     if refreshes_command_sessions

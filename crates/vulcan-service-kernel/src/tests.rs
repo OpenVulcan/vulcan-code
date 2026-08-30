@@ -17,6 +17,7 @@ pub(crate) mod test_support;
 use test_support::*;
 
 mod active_session_state_tests;
+mod capability_metadata_tests;
 
 /// Verifies application shutdown drains tasks before VMM and releases MCP last.
 /// 验证应用关闭会先排空任务、再关闭 VMM，并最后释放 MCP。

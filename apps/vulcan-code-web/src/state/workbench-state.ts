@@ -757,7 +757,9 @@ function updateSubagentNavigationRunPhase(
   conversationId: string,
   runPhase?: string,
 ): WorkbenchSnapshot["subagentNavigation"] {
-  if (!navigation?.tasks?.some((task) => task.taskId === conversationId)) {
+  // Archive lifecycle is authoritative: late execution phases cannot reopen a closed child.
+  // 归档生命周期具有权威性：迟到的执行阶段不能重新打开已关闭子任务。
+  if (!navigation?.tasks?.some((task) => task.taskId === conversationId && task.runState !== "closed")) {
     return navigation;
   }
   const normalized = normalizedSessionRunPhase(runPhase);
@@ -769,7 +771,7 @@ function updateSubagentNavigationRunPhase(
   return {
     ...navigation,
     tasks: navigation.tasks.map((task) => (
-      task.taskId === conversationId
+      task.taskId === conversationId && task.runState !== "closed"
         ? { ...task, isRunning: running, runState }
         : task
     )),
@@ -846,14 +848,19 @@ export function applySubagentPanelRouteResponse(
   if (currentRevision > 0 && responseRevision < currentRevision) {
     return workbench;
   }
+  // nextNavigationByConversation changes only when the route response carries an authoritative navigation snapshot.
+  // nextNavigationByConversation 仅在路由响应携带权威导航快照时发生变化。
+  const nextNavigationByConversation = response.subagentNavigation
+    ? upsertSubagentNavigationForConversation(
+      workbench.subagentNavigationByConversation ?? [],
+      response.parentConversationId ?? response.subagentNavigation.parentConversationId,
+      response.subagentNavigation,
+    )
+    : workbench.subagentNavigationByConversation ?? [];
   return deriveSelectedConversationFields({
     ...workbench,
     revision: response.revision,
-    subagentNavigationByConversation: upsertSubagentNavigationForConversation(
-      workbench.subagentNavigationByConversation ?? [],
-      response.parentConversationId ?? response.subagentNavigation?.parentConversationId ?? null,
-      response.subagentNavigation ?? null,
-    ),
+    subagentNavigationByConversation: nextNavigationByConversation,
   });
 }
 

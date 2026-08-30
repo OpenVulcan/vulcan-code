@@ -438,17 +438,17 @@ const handleEditConversationGeneration = React.useCallback(async (
 const handleForkConversationGeneration = React.useCallback(async (
   sourceSessionId: string,
   expectedWindowGeneration: number,
-  targetSeq: number,
+  sourceTurnEndSeq: number,
   childSessionId: string,
   title: string,
 ): Promise<string | null> => {
   try {
-    // response must preserve the exact parent, child, and source-seq identities.
-    // 响应必须保留精确的父会话、子会话与来源 seq 身份。
+    // response must preserve the exact parent, child, and completed-Turn identities.
+    // 响应必须保留精确的父会话、子会话与完整回合身份。
     const response = await forkConversationGenerationV1({
       sourceSessionId,
       expectedWindowGeneration,
-      targetSeq,
+      sourceTurnEndSeq,
       childSessionId,
       title,
     });
@@ -459,8 +459,7 @@ const handleForkConversationGeneration = React.useCallback(async (
     if (
       response.sourceSessionId !== sourceSessionId
       || response.childSessionId !== childSessionId
-      || response.sourceTargetSeq !== targetSeq
-      || !response.dispatchStarted
+      || response.sourceTurnEndSeq !== sourceTurnEndSeq
     ) {
       throw new Error("ERR_CONVERSATION_FORK_GENERATION_ACK_MISMATCH");
     }

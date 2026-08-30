@@ -260,40 +260,18 @@ function localizedRequestConfigChangeAttributes(
   if (noticeKind !== "model_switch") {
     return null;
   }
-  // providerName prefers the frozen display label and falls back only to its exact persisted id.
-  // providerName 优先使用冻结的显示标签，仅在缺失时退回精确持久化标识。
-  const providerName = metadataString(message.metadata, ["provider_name", "provider_id"]) ?? "";
-  // connectionName prefers the frozen account label and falls back only to its exact persisted id.
-  // connectionName 优先使用冻结的账号标签，仅在缺失时退回精确持久化标识。
-  const connectionName = metadataString(message.metadata, ["connection_name", "connection_id"]) ?? "";
-  // modelName prefers the frozen model label and falls back only to its exact persisted id.
-  // modelName 优先使用冻结的模型标签，仅在缺失时退回精确持久化标识。
-  const modelName = metadataString(message.metadata, ["model_name", "model_id"]) ?? "";
-  // activation selects the lifecycle-specific localized explanation.
-  // activation 选择与生命周期语义对应的本地化说明。
-  const activation = metadataString(message.metadata, ["activation"]);
-  // summaryKey remains extensible for already-persisted immediate records while session
-  // selections use the strict next-real-Provider-request boundary.
-  // summaryKey 为已持久化的即时记录保留扩展性，而会话选择使用严格的下一次真实 Provider 请求边界。
-  const summaryKey: TranslationKey = activation === "immediate"
-    ? "conversation.modelSwitch.immediate"
-    : "conversation.modelSwitch.nextProviderRequest";
-  // title is localized at render time so changing the UI locale updates historical records too.
-  // title 在渲染时本地化，因此切换界面语言也会更新历史记录。
-  const title = t?.("conversation.modelSwitch.title") ?? "Model selection";
-  // template is the active-language sentence before exact label interpolation.
-  // template 是插入精确标签前的当前语言句子。
-  const template = t?.(summaryKey)
-    ?? (activation === "immediate"
-      ? "Selected {provider} / {account} / {model}."
-      : "Selected {provider} / {account} / {model}; the current Provider request keeps its frozen route, and this selection applies to the next real Provider request.");
-  // summary replaces only the three contract-declared placeholders.
-  // summary 仅替换契约声明的三个占位符。
-  const summary = template
-    .replaceAll("{provider}", providerName)
-    .replaceAll("{account}", connectionName)
-    .replaceAll("{model}", modelName);
-  return { title, summary };
+  // Labels are projected from both persisted routes and the current provider display catalog.
+  // 标签从前后持久化路线及当前供应商显示目录投影得到。
+  const previous = metadataString(message.metadata, ["previous_model_label"]);
+  const current = metadataString(message.metadata, ["current_model_label"]);
+  if (previous === null || current === null) return null;
+  // template stays short; activation internals never enter the visible sentence.
+  // template 保持简短；生效流程内部细节不会进入可见句子。
+  const template = t?.("conversation.modelSwitch.changed") ?? "Model changed from {previous} to {current}.";
+  return {
+    title: t?.("conversation.modelSwitch.title") ?? "Model changed",
+    summary: template.replaceAll("{previous}", previous).replaceAll("{current}", current),
+  };
 }
 
 // parseDirectiveConversationBlocks parses Vulcan triple-colon transcript directives.

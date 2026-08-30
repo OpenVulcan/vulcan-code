@@ -46,9 +46,9 @@ function seqOffset(markup: string, seq: number): number {
 }
 
 describe("ConversationV1DisplayRenderer", () => {
-  it("offers generation actions only for canonical root user inputs", () => {
-    // events contain one root input and one queued-scheduled input in exact seq order.
-    // events 按精确 seq 顺序包含一条根输入与一条排队调度输入。
+  it("offers edit at the root input and fork only after the owning Turn completes", () => {
+    // events contain one root input, one queued input, one final answer, and terminal TurnStats.
+    // events 包含一条根输入、一条排队输入、一条最终回答与终态 TurnStats。
     const events: readonly ConversationEventSummary[] = [
       summary(1, {
         kind: "user_input",
@@ -70,10 +70,32 @@ describe("ConversationV1DisplayRenderer", () => {
         text: "turn-ending answer",
         status: "completed",
       }),
+      summary(4, {
+        kind: "turn_stats",
+        start_seq: 1,
+        end_seq: 4,
+        outcome: "completed",
+        duration_ms: 3,
+        buckets: {
+          direct: { api_call_count: 1, unknown_usage_api_call_count: 0, tool_call_count: 0, subagent_return_count: 0, usage: {} },
+          subagent: { api_call_count: 0, unknown_usage_api_call_count: 0, tool_call_count: 0, subagent_return_count: 0, usage: {} },
+          total: { api_call_count: 1, unknown_usage_api_call_count: 0, tool_call_count: 0, subagent_return_count: 0, usage: {} },
+        },
+      }, "ui_only"),
     ];
     // onAction proves action controls require an explicit production owner.
     // onAction 证明动作控件必须拥有显式生产归属。
     const onAction = vi.fn();
+    // incompleteMarkup proves a final answer without terminal statistics is not a fork boundary.
+    // incompleteMarkup 证明缺少终态统计的最终回答不是分叉边界。
+    const incompleteMarkup = renderToStaticMarkup(
+      <I18nProvider initialLocale="zh-CN">
+        <ConversationV1DisplayRenderer
+          events={events.slice(0, -1)}
+          onRootInputGenerationAction={onAction}
+        />
+      </I18nProvider>,
+    );
     // markup is visibility evidence; no legacy message identity participates.
     // markup 是可见性证据；不存在旧消息身份参与。
     const markup = renderToStaticMarkup(
@@ -85,6 +107,7 @@ describe("ConversationV1DisplayRenderer", () => {
       </I18nProvider>,
     );
 
+    expect(incompleteMarkup).not.toContain('aria-label="分叉会话"');
     expect(markup.match(/aria-label="编辑用户提示词"/g)).toHaveLength(1);
     expect(markup.match(/aria-label="分叉会话"/g)).toHaveLength(1);
     expect(markup).toContain("lucide-pencil");
@@ -485,8 +508,8 @@ describe("ConversationV1DisplayRenderer", () => {
     expect(markup).toContain("lucide-split");
     expect(markup).not.toContain("回合结束");
     expect(markup).toContain("Connection restored");
-    expect(markup).toContain("gpt-v1 · high");
-    expect(markup).toContain("gpt-v2 · max");
+    expect(markup).toContain("模型已从 openai / gpt-v1 切换为 openai / gpt-v2。");
+    expect(markup).toContain("conversation-model-switch-help");
     expect(markup).toContain("<strong>思考强度</strong><span>high → max</span>");
   });
 

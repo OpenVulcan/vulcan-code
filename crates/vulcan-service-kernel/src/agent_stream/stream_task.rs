@@ -871,12 +871,15 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                         // 首条工具请求事件是纯工具 Provider 输出即使没有可见 Token 也开始影响重放的服务边界。
                         provider_telemetry_guard.observe_semantic_output();
                     }
-                    if let Some(boundary) = event.tool_execution_boundary.as_ref() {
+                    if event.tool_execution_boundary.is_some() {
                         if let Some(sink) = provider_v1_sink.as_mut() {
                             // The existing runtime barrier is released only after the same V1 owner durably applies this exact boundary.
                             // 仅在同一个 V1 所有者可靠应用当前精确边界后，才释放既有运行时闸门。
                             let v1_tool_result = match current_v1_unix_millis() {
-                                Ok(now_ms) => sink.apply_tool_boundary(boundary, now_ms).await,
+                                Ok(now_ms) => {
+                                    sink.apply_tool_event(&app, &task_state, &event, now_ms)
+                                        .await
+                                }
                                 Err(error) => Err(ProviderV1SinkError::Timestamp(error)),
                             };
                             let boundary_outcome = match v1_tool_result {
@@ -906,8 +909,8 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                                     "[webui-service] acknowledge Provider V1 tool boundary failed: {error}"
                                 );
                             }
-                            // V1 is the sole persistence owner for admitted sessions; legacy recovery/transcript projection is skipped.
-                            // 对已准入会话，V1 是唯一持久化所有者；跳过旧恢复与转录投影。
+                            // V1 persistence and live lifecycle projection have both completed; do not replay legacy transcript work.
+                            // V1 持久化与实时生命周期投影均已完成；不得重放旧转录工作。
                             continue;
                         }
                         // Missing V1 ownership is a hard durability failure; no retry sidecar may become a second authority.

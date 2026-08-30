@@ -1,11 +1,5 @@
 use super::*;
 use crate::agent_runtime::provider_request_bridge_conversation::core_snapshot_to_session_conversation_state;
-use crate::agent_runtime::runtime_stream_intervention::{
-    RuntimePromptIntervention, RuntimePromptInterventionError,
-};
-use vulcan_core::controller::{
-    AgentMessageAppendRequest, DisplayRecordAppendRequest, VulcanCoreController,
-};
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
     ConversationRecord as CoreConversationRecord, TranscriptRecordKind as CoreTranscriptRecordKind,
@@ -133,18 +127,27 @@ impl TaskRuntime {
         }
         let target = self.resolve_inter_agent_message_target(current_session_id, &parsed.target)?;
         let target_session_id = SessionId::from(target.session_id);
-        let continues_task_turn = self.task_has_active_or_starting_run(target_session_id)?;
-        let stopped_task_ids = if parsed.delivery_mode.interrupts_current_task() {
-            self.stop_task_tree(target_session_id)?
+        // transaction_task_ids define the exact execution scope that must not settle between message admission and interruption.
+        // transaction_task_ids 定义消息准入与中止之间不得收敛的精确执行范围。
+        let transaction_task_ids = if parsed.delivery_mode.interrupts_current_task() {
+            self.task_subtree_ids(target_session_id)?
         } else {
-            Vec::new()
+            vec![target_session_id]
         };
-        let transaction_lock = self.task_execution_state_lock(target_session_id)?;
-        let transaction_guard = transaction_lock.lock().map_err(|_| {
-            String::from(
-                "The task execution transaction is locked and cannot admit the inter-agent message.",
-            )
-        })?;
+        // transaction_locks keep every interrupted finalizer behind the admitted inbox message.
+        // transaction_locks 让全部被中止执行的终态处理器排在已准入 inbox 消息之后。
+        let transaction_locks =
+            self.ordered_task_execution_state_locks(transaction_task_ids.as_slice())?;
+        // transaction_guards retain the sorted task boundaries through registry stop and inbox admission.
+        // transaction_guards 在注册表停止与 inbox 准入期间保留排序后的任务边界。
+        let mut transaction_guards = Vec::with_capacity(transaction_locks.len());
+        for transaction_lock in &transaction_locks {
+            transaction_guards.push(transaction_lock.lock().map_err(|_| {
+                String::from(
+                    "The task execution transaction is locked and cannot admit the inter-agent message.",
+                )
+            })?);
+        }
         let admitted_target =
             self.resolve_inter_agent_message_target(current_session_id, &parsed.target)?;
         if admitted_target.session_id != target.session_id {
@@ -153,6 +156,22 @@ impl TaskRuntime {
                 target.agent_id, target.session_id, admitted_target.session_id
             ));
         }
+        // continues_task_turn is sampled inside the same transaction that owns stop and admission.
+        // continues_task_turn 在持有停止与准入事务的同一边界内取样。
+        let continues_task_turn = self.task_has_active_or_starting_run(target_session_id)?;
+        // stopped_task_ids preserve interrupt semantics while finalizers remain blocked on the task locks.
+        // stopped_task_ids 在终态处理器仍被任务锁阻挡时保留插队中止语义。
+        let stopped_task_ids = if parsed.delivery_mode.interrupts_current_task() {
+            let stopped_task_ids =
+                self.reserve_and_abort_selected_task_runs(transaction_task_ids.as_slice())?;
+            self.mark_stopped_tasks_with_transaction_locks_held(
+                stopped_task_ids.as_slice(),
+                "user_interrupt",
+            )?;
+            stopped_task_ids
+        } else {
+            Vec::new()
+        };
         let delivery_id = self.enqueue_inter_agent_message(
             current_session_id,
             target_session_id,
@@ -161,7 +180,7 @@ impl TaskRuntime {
             continues_task_turn,
         )?;
         let should_resume = !self.task_has_active_or_starting_run(target_session_id)?;
-        drop(transaction_guard);
+        drop(transaction_guards);
 
         if should_resume {
             self.spawn_idle_agent_resume_from_inbox(
@@ -717,8 +736,13 @@ impl TaskRuntime {
                         error,
                     )
                     .to_string();
-                if let Err(mark_error) =
-                    self.mark_task_failure(current_session_id, &invocation, &restored_error)
+                if let Err(mark_error) = self
+                    .mark_task_failure_without_parent_mailbox(
+                        current_session_id,
+                        &invocation,
+                        &restored_error,
+                    )
+                    .map(|_| ())
                 {
                     return Err(format!(
                         "{restored_error} Additionally, failed to mark the child agent failure: {mark_error}"
@@ -735,8 +759,8 @@ impl TaskRuntime {
         Ok(true)
     }
 
-    /// Resumes a just-settled child agent when queue-mode messages arrived too late for in-turn injection.
-    /// 当 queue 模式消息来得太晚、无法在当前 turn 内注入时，续跑刚结束的子代理。
+    /// Resumes a settled child by admitting queued messages as the next durable V1 root input.
+    /// 在子代理结束后，将排队消息准入为下一条可靠 V1 根输入并续跑。
     ///
     /// # Parameters
     /// 参数
@@ -780,63 +804,6 @@ impl TaskRuntime {
         self.resume_idle_agent_from_inbox(current_session_id, &target)
             .await
     }
-}
-
-/// Builds a runtime intervention that injects queued messages into one running child agent.
-/// 构建一个运行时干预钩子，将排队消息注入到单个运行中子代理。
-///
-/// # Parameters
-/// 参数
-/// `task_runtime` owns the shared agent-control inbox.
-/// `task_runtime` 持有共享的 AgentControl inbox。
-/// `task_id` identifies the child agent whose stream reached a safe boundary.
-/// `task_id` 标识到达安全边界的子代理。
-///
-/// # Returns
-/// 返回值
-/// A prompt intervention closure for the child runtime stream.
-/// 用于子运行时流的提示词干预闭包。
-pub(super) fn build_child_agent_prompt_intervention(
-    task_runtime: Arc<TaskRuntime>,
-    task_id: SessionId,
-) -> RuntimePromptIntervention {
-    Arc::new(move |_session_id, controller| {
-        let messages = task_runtime
-            .take_inter_agent_messages(task_id)
-            .map_err(|message| RuntimePromptInterventionError::StateAccess { message })?;
-        if messages.is_empty() {
-            return Ok(false);
-        }
-        // controller_draft keeps provider-visible and display projections atomic on identity failure.
-        // controller_draft 在身份失败时保持 Provider 可见投影与显示投影的原子性。
-        let mut controller_draft = controller.clone();
-        append_inter_agent_agent_messages_to_controller(&mut controller_draft, &messages);
-        if let Err(error) =
-            append_inter_agent_display_records_to_controller(&mut controller_draft, &messages)
-        {
-            let operation_error = format!("Failed to append child display record: {error}");
-            let restore_error = task_runtime.restore_inter_agent_messages_front_after_failure(
-                task_id,
-                messages,
-                "append_child_display_record",
-                operation_error,
-            );
-            return Err(match restore_error {
-                InterAgentMessageRestoreError::Operation { message } => {
-                    RuntimePromptInterventionError::ProjectionConflict { message }
-                }
-                InterAgentMessageRestoreError::Recovery {
-                    operation_error,
-                    recovery_error,
-                } => RuntimePromptInterventionError::RecoveryFailure {
-                    operation_error,
-                    recovery_error,
-                },
-            });
-        }
-        *controller = controller_draft;
-        Ok(true)
-    })
 }
 
 /// Strict parsed arguments for send_message.
@@ -948,24 +915,6 @@ fn format_inter_agent_messages_for_model(messages: &[QueuedInterAgentMessage]) -
         .map(inter_agent_message_model_text)
         .collect::<Vec<_>>()
         .join("\n\n")
-}
-
-/// Appends provider-visible typed messages for delivered parent-to-child messages to a live controller.
-/// 将已投递的父到子消息作为 Provider 可见类型化消息追加到实时控制器。
-///
-/// # Parameters
-/// 参数
-/// `controller` owns the child-agent core snapshot being updated.
-/// `controller` 持有正在更新的子智能体核心快照。
-/// `messages` are the delivered inter-agent messages.
-/// `messages` 是已投递的智能体间消息。
-fn append_inter_agent_agent_messages_to_controller(
-    controller: &mut VulcanCoreController,
-    messages: &[QueuedInterAgentMessage],
-) {
-    for message in messages {
-        controller.append_agent_message(inter_agent_message_append_request(message));
-    }
 }
 
 /// Atomically appends provider-visible and display projections for delivered messages to a stored snapshot.
@@ -1085,32 +1034,6 @@ where
     Ok(())
 }
 
-/// Builds a controller append request for one typed parent-to-child message.
-/// 为单条父到子类型化消息构建控制器追加请求。
-///
-/// # Parameters
-/// 参数
-/// `message` is the delivered inter-agent message.
-/// `message` 是已投递的智能体间消息。
-///
-/// # Returns
-/// 返回值
-/// A provider-visible agent-message append request.
-/// 一条 Provider 可见智能体消息追加请求。
-fn inter_agent_message_append_request(
-    message: &QueuedInterAgentMessage,
-) -> AgentMessageAppendRequest {
-    AgentMessageAppendRequest {
-        message_type: String::from("MESSAGE"),
-        task_name: message.target_agent_id.clone(),
-        sender: inter_agent_message_sender(message),
-        recipient: message.target_agent_id.clone(),
-        payload: message.content.clone(),
-        trigger_turn: true,
-        metadata: Some(inter_agent_agent_message_metadata(message)),
-    }
-}
-
 /// Builds the canonical payload for one typed parent-to-child message.
 /// 为单条父到子类型化消息构建规范载荷。
 ///
@@ -1227,56 +1150,6 @@ fn inter_agent_agent_message_metadata(message: &QueuedInterAgentMessage) -> Valu
         "created_at_ms": message.created_at_ms,
         (INTER_AGENT_CONTINUES_TASK_TURN_KEY): message.continues_task_turn,
     })
-}
-
-/// Appends display-only records for delivered parent-to-child messages to a live controller.
-/// 将已投递的父到子消息作为仅显示记录追加到实时控制器。
-///
-/// # Parameters
-/// 参数
-/// `controller` owns the child-agent core snapshot being updated.
-/// `controller` 持有正在更新的子智能体核心快照。
-/// `messages` are the delivered inter-agent messages.
-/// `messages` 是已投递的智能体间消息。
-///
-/// # Returns
-/// 返回值
-/// Returns success after all display records append, or the exact Core identity failure.
-/// 全部显示记录追加后返回成功，否则返回准确的 Core 身份错误。
-fn append_inter_agent_display_records_to_controller(
-    controller: &mut VulcanCoreController,
-    messages: &[QueuedInterAgentMessage],
-) -> Result<(), String> {
-    for message in messages {
-        controller
-            .append_display_record(inter_agent_display_record_request(message))
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(())
-}
-
-/// Builds one controller display-record request for a parent-to-child message.
-/// 为一条父到子消息构建控制器显示记录请求。
-///
-/// # Parameters
-/// 参数
-/// `message` is the delivered inter-agent message.
-/// `message` 是已投递的智能体间消息。
-///
-/// # Returns
-/// 返回值
-/// A display-only append request that does not alter provider-visible history.
-/// 不改变 Provider 可见历史的仅显示追加请求。
-fn inter_agent_display_record_request(
-    message: &QueuedInterAgentMessage,
-) -> DisplayRecordAppendRequest {
-    DisplayRecordAppendRequest {
-        record_id: Some(message.delivery_id.clone()),
-        role: CoreTranscriptRole::User,
-        title: String::from("智能体消息"),
-        body: message.content.clone(),
-        metadata: Some(inter_agent_display_record_metadata(message)),
-    }
 }
 
 /// Builds one core conversation record for a parent-to-child message.

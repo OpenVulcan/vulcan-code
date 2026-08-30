@@ -257,7 +257,7 @@ export interface WorkspaceShellProps {
   onForkConversationGeneration: (
     sourceSessionId: string,
     expectedWindowGeneration: number,
-    targetSeq: number,
+    sourceTurnEndSeq: number,
     childSessionId: string,
     title: string,
   ) => Promise<string | null>;

@@ -541,6 +541,9 @@ export interface SubagentOrchestrationPresentation {
   // Whether a wait_agent call ended by timeout.
   // wait_agent 调用是否因超时结束。
   timedOut?: boolean | null;
+  // Whether wait_agent returned immediately because no active child or queued feedback exists.
+  // wait_agent 是否因为不存在活动子代理或排队反馈而立即返回。
+  noActiveAgents?: boolean;
   // Whether a wait_agent call ended because the parent turn was interrupted.
   // wait_agent 调用是否因为父级回合被打断而结束。
   interrupted?: boolean | null;

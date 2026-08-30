@@ -604,9 +604,8 @@ pub(crate) fn mark_webui_subagent_tasks_stopped_in_state(
         }
         guard.detached_subagent_task_listeners.remove(task_id);
         clear_all_webui_subagent_completion_gate_ignored_for_task(guard, *task_id);
-        guard
-            .session_subagent_navigation_rounds
-            .remove(direct_parent_session_id);
+        // Stopping execution is not a new user turn and must retain closed siblings for inspection.
+        // 停止执行不代表新用户回合，必须保留已关闭的兄弟任务供查看。
         if guard.active_subagent_panel.is_some_and(|selection| {
             selection.parent_session_id == *direct_parent_session_id
                 && selection.task_id == *task_id
@@ -616,9 +615,9 @@ pub(crate) fn mark_webui_subagent_tasks_stopped_in_state(
     }
 }
 
-/// Removes closed WebUI subagent tasks from every unclosed-agent surface cache.
-/// 从所有未关闭代理界面缓存中移除已关闭的 WebUI 子代理任务。
-pub(crate) fn remove_webui_closed_subagent_tasks_in_state(
+/// Unloads process-local runtime state for closed WebUI subagents without hiding their current-turn rows.
+/// 卸载已关闭 WebUI 子代理的进程内运行状态，同时不隐藏其当前回合列表行。
+pub(crate) fn unload_webui_closed_subagent_runtime_state(
     guard: &mut ServiceBridgeState,
     task_ids: &[SessionId],
 ) -> bool {
@@ -626,21 +625,7 @@ pub(crate) fn remove_webui_closed_subagent_tasks_in_state(
         return false;
     }
     let task_ids = task_ids.iter().copied().collect::<BTreeSet<_>>();
-    let affected_parent_session_ids = task_ids
-        .iter()
-        .filter_map(|task_id| {
-            guard
-                .subagent_surface_detail_cache
-                .get(task_id)
-                .map(|entry| entry.task_state.parent_session_id)
-        })
-        .collect::<BTreeSet<_>>();
     let mut changed = false;
-    for parent_session_id in affected_parent_session_ids {
-        changed |= guard
-            .session_subagent_navigation_rounds
-            .remove(&parent_session_id);
-    }
     for task_id in &task_ids {
         changed |= guard
             .detached_subagent_task_listeners

@@ -601,6 +601,19 @@ export async function loadPublicAiSessionProviderToolSelections(
   );
 }
 
+// Rebuilds capability settings for conversationId to global defaults and returns the effective snapshot.
+// 将 conversationId 的能力设置重建为全局默认值，并返回生效快照。
+// Only an explicit user action may call this; history, goals and other configuration are not reset.
+// 仅显式用户操作可以调用；不重置历史、目标及其他配置。
+export async function rebuildPublicAiSessionProviderToolSelections(
+  conversationId: string,
+): Promise<PublicAiSessionProviderToolSettings> {
+  return serviceClient.request(
+    "service_rebuild_public_ai_session_provider_tool_selections",
+    { conversationId },
+  );
+}
+
 // savePublicAiSessionProviderToolSelections replaces all session-level direct and extension targets.
 // savePublicAiSessionProviderToolSelections 替换全部会话级直连与扩展目标。
 export async function savePublicAiSessionProviderToolSelections(request: {

@@ -72,8 +72,8 @@ pub struct EditGenerationInput {
     pub now_ms: i64,
 }
 
-/// Complete domain input for forking one historical root input into a new session.
-/// 把一条历史根输入分叉到新会话的完整领域输入。
+/// Complete domain input for forking one completed Turn into a new session.
+/// 把一个已完成回合分叉到新会话的完整领域输入。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForkGenerationInput {
     /// Exact child session identity allocated by the lifecycle owner.
@@ -82,9 +82,9 @@ pub struct ForkGenerationInput {
     /// Exact child display title.
     /// 精确子会话显示标题。
     pub title: String,
-    /// Retained root user-input seq that becomes the child open history boundary.
-    /// 成为子会话开放历史边界的保留根用户输入 seq。
-    pub target_seq: Seq,
+    /// Terminal TurnStats seq retained as the completed child history boundary.
+    /// 作为子会话完整历史边界保留的终态 TurnStats seq。
+    pub source_turn_end_seq: Seq,
     /// Child creation and generation-build time in Unix milliseconds.
     /// 子会话创建与 generation 构建时间（Unix 毫秒）。
     pub now_ms: i64,
@@ -151,7 +151,7 @@ impl SessionDocument {
             self.metadata.title.clone(),
             self.metadata.created_at_ms,
             self.metadata.archived_at_ms,
-            input.target_seq,
+            Some(input.target_seq),
             effective_now_ms,
         )?;
         self.finish_generation_build(metadata, retained, input.target_seq, effective_now_ms)
@@ -183,12 +183,12 @@ impl SessionDocument {
             });
         }
 
-        let target_index = self.require_generation_root_target(input.target_seq)?;
+        let target_index = self.require_generation_turn_end_target(input.source_turn_end_seq)?;
         let retained = self.events[..=target_index].to_vec();
         let fork_origin = ForkOrigin {
             source_session_id: self.metadata.session_id.clone(),
             source_segment_generation: self.metadata.segment_generation,
-            source_target_seq: input.target_seq,
+            source_target_seq: input.source_turn_end_seq,
         };
         let metadata = self.build_generation_metadata(
             input.child_session_id,
@@ -197,10 +197,10 @@ impl SessionDocument {
             input.title,
             input.now_ms,
             None,
-            input.target_seq,
+            None,
             input.now_ms,
         )?;
-        self.finish_generation_build(metadata, retained, input.target_seq, input.now_ms)
+        self.finish_generation_build(metadata, retained, input.source_turn_end_seq, input.now_ms)
     }
 
     /// Validates source durability, residency, and API quiescence before any generation work.
@@ -263,6 +263,46 @@ impl SessionDocument {
         Ok(index)
     }
 
+    /// Resolves and validates one terminal TurnStats event retained as a fork boundary.
+    /// 解析并校验一条作为分叉边界保留的终态 TurnStats 事件。
+    ///
+    /// # Parameters / 参数
+    /// `turn_end_seq` is the exact inclusive end seq of one completed source Turn.
+    /// `turn_end_seq` 是源会话中一个已完成回合的精确包含式结束 seq。
+    ///
+    /// # Returns / 返回值
+    /// Returns the event index only when the seq is the canonical terminal statistics event.
+    /// 仅当该 seq 是规范终态统计事件时返回事件索引。
+    fn require_generation_turn_end_target(&self, turn_end_seq: Seq) -> Result<usize, DomainError> {
+        let index =
+            turn_end_seq
+                .value()
+                .checked_sub(1)
+                .ok_or(DomainError::InvalidGenerationInput {
+                    field: "source_turn_end_seq",
+                })? as usize;
+        let event = self.events.get(index).ok_or_else(|| {
+            DomainError::reference("generation_source_turn_end_seq", turn_end_seq.value())
+        })?;
+        if event.seq != turn_end_seq {
+            return Err(DomainError::SequenceViolation {
+                expected: turn_end_seq.value(),
+                actual: event.seq.value(),
+            });
+        }
+        let EventBody::TurnStats(stats) = &event.event else {
+            return Err(DomainError::InvalidGenerationInput {
+                field: "source_turn_end_event_kind",
+            });
+        };
+        if event.turn_id.is_none() || stats.end_seq != turn_end_seq {
+            return Err(DomainError::InvalidGenerationInput {
+                field: "source_turn_end_identity",
+            });
+        }
+        Ok(index)
+    }
+
     /// Builds metadata whose semantic fields are complete and whose physical split map is unpublished.
     /// 构建语义字段完整、物理分片映射尚未发布的 metadata。
     #[allow(clippy::too_many_arguments)]
@@ -274,7 +314,7 @@ impl SessionDocument {
         title: String,
         created_at_ms: i64,
         archived_at_ms: Option<i64>,
-        target_seq: Seq,
+        open_turn_start_seq: Option<Seq>,
         updated_at_ms: i64,
     ) -> Result<MetadataDocument, DomainError> {
         let next_document_revision =
@@ -300,7 +340,7 @@ impl SessionDocument {
         metadata.input_state = InputState::default();
         metadata.segment_generation = next_segment_generation;
         metadata.active_context_generation = next_context_generation;
-        metadata.open_turn_start_seq = Some(target_seq);
+        metadata.open_turn_start_seq = open_turn_start_seq;
         metadata.split_list.clear();
         Ok(metadata)
     }
@@ -341,20 +381,18 @@ impl SessionDocument {
             retained,
         )?;
         if !active_mode_keys.is_empty() {
-            let turn_id = document
-                .active_turn
-                .as_ref()
-                .map(|turn| turn.turn_id)
-                .ok_or(DomainError::InvalidGenerationInput {
-                    field: "target_open_turn",
-                })?;
+            // mode_reset_turn_id keeps edit resets inside the rewritten open Turn, while a
+            // completed-Turn fork records the reset outside every Turn and starts no new work.
+            // mode_reset_turn_id 让编辑重置留在重写后的开放回合内；完整回合分叉则在所有回合之外
+            // 记录重置，并且不会启动任何新工作。
+            let mode_reset_turn_id = document.active_turn.as_ref().map(|turn| turn.turn_id);
             let mut staged_allocator = document.id_allocator;
             let mut staged_events = Vec::with_capacity(active_mode_keys.len());
             for context_key in active_mode_keys {
                 document.stage_event(
                     &mut staged_allocator,
                     &mut staged_events,
-                    Some(turn_id),
+                    mode_reset_turn_id,
                     EventVisibility::Provider,
                     EventBody::SystemContext(SystemContextEvent {
                         context_key: context_key.to_string(),
@@ -511,6 +549,9 @@ mod tests {
                 T0 + 4,
             )
             .unwrap();
+        document
+            .close_turn(crate::v1::event::TurnOutcome::Completed, 1, T0 + 5)
+            .unwrap();
         make_durable(&mut document);
         document
     }
@@ -527,8 +568,15 @@ mod tests {
         };
         source.metadata.fork_origin = Some(fork_origin.clone());
         let before = source.clone();
-        let target_seq = source.events().last().unwrap().seq;
-        let old_event_revision = source.events().last().unwrap().event_revision;
+        let target_seq = source
+            .events()
+            .iter()
+            .find_map(|event| match &event.event {
+                EventBody::UserInput(input) if input.text == "second" => Some(event.seq),
+                _ => None,
+            })
+            .expect("second root input must exist");
+        let old_event_revision = source.events()[target_seq.value() as usize - 1].event_revision;
         let output = source
             .build_edited_generation(EditGenerationInput {
                 target_seq,
@@ -577,12 +625,12 @@ mod tests {
     #[test]
     fn fork_generation_preserves_prefix_identity_and_resets_transient_state() {
         let source = durable_edit_source();
-        let target_seq = source.events().last().unwrap().seq;
+        let source_turn_end_seq = source.events().last().unwrap().seq;
         let output = source
             .build_fork_generation(ForkGenerationInput {
                 child_session_id: "child-session".to_string(),
                 title: "child".to_string(),
-                target_seq,
+                source_turn_end_seq,
                 now_ms: T0 + 20,
             })
             .unwrap();
@@ -593,7 +641,7 @@ mod tests {
             Some(ForkOrigin {
                 source_session_id: source.metadata.session_id.clone(),
                 source_segment_generation: source.metadata.segment_generation,
-                source_target_seq: target_seq,
+                source_target_seq: source_turn_end_seq,
             })
         );
         assert_eq!(output.metadata.created_at_ms, T0 + 20);
@@ -607,9 +655,20 @@ mod tests {
             source.metadata.document_revision + 1
         );
         assert_eq!(
-            output.events[..target_seq.value() as usize],
-            source.events()[..target_seq.value() as usize]
+            output.events[..source_turn_end_seq.value() as usize],
+            source.events()[..source_turn_end_seq.value() as usize]
         );
+        assert_eq!(output.history_target_seq, source_turn_end_seq);
+        assert_eq!(output.metadata.open_turn_start_seq, None);
+        let restored = SessionDocument::from_parts(
+            output.metadata.clone(),
+            output.runtime_lock.clone(),
+            output.compactions.clone(),
+            Vec::new(),
+            output.events.clone(),
+        )
+        .unwrap();
+        assert!(restored.active_turn().is_none());
         assert!(!output.metadata.mode.goal.enabled);
         assert!(!output.metadata.mode.plan.enabled);
         assert_eq!(output.metadata.input_state, InputState::default());
@@ -618,6 +677,33 @@ mod tests {
             RuntimeInitializationState::BaselineRefreshPending
         );
         assert!(output.runtime_lock.locked_sources.is_empty());
+    }
+
+    /// Fork generation rejects a root-input anchor because only a completed Turn end is valid.
+    /// 分叉 generation 拒绝根输入锚点，因为只有已完成回合的结束点才有效。
+    #[test]
+    fn fork_generation_rejects_root_input_anchor() {
+        let source = durable_edit_source();
+        let root_input_seq = source
+            .events()
+            .iter()
+            .find_map(|event| match &event.event {
+                EventBody::UserInput(_) => Some(event.seq),
+                _ => None,
+            })
+            .expect("source root input must exist");
+
+        assert!(matches!(
+            source.build_fork_generation(ForkGenerationInput {
+                child_session_id: "child-session".to_string(),
+                title: "child".to_string(),
+                source_turn_end_seq: root_input_seq,
+                now_ms: T0 + 20,
+            }),
+            Err(DomainError::InvalidGenerationInput {
+                field: "source_turn_end_event_kind",
+            })
+        ));
     }
 
     /// Generation building rejects dirty sources and leaves them byte-for-byte unchanged.

@@ -459,7 +459,6 @@ pub(crate) async fn start_exact_v1_subagent_return_turn(
     receipt: SubagentReturnReceipt,
 ) -> Result<bool, String> {
     let handle = session_v1_handle_from_state(state, session_id).await?;
-    let authority = subagent_return_dispatch_authority_from_v1_handle(handle.as_ref(), &receipt)?;
     let (active_api_turn, already_dispatched) = handle
         .read(|document| {
             let active_api_turn = document.active_api().map(|api| api.turn_id);
@@ -474,11 +473,28 @@ pub(crate) async fn start_exact_v1_subagent_return_turn(
     if already_dispatched {
         return Ok(true);
     }
-    if active_api_turn.is_some() {
+    if let Some(active_turn_id) = active_api_turn {
+        if active_turn_id == receipt.parent_turn_id {
+            // The stream-finished owner receives this durable return after the physical API terminal boundary.
+            // 流终态所有者会在物理 API 终态边界后接收这条可靠回流。
+            webui_trace(
+                "subagent_return_waits_for_owning_parent_api_terminal",
+                format!(
+                    "session={session_id} turn={} return_seq={} stats_seq={}",
+                    receipt.parent_turn_id.value(),
+                    receipt.return_seq.value(),
+                    receipt.stats_seq.value()
+                ),
+            );
+            return Ok(false);
+        }
         return Err(String::from(
-            "A physical API that predates the subagent return still owns the parent Turn.",
+            "Another V1 Turn already owns the active physical API before subagent return dispatch.",
         ));
     }
+    // A duplicate receipt already covered by an API does not require reopening its old turn.
+    // 已被 API 覆盖的重复回执不需要重新打开旧回合。
+    let authority = subagent_return_dispatch_authority_from_v1_handle(handle.as_ref(), &receipt)?;
     if maybe_prepare_webui_subagent_return_continuation(
         app,
         state,

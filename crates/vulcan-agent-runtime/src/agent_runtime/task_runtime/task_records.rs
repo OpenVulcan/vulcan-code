@@ -23,6 +23,83 @@ impl TaskRuntime {
         invocation: &TaskExecutionRequest,
         outcome: &TaskExecutionOutcome,
     ) -> Result<(), String> {
+        self.store_task_outcome_projection(current_session_id, invocation, outcome, true)
+            .map(|_| ())
+    }
+
+    /// Stores one terminal outcome while deferring parent-mailbox publication until successor ownership is known.
+    /// 保存一条终态结果，并将父级 mailbox 发布延迟到后继执行所有权确定之后。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `current_session_id`: Controller session that observed the outcome.
+    /// - `current_session_id`：观察到该结果的控制器会话。
+    /// - `invocation`: Exact physical child execution that produced the outcome.
+    /// - `invocation`：产出该结果的精确物理子执行。
+    /// - `outcome`: Terminal execution outcome to persist without immediate mailbox publication.
+    /// - `outcome`：需要持久化但不立即发布 mailbox 的终态执行结果。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when this execution still owned and committed the stable task record; `false` when it was stale.
+    /// 当该执行仍拥有并提交了稳定任务记录时返回 `true`；执行已过期时返回 `false`。
+    pub(super) fn store_task_outcome_without_parent_mailbox(
+        &self,
+        current_session_id: SessionId,
+        invocation: &TaskExecutionRequest,
+        outcome: &TaskExecutionOutcome,
+    ) -> Result<bool, String> {
+        self.store_task_outcome_projection(current_session_id, invocation, outcome, false)
+    }
+
+    /// Publishes a previously committed terminal outcome to the process-local parent mailbox.
+    /// 将先前已经提交的终态结果发布到进程内父级 mailbox。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `invocation`: Exact child execution that owns the terminal event.
+    /// - `invocation`：拥有该终态事件的精确子执行。
+    /// - `outcome`: Committed terminal outcome used to build the mailbox payload.
+    /// - `outcome`：用于构建 mailbox 载荷的已提交终态结果。
+    pub(super) fn publish_task_outcome_to_parent_mailbox(
+        &self,
+        invocation: &TaskExecutionRequest,
+        outcome: &TaskExecutionOutcome,
+    ) {
+        self.publish_subagent_mailbox_event(
+            invocation,
+            task_session_status_from_execution_status(outcome.execution_status),
+            Some(outcome.final_output_text.as_str()),
+            None,
+            Some(outcome),
+        );
+    }
+
+    /// Commits one terminal task projection with explicit parent-mailbox publication policy.
+    /// 按显式父级 mailbox 发布策略提交一条终态任务投影。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `current_session_id`: Controller session that observed the outcome.
+    /// - `current_session_id`：观察到该结果的控制器会话。
+    /// - `invocation`: Exact child-task invocation identity and configuration.
+    /// - `invocation`：精确的子任务调用身份与配置。
+    /// - `outcome`: Terminal execution outcome to project.
+    /// - `outcome`：需要投影的终态执行结果。
+    /// - `publish_parent_mailbox`: Whether this commit may immediately wake the parent waiter.
+    /// - `publish_parent_mailbox`：本次提交是否可以立即唤醒父级等待者。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Whether this exact execution committed the stable task projection.
+    /// 返回该精确执行是否提交了稳定任务投影。
+    fn store_task_outcome_projection(
+        &self,
+        current_session_id: SessionId,
+        invocation: &TaskExecutionRequest,
+        outcome: &TaskExecutionOutcome,
+        publish_parent_mailbox: bool,
+    ) -> Result<bool, String> {
         let transaction_lock = self.task_execution_state_lock(invocation.task_id)?;
         let _transaction = transaction_lock.lock().map_err(|_| {
             String::from(
@@ -38,7 +115,7 @@ impl TaskRuntime {
                     invocation.task_id, invocation.execution_id
                 ),
             );
-            return Ok(());
+            return Ok(false);
         }
 
         let record = self.build_task_outcome_record(current_session_id, invocation, outcome)?;
@@ -48,14 +125,10 @@ impl TaskRuntime {
             status,
             task_record_registry_result_summary(&record, status),
         )?;
-        self.publish_subagent_mailbox_event(
-            invocation,
-            status,
-            Some(outcome.final_output_text.as_str()),
-            None,
-            Some(outcome),
-        );
-        Ok(())
+        if publish_parent_mailbox {
+            self.publish_task_outcome_to_parent_mailbox(invocation, outcome);
+        }
+        Ok(true)
     }
 
     /// Stores one running child-task outcome in the process-local task projections.
@@ -385,10 +458,87 @@ impl TaskRuntime {
     /// 在常驻任务与注册表投影更新后返回成功。
     pub(super) fn mark_task_failure(
         &self,
-        _current_session_id: SessionId,
+        current_session_id: SessionId,
         invocation: &TaskExecutionRequest,
         error: &str,
     ) -> Result<(), String> {
+        self.mark_task_failure_projection(current_session_id, invocation, error, true)
+            .map(|_| ())
+    }
+
+    /// Stores one failed outcome while deferring parent-mailbox publication until successor ownership is known.
+    /// 保存一条失败结果，并将父级 mailbox 发布延迟到后继执行所有权确定之后。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `current_session_id`: Controller session that observed the failure.
+    /// - `current_session_id`：观察到失败的控制器会话。
+    /// - `invocation`: Exact physical child execution that failed.
+    /// - `invocation`：发生失败的精确物理子执行。
+    /// - `error`: Stable failure text to persist without immediate mailbox publication.
+    /// - `error`：需要持久化但不立即发布 mailbox 的稳定失败文本。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when this execution committed the failure projection; `false` when it was stale.
+    /// 当该执行提交了失败投影时返回 `true`；执行已过期时返回 `false`。
+    pub(super) fn mark_task_failure_without_parent_mailbox(
+        &self,
+        current_session_id: SessionId,
+        invocation: &TaskExecutionRequest,
+        error: &str,
+    ) -> Result<bool, String> {
+        self.mark_task_failure_projection(current_session_id, invocation, error, false)
+    }
+
+    /// Publishes a previously committed child failure to the process-local parent mailbox.
+    /// 将先前已经提交的子代理失败发布到进程内父级 mailbox。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `invocation`: Exact child execution that owns the failure event.
+    /// - `invocation`：拥有该失败事件的精确子执行。
+    /// - `error`: Stable failure text used by the mailbox payload.
+    /// - `error`：mailbox 载荷使用的稳定失败文本。
+    pub(super) fn publish_task_failure_to_parent_mailbox(
+        &self,
+        invocation: &TaskExecutionRequest,
+        error: &str,
+    ) {
+        self.publish_subagent_mailbox_event(
+            invocation,
+            TaskSessionStatus::Failed,
+            Some(error),
+            Some(error),
+            None,
+        );
+    }
+
+    /// Commits one failed task projection with explicit parent-mailbox publication policy.
+    /// 按显式父级 mailbox 发布策略提交一条失败任务投影。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `current_session_id`: Controller session retained by the task-runtime call contract.
+    /// - `current_session_id`：任务运行时调用契约保留的控制器会话。
+    /// - `invocation`: Exact child execution that failed.
+    /// - `invocation`：发生失败的精确子执行。
+    /// - `error`: Stable failure text projected into the task record.
+    /// - `error`：投影到任务记录中的稳定失败文本。
+    /// - `publish_parent_mailbox`: Whether this commit may immediately wake the parent waiter.
+    /// - `publish_parent_mailbox`：本次提交是否可以立即唤醒父级等待者。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Whether this exact execution committed the stable failure projection.
+    /// 返回该精确执行是否提交了稳定失败投影。
+    fn mark_task_failure_projection(
+        &self,
+        _current_session_id: SessionId,
+        invocation: &TaskExecutionRequest,
+        error: &str,
+        publish_parent_mailbox: bool,
+    ) -> Result<bool, String> {
         let transaction_lock = self.task_execution_state_lock(invocation.task_id)?;
         let _transaction = transaction_lock.lock().map_err(|_| {
             String::from(
@@ -403,7 +553,7 @@ impl TaskRuntime {
                     invocation.task_id, invocation.execution_id
                 ),
             );
-            return Ok(());
+            return Ok(false);
         }
 
         let record = self.build_failed_task_record(invocation, error)?;
@@ -413,14 +563,10 @@ impl TaskRuntime {
             TaskSessionStatus::Failed,
             task_record_registry_result_summary(&record, TaskSessionStatus::Failed),
         )?;
-        self.publish_subagent_mailbox_event(
-            invocation,
-            TaskSessionStatus::Failed,
-            Some(error),
-            Some(error),
-            None,
-        );
-        Ok(())
+        if publish_parent_mailbox {
+            self.publish_task_failure_to_parent_mailbox(invocation, error);
+        }
+        Ok(true)
     }
 
     /// Removes one still-created resident task after its backend failed before execution began.

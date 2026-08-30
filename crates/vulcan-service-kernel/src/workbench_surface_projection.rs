@@ -1,9 +1,7 @@
 //! Workbench surface and subagent navigation projection helpers.
 //! 工作台界面与子代理导航投影辅助逻辑。
 
-use super::{
-    ServiceBridgeState, subagent_navigation_surface_is_visible, subagent_navigation_task_label,
-};
+use super::{ServiceBridgeState, subagent_navigation_task_label};
 use vulcan_service_api::{SubagentNavigationSnapshot, SubagentTaskSummary};
 use vulcan_session_core::{SubagentRegistryEntry, SubagentStatus};
 use vulcan_workbench_model::{SessionId, SubagentTaskPanelState, SubagentTaskRunState};
@@ -55,11 +53,23 @@ pub(super) fn subagent_navigation_snapshot_for_parent_from_cached_state(
     if parent_session_id == SessionId::nil() {
         return Ok(None);
     }
-    let has_visible_round = guard
-        .session_subagent_navigation_rounds
-        .contains(&parent_session_id);
     let normalized_projection =
         authoritative_subagent_tree_projection_from_registry(guard, parent_session_id)?;
+    // Only open or already-admitted children enter the current cohort; archived history cannot reopen it.
+    // 只有开放或已经准入的子任务进入当前集合；归档历史不得因新任务而重新准入。
+    // This also admits an unclosed child carried across turns before it is closed in the new turn.
+    // 这也会在跨回合保留的开放子任务于新回合关闭前将其准入。
+    if !normalized_projection.is_empty() {
+        guard
+            .session_subagent_navigation_rounds
+            .entry(parent_session_id)
+            .or_default()
+            .extend(
+                normalized_projection
+                    .iter()
+                    .map(|projection| projection.state.task_id),
+            );
+    }
     let requested_active_task_id = use_active_panel
         .then(|| valid_active_subagent_task_id_for_projection(guard, &normalized_projection))
         .flatten();
@@ -68,15 +78,6 @@ pub(super) fn subagent_navigation_snapshot_for_parent_from_cached_state(
         && requested_active_task_id.is_none()
     {
         guard.active_subagent_panel = None;
-    }
-    let has_active_panel = requested_active_task_id.is_some();
-    let has_unclosed_subagents = !normalized_projection.is_empty();
-    if !subagent_navigation_surface_is_visible(
-        has_visible_round,
-        has_unclosed_subagents,
-        has_active_panel,
-    ) {
-        return Ok(None);
     }
     if normalized_projection.is_empty() {
         return Ok(None);
@@ -142,23 +143,35 @@ pub(super) fn open_subagent_registry_entry_for_task(
         .into_iter()
         .find(|entry| entry.session_id.as_uuid() == task_id))
 }
-/// Builds panel projections from the authoritative runtime registry for every open task.
-/// 从权威运行时注册表为每个未关闭任务构建面板投影。
+/// Builds panel projections from the authoritative runtime registry for every currently visible task.
+/// 从权威运行时注册表为每个当前可见任务构建面板投影。
 fn authoritative_subagent_tree_projection_from_registry(
     guard: &ServiceBridgeState,
     root_parent_session_id: SessionId,
 ) -> Result<Vec<SubagentTaskNavigationProjection>, String> {
+    // admitted_task_ids belong only to the requested parent's current user turn.
+    // admitted_task_ids 仅属于所请求父会话的当前用户回合。
+    let admitted_task_ids = guard
+        .session_subagent_navigation_rounds
+        .get(&root_parent_session_id);
     let entries = if let Some(task_runtime) = guard
         .agent_runtime
         .as_ref()
         .map(|runtime| &runtime.task_runtime)
     {
-        task_runtime.open_subagent_registry_entries_for_parent_tree(root_parent_session_id)?
+        task_runtime.subagent_registry_entries_for_parent_tree(
+            root_parent_session_id,
+            admitted_task_ids.is_some(),
+        )?
     } else {
         Vec::new()
     };
     Ok(entries
         .iter()
+        .filter(|entry| {
+            entry.status != SubagentStatus::Archived
+                || admitted_task_ids.is_some_and(|ids| ids.contains(&entry.session_id.as_uuid()))
+        })
         .map(|entry| SubagentTaskNavigationProjection {
             state: subagent_task_panel_state_from_registry_entry(guard, entry),
             agent_profile_id: subagent_agent_profile_id_from_prompt_source(
@@ -209,7 +222,8 @@ fn subagent_run_state_from_registry_status(status: SubagentStatus) -> SubagentTa
         | SubagentStatus::Compacting => SubagentTaskRunState::Running,
         SubagentStatus::Completed => SubagentTaskRunState::Completed,
         SubagentStatus::Failed => SubagentTaskRunState::Failed,
-        SubagentStatus::Stopped | SubagentStatus::Archived => SubagentTaskRunState::Stopped,
+        SubagentStatus::Stopped => SubagentTaskRunState::Stopped,
+        SubagentStatus::Archived => SubagentTaskRunState::Closed,
     }
 }
 

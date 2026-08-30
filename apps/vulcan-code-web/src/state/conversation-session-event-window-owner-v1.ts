@@ -66,6 +66,18 @@ export function useConversationSessionEventWindowOwnerV1(
     () => new ConversationEventWindowController(eventWindowClient),
     [eventWindowClient, options.live, options.sessionId],
   );
+  // controllerOwnershipRef tracks the latest effect lease so React StrictMode replay cannot dispose a reused controller.
+  // controllerOwnershipRef 跟踪最新 effect 租约，避免 React StrictMode 重放销毁仍被复用的控制器。
+  const controllerOwnershipRef = React.useRef({
+    controller,
+    generation: 0,
+  });
+  if (controllerOwnershipRef.current.controller !== controller) {
+    controllerOwnershipRef.current = {
+      controller,
+      generation: controllerOwnershipRef.current.generation,
+    };
+  }
   // snapshot is read through React's tear-free external-store contract.
   // snapshot 通过 React 无撕裂外部存储契约读取。
   const snapshot = useConversationEventWindowSnapshot(controller);
@@ -93,12 +105,28 @@ export function useConversationSessionEventWindowOwnerV1(
       return options.live ? controller.rehydrate(options.sessionId) : false;
     },
     prependOlder: () => options.live ? controller.prependOlder() : Promise.resolve(false),
-  }), [controller, eventWindowClient, options.live, options.parentSessionId, options.sessionId]);
+  }), [controller, options.live, options.sessionId]);
 
   React.useEffect(() => {
-    // Controller disposal belongs only to controller replacement or component unmount.
-    // 控制器销毁仅属于控制器替换或组件卸载。
-    return () => controller.dispose();
+    // generation identifies this exact effect lease for deferred disposal validation.
+    // generation 标识本次精确 effect 租约，供延迟销毁校验使用。
+    const generation = controllerOwnershipRef.current.generation + 1;
+    controllerOwnershipRef.current = { controller, generation };
+    return () => {
+      // StrictMode immediately renews the same controller lease before this microtask executes.
+      // StrictMode 会在本微任务执行前立即续租同一个控制器。
+      queueMicrotask(() => {
+        // latestOwnership is the authoritative owner after any replacement or StrictMode replay.
+        // latestOwnership 是替换或 StrictMode 重放后的权威归属。
+        const latestOwnership = controllerOwnershipRef.current;
+        if (
+          latestOwnership.controller !== controller
+          || latestOwnership.generation === generation
+        ) {
+          controller.dispose();
+        }
+      });
+    };
   }, [controller]);
 
   React.useEffect(() => {
@@ -152,6 +180,9 @@ export function useConversationSessionEventWindowOwnerV1(
   }, [controller, eventWindowClient, options.live, options.parentSessionId, options.sessionId]);
 
   React.useEffect(() => {
+    // active binds asynchronous reconnect failures to this exact controller effect, not its replacement.
+    // active 将异步重连失败绑定到本次精确控制器 effect，而不是其替代页面。
+    let active = true;
     /** Recovers only after one real disconnect and one established owner baseline.
      * 仅在真实断链且归属基线已经建立后执行恢复。 */
     const handleConnectionStatus = (event: Event): void => {
@@ -163,11 +194,16 @@ export function useConversationSessionEventWindowOwnerV1(
       if (!options.live || !wasDisconnectedRef.current || !hydratedRef.current) return;
       wasDisconnectedRef.current = false;
       void controller.recoverConnection(false).catch((recoveryError) => {
-        setError(recoveryError instanceof Error ? recoveryError.message : String(recoveryError));
+        if (active) {
+          setError(recoveryError instanceof Error ? recoveryError.message : String(recoveryError));
+        }
       });
     };
     window.addEventListener(BROWSER_SERVICE_CONNECTION_EVENT, handleConnectionStatus);
-    return () => window.removeEventListener(BROWSER_SERVICE_CONNECTION_EVENT, handleConnectionStatus);
+    return () => {
+      active = false;
+      window.removeEventListener(BROWSER_SERVICE_CONNECTION_EVENT, handleConnectionStatus);
+    };
   }, [controller, options.live]);
 
   return { snapshot, commands, loading, error };

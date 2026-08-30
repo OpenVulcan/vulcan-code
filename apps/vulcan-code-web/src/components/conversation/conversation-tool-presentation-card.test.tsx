@@ -507,4 +507,120 @@ describe("ToolPresentationCard file access icons", () => {
     expect(markup).toContain('data-subagent-usage-tooltip="true"');
     expect(markup).toContain('tabindex="0"');
   });
+
+  // Every folded orchestration card keeps the operation name before its concrete agent or outcome.
+  // 每个折叠调度卡都在具体智能体或结果前保留操作名称。
+  it("keeps create, message, wait, list, and close operations visible in folded rows", () => {
+    // cases cover the operation labels that were previously replaced by only an agent name.
+    // cases 覆盖此前被单独智能体名称替代的操作文案。
+    const cases: Array<{
+      presentation: SubagentOrchestrationPresentation;
+      expected: string;
+    }> = [
+      {
+        presentation: {
+          ...WAIT_AGENT_PRESENTATION,
+          agents: [],
+          id: "spawn-agent-summary",
+          operation: "create",
+          terminalEventReceived: false,
+          title: "long-task",
+        },
+        expected: "创建智能体 · long-task",
+      },
+      {
+        presentation: {
+          ...WAIT_AGENT_PRESENTATION,
+          agents: [],
+          id: "message-agent-summary",
+          operation: "message",
+          target: "long-task",
+          terminalEventReceived: false,
+          title: "long-task",
+        },
+        expected: "向智能体发送消息 · long-task",
+      },
+      {
+        presentation: WAIT_AGENT_PRESENTATION,
+        expected: "等待智能体消息 · 已收到智能体消息",
+      },
+      {
+        presentation: {
+          ...WAIT_AGENT_PRESENTATION,
+          id: "list-agent-summary",
+          operation: "list_agents",
+          terminalEventReceived: false,
+          title: "list_agents",
+        },
+        expected: "查询智能体状态列表 · 1 智能体",
+      },
+      {
+        presentation: {
+          ...WAIT_AGENT_PRESENTATION,
+          agents: [],
+          id: "close-agent-summary",
+          operation: "close",
+          target: "long-task",
+          terminalEventReceived: false,
+          title: "long-task",
+        },
+        expected: "关闭智能体 · long-task",
+      },
+    ];
+
+    for (const testCase of cases) {
+      // markup captures the exact folded copy without browser-only interaction state.
+      // markup 捕获不依赖浏览器交互状态的精确折叠文案。
+      const markup = renderToStaticMarkup(
+        <I18nProvider initialLocale="zh-CN">
+          <TooltipProvider>
+            <ToolPresentationCard
+              detailLoadEnabled={false}
+              expanded={false}
+              expandedToolPresentationIds={new Set()}
+              presentation={testCase.presentation}
+              requestProgress={null}
+              onExpandedChange={() => undefined}
+              onLoadToolDetail={async () => null}
+            />
+          </TooltipProvider>
+        </I18nProvider>,
+      );
+      expect(markup).toContain(testCase.expected);
+    }
+  });
+
+  // A no-active-agents wait is terminal UI state, never a pending spinner label.
+  // 无活动子代理等待属于终态 UI 状态，绝不能显示为等待中的旋转状态。
+  it("renders no-active-agent waits as completed zero-work results", () => {
+    // presentation models the authoritative immediate backend result.
+    // presentation 模拟后端权威的即时返回结果。
+    const presentation: SubagentOrchestrationPresentation = {
+      ...WAIT_AGENT_PRESENTATION,
+      agents: [],
+      id: "wait-agent-no-active",
+      noActiveAgents: true,
+      terminalEventReceived: false,
+    };
+    // markup captures both the operation and terminal reason in the folded row.
+    // markup 捕获折叠行中的操作名称和终态原因。
+    const markup = renderToStaticMarkup(
+      <I18nProvider initialLocale="zh-CN">
+        <TooltipProvider>
+          <ToolPresentationCard
+            detailLoadEnabled={false}
+            expanded={false}
+            expandedToolPresentationIds={new Set()}
+            presentation={presentation}
+            requestProgress={null}
+            onExpandedChange={() => undefined}
+            onLoadToolDetail={async () => null}
+          />
+        </TooltipProvider>
+      </I18nProvider>,
+    );
+
+    expect(markup).toContain("等待智能体消息 · 当前无未关闭的智能体。");
+    expect(markup).not.toContain("等待智能体消息 · 等待中");
+  });
 });

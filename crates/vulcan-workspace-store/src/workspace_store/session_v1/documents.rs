@@ -71,6 +71,56 @@ pub fn read_metadata(path: &Path) -> Result<MetadataDocument, SessionV1Error> {
     Ok(document)
 }
 
+/// Reads `path` for an explicit capability rebuild, replacing only the known capability subtree.
+/// 为显式能力重建读取 `path`，仅替换确定的能力子树。
+/// Returns typed metadata with `selection`; invalid JSON, other fields and contracts remain errors.
+/// 返回包含 `selection` 的类型化元数据；无效 JSON、其他字段及契约仍然报错。
+pub(crate) fn read_metadata_for_provider_tool_rebuild(
+    path: &Path,
+    selection: &vulcan_session_core::v1::config::ProviderToolSelectionConfig,
+) -> Result<MetadataDocument, SessionV1Error> {
+    // Decode just enough structure to replace a malformed optional addon, never the conversation.
+    // 仅解码替换损坏可选附加项所需的结构，绝不替换会话本身。
+    let mut raw: serde_json::Value =
+        read_json_document(path, "metadata", ErrorCode::MetadataCorrupt)?;
+    let selections = raw
+        .pointer_mut("/config/selection")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| {
+            SessionV1Error::corrupt(
+                ErrorCode::MetadataCorrupt,
+                path,
+                "metadata config.selection must be an object; capability-only rebuild refused",
+            )
+        })?;
+    selections.insert(
+        "provider_tools".to_owned(),
+        serde_json::to_value(selection).map_err(|error| {
+            SessionV1Error::corrupt(
+                ErrorCode::MetadataCorrupt,
+                path,
+                format!("serialize capability defaults: {error}"),
+            )
+        })?,
+    );
+    // All surrounding typed fields and the frozen version contract must still pass unchanged.
+    // 周边全部类型化字段及冻结版本契约仍必须原样通过校验。
+    let document: MetadataDocument = serde_json::from_value(raw).map_err(|error| {
+        SessionV1Error::corrupt(
+            ErrorCode::MetadataCorrupt,
+            path,
+            format!("parse metadata outside capability settings: {error}"),
+        )
+    })?;
+    validate_contract(
+        &document.contract,
+        METADATA_CONTRACT,
+        path,
+        document.schema_version,
+    )?;
+    Ok(document)
+}
+
 /// Reads the runtime document and validates its frozen contract.
 /// 读取 runtime 文档并校验其冻结契约。
 pub fn read_runtime(path: &Path) -> Result<RuntimeDocument, SessionV1Error> {

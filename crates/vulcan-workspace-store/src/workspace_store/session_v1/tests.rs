@@ -122,7 +122,7 @@ fn build_durable_edit_output(
 fn build_durable_fork_output(
     source_layout: &SessionV1Layout,
     child_layout: &SessionV1Layout,
-    target_seq: Seq,
+    source_turn_end_seq: Seq,
     now_ms: i64,
 ) -> GenerationBuildOutput {
     let loaded = load_session(source_layout).expect("published fork source must load");
@@ -131,7 +131,7 @@ fn build_durable_fork_output(
         .build_fork_generation(ForkGenerationInput {
             child_session_id: child_layout.session_id.clone(),
             title: loaded.document.metadata.title.clone(),
-            target_seq,
+            source_turn_end_seq,
             now_ms,
         })
         .expect("durable fork source must build one complete Core output")
@@ -1434,22 +1434,25 @@ fn edit_generation_byte_copies_prefix_and_switches() {
 fn fork_creates_loadable_identity_preserving_session() {
     let (root, layout) = fresh_layout("fork-src");
     let mut document = filled_document(&layout.session_id, 3);
-    let target_turn = submit_test_root(
+    submit_test_root(
         &mut document,
         "workspace-store-fork-boundary",
         "fork boundary",
         1_700_000_000_100,
     );
-    let target_seq = document
-        .events()
-        .last()
-        .expect("fork boundary input must exist")
-        .seq;
+    let source_turn_end_seq = document
+        .close_turn(TurnOutcome::Completed, 1, 1_700_000_000_100)
+        .expect("fork boundary Turn must close");
     document.metadata = publish_initial(&layout, &document);
     let source_events = document.events().len();
     let fork_root = root.path().join("fork");
     let fork_layout = SessionV1Layout::new(fork_root, "project-1", "2026-08-26", "sess-fork-1");
-    let output = build_durable_fork_output(&layout, &fork_layout, target_seq, 1_700_000_000_101);
+    let output = build_durable_fork_output(
+        &layout,
+        &fork_layout,
+        source_turn_end_seq,
+        1_700_000_000_101,
+    );
     let published = create_session(
         &fork_layout,
         &output.metadata,
@@ -1462,10 +1465,8 @@ fn fork_creates_loadable_identity_preserving_session() {
     let loaded = load_session(&fork_layout).unwrap();
     assert_eq!(loaded.document.events().len(), source_events);
     assert_eq!(loaded.document.events(), output.events);
-    assert_eq!(
-        loaded.document.active_turn().map(|turn| turn.turn_id),
-        Some(target_turn)
-    );
+    assert!(loaded.document.active_turn().is_none());
+    assert_eq!(loaded.document.metadata.open_turn_start_seq, None);
     assert_eq!(published.id_frontier, output.metadata.id_frontier);
     drop(root);
 }
@@ -3266,12 +3267,16 @@ fn fork_reselects_pointer_and_preserves_kept_nodes() {
         7,
     );
     let fork_target_seq = document
-        .events()
-        .last()
-        .expect("fork boundary root input must exist")
-        .seq;
+        .close_turn(TurnOutcome::Completed, 1, 7)
+        .expect("fork boundary Turn must close");
     // A second node beyond any fork candidate boundary must never be carried.
     // 任何分叉候选边界之后的第二个节点绝不继承。
+    submit_test_root(
+        &mut document,
+        "workspace-store-post-fork-compaction",
+        "second compaction after fork boundary",
+        8,
+    );
     let api2 = prepare_api(
         &mut document,
         ApiPurposeKind::Compaction,
@@ -3298,9 +3303,9 @@ fn fork_reselects_pointer_and_preserves_kept_nodes() {
     assert_eq!(document.compactions.len(), 2);
     flush_candidate(&mut document, &layout, 11);
 
-    // The boundary is a real root input after the first compaction and before
+    // The boundary is one completed Turn after the first compaction and before
     // the second one, so the first node is retained with exact identities.
-    // 边界是第一压缩后、第二压缩前的真实根输入，因此第一个节点以精确身份保留。
+    // 边界是第一压缩后、第二压缩前的完整回合，因此第一个节点以精确身份保留。
     let (_fork_root, fork_layout) = fresh_layout("fork-remap-new");
     let output = build_durable_fork_output(&layout, &fork_layout, fork_target_seq, 12);
     let published = create_session(
@@ -3988,6 +3993,179 @@ fn tail_only_load_restores_open_turn_across_rollover() {
         Some(turn_id)
     );
     drop(root);
+}
+
+/// Goal timing and usage survive a rollover that leaves only the newest continuation in the tail.
+/// 分片滚动使尾段只剩最新续跑回合后，目标计时与用量仍可恢复。
+#[test]
+fn goal_checkpoint_survives_tail_rollover_and_paused_restart() {
+    use vulcan_session_core::v1::{config::GoalState, goal::goal_work_time};
+    let (_root, layout) = fresh_layout("goal-clock-rollover");
+    let mut document = SessionDocument::new(&layout.session_id, "project-1", "title", 1);
+    document.metadata = publish_initial(&layout, &document);
+    document
+        .create_goal("long goal", None, "long goal", 1_000)
+        .unwrap();
+    let first_turn = document.active_turn().unwrap().turn_id;
+    let first_api = prepare_api(
+        &mut document,
+        ApiPurposeKind::MainGeneration,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        2_000,
+    );
+    document
+        .append_assistant_text(
+            first_api,
+            "step 1",
+            AssistantSemanticStatus::Completed,
+            3_000,
+        )
+        .unwrap();
+    complete_api(&mut document, first_api, 4_000, None);
+    document
+        .complete_turn_and_select_successor(first_turn, 5_000)
+        .unwrap();
+    flush_with_limits(
+        &layout,
+        &mut document,
+        &FlushLimits {
+            max_lines: 4,
+            max_bytes: 8 * 1024 * 1024,
+        },
+        5_000,
+    );
+    prepare_api(
+        &mut document,
+        ApiPurposeKind::MainGeneration,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        9_000,
+    );
+    flush_candidate(&mut document, &layout, 9_000);
+    let expected_clock = goal_work_time(&document).unwrap();
+    let expected_origin = document.metadata.mode.goal.origin_seq.unwrap();
+    let (mut loaded, report) = load_session_tail_only(&layout).unwrap();
+    assert!(report.opened_segment_files >= 2);
+    assert!(
+        loaded
+            .document
+            .events()
+            .iter()
+            .any(|event| event.seq == expected_origin)
+    );
+    assert_eq!(goal_work_time(&loaded.document), Some(expected_clock));
+    loaded.document.project_persisted_interruptions().unwrap();
+    assert_eq!(loaded.document.metadata.mode.goal.state, GoalState::Paused);
+    flush_candidate(&mut loaded.document, &layout, 10_000);
+    let (mut reopened, _) = load_session_tail_only(&layout).unwrap();
+    assert_eq!(
+        reopened.document.metadata.mode.goal.state,
+        GoalState::Paused
+    );
+    assert_eq!(
+        goal_work_time(&reopened.document).unwrap().elapsed_ms,
+        expected_clock.elapsed_ms
+    );
+    reopened
+        .document
+        .resume_goal("long goal", None, "long goal", 1_000_000)
+        .unwrap();
+    assert_eq!(
+        goal_work_time(&reopened.document).unwrap().elapsed_ms,
+        expected_clock.elapsed_ms
+    );
+    assert_eq!(
+        reopened.document.metadata.mode.goal.origin_seq,
+        Some(expected_origin)
+    );
+}
+
+/// A goal created inside a running tool retains its owning API facts across the next rollover.
+/// 在运行工具中创建的目标经过后续分片滚动后仍保留所属 API 事实。
+#[test]
+fn goal_retained_prefix_includes_native_creation_api() {
+    let (_root, layout) = fresh_layout("goal-native-prefix");
+    let mut document = SessionDocument::new(&layout.session_id, "project-1", "title", 1);
+    document.metadata = publish_initial(&layout, &document);
+    let turn = submit_test_root(&mut document, "native-goal", "work", 100);
+    let api = prepare_api(
+        &mut document,
+        ApiPurposeKind::MainGeneration,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        200,
+    );
+    flush_with_limits(
+        &layout,
+        &mut document,
+        &FlushLimits {
+            max_lines: 1,
+            max_bytes: 8 * 1024 * 1024,
+        },
+        200,
+    );
+    let tool = document
+        .prepare_tool(
+            api,
+            RequestStreamId::try_new("native-goal-stream").unwrap(),
+            "create_goal",
+            ToolPayload::try_new(serde_json::json!({"objective":"work"})).unwrap(),
+            Some("native-goal-call".to_string()),
+            300,
+        )
+        .unwrap();
+    document.start_prepared_tool(api, tool, 400).unwrap();
+    document.create_goal("work", None, "work", 1_000).unwrap();
+    document
+        .finish_tool(
+            api,
+            tool,
+            ToolCompletion {
+                output: Some(ToolPayload::try_new(serde_json::json!({"ok":true})).unwrap()),
+                changeset: None,
+                status: ToolCallStatus::Completed,
+                finished_at_ms: 1_100,
+                external_refs: Vec::new(),
+                generated_resources: Vec::new(),
+            },
+        )
+        .unwrap();
+    complete_api(&mut document, api, 1_300, None);
+    let final_api = prepare_api(
+        &mut document,
+        ApiPurposeKind::MainGeneration,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        1_350,
+    );
+    document
+        .append_assistant_text(
+            final_api,
+            "work started",
+            AssistantSemanticStatus::Completed,
+            1_400,
+        )
+        .unwrap();
+    complete_api(&mut document, final_api, 1_450, None);
+    document
+        .complete_turn_and_select_successor(turn, 1_500)
+        .unwrap();
+    flush_with_limits(
+        &layout,
+        &mut document,
+        &FlushLimits {
+            max_lines: 1,
+            max_bytes: 8 * 1024 * 1024,
+        },
+        1_500,
+    );
+    let (loaded, _) = load_session_tail_only(&layout).unwrap();
+    assert!(loaded.document.events().iter().any(
+        |event| matches!(&event.event, EventBody::ApiStarted(started) if started.api_call_id == api)
+    ));
+    assert_eq!(
+        vulcan_session_core::v1::goal::goal_work_time(&loaded.document)
+            .unwrap()
+            .elapsed_ms,
+        500
+    );
 }
 
 /// Per-phase duration of one completed Turn fixture.

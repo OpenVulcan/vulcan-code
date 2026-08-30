@@ -16,6 +16,8 @@ import { ConversationLiveStreamStore } from "@/state/conversation-live-stream-st
 import type { ConversationSessionResourceCatalogV1 } from "@/state/conversation-session-resources-v1";
 import { projectConversationBranchPresentationV1 } from "./conversation-branch-presentation-v1";
 import { ConversationBranchWorkspaceV1 } from "./conversation-branch-workspace-v1";
+import type { ThinkingDisplayMode } from "./thinking-display";
+import { projectConversationTimelineItems } from "./conversation-timeline";
 
 // eventSummary builds one typed V1 envelope for restored-workspace tests.
 // eventSummary 为恢复后 workspace 测试构建一条强类型 V1 envelope。
@@ -126,7 +128,7 @@ function completeTurnEvents(): readonly ConversationEventSummary[] {
     eventSummary(8, {
       kind: "turn_stats",
       start_seq: 1,
-      end_seq: 7,
+      end_seq: 8,
       outcome: "completed",
       duration_ms: 200,
       buckets: { direct: totalBucket, subagent: emptyBucket, total: totalBucket },
@@ -153,7 +155,14 @@ function snapshot(events: readonly ConversationEventSummary[]): ConversationEven
 
 // renderWorkspace renders the real restored branch shell with V1 authority.
 // renderWorkspace 使用 V1 权威渲染真实恢复后的分支外壳。
-function renderWorkspace(events: readonly ConversationEventSummary[]): string {
+// Parameters: events is the canonical history; reasoningDisplayMode selects its current presentation.
+// 参数：events 是规范历史；reasoningDisplayMode 选择当前展示方式。
+// Returns: static markup with every process expanded so display filtering can be checked independently.
+// 返回值：展开所有过程的静态标记，以便独立检查展示过滤。
+function renderWorkspace(
+  events: readonly ConversationEventSummary[],
+  reasoningDisplayMode: ThinkingDisplayMode = "inline_output",
+): string {
   const conversation: ConversationSummary = {
     id: "session-branch-v1",
     title: "恢复界面",
@@ -163,6 +172,13 @@ function renderWorkspace(events: readonly ConversationEventSummary[]): string {
     rehydrate: vi.fn(async () => true),
     prependOlder: vi.fn(async () => true),
   };
+  // timeline identifies exact process keys so historical folds cannot mask reasoning-mode assertions.
+  // timeline 标识精确过程键，防止历史折叠遮蔽思考模式断言。
+  const timeline = projectConversationTimelineItems(
+    projectConversationBranchPresentationV1(conversation.id, events, emptyResourceCatalog(), (key) => key).renderItems,
+    conversation,
+    false,
+  );
   return renderToStaticMarkup(
     <I18nProvider initialLocale="zh-CN">
       <TooltipProvider>
@@ -171,14 +187,21 @@ function renderWorkspace(events: readonly ConversationEventSummary[]): string {
             commandSessions={[]}
             commands={commands}
             conversation={conversation}
-            initialExpandedState={null}
+            initialExpandedState={{
+              processCollapsedByKey: Object.fromEntries(timeline.flatMap((item) => item.kind === "process"
+                ? [[`${conversation.id}:${item.process.id}`, false]]
+                : [])),
+              expandedUserPromptIds: [],
+              expandedToolPresentationIds: [],
+              measuredCollapseById: {},
+            }}
             onCopyText={() => undefined}
             onExpandedStateChange={() => undefined}
             onOpenSubagentPanel={async () => true}
             onPreserveHistoryPrepend={(load) => load()}
             onRootInputGenerationAction={() => undefined}
             onScrollStateChange={() => undefined}
-            reasoningDisplayMode="inline_output"
+            reasoningDisplayMode={reasoningDisplayMode}
             scrollRef={React.createRef<HTMLElement>()}
             sessionId={conversation.id}
             sessionRunning={false}
@@ -191,6 +214,59 @@ function renderWorkspace(events: readonly ConversationEventSummary[]): string {
 }
 
 describe("ConversationBranchWorkspaceV1", () => {
+  // Mode changes must reproject the same completed ledger without waiting for a new provider event.
+  // 模式变化必须重新投影同一份已结束账本，不能等待新的供应商事件。
+  it("applies all display modes to completed history without mutating its events", () => {
+    // events includes two reasoning segments in each completed logical Turn.
+    // events 在每个已完成逻辑回合中包含两段思考。
+    const events = completeTurnEvents().flatMap((summary) => summary.event.kind === "assistant_text"
+      ? [eventSummary(0, {
+          kind: "assistant_reasoning",
+          api_call_id: summary.event.api_call_id,
+          text: "工具结束后继续核对。",
+          status: "completed",
+        }), summary]
+      : [summary]).map((summary, index) => ({
+        ...summary,
+        seq: index + 1,
+        event: summary.event.kind === "turn_stats"
+          ? { ...summary.event, end_seq: index + 1 }
+          : summary.event,
+      }));
+    // history repeats the display fixture with distinct Turn and sequence identities to verify per-Turn selection.
+    // history 以不同回合与序号身份重复展示测试数据，用于验证按回合选择首段。
+    const history = [...events, ...events.map((summary) => ({
+      ...summary,
+      seq: summary.seq + events.length,
+      turn_id: 12,
+      event: summary.event.kind === "turn_stats"
+        ? { ...summary.event, start_seq: events.length + 1, end_seq: events.length * 2 }
+        : summary.event,
+    }))];
+    // original records the immutable ledger before any presentation choice.
+    // original 记录任何展示选择之前的不可变账本。
+    const original = JSON.stringify(history);
+    // cases also returns to inline mode so previously hidden reasoning must remain recoverable.
+    // cases 还会返回内联模式，确保此前隐藏的思考仍能恢复。
+    const cases: readonly [ThinkingDisplayMode, number][] = [
+      ["inline_output", 4],
+      ["popup_only", 0],
+      ["first_inline_with_popup", 2],
+      ["first_inline_only", 2],
+      ["inline_output", 4],
+    ];
+    for (const [mode, expectedCount] of cases) {
+      // markup uses the production branch shell, including its exact row filtering.
+      // markup 使用生产分支外壳，包含其精确行过滤逻辑。
+      const markup = renderWorkspace(history, mode);
+      expect(markup.match(/class="thinking-block[" ]/g)?.length ?? 0, mode).toBe(expectedCount);
+      expect(markup, mode).toContain("已经完成核对。");
+      expect(markup, mode).toContain("rg current-call-chain");
+      expect(markup, mode).toContain("turn-stats-row");
+    }
+    expect(JSON.stringify(history)).toBe(original);
+  });
+
   it("uses the durable user-input update time after an edited generation", () => {
     const editedRoot = {
       ...eventSummary(1, {

@@ -326,9 +326,9 @@ fn subagent_feedback_stats_status(run_state: SubagentTaskRunState) -> SessionTur
     match run_state {
         SubagentTaskRunState::Failed => SessionTurnStatsStatus::Failed,
         SubagentTaskRunState::Stopped => SessionTurnStatsStatus::Stopped,
-        SubagentTaskRunState::Running | SubagentTaskRunState::Completed => {
-            SessionTurnStatsStatus::Completed
-        }
+        SubagentTaskRunState::Running
+        | SubagentTaskRunState::Completed
+        | SubagentTaskRunState::Closed => SessionTurnStatsStatus::Completed,
     }
 }
 

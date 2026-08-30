@@ -808,7 +808,7 @@ function WorkspaceSubagentPanel(args: {
   const taskRunning = Boolean(task?.isRunning && parentConversationId && taskId);
   // taskOpen is the sole authority for retaining a live child handle and event subscription.
   // taskOpen 是保留实时子会话句柄与事件订阅的唯一权威。
-  const taskOpen = Boolean(task && parentConversationId && taskId);
+  const taskOpen = Boolean(task && task.runState !== "closed" && parentConversationId && taskId);
   // transientReasoningStatus subscribes only while this exact child remains live.
   // transientReasoningStatus 仅在当前精确子会话仍实时存在时订阅。
   const transientReasoningStatus = useConversationTransientReasoningStatus(taskOpen ? taskId : null);
@@ -863,13 +863,10 @@ function WorkspaceSubagentPanel(args: {
     try {
       await args.props.onCloseSubagentTask(parentConversationId, taskId);
       setCloseConfirmOpen(false);
-      args.scrollSnapshots.current.delete(taskId);
-      args.expandedStates.current.delete(taskId);
-      args.props.onCloseContextTab(args.tab.id);
     } finally {
       setCloseSubmitting(false);
     }
-  }, [args.expandedStates, args.props, args.scrollSnapshots, args.tab.id, closeSubmitting, parentConversationId, taskId]);
+  }, [args.props, closeSubmitting, parentConversationId, taskId]);
   // updateTailLock publishes the child controller's explicit tail ownership state.
   // updateTailLock 发布子界面控制器的显式尾部所有权状态。
   const updateTailLock = React.useCallback((locked: boolean) => {
@@ -931,6 +928,7 @@ function WorkspaceSubagentPanel(args: {
         </div>
       ) : null}
       <ConversationBranchWorkspaceV1
+        providers={args.props.workbench.providers}
         commandSessions={subagentCommandSessions}
         commands={transcriptOwner.commands}
         conversation={subagentConversation}

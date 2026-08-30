@@ -33,8 +33,12 @@ export type RequestConfigChangeKind = "route" | "thinking" | "none";
  * @returns route for Provider/account/model changes, thinking for thinking-only changes, otherwise none.
  *          Provider/账号/模型变化返回 route，仅思考强度变化返回 thinking，否则返回 none。 */
 export function requestConfigChangeKind(event: RequestConfigChangedEvent): RequestConfigChangeKind {
+  // An empty previous route is initial configuration, including notices persisted by older builds.
+  // 空的上一条路线表示首次配置，也包括旧版本已持久化的首次配置提示。
+  if (event.previous.provider == null && event.previous.model == null) return "none";
+  // Credential rotation does not change the user-selected provider/model.
+  // 凭据轮换不代表用户选择的供应商或模型发生变化。
   const routeChanged = event.previous.provider !== event.current.provider
-    || (event.previous.connection_id ?? null) !== (event.current.connection_id ?? null)
     || event.previous.model !== event.current.model;
   if (routeChanged) {
     return "route";
@@ -175,6 +179,9 @@ export interface ConversationAssistantTranscriptNode extends ConversationTranscr
   item: AssistantMarkdownDisplayItem;
   api_stats: ApiStatsEvent | null;
   root_input: ConversationRootInputAnchor | null;
+  /** Exact terminal TurnStats seq for the completed owning Turn.
+   * 所属完整回合的精确终态 TurnStats seq。 */
+  turn_end_seq: number | null;
 }
 
 /** One framed terminal statistics row emitted at the durable end of a Turn.
@@ -221,6 +228,9 @@ export function projectConversationTranscriptDisplay(
   const finalAssistantSeqByTurn = finalAssistantSeqs(items);
   const apiStatsById = new Map<number, ApiStatsEvent>();
   const rootInputByTurn = new Map<string, ConversationRootInputAnchor>();
+  // turnEndSeqByTurn makes fork actions depend on the completed Turn boundary, never its root input.
+  // turnEndSeqByTurn 让分叉操作依赖完整回合边界，而不是其根输入。
+  const turnEndSeqByTurn = new Map<string, number>();
   for (const item of items) {
     if (item.kind === "event" && item.event.kind === "api_stats") {
       apiStatsById.set(item.event.api_call_id, item.event);
@@ -231,6 +241,13 @@ export function projectConversationTranscriptDisplay(
       && item.event.input_source === "root"
     ) {
       rootInputByTurn.set(turnKey(item.turn_id), { seq: item.seq, text: item.event.text });
+    }
+    if (
+      item.kind === "event"
+      && item.event.kind === "turn_stats"
+      && item.turn_id !== null
+    ) {
+      turnEndSeqByTurn.set(turnKey(item.turn_id), item.event.end_seq);
     }
   }
 
@@ -274,6 +291,7 @@ export function projectConversationTranscriptDisplay(
           item,
           api_stats: apiStatsById.get(item.assistant.api_call_id) ?? null,
           root_input: rootInputByTurn.get(turnKey(item.turn_id)) ?? null,
+          turn_end_seq: turnEndSeqByTurn.get(turnKey(item.turn_id)) ?? null,
         });
       } else {
         appendProcess(item);

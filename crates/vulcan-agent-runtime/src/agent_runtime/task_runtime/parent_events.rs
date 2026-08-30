@@ -26,6 +26,38 @@ pub(super) fn publish_task_finished_to_parent(
     }
 }
 
+/// Publishes a settled child result only when no queued-message successor run took ownership.
+/// 仅在没有排队消息续跑接管子任务时发布已收敛的子任务结果。
+///
+/// # Parameters
+/// 参数
+/// `task_runtime` owns the child event stream and parent mailbox.
+/// `task_runtime` 持有子任务事件流与父级 mailbox。
+/// `request` identifies the settled physical child execution.
+/// `request` 标识已收敛的物理子执行。
+/// `outcome` is the settled execution outcome.
+/// `outcome` 是已收敛执行的结果。
+/// `detail` is the user-visible lifecycle detail for a truly terminal result.
+/// `detail` 是真正终态结果对应的用户可见生命周期说明。
+/// `outcome_committed` states that this execution committed the stable terminal projection.
+/// `outcome_committed` 表示该执行已经提交稳定终态投影。
+/// `queued_resume_started` states that queued input already started a successor execution.
+/// `queued_resume_started` 表示排队输入已经启动了后继执行。
+pub(super) fn publish_task_finished_to_parent_after_resume_decision(
+    task_runtime: &TaskRuntime,
+    request: &TaskExecutionRequest,
+    outcome: &TaskExecutionOutcome,
+    detail: &str,
+    outcome_committed: bool,
+    queued_resume_started: bool,
+) {
+    if !outcome_committed || queued_resume_started {
+        return;
+    }
+    task_runtime.publish_task_outcome_to_parent_mailbox(request, outcome);
+    publish_task_finished_to_parent(task_runtime, request, outcome, detail);
+}
+
 /// Builds one completed parent event with an optional ledger-materialized child statistic.
 /// 构建一条可携带账本物化子统计的完成父事件。
 ///
@@ -67,13 +99,16 @@ fn build_task_finished_parent_runtime_event_with_turn_stats(
     )
 }
 
-/// Publishes a failed child-task lifecycle event back to the parent session.
-/// 将失败的子任务生命周期事件发布回父级会话。
+/// Publishes a failed child-task lifecycle event to both parent feedback channels.
+/// 将失败的子任务生命周期事件发布到父级的两条反馈通道。
 pub(super) fn publish_task_failure_to_parent(
     task_runtime: &TaskRuntime,
     request: &TaskExecutionRequest,
     error: &str,
 ) {
+    // The process-local mailbox owns wait_agent wake-up, while the detached event owns the visible parent timeline.
+    // 进程内 mailbox 负责唤醒 wait_agent，分离事件负责父级时间线可见反馈。
+    task_runtime.publish_task_failure_to_parent_mailbox(request, error);
     let event = build_task_failure_parent_runtime_event_with_turn_stats(request, error);
     // A detached parent-event failure cannot propagate beyond the background owner.
     // 分离的父级事件失败无法越过后台所有者继续传播。
@@ -90,6 +125,34 @@ pub(super) fn publish_task_failure_to_parent(
             request.task_id, request.execution_id
         );
     }
+}
+
+/// Publishes a failed child result only when no queued-message successor run took ownership.
+/// 仅在没有排队消息续跑接管子任务时发布失败的子任务结果。
+///
+/// # Parameters
+/// 参数
+/// `task_runtime` owns the child event stream and parent mailbox.
+/// `task_runtime` 持有子任务事件流与父级 mailbox。
+/// `request` identifies the failed physical child execution.
+/// `request` 标识失败的物理子执行。
+/// `error` is the terminal failure text.
+/// `error` 是终态失败文本。
+/// `failure_committed` states that this execution committed the stable failure projection.
+/// `failure_committed` 表示该执行已经提交稳定失败投影。
+/// `queued_resume_started` states that queued input already started a successor execution.
+/// `queued_resume_started` 表示排队输入已经启动了后继执行。
+pub(super) fn publish_task_failure_to_parent_after_resume_decision(
+    task_runtime: &TaskRuntime,
+    request: &TaskExecutionRequest,
+    error: &str,
+    failure_committed: bool,
+    queued_resume_started: bool,
+) {
+    if !failure_committed || queued_resume_started {
+        return;
+    }
+    publish_task_failure_to_parent(task_runtime, request, error);
 }
 
 /// Builds one failed parent event with an optional ledger-materialized child statistic.

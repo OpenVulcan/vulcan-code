@@ -163,8 +163,8 @@ fn goal_dispatch_registration_requires_the_current_prompt_reservation() {
     );
 }
 
-/// Verifies a freshly registered open GoalContinuation Turn grants one concurrent dispatch owner.
-/// 验证新注册的开放 GoalContinuation 回合只授予一个并发分发所有者。
+/// A restarted goal stays paused until Play, then grants exactly one concurrent dispatch owner.
+/// 重启目标保持暂停直至点击播放，随后只授予一个并发分发所有者。
 #[test]
 fn restarted_open_goal_continuation_admits_exactly_one_dispatch_owner() {
     let session_id = SessionId::from_u128(0x9610);
@@ -177,9 +177,23 @@ fn restarted_open_goal_continuation_admits_exactly_one_dispatch_owner() {
             2,
         )
         .expect("Goal creation should open one continuation Turn");
-    let expected_turn_id = transition
+    let interrupted_turn_id = transition
         .continuation_turn_id
         .expect("new Goal should own one continuation Turn");
+    document
+        .project_persisted_interruptions()
+        .expect("restart should pause the goal");
+    assert_eq!(
+        document.metadata.mode.goal.state,
+        vulcan_session_core::v1::config::GoalState::Paused
+    );
+    let resumed = document
+        .resume_goal("resume after restart", Some(10_000), "resume", 50_000)
+        .expect("Play resumes the goal");
+    let expected_turn_id = resumed
+        .continuation_turn_id
+        .expect("Play opens a continuation");
+    assert_ne!(expected_turn_id, interrupted_turn_id);
     let handle =
         SessionHandle::with_backend(session_id, document, Arc::new(RestartGoalReadOnlyBackend));
     let service_state = test_service_state_with_parent_session(session_id);
@@ -274,6 +288,7 @@ async fn webui_session_kernel_user_turn_does_not_preinterrupt_wait_agent() {
     let session_id = SessionId::new_v4();
     let mut state = test_service_state_with_parent_session(session_id);
     state.agent_runtime = Some(test_agent_runtime_bridge());
+    seed_test_running_subagent_for_parent(&mut state, session_id);
     let task_runtime = state
         .agent_runtime
         .as_ref()
@@ -299,6 +314,7 @@ async fn webui_pending_prompt_enqueue_does_not_interrupt_active_wait_agent() {
     let session_id = SessionId::new_v4();
     let mut state = test_service_state_with_parent_session(session_id);
     state.agent_runtime = Some(test_agent_runtime_bridge());
+    seed_test_running_subagent_for_parent(&mut state, session_id);
     let agent_runtime = state
         .agent_runtime
         .as_ref()
@@ -540,6 +556,7 @@ async fn webui_session_kernel_stop_interrupts_active_wait_agent() {
     let session_id = SessionId::new_v4();
     let mut state = test_service_state_with_parent_session(session_id);
     state.agent_runtime = Some(test_agent_runtime_bridge());
+    seed_test_running_subagent_for_parent(&mut state, session_id);
     let task_runtime = state
         .agent_runtime
         .as_ref()

@@ -317,6 +317,14 @@ pub struct ProviderToolSelectionConfig {
 }
 
 impl ProviderToolSelectionConfig {
+    /// Validates this selection without loading a session document or any Turn.
+    /// 校验当前选择，不加载会话文档或任何回合。
+    /// Returns the same canonical-configuration error used by runtime mutations.
+    /// 返回与运行时修改相同的规范配置错误。
+    pub fn validate(&self) -> Result<(), super::errors::DomainError> {
+        super::document::validate_provider_tool_selection_config(self)
+    }
+
     /// Returns whether no provider-tool selection fact has been materialized.
     /// 返回是否尚未物化任何供应商工具选择事实。
     pub fn is_empty(&self) -> bool {
@@ -632,8 +640,8 @@ pub struct ForkOrigin {
     /// Parent event-tree generation observed by the fork request.
     /// 分叉请求观察到的父事件树 generation。
     pub source_segment_generation: u64,
-    /// Retained parent root-input seq that became the child open boundary.
-    /// 成为子会话开放边界的父根输入 seq。
+    /// Retained parent terminal TurnStats seq that became the child completed-history boundary.
+    /// 成为子会话完整历史边界的父级终态 TurnStats seq。
     pub source_target_seq: Seq,
 }
 

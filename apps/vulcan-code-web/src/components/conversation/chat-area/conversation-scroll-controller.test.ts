@@ -2,9 +2,40 @@ import { describe, expect, it } from "vitest";
 import {
   classifyConversationObservedScrollMovement,
   conversationResizeCorrectionMode,
+  reconcileConversationNativeScrollClamp,
 } from "./conversation-scroll-controller";
 
 describe("conversation scroll ownership ledger", () => {
+  it("keeps tail ownership when composer shrink precedes prompt insertion and the native scroll event", () => {
+    // baseline acknowledges the browser clipping the former tail before the new prompt grows the range.
+    // baseline 在新提示词增大范围前确认浏览器对原尾部位置的截断。
+    const baseline = reconcileConversationNativeScrollClamp(823, 635, 635);
+    expect(baseline).toBe(635);
+    expect(classifyConversationObservedScrollMovement(baseline, 635, null)).toEqual({
+      readerMoved: false,
+      retainTarget: false,
+    });
+    // appendedBaseline must retain the acknowledged position when the delayed event sees the larger range.
+    // appendedBaseline 在延迟事件看到增大后的范围时必须保留已确认的位置。
+    const appendedBaseline = reconcileConversationNativeScrollClamp(baseline, 635, 776);
+    expect(appendedBaseline).toBe(635);
+  });
+
+  it("does not hide actual reader movement during or after a shrinking layout", () => {
+    expect(reconcileConversationNativeScrollClamp(823, 600, 635)).toBe(823);
+    expect(reconcileConversationNativeScrollClamp(600, 550, 635)).toBe(600);
+    // baseline is the clipped tail; any subsequent upward movement still belongs to the reader.
+    // baseline 是截断后的尾部；随后任何向上移动仍属于阅读者。
+    const baseline = reconcileConversationNativeScrollClamp(823, 635, 635);
+    expect(classifyConversationObservedScrollMovement(baseline, 590, null).readerMoved).toBe(true);
+  });
+
+  it("acknowledges collapse to an unscrollable surface without inferring movement from growth", () => {
+    expect(reconcileConversationNativeScrollClamp(240, 0, 0)).toBe(0);
+    expect(reconcileConversationNativeScrollClamp(240, 240, 400)).toBe(240);
+    expect(reconcileConversationNativeScrollClamp(240, 180.5, 181)).toBe(180.5);
+  });
+
   it("treats an unregistered native movement as reader ownership", () => {
     expect(classifyConversationObservedScrollMovement(400, 320, null)).toEqual({
       readerMoved: true,

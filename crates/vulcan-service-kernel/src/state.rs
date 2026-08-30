@@ -328,9 +328,9 @@ pub struct ServiceBridgeState {
     /// 按子任务标识索引的长生命周期已加载子转录详情。
     pub(crate) subagent_surface_detail_cache:
         BTreeMap<SessionId, WebuiSubagentSurfaceDetailCacheEntry>,
-    /// Parent sessions whose current coordination round should keep subagent navigation visible.
-    /// 当前协调轮次中应保持子代理导航可见的父会话集合。
-    pub(crate) session_subagent_navigation_rounds: BTreeSet<SessionId>,
+    /// Exact child ids admitted to each parent's current round; reset only when that parent starts a new user turn.
+    /// 各父会话当前回合准入的精确子任务标识；仅在该父会话开始新用户回合时重置。
+    pub(crate) session_subagent_navigation_rounds: BTreeMap<SessionId, BTreeSet<SessionId>>,
     /// Currently opened subagent surface selection.
     /// 当前打开的子代理界面选择。
     pub(crate) active_subagent_panel: Option<SelectedSubagentTaskPanel>,

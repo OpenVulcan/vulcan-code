@@ -52,6 +52,31 @@ function cardItem(options: {
   };
 }
 
+/** Builds the exact persisted V1 output envelope produced by persistent_tool_output_from_result.
+ * 构建 persistent_tool_output_from_result 产出的精确持久化 V1 输出信封。 */
+function subagentToolOutput(
+  // Public tool id stored beside the output.
+  // 与输出一同存储的公开工具标识。
+  toolName: string,
+  // Exact host-result semantic kind.
+  // 精确宿主结果语义类型。
+  hostKind: string,
+  // Exact structured host payload.
+  // 精确结构化宿主载荷。
+  hostPayload: ToolPayload,
+): ToolPayload {
+  return {
+    tool_call_id: `provider-${toolName}`,
+    tool_name: toolName,
+    model_output: hostPayload,
+    host_result: {
+      kind: hostKind,
+      payload: hostPayload,
+    },
+    is_error: false,
+  };
+}
+
 /** Builds the deleted-file card that previously showed -208 only in its header.
  * 构建曾经只在头部显示 -208 的删除文件卡片。 */
 function deletedFileItem(): ToolCallDisplayItem {
@@ -376,13 +401,183 @@ describe("ConversationV1ToolCard", () => {
       </I18nProvider>,
     );
 
-    for (const markup of [askMarkup, subagentMarkup, terminalMarkup]) {
+    for (const markup of [askMarkup, terminalMarkup]) {
       expect(markup).toContain("tool-presentation-card v1-tool-card");
     }
     expect(askMarkup).toContain("ask");
+    expect(subagentMarkup).toContain("tool-presentation-card subagent-orchestration");
     expect(subagentMarkup).toContain("review-agent");
     expect(terminalMarkup).toContain('data-tool-detail="true"');
     expect(terminalMarkup).toContain("Get-Process");
     expect(terminalMarkup).toContain("terminal: terminal-2");
+  });
+
+  it("routes every built-in subagent orchestration tool through the complete rich card", () => {
+    // cases cover the complete public orchestration surface that previously fell into the generic V1 card.
+    // cases 覆盖此前落入通用 V1 卡片的完整公开调度工具面。
+    const cases: Array<{
+      toolName: string;
+      input: ToolPayload;
+      hostKind: string;
+      hostPayload: ToolPayload;
+      expectedText: string;
+    }> = [
+      {
+        toolName: "spawn_agent",
+        input: { agent: "reviewer", prompt: "审核持久化链路" },
+        hostKind: "subagent_task",
+        hostPayload: {
+          task_name: "reviewer",
+          display_title: "reviewer",
+          execution_status: "running",
+          prompt: "审核持久化链路",
+        },
+        expectedText: "reviewer",
+      },
+      {
+        toolName: "send_message",
+        input: { target: "queue-agent", message: "补充检查队列", delivery_mode: "queue" },
+        hostKind: "subagent_message",
+        hostPayload: {
+          target: "queue-agent",
+          message: "补充检查队列",
+          queued: true,
+          delivery_mode: "queue",
+          delivery_status: "queued",
+        },
+        expectedText: "queue-agent",
+      },
+      {
+        toolName: "wait_agent",
+        input: { timeout_ms: 10000 },
+        hostKind: "subagent_wait",
+        hostPayload: {
+          message: "Received terminal child feedback.",
+          timed_out: false,
+          no_active_agents: false,
+          terminal_event_count: 1,
+          agents: [{
+            task_name: "wait-agent",
+            status: "completed",
+            result: "等待完成",
+            usage_segments: [{
+              provider_call_count: 2,
+              tool_call_count: 1,
+              total_tokens: 420,
+              cached_input_tokens: 120,
+            }],
+          }],
+        },
+        expectedText: "wait-agent",
+      },
+      {
+        toolName: "agent_orchestration_info",
+        input: {},
+        hostKind: "subagent_status",
+        hostPayload: {
+          tool: "agent_orchestration_info",
+          agents: [{ task_name: "info-agent", status: "running" }],
+        },
+        expectedText: "info-agent",
+      },
+      {
+        toolName: "list_agents",
+        input: {},
+        hostKind: "subagent_status",
+        hostPayload: {
+          tool: "list_agents",
+          agents: [{ task_name: "listed-agent", status: "completed", result: "已完成" }],
+        },
+        expectedText: "listed-agent",
+      },
+      {
+        toolName: "close_agent",
+        input: { target: "closed-agent" },
+        hostKind: "subagent_control",
+        hostPayload: {
+          operation: "close",
+          target: "closed-agent",
+          closed_count: 1,
+          closed_agents: ["closed-agent"],
+          cleared_message_count: 1,
+        },
+        expectedText: "closed-agent",
+      },
+      {
+        toolName: "interrupt_agent",
+        input: { target: "interrupted-agent" },
+        hostKind: "subagent_control",
+        hostPayload: {
+          operation: "interrupt",
+          target: "interrupted-agent",
+          stopped_count: 1,
+          stopped_subagent_task_ids: ["child-interrupted"],
+        },
+        expectedText: "interrupted-agent",
+      },
+    ];
+
+    cases.forEach((testCase, index) => {
+      const markup = renderToStaticMarkup(
+        <I18nProvider initialLocale="zh-CN">
+          <ConversationV1ToolCard
+            defaultExpanded
+            item={cardItem({
+              seq: 400 + index,
+              toolName: testCase.toolName,
+              input: testCase.input,
+              output: subagentToolOutput(
+                testCase.toolName,
+                testCase.hostKind,
+                testCase.hostPayload,
+              ),
+              externalRefs: testCase.toolName === "spawn_agent"
+                ? [{ kind: "subagent", id: "child-reviewer" }]
+                : undefined,
+            })}
+          />
+        </I18nProvider>,
+      );
+
+      expect(markup).toContain("tool-presentation-card subagent-orchestration");
+      expect(markup).not.toContain('data-tool-kind="generic"');
+      expect(markup).toContain(testCase.expectedText);
+    });
+  });
+
+  it("keeps wait-agent usage statistics visible in the tips chip", () => {
+    const markup = renderToStaticMarkup(
+      <I18nProvider initialLocale="zh-CN">
+        <ConversationV1ToolCard
+          item={cardItem({
+            seq: 500,
+            toolName: "wait_agent",
+            input: { timeout_ms: 10000 },
+            output: subagentToolOutput("wait_agent", "subagent_wait", {
+              message: "Received terminal child feedback.",
+              timed_out: false,
+              no_active_agents: false,
+              terminal_event_count: 1,
+              agents: [{
+                task_name: "usage-agent",
+                status: "completed",
+                usage_segments: [{
+                  provider_call_count: 2,
+                  tool_call_count: 3,
+                  total_tokens: 640,
+                  cached_input_tokens: 240,
+                }],
+              }],
+            }),
+          })}
+        />
+      </I18nProvider>,
+    );
+
+    expect(markup).toContain("subagent-orchestration-compact-usage");
+    expect(markup).toContain("2 次调用");
+    expect(markup).toContain("3 个工具");
+    expect(markup).toContain("640 tokens");
+    expect(markup).toContain("缓存 240 tokens");
   });
 });

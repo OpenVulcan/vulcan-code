@@ -7,7 +7,7 @@ import {
 } from "@/components/conversation/conversation-chrome";
 import {
   ConversationBranchWorkspaceV1,
-  type ConversationBranchRootInputGenerationActionV1,
+  type ConversationBranchGenerationActionV1,
 } from "@/components/conversation/conversation-branch-workspace-v1";
 import {
   ConversationGenerationDialogV1,
@@ -43,6 +43,7 @@ import {
 import { useConversationSurfaceLayoutMemory } from "@/components/conversation/chat-area/surface-layout-memory";
 import { useConversationScrollController } from "@/components/conversation/chat-area/conversation-scroll-controller";
 import { ConversationContinueControl } from "@/components/conversation/conversation-continue-control";
+import { activeThinkingOverlayBlock } from "@/components/conversation/thinking-display";
 import { selectConversationContinueCandidateV1 } from "@/service/conversation-continuation-selector-v1";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
 import type {
@@ -56,12 +57,12 @@ import {
 /** Process-local target for one exact V1 edit or fork action.
  * 一次精确 V1 编辑或分叉动作的进程内目标。
  */
-interface ConversationGenerationTargetV1 extends ConversationBranchRootInputGenerationActionV1 {
+type ConversationGenerationTargetV1 = ConversationBranchGenerationActionV1 & {
   /** Stable child identity reused by every fork retry from this dialog.
    * 当前对话框中每次分叉重试复用的稳定子会话身份。
    */
   childSessionId: string | null;
-}
+};
 
 // ChatArea renders the conversation workspace and composer.
 // ChatArea 渲染会话工作区与输入区域。
@@ -153,7 +154,7 @@ export function ChatArea(props: ChatAreaProps) {
    * 从一条 canonical 根输入事件打开 generation 对话框。
    */
   const handleRootInputGenerationAction = React.useCallback((
-    action: ConversationBranchRootInputGenerationActionV1,
+    action: ConversationBranchGenerationActionV1,
   ) => {
     setGenerationTarget({
       ...action,
@@ -182,7 +183,7 @@ export function ChatArea(props: ChatAreaProps) {
         const edited = await props.onEditConversationGeneration(
           session.id,
           owner.window_generation,
-          target.seq,
+          target.targetSeq,
           value,
         );
         if (!edited) return;
@@ -200,7 +201,7 @@ export function ChatArea(props: ChatAreaProps) {
         const forked = await props.onForkConversationGeneration(
           session.id,
           owner.window_generation,
-          target.seq,
+          target.sourceTurnEndSeq,
           childSessionId,
           value,
         );
@@ -397,9 +398,10 @@ export function ChatArea(props: ChatAreaProps) {
   );
   // displayedStreamingReasoningBlock drives the popup modes without reading legacy transcript rows.
   // displayedStreamingReasoningBlock 在不读取旧转录行的情况下驱动浮层模式。
-  const displayedStreamingReasoningBlock = thinkingDisplayMode === "inline_output"
-    ? null
-    : streamingReasoningBlock;
+  const displayedStreamingReasoningBlock = activeThinkingOverlayBlock(
+    thinkingDisplayMode,
+    streamingReasoningBlock,
+  );
   // Visual transitions retain empty, popup, and first-submission surfaces within the current conversation scope.
   // 视觉过渡在当前会话作用域内保留空状态、思考浮层与首条提交界面。
   const {
@@ -606,6 +608,7 @@ export function ChatArea(props: ChatAreaProps) {
       ) : null}
       {selectedConversation ? (
         <ConversationBranchWorkspaceV1
+          providers={props.workbench.providers}
           commandSessions={props.workbench.commandSessions ?? []}
           commands={eventWindowCommands}
           conversation={selectedConversation}
@@ -650,7 +653,6 @@ export function ChatArea(props: ChatAreaProps) {
           transientReasoningStatus={transientReasoningStatus ? (
             <TransientReasoningStatusLine status={transientReasoningStatus} />
           ) : null}
-          visibleThinkingOverlayBlockId={visibleStreamingThinkingOverlayBlock?.id ?? null}
           workspacePath={selectedProject?.path ?? null}
           onTrace={props.onTrace}
         />

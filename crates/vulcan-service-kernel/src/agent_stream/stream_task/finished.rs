@@ -3,6 +3,7 @@
 
 use super::super::provider_v1_sink::ProviderV1FinishedDurability;
 use super::*;
+use crate::session_goal_lifecycle::registered_session_v1_handle_from_state;
 
 /// Outcome of handling one finished stream report.
 /// 单个流终态报告的处理结果。
@@ -275,7 +276,48 @@ pub(super) async fn handle_finished_stream_event(
 
     // The durable V1 Turn receipt alone selects and authorizes a successor; legacy persistence cannot veto it.
     // 可靠 V1 回合回执独自选择并授权后继；旧持久化不得否决该事实。
-    let started_next_prompt = if let Some(receipt) = turn_completion_receipt {
+    // Re-read only after releasing terminal admission: a child can finish after the sink snapshot.
+    // 释放终态准入后重新读取：子任务可能在 sink 快照之后完成。
+    let pending_subagent_return = if terminal_authority_settled {
+        match registered_session_v1_handle_from_state(task_state, finished_session_id).and_then(
+            |handle| {
+                handle
+                    .read(|document| document.pending_subagent_return_dispatch())
+                    .map_err(|error| error.to_string())?
+                    .map_err(|error| error.to_string())
+            },
+        ) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                eprintln!(
+                    "[webui-service] read terminal subagent return failed: session={finished_session_id} error={error}"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let started_next_prompt = if let Some(receipt) = pending_subagent_return {
+        match start_exact_v1_subagent_return_turn(
+            app,
+            task_state,
+            controller_runtime,
+            agent_runtime,
+            finished_session_id,
+            receipt,
+        )
+        .await
+        {
+            Ok(started) => started,
+            Err(error) => {
+                eprintln!(
+                    "[webui-service] dispatch exact V1 subagent return failed: session={finished_session_id} error={error}"
+                );
+                false
+            }
+        }
+    } else if let Some(receipt) = turn_completion_receipt {
         maybe_start_webui_turn_chain_after_finished(
             app,
             task_state,

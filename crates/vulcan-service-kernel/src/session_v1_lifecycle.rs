@@ -14,6 +14,7 @@ use vulcan_session_core::v1::document::{
     ClientInputSubmission, ForkGenerationInput, IdempotentMutation, SessionDocument,
 };
 use vulcan_session_core::v1::errors::DomainError;
+use vulcan_session_core::v1::event::{EventBody, TurnOutcome};
 use vulcan_session_core::v1::ids::{ClientActionId, ResourceId, Seq};
 use vulcan_workbench_model::SessionId;
 use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
@@ -67,9 +68,9 @@ pub(crate) struct CreateForkSessionV1Request {
     /// Exact child display title.
     /// 精确子会话显示标题。
     pub(crate) title: String,
-    /// Parent root-input seq retained as the child open boundary.
-    /// 作为子会话开放边界保留的父根输入 seq。
-    pub(crate) target_seq: Seq,
+    /// Parent terminal TurnStats seq retained as the child completed-history boundary.
+    /// 作为子会话完整历史边界保留的父级终态 TurnStats seq。
+    pub(crate) source_turn_end_seq: Seq,
     /// Semantic creation time used only by the first successful publication.
     /// 仅由首次成功发布使用的语义创建时间。
     pub(crate) now_ms: i64,
@@ -84,9 +85,9 @@ pub(crate) struct CreatedForkSessionV1 {
     /// Whether this invocation physically published the child.
     /// 本次调用是否物理发布了子会话。
     pub(crate) created: bool,
-    /// Exact parent seq retained by the child.
-    /// 子会话保留的精确父 seq。
-    pub(crate) source_target_seq: Seq,
+    /// Exact parent terminal TurnStats seq retained by the child.
+    /// 子会话保留的精确父级终态 TurnStats seq。
+    pub(crate) source_turn_end_seq: Seq,
 }
 
 /// Structured failures produced by the strict V1 lifecycle boundary.
@@ -464,7 +465,7 @@ pub(crate) async fn create_or_get_forked_session_v1(
     let expected_origin = ForkOrigin {
         source_session_id: request.source_session_id.to_string(),
         source_segment_generation: request.expected_source_generation,
-        source_target_seq: request.target_seq,
+        source_target_seq: request.source_turn_end_seq,
     };
 
     if let Some(existing_locator) =
@@ -483,7 +484,7 @@ pub(crate) async fn create_or_get_forked_session_v1(
         return Ok(CreatedForkSessionV1 {
             handle: existing,
             created: false,
-            source_target_seq: request.target_seq,
+            source_turn_end_seq: request.source_turn_end_seq,
         });
     }
 
@@ -493,7 +494,7 @@ pub(crate) async fn create_or_get_forked_session_v1(
         ForkGenerationInput {
             child_session_id: request.child_session_id.to_string(),
             title: request.title.clone(),
-            target_seq: request.target_seq,
+            source_turn_end_seq: request.source_turn_end_seq,
             now_ms: request.now_ms,
         },
     )?;
@@ -527,7 +528,7 @@ pub(crate) async fn create_or_get_forked_session_v1(
     Ok(CreatedForkSessionV1 {
         handle,
         created: true,
-        source_target_seq: request.target_seq,
+        source_turn_end_seq: request.source_turn_end_seq,
     })
 }
 
@@ -565,6 +566,92 @@ fn validate_existing_fork_retry(
             field: "fork_origin",
         });
     }
+    Ok(())
+}
+
+/// Closes a superseded open child Turn before one queued or interrupted execution starts a new root input.
+/// 在排队或插队执行启动新的根输入前，关闭已被取代但仍开放的子会话回合。
+///
+/// # Parameters / 参数
+///
+/// - `handle`: Exact embedded child-session owner loaded from the root-derived `TASK` path.
+///   `handle`：从根会话派生的 `TASK` 路径加载的精确内嵌子会话所有者。
+/// - `submission`: New execution root input whose client action identity provides replay protection.
+///   `submission`：以客户端动作身份提供重放保护的新执行根输入。
+/// - `now_ms`: Authoritative admission time used for the stopped boundary and successor input.
+///   `now_ms`：用于停止边界和后继输入的权威准入时间。
+///
+/// # Returns / 返回值
+///
+/// Returns success after an exact replay is confirmed or after the old Turn is stopped and the new
+/// root input is durably admitted, including the interrupted physical API of the superseded execution.
+/// 在确认精确重放，或被替代执行的物理 API 中断、旧回合停止且新根输入可靠准入后返回成功。
+fn submit_resumed_embedded_task_root_input(
+    handle: &SessionHandle,
+    submission: ClientInputSubmission,
+    now_ms: i64,
+) -> Result<(), SessionV1LifecycleError> {
+    let (submission_already_exists, open_turn_id, has_active_api) = handle.read(|document| {
+        let submission_already_exists = document.events().iter().any(|event| {
+            matches!(
+                &event.event,
+                EventBody::UserInput(input)
+                    if input.client_action_id == submission.client_action_id
+            )
+        });
+        let open_turn_id = document
+            .active_turn()
+            .filter(|turn| !turn.closed)
+            .map(|turn| turn.turn_id);
+        (
+            submission_already_exists,
+            open_turn_id,
+            document.active_api().is_some(),
+        )
+    })?;
+    if submission_already_exists {
+        handle.submit_root_input(submission, now_ms)?;
+        return Ok(());
+    }
+    if let Some(expected_turn_id) = open_turn_id {
+        if has_active_api {
+            handle.mutate_durable_if_changed(
+                SessionMutationAdmission::ExistingTurn,
+                SessionFlushReason::ApiCompleted,
+                |document| {
+                    if document.interrupt_active_api_for_process(now_ms)?.is_some() {
+                        return Ok(SessionMutationChange::Changed(()));
+                    }
+                    Ok(SessionMutationChange::Unchanged(()))
+                },
+            )?;
+        }
+        handle.mutate_durable(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::TurnCompleted,
+            |document| {
+                let turn = document.active_turn().ok_or(DomainError::NoActiveTurn)?;
+                if turn.closed || turn.turn_id != expected_turn_id {
+                    return Err(DomainError::TurnIdentityMismatch {
+                        expected: expected_turn_id.value(),
+                        actual: turn.turn_id.value(),
+                    });
+                }
+                let started_at_ms = document
+                    .events()
+                    .iter()
+                    .find(|event| event.seq == turn.start_seq)
+                    .ok_or(DomainError::ReferenceViolation {
+                        kind: "turn_start_event",
+                        value: turn.start_seq.value(),
+                    })?
+                    .created_at_ms;
+                let duration_ms = now_ms.saturating_sub(started_at_ms).max(0);
+                document.close_turn(TurnOutcome::Stopped, duration_ms, now_ms)
+            },
+        )?;
+    }
+    handle.submit_root_input(submission, now_ms)?;
     Ok(())
 }
 
@@ -671,7 +758,8 @@ pub(crate) fn create_or_load_embedded_task_session_v1(
     })?;
 
     if facts.is_resumed {
-        handle.submit_root_input(
+        submit_resumed_embedded_task_root_input(
+            handle.as_ref(),
             ClientInputSubmission::new(client_action_id, child_prompt, vec![]),
             now_ms,
         )?;
@@ -1084,7 +1172,7 @@ mod tests {
     use vulcan_session_core::v1::document::PrepareAndStartApiInput;
     use vulcan_session_core::v1::event::{
         ApiCallStatus, ApiPurposeKind, ApiRequestSnapshot, AssistantSemanticStatus, EventBody,
-        ProviderProjectionProof,
+        ProviderProjectionProof, TurnOutcome,
     };
     use vulcan_session_core::v1::ids::Seq;
     use vulcan_session_core::v1::projection::provider_visible_fingerprint;
@@ -1234,6 +1322,19 @@ mod tests {
         .expect("create and register root V1 session")
     }
 
+    /// Closes and durably flushes the current fixture Turn, returning its terminal TurnStats seq.
+    /// 关闭并可靠刷新当前夹具回合，返回其终态 TurnStats seq。
+    fn close_fixture_turn(handle: &SessionHandle, now_ms: i64) -> Seq {
+        handle
+            .mutate_durable(
+                SessionMutationAdmission::ExistingTurn,
+                SessionFlushReason::TurnCompleted,
+                |document| document.close_turn(TurnOutcome::Completed, 1, now_ms),
+            )
+            .expect("close and flush fixture Turn")
+            .value
+    }
+
     /// Fork creation publishes one exact child and makes response-loss retries idempotent.
     /// 分叉创建只发布一个精确子会话，并使响应丢失后的重试保持幂等。
     #[tokio::test]
@@ -1243,13 +1344,9 @@ mod tests {
         let source_session_id = SessionId::from_u128(0x72_01);
         let child_session_id = SessionId::from_u128(0x72_02);
         let source = create_fixture_session(&fixture, &registry, source_session_id).await;
-        let (source_generation, target_seq) = source
-            .read(|document| {
-                (
-                    document.segment_generation(),
-                    document.events().last().expect("source root event").seq,
-                )
-            })
+        let source_turn_end_seq = close_fixture_turn(&source, 1_787_788_800_100);
+        let source_generation = source
+            .read(SessionDocument::segment_generation)
             .expect("read source generation");
 
         let first = create_or_get_forked_session_v1(
@@ -1260,18 +1357,18 @@ mod tests {
                 expected_source_generation: source_generation,
                 child_session_id,
                 title: String::from("Forked title"),
-                target_seq,
+                source_turn_end_seq,
                 now_ms: 1_787_788_800_500,
             },
         )
         .await
         .expect("create exact fork");
         assert!(first.created);
-        assert_eq!(first.source_target_seq, target_seq);
+        assert_eq!(first.source_turn_end_seq, source_turn_end_seq);
         let expected_origin = ForkOrigin {
             source_session_id: source_session_id.to_string(),
             source_segment_generation: source_generation,
-            source_target_seq: target_seq,
+            source_target_seq: source_turn_end_seq,
         };
         assert_eq!(
             first
@@ -1279,6 +1376,20 @@ mod tests {
                 .read(|document| document.metadata.fork_origin.clone())
                 .expect("read child origin"),
             Some(expected_origin.clone())
+        );
+        assert!(
+            first
+                .handle
+                .read(|document| {
+                    document.active_turn().is_none()
+                        && document.metadata.open_turn_start_seq.is_none()
+                        && !document.events().iter().any(|event| {
+                            event.seq.value() > source_turn_end_seq.value()
+                                && matches!(&event.event, EventBody::ApiStarted(_))
+                        })
+                })
+                .expect("read dormant child state"),
+            "fork publication must not open or dispatch a successor Turn"
         );
 
         let retried = create_or_get_forked_session_v1(
@@ -1289,7 +1400,7 @@ mod tests {
                 expected_source_generation: source_generation,
                 child_session_id,
                 title: String::from("Forked title"),
-                target_seq,
+                source_turn_end_seq,
                 now_ms: 1_787_788_800_900,
             },
         )
@@ -1306,7 +1417,7 @@ mod tests {
                     expected_source_generation: source_generation,
                     child_session_id,
                     title: String::from("Conflicting title"),
-                    target_seq,
+                    source_turn_end_seq,
                     now_ms: 1_787_788_801_000,
                 },
             )
@@ -1335,13 +1446,9 @@ mod tests {
         let source_session_id = SessionId::from_u128(0x72_11);
         let child_session_id = SessionId::from_u128(0x72_12);
         let source = create_fixture_session(&fixture, &registry, source_session_id).await;
-        let (source_generation, target_seq) = source
-            .read(|document| {
-                (
-                    document.segment_generation(),
-                    document.events().last().expect("source root event").seq,
-                )
-            })
+        let source_turn_end_seq = close_fixture_turn(&source, 1_787_788_801_050);
+        let source_generation = source
+            .read(SessionDocument::segment_generation)
             .expect("read source generation");
 
         assert!(matches!(
@@ -1353,7 +1460,7 @@ mod tests {
                     expected_source_generation: source_generation + 1,
                     child_session_id,
                     title: String::from("Rejected fork"),
-                    target_seq,
+                    source_turn_end_seq,
                     now_ms: 1_787_788_801_100,
                 },
             )
@@ -1694,6 +1801,118 @@ mod tests {
             .expect("read replayed embedded task session");
         assert_eq!(replayed_memory, replayed_durable);
         assert_eq!(replayed_events, created_events);
+        fixture.shutdown().await;
+    }
+
+    /// A resumed child execution stops the prior open Turn before admitting its distinct root input.
+    /// 续跑子执行会先停止先前仍开放的回合，再准入其不同的根输入。
+    #[tokio::test]
+    async fn embedded_task_resume_replaces_open_turn_before_new_root_input() {
+        let fixture = LifecycleControllerFixture::start().await;
+        let root_session_id = SessionId::new_v4();
+        let child_session_id = SessionId::new_v4();
+        let registry = SessionRuntimeRegistry::default();
+        create_fixture_session(&fixture, &registry, root_session_id).await;
+        let first = create_or_load_embedded_task_session_v1(
+            &registry,
+            TaskV1ExecutionFacts {
+                root_session_id,
+                parent_session_id: root_session_id,
+                task_id: child_session_id,
+                execution_id: String::from("embedded-task-execution-open"),
+                prompt: String::from("run the original child task"),
+                display_title: String::from("Resumable embedded task"),
+                is_resumed: false,
+                admitted_at_ms: 1_787_788_800_020,
+            },
+        )
+        .expect("create initial embedded task turn");
+        let first_turn_id = first
+            .read(|document| document.active_turn().expect("initial child turn").turn_id)
+            .expect("read initial child turn");
+        // firstApi models the superseded physical child execution that interruption has already aborted.
+        // firstApi 模拟已经被中止操作终止的被替代子代理物理执行。
+        let first_api_preparation = first
+            .read(|document| {
+                lifecycle_test_api_input(
+                    document,
+                    ApiRequestSnapshot::new("provider", "model"),
+                    1_787_788_800_030,
+                )
+            })
+            .expect("build initial child API preparation");
+        let first_api_call_id = first
+            .prepare_and_start_api_durable(first_api_preparation)
+            .expect("start initial child API")
+            .value
+            .api_call_id;
+        first
+            .update_reasoning(
+                first_api_call_id,
+                "superseded child reasoning",
+                AssistantSemanticStatus::Streaming,
+                1_787_788_800_040,
+            )
+            .expect("persist initial child API activity");
+
+        let resumed = create_or_load_embedded_task_session_v1(
+            &registry,
+            TaskV1ExecutionFacts {
+                root_session_id,
+                parent_session_id: root_session_id,
+                task_id: child_session_id,
+                execution_id: String::from("embedded-task-execution-resumed"),
+                prompt: String::from("process the queued parent message"),
+                display_title: String::from("Resumable embedded task"),
+                is_resumed: true,
+                admitted_at_ms: 1_787_788_800_120,
+            },
+        )
+        .expect("resume embedded task after stopping the superseded turn");
+        resumed
+            .read(|document| {
+                let active_turn = document.active_turn().expect("resumed child turn");
+                assert!(!active_turn.closed);
+                assert_ne!(active_turn.turn_id, first_turn_id);
+                assert!(document.events().iter().any(|event| {
+                    event.turn_id == Some(first_turn_id)
+                        && matches!(
+                            &event.event,
+                            EventBody::TurnBoundary(boundary)
+                                if boundary.outcome == TurnOutcome::Stopped
+                        )
+                }));
+                assert!(document.events().iter().any(|event| {
+                    matches!(
+                        &event.event,
+                        EventBody::ApiStats(stats)
+                            if stats.api_call_id == first_api_call_id
+                                && stats.status == ApiCallStatus::Interrupted
+                    )
+                }));
+                assert!(document.events().iter().any(|event| {
+                    event.turn_id == Some(active_turn.turn_id)
+                        && matches!(
+                            &event.event,
+                            EventBody::UserInput(input)
+                                if input.client_action_id.as_str()
+                                    == "embedded-task-execution-resumed"
+                                    && input.text == "process the queued parent message"
+                        )
+                }));
+                assert_eq!(document.memory_revision(), document.durable_revision());
+            })
+            .expect("verify resumed embedded task lifecycle");
+        // projection is captured from the durable owner used by physical request reconstruction, not the legacy controller.
+        // projection 从物理请求重建使用的可靠所有者捕获，而不是从旧控制器捕获。
+        let projection = resumed
+            .capture_context_compaction_planning_snapshot()
+            .expect("capture durable successor provider input");
+        assert!(projection.items.iter().any(|item| matches!(
+            item,
+            vulcan_session_core::v1::projection::ProjectedItem::UserInput { text, .. }
+                if text == "process the queued parent message"
+        )));
         fixture.shutdown().await;
     }
 

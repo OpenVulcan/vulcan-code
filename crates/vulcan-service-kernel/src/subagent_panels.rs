@@ -408,7 +408,7 @@ pub(super) async fn service_close_subagent_task(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        remove_webui_closed_subagent_tasks_in_state(&mut guard, &closed_task_ids);
+        unload_webui_closed_subagent_runtime_state(&mut guard, &closed_task_ids);
         let workspace_snapshot = guard
             .workspace_snapshot
             .clone()

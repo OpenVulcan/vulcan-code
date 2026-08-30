@@ -5,12 +5,12 @@
 //! files named by the split map. It never scans directories, never searches
 //! for candidates, never rewrites files, and never repairs anything.
 //! `load_session` retains the full stream; `load_session_tail_only` retains
-//! only the active tail and reports its metrics (audit P0#2): sealed segments
+//! the active tail plus the exact open-turn/retained-goal interval and reports its metrics: sealed segments
 //! stay logically addressable through the catalog and are validated on their
 //! first precise load (plan 6.1.4/6.1.8).
 //! 加载只接触 metadata、runtime、compactions 与分片映射精确命名的分片文件。
 //! 它绝不扫描目录、绝不寻找候选、绝不重写文件、绝不修复任何内容。
-//! `load_session` 保留完整流；`load_session_tail_only` 只保留活动尾段并报告
+//! `load_session` 保留完整流；`load_session_tail_only` 保留活动尾段与精确的开放回合、保留目标区间并报告
 //! 其指标(审计 P0#2)：封口分片通过 catalog 保持逻辑可寻址，并在首次精确
 //! 加载时校验(计划 6.1.4/6.1.8)。
 
@@ -195,9 +195,13 @@ pub fn load_session_tail_only(
     }
     let (resident_events, opened_segment_files, parsed_event_count) =
         load_open_turn_resident_events(layout, &metadata, tail_events)?;
+    // A retained goal owns cumulative facts across turns; its origin cannot be dropped at a segment rollover.
+    // 保留的目标拥有跨回合累计事实，分片滚动时不得丢失其起点。
+    let (resident_events, goal_opened_files, goal_parsed_events) =
+        load_goal_resident_prefix(layout, &metadata, resident_events)?;
     let report = LoadReport {
-        opened_segment_files,
-        parsed_event_count,
+        opened_segment_files: opened_segment_files + goal_opened_files,
+        parsed_event_count: parsed_event_count + goal_parsed_events,
         resident_event_count: resident_events.len() as u64,
         catalog_entries: metadata.split_list.len() as u64,
     };
@@ -219,6 +223,61 @@ pub fn load_session_tail_only(
     Ok((LoadedV1Session { document, metadata }, report))
 }
 
+/// Loads only the retained goal's missing prefix; sessions without goals keep the ordinary tail-only path.
+/// 只加载保留目标缺失的前缀；无目标会话仍沿用普通仅尾段路径。
+/// `resident` already covers the open turn; returns the required contiguous stream and incremental I/O counts.
+/// `resident` 已覆盖开放回合；返回必需的连续流及新增 I/O 计数。
+fn load_goal_resident_prefix(
+    layout: &SessionV1Layout,
+    metadata: &MetadataDocument,
+    resident: Vec<ConversationEvent>,
+) -> Result<(Vec<ConversationEvent>, u64, u64), SessionV1Error> {
+    let goal = &metadata.mode.goal;
+    let Some(origin) = goal.origin_seq.filter(|_| goal.enabled) else {
+        return Ok((resident, 0, 0));
+    };
+    if resident.iter().any(|event| event.seq == origin) {
+        return Ok((resident, 0, 0));
+    }
+    // The open-turn loader always starts at a segment boundary, so no segment is parsed twice.
+    // 开放回合加载器始终从分片边界开始，因此不会重复解析分片。
+    let resident_start = resident
+        .first()
+        .map(|event| event.seq.value())
+        .unwrap_or_else(|| {
+            metadata
+                .split_list
+                .last()
+                .expect("validated split map")
+                .start_seq
+                .value()
+        });
+    let mut prefix = Vec::new();
+    let mut opened_files = 0;
+    for entry in &metadata.split_list {
+        if entry.start_seq.value() >= resident_start {
+            break;
+        }
+        if entry.end_seq.is_some_and(|end| end < origin) {
+            continue;
+        }
+        let (_, mut events) = load_segment_entry(layout, metadata, entry, entry.start_seq.value())?;
+        opened_files += 1;
+        prefix.append(&mut events);
+    }
+    if !prefix.iter().any(|event| event.seq == origin) {
+        return Err(SessionV1Error::corrupt(
+            ErrorCode::ReferenceViolation,
+            layout.metadata_path(),
+            format!("goal origin_seq {} has no persisted event", origin.value()),
+        )
+        .with_context(&layout.session_id, layout.metadata_path()));
+    }
+    let parsed_events = prefix.len() as u64;
+    prefix.extend(resident);
+    Ok((prefix, opened_files, parsed_events))
+}
+
 /// Extends the complete active tail backwards only to the cached open-Turn
 /// start. Tail facts override a stale cursor when the Turn started or closed
 /// in a tail write that reached disk before metadata.
@@ -231,7 +290,10 @@ fn load_open_turn_resident_events(
 ) -> Result<(Vec<ConversationEvent>, u64, u64), SessionV1Error> {
     let tail_event_count = tail_events.len() as u64;
     if let Some((turn_id, closed)) = latest_turn_state(&tail_events) {
-        if closed || explicit_turn_start_index(&tail_events, turn_id).is_some() {
+        if closed
+            || explicit_turn_start_index(&tail_events, turn_id, metadata.open_turn_start_seq)
+                .is_some()
+        {
             return Ok((tail_events, 1, tail_event_count));
         }
     } else if metadata.open_turn_start_seq.is_none() {
@@ -290,7 +352,7 @@ fn load_open_turn_resident_events(
         )
         .with_context(&layout.session_id, layout.metadata_path())
     })?;
-    let actual_start = explicit_turn_start_index(&resident, turn_id)
+    let actual_start = explicit_turn_start_index(&resident, turn_id, metadata.open_turn_start_seq)
         .map(|index| resident[index].seq)
         .ok_or_else(|| {
             SessionV1Error::corrupt(
@@ -327,7 +389,11 @@ fn latest_turn_state(events: &[ConversationEvent]) -> Option<(TurnId, bool)> {
 
 /// Returns the resident index of one turn's explicit root semantic.
 /// 返回一个回合显式根语义在常驻流中的索引。
-fn explicit_turn_start_index(events: &[ConversationEvent], turn_id: TurnId) -> Option<usize> {
+fn explicit_turn_start_index(
+    events: &[ConversationEvent],
+    turn_id: TurnId,
+    open_start: Option<vulcan_session_core::v1::ids::Seq>,
+) -> Option<usize> {
     events.iter().position(|event| {
         if event.turn_id != Some(turn_id) {
             return false;
@@ -337,7 +403,15 @@ fn explicit_turn_start_index(events: &[ConversationEvent], turn_id: TurnId) -> O
                 input.input_source,
                 UserInputSource::Root | UserInputSource::QueuedScheduled
             ),
-            EventBody::SystemContext(context) => context.context_key == "goal_continuation",
+            // Match the same Goal start authority as SessionDocument::rebuild_derived_state.
+            // 与 SessionDocument::rebuild_derived_state 使用同一 Goal 起点权威。
+            EventBody::SystemContext(context) => {
+                context.context_key == "goal_continuation"
+                    || (context.context_key == "goal_state"
+                        && context.operation
+                            == vulcan_session_core::v1::event::SystemContextOperation::Upsert
+                        && open_start == Some(event.seq))
+            }
             _ => false,
         }
     })

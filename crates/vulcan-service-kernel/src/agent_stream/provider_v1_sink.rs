@@ -10,7 +10,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use sha2::{Digest, Sha256};
 use vulcan_agent_runtime::agent_runtime::events::{
-    PreparedPhysicalApi, ProviderRequestPreparationCandidate, ToolExecutionRecoveryBoundary,
+    PreparedPhysicalApi, ProviderRequestPreparationCandidate, RuntimeEvent,
+    ToolExecutionRecoveryBoundary,
 };
 use vulcan_agent_runtime::agent_runtime::provider_v1_bridge::{
     ProviderV1ApiTerminalFacts, ProviderV1ExternalResourceError, ProviderV1GeneratedResourceError,
@@ -58,7 +59,7 @@ use vulcan_workspace_store::workspace_store::{
 use crate::session_runtime_registry_v1::{
     SessionFlushReason, SessionHandle, SessionMutationAdmission, SessionMutationChange,
     SessionMutationReceipt, SessionPreparedPhysicalRequest, SessionProviderProjectionSnapshot,
-    SessionRuntimeError,
+    SessionRuntimeError, SuccessfulTurnSettlement,
 };
 use crate::state::SharedServiceBridgeState;
 
@@ -264,6 +265,12 @@ pub(crate) enum ProviderV1SinkError {
     /// The host clock could not provide a V1 event timestamp.
     /// 宿主时钟无法提供 V1 事件时间戳。
     Timestamp(String),
+    /// The stream adapter received an event without the required typed tool boundary.
+    /// 流适配器收到的事件缺少必需的强类型工具边界。
+    MissingToolExecutionBoundary,
+    /// Durable tool completion could not update its non-transcript lifecycle surfaces.
+    /// 可靠工具完成后无法更新其非转录生命周期界面。
+    ToolLifecycleProjection(String),
     /// A new request arrived while another physical request remained active.
     /// 另一物理请求仍活动时到达了新请求。
     RequestAlreadyActive,
@@ -374,6 +381,8 @@ impl fmt::Display for ProviderV1SinkError {
         match self {
             Self::Runtime(error) => write!(formatter, "{error}"),
             Self::Timestamp(error) => write!(formatter, "V1 timestamp acquisition failed: {error}"),
+            Self::MissingToolExecutionBoundary => formatter.write_str("The V1 tool event has no typed execution boundary."),
+            Self::ToolLifecycleProjection(error) => write!(formatter, "V1 tool lifecycle projection failed: {error}"),
             Self::RequestAlreadyActive => {
                 formatter.write_str("A V1 Provider request is already active.")
             }
@@ -1313,13 +1322,59 @@ impl ProviderV1StreamSink {
         let has_promoted_in_turn_inputs = !api_terminal.value.promoted_input_seqs.is_empty();
         self.api_terminal_completion = Some(api_terminal);
         if closes_logical_turn && !has_promoted_in_turn_inputs {
+            // Settlement atomically chooses closure or child-return continuation, without a read/write gap.
+            // 结算原子选择关闭或子任务回流续跑，不留下读写间隙。
             let receipt = self
                 .handle
                 .complete_successful_turn(completed_at_ms)
                 .await?;
-            self.turn_completion = Some(receipt);
+            match receipt.value {
+                SuccessfulTurnSettlement::Completed(value) => {
+                    self.turn_completion = Some(SessionMutationReceipt {
+                        value,
+                        revision: receipt.revision,
+                        changed_event_seqs: receipt.changed_event_seqs,
+                        flush_reason: receipt.flush_reason,
+                    });
+                }
+                // Terminal handling reads pending returns from the owner after releasing admission.
+                // 终态处理释放准入后从所有者读取待回流结果，不保留可能过期的快照。
+                SuccessfulTurnSettlement::SubagentReturn => {}
+            }
         }
         Ok(ProviderV1TerminalOutcome::Completed)
+    }
+
+    /// Commits one V1 tool event, then updates lifecycle surfaces before its caller acknowledges it.
+    /// 提交一个 V1 工具事件，然后在调用方确认前更新生命周期界面。
+    ///
+    /// Parameters: app emits lifecycle deltas, state owns live surfaces, event is the executor's exact event,
+    /// and now_ms timestamps the V1 mutation. Returns the durable boundary outcome or an explicit error.
+    /// 参数：app 发射生命周期增量，state 持有实时界面，event 是执行器的精确事件，
+    /// now_ms 为 V1 修改提供时间戳。返回可靠边界结果或显式错误。
+    pub(crate) async fn apply_tool_event(
+        &mut self,
+        app: &vulcan_service_api::ServiceEventEmitter,
+        state: &SharedServiceBridgeState,
+        event: &RuntimeEvent,
+        now_ms: i64,
+    ) -> Result<ProviderV1ToolBoundaryOutcome, ProviderV1SinkError> {
+        // boundary is the sole typed durability source, not reconstructed display metadata.
+        // boundary 是唯一的强类型可靠性来源，不是由显示元数据重建的内容。
+        let boundary = event
+            .tool_execution_boundary
+            .as_ref()
+            .ok_or(ProviderV1SinkError::MissingToolExecutionBoundary)?;
+        // outcome is available only after persistence succeeds; failed boundaries must not publish lifecycle changes.
+        // outcome 仅在持久化成功后可用；失败边界不得发布生命周期变更。
+        let outcome = self.apply_tool_boundary(boundary, now_ms).await?;
+        // This projector owns only live resources and request progress, never legacy transcript persistence.
+        // 此投影器仅拥有实时资源和请求进度，不负责旧转录持久化。
+        // Keeping it inside the public V1 entry prevents callers' early returns from skipping close/spawn deltas.
+        // 将其放在公开 V1 入口内，防止调用方提前返回时跳过关闭或创建增量。
+        super::append_runtime_event_projection(app, state, self.handle.session_id(), event)
+            .map_err(ProviderV1SinkError::ToolLifecycleProjection)?;
+        Ok(outcome)
     }
 
     /// Applies one exact tool boundary through Prepared, Running, and terminal on one event seq.
@@ -1334,7 +1389,7 @@ impl ProviderV1StreamSink {
     /// 返回值
     /// Returns only after the exact existing execution barrier is represented by a durable V1 revision.
     /// 仅在精确的既有执行边界被一个可靠 V1 修订表达后返回。
-    pub(crate) async fn apply_tool_boundary(
+    async fn apply_tool_boundary(
         &mut self,
         boundary: &ToolExecutionRecoveryBoundary,
         now_ms: i64,
@@ -1774,13 +1829,13 @@ mod tests {
     use vulcan_session_core::v1::context::LockedBaselineProjection;
     use vulcan_session_core::v1::document::{
         ClientInputSubmission, FlushCandidate, IdempotentMutation, PrepareAndStartApiInput,
-        SessionDocument,
+        SessionDocument, SubagentReturnBuildRequest,
     };
     use vulcan_session_core::v1::event::{
         ApiEndReason, ApiPurposeKind, ApiRequestSnapshot, ApiTimings, ConversationEvent, EventBody,
         ExternalResourceKind, ProviderProjectionProof,
     };
-    use vulcan_session_core::v1::ids::{ClientActionId, Seq};
+    use vulcan_session_core::v1::ids::{ClientActionId, Seq, SubagentTaskId};
     use vulcan_session_core::v1::projection::provider_visible_fingerprint;
     use vulcan_session_core::v1::stats::UsageSnapshot;
     use vulcan_workbench_model::SessionId;
@@ -2104,6 +2159,263 @@ mod tests {
         }
     }
 
+    /// Captures navigation pushes and checks they never precede durable V1 tool completion.
+    /// 捕获导航推送，并检查推送不会早于可靠的 V1 工具完成。
+    struct ToolLifecycleEventSink {
+        /// Parent ledger that must already contain the completed tool when closure is published.
+        /// 发布关闭状态时必须已包含完成工具的父账本。
+        handle: Arc<SessionHandle>,
+        /// Navigation states observed without opening or refreshing any child panel.
+        /// 未打开或刷新任何子面板时观察到的导航状态。
+        states: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl vulcan_service_api::ServiceEventSink for ToolLifecycleEventSink {
+        /// Records each child status; parameters contain the service event and no value is returned.
+        /// 记录每个子任务状态；参数包含服务事件，无返回值。
+        fn emit_service_event(&self, event: vulcan_service_api::ServiceEvent) {
+            if let vulcan_service_api::ServiceEvent::WorkbenchDelta(envelope) = event
+                && let vulcan_service_api::WorkbenchDelta::SubagentNavigationChanged(delta) =
+                    envelope.delta
+                && let Some(navigation) = delta.subagent_navigation
+            {
+                for task in navigation.tasks {
+                    if task.run_state == "closed" {
+                        self.handle.read(|document| {
+                            assert_eq!(document.memory_revision(), document.durable_revision());
+                            assert!(document.events().iter().any(|event| matches!(
+                                &event.event, EventBody::ToolCall(tool) if tool.status == ToolCallStatus::Completed
+                            )));
+                        }).expect("closed navigation must follow durable tool completion");
+                    }
+                    self.states
+                        .lock()
+                        .expect("captured states")
+                        .push(task.run_state);
+                }
+            }
+        }
+    }
+
+    /// Exercises the real V1 event handler after closing a live child, including pending-peer and rejected-boundary cases.
+    /// 关闭实时子任务后执行真实 V1 事件处理入口，包含同批工具未完成与边界被拒绝的情况。
+    /// Parameters: tool_call_count selects one or two tools; start_close_tool controls whether completion is admissible.
+    /// 参数：tool_call_count 选择一个或两个工具；start_close_tool 控制完成边界是否满足准入条件。
+    /// Returns: none; asserts navigation and cache changes only follow successful durable tool completion.
+    /// 返回值：无；断言导航与缓存变化只能发生在工具可靠完成后。
+    async fn assert_v1_close_agent_navigation(tool_call_count: usize, start_close_tool: bool) {
+        use crate::agent_stream::{
+            ProviderTelemetryHookGuard, handle_webui_detached_child_execution_event,
+        };
+        use crate::tests::test_support::{
+            seed_test_live_subagent_registry_from_panel_states,
+            test_service_state_with_parent_session,
+        };
+        use vulcan_agent_runtime::agent_runtime::events::{
+            ExecutionStreamEvent, RuntimeEvent, RuntimeEventKind,
+        };
+        use vulcan_agent_runtime::agent_runtime::provider_tool_event_format::{
+            attach_tool_name_to_runtime_metadata, build_tool_result_runtime_metadata,
+        };
+        use vulcan_workbench_model::{SubagentTaskPanelState, SubagentTaskRunState};
+
+        // handle and sink share the real V1 persistence owner for this execution.
+        // handle 和 sink 共享本次执行的真实 V1 持久化所有者。
+        let handle = published_open_turn();
+        let mut sink = ProviderV1StreamSink::new(
+            Arc::clone(&handle),
+            Arc::new(ProjectResourceCatalogRegistry::default()),
+        );
+        prepare_sink_request(&handle, &mut sink);
+        assert!((1..=2).contains(&tool_call_count));
+        sink.accept_terminal(terminal_facts(tool_call_count))
+            .await
+            .expect("tool-bearing terminal");
+        // request is prepared and started before close_agent changes the live registry.
+        // request 在 close_agent 改变实时注册表前完成准备和启动。
+        let request =
+            recovery_request("close-1", "close_agent", json!({"target": "standby-agent"}));
+        // requests can include an unfinished sibling, so closure must not wait for the whole API batch.
+        // requests 可包含尚未完成的同批工具，因此关闭同步不得等待整批 API 完成。
+        let mut requests = vec![request.clone()];
+        if tool_call_count == 2 {
+            requests.push(recovery_request("list-2", "list_agents", json!({})));
+        }
+        sink.apply_tool_boundary(&ToolExecutionRecoveryBoundary::BatchPrepared(requests), 9)
+            .await
+            .expect("prepared close");
+        if start_close_tool {
+            sink.apply_tool_boundary(
+                &ToolExecutionRecoveryBoundary::Started {
+                    request: request.request.clone(),
+                    binding_fingerprint: request.binding_fingerprint.clone(),
+                },
+                10,
+            )
+            .await
+            .expect("running close");
+        }
+        // child is completed but still open, exactly matching the reported standby state.
+        // child 已完成但仍开放，与报告中的待命状态一致。
+        let child = SubagentTaskPanelState {
+            task_id: SessionId::new_v4(),
+            parent_session_id: handle.session_id(),
+            public_task_id: String::from("standby-agent"),
+            subagent_label: String::from("standby-agent"),
+            description: None,
+            run_state: SubagentTaskRunState::Completed,
+            result_text: String::from("online"),
+            conversation_state: None,
+        };
+        // service_state seeds the production runtime registry, not a synthetic close projection.
+        // service_state 填充生产运行时注册表，而不是合成关闭投影。
+        let mut service_state = test_service_state_with_parent_session(handle.session_id());
+        seed_test_live_subagent_registry_from_panel_states(
+            &mut service_state,
+            handle.session_id(),
+            std::slice::from_ref(&child),
+        );
+        service_state.subagent_surface_detail_cache.insert(
+            child.task_id,
+            crate::state::WebuiSubagentSurfaceDetailCacheEntry {
+                task_state: child.clone(),
+                last_access_ms: 0,
+            },
+        );
+        // runtime performs the actual close; state retains the same live cache used by the event handler.
+        // runtime 执行真实关闭；state 保留事件处理器使用的同一实时缓存。
+        let runtime = service_state.agent_runtime.clone().expect("seeded runtime");
+        let state = Arc::new(std::sync::Mutex::new(service_state));
+        // capture observes the same service deltas consumed by the frontend list.
+        // capture 观察前端列表消费的同一类服务增量。
+        let capture = Arc::new(ToolLifecycleEventSink {
+            handle: Arc::clone(&handle),
+            states: std::sync::Mutex::new(Vec::new()),
+        });
+        // app forwards service deltas to the test observer without any navigation refresh.
+        // app 将服务增量转发给测试观察器，不触发任何导航刷新。
+        let app = vulcan_service_api::ServiceEventEmitter::new(vec![capture.clone()]);
+        crate::emit_webui_subagent_navigation_changed_delta_for_parent(
+            &app,
+            &state,
+            handle.session_id(),
+        )
+        .expect("initial standby navigation");
+        // closed is the real tool result produced after the registry archive commits.
+        // closed 是注册表归档提交后产出的真实工具结果。
+        let closed = runtime
+            .task_runtime
+            .invoke_close_agent(handle.session_id(), json!({"target": "standby-agent"}))
+            .await
+            .expect("close actual child");
+        // host_result retains the runtime producer's exact kind and payload without synthesizing closure fields.
+        // host_result 保留运行时生产者的精确 kind 和 payload，不合成关闭字段。
+        let host_result = closed.host_result.expect("close host result");
+        // result preserves the production executor's typed tool completion envelope.
+        // result 保留生产执行器的强类型工具完成信封。
+        let result = ToolInvocationResult {
+            tool_call_id: String::from("close-1"),
+            tool_name: String::from("close_agent"),
+            model_output: closed.model_output.to_string(),
+            host_result: Some(json!({"kind": host_result.kind, "payload": host_result.payload})),
+            is_error: false,
+        };
+        // metadata is generated with the same formatter as StreamingRuntimeToolExecutor.
+        // metadata 由 StreamingRuntimeToolExecutor 使用的同一格式化器生成。
+        let metadata = attach_tool_name_to_runtime_metadata(
+            Some(build_tool_result_runtime_metadata(
+                "close-1",
+                result.host_result.as_ref(),
+                "completed",
+            )),
+            "close_agent",
+        );
+        // event carries both the typed V1 boundary and the executor's canonical display metadata.
+        // event 同时携带强类型 V1 边界与执行器的规范显示元数据。
+        let event = RuntimeEvent::new(
+            RuntimeEventKind::ToolFinished,
+            "工具返回 · close-1",
+            "closed",
+        )
+        .with_tool_execution_boundary(ToolExecutionRecoveryBoundary::Finished(result))
+        .with_metadata(metadata);
+        // telemetry uses the same service state as the production detached-event entry.
+        // telemetry 使用与生产独立事件入口相同的服务状态。
+        let mut telemetry =
+            ProviderTelemetryHookGuard::new_with_persistence(Arc::clone(&state), None);
+        // handled must complete all lifecycle projection before returning to the executor.
+        // handled 必须在返回执行器前完成全部生命周期投影。
+        let handled = handle_webui_detached_child_execution_event(
+            &app,
+            &state,
+            &runtime,
+            "close-execution",
+            &mut telemetry,
+            &mut sink,
+            ExecutionStreamEvent::RuntimeEvent {
+                session_id: handle.session_id(),
+                event,
+            },
+        )
+        .await;
+        if !start_close_tool {
+            handled.expect_err("an unstarted close cannot be durably completed");
+            assert_eq!(
+                *capture.states.lock().expect("captured navigation states"),
+                vec![String::from("completed")]
+            );
+            assert!(
+                state
+                    .lock()
+                    .expect("service state")
+                    .subagent_surface_detail_cache
+                    .contains_key(&child.task_id)
+            );
+            return;
+        }
+        handled.expect("real V1 event handler");
+        assert_eq!(
+            *capture.states.lock().expect("captured navigation states"),
+            vec![String::from("completed"), String::from("closed")]
+        );
+        assert!(
+            !state
+                .lock()
+                .expect("service state")
+                .subagent_surface_detail_cache
+                .contains_key(&child.task_id)
+        );
+        assert_eq!(sink.api_terminal_completion.is_none(), tool_call_count == 2);
+        assert_eq!(sink.active.is_some(), tool_call_count == 2);
+    }
+
+    /// Verifies closure is pushed immediately through the real stream entry without opening the child panel.
+    /// 验证关闭通过真实流入口立即推送，无需打开子面板。
+    /// Parameters: none. Returns: none; fails if the navigation remains in standby.
+    /// 参数：无。返回值：无；若导航仍为待命则失败。
+    #[tokio::test]
+    async fn v1_close_agent_event_pushes_closed_navigation_without_reopening_panel() {
+        assert_v1_close_agent_navigation(1, true).await;
+    }
+
+    /// Verifies a closed child is published while another tool in the same physical API remains unfinished.
+    /// 验证同一物理 API 中仍有未完成工具时，也会发布子任务关闭状态。
+    /// Parameters: none. Returns: none; fails if projection waits for the remaining tool or API completion.
+    /// 参数：无。返回值：无；若投影等待剩余工具或 API 完成则失败。
+    #[tokio::test]
+    async fn v1_close_agent_event_pushes_closed_navigation_before_peer_tool_finishes() {
+        assert_v1_close_agent_navigation(2, true).await;
+    }
+
+    /// Verifies a rejected V1 completion does not publish closure or evict the child detail cache.
+    /// 验证被拒绝的 V1 完成边界不会发布关闭状态或清除子任务详情缓存。
+    /// Parameters: none. Returns: none; fails if lifecycle changes precede durable completion.
+    /// 参数：无。返回值：无；若生命周期变化早于可靠完成则失败。
+    #[tokio::test]
+    async fn v1_close_agent_event_rejects_navigation_projection_when_boundary_fails() {
+        assert_v1_close_agent_navigation(1, false).await;
+    }
+
     /// Verifies api_started is durable before semantic streaming and terminal closure.
     /// 验证 api_started 在语义流与终态闭合前已经可靠落盘。
     #[tokio::test]
@@ -2180,6 +2492,352 @@ mod tests {
         let consumed = sink.take_finished_durability();
         assert!(consumed.api_terminal.is_none());
         assert!(consumed.turn_completion.is_none());
+    }
+
+    /// Verifies a child return committed during the parent API is transferred to stream-finished dispatch instead of closing the Turn.
+    /// 验证父级 API 期间提交的子代理回流会转交流终态分发，而不是关闭回合。
+    #[tokio::test]
+    async fn child_return_during_parent_api_defers_turn_completion_to_exact_continuation() {
+        // childHandle produces the exact terminal child facts required by the parent return contract.
+        // childHandle 产生父级回流契约要求的精确子会话终态事实。
+        let child_handle = published_open_turn();
+        let mut child_sink = ProviderV1StreamSink::new(
+            Arc::clone(&child_handle),
+            Arc::new(ProjectResourceCatalogRegistry::default()),
+        );
+        prepare_sink_request(&child_handle, &mut child_sink);
+        child_sink
+            .append_assistant_delta("durable child result", 5)
+            .expect("append child assistant result");
+        child_sink
+            .accept_terminal(terminal_facts(0))
+            .await
+            .expect("complete child turn");
+        // childDurability retains both the child final Turn and its exact assistant source seq.
+        // childDurability 同时保留子会话最终回合及其精确 assistant 来源 seq。
+        let child_durability = child_sink.take_finished_durability();
+        let child_turn_id = child_durability
+            .api_terminal
+            .as_ref()
+            .expect("child API terminal")
+            .value
+            .turn_id;
+        let child_assistant_seq = child_durability
+            .completed_assistant_text
+            .as_ref()
+            .expect("child assistant semantic")
+            .seq;
+        let return_input = child_handle
+            .read(|document| {
+                document.build_subagent_return_input(SubagentReturnBuildRequest {
+                    final_turn_id: child_turn_id,
+                    child_task_id: SubagentTaskId::try_new("child-return-during-parent-api")?,
+                    source_assistant_text_seq: child_assistant_seq,
+                })
+            })
+            .expect("read child document")
+            .expect("build exact child return");
+
+        // parentSink remains physically active when the child return enters the same logical Turn.
+        // parentSink 在子代理回流进入同一逻辑回合时仍持有活动物理 API。
+        let parent_handle = published_open_turn();
+        let mut parent_sink = ProviderV1StreamSink::new(
+            Arc::clone(&parent_handle),
+            Arc::new(ProjectResourceCatalogRegistry::default()),
+        );
+        prepare_sink_request(&parent_handle, &mut parent_sink);
+        parent_sink
+            .append_assistant_delta("parent still owns the API", 5)
+            .expect("append parent assistant text");
+        let appended_return = parent_handle
+            .append_subagent_return_with_stats(return_input, 12)
+            .expect("append child return to active parent Turn")
+            .value;
+        // parentTerminal ends after the child return and releases only the physical API.
+        // parentTerminal 在子代理回流后结束，且只释放物理 API。
+        let mut parent_terminal = terminal_facts(0);
+        parent_terminal.completed_at_ms = 20;
+        parent_terminal.timing.completed_at_ms = Some(20);
+        parent_sink
+            .accept_terminal(parent_terminal)
+            .await
+            .expect("complete parent physical API");
+
+        let durability = parent_sink.take_finished_durability();
+        assert!(
+            durability.turn_completion.is_none(),
+            "a pending child return must keep the parent logical Turn open"
+        );
+        let pending_dispatch = parent_handle
+            .read(|document| document.pending_subagent_return_dispatch())
+            .expect("read parent document")
+            .expect("validate pending child return");
+        assert_eq!(pending_dispatch.as_ref(), Some(&appended_return));
+    }
+
+    /// Exercises late completion through the production listener with or without a durable child receipt.
+    /// 有或没有可靠子任务回执时，通过生产监听器验证迟到完成事件。
+    /// Parameters: durable_child selects successful persistence or an explicit missing-receipt failure.
+    /// 参数：durable_child 选择持久化成功或显式缺失回执失败。
+    /// Returns: none; verifies immediate terminal pushes, cleanup, and exact continuation input.
+    /// 返回值：无；验证立即终态推送、清理与精确续跑输入。
+    async fn assert_late_child_completion_lifecycle(durable_child: bool) {
+        use crate::agent_stream::{
+            ProviderTelemetryHookGuard, handle_webui_detached_subagent_task_event,
+        };
+        use crate::tests::test_support::{
+            TestControllerRuntimeRoot, seed_test_live_subagent_registry_from_panel_states,
+            test_service_state_with_parent_session,
+        };
+        use vulcan_agent_runtime::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
+        use vulcan_agent_runtime::agent_runtime::task_runtime::DetachedTaskRuntimeEvent;
+        use vulcan_workbench_model::{
+            SessionRunPhase, SubagentTaskPanelState, SubagentTaskRunState,
+        };
+
+        // parent_handle has already durably closed the initial user turn.
+        // parent_handle 已经可靠关闭最初的用户回合。
+        let parent_handle = published_open_turn();
+        let mut parent_sink = ProviderV1StreamSink::new(
+            Arc::clone(&parent_handle),
+            Arc::new(ProjectResourceCatalogRegistry::default()),
+        );
+        prepare_sink_request(&parent_handle, &mut parent_sink);
+        parent_sink
+            .append_assistant_delta("child is still working", 5)
+            .unwrap();
+        parent_sink
+            .accept_terminal(terminal_facts(0))
+            .await
+            .unwrap();
+        // child_sink retains the exact source receipt used by the production completion path.
+        // child_sink 保留生产完成路径使用的精确来源回执。
+        let child_handle = published_open_turn();
+        let mut child_sink = ProviderV1StreamSink::new(
+            Arc::clone(&child_handle),
+            Arc::new(ProjectResourceCatalogRegistry::default()),
+        );
+        if durable_child {
+            prepare_sink_request(&child_handle, &mut child_sink);
+            child_sink
+                .append_assistant_delta("LATE_CHILD_OK", 5)
+                .unwrap();
+            child_sink.accept_terminal(terminal_facts(0)).await.unwrap();
+        }
+        // child is terminal in the real registry while an existing listener still makes the projection active.
+        // child 在真实注册表中已终态，但现存监听器仍会让投影显示活动。
+        let child = SubagentTaskPanelState {
+            task_id: child_handle.session_id(),
+            parent_session_id: parent_handle.session_id(),
+            public_task_id: String::from("late-child"),
+            subagent_label: String::from("late-child"),
+            description: None,
+            run_state: SubagentTaskRunState::Completed,
+            result_text: String::from("LATE_CHILD_OK"),
+            conversation_state: None,
+        };
+        let mut service_state = test_service_state_with_parent_session(parent_handle.session_id());
+        seed_test_live_subagent_registry_from_panel_states(
+            &mut service_state,
+            parent_handle.session_id(),
+            std::slice::from_ref(&child),
+        );
+        service_state
+            .session_runtime_registry
+            .register(Arc::clone(&parent_handle))
+            .unwrap();
+        service_state
+            .detached_subagent_task_listeners
+            .insert(child.task_id, String::from("late-execution"));
+        // A stopped parent must retain the result without invoking an external Provider during this test.
+        // 测试中的已停止父会话必须保留结果，但不调用外部 Provider。
+        service_state
+            .workspace_snapshot
+            .as_mut()
+            .unwrap()
+            .session_run_phases
+            .insert(parent_handle.session_id(), SessionRunPhase::Stopped);
+        let runtime = service_state.agent_runtime.clone().unwrap();
+        let state = Arc::new(std::sync::Mutex::new(service_state));
+        let capture = Arc::new(ToolLifecycleEventSink {
+            handle: Arc::clone(&parent_handle),
+            states: Default::default(),
+        });
+        let app = vulcan_service_api::ServiceEventEmitter::new(vec![capture.clone()]);
+        crate::emit_webui_subagent_navigation_changed_delta_for_parent(
+            &app,
+            &state,
+            parent_handle.session_id(),
+        )
+        .unwrap();
+        // controller_root owns isolated offline storage; it never touches the user's session files.
+        // controller_root 持有隔离离线存储，不接触用户会话文件。
+        let controller_root = TestControllerRuntimeRoot::new(parent_handle.session_id());
+        let controller = controller_root.controller_runtime_handle();
+        let mut telemetry =
+            ProviderTelemetryHookGuard::new_with_persistence(Arc::clone(&state), None);
+        let event = RuntimeEvent::new(RuntimeEventKind::DelegateFinished, "Child finished", "Completed").with_metadata(Some(json!({
+            "kind": "subagent_task", "payload": {
+                "task_id": "late-child", "subagent_task_id": child.task_id.to_string(),
+                "execution_id": "late-execution", "execution_status": "completed", "subagent": "late-child", "result": "LATE_CHILD_OK"
+            }
+        })));
+        let handled = handle_webui_detached_subagent_task_event(
+            &app,
+            &state,
+            &controller,
+            &runtime,
+            child.task_id,
+            "late-execution",
+            child_handle.as_ref(),
+            &mut telemetry,
+            &mut child_sink,
+            DetachedTaskRuntimeEvent::ParentRuntime {
+                parent_session_id: parent_handle.session_id(),
+                event,
+            },
+        )
+        .await;
+        assert!(
+            !state
+                .lock()
+                .unwrap()
+                .detached_subagent_task_listeners
+                .contains_key(&child.task_id)
+        );
+        assert_eq!(
+            capture.states.lock().unwrap().last().map(String::as_str),
+            Some("completed")
+        );
+        if durable_child {
+            handled.expect("late completion must be persisted without a user prompt");
+            let receipt = parent_handle
+                .read(|doc| doc.pending_subagent_return_dispatch())
+                .unwrap()
+                .unwrap()
+                .expect("pending return");
+            let authority =
+                crate::webui_prompt_lifecycle::subagent_return_dispatch_authority_from_v1_handle(
+                    &parent_handle,
+                    &receipt,
+                )
+                .unwrap();
+            assert_eq!(authority.content, "LATE_CHILD_OK");
+            prepare_sink_request(&parent_handle, &mut parent_sink);
+            assert!(
+                parent_handle
+                    .read(|doc| doc.active_api().is_some())
+                    .unwrap()
+            );
+        } else {
+            assert!(
+                handled
+                    .unwrap_err()
+                    .contains("no exact durable V1 final assistant receipt")
+            );
+        }
+    }
+
+    /// Verifies late successful completion publishes terminal navigation and retains a dispatchable return.
+    /// 验证迟到成功完成会发布终态导航并保留可分发的回流。
+    /// Parameters: none. Returns: none; assertions cover the production listener entry.
+    /// 参数：无。返回值：无；断言覆盖生产监听器入口。
+    #[tokio::test]
+    async fn late_child_completion_pushes_state_without_new_user_input() {
+        assert_late_child_completion_lifecycle(true).await;
+    }
+
+    /// Verifies return persistence errors cannot suppress terminal navigation or leak the listener.
+    /// 验证回流持久化错误不能阻断终态导航或泄漏监听器。
+    /// Parameters: none. Returns: none; asserts explicit failure and successful lifecycle cleanup.
+    /// 参数：无。返回值：无；断言显式失败以及生命周期成功清理。
+    #[tokio::test]
+    async fn late_child_completion_error_still_pushes_state() {
+        assert_late_child_completion_lifecycle(false).await;
+    }
+
+    /// Executes native Goal mutations while the production V1 sink owns a running tool boundary.
+    /// 在生产 V1 sink 持有运行中工具边界时执行原生 Goal 修改。
+    /// Parameters: none. Returns: none; asserts creation, completion, replacement and durable tool closure.
+    /// 参数：无。返回值：无；断言创建、完成、替换以及可靠工具闭合。
+    #[tokio::test]
+    async fn native_goal_creation_inside_v1_tool_api_succeeds() {
+        use vulcan_agent_runtime::tooling::native::{NativeGoalStatus, NativeGoalTerminalStatus};
+        // handle owns the same active physical API observed by the native Goal runtime.
+        // handle 持有原生 Goal 运行时观察到的同一个活动物理 API。
+        let handle = published_open_turn();
+        let mut sink = ProviderV1StreamSink::new(
+            Arc::clone(&handle),
+            Arc::new(ProjectResourceCatalogRegistry::default()),
+        );
+        prepare_sink_request(&handle, &mut sink);
+        sink.accept_terminal(terminal_facts(1)).await.unwrap();
+        let request = recovery_request(
+            "goal-create",
+            "create_goal",
+            json!({"objective": "test goal"}),
+        );
+        sink.apply_tool_boundary(
+            &ToolExecutionRecoveryBoundary::BatchPrepared(vec![request.clone()]),
+            9,
+        )
+        .await
+        .unwrap();
+        sink.apply_tool_boundary(
+            &ToolExecutionRecoveryBoundary::Started {
+                request: request.request,
+                binding_fingerprint: request.binding_fingerprint,
+            },
+            10,
+        )
+        .await
+        .unwrap();
+        let service_state =
+            crate::tests::test_support::test_service_state_with_parent_session(handle.session_id());
+        service_state
+            .session_runtime_registry
+            .register(Arc::clone(&handle))
+            .unwrap();
+        let state = Arc::new(std::sync::Mutex::new(service_state));
+        let runtime = crate::session_goals::session_v1_native_goal_runtime(
+            state,
+            vulcan_service_api::ServiceEventEmitter::new(Vec::new()),
+        );
+        let goal = runtime
+            .create_goal(handle.session_id(), String::from("test goal"), Some(2000))
+            .await
+            .expect("create_goal inside its running V1 tool");
+        assert_eq!(goal.status, NativeGoalStatus::Active);
+        runtime
+            .update_goal_status(handle.session_id(), NativeGoalTerminalStatus::Complete)
+            .await
+            .unwrap();
+        let replacement = runtime
+            .create_goal(handle.session_id(), String::from("replacement goal"), None)
+            .await
+            .expect("replace completed goal inside tool API");
+        assert_ne!(goal.goal_id, replacement.goal_id);
+        // Tool completion must still target the original active API after Goal metadata changed.
+        // Goal 元数据变化后，工具完成仍必须指向原有活动 API。
+        sink.apply_tool_boundary(
+            &ToolExecutionRecoveryBoundary::Finished(ToolInvocationResult {
+                tool_call_id: String::from("goal-create"),
+                tool_name: String::from("create_goal"),
+                model_output: String::from("{\"ok\":true}"),
+                host_result: None,
+                is_error: false,
+            }),
+            12,
+        )
+        .await
+        .unwrap();
+        handle
+            .read(|document| {
+                assert!(document.active_api().is_none());
+                assert!(document.active_turn().is_some_and(|turn| !turn.closed));
+                assert_eq!(document.memory_revision(), document.durable_revision());
+            })
+            .unwrap();
     }
 
     /// Verifies an in-turn supplement closes one physical API without closing the logical Turn.

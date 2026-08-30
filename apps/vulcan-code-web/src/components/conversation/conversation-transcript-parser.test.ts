@@ -64,20 +64,15 @@ describe("conversation transcript parser source identity", () => {
       body: "provider_id=command-code\nconnection_id=command-code-account\nmodel_id=deepseek",
       metadata: {
         notice_kind: "model_switch",
-        activation: "next_provider_request",
-        provider_id: "command-code",
-        provider_name: "Command Code",
-        connection_id: "command-code-account",
-        connection_name: "主账号",
-        model_id: "deepseek",
-        model_name: "DeepSeek",
+        previous_model_label: "OpenAI / GPT-5",
+        current_model_label: "Command Code / DeepSeek",
       },
     };
     // translations proves historical records use the active UI locale instead of persisted prose.
     // translations 证明历史记录使用当前界面语言，而不是持久化文案。
     const translations: Partial<Record<TranslationKey, string>> = {
-      "conversation.modelSwitch.title": "模型选择",
-      "conversation.modelSwitch.nextProviderRequest": "已选择 {provider} / {account} / {model}；下一次真实 Provider 请求生效。",
+      "conversation.modelSwitch.title": "模型切换",
+      "conversation.modelSwitch.changed": "模型已从 {previous} 切换为 {current}。",
     };
 
     const [block] = parseConversationBlocks(
@@ -86,8 +81,8 @@ describe("conversation transcript parser source identity", () => {
     );
 
     expect(block?.kind).toBe("notice");
-    expect(block?.title).toBe("模型选择");
-    expect(block?.summary).toBe("已选择 Command Code / 主账号 / DeepSeek；下一次真实 Provider 请求生效。");
+    expect(block?.title).toBe("模型切换");
+    expect(block?.summary).toBe("模型已从 OpenAI / GPT-5 切换为 Command Code / DeepSeek。");
     expect(block?.sourceMessageId).toBe("model-switch-1");
   });
 

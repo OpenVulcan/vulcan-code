@@ -13,6 +13,189 @@ use crate::session_runtime_registry_v1::{
     SessionFlushReason, SessionHandle, SessionMutationAdmission, SessionMutationChange,
 };
 
+/// Metadata-only capability access that never creates a conversation runtime.
+/// 纯元数据能力访问，绝不创建会话运行时。
+pub(crate) struct SessionProviderToolConfiguration {
+    /// Exact indexed storage authority for an unloaded session.
+    /// 未加载会话的精确索引存储权威。
+    locator: vulcan_workspace_store::workspace_store::SessionV1StorageLocator,
+    /// Shared registry serializes configuration access with physical loading.
+    /// 共享注册表串行化配置访问与物理加载。
+    registry: std::sync::Arc<crate::session_runtime_registry_v1::SessionRuntimeRegistry>,
+    /// Stable identity used for the resident owner and unloaded admission slot.
+    /// 常驻 owner 与未加载准入槽使用的稳定身份。
+    session_id: crate::SessionId,
+    /// Prevents archive/delete from retiring the owner during configuration publication.
+    /// 防止配置发布过程中归档/删除退役该 owner。
+    _lifecycle: crate::session_runtime_registry_v1::SessionLifecycleTransitionGuard,
+}
+
+impl SessionProviderToolConfiguration {
+    /// Resolves one configuration owner from `state` and `session_id`, without loading history.
+    /// 从 `state` 与 `session_id` 解析配置 owner，不加载历史。
+    /// Returns an access guard retained through configuration validation and publication.
+    /// 返回贯穿配置校验与发布过程的访问守卫。
+    pub(crate) async fn resolve(
+        state: &crate::SharedServiceBridgeState,
+        session_id: crate::SessionId,
+    ) -> Result<Self, String> {
+        // Capture only the index controller and registry, never the interaction runtime.
+        // 仅捕获索引控制器和注册表，不获取交互运行时。
+        let (controller, registry) = {
+            let guard = state
+                .lock()
+                .map_err(|error| format!("Failed to lock service state: {error}"))?;
+            (
+                guard
+                    .controller_runtime
+                    .clone()
+                    .ok_or_else(|| String::from("Controller runtime is not ready."))?,
+                std::sync::Arc::clone(&guard.session_runtime_registry),
+            )
+        };
+        // Lifecycle exclusion precedes exact index lookup, closing the delete/read race.
+        // 生命周期排除先于精确索引查询，封闭删除/读取竞争窗口。
+        let lifecycle = registry
+            .acquire_lifecycle_transition(session_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        let locator = vulcan_workspace_store::workspace_store::locate_session_v1_storage(
+            &controller,
+            &session_id.to_string(),
+        )
+        .await
+        .map_err(|error| format!("定位会话能力配置失败：{error}"))?;
+        Ok(Self {
+            locator,
+            registry,
+            session_id,
+            _lifecycle: lifecycle,
+        })
+    }
+
+    /// Reads the current capability configuration; returns no transcript or Turn-derived data.
+    /// 读取当前能力配置；不返回转录或回合派生数据。
+    pub(crate) fn read(&self) -> Result<ProviderToolSelectionConfig, String> {
+        self.registry.with_configuration_access(
+            self.session_id,
+            |handle| {
+                handle
+                    .read(|document| document.metadata.config.selection.provider_tools.clone())
+                    .map_err(|error| format!("读取会话能力配置失败：{error}"))
+            },
+            || {
+                self.locator
+                    .read_provider_tool_selection()
+                    .map_err(|error| format!("读取会话能力配置失败：{error}"))
+            },
+        )
+    }
+
+    /// Saves `selection` at `now_ms`; returns whether the persisted configuration changed.
+    /// 在 `now_ms` 保存 `selection`；返回持久化配置是否变化。
+    /// Resident mutations share the existing writer; cold writes reserve the physical load slot.
+    /// 常驻修改复用现有写入器；冷写入预留物理加载槽。
+    pub(crate) fn save(
+        &self,
+        selection: ProviderToolSelectionConfig,
+        now_ms: i64,
+    ) -> Result<bool, String> {
+        self.registry.with_configuration_access(
+            self.session_id,
+            |handle| set_provider_tool_selection_v1(handle, selection.clone(), now_ms),
+            || {
+                self.locator
+                    .save_unloaded_provider_tool_selection(selection.clone(), now_ms)
+                    .map_err(|error| format!("保存会话能力配置失败：{error}"))
+            },
+        )
+    }
+
+    /// Explicitly rebuilds capability settings from `selection` at `now_ms`, returning whether changed.
+    /// 于 `now_ms` 从 `selection` 显式重建能力设置，返回是否变化。
+    /// Uses the resident writer or the cold configuration gate; never reconstructs a Turn.
+    /// 使用常驻写入器或冷配置门控；绝不重建回合。
+    pub(crate) fn rebuild(
+        &self,
+        selection: ProviderToolSelectionConfig,
+        now_ms: i64,
+    ) -> Result<bool, String> {
+        self.registry.with_configuration_access(
+            self.session_id,
+            |handle| set_provider_tool_selection_v1(handle, selection.clone(), now_ms),
+            || {
+                self.locator
+                    .rebuild_unloaded_provider_tool_selection(selection.clone(), now_ms)
+                    .map_err(|error| format!("重建会话能力配置失败：{error}"))
+            },
+        )
+    }
+}
+
+/// Applies one initialized V1 Provider-tool selection to the temporary runtime projection.
+/// 把一份已初始化的 V1 Provider 工具选择应用到阶段内运行态投影。
+pub(crate) fn apply_provider_tool_selection_v1(
+    runtime_state: &mut vulcan_workbench_model::SessionRuntimeStateEntry,
+    selection: &vulcan_session_core::v1::config::ProviderToolSelectionConfig,
+) {
+    if !selection.initialized {
+        return;
+    }
+    runtime_state.provider_tool_selections = selection
+        .selections
+        .iter()
+        .map(|entry| {
+            (
+                entry.capability.clone(),
+                vulcan_workbench_model::SessionProviderToolTargetSelection {
+                    connection_id: entry.target.connection_id.clone(),
+                    target_id: entry.target.target_id.clone(),
+                },
+            )
+        })
+        .collect();
+    runtime_state.provider_tool_enabled_capabilities =
+        selection.enabled_capabilities.iter().cloned().collect();
+    runtime_state.media_understanding_modes = selection
+        .media_understanding_modes
+        .iter()
+        .map(|entry| {
+            (
+                entry.capability.clone(),
+                match entry.mode {
+                    vulcan_session_core::v1::config::ProviderMediaUnderstandingMode::ProviderTool => {
+                        vulcan_workbench_model::SessionMediaUnderstandingMode::ProviderTool
+                    }
+                    vulcan_session_core::v1::config::ProviderMediaUnderstandingMode::ModelReplacement => {
+                        vulcan_workbench_model::SessionMediaUnderstandingMode::ModelReplacement
+                    }
+                },
+            )
+        })
+        .collect();
+    runtime_state.provider_extension_target_sets = selection
+        .extension_target_sets
+        .iter()
+        .map(|entry| {
+            (
+                entry.capability.clone(),
+                entry
+                    .targets
+                    .iter()
+                    .map(
+                        |target| vulcan_workbench_model::SessionProviderToolTargetSelection {
+                            connection_id: target.connection_id.clone(),
+                            target_id: target.target_id.clone(),
+                        },
+                    )
+                    .collect(),
+            )
+        })
+        .collect();
+    runtime_state.provider_tool_settings_initialized = true;
+    runtime_state.provider_tool_selections_overridden = selection.overridden;
+}
+
 /// Immutable fallback facts captured from the currently admitted legacy execution projection.
 /// 从当前已准入旧执行投影捕获的不可变回退事实。
 #[derive(Debug, Clone, Default)]
@@ -373,8 +556,116 @@ pub(crate) fn reasoning_effort_level_key(level: ReasoningEffortLevel) -> String 
 
 #[cfg(test)]
 mod tests {
-    //! Durable V1 pending-request service tests.
-    //! 可靠 V1 待生效请求服务测试。
+    //! Durable V1 request and metadata-only capability service tests.
+    //! 可靠 V1 请求与纯元数据能力服务测试。
+
+    /// Exercises cold and resident saves through the same service configuration boundary.
+    /// 通过同一服务配置边界验证冷会话与常驻会话保存。
+    #[tokio::test]
+    async fn capability_metadata_survives_loading_and_later_runtime_flush() {
+        use crate::session_runtime_registry_v1::SessionRuntimeRegistry;
+        use vulcan_workspace_store::workspace_store::{
+            create_session_v1_storage_fixture, load_session_v1_tail,
+        };
+        // The real file backend detects stale-owner overwrites that in-memory mocks would miss.
+        // 真实文件后端可发现内存模拟无法发现的旧 owner 覆盖问题。
+        let temporary = tempfile::tempdir().unwrap();
+        let session_id = SessionId::from_u128(0x62c1);
+        let locator =
+            create_session_v1_storage_fixture(temporary.path(), &session_id.to_string(), 1)
+                .unwrap();
+        let registry = Arc::new(SessionRuntimeRegistry::default());
+        let access = SessionProviderToolConfiguration {
+            locator: locator.clone(),
+            registry: registry.clone(),
+            session_id,
+            _lifecycle: registry
+                .acquire_lifecycle_transition(session_id)
+                .await
+                .unwrap(),
+        };
+        let first = ProviderToolSelectionConfig {
+            initialized: true,
+            overridden: true,
+            ..Default::default()
+        };
+        assert!(access.save(first.clone(), 2).unwrap());
+        assert_eq!(access.read().unwrap(), first);
+        assert!(registry.get(session_id).is_err());
+        let handle = registry
+            .get_or_load(session_id, || {
+                let loaded = load_session_v1_tail(&locator).unwrap();
+                Ok(SessionHandle::new(
+                    session_id,
+                    locator.clone(),
+                    loaded.document,
+                ))
+            })
+            .unwrap();
+        assert_eq!(
+            handle
+                .read(|document| document.metadata.config.selection.provider_tools.clone())
+                .unwrap(),
+            first
+        );
+        let second = ProviderToolSelectionConfig {
+            enabled_capabilities: vec![String::from("search")],
+            ..first
+        };
+        assert!(access.save(second.clone(), 3).unwrap());
+        assert_eq!(
+            handle
+                .read(|document| document.metadata.config.selection.provider_tools.clone())
+                .unwrap(),
+            second
+        );
+        handle
+            .mutate_durable_if_changed(
+                SessionMutationAdmission::MetadataOnly,
+                SessionFlushReason::MetadataChanged,
+                |document| {
+                    if document.set_output_style(Some(String::from("concise")), 4)? {
+                        Ok(SessionMutationChange::Changed(()))
+                    } else {
+                        Ok(SessionMutationChange::Unchanged(()))
+                    }
+                },
+            )
+            .unwrap();
+        handle.flush_all().unwrap();
+        assert_eq!(locator.read_provider_tool_selection().unwrap(), second);
+        assert_eq!(
+            load_session_v1_tail(&locator)
+                .unwrap()
+                .document
+                .metadata
+                .config
+                .selection
+                .provider_tools,
+            second
+        );
+        // Rebuild a resident owner through its writer so later flushes cannot resurrect old overrides.
+        // 通过常驻 owner 的写入器重建，避免后续 flush 复活旧覆盖值。
+        let defaults = ProviderToolSelectionConfig {
+            initialized: true,
+            ..Default::default()
+        };
+        assert!(access.rebuild(defaults.clone(), 5).unwrap());
+        assert_eq!(access.read().unwrap(), defaults);
+        handle.flush_all().unwrap();
+        assert_eq!(locator.read_provider_tool_selection().unwrap(), defaults);
+        assert_eq!(
+            load_session_v1_tail(&locator)
+                .unwrap()
+                .document
+                .metadata
+                .config
+                .selection
+                .output_style
+                .as_deref(),
+            Some("concise")
+        );
+    }
 
     use super::*;
     use crate::session_runtime_registry_v1::SessionPersistenceBackend;

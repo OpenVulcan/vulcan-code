@@ -63,6 +63,72 @@ fn install_test_subagent_catalog(task_runtime: &TaskRuntime) {
         .expect("test catalog should install");
 }
 
+/// Stores one running child-agent record so wait_agent tests exercise a real live target.
+/// 保存一条运行中的子代理记录，使 wait_agent 测试覆盖真实活动目标。
+///
+/// # Parameters
+/// 参数
+/// `task_runtime` is the runtime that owns the child registry.
+/// `task_runtime` 是拥有子代理注册表的运行时。
+/// `root_session_id` is the direct parent session.
+/// `root_session_id` 是直接父会话。
+/// `public_task_id` is the stable model-visible child id.
+/// `public_task_id` 是模型可见的稳定子代理标识。
+///
+/// # Returns
+/// 返回值
+/// The internal child session id stored as running.
+/// 返回以运行态保存的内部子会话标识。
+fn store_running_wait_agent_child(
+    task_runtime: &TaskRuntime,
+    root_session_id: SessionId,
+    public_task_id: &str,
+) -> SessionId {
+    // task_id is the internal session identity for this live child.
+    // task_id 是本活动子代理的内部会话身份。
+    let task_id = Uuid::new_v4();
+    // controller_config supplies the minimal executable runtime configuration required by the record.
+    // controller_config 提供记录所需的最小可执行运行时配置。
+    let controller_config = build_test_controller_config("Base prompt");
+    // invocation owns the exact parent-child identities used by the registry projection.
+    // invocation 持有注册表投影所需的精确父子身份。
+    let invocation = TaskExecutionRequest {
+        current_session_id: root_session_id,
+        root_session_id,
+        task_id,
+        execution_id: format!("{public_task_id}-execution"),
+        public_task_id: public_task_id.to_string(),
+        prompt: String::from("keep running"),
+        description: Some(String::from("Running wait target")),
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main("keep running"),
+        display_title: public_task_id.to_string(),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    // outcome records an admitted child that has not produced terminal feedback.
+    // outcome 记录已经准入但尚未产出终态反馈的子代理。
+    let outcome = TaskExecutionOutcome {
+        task_id,
+        controller_config: controller_config.clone(),
+        resolved_config: test_resolved_config(&controller_config, &invocation.invocation_config),
+        snapshot: CoreConversationSnapshot::default(),
+        provider_turns_executed: 0,
+        tool_calls_processed: 0,
+        final_assistant_message_id: None,
+        final_output_text: String::from(RUNNING_TASK_RESULT_SUMMARY),
+        execution_status: TaskExecutionStatus::Running,
+        usage_segments: Vec::new(),
+    };
+    task_runtime
+        .store_running_task_outcome_in_memory(root_session_id, &invocation, &outcome)
+        .expect("running wait target should store");
+    task_id
+}
+
 /// Verifies agent_orchestration_info exposes enabled agents by default.
 /// 验证 agent_orchestration_info 默认只暴露已启用智能体。
 #[tokio::test]
@@ -1511,6 +1577,122 @@ async fn interrupt_agent_rejects_root_self_and_unknown_targets() {
     assert!(unknown_error.contains("Unknown child agent"));
 }
 
+/// Verifies interrupt-mode delivery aborts the current run and resumes the same child with the admitted message.
+/// 验证插队模式投递会中止当前运行，并携带已接纳消息续跑同一子代理。
+#[tokio::test]
+async fn inter_agent_interrupt_aborts_then_resumes_with_admitted_message() {
+    // task_runtime owns the child registry, active-run reservation, inbox, and resume backend under test.
+    // task_runtime 持有本测试中的子代理注册表、活动运行预留、inbox 与续跑后端。
+    let task_runtime = Arc::new(TaskRuntime::new());
+    // root_session_id is the direct parent that sends the interrupt message.
+    // root_session_id 是发送插队消息的直接父会话。
+    let root_session_id = Uuid::new_v4();
+    // task_id identifies the already-running child that must be interrupted and resumed.
+    // task_id 标识必须被中止并续跑的既有运行中子代理。
+    let task_id = store_running_wait_agent_child(&task_runtime, root_session_id, "worker-a");
+    // captured_snapshot proves the admitted message reaches the successor provider context.
+    // captured_snapshot 证明已接纳消息进入后继执行的 Provider 上下文。
+    let captured_snapshot = Arc::new(std::sync::Mutex::new(None::<CoreConversationSnapshot>));
+    // captured_snapshot_for_handler transfers the assertion sink into the exact parent backend.
+    // captured_snapshot_for_handler 将断言接收器传入精确父会话后端。
+    let captured_snapshot_for_handler = Arc::clone(&captured_snapshot);
+    // backend_guard keeps the exact parent backend installed through the successor resume.
+    // backend_guard 在后继续跑期间保持精确父会话后端已安装。
+    let _backend_guard = task_runtime
+        .install_backend(
+            root_session_id,
+            Arc::new(move |request: TaskExecutionRequest| {
+                *captured_snapshot_for_handler
+                    .lock()
+                    .expect("captured snapshot lock") = Some(request.snapshot.clone());
+                Box::pin(async move {
+                    // controller_config supplies the completed successor outcome required by persistence.
+                    // controller_config 提供持久化所需的已完成后继执行结果配置。
+                    let controller_config = build_test_controller_config("Interrupt follow-up");
+                    Ok(TaskExecutionOutcome {
+                        task_id: request.task_id,
+                        controller_config: controller_config.clone(),
+                        resolved_config: test_resolved_config(
+                            &controller_config,
+                            &request.invocation_config,
+                        ),
+                        snapshot: request.snapshot,
+                        provider_turns_executed: 1,
+                        tool_calls_processed: 0,
+                        final_assistant_message_id: Some(String::from("interrupt-followup")),
+                        final_output_text: String::from("interrupt follow-up complete"),
+                        execution_status: TaskExecutionStatus::Completed,
+                        usage_segments: Vec::new(),
+                    })
+                })
+            }),
+        )
+        .expect("task backend should install");
+    // pending_join models the provider future owned by the current physical child execution.
+    // pending_join 模拟当前物理子执行持有的 Provider future。
+    let pending_join = tokio::spawn(async { std::future::pending::<()>().await });
+    // active_guard keeps the interrupted execution reserved until its finalizer releases ownership.
+    // active_guard 在中止执行的终态处理器释放所有权前保持该执行已预留。
+    let active_guard = install_test_active_task_run(
+        &task_runtime,
+        task_id,
+        "interrupt-running-execution",
+        pending_join.abort_handle(),
+    );
+
+    // send_result is the immediate admission acknowledgement returned to the parent agent.
+    // send_result 是立即返回给父代理的消息接纳确认。
+    let send_result = task_runtime
+        .invoke_send_message(
+            root_session_id,
+            json!({
+                "target": "worker-a",
+                "message": "replace the current work with this instruction",
+                "delivery_mode": "interrupt"
+            }),
+        )
+        .await
+        .expect("interrupt message should be admitted");
+    assert_eq!(send_result.model_output["queued"], true);
+    assert_eq!(send_result.model_output["delivery_mode"], "interrupt");
+    assert_eq!(send_result.model_output["interrupted"], true);
+    assert_eq!(
+        task_runtime
+            .inter_agent_message_count_for_task(task_id)
+            .expect("interrupted child inbox should remain readable"),
+        1
+    );
+    // join_error confirms interrupt delivery actually aborts the previous physical execution.
+    // join_error 确认插队投递确实中止了上一条物理执行。
+    let join_error = tokio::time::timeout(Duration::from_secs(1), pending_join)
+        .await
+        .expect("interrupted provider future should settle")
+        .expect_err("interrupted provider future should be cancelled");
+    assert!(join_error.is_cancelled());
+
+    drop(active_guard);
+    assert!(
+        task_runtime
+            .resume_agent_from_inbox_after_task_settled(root_session_id, task_id)
+            .await
+            .expect("interrupted child should resume from its inbox")
+    );
+    // resumed_snapshot is the exact successor context supplied to the child backend.
+    // resumed_snapshot 是传给子代理后端的精确后继执行上下文。
+    let resumed_snapshot = captured_snapshot
+        .lock()
+        .expect("captured snapshot lock")
+        .clone()
+        .expect("successor snapshot should be captured");
+    assert!(resumed_snapshot.messages.iter().any(|message| {
+        matches!(
+            &message.payload,
+            CoreConversationPayload::AgentMessage { payload, .. }
+                if payload == "replace the current work with this instruction"
+        )
+    }));
+}
+
 /// Verifies wait_agent returns an activity acknowledgement instead of child output.
 /// 验证 wait_agent 返回活动确认而不是子代理输出。
 #[tokio::test]
@@ -1568,9 +1750,11 @@ async fn wait_agent_returns_consumed_child_feedback() {
         .expect("task outcome should store");
 
     let result = task_runtime
-        .invoke_wait_agent(root_session_id, json!({ "target": "agent-review" }))
+        .invoke_wait_agent(root_session_id, json!({}))
         .await
-        .expect("wait_agent should succeed");
+        .expect(
+            "implicit wait_agent should claim terminal feedback even after the child completed",
+        );
 
     assert_eq!(
         result.model_output["message"],
@@ -1578,7 +1762,8 @@ async fn wait_agent_returns_consumed_child_feedback() {
     );
     assert_eq!(result.model_output["activity_status"], "terminal_update");
     assert_eq!(result.model_output["timed_out"], false);
-    assert_eq!(result.model_output["pending_event_count"], 1);
+    assert_eq!(result.model_output["delivered_event_count"], 1);
+    assert!(result.model_output.get("pending_event_count").is_none());
     assert_eq!(result.model_output["terminal_event_count"], 1);
     assert_eq!(
         result.model_output["agents"][0]["execution_id"],
@@ -1599,10 +1784,95 @@ async fn wait_agent_returns_consumed_child_feedback() {
         120
     );
     assert!(result.model_output.to_string().contains("review complete"));
+
+    let cached_result = task_runtime
+        .invoke_wait_agent(root_session_id, json!({ "target": "agent-review" }))
+        .await
+        .expect("explicit wait_agent should return the authoritative cached terminal result");
+    assert_eq!(
+        cached_result.model_output["activity_status"],
+        "terminal_update"
+    );
+    assert_eq!(cached_result.model_output["timed_out"], false);
+    assert_eq!(cached_result.model_output["delivered_event_count"], 1);
+    assert_eq!(
+        cached_result.model_output["agents"][0]["result"],
+        "review complete"
+    );
+    assert_eq!(
+        cached_result.model_output["agents"][0]["status"],
+        "completed"
+    );
+
+    // queued_message represents an admitted successor that has not started its new physical execution yet.
+    // queued_message 表示已经接纳、但尚未启动新物理执行的后继投递。
+    let queued_message = QueuedInterAgentMessage {
+        delivery_id: String::from("queued-after-terminal"),
+        author_session_id: root_session_id,
+        target_task_id: task_id,
+        target_agent_id: String::from("agent-review"),
+        content: String::from("continue with the queued follow-up"),
+        created_at_ms: current_unix_millis_u64(),
+        continues_task_turn: false,
+    };
+    task_runtime
+        .agent_inboxes
+        .write()
+        .expect("agent inbox should be writable")
+        .insert(task_id, VecDeque::from([queued_message]));
+    // target_session_ids limits the synthetic terminal lookup to the exact child under test.
+    // target_session_ids 将合成终态查询限制到本测试中的精确子代理。
+    let target_session_ids = BTreeSet::from([SessionNodeId::from(task_id)]);
+    // cached_events must stay empty until the queued successor itself produces a terminal result.
+    // cached_events 必须保持为空，直到排队的后继执行自身产生终态结果。
+    let cached_events = task_runtime
+        .wait_agent_cached_terminal_events(root_session_id, &target_session_ids, &BTreeSet::new())
+        .expect("cached terminal lookup should remain readable");
+    assert!(
+        cached_events.is_empty(),
+        "a queued successor must suppress the superseded cached terminal result"
+    );
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(25),
+            task_runtime.invoke_wait_agent(root_session_id, json!({"timeout_ms": 10_000})),
+        )
+        .await
+        .is_err(),
+        "implicit waiting must not report no active agents while a successor is queued"
+    );
 }
 
-/// Verifies wait_agent blocks until a terminal parent-mailbox event arrives and consumes the internal wake event.
-/// 验证 wait_agent 会阻塞到父级 mailbox 收到终态事件，并消费内部唤醒事件。
+/// Verifies wait_agent returns immediately instead of timing out when no child can produce activity.
+/// 验证不存在可产生活动的子代理时，wait_agent 会立即返回而不是等待超时。
+#[tokio::test]
+async fn wait_agent_returns_immediately_without_active_children() {
+    let task_runtime = TaskRuntime::new();
+    let root_session_id = Uuid::new_v4();
+
+    let result = tokio::time::timeout(
+        Duration::from_millis(200),
+        task_runtime.invoke_wait_agent(root_session_id, json!({ "timeout_ms": 10_000 })),
+    )
+    .await
+    .expect("wait_agent should not enter its timeout path without active children")
+    .expect("wait_agent should return a no-active-agents result");
+
+    assert_eq!(result.model_output["activity_status"], "no_active_agents");
+    assert_eq!(result.model_output["no_active_agents"], true);
+    assert_eq!(result.model_output["timed_out"], false);
+    assert_eq!(result.model_output["delivered_event_count"], 0);
+    assert_eq!(result.model_output["agents"], json!([]));
+    assert!(
+        result.model_output["message"]
+            .as_str()
+            .expect("wait message should be text")
+            .contains("Do not call wait_agent again")
+    );
+}
+
+/// Concurrent default waits must both observe child completion even though only one claims the mailbox event.
+/// 并发默认等待必须都能观察子代理完成，即使只有一个调用能认领 mailbox 事件。
 #[tokio::test]
 async fn wait_agent_wakes_when_terminal_mailbox_event_arrives() {
     let task_runtime = Arc::new(TaskRuntime::new());
@@ -1664,10 +1934,25 @@ async fn wait_agent_wakes_when_terminal_mailbox_event_arrives() {
             .expect("terminal mailbox event should store");
     });
 
-    let result = task_runtime
-        .invoke_wait_agent(root_session_id, json!({ "timeout_ms": 10_000 }))
-        .await
-        .expect("wait_agent should wake on mailbox");
+    // results exercises a mailbox claim race without waiting for the configured ten-second timeout.
+    // results 覆盖 mailbox 认领竞态，无需等到配置的十秒超时。
+    let results = tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::join!(
+            task_runtime.invoke_wait_agent(root_session_id, json!({ "timeout_ms": 10_000 })),
+            task_runtime.invoke_wait_agent(root_session_id, json!({ "timeout_ms": 10_000 }))
+        )
+    })
+    .await
+    .expect("both waits must observe completion without a second mailbox event");
+    // Both results observe completion; scheduler order decides which caller owns the mailbox payload.
+    // 两个结果都观察到完成；调度顺序决定哪个调用持有 mailbox 载荷。
+    let result = results.0.expect("first wait should wake");
+    let second_result = results.1.expect("second wait should wake");
+    assert_eq!(second_result.model_output["timed_out"], false);
+    assert_eq!(
+        second_result.model_output["agents"][0]["result"],
+        "review complete"
+    );
 
     assert_eq!(
         result.model_output["message"],
@@ -1675,11 +1960,14 @@ async fn wait_agent_wakes_when_terminal_mailbox_event_arrives() {
     );
     assert_eq!(result.model_output["activity_status"], "terminal_update");
     assert_eq!(result.model_output["timed_out"], false);
-    assert_eq!(result.model_output["pending_event_count"], 1);
+    assert_eq!(result.model_output["delivered_event_count"], 1);
+    assert!(result.model_output.get("pending_event_count").is_none());
     assert_eq!(result.model_output["terminal_event_count"], 1);
-    assert_eq!(
-        result.model_output["agents"][0]["execution_id"],
-        "test-execution"
+    assert!(
+        [&result, &second_result]
+            .iter()
+            .any(|response| response.model_output["agents"][0]["execution_id"] == "test-execution"),
+        "one waiter must claim the exact execution event"
     );
     assert_eq!(
         result.model_output["agents"][0]["result"],
@@ -1831,6 +2119,10 @@ async fn wait_agent_wakes_when_parent_interruption_arrives() {
     // rootSessionId identifies the parent wait that the notifier interrupts.
     // rootSessionId 标识通知方要打断的父级等待。
     let root_session_id = Uuid::new_v4();
+    // runningChild keeps the wait active until the explicit parent interruption arrives.
+    // runningChild 让等待保持活动，直到显式父级中断到达。
+    let _running_child =
+        store_running_wait_agent_child(task_runtime.as_ref(), root_session_id, "interrupt-target");
     // notifierRuntime lets the asynchronous notifier share the same interruption registry.
     // notifierRuntime 让异步通知方共享同一中断注册表。
     let notifier_runtime = Arc::clone(&task_runtime);
@@ -1908,12 +2200,16 @@ fn wait_agent_parent_interruption_notification_reports_poisoned_registry() {
     );
 }
 
-/// Verifies wait_agent times out instead of reporting completion when no mailbox event exists.
-/// 验证不存在 mailbox 事件时 wait_agent 会超时而不是误报完成。
+/// Verifies wait_agent still times out for a genuinely running child that emits no mailbox event.
+/// 验证真实运行中的子代理没有产生 mailbox 事件时，wait_agent 仍会正常超时。
 #[tokio::test]
 async fn wait_agent_times_out_without_mailbox_event() {
     let task_runtime = TaskRuntime::new();
     let root_session_id = Uuid::new_v4();
+    // runningChild distinguishes a valid live wait from the zero-child immediate-return path.
+    // runningChild 将有效活动等待与零子代理即时返回路径区分开。
+    let _running_child =
+        store_running_wait_agent_child(&task_runtime, root_session_id, "timeout-target");
 
     let result = task_runtime
         .invoke_wait_agent(root_session_id, json!({ "timeout_ms": 10_000 }))
