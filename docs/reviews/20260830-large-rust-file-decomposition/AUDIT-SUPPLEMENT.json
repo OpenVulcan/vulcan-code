@@ -1,0 +1,154 @@
+[
+  {
+    "file": "crates/vulcan-runtime-assets/resources/provider-manifests/bundled-index.json",
+    "sha256": "0465931651bd3a6dcccd5feab02d879fc2fa7f430f7c4e72999d70c36aa64b86"
+  },
+  {
+    "file": "crates/vulcan-runtime-assets/resources/provider-manifests/.gitattributes",
+    "sha256": "c6342a3fb9f6831300124e202973aec624fcc5f289be5171c66ecf086e45d55a"
+  },
+  {
+    "file": "crates/vulcan-provider-adapters/resources/golden/system-providers-v2.json",
+    "sha256": "7354a8cf188ba5f5ae4e4594f9f8f8e885346f38b58efa5ff3d6270c5d93a1de"
+  },
+  {
+    "file": "crates/vulcan-provider-adapters/resources/golden/.gitattributes",
+    "sha256": "cb6db1ca33f1dfe39350f76d620ad72cfa3c3e9f59c4646957158077bdd2239c"
+  },
+  {
+    "file": "docs/新增系统供应商流程.md",
+    "sha256": "07f9d40863f026877a96a176e97889bc96c9d72f17d643aca3639fb897574f55"
+  },
+  {
+    "file": "crates/vulcan-plugin-runtime/src/lib.rs",
+    "sha256": "c58e85e889c3735d82e7e6f6aaf9eedd121a292e91d7781d2c737492b71e6293"
+  },
+  {
+    "file": "crates/vulcan-provider-adapters/src/lib.rs",
+    "sha256": "72f46a98b81aedb27aecfd29812ae28aab0b6359f9adbbced5e6c2e501dc1b75"
+  },
+  {
+    "file": "crates/vulcan-service-kernel/src/lib.rs",
+    "sha256": "01e3f6e3fdbbe8e75aa735d04f0fdea374277f2411fb265ee00dcb2e3a0eab36"
+  },
+  {
+    "file": "crates/vulcan-session-core/src/lib.rs",
+    "sha256": "83b961e1dbded4c769fb508beda50b7eea6966d156f5743250273fb04b12651b"
+  },
+  {
+    "file": "crates/vulcan-workspace-store/src/lib.rs",
+    "sha256": "166e7ce7c39a7caf2433f5753eae873953537b5a3405d1702a86c930535c3d51"
+  },
+  {
+    "file": "crates/vulcan-agent-runtime/src/lib.rs",
+    "sha256": "bc4a452eb92d8b62eb93c5978d61f5828e4af3e736bd90b68cf20b86d57773ab"
+  },
+  {
+    "file": "crates/vulcan-service-kernel/src/skills_services.rs",
+    "sha256": "1f0abef0eee5a523ed1074715cfc08265d4842de758ec2738c107a81fe297b6c"
+  },
+  {
+    "file": "crates/vulcan-session-core/src/v1/document/generation.rs",
+    "sha256": "de515d9f03a3e9ba44cb05d6992d36e1991608d4c204e28713ace63afa3f7399"
+  },
+  {
+    "file": "crates/vulcan-session-core/src/v1/document/recovery.rs",
+    "sha256": "9bf88e0fa80e7eaaef077bfbae676eefe2d8a5e377f4760da56abc1490cbe7de"
+  },
+  {
+    "file": "crates/vulcan-provider-adapters/src/provider_manifest/validation.rs",
+    "sha256": "885b0742b03611fc7d5eb0a360423f710f0816f3915b40d8e5664bef1778161c"
+  },
+  {
+    "file": "crates/vulcan-service-kernel/src/provider_manifest_sync.rs",
+    "sha256": "0cde07427e787e14a2ffead049e8b13068ca3409c53d51d99bc098f417bfdd06"
+  },
+  {
+    "file": "crates/vulcan-service-kernel/src/configured_inference.rs",
+    "sha256": "a5f11c5a8e6a276875276f5d2c0b3e41434a64da25069635f5e9a67638432fe1"
+  },
+  {
+    "file": "crates/vulcan-host-tools/src/file_runtime.rs",
+    "sha256": "77dfcccd0a4a9795f10bd1b0c13443a6cb21018d17de313f893da748903c75b9"
+  },
+  {
+    "file": "crates/vulcan-service-kernel/src/session_runtime_registry_v1.rs",
+    "sha256": "532170156f803f71acec06c47768dcdfe8d1ef0415273b05d76f5ed7f544a661"
+  },
+  {
+    "file": "crates/vulcan-provider-adapters/src/configuration.rs",
+    "sha256": "a4503e63eade572875c26825285c42de89c12c71a9ad2865a1a6cf76e1341e09"
+  },
+  {
+    "file": "crates/vulcan-service-kernel/src/workbench_refresh.rs",
+    "sha256": "a80d89ad1b8158ecc38a082fbe4b7b569f69269f5f098cd6a69b34187e79f107"
+  },
+  {
+    "file": "crates/vulcan-runtime-assets/resources/provider-manifests/manifests/alibaba.json",
+    "sha256": "afb27da26fbe4570f750305577a1f2478ce6c41f156d4f96b47f45a411687480"
+  },
+  {
+    "file": "crates/vulcan-runtime-assets/resources/provider-manifests/manifests/anthropic.json",
+    "sha256": "6a287f166520fcfad58754c444232ddddb013dc4e785a1f1b0c754260b0d1b09"
+  },
+  {
+    "file": "crates/vulcan-runtime-assets/resources/provider-manifests/manifests/apikeyfun.json",
+    "sha256": "6d68f23b1b8cbe11e94156d407174559e4cb04106dfcca627c3aca30f0f1b454"
+  },
+  {
+    "file": "crates/vulcan-runtime-assets/resources/provider-manifests/manifests/claudeapi.json",
+    "sha256": "ccc0da956fadc949977a8cc57033e06245c5fe5cd4f9f7ddfc0db42ca2f8547b"
+  },
+  {
+    "file": "crates/vulcan-runtime-assets/resources/provider-manifests/manifests/code0.json",
+    "sha256": "d1cd24a986012346fba31ec75cc02dcacb68c961ed965567bb1c8a8d6209d07c"
+  },
+  {
+    "file": "crates/vulcan-runtime-assets/resources/provider-manifests/manifests/commandcode.json",
+    "sha256": "c8a1543e5222ac092b13ae0060abe704ea26c9aebb2ed576df32fd3a00c24c70"
+  },
+  {
+    "file": "crates/vulcan-runtime-assets/resources/provider-manifests/manifests/deepseek.json",
+    "sha256": "b7ad1149d0a64783e9374e0a18248b26f0b7650ec1baa4dace6592618c5689ac"
+  },
+  {
+    "file": "crates/vulcan-runtime-assets/resources/provider-manifests/manifests/fennoai.json",
+    "sha256": "3fa8c9b011be0c05d3d2434687e72cabe2f0c8dda281f29073f18e4addf9ace2"
+  },
+  {
+    "file": "crates/vulcan-runtime-assets/resources/provider-manifests/manifests/google.json",
+    "sha256": "53ac54e01e736ef1f87a6a718ad156cd68112ce2984165ba2732e6ef745b7e1b"
+  },
+  {
+    "file": "crates/vulcan-runtime-assets/resources/provider-manifests/manifests/kimi.json",
+    "sha256": "f9b89aa496bc50245193ae76708b457d4f15e01c588310e49cb7007321569711"
+  },
+  {
+    "file": "crates/vulcan-runtime-assets/resources/provider-manifests/manifests/minimax.json",
+    "sha256": "78941b70ddcdfba91218cdcb0a67b43ab2f393c087487ce1cbe0040df3948421"
+  },
+  {
+    "file": "crates/vulcan-runtime-assets/resources/provider-manifests/manifests/openai.json",
+    "sha256": "13627faf45e16cc34bc2721459ef048b25dc1765af1f090cb5931c81f2c3345e"
+  },
+  {
+    "file": "crates/vulcan-runtime-assets/resources/provider-manifests/manifests/opencode-go.json",
+    "sha256": "575626043b5c2d5ba8d6fa11368c6b1221d333c2b00bfd7c148671320ca48936"
+  },
+  {
+    "file": "crates/vulcan-runtime-assets/resources/provider-manifests/manifests/openrouter.json",
+    "sha256": "f7e4524071051e15849daac8dc37df43b24e4e26feff58bc767beaef51e32ae5"
+  },
+  {
+    "file": "crates/vulcan-runtime-assets/resources/provider-manifests/manifests/qiniu.json",
+    "sha256": "54e14520d0ebf7c56f345e3431664378b791ec10be36cc8e8b54b810c8a518d2"
+  },
+  {
+    "file": "crates/vulcan-runtime-assets/resources/provider-manifests/manifests/tavily.json",
+    "sha256": "019024dd044da2f7a6c421795bcf3df8a84feb8fa98813da163afb6ad3e5c371"
+  },
+  {
+    "file": "crates/vulcan-runtime-assets/resources/provider-manifests/manifests/tokenrhythm.json",
+    "sha256": "86484161aa75027c00d55d1dce51d49456efa0ef122afa0c68013811ee36d809"
+  }
+]

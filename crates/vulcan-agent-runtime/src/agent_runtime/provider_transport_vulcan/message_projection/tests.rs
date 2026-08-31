@@ -1,0 +1,290 @@
+//! Regression tests for the message_projection boundary.
+//! message_projection边界的回归测试。
+
+use super::*;
+use crate::attachment_assets::{AttachmentDescriptor, stage_attachment_bytes};
+use serde_json::json;
+
+/// Verifies final provider projection replaces an integrity-invalid historical attachment with model-safe metadata.
+/// 验证最终 Provider 投影会用模型安全元数据替换完整性失效的历史附件。
+#[test]
+fn provider_projection_rejects_same_length_mutated_managed_attachment() {
+    // workspace owns the indexed attachment and is removed after the projection assertion.
+    // workspace 持有索引附件，并在投影断言后移除。
+    let workspace = std::env::temp_dir().join(format!(
+        "vulcan-provider-attachment-integrity-test-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&workspace).expect("test workspace should be created");
+    // attachment retains immutable byte facts while omitting an original-source fallback.
+    // attachment 保留不可变字节事实，同时不提供原始来源回退路径。
+    let attachment = stage_attachment_bytes(
+        workspace.to_string_lossy().as_ref(),
+        &AttachmentDescriptor {
+            kind: ConversationAttachmentKind::Image,
+            mime_type: "image/png",
+            extension: "png",
+        },
+        "integrity.png",
+        None,
+        b"original-image",
+    )
+    .expect("test attachment should stage");
+    // mutated_bytes deliberately preserves length while changing the indexed content identity.
+    // mutated_bytes 故意保持长度不变，同时改变已索引的内容身份。
+    let mutated_bytes = vec![b'x'; b"original-image".len()];
+    std::fs::write(&attachment.local_path, mutated_bytes)
+        .expect("same-length attachment mutation should write");
+    // message exercises the final canonical-message bridge shared by ordinary requests and compaction.
+    // message 覆盖普通请求与压缩共同使用的最终规范消息桥接。
+    let message = vulcan_core::types::ConversationMessage {
+        id: String::from("user-integrity"),
+        payload: CoreConversationPayload::UserText {
+            text: String::from("inspect attachment"),
+            attachments: vec![attachment],
+        },
+    };
+
+    let projected = core_message_to_public(
+        &message,
+        "provider",
+        "connection",
+        "https://provider.invalid/v1/responses",
+        "openai-responses.v1",
+        "model",
+    )
+    .expect("integrity-invalid attachment should degrade to metadata");
+
+    assert!(
+        !projected
+            .content
+            .iter()
+            .any(|item| matches!(item, ContentItem::Resource { .. }))
+    );
+    assert!(projected.content.iter().any(|item| {
+        matches!(item, ContentItem::Text { text } if text.contains("managed resource no longer exists"))
+    }));
+
+    std::fs::remove_dir_all(&workspace).expect("test workspace should be removed");
+}
+
+/// Verifies opaque compaction context requires the exact connection and resolved route.
+/// 验证不透明压缩上下文必须匹配精确连接与已解析路由。
+#[test]
+fn responses_compaction_context_requires_exact_route_identity() {
+    let state = json!({
+        "vulcan_ai": {
+            "responses_compaction": {
+                "provider_id": "custom:proxy",
+                "connection_id": "connection-a",
+                "route_fingerprint": "https://proxy.example/v1/responses",
+                "protocol_profile_id": "openai-codex-responses.v1",
+                "model_id": "gpt-5-codex",
+                "items": [
+                    {"type": "compaction_summary", "encrypted_content": "opaque"},
+                    {"type": "message", "role": "assistant", "content": []}
+                ]
+            }
+        }
+    });
+    // matchingItems must normalize the official alias before replaying it to the provider.
+    // matchingItems 必须在重放给供应商前规范化官方别名。
+    let matching_items = responses_compaction_items_for_route(
+        Some(&state),
+        "custom:proxy",
+        "connection-a",
+        "https://proxy.example/v1/responses",
+        "openai-codex-responses.v1",
+        "gpt-5-codex",
+    )
+    .expect("matching route should replay context");
+    assert_eq!(matching_items.len(), 2);
+    assert_eq!(matching_items[0]["type"], "compaction");
+    // publicMessage proves local checkpoint diagnostics are not emitted before the opaque item.
+    // publicMessage 证明本地检查点诊断不会先于不透明项发出。
+    let public_message = core_message_to_public(
+        &vulcan_core::types::ConversationMessage {
+            id: String::from("summary-1"),
+            payload: CoreConversationPayload::Assistant {
+                text: String::from("local checkpoint diagnostics"),
+                reasoning: String::new(),
+                provider_message_id: None,
+                provider_message_state: Some(state.clone()),
+                usage: None,
+                tool_calls: Vec::new(),
+            },
+        },
+        "custom:proxy",
+        "connection-a",
+        "https://proxy.example/v1/responses",
+        "openai-codex-responses.v1",
+        "gpt-5-codex",
+    )
+    .expect("matching compact anchor should project");
+    assert!(public_message.content.is_empty());
+    assert_eq!(public_message.provider_context_items.len(), 2);
+    assert!(
+        responses_compaction_items_for_route(
+            Some(&state),
+            "custom:proxy",
+            "connection-b",
+            "https://proxy.example/v1/responses",
+            "openai-codex-responses.v1",
+            "gpt-5-codex",
+        )
+        .is_err()
+    );
+    assert!(
+        responses_compaction_items_for_route(
+            Some(&state),
+            "custom:proxy",
+            "connection-a",
+            "https://proxy.example/changed/responses",
+            "openai-codex-responses.v1",
+            "gpt-5-codex",
+        )
+        .is_err()
+    );
+}
+
+/// Verifies ordinary replay content falls back locally when the credential or endpoint changes.
+/// 验证凭据或端点变化时，普通重放内容会安全回退到本地规范内容。
+#[test]
+fn ordinary_replay_content_requires_exact_connection_route() {
+    // state contains one signed reasoning item produced by the original physical route.
+    // state 包含由原始物理路由生成的一项带签名推理内容。
+    let state = json!({
+        "vulcan_ai": {
+            "replay": ProviderReplayEnvelope::new(
+                "custom:proxy",
+                "connection-a",
+                "https://proxy.example/v1/responses",
+                "openai-codex-responses.v1",
+                "gpt-5-codex",
+                vec![ContentItem::Reasoning {
+                    text: String::from("reasoning"),
+                    signature: Some(String::from("opaque-signature")),
+                }],
+                vec![json!({
+                    "type": "reasoning",
+                    "id": "reasoning-item",
+                    "status": "completed",
+                    "summary": [{"type": "summary_text", "text": "reasoning"}],
+                })],
+            )
+        }
+    });
+
+    assert!(
+        replay_content_for_route(
+            Some(&state),
+            "custom:proxy",
+            "connection-a",
+            "https://proxy.example/v1/responses",
+            "openai-codex-responses.v1",
+            "gpt-5-codex",
+        )
+        .expect("matching route should decode")
+        .is_some()
+    );
+    assert!(
+        replay_content_for_route(
+            Some(&state),
+            "custom:proxy",
+            "connection-b",
+            "https://proxy.example/v1/responses",
+            "openai-codex-responses.v1",
+            "gpt-5-codex",
+        )
+        .expect("credential mismatch should be a safe local fallback")
+        .is_none()
+    );
+    assert!(
+        replay_content_for_route(
+            Some(&state),
+            "custom:proxy",
+            "connection-a",
+            "https://proxy.example/changed/responses",
+            "openai-codex-responses.v1",
+            "gpt-5-codex",
+        )
+        .expect("endpoint mismatch should be a safe local fallback")
+        .is_none()
+    );
+    assert_eq!(
+        replay_provider_context_items_for_route(
+            Some(&state),
+            "custom:proxy",
+            "connection-a",
+            "https://proxy.example/v1/responses",
+            "openai-codex-responses.v1",
+            "gpt-5-codex",
+        )
+        .expect("matching provider context should decode")[0]["id"],
+        "reasoning-item"
+    );
+    assert!(
+        replay_provider_context_items_for_route(
+            Some(&state),
+            "custom:proxy",
+            "connection-b",
+            "https://proxy.example/v1/responses",
+            "openai-codex-responses.v1",
+            "gpt-5-codex",
+        )
+        .expect("credential mismatch should not replay provider context")
+        .is_empty()
+    );
+    // switchedRouteMessage proves provider-owned items never cross a protocol boundary.
+    // switchedRouteMessage 证明供应商持有项绝不会跨越协议边界。
+    let switched_route_message = core_message_to_public(
+        &vulcan_core::types::ConversationMessage {
+            id: String::from("assistant-switched"),
+            payload: CoreConversationPayload::Assistant {
+                text: String::new(),
+                reasoning: String::from("reasoning"),
+                provider_message_id: None,
+                provider_message_state: Some(state.clone()),
+                usage: None,
+                tool_calls: Vec::new(),
+            },
+        },
+        "custom:proxy",
+        "connection-a",
+        "https://proxy.example/v1/messages",
+        "anthropic-messages.v1",
+        "gpt-5-codex",
+    )
+    .expect("protocol switch should project provider-neutral content");
+    assert!(switched_route_message.provider_context_items.is_empty());
+    assert_eq!(
+        switched_route_message.content,
+        vec![ContentItem::Reasoning {
+            text: String::from("reasoning"),
+            signature: None,
+        }]
+    );
+    // exactRouteMessage proves raw provider items replace canonical re-encoding only on their owner route.
+    // exactRouteMessage 证明原始供应商项仅在归属路由上替代规范重编码。
+    let exact_route_message = core_message_to_public(
+        &vulcan_core::types::ConversationMessage {
+            id: String::from("assistant-1"),
+            payload: CoreConversationPayload::Assistant {
+                text: String::new(),
+                reasoning: String::from("reasoning"),
+                provider_message_id: None,
+                provider_message_state: Some(state),
+                usage: None,
+                tool_calls: Vec::new(),
+            },
+        },
+        "custom:proxy",
+        "connection-a",
+        "https://proxy.example/v1/responses",
+        "openai-codex-responses.v1",
+        "gpt-5-codex",
+    )
+    .expect("matching assistant should project exact provider context");
+    assert!(exact_route_message.content.is_empty());
+    assert_eq!(exact_route_message.provider_context_items.len(), 1);
+}

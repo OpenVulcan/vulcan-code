@@ -1,0 +1,82 @@
+# 02：公共AI设置层测试及夹具迁移映射
+
+## 保全结果
+
+2026-08-31，第15阶段：47项原测试全部仍可发现，47项随职责迁移，0项保持原路径。唯一1个路由夹具随两项实际消费者迁移，未复制或删除。
+
+46项测试体严格等价；连接请求契约测试仅5个指定serde单表达式match分支花括号被rustfmt调整，389→388token，已逐分支完整匹配再核对全函数。原表达式、正反断言、测试属性与忽略状态保留；生产泛型尾逗号例外不得用于放宽测试。发现列表与实际执行分别留证。
+
+## 完整测试路径
+
+| 原测试路径 | 当前测试路径 | 当前产物行 |
+| --- | --- | --- |
+| `public_ai_settings::context_compaction_window_node_tests::changed_node_values_invalidate_locked_session_budgets_only` | `public_ai_settings::publication::tests::changed_node_values_invalidate_locked_session_budgets_only` | `crates/vulcan-service-kernel/src/public_ai_settings/publication/tests.rs:12` |
+| `public_ai_settings::inference_settings_route_tests::capability_metadata_defaults_keep_inheritance_after_rebuild` | `public_ai_settings::session_tools::tests::capability_metadata_defaults_keep_inheritance_after_rebuild` | `crates/vulcan-service-kernel/src/public_ai_settings/session_tools/tests.rs:9` |
+| `public_ai_settings::inference_settings_route_tests::media_capability_backend_accepts_model_replacement_without_provider_target` | `public_ai_settings::provider_tools::tests::media_capability_backend_accepts_model_replacement_without_provider_target` | `crates/vulcan-service-kernel/src/public_ai_settings/provider_tools/tests.rs:13` |
+| `public_ai_settings::inference_settings_route_tests::connection_removal_clears_exact_media_and_extension_references` | `public_ai_settings::connections::tests::connection_removal_clears_exact_media_and_extension_references` | `crates/vulcan-service-kernel/src/public_ai_settings/connections/tests.rs:15` |
+| `public_ai_settings::inference_settings_route_tests::media_candidate_capabilities_intersect_model_and_protocol_support` | `public_ai_settings::media_candidates::tests::media_candidate_capabilities_intersect_model_and_protocol_support` | `crates/vulcan-service-kernel/src/public_ai_settings/media_candidates/tests.rs:9` |
+| `public_ai_settings::inference_settings_route_tests::anthropic_video_candidate_excludes_unregistered_audio_input` | `public_ai_settings::media_candidates::tests::anthropic_video_candidate_excludes_unregistered_audio_input` | `crates/vulcan-service-kernel/src/public_ai_settings/media_candidates/tests.rs:45` |
+| `public_ai_settings::inference_settings_route_tests::anthropic_candidate_requires_json_schema_capability` | `public_ai_settings::media_candidates::tests::anthropic_candidate_requires_json_schema_capability` | `crates/vulcan-service-kernel/src/public_ai_settings/media_candidates/tests.rs:80` |
+| `public_ai_settings::inference_settings_route_tests::fixed_off_reasoning_accepts_only_none` | `public_ai_settings::inference_validation::tests::fixed_off_reasoning_accepts_only_none` | `crates/vulcan-service-kernel/src/public_ai_settings/inference_validation/tests.rs:9` |
+| `public_ai_settings::inference_settings_route_tests::manifest_rpc_identity_guard_rejects_unknown_and_oversized_values` | `public_ai_settings::provider_synchronization::tests::manifest_rpc_identity_guard_rejects_unknown_and_oversized_values` | `crates/vulcan-service-kernel/src/public_ai_settings/provider_synchronization/tests.rs:194` |
+| `public_ai_settings::inference_settings_route_tests::compensated_projection_becomes_bounded_provider_rejection` | `public_ai_settings::provider_synchronization::tests::compensated_projection_becomes_bounded_provider_rejection` | `crates/vulcan-service-kernel/src/public_ai_settings/provider_synchronization/tests.rs:9` |
+| `public_ai_settings::inference_settings_route_tests::provider_projection_rejects_missing_activation_before_image` | `public_ai_settings::provider_synchronization::tests::provider_projection_rejects_missing_activation_before_image` | `crates/vulcan-service-kernel/src/public_ai_settings/provider_synchronization/tests.rs:39` |
+| `public_ai_settings::inference_settings_route_tests::cancelled_provider_publication_restores_staged_before_images` | `public_ai_settings::provider_synchronization::tests::cancelled_provider_publication_restores_staged_before_images` | `crates/vulcan-service-kernel/src/public_ai_settings/provider_synchronization/tests.rs:64` |
+| `public_ai_settings::inference_settings_route_tests::settings_snapshot_excludes_isolated_custom_provider_connection` | `public_ai_settings::snapshot::tests::settings_snapshot_excludes_isolated_custom_provider_connection` | `crates/vulcan-service-kernel/src/public_ai_settings/snapshot/tests.rs:9` |
+| `public_ai_settings::inference_settings_route_tests::isolated_custom_provider_removal_identity_is_namespace_safe` | `public_ai_settings::custom_providers::tests::isolated_custom_provider_removal_identity_is_namespace_safe` | `crates/vulcan-service-kernel/src/public_ai_settings/custom_providers/tests.rs:11` |
+| `public_ai_settings::inference_settings_route_tests::connection_requests_reject_user_selected_protocol` | `public_ai_settings::connections::tests::connection_requests_reject_user_selected_protocol` | `crates/vulcan-service-kernel/src/public_ai_settings/connections/tests.rs:140` |
+| `public_ai_settings::inference_settings_route_tests::settings_test_route_retains_exact_usage_scope` | `public_ai_settings::inference_testing::tests::settings_test_route_retains_exact_usage_scope` | `crates/vulcan-service-kernel/src/public_ai_settings/inference_testing/tests.rs:39` |
+| `public_ai_settings::inference_settings_route_tests::settings_snapshot_projects_capability_overrides_without_catalogs` | `public_ai_settings::snapshot::tests::settings_snapshot_projects_capability_overrides_without_catalogs` | `crates/vulcan-service-kernel/src/public_ai_settings/snapshot/tests.rs:61` |
+| `public_ai_settings::inference_settings_route_tests::settings_snapshot_separates_provider_tool_templates_from_conversation_access` | `public_ai_settings::snapshot::tests::settings_snapshot_separates_provider_tool_templates_from_conversation_access` | `crates/vulcan-service-kernel/src/public_ai_settings/snapshot/tests.rs:96` |
+| `public_ai_settings::inference_settings_route_tests::internal_conversation_candidate_uses_model_protocol_binding` | `public_ai_settings::inference_settings::tests::internal_conversation_candidate_uses_model_protocol_binding` | `crates/vulcan-service-kernel/src/public_ai_settings/inference_settings/tests.rs:11` |
+| `public_ai_settings::inference_settings_route_tests::custom_model_route_status_exposes_model_specific_protocol_block` | `public_ai_settings::catalog_projection::tests::custom_model_route_status_exposes_model_specific_protocol_block` | `crates/vulcan-service-kernel/src/public_ai_settings/catalog_projection/tests.rs:15` |
+| `public_ai_settings::inference_settings_route_tests::invalid_active_account_rebinds_same_model_before_model_fallback` | `public_ai_settings::model_selection::tests::invalid_active_account_rebinds_same_model_before_model_fallback` | `crates/vulcan-service-kernel/src/public_ai_settings/model_selection/tests.rs:11` |
+| `public_ai_settings::inference_settings_route_tests::session_model_selection_waits_for_next_provider_request_and_is_idempotent` | `public_ai_settings::model_selection::tests::session_model_selection_waits_for_next_provider_request_and_is_idempotent` | `crates/vulcan-service-kernel/src/public_ai_settings/model_selection/tests.rs:116` |
+| `public_ai_settings::inference_settings_route_tests::missing_session_models_remain_exact_until_explicit_reselection_or_revocation` | `public_ai_settings::model_selection::tests::missing_session_models_remain_exact_until_explicit_reselection_or_revocation` | `crates/vulcan-service-kernel/src/public_ai_settings/model_selection/tests.rs:215` |
+| `public_ai_settings::inference_settings_route_tests::account_membership_cannot_enable_provider_disabled_custom_model` | `public_ai_settings::custom_models::tests::account_membership_cannot_enable_provider_disabled_custom_model` | `crates/vulcan-service-kernel/src/public_ai_settings/custom_models/tests.rs:10` |
+| `public_ai_settings::inference_settings_route_tests::vmm_llm_route_requires_disabled_reasoning_capability` | `public_ai_settings::inference_validation::tests::vmm_llm_route_requires_disabled_reasoning_capability` | `crates/vulcan-service-kernel/src/public_ai_settings/inference_validation/tests.rs:25` |
+| `public_ai_settings::inference_settings_route_tests::settings_test_route_rejects_operation_slot_mismatch` | `public_ai_settings::inference_testing::tests::settings_test_route_rejects_operation_slot_mismatch` | `crates/vulcan-service-kernel/src/public_ai_settings/inference_testing/tests.rs:66` |
+| `public_ai_settings::inference_settings_route_tests::session_provider_tool_settings_reject_missing_selection` | `public_ai_settings::session_tools::tests::session_provider_tool_settings_reject_missing_selection` | `crates/vulcan-service-kernel/src/public_ai_settings/session_tools/tests.rs:39` |
+| `public_ai_settings::inference_settings_route_tests::provider_tool_selection_v1_orders_final_persisted_keys` | `public_ai_settings::session_tools::tests::provider_tool_selection_v1_orders_final_persisted_keys` | `crates/vulcan-service-kernel/src/public_ai_settings/session_tools/tests.rs:63` |
+| `public_ai_settings::inference_settings_route_tests::session_media_understanding_settings_reject_missing_backend` | `public_ai_settings::session_tools::tests::session_media_understanding_settings_reject_missing_backend` | `crates/vulcan-service-kernel/src/public_ai_settings/session_tools/tests.rs:176` |
+| `public_ai_settings::inference_settings_route_tests::session_provider_tool_settings_reconciliation_is_idempotent` | `public_ai_settings::session_tools::tests::session_provider_tool_settings_reconciliation_is_idempotent` | `crates/vulcan-service-kernel/src/public_ai_settings/session_tools/tests.rs:200` |
+| `public_ai_settings::inference_settings_route_tests::session_media_direct_targets_are_removed_from_overridden_sessions` | `public_ai_settings::session_tools::tests::session_media_direct_targets_are_removed_from_overridden_sessions` | `crates/vulcan-service-kernel/src/public_ai_settings/session_tools/tests.rs:269` |
+| `public_ai_settings::inference_settings_route_tests::session_media_backend_mode_is_materialized_with_session_defaults` | `public_ai_settings::session_tools::tests::session_media_backend_mode_is_materialized_with_session_defaults` | `crates/vulcan-service-kernel/src/public_ai_settings/session_tools/tests.rs:329` |
+| `public_ai_settings::inference_settings_route_tests::custom_codex_provider_candidate_preserves_explicit_responses_capabilities` | `public_ai_settings::custom_providers::tests::custom_codex_provider_candidate_preserves_explicit_responses_capabilities` | `crates/vulcan-service-kernel/src/public_ai_settings/custom_providers/tests.rs:32` |
+| `public_ai_settings::inference_settings_route_tests::custom_codex_capability_switch_is_not_a_connection_contract_change` | `public_ai_settings::custom_providers::tests::custom_codex_capability_switch_is_not_a_connection_contract_change` | `crates/vulcan-service-kernel/src/public_ai_settings/custom_providers/tests.rs:78` |
+| `public_ai_settings::inference_settings_route_tests::custom_provider_edit_atomically_migrates_every_existing_credential` | `public_ai_settings::custom_providers::tests::custom_provider_edit_atomically_migrates_every_existing_credential` | `crates/vulcan-service-kernel/src/public_ai_settings/custom_providers/tests.rs:142` |
+| `public_ai_settings::inference_settings_route_tests::custom_provider_observation_acceptance_is_closed_and_explicit` | `public_ai_settings::custom_providers::tests::custom_provider_observation_acceptance_is_closed_and_explicit` | `crates/vulcan-service-kernel/src/public_ai_settings/custom_providers/tests.rs:481` |
+| `public_ai_settings::inference_settings_route_tests::custom_provider_pending_validation_matches_non_ready_acceptance` | `public_ai_settings::custom_providers::tests::custom_provider_pending_validation_matches_non_ready_acceptance` | `crates/vulcan-service-kernel/src/public_ai_settings/custom_providers/tests.rs:524` |
+| `public_ai_settings::inference_settings_route_tests::custom_model_save_request_defaults_missing_template_decisions` | `public_ai_settings::custom_models::tests::custom_model_save_request_defaults_missing_template_decisions` | `crates/vulcan-service-kernel/src/public_ai_settings/custom_models/tests.rs:48` |
+| `public_ai_settings::inference_settings_route_tests::system_connection_directory_uses_manifest_routes` | `public_ai_settings::catalog_projection::tests::system_connection_directory_uses_manifest_routes` | `crates/vulcan-service-kernel/src/public_ai_settings/catalog_projection/tests.rs:120` |
+| `public_ai_settings::inference_settings_route_tests::multi_protocol_directory_kind_aggregates_route_discovery` | `public_ai_settings::catalog_projection::tests::multi_protocol_directory_kind_aggregates_route_discovery` | `crates/vulcan-service-kernel/src/public_ai_settings/catalog_projection/tests.rs:164` |
+| `public_ai_settings::inference_settings_route_tests::multi_protocol_migration_preserves_exact_internal_route_binding` | `public_ai_settings::custom_providers::tests::multi_protocol_migration_preserves_exact_internal_route_binding` | `crates/vulcan-service-kernel/src/public_ai_settings/custom_providers/tests.rs:568` |
+| `public_ai_settings::inference_settings_route_tests::multi_protocol_custom_provider_projects_one_route_per_protocol` | `public_ai_settings::custom_providers::tests::multi_protocol_custom_provider_projects_one_route_per_protocol` | `crates/vulcan-service-kernel/src/public_ai_settings/custom_providers/tests.rs:618` |
+| `public_ai_settings::inference_settings_route_tests::removed_protocols_reports_only_the_deleted_protocol` | `public_ai_settings::custom_providers::tests::removed_protocols_reports_only_the_deleted_protocol` | `crates/vulcan-service-kernel/src/public_ai_settings/custom_providers/tests.rs:661` |
+| `public_ai_settings::inference_settings_route_tests::connection_contract_comparison_normalizes_every_route` | `public_ai_settings::custom_providers::tests::connection_contract_comparison_normalizes_every_route` | `crates/vulcan-service-kernel/src/public_ai_settings/custom_providers/tests.rs:731` |
+| `public_ai_settings::inference_settings_route_tests::bounded_fixed_headers_survive_prepare_and_registry_revalidation` | `public_ai_settings::custom_providers::tests::bounded_fixed_headers_survive_prepare_and_registry_revalidation` | `crates/vulcan-service-kernel/src/public_ai_settings/custom_providers/tests.rs:795` |
+| `public_ai_settings::inference_settings_route_tests::secret_fixed_headers_are_rejected_at_service_save_boundary` | `public_ai_settings::custom_providers::tests::secret_fixed_headers_are_rejected_at_service_save_boundary` | `crates/vulcan-service-kernel/src/public_ai_settings/custom_providers/tests.rs:833` |
+| `public_ai_settings::inference_settings_route_tests::explicit_preferences_require_enabled_protocols` | `public_ai_settings::custom_models::tests::explicit_preferences_require_enabled_protocols` | `crates/vulcan-service-kernel/src/public_ai_settings/custom_models/tests.rs:65` |
+
+## 测试辅助节点
+
+| 辅助节点 | 原始行 | 当前产物行 | 核查 |
+| --- | ---: | --- | --- |
+| `route_fixture` | 13959–13974 | `crates/vulcan-service-kernel/src/public_ai_settings/inference_testing/tests.rs:19` | 唯一且严格等价；仅原两项路由测试使用 |
+
+## 归属与接线
+
+- inference_validation两项回归保留FixedOff控制与VMM精确策略；media_candidates三项回归保留模型/协议交集、音频排除及结构化输出约束。
+- inference_testing两项回归保留持久用途范围与错槽位拒绝，唯一夹具与它们归位；这不是将生产连接测试功能误当无效测试删除。
+- connections两项回归保留精确账号清理及OAuth/新增/更新三类请求拒绝协议注入；原正反用例完整，OAuth类型由显式导入引用唯一所有者。
+- publication一项回归保留锁定活动/归档预算失效及组装指纹不变；原单用例测试模块外壳一并移除，用例仍通过新模块cfg(test)接线。
+- provider_synchronization四项回归覆盖有界补偿拒绝、缺失前镜像拒绝、取消时磁盘/暂存恢复及可信Index身份守卫；不将失败与取消回归换成成功路径测试。
+- custom_providers十二项回归覆盖精确命名空间、候选契约、全部凭据原子迁移、封闭发现接纳、多协议绑定与固定请求头边界，仍保留全部正反断言。
+- custom_models三项直接回归保留供应商禁用权威、模板决策缺省契约和显式协议/重复偏好校验，唯一批次上限常量随领域归位。
+- model_settings没有独占的原内联回归；模型能力投影、精确会话撤销与全局选择跨层回归保留真实所有者，不新增空测试文件或复制用例。
+- model_selection三项直接回归保留同模型账号重绑、下一Provider请求pending幂等和活动/归档精确撤销；两个原cfg(test)助手保留条件，跨文件提交回归仍使用原根crate入口。
+- inference_settings一项回归完整保留冻结协议、两种用途、内部开关及路由投影溯源断言，通过测试专用导入调用原快照投影所有者。
+- provider_tools一项直接回归保留模型代替不依赖Provider Target以及搜索不能借用无关媒体后端的正反例。
+- session_tools七项回归保留继承/覆盖、最终序列化键排序、缺失目标/后端冲突、幂等初始化、旧媒体目标清理和默认模式物化；元数据RPC消费者另行定向复验。
+- catalog_projection三项回归保留受阻自定义模型诊断、系统Manifest目录类型及多协议远端发现聚合；snapshot三项保留隔离账号修复诊断、无目录能力覆盖可编辑性及纯生成模板/会话模型隔离。
+- general_settings没有独占的原内联回归，不为凑配套文件复制测试。原根inference_settings_route_tests已空并移除外壳，全部47项测试通过各职责模块cfg(test)接线。未删除、忽略、复制或改弱用例；真实账号授权、在线推理及桌面交互仍未验收。

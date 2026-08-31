@@ -1,0 +1,484 @@
+//! Canonical conversation and route-owned replay projection for requests and compaction.
+//! 请求与压缩使用的规范会话及路由持有重放投影。
+
+use super::input_resources::{InlineResourceProjectionBudget, resolve_public_message_resources};
+use super::provider_failure;
+use crate::agent_runtime::provider_attachment::build_missing_attachment_replay_text;
+use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
+use crate::attachment_assets::resolve_attachment_replay_path;
+use serde_json::Value;
+use std::collections::BTreeSet;
+use vulcan_ai_contract::{
+    AiMessage, ContentItem, MessageRole, ProviderReplayEnvelope, ResourceKind, ResourceReference,
+    ToolCall as PublicToolCall, ToolResult, canonicalize_codex_responses_replay_items,
+    is_replayable_codex_responses_item,
+};
+use vulcan_context::{SessionConversationState, SessionMessageEntry};
+use vulcan_core::types::{
+    ConversationAttachmentKind, ConversationPayload as CoreConversationPayload,
+    CoreError as VulcanCoreError,
+};
+use vulcan_provider_adapters::ResolvedPublicAiExecution;
+
+/// Converts one canonical controller message into the public contract.
+/// 将一条规范控制器消息转换为公共契约。
+/// Projects the exact planned canonical source through the same route used for compact dispatch.
+/// 通过压缩分派使用的同一路由投影精确规划的规范来源。
+///
+/// # Parameters
+/// 参数
+/// `conversation_state` owns lossless canonical messages, `source` selects the exact planner window,
+/// and `resolved` freezes route, model capabilities, media projection, and opaque replay identity.
+/// `conversation_state` 持有无损规范消息，`source` 选择精确规划窗口，`resolved` 冻结路由、
+/// 模型能力、媒体投影与不透明重放身份。
+///
+/// # Returns
+/// 返回值
+/// Ordered provider-neutral messages with tools, results, images, and prior compact items preserved,
+/// or a pre-dispatch projection error without sending a provider request.
+/// 返回保留工具、结果、图片与既有压缩项的有序供应商无关消息；投影失败时在发送前返回错误。
+pub(crate) async fn build_responses_compaction_messages(
+    conversation_state: &SessionConversationState,
+    source: &[SessionMessageEntry],
+    resolved: &ResolvedPublicAiExecution,
+    session_scope_id: Option<&str>,
+) -> Result<Vec<AiMessage>, String> {
+    // sourceIds is the exact planner-selected canonical window and rejects ambiguous duplicates.
+    // sourceIds 是规划器精确选中的规范窗口，并拒绝有歧义的重复标识。
+    let source_ids = source
+        .iter()
+        .map(|message| message.id.as_str())
+        .collect::<BTreeSet<_>>();
+    if source_ids.len() != source.len() {
+        return Err(String::from(
+            "Remote Responses compaction source contains duplicate message identities.",
+        ));
+    }
+    // snapshot validates canonical identities before any route-specific projection runs.
+    // snapshot 在执行任何路由专属投影前校验规范身份。
+    let snapshot = build_core_conversation_snapshot(conversation_state)?;
+    // routeFingerprint must match both existing opaque checkpoints and the immutable dispatch route.
+    // routeFingerprint 必须同时匹配既有不透明检查点与不可变分派路由。
+    let route_fingerprint = resolved.route.request_url("/responses");
+    // projectedIds proves every planner-selected source row was found in the canonical snapshot.
+    // projectedIds 证明规划器选择的每条来源记录都存在于规范快照中。
+    let mut projected_ids = BTreeSet::new();
+    // messages retains canonical order after exact-window filtering.
+    // messages 在精确窗口过滤后保留规范顺序。
+    let mut messages = Vec::new();
+    for message in &snapshot.messages {
+        if !source_ids.contains(message.id.as_str()) {
+            continue;
+        }
+        projected_ids.insert(message.id.as_str());
+        // publicMessage uses the normal request bridge so tool and provider item shapes cannot diverge.
+        // publicMessage 使用普通请求桥接，避免工具与供应商项形态发生分歧。
+        let public_message = core_message_to_public(
+            message,
+            resolved.route.provider.id.as_str(),
+            resolved.route.connection.id.as_str(),
+            route_fingerprint.as_str(),
+            resolved.route.protocol_route.protocol_profile_id.as_str(),
+            resolved.model.id.as_str(),
+        )
+        .map_err(|error| error.to_string())?;
+        messages.push(public_message);
+    }
+    if projected_ids != source_ids {
+        return Err(String::from(
+            "Remote Responses compaction source no longer matches the canonical conversation.",
+        ));
+    }
+    // Newer compacted messages reserve inline bytes before older history to preserve current-turn relevance.
+    // 较新的压缩消息先于旧历史保留内联字节，以保持当前回合相关性。
+    let mut inline_resource_budget = InlineResourceProjectionBudget::default();
+    for public_message in messages.iter_mut().rev() {
+        resolve_public_message_resources(
+            public_message,
+            &resolved.route,
+            resolved.model.id.as_str(),
+            resolved.model.capabilities.input_resources.as_slice(),
+            &resolved.client,
+            session_scope_id,
+            &mut inline_resource_budget,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    }
+    messages.retain(|message| {
+        !message.content.is_empty() || !message.provider_context_items.is_empty()
+    });
+    Ok(messages)
+}
+
+pub(super) fn core_message_to_public(
+    message: &vulcan_core::types::ConversationMessage,
+    provider_id: &str,
+    connection_id: &str,
+    route_fingerprint: &str,
+    protocol_profile_id: &str,
+    model_id: &str,
+) -> Result<AiMessage, VulcanCoreError> {
+    match &message.payload {
+        CoreConversationPayload::UserText { text, attachments } => {
+            let mut content = vec![ContentItem::Text { text: text.clone() }];
+            for (index, attachment) in attachments.iter().enumerate() {
+                // replay_path is the only host path allowed to reach provider projection after index-backed integrity verification.
+                // replay_path 是经过索引完整性校验后唯一允许进入 Provider 投影的宿主路径。
+                let Some(replay_path) = resolve_attachment_replay_path(attachment) else {
+                    content.push(ContentItem::Text {
+                        text: build_missing_attachment_replay_text(attachment),
+                    });
+                    continue;
+                };
+                let resource_id = attachment
+                    .asset_id
+                    .clone()
+                    .unwrap_or_else(|| format!("{}:attachment:{index}", message.id));
+                let kind = match attachment.kind {
+                    ConversationAttachmentKind::Audio => ResourceKind::Audio,
+                    ConversationAttachmentKind::Image => ResourceKind::Image,
+                    ConversationAttachmentKind::Video => ResourceKind::Video,
+                    ConversationAttachmentKind::Pdf => ResourceKind::File,
+                    ConversationAttachmentKind::File => ResourceKind::File,
+                };
+                content.push(ContentItem::Resource {
+                    resource: ResourceReference {
+                        id: resource_id,
+                        kind,
+                        media_type: Some(attachment.mime_type.clone()),
+                        source_kind: vulcan_ai_contract::ResourceSourceKind::HostResolved,
+                        file_name: Some(attachment.file_name.clone()),
+                        image_detail: None,
+                        resource_path: attachment.resource_path.clone(),
+                        local_path: Some(replay_path.to_string_lossy().into_owned()),
+                        url: None,
+                    },
+                });
+            }
+            Ok(AiMessage {
+                role: MessageRole::User,
+                content,
+                provider_context_items: Vec::new(),
+            })
+        }
+        CoreConversationPayload::Assistant {
+            text,
+            reasoning,
+            provider_message_state,
+            tool_calls,
+            ..
+        } => {
+            // providerContextItems prefer complete ordinary output replay before remote compaction state.
+            // providerContextItems 优先采用完整普通输出重放，其次才采用远端压缩状态。
+            let mut provider_context_items = replay_provider_context_items_for_route(
+                provider_message_state.as_ref(),
+                provider_id,
+                connection_id,
+                route_fingerprint,
+                protocol_profile_id,
+                model_id,
+            )?;
+            if provider_context_items.is_empty() {
+                provider_context_items = responses_compaction_items_for_route(
+                    provider_message_state.as_ref(),
+                    provider_id,
+                    connection_id,
+                    route_fingerprint,
+                    protocol_profile_id,
+                    model_id,
+                )?;
+            }
+            if let Some(content) = replay_content_for_route(
+                provider_message_state.as_ref(),
+                provider_id,
+                connection_id,
+                route_fingerprint,
+                protocol_profile_id,
+                model_id,
+            )? {
+                return Ok(AiMessage {
+                    role: MessageRole::Assistant,
+                    content: if provider_context_items.is_empty() {
+                        content
+                    } else {
+                        Vec::new()
+                    },
+                    provider_context_items,
+                });
+            }
+            let mut content = Vec::new();
+            // Opaque compaction items replace the anchor's local diagnostic text on their exact route.
+            // 不透明压缩项在精确路由上替代锚点的本地诊断文本。
+            if provider_context_items.is_empty() {
+                if !reasoning.is_empty() {
+                    content.push(ContentItem::Reasoning {
+                        text: reasoning.clone(),
+                        signature: None,
+                    });
+                }
+                if !text.is_empty() {
+                    content.push(ContentItem::Text { text: text.clone() });
+                }
+                for call in tool_calls {
+                    // Outbound encoding consumes the canonical wire id only; local runtime aliases never leak.
+                    // 出站编码只使用规范线协议标识；本地运行时别名绝不泄漏。
+                    let call_id = call
+                        .tool_call_id
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| {
+                            provider_failure(
+                                "vulcan",
+                                "Canonical tool call is missing its provider-visible call identifier.",
+                            )
+                        })?;
+                    content.push(ContentItem::ToolCall {
+                        call: PublicToolCall {
+                            id: call_id.to_string(),
+                            name: call.tool_name.clone(),
+                            arguments: call.arguments.clone(),
+                            signature: None,
+                        },
+                    });
+                }
+            }
+            Ok(AiMessage {
+                role: MessageRole::Assistant,
+                content,
+                provider_context_items,
+            })
+        }
+        CoreConversationPayload::ToolResult {
+            tool_call_id,
+            is_error,
+            text,
+        } => {
+            let call_id = tool_call_id.clone().ok_or_else(|| {
+                provider_failure(
+                    "vulcan",
+                    "Canonical tool result is missing its provider-visible call identifier.",
+                )
+            })?;
+            Ok(AiMessage {
+                role: MessageRole::Tool,
+                content: vec![ContentItem::ToolResult {
+                    result: ToolResult {
+                        call_id,
+                        is_error: *is_error,
+                        content: Value::String(text.clone()),
+                    },
+                }],
+                provider_context_items: Vec::new(),
+            })
+        }
+        CoreConversationPayload::AgentMessage { .. } => Ok(AiMessage {
+            role: MessageRole::User,
+            content: vec![ContentItem::Text {
+                text: message
+                    .payload
+                    .agent_message_model_text()
+                    .ok_or_else(|| provider_failure("vulcan", "Agent message rendering failed."))?,
+            }],
+            provider_context_items: Vec::new(),
+        }),
+    }
+}
+
+/// Reads durable ordered replay content only for the exact active execution route.
+/// 仅为当前精确执行路由读取可持久化的有序重放内容。
+///
+/// # Parameters
+/// 参数
+/// `provider_message_state` is the Core-persisted assistant extension; the remaining identifiers
+/// define the currently selected execution route.
+/// `provider_message_state` 是 Core 持久化的助手扩展；其余标识定义当前选定执行路由。
+///
+/// # Returns
+/// 返回值
+/// Exact ordered content for a matching route, no replay for a different route, or a controlled
+/// error when a declared replay envelope is malformed.
+/// 路由匹配时返回精确有序内容；路由不同时不重放；已声明封套损坏时返回受控错误。
+fn replay_content_for_route(
+    provider_message_state: Option<&Value>,
+    provider_id: &str,
+    connection_id: &str,
+    route_fingerprint: &str,
+    protocol_profile_id: &str,
+    model_id: &str,
+) -> Result<Option<Vec<ContentItem>>, VulcanCoreError> {
+    let Some(replay_value) =
+        provider_message_state.and_then(|state| state.pointer("/vulcan_ai/replay"))
+    else {
+        return Ok(None);
+    };
+    let envelope: ProviderReplayEnvelope =
+        serde_json::from_value(replay_value.clone()).map_err(|error| {
+            provider_failure(
+                provider_id,
+                format!("Persisted public replay envelope is invalid: {error}").as_str(),
+            )
+        })?;
+    if !envelope.matches_route(
+        provider_id,
+        connection_id,
+        route_fingerprint,
+        protocol_profile_id,
+        model_id,
+    ) {
+        return Ok(None);
+    }
+    Ok(Some(envelope.content))
+}
+
+/// Reads exact Responses output items from one route-matched replay envelope.
+/// 从一份路由匹配的重放封套读取精确 Responses 输出项。
+///
+/// # Parameters
+/// 参数
+/// `provider_message_state` is the persisted assistant extension; the remaining identifiers
+/// define the only physical route allowed to replay provider-owned output items.
+/// `provider_message_state` 是持久化的助手扩展；其余标识定义唯一允许重放供应商输出项的物理路由。
+///
+/// # Returns
+/// 返回值
+/// The validated ordered provider item list for an exact route, or an empty list otherwise.
+/// 精确路由匹配时返回已验证的有序供应商项列表，否则返回空列表。
+fn replay_provider_context_items_for_route(
+    provider_message_state: Option<&Value>,
+    provider_id: &str,
+    connection_id: &str,
+    route_fingerprint: &str,
+    protocol_profile_id: &str,
+    model_id: &str,
+) -> Result<Vec<Value>, VulcanCoreError> {
+    // replayValue is the only durable extension allowed to own ordinary provider output items.
+    // replayValue 是唯一允许持有普通供应商输出项的持久化扩展。
+    let Some(replay_value) =
+        provider_message_state.and_then(|state| state.pointer("/vulcan_ai/replay"))
+    else {
+        return Ok(Vec::new());
+    };
+    // envelope validates the closed format before any route-owned payload becomes visible.
+    // envelope 在任何路由专属载荷可见前校验封闭格式。
+    let envelope: ProviderReplayEnvelope =
+        serde_json::from_value(replay_value.clone()).map_err(|error| {
+            provider_failure(
+                provider_id,
+                format!("Persisted public replay envelope is invalid: {error}").as_str(),
+            )
+        })?;
+    if !envelope.matches_route(
+        provider_id,
+        connection_id,
+        route_fingerprint,
+        protocol_profile_id,
+        model_id,
+    ) {
+        return Ok(Vec::new());
+    }
+    if !envelope
+        .provider_context_items
+        .iter()
+        .all(is_replayable_codex_responses_item)
+    {
+        return Err(provider_failure(
+            provider_id,
+            "Persisted public replay envelope contains a non-replayable provider context item.",
+        ));
+    }
+    Ok(envelope.provider_context_items)
+}
+
+/// Reads route-bound remote Responses compaction items from one canonical assistant state.
+/// 从一条规范助手状态读取绑定路由的远端 Responses 压缩项。
+///
+/// # Parameters
+/// 参数
+/// `provider_message_state` is the persisted assistant extension; the remaining identifiers freeze
+/// the only route allowed to replay the ordered opaque Responses item list.
+/// `provider_message_state` 是持久化助手扩展；其余标识冻结唯一允许重放有序不透明 Responses 项列表的路由。
+///
+/// # Returns
+/// 返回值
+/// A validated ordered Responses-item list, or an empty list when no exact route-bound state exists.
+/// 返回已验证的有序 Responses 项列表；不存在精确路由绑定状态时返回空列表。
+fn responses_compaction_items_for_route(
+    provider_message_state: Option<&Value>,
+    provider_id: &str,
+    connection_id: &str,
+    route_fingerprint: &str,
+    protocol_profile_id: &str,
+    model_id: &str,
+) -> Result<Vec<Value>, VulcanCoreError> {
+    let Some(value) =
+        provider_message_state.and_then(|state| state.pointer("/vulcan_ai/responses_compaction"))
+    else {
+        return Ok(Vec::new());
+    };
+    let envelope = value.as_object().ok_or_else(|| {
+        provider_failure(
+            provider_id,
+            "Persisted Responses compaction envelope must be an object.",
+        )
+    })?;
+    if envelope.get("provider_id").and_then(Value::as_str) != Some(provider_id)
+        || envelope.get("connection_id").and_then(Value::as_str) != Some(connection_id)
+        || envelope.get("route_fingerprint").and_then(Value::as_str) != Some(route_fingerprint)
+        || envelope.get("protocol_profile_id").and_then(Value::as_str) != Some(protocol_profile_id)
+        || envelope.get("model_id").and_then(Value::as_str) != Some(model_id)
+    {
+        return Err(provider_failure(
+            provider_id,
+            "Persisted Responses compaction context belongs to a different provider route and cannot be discarded safely.",
+        ));
+    }
+    let items = envelope
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            provider_failure(
+                provider_id,
+                "Persisted Responses compaction envelope is missing its item list.",
+            )
+        })?;
+    // canonicalItems mirrors the official Codex deserializer alias before replay validation.
+    // canonicalItems 在重放校验前镜像官方 Codex 反序列化器别名。
+    let mut canonical_items = items.clone();
+    canonicalize_codex_responses_replay_items(&mut canonical_items);
+    let contains_compaction = canonical_items
+        .iter()
+        .any(|item| item.get("type").and_then(Value::as_str) == Some("compaction"));
+    if canonical_items.is_empty()
+        || !canonical_items
+            .iter()
+            .all(is_replayable_codex_responses_item)
+        || !contains_compaction
+    {
+        return Err(provider_failure(
+            provider_id,
+            "Persisted Responses compaction envelope contains an invalid ordered replayable item.",
+        ));
+    }
+    Ok(canonical_items)
+}
+
+/// Returns the model-visible text of one canonical controller message.
+/// 返回一条规范控制器消息的模型可见文本。
+pub(super) fn core_message_text(
+    message: &vulcan_core::types::ConversationMessage,
+) -> Result<String, VulcanCoreError> {
+    match &message.payload {
+        CoreConversationPayload::UserText { text, .. } => Ok(text.clone()),
+        CoreConversationPayload::Assistant { text, .. } => Ok(text.clone()),
+        CoreConversationPayload::ToolResult { text, .. } => Ok(text.clone()),
+        CoreConversationPayload::AgentMessage { .. } => message
+            .payload
+            .agent_message_model_text()
+            .ok_or_else(|| provider_failure("vulcan", "Agent message rendering failed.")),
+    }
+}
+
+#[cfg(test)]
+mod tests;

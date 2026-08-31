@@ -1,0 +1,6 @@
+# Keep integrity-pinned manifests byte-stable across Windows and Unix checkouts.
+# 保持完整性索引固定的清单在 Windows 与 Unix 检出时字节一致。
+/manifests/*.json text eol=lf
+# Keep the generated bundled index in the same canonical text representation.
+# 让生成的内置索引使用相同的规范文本表示。
+/bundled-index.json text eol=lf

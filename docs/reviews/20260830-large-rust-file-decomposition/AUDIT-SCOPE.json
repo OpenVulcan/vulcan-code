@@ -1,0 +1,51 @@
+[
+  {
+    "id": "01",
+    "original": "crates/vulcan-provider-adapters/src/runtime.rs"
+  },
+  {
+    "id": "02",
+    "original": "crates/vulcan-service-kernel/src/public_ai_settings.rs"
+  },
+  {
+    "id": "03",
+    "original": "crates/vulcan-provider-adapters/src/execution.rs"
+  },
+  {
+    "id": "04",
+    "original": "crates/vulcan-workspace-store/src/knowledge_base/runtime.rs"
+  },
+  {
+    "id": "05",
+    "original": "crates/vulcan-session-core/src/v1/document.rs",
+    "children": [
+      "api",
+      "compaction",
+      "hydration",
+      "input",
+      "modes",
+      "persistence",
+      "provider_source",
+      "selection",
+      "subagent",
+      "tools",
+      "turns"
+    ]
+  },
+  {
+    "id": "06",
+    "original": "crates/vulcan-plugin-runtime/src/runtime.rs"
+  },
+  {
+    "id": "09",
+    "original": "crates/vulcan-session-core/src/v1/document/document_tests.rs"
+  },
+  {
+    "id": "13",
+    "original": "crates/vulcan-provider-adapters/src/client.rs"
+  },
+  {
+    "id": "14",
+    "original": "crates/vulcan-agent-runtime/src/agent_runtime/provider_transport_vulcan.rs"
+  }
+]
