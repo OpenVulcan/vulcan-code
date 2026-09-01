@@ -4349,6 +4349,7 @@ mod tests {
             .expect_err("undeclared host must remain outside the frozen authority");
         assert!(error.contains("declared scheme"));
         assert!(error.contains("host suffixes"));
+        assert!(error.contains("assets.example.org"));
 
         // A non-default port is a distinct network authority that the host-only policy cannot grant.
         // 非默认端口属于宿主专用策略无法授权的另一项网络权限。

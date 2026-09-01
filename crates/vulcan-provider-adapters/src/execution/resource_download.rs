@@ -110,7 +110,7 @@ impl ProviderToolResourceDownloadPolicy {
             || !provider_resource_host_matches_suffixes(host, &self.host_suffixes)
         {
             return Err(format!(
-                "{label} is outside the declared scheme, default port or exact operation origin, and host suffixes."
+                "{label} URL host `{host}` is outside the declared scheme, default port or exact operation origin, and host suffixes."
             ));
         }
         Ok(url)

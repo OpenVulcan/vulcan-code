@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "minimax",
-  "revision": 19,
-  "published_at": "2026-09-01T09:27:25Z",
+  "revision": 22,
+  "published_at": "2026-09-01T15:23:17Z",
   "engine_contract": {
     "minimum_manifest_engine": 2,
     "required_protocol_profiles": [
@@ -815,7 +815,7 @@
               "aspect_ratio": {"$vulcan_ref": {"path": "/aspect_ratio", "optional": true}},
               "width": {"$vulcan_ref": {"path": "/width", "optional": true}},
               "height": {"$vulcan_ref": {"path": "/height", "optional": true}},
-              "response_format": "base64",
+              "response_format": "url",
               "seed": {"$vulcan_ref": {"path": "/seed", "optional": true}},
               "n": {"$vulcan_ref": {"path": "/count"}},
               "prompt_optimizer": {"$vulcan_ref": {"path": "/prompt_optimizer"}},
@@ -1026,7 +1026,7 @@
     },
     {
       "profile_id": "minimax.image.response.v1",
-      "description": "Normalize MiniMax image application status while preserving declarative resource carriers.",
+      "description": "Normalize MiniMax image application status while preserving every successful output when the provider reports partial failures.",
       "payload": {
         "profile_id": "minimax.image.response.v1",
         "revision": 1,
@@ -1038,20 +1038,8 @@
                 "path": "/base_resp/status_code",
                 "equals": 0,
                 "then": {
-                  "$vulcan_if_equals": {
-                    "path": "/data/failed_count",
-                    "equals": 0,
-                    "then": {
-                      "id": {"$vulcan_ref": {"path": "/data/task_id"}},
-                      "data": {"$vulcan_ref": {"path": "/data"}}
-                    },
-                    "otherwise": {
-                      "error": {
-                        "code": "partial_failure",
-                        "message": "Provider reported one or more failed image outputs."
-                      }
-                    }
-                  }
+                  "id": {"$vulcan_ref": {"path": "/data/task_id", "optional": true}},
+                  "data": {"$vulcan_ref": {"path": "/data"}}
                 },
                 "otherwise": {
                   "error": {
@@ -1321,7 +1309,7 @@
           "remove_source": false
         }
       ],
-      "timeout_ms": 60000,
+      "timeout_ms": 300000,
       "idempotent": false
     },
     {
@@ -1654,7 +1642,7 @@
         ],
         "normalized_result_path": "resources",
         "resource_kind": "image",
-        "source_path": "/data/image_base64",
+        "source_path": "/data/image_urls",
         "resource_decoders": [
           {
             "source_path": "/data/image_base64",
@@ -1668,7 +1656,7 @@
           {
             "source_path": "/data/image_urls",
             "encoding": "https_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/jpeg",
             "optional": true,
@@ -3697,7 +3685,7 @@
         ],
         "normalized_result_path": "resources",
         "resource_kind": "image",
-        "source_path": "/data/image_base64",
+        "source_path": "/data/image_urls",
         "resource_decoders": [
           {
             "source_path": "/data/image_base64",
@@ -3711,7 +3699,7 @@
           {
             "source_path": "/data/image_urls",
             "encoding": "https_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/jpeg",
             "optional": true,
@@ -3836,7 +3824,7 @@
         ],
         "normalized_result_path": "resources",
         "resource_kind": "image",
-        "source_path": "/data/image_base64",
+        "source_path": "/data/image_urls",
         "resource_decoders": [
           {
             "source_path": "/data/image_base64",
@@ -3850,7 +3838,7 @@
           {
             "source_path": "/data/image_urls",
             "encoding": "https_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/jpeg",
             "optional": true,
@@ -5914,7 +5902,7 @@
         ],
         "normalized_result_path": "resources",
         "resource_kind": "image",
-        "source_path": "/data/image_base64",
+        "source_path": "/data/image_urls",
         "resource_decoders": [
           {
             "source_path": "/data/image_base64",
@@ -5928,7 +5916,7 @@
           {
             "source_path": "/data/image_urls",
             "encoding": "https_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "image",
             "mime_type": "image/jpeg",
             "optional": true,
@@ -6040,7 +6028,7 @@
       },
       {
         "url": "https://github.com/MiniMax-AI/cli/commit/2576f4656211e6d296bb1fe885da141080b70f23",
-        "note": "MiniMax CLI video generation verifies the V1 task, retrieves file metadata by file_id, and downloads file.download_url; a live CN retrieval returned the exact authorized OSS host recorded by the video output contract."
+        "note": "MiniMax CLI image generation defaults to response_format=url with a 300-second request timeout; video generation verifies the V1 task, retrieves file metadata by file_id, and downloads file.download_url, while a live CN retrieval returned the exact authorized OSS host recorded by the video output contract."
       }
     ]
   }

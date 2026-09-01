@@ -37,7 +37,7 @@
     },
     "output": {
       "kind": "resources",
-      "source_path": "/data/image_base64",
+      "source_path": "/data/image_urls",
       "normalized_result_path": "resources",
       "resource_kind": "image",
       "mime_types": ["image/jpeg"],
@@ -54,7 +54,7 @@
         {
           "source_path": "/data/image_urls",
           "encoding": "https_url",
-          "download_host_suffixes": ["example.com"],
+          "download_host_suffixes": [".aliyuncs.com"],
           "resource_kind": "image",
           "mime_type": "image/jpeg",
           "optional": true,
@@ -80,7 +80,7 @@
     "response_profile_refs": ["fixture.minimax.image.response.v1"],
     "upload_channel_refs": [],
     "upload_bindings": [],
-    "timeout_ms": 60000,
+    "timeout_ms": 300000,
     "idempotent": false
   },
   "upload_channels": [],
@@ -110,7 +110,7 @@
               "aspect_ratio": {"$vulcan_ref": {"path": "/aspect_ratio", "optional": true}},
               "width": {"$vulcan_ref": {"path": "/width", "optional": true}},
               "height": {"$vulcan_ref": {"path": "/height", "optional": true}},
-              "response_format": "base64",
+              "response_format": "url",
               "seed": {"$vulcan_ref": {"path": "/seed", "optional": true}},
               "n": {"$vulcan_ref": {"path": "/count"}},
               "prompt_optimizer": {"$vulcan_ref": {"path": "/prompt_optimizer"}},
@@ -130,7 +130,7 @@
   "response_profiles": [
     {
       "profile_id": "fixture.minimax.image.response.v1",
-      "description": "Normalize MiniMax image application status.",
+      "description": "Normalize MiniMax image application status while preserving successful partial outputs.",
       "payload": {
         "profile_id": "fixture.minimax.image.response.v1",
         "revision": 1,
@@ -142,15 +142,8 @@
                 "path": "/base_resp/status_code",
                 "equals": 0,
                 "then": {
-                  "$vulcan_if_equals": {
-                    "path": "/data/failed_count",
-                    "equals": 0,
-                    "then": {
-                      "id": {"$vulcan_ref": {"path": "/data/task_id"}},
-                      "data": {"$vulcan_ref": {"path": "/data"}}
-                    },
-                    "otherwise": {"error": {"code": "partial_failure", "message": "failed image"}}
-                  }
+                  "id": {"$vulcan_ref": {"path": "/data/task_id", "optional": true}},
+                  "data": {"$vulcan_ref": {"path": "/data"}}
                 },
                 "otherwise": {
                   "error": {
@@ -168,7 +161,7 @@
   "required_execution_primitives": ["http_json_sync"],
   "required_upload_primitives": [],
   "required_transformers": ["rebuild_json_template", "remove_if_empty"],
-  "arguments": {"prompt": "a red volcano"},
+  "arguments": {"prompt": "a red volcano", "count": 2},
   "interactions": [
     {
       "method": "POST",
@@ -176,19 +169,18 @@
       "expected_json_body": {
         "model": "image-01",
         "prompt": "a red volcano",
-        "response_format": "base64",
-        "n": 1,
+        "response_format": "url",
+        "n": 2,
         "prompt_optimizer": false,
         "aigc_watermark": false
       },
       "response_status": 200,
       "response_json_body": {
         "data": {
-          "task_id": "image-task-1",
-          "image_base64": ["aGVsbG8="],
-          "image_urls": [],
+          "image_base64": [],
+          "image_urls": ["https://minimax-image.oss-cn-shanghai.aliyuncs.com/image-1.jpg"],
           "success_count": 1,
-          "failed_count": 0
+          "failed_count": 1
         },
         "base_resp": {"status_code": 0, "status_msg": "ok"}
       }
