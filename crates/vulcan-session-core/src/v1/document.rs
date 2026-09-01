@@ -59,6 +59,7 @@ mod selection;
 mod subagent;
 mod tools;
 mod turns;
+mod user_prompt;
 
 pub use api::{
     ApiCompletion, ApiGroupCompletionReceipt, ApiTransportObservedReceipt,

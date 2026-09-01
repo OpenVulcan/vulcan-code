@@ -4,19 +4,15 @@
 use super::{
     PROVIDER_TOOL_MEDIA_CACHE_DURATION_MS, ProviderExecutionClient, ProviderExecutionRoute,
 };
-use crate::CredentialExecutionSecret;
 use crate::media::{MediaUploadCancellation, MediaUploadProgressCallback};
+use crate::{CredentialExecutionSecret, MediaUploadFailure};
 use base64::Engine as _;
-use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
+use tokio::io::AsyncReadExt;
 use vulcan_ai_contract::ResourceKind;
-
-/// Host-wide preferred inline ceiling before an available provider upload channel is selected.
-/// 存在 Provider 上传通道时，宿主优先内联所采用的统一字节上限。
-pub const PREFERRED_INLINE_MEDIA_MAX_BYTES: u64 = 512 * 1024;
 
 /// Maximum process-local prepared media references retained across all providers and accounts.
 /// 全部供应商与账号合计允许保留的最大进程内媒体准备引用数。
@@ -51,6 +47,24 @@ pub(super) struct PreparedMediaCacheEntry {
     /// Source metadata prevents a rewritten file from reusing an older provider reference.
     /// 源文件元数据防止被改写的文件复用旧供应商引用。
     source_fingerprint: PreparedMediaSourceFingerprint,
+}
+
+/// An admitted immutable source whose original filename and identity do not depend on the physical entity path.
+/// 已准入不可变来源，其原始文件名及身份不依赖物理实体路径。
+#[derive(Debug, Clone, Copy)]
+pub struct AdmittedLocalMediaSource<'a> {
+    /// Exact host-owned local path used only for private media IO.
+    /// 仅用于私有媒体IO的精确宿主持有本地路径。
+    pub path: &'a Path,
+    /// Original filename supplied by the authoritative resource owner.
+    /// 权威资源所有者提供的原始文件名。
+    pub file_name: &'a str,
+    /// Exact catalog or managed-asset MIME type.
+    /// 精确目录或托管资产MIME类型。
+    pub mime_type: &'a str,
+    /// Required immutable source identity captured before this preparation attempt.
+    /// 本次准备尝试之前捕获的必需不可变来源身份。
+    pub identity: &'a PreparedMediaSourceIdentity,
 }
 
 /// Carries one prepared media outcome together with the exact verified source revision.
@@ -134,6 +148,9 @@ pub struct ConversationPreparedMediaRetention<'a> {
 /// 携带引用复用所需的不可变上传契约身份。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversationMediaUploadContract {
+    /// Exact total upload timeout declared by the selected real network interface.
+    /// 选中真实网络接口声明的精确上传总超时。
+    pub timeout_ms: u64,
     /// Stable Manifest upload-channel identifier.
     /// 稳定的 Manifest 上传通道标识。
     pub upload_channel_id: String,
@@ -149,6 +166,44 @@ pub struct ConversationMediaUploadContract {
     /// Exact wire encoding used by references returned from this channel.
     /// 当前通道返回引用使用的精确 Wire 编码。
     pub reference_encoding: crate::UploadReferenceEncoding,
+    /// Exact raw-byte bound of the selected interface, applied even when inline is preferred.
+    /// 选中接口的精确原始字节上限，即使偏好内联也必须执行。
+    pub max_bytes: Option<u64>,
+    /// Exact resource-count bound of the selected interface.
+    /// 选中接口的精确资源数量上限。
+    pub max_count: Option<u64>,
+}
+
+/// Exact preflight decision and source size consumed by local materialization.
+/// 本地物化消费的精确预检决定与源大小。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalMediaMaterialization {
+    /// Inline only the exact preflight-sized source; no upload fallback is permitted.
+    /// 仅内联精确预检大小的来源，不允许上传回退。
+    Inline {
+        /// Raw bytes admitted before reading or allocating the payload.
+        /// 读取或分配载荷之前准入的原始字节数。
+        source_byte_len: u64,
+    },
+    /// Execute the selected real upload; missing upload declarations are errors, not inline hints.
+    /// 执行选中真实上传；缺失上传声明属于错误，不是内联提示。
+    ProviderUpload {
+        /// Raw bytes admitted before source hashing or upload.
+        /// 来源哈希或上传之前准入的原始字节数。
+        source_byte_len: u64,
+    },
+}
+
+impl LocalMediaMaterialization {
+    /// Returns the exact preflight size shared by both materialization variants.
+    /// 返回两种物化变体共用的精确预检大小。
+    pub fn source_byte_len(self) -> u64 {
+        match self {
+            Self::Inline { source_byte_len } | Self::ProviderUpload { source_byte_len } => {
+                source_byte_len
+            }
+        }
+    }
 }
 
 /// Identifies the source-file revision used to create one prepared media reference.
@@ -253,7 +308,7 @@ async fn prepared_media_source_fingerprint(
     progress: Option<MediaUploadProgressCallback>,
     cancellation: Option<&MediaUploadCancellation>,
 ) -> Result<PreparedMediaSourceFingerprint, String> {
-    read_prepared_media_source(local_path, progress, cancellation, false)
+    read_prepared_media_source(local_path, progress, cancellation, false, None)
         .await
         .map(|source| source.fingerprint)
 }
@@ -267,6 +322,8 @@ async fn prepared_media_source_fingerprint(
 /// `prepared_media_source_fingerprint`; `retain_bytes` enables request-owned byte retention.
 /// `local_path`、`progress` 与 `cancellation` 定义和 `prepared_media_source_fingerprint`
 /// 相同的有界读取契约；`retain_bytes` 启用请求自有字节保留。
+/// `planned_byte_len` pins preflight size when present; identity-only callers have no prior size snapshot.
+/// 存在 `planned_byte_len` 时固定预检大小；仅计算身份的调用者没有此前大小快照。
 ///
 /// # Returns
 /// 返回值
@@ -277,43 +334,69 @@ async fn read_prepared_media_source(
     progress: Option<MediaUploadProgressCallback>,
     cancellation: Option<&MediaUploadCancellation>,
     retain_bytes: bool,
+    planned_byte_len: Option<u64>,
 ) -> Result<PreparedMediaSourceRead, String> {
-    let metadata = tokio::fs::metadata(local_path)
-        .await
-        .map_err(|error| format!("Media source metadata could not be read: {error}"))?;
+    // Each source operation observes cancellation while pending, not only after a filesystem read finishes.
+    // 每个来源操作在等待时观察取消，而非仅在文件系统读取完成后检查。
+    let metadata = await_prepared_source_io(
+        cancellation,
+        tokio::fs::metadata(local_path),
+        "Media source metadata could not be read",
+    )
+    .await?;
     if !metadata.is_file() {
         return Err(String::from("Media source must be a file."));
     }
     let expected_byte_len = metadata.len();
+    if planned_byte_len.is_some_and(|planned| planned != expected_byte_len) {
+        return Err(String::from(
+            "Media source size changed after delivery planning; retry is required.",
+        ));
+    }
     if expected_byte_len == 0 {
         return Err(String::from("Media source must be a non-empty file."));
     }
     let modified_at = metadata.modified().ok();
-    let file = tokio::fs::File::open(local_path)
-        .await
-        .map_err(|error| format!("Media source could not be opened: {error}"))?;
-    let mut source = tokio_util::io::ReaderStream::new(file);
+    let file = await_prepared_source_io(
+        cancellation,
+        tokio::fs::File::open(local_path),
+        "Media source could not be opened",
+    )
+    .await?;
+    // The extra byte detects growth, but the reader cannot traverse an unadmitted tail.
+    // 额外字节检测增长，但读取器不能遍历未准入尾部。
+    let mut source = file.take(expected_byte_len.saturating_add(1));
+    // A fixed heap buffer bounds read memory without inflating every async future's stack footprint.
+    // 固定堆缓冲区约束读取内存，不扩大每个异步Future的栈体积。
+    let mut buffer = vec![0_u8; 64 * 1024];
     let mut content_hasher = Sha256::new();
     let mut processed = 0_u64;
     // retainedBytes owns exactly the chunks included in contentHasher when inline projection is required.
     // retainedBytes 在需要内联投影时精确持有纳入 contentHasher 的全部分块。
     let mut retained_bytes = retain_bytes.then(Vec::new);
-    while let Some(chunk) = source.next().await {
-        if cancellation.is_some_and(MediaUploadCancellation::is_cancelled) {
-            return Err(String::from("media upload cancelled"));
+    loop {
+        // Cancellation wins a simultaneous ready read and never publishes additional bytes or progress.
+        // 取消优先于同时就绪的读取，绝不再发布额外字节或进度。
+        let count = await_prepared_source_io(
+            cancellation,
+            source.read(&mut buffer),
+            "Media source could not be read",
+        )
+        .await?;
+        if count == 0 {
+            break;
         }
-        let chunk = chunk.map_err(|error| format!("Media source could not be read: {error}"))?;
         processed = processed
-            .checked_add(chunk.len() as u64)
+            .checked_add(count as u64)
             .ok_or_else(|| String::from("Media source byte count overflowed."))?;
         if processed > expected_byte_len {
             return Err(String::from(
                 "Media source changed while its content fingerprint was being read.",
             ));
         }
-        content_hasher.update(chunk.as_ref());
+        content_hasher.update(&buffer[..count]);
         if let Some(retained_bytes) = retained_bytes.as_mut() {
-            retained_bytes.extend_from_slice(chunk.as_ref());
+            retained_bytes.extend_from_slice(&buffer[..count]);
         }
         if let Some(callback) = progress.as_ref() {
             callback(processed, Some(expected_byte_len));
@@ -324,9 +407,12 @@ async fn read_prepared_media_source(
             "Media source changed while its content fingerprint was being read.",
         ));
     }
-    let current_metadata = tokio::fs::metadata(local_path)
-        .await
-        .map_err(|_| String::from("Media source disappeared during preparation."))?;
+    let current_metadata = await_prepared_source_io(
+        cancellation,
+        tokio::fs::metadata(local_path),
+        "Media source disappeared during preparation",
+    )
+    .await?;
     if !current_metadata.is_file()
         || current_metadata.len() != expected_byte_len
         || current_metadata.modified().ok() != modified_at
@@ -343,6 +429,34 @@ async fn read_prepared_media_source(
         },
         retained_bytes,
     })
+}
+
+/// Awaits one exact source `io` operation under optional host `cancellation`; `stage` supplies a non-secret diagnostic.
+/// 在可选宿主`cancellation`约束下等待一个精确来源`io`操作；`stage`提供非秘密诊断。
+/// Returns its value, cancellation, or the safe stage error; no stage establishes or resets another timeout.
+/// 返回操作值、取消或安全阶段错误；任何阶段均不建立或重置另一个超时。
+async fn await_prepared_source_io<T>(
+    cancellation: Option<&MediaUploadCancellation>,
+    io: impl std::future::Future<Output = std::io::Result<T>>,
+    stage: &'static str,
+) -> Result<T, String> {
+    // The optional branch is declared by historical read-only cache APIs; real preparation always passes its token.
+    // 可选分支由历史只读缓存API声明；真实准备始终传入自身令牌。
+    let result = if let Some(cancellation) = cancellation {
+        tokio::select! {
+            biased;
+            _ = cancellation.wait() => return Err(String::from("media upload cancelled")),
+            result = io => result,
+        }
+    } else {
+        io.await
+    };
+    // A ready operation may synchronously trigger cancellation during its final poll; cancellation still owns the result.
+    // 就绪操作可能在最终轮询中同步触发取消；结果仍归取消所有。
+    if cancellation.is_some_and(MediaUploadCancellation::is_cancelled) {
+        return Err(String::from("media upload cancelled"));
+    }
+    result.map_err(|_| format!("{stage}."))
 }
 
 /// Resolves the declaration that materializes one pre-dispatch conversation resource.
@@ -389,6 +503,8 @@ fn resolve_conversation_media_upload_channel<'a>(
     // 通道选择只依赖冻结引用、资源类别与 MIME 允许列表；字节与路径检查仍由物化器在网络
     // 分派前执行。
     let resource = crate::upload_engine::UploadResource {
+        source_identity: None,
+        file_name: None,
         local_path: None,
         inline_bytes: None,
         mime_type: mime_type.to_string(),
@@ -396,13 +512,12 @@ fn resolve_conversation_media_upload_channel<'a>(
         remote_url: None,
         item_count: 1,
     };
-    crate::upload_engine::resolve_upload_channel(
+    crate::upload_engine::resolve_real_upload_channel(
         route.upload_channels.as_slice(),
         constraint.upload_channel_refs.as_slice(),
         &resource,
         credential_profile.credential_role.as_deref(),
     )
-    .map(Some)
 }
 
 /// Builds the content fingerprint of the request-relevant upload semantics.
@@ -449,6 +564,8 @@ fn prepared_media_key(
         .iter()
         .find(|profile| profile.id == route.connection.credential_profile_id)?;
     let source = crate::upload_engine::UploadResource {
+        source_identity: None,
+        file_name: None,
         local_path: None,
         inline_bytes: None,
         mime_type: mime_type.to_string(),
@@ -463,13 +580,13 @@ fn prepared_media_key(
         .find(|constraint| {
             constraint.resource_kind == kind && !constraint.upload_channel_refs.is_empty()
         })?;
-    let channel = crate::upload_engine::resolve_upload_channel(
+    let channel = crate::upload_engine::resolve_real_upload_channel(
         route.upload_channels.as_slice(),
         constraint.upload_channel_refs.as_slice(),
         &source,
         credential_profile.credential_role.as_deref(),
     )
-    .ok()?;
+    .ok()??;
     prepared_media_cache_key(PreparedMediaCacheKeyInput {
         provider_id: route.provider.id.as_str(),
         service_entry_id: route.entry.id.as_str(),
@@ -581,10 +698,10 @@ impl ProviderExecutionClient {
     /// `progress` receives video upload bytes and `cancellation` owns the submit cancel path.
     /// `retain_inline_reference` 为请求作用域媒体请求自有 Data URL；`progress` 接收视频上传字节，
     /// `cancellation` 持有提交取消路径。
-    /// `allow_provider_upload` is true only for media kinds whose protocol contract owns a
-    /// reusable provider reference, currently video; images and audio remain request-scoped.
-    /// `allow_provider_upload` 仅对协议契约要求可复用供应商引用的媒体类型开启，目前为视频；
-    /// 图片与音频始终保持请求作用域。
+    /// `materialization` is the trusted caller's exact planned action and source byte count.
+    /// `materialization` 是可信调用者规划的精确动作与源字节数。
+    /// An unavailable planned upload fails explicitly; it never falls back to inline data.
+    /// 已规划上传不可用时明确失败，绝不回退到内联数据。
     ///
     /// # Returns
     /// 返回值
@@ -599,21 +716,66 @@ impl ProviderExecutionClient {
         route: &ProviderExecutionRoute,
         model_id: &str,
         secret: &CredentialExecutionSecret,
-        local_path: &Path,
+        source: AdmittedLocalMediaSource<'_>,
         kind: ResourceKind,
-        mime_type: &str,
         retain_inline_reference: bool,
-        allow_provider_upload: bool,
+        materialization: LocalMediaMaterialization,
         progress: Option<MediaUploadProgressCallback>,
         cancellation: &MediaUploadCancellation,
     ) -> Result<PreparedConversationMedia, String> {
+        self.prepare_local_media_typed(
+            route,
+            model_id,
+            secret,
+            source,
+            kind,
+            retain_inline_reference,
+            materialization,
+            progress,
+            cancellation,
+        )
+        .await
+        .map_err(String::from)
+    }
+
+    /// Materializes `source` using frozen `route`, `model_id`, `secret` and the exact planned `materialization`.
+    /// 使用冻结`route`、`model_id`、`secret`及精确规划`materialization`物化`source`。
+    /// `kind` fixes modality; `retain_inline_reference` controls inline ownership; progress and cancellation retain caller scope.
+    /// `kind`固定模态；`retain_inline_reference`控制内联持有；进度及取消保留调用方作用域。
+    /// Returns verified media or typed failure facts without flattening actual HTTP status or response shape errors.
+    /// 返回已验证媒体或强类型失败事实，不压平实际HTTP状态或响应形态错误。
+    // Preserve the same explicit route/source/lifecycle contract as the existing public compatibility wrapper.
+    // 保留与既有公共兼容包装器相同的显式路线/来源/生命周期契约。
+    #[allow(clippy::too_many_arguments)]
+    pub async fn prepare_local_media_typed(
+        &self,
+        route: &ProviderExecutionRoute,
+        model_id: &str,
+        secret: &CredentialExecutionSecret,
+        source: AdmittedLocalMediaSource<'_>,
+        kind: ResourceKind,
+        retain_inline_reference: bool,
+        materialization: LocalMediaMaterialization,
+        progress: Option<MediaUploadProgressCallback>,
+        cancellation: &MediaUploadCancellation,
+    ) -> Result<PreparedConversationMedia, MediaUploadFailure> {
         if cancellation.is_cancelled() {
-            return Err(String::from("media upload cancelled"));
+            return Err(MediaUploadFailure::Cancelled);
         }
-        // The request must never bind a provider reference to a source that changed during preparation.
-        // 请求绝不能把供应商引用绑定到准备期间已经发生变化的源文件。
-        let source_fingerprint =
-            prepared_media_source_fingerprint(local_path, None, Some(cancellation)).await?;
+        // Source metadata is supplied by the resource owner, never inferred from an extensionless entity path.
+        // 来源元数据由资源所有者提供，绝不从无扩展名实体路径推断。
+        let AdmittedLocalMediaSource {
+            path: local_path,
+            file_name,
+            mime_type,
+            identity,
+        } = source;
+        // Recheck hard limits against the admitted size before hashing or retaining any file bytes.
+        // 在哈希或保留任何文件字节之前，按照准入大小重新检查硬限制。
+        let source_byte_len = materialization.source_byte_len();
+        if source_byte_len != identity.byte_len {
+            return Err(MediaUploadFailure::SourceChanged);
+        }
         // maxBytes is the route-wide ceiling enforced before either upload or inline ownership.
         // maxBytes 是在上传或内联持有之前统一执行的路由级上限。
         if let Some(max_bytes) = route
@@ -622,48 +784,74 @@ impl ProviderExecutionClient {
             .iter()
             .find(|constraint| constraint.resource_kind == kind)
             .and_then(|constraint| constraint.max_bytes)
-            && source_fingerprint.byte_len > max_bytes
+            && source_byte_len > max_bytes
         {
-            return Err(format!(
-                "Media source is {} bytes and exceeds the frozen route limit of {max_bytes} bytes.",
-                source_fingerprint.byte_len
-            ));
+            return Err(MediaUploadFailure::SourceTooLarge {
+                actual_bytes: source_byte_len,
+                max_bytes,
+            });
         }
-        let upload_channel = if allow_provider_upload {
-            resolve_conversation_media_upload_channel(route, kind, mime_type)?
-        } else {
-            None
+        // Even inline preference cannot bypass an applicable real interface's hard limit.
+        // 即使偏好内联，也不能绕过适用真实接口的硬限制。
+        let declared_upload = resolve_conversation_media_upload_channel(route, kind, mime_type)
+            .map_err(|_| MediaUploadFailure::InvalidContract)?;
+        // Verified source metadata is sufficient for contract validation without reading content.
+        // 已验证源元数据足以进行契约校验，无需读取内容。
+        let resource = crate::upload_engine::UploadResource {
+            source_identity: Some(identity.clone()),
+            file_name: Some(file_name.to_string()),
+            local_path: Some(local_path.to_path_buf()),
+            inline_bytes: None,
+            mime_type: mime_type.to_string(),
+            byte_len: source_byte_len,
+            remote_url: None,
+            item_count: 1,
         };
-        if kind == ResourceKind::Video && upload_channel.is_none() {
-            return Err(format!(
-                "Video resource `{}` has no declared provider upload channel; refusing Base64 fallback.",
-                local_path.display()
-            ));
+        if let Some(channel) = declared_upload {
+            crate::upload_engine::validate_upload_resource(channel, &resource)?;
+        }
+        // Resolve only the planned branch; a missing upload is a contract error, not inline admission.
+        // 仅解析规划分支；缺失上传属于契约错误，而非内联准入。
+        let upload_channel = match materialization {
+            LocalMediaMaterialization::Inline { .. } => None,
+            LocalMediaMaterialization::ProviderUpload { .. } => {
+                Some(declared_upload.ok_or(MediaUploadFailure::MissingUploadChannel)?)
+            }
+        };
+        // Pin the first fingerprint read to the policy size so concurrent growth cannot evade admission.
+        // 把首次指纹读取固定到策略大小，防止并发增长绕过准入。
+        let source_fingerprint = read_prepared_media_source(
+            local_path,
+            None,
+            Some(cancellation),
+            false,
+            Some(source_byte_len),
+        )
+        .await
+        .map_err(|_| {
+            if cancellation.is_cancelled() {
+                MediaUploadFailure::Cancelled
+            } else {
+                MediaUploadFailure::SourceUnavailable
+            }
+        })?
+        .fingerprint;
+        if source_fingerprint.byte_len != identity.byte_len
+            || hex::encode(source_fingerprint.content_sha256) != identity.content_sha256
+        {
+            return Err(MediaUploadFailure::SourceChanged);
         }
         let (prepared_reference, current_source_fingerprint) = if let Some(channel) = upload_channel
         {
             // The frozen route selects a bounded upload channel by resource kind and ordered
             // channel references; provider identity never participates in dispatch.
             // 冻结路由按资源类型与有序通道引用选择有界上传通道；供应商身份不参与分派。
-            let resource = crate::upload_engine::UploadResource {
-                local_path: Some(local_path.to_path_buf()),
-                inline_bytes: None,
-                mime_type: mime_type.to_string(),
-                byte_len: source_fingerprint.byte_len,
-                remote_url: None,
-                item_count: 1,
-            };
             let credential_profile = route
                 .entry
                 .credential_profiles
                 .iter()
                 .find(|profile| profile.id == route.connection.credential_profile_id)
-                .ok_or_else(|| {
-                    format!(
-                        "Provider route credential profile `{}` is absent from service entry `{}`.",
-                        route.connection.credential_profile_id, route.entry.id
-                    )
-                })?;
+                .ok_or(MediaUploadFailure::InvalidContract)?;
             // nativeReference is immutable provider-owned content produced from the uploaded bytes.
             // nativeReference 是由已上传字节生成的不可变供应商托管内容。
             let native_reference = crate::upload_engine::materialize_upload(
@@ -684,8 +872,22 @@ impl ProviderExecutionClient {
             .reference;
             // currentSourceFingerprint proves the source stayed unchanged across upload materialization.
             // currentSourceFingerprint 证明源文件在上传物化期间保持不变。
-            let current_source_fingerprint =
-                prepared_media_source_fingerprint(local_path, None, Some(cancellation)).await?;
+            let current_source_fingerprint = read_prepared_media_source(
+                local_path,
+                None,
+                Some(cancellation),
+                false,
+                Some(source_byte_len),
+            )
+            .await
+            .map_err(|_| {
+                if cancellation.is_cancelled() {
+                    MediaUploadFailure::Cancelled
+                } else {
+                    MediaUploadFailure::SourceUnavailable
+                }
+            })?
+            .fingerprint;
             (Some(native_reference), current_source_fingerprint)
         } else {
             // inlineSource retains bytes only for callers that bind the result directly to a request.
@@ -695,8 +897,16 @@ impl ProviderExecutionClient {
                 progress,
                 Some(cancellation),
                 retain_inline_reference,
+                Some(source_byte_len),
             )
-            .await?;
+            .await
+            .map_err(|_| {
+                if cancellation.is_cancelled() {
+                    MediaUploadFailure::Cancelled
+                } else {
+                    MediaUploadFailure::SourceUnavailable
+                }
+            })?;
             // inlineReference owns exact verified bytes when requested and otherwise avoids Base64 allocation.
             // inlineReference 在被请求时持有精确已验证字节，否则避免分配 Base64。
             let inline_reference = inline_source.retained_bytes.map(|inline_bytes| {
@@ -708,12 +918,10 @@ impl ProviderExecutionClient {
             (inline_reference, inline_source.fingerprint)
         };
         if cancellation.is_cancelled() {
-            return Err(String::from("media upload cancelled"));
+            return Err(MediaUploadFailure::Cancelled);
         }
         if current_source_fingerprint != source_fingerprint {
-            return Err(String::from(
-                "Media source changed during preparation; please retry the submission.",
-            ));
+            return Err(MediaUploadFailure::SourceChanged);
         }
         Ok(PreparedConversationMedia {
             prepared_reference,
@@ -756,6 +964,9 @@ impl ProviderExecutionClient {
             return Ok(None);
         };
         Ok(Some(ConversationMediaUploadContract {
+            timeout_ms: channel.timeout_ms.ok_or_else(|| {
+                String::from("Network media upload contract has no declared total timeout.")
+            })?,
             upload_channel_id: channel.upload_channel_id.clone(),
             contract_fingerprint: upload_channel_contract_fingerprint(channel)
                 .ok_or_else(|| String::from("Media upload contract could not be fingerprinted."))?,
@@ -764,7 +975,29 @@ impl ProviderExecutionClient {
             reference_encoding: channel
                 .reference_encoding
                 .unwrap_or(crate::UploadReferenceEncoding::ProviderFileId),
+            max_bytes: channel.max_bytes,
+            max_count: channel.max_count,
         }))
+    }
+
+    /// Validates an exact provider `reference` against the frozen `route`, `kind` and `mime_type` without cache writes or I/O.
+    /// 根据冻结`route`、`kind`及`mime_type`校验精确供应商`reference`，不写缓存也不执行IO。
+    /// Returns a controlled contract error instead of accepting a guessed source encoding.
+    /// 返回受控契约错误，不接受猜测的来源编码。
+    pub fn validate_conversation_media_reference(
+        &self,
+        route: &ProviderExecutionRoute,
+        kind: ResourceKind,
+        mime_type: &str,
+        reference: &str,
+    ) -> Result<(), String> {
+        // The same executable channel resolver owns both physical uploads and historical reference validation.
+        // 同一可执行通道解析器同时持有物理上传和历史引用校验。
+        let channel = resolve_conversation_media_upload_channel(route, kind, mime_type)?
+            .ok_or_else(|| {
+                String::from("Provider reference has no applicable executable upload contract.")
+            })?;
+        crate::upload_engine::validate_prepared_reference(channel, reference)
     }
 
     /// Reads one exact source identity without retaining the source bytes in memory.
@@ -780,6 +1013,32 @@ impl ProviderExecutionClient {
                 byte_len: fingerprint.byte_len,
                 content_sha256: hex::encode(fingerprint.content_sha256),
             })
+    }
+
+    /// Reads exact `source_byte_len` admitted bytes from `local_path`, observing optional `cancellation` without retaining payload.
+    /// 从`local_path`读取精确已准入`source_byte_len`字节，遵循可选`cancellation`，不保留载荷。
+    /// Returns a source identity only when current metadata and bounded hashing still match the admitted length.
+    /// 仅当当前元数据及有界哈希仍匹配准入长度时返回来源身份。
+    pub async fn read_admitted_media_source_identity(
+        &self,
+        local_path: &Path,
+        source_byte_len: u64,
+        cancellation: Option<&MediaUploadCancellation>,
+    ) -> Result<PreparedMediaSourceIdentity, String> {
+        // The caller's policy proof, not fresh file growth, fixes the maximum hashing work.
+        // 最大哈希工作量由调用方策略证明决定，而非文件新增长的大小。
+        let source = read_prepared_media_source(
+            local_path,
+            None,
+            cancellation,
+            false,
+            Some(source_byte_len),
+        )
+        .await?;
+        Ok(PreparedMediaSourceIdentity {
+            byte_len: source.fingerprint.byte_len,
+            content_sha256: hex::encode(source.fingerprint.content_sha256),
+        })
     }
 
     /// Looks up a reusable provider-tool media reference under the shared upload-contract boundary.
@@ -810,6 +1069,7 @@ impl ProviderExecutionClient {
         local_path: &Path,
         kind: ResourceKind,
         mime_type: &str,
+        expected_source: &PreparedMediaSourceIdentity,
         cancellation: Option<&MediaUploadCancellation>,
     ) -> Result<Option<PreparedMediaReferenceSnapshot>, String> {
         let Some(cache_duration_ms) = channel
@@ -822,8 +1082,22 @@ impl ProviderExecutionClient {
         if channel.reference_scope == crate::UploadReferenceScope::Session {
             return Ok(None);
         }
-        let source_fingerprint =
-            prepared_media_source_fingerprint(local_path, None, cancellation).await?;
+        // Cache lookup cannot bind a larger or replaced source than the one admitted by this invocation.
+        // 缓存查询不能绑定比本次调用准入时更大或已被替换的来源。
+        let source_fingerprint = read_prepared_media_source(
+            local_path,
+            None,
+            cancellation,
+            false,
+            Some(expected_source.byte_len),
+        )
+        .await?
+        .fingerprint;
+        if hex::encode(source_fingerprint.content_sha256) != expected_source.content_sha256 {
+            return Err(String::from(
+                "Media source changed after upload cache admission.",
+            ));
+        }
         let key = prepared_media_cache_key(PreparedMediaCacheKeyInput {
             provider_id,
             service_entry_id,
@@ -892,7 +1166,17 @@ impl ProviderExecutionClient {
             return Ok(());
         }
         crate::upload_engine::validate_prepared_reference(channel, provider_reference.as_str())?;
-        let source_fingerprint = prepared_media_source_fingerprint(local_path, None, None).await?;
+        // The pre-upload identity also bounds post-upload verification for dedicated provider operations.
+        // 上传前身份也约束专用供应商操作的上传后验证。
+        let source_fingerprint = read_prepared_media_source(
+            local_path,
+            None,
+            None,
+            false,
+            Some(expected_source_identity.byte_len),
+        )
+        .await?
+        .fingerprint;
         let actual_source_identity = PreparedMediaSourceIdentity {
             byte_len: source_fingerprint.byte_len,
             content_sha256: hex::encode(source_fingerprint.content_sha256),
@@ -983,7 +1267,12 @@ impl ProviderExecutionClient {
             ));
         }
         crate::upload_engine::validate_prepared_reference(channel, provider_reference.as_str())?;
-        let source_fingerprint = prepared_media_source_fingerprint(local_path, None, None).await?;
+        // Persisted source size bounds cache hydration too; a changed file must not trigger unbounded hashing.
+        // 持久化来源大小同样约束缓存补水；变化文件不能触发无界哈希。
+        let source_fingerprint =
+            read_prepared_media_source(local_path, None, None, false, Some(source_byte_len))
+                .await?
+                .fingerprint;
         let actual_source_sha256 = hex::encode(source_fingerprint.content_sha256);
         if actual_source_sha256 != source_sha256 || source_fingerprint.byte_len != source_byte_len {
             return Err(String::from(
@@ -1098,6 +1387,8 @@ impl ProviderExecutionClient {
             return;
         };
         let resource = crate::upload_engine::UploadResource {
+            source_identity: None,
+            file_name: None,
             local_path: Some(local_path.to_path_buf()),
             inline_bytes: None,
             mime_type: mime_type.to_string(),
@@ -1122,13 +1413,14 @@ impl ProviderExecutionClient {
                 constraint.resource_kind == kind && !constraint.upload_channel_refs.is_empty()
             })
             .and_then(|constraint| {
-                crate::upload_engine::resolve_upload_channel(
+                crate::upload_engine::resolve_real_upload_channel(
                     route.upload_channels.as_slice(),
                     constraint.upload_channel_refs.as_slice(),
                     &resource,
                     credential_role,
                 )
                 .ok()
+                .flatten()
             });
         let cache_duration_ms = channel.and_then(|channel| channel.cache_duration_ms);
         // Timed process caches require a declared provider lifetime; durable conversation entries may retain a reference without one.
@@ -1237,6 +1529,50 @@ impl ProviderExecutionClient {
             );
             prune_prepared_media_cache(&mut cache, now);
         }
+    }
+
+    /// Looks up an independent invocation's cache entry without exceeding `source_byte_len` admitted by policy.
+    /// 查询独立调用缓存条目，不超过策略准入的 `source_byte_len`。
+    /// `route`, `local_path`, `kind`, `mime_type`, `session_scope_id` and `cancellation` retain the exact source and scope.
+    /// `route`、`local_path`、`kind`、`mime_type`、`session_scope_id` 与 `cancellation` 保留精确来源和作用域。
+    /// Returns a valid reference or no reusable entry; a changed source is never matched to another size.
+    /// 返回有效引用或无可复用条目；已变化来源绝不匹配到另一大小。
+    #[allow(clippy::too_many_arguments)]
+    pub async fn prepared_media_reference_for_admitted_source(
+        &self,
+        route: &ProviderExecutionRoute,
+        local_path: &Path,
+        kind: ResourceKind,
+        mime_type: &str,
+        source_identity: &PreparedMediaSourceIdentity,
+        session_scope_id: Option<&str>,
+        cancellation: Option<&MediaUploadCancellation>,
+    ) -> Option<PreparedMediaReferenceSnapshot> {
+        // Bounded hashing shares the same source-size contract as subsequent materialization.
+        // 有界哈希与后续物化共用相同来源大小契约。
+        let source_fingerprint = read_prepared_media_source(
+            local_path,
+            None,
+            cancellation,
+            false,
+            Some(source_identity.byte_len),
+        )
+        .await
+        .ok()?
+        .fingerprint;
+        if hex::encode(source_fingerprint.content_sha256) != source_identity.content_sha256 {
+            return None;
+        }
+        // Cache identity remains content-addressed and scoped to the selected real upload contract.
+        // 缓存身份保持内容寻址，并受选中真实上传契约的作用域约束。
+        let key = prepared_media_key(
+            route,
+            &source_fingerprint,
+            kind,
+            mime_type,
+            session_scope_id,
+        )?;
+        self.cached_prepared_media_reference(&key, &source_fingerprint)
     }
 
     /// Returns a still-valid provider reference and its original wall-clock lifetime.

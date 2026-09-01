@@ -887,6 +887,7 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         runtime_system_updates: Vec::new(),
         controller_runtime: None,
         native_goal_runtime: None,
+        media_resource_runtime: None,
         knowledge_access: None,
         session_goal_context: None,
         session_plan_context: None,

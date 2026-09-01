@@ -1,3 +1,6 @@
+import type { PublicAiMediaDeliverySettingsSnapshot } from "./media-delivery";
+export type * from "./media-delivery";
+
 // CredentialMode identifies one supported credential lifecycle.
 // CredentialMode 标识一种受支持的凭据生命周期。
 export type CredentialMode = "auth" | "token";
@@ -1216,6 +1219,9 @@ export interface ProviderUsageDashboard {
 // PublicAiSettingsSnapshot combines persisted and process-local settings state.
 // PublicAiSettingsSnapshot 组合持久化设置状态与进程内设置状态。
 export interface PublicAiSettingsSnapshot {
+  // mediaDelivery exposes the backend's effective policy, revision and configurable ceilings.
+  // mediaDelivery 公开后端生效策略、修订及可配置上限。
+  mediaDelivery: PublicAiMediaDeliverySettingsSnapshot;
   // contextWindowPolicyOverrides is the system-level sparse Codex window policy.
   // contextWindowPolicyOverrides 是系统级稀疏 Codex 窗口策略。
   contextWindowPolicyOverrides: PublicAiContextWindowPolicyOverrides;

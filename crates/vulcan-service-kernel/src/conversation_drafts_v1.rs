@@ -24,7 +24,9 @@ use crate::conversation_resources_v1::{
 };
 use crate::session_goal_lifecycle::current_v1_goal_unix_millis;
 use crate::session_runtime_registry_v1::SessionHandle;
-use crate::session_v1_lifecycle::{get_or_load_session_v1, register_project_attachments_v1};
+use crate::session_v1_lifecycle::{
+    get_or_load_session_v1, register_project_attachment_occurrences_v1,
+};
 use crate::state::SharedServiceBridgeState;
 
 /// Reads one authoritative V1 composer draft without consulting browser-local storage.
@@ -50,12 +52,38 @@ pub(crate) async fn service_set_session_draft_v1(
         ));
     }
     let authority = load_draft_authority(&state, &request.session_id).await?;
+    // Preserve explicit original input positions independently of canonical source metadata reconstruction.
+    // 独立于规范来源元数据重建，保留显式原输入位置。
+    let resource_sources = request
+        .attachments
+        .iter()
+        .map(|attachment| attachment.prompt_source.clone())
+        .collect();
+    // Existing project identities remain separate from staged assets and must never be reconstructed from content.
+    // 既有项目身份与暂存资产分离，绝不能从内容重建。
+    let existing_ids = request
+        .attachments
+        .iter()
+        .map(|attachment| {
+            attachment
+                .project_resource_id
+                .map(crate::conversation_resources_v1::checked_resource_id)
+                .transpose()
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let attachments = resolve_draft_attachments(&state, &authority.locator, request.attachments)?;
-    let resource_ids = register_project_attachments_v1(
+    // Persist explicit attachment identities before the browser replaces staged metadata with project ResourceIds.
+    // 在浏览器将暂存元数据替换成项目ResourceId之前，持久保存显式附件身份。
+    let staged_attachment_ids = attachments
+        .iter()
+        .map(|attachment| attachment.asset_id.clone())
+        .collect();
+    let resource_ids = register_project_attachment_occurrences_v1(
         &authority.controller,
         authority.resource_registry.as_ref(),
         authority.locator.project_id(),
         &attachments,
+        &existing_ids,
     )
     .map_err(|error| error.to_string())?;
     let now_ms = current_v1_goal_unix_millis()?;
@@ -67,7 +95,13 @@ pub(crate) async fn service_set_session_draft_v1(
     } else {
         authority
             .handle
-            .set_draft(request.text, resource_ids, now_ms)
+            .set_draft(
+                request.text,
+                resource_ids,
+                staged_attachment_ids,
+                resource_sources,
+                now_ms,
+            )
             .map_err(|error| error.to_string())?;
     }
     draft_response_from_authority(authority.handle.as_ref(), &authority.locator)
@@ -204,6 +238,16 @@ fn draft_response_from_authority(
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(SessionDraftV1Response {
+        resource_sources: if draft.resource_sources.is_empty() {
+            vec![None; draft.resource_ids.len()]
+        } else {
+            draft.resource_sources
+        },
+        staged_attachment_ids: if draft.staged_attachment_ids.is_empty() {
+            vec![None; draft.resource_ids.len()]
+        } else {
+            draft.staged_attachment_ids
+        },
         session_id: locator.session_id().to_string(),
         text: draft.text,
         resources,

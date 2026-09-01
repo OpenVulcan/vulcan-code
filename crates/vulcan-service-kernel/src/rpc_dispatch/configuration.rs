@@ -53,6 +53,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_public_ai_usage_refresh_settings",
     "service_save_public_ai_provider_priority",
     "service_save_public_ai_context_window_policy_overrides",
+    "service_save_public_ai_media_delivery_policy",
+    "service_reset_public_ai_media_delivery_policy",
     "service_save_public_ai_context_compaction_window_nodes",
     "service_select_public_ai_model",
     "service_save_public_ai_model_overrides",
@@ -375,6 +377,22 @@ pub(super) async fn dispatch(
         ),
         "service_save_public_ai_context_window_policy_overrides" => rpc_json_result(
             service_save_public_ai_context_window_policy_overrides(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_save_public_ai_media_delivery_policy" => rpc_json_result(
+            service_save_public_ai_media_delivery_policy(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_reset_public_ai_media_delivery_policy" => rpc_json_result(
+            service_reset_public_ai_media_delivery_policy(
                 app,
                 state,
                 rpc_required_param(params, "request")?,

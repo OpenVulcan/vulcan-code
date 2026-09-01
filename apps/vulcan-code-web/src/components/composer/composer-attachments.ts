@@ -81,9 +81,12 @@ export interface UseComposerAttachmentsState {
   // handleComposerDrop stages dropped files and clears drag highlighting.
   // handleComposerDrop 暂存拖入文件并清理拖拽高亮。
   handleComposerDrop: (event: React.DragEvent<HTMLElement>) => void;
-  // removeComposerAttachment removes one staged attachment by index.
-  // removeComposerAttachment 按索引移除单个已暂存附件。
-  removeComposerAttachment: (index: number) => void;
+  // removeComposerAttachment removes only the captured object, never a later occupant of its old index.
+  // removeComposerAttachment 只移除捕获的对象，绝不移除后来占用旧索引的附件。
+  removeComposerAttachment: (attachment: ComposerAttachmentSummary) => void;
+  // invalidatePendingAttachmentStaging prevents an older async file selection from entering a replacement draft.
+  // invalidatePendingAttachmentStaging 阻止较早的异步文件选择进入替换后的草稿。
+  invalidatePendingAttachmentStaging: () => void;
 }
 
 // useComposerAttachments owns attachment validation, staging, drag-drop, and paste behavior.
@@ -104,6 +107,9 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
   // attachmentFileInputRef opens the browser file picker for manual attachment selection.
   // attachmentFileInputRef 打开浏览器文件选择器用于手动选择附件。
   const attachmentFileInputRef = React.useRef<HTMLInputElement | null>(null);
+  // stagingGenerationRef invalidates async staging work that belongs to an earlier complete draft.
+  // stagingGenerationRef 使属于较早完整草稿的异步暂存工作失效。
+  const stagingGenerationRef = React.useRef(0);
   // enabledAttachmentCapabilities resolves host attachment categories; direct delivery remains route-specific.
   // enabledAttachmentCapabilities 解析宿主附件分类；直接传输仍由具体路线决定。
   const enabledAttachmentCapabilities = React.useMemo(
@@ -125,6 +131,7 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
   // stageComposerFiles validates and stages files selected, dropped, or pasted into the composer.
   // stageComposerFiles 校验并暂存通过选择、拖拽或粘贴进入输入区的文件。
   const stageComposerFiles = React.useCallback(async (files: File[], preferredKind?: string | null) => {
+    const stagingGeneration = stagingGenerationRef.current;
     const candidates = files.filter((file) => {
       const kind = inferComposerAttachmentKindFromFile(file);
       return Boolean(kind && (!preferredKind || kind === preferredKind) && enabledAttachmentKinds.has(kind));
@@ -144,8 +151,14 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
     }
     const staged: ComposerAttachmentSummary[] = [];
     for (const file of acceptedFiles) {
+      if (stagingGeneration !== stagingGenerationRef.current) {
+        return;
+      }
       try {
         let attachment = await args.onStageAttachmentBytes(args.projectId, args.conversationId, file);
+        if (stagingGeneration !== stagingGenerationRef.current) {
+          return;
+        }
         if (attachment) {
           const previewFile = await createComposerImagePreviewFile(file);
           if (previewFile && attachment.assetId) {
@@ -170,6 +183,9 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
       }
     }
     if (!staged.length) {
+      return;
+    }
+    if (stagingGeneration !== stagingGenerationRef.current) {
       return;
     }
     setAttachments((current) => {
@@ -257,10 +273,22 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
     void stageComposerFiles(files);
   }, [stageComposerFiles]);
 
-  // removeComposerAttachment removes one staged attachment by its currently rendered position.
-  // removeComposerAttachment 按当前渲染位置移除单个已暂存附件。
-  const removeComposerAttachment = React.useCallback((index: number) => {
-    setAttachments((current) => current.filter((_, currentIndex) => currentIndex !== index));
+  // removeComposerAttachment accepts the captured object and preserves files added while cancellation waited.
+  // removeComposerAttachment 接收捕获对象，保留取消等待期间新添加的文件。
+  // Returns nothing; a replaced or already removed object leaves the current draft unchanged.
+  // 无返回值；对象已被替换或移除时保持当前草稿不变。
+  const removeComposerAttachment = React.useCallback((attachment: ComposerAttachmentSummary) => {
+    setAttachments((current) => current.filter((candidate) => candidate !== attachment));
+  }, []);
+
+  // invalidatePendingAttachmentStaging advances the draft generation without cancelling canonical asset persistence.
+  // invalidatePendingAttachmentStaging 推进草稿代际，但不取消规范资产的持久化。
+  const invalidatePendingAttachmentStaging = React.useCallback(() => {
+    stagingGenerationRef.current += 1;
+    setIsAttachmentDragOver(false);
+    if (attachmentFileInputRef.current) {
+      attachmentFileInputRef.current.value = "";
+    }
   }, []);
 
   return {
@@ -278,6 +306,7 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
     handleComposerDragOver,
     handleComposerDrop,
     removeComposerAttachment,
+    invalidatePendingAttachmentStaging,
   };
 }
 

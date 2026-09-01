@@ -639,6 +639,7 @@ mod tests {
     fn v1_queued_inputs_rebuild_process_mirror_without_legacy_runtime_state() {
         let queued_inputs = vec![
             QueuedInput {
+                parameters: None,
                 client_action_id: ClientActionId::try_new("client-action-1")
                     .expect("first client action should be valid"),
                 input_id: PendingInputId::try_new(11).expect("first pending input should be valid"),
@@ -650,6 +651,7 @@ mod tests {
                 created_at_ms: 1_787_000_000_001,
             },
             QueuedInput {
+                parameters: None,
                 client_action_id: ClientActionId::try_new("client-action-2")
                     .expect("second client action should be valid"),
                 input_id: PendingInputId::try_new(12)

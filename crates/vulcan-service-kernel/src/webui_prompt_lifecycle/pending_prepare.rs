@@ -12,11 +12,10 @@ use vulcan_session_core::v1::ids::{
 use vulcan_workbench_model::{PendingPromptRuntimeOptions, PendingSessionPromptEntry};
 
 use crate::{
-    commit_prepared_submission_media_ledger,
     conversation_submission::{
         effective_pending_prompt_reasoning_effort, exact_v1_dispatch_runtime_options,
     },
-    emit_webui_subagent_navigation_changed_delta_for_parent, prepare_submission_media,
+    emit_webui_subagent_navigation_changed_delta_for_parent,
     project_conversation_services::try_begin_pending_prompt_dispatch_exclusion,
     session_goal_lifecycle::{
         SessionGoalDispatchAuthority, registered_session_v1_handle_from_state,
@@ -905,37 +904,10 @@ async fn prepare_webui_pending_prompt(
     let workspace_path = workspace_path_for_session(&workspace_snapshot, session_id);
     let runtime_options = entry.runtime_options.clone();
     let entry_agent_runtime = agent_runtime_for_pending_prompt(agent_runtime, &entry);
-    // Queued media is prepared at the actual dispatch boundary so native provider references cannot expire while waiting.
-    // 排队媒体在实际分发边界准备，避免原生供应商引用在等待期间过期。
-    // pendingRuntimeState supplies the exact persisted lease identity captured for this queue owner.
-    // pendingRuntimeState 提供为该队列所有者捕获的精确持久化租约身份。
-    let pending_runtime_state = workspace_snapshot.session_runtime_state.get(&session_id);
-    let prepared_submission_projection = match prepare_submission_media(
-        app,
-        state,
-        &entry_agent_runtime,
-        entry.id.as_str(),
-        Some(session_id),
-        pending_runtime_state,
-        None,
-        entry.attachments.as_slice(),
-    )
-    .await
-    {
-        Ok(prepared_submission_projection) => prepared_submission_projection,
-        Err(error) => {
-            if error.starts_with("submission_cancelled:") {
-                webui_trace(
-                    "pending_prompt_media_prepare_cancelled",
-                    format!("session={session_id}"),
-                );
-                return Ok(false);
-            }
-            return Err(error);
-        }
-    };
-    let provider_attachments = prepared_submission_projection.provider_attachments;
-    let prepared_submission_media = prepared_submission_projection.prepared_media;
+    // Actual V1 preparation owns the ordered prompt provenance, original receipt and transfer lifecycle.
+    // 真实V1准备持有有序提示词来源、原回执及传输生命周期。
+    let provider_attachments =
+        crate::media_upload::defer_attachment_delivery_to_v1(&entry.attachments);
     // reasoning_effort prevents a neutral internal queue placeholder from changing the active reasoning selection.
     // reasoning_effort 防止中性的内部队列占位值改变当前推理强度选择。
     let reasoning_effort = effective_pending_prompt_reasoning_effort(
@@ -1137,12 +1109,6 @@ async fn prepare_webui_pending_prompt(
         }
         precheck_start
     };
-    commit_prepared_submission_media_ledger(
-        &mut workspace_snapshot,
-        session_id,
-        precheck_start.canonical_user_message_id.as_deref(),
-        prepared_submission_media,
-    )?;
     if precheck_start.vmm_runtime_ready {
         refresh_exact_vmm_hook_session_projection(
             &entry_agent_runtime.vmm_hook_runtime,

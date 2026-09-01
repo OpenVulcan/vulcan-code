@@ -3,6 +3,7 @@ import { LoaderCircle } from "lucide-react"
 
 import { ContextWindowPolicyEditor } from "@/components/features/settings/public-ai-model-capability-dialog"
 import { ProviderRetrySettingsArea } from "@/components/features/settings/provider-retry-settings"
+import { MediaDeliveryPolicyCard } from "@/components/features/settings/media-delivery-policy-card"
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -311,6 +312,7 @@ export function ContextBasicsSettingsArea(props: {
             intervalSeconds={snapshot.usageRefreshIntervalSeconds}
             onSaved={setSnapshot}
           />
+          <MediaDeliveryPolicyCard settings={snapshot.mediaDelivery} onSaved={setSnapshot} />
         </>
       ) : (
         <p className="settings-muted-line">{t("settings.contextBasics.loading")}</p>

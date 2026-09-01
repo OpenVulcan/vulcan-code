@@ -173,6 +173,7 @@ pub(crate) fn execute_provider_prompt_stream(
         public_ai_runtime,
         false,
         prompt_intervention,
+        None,
     )
 }
 
@@ -192,6 +193,7 @@ pub(crate) fn execute_provider_prompt_capture_stream(
     tools_manager: VulcanToolsManager,
     resolved_tools: Vec<ResolvedToolDefinition>,
     public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
+    media_projection: Option<Arc<dyn crate::prompt_media_projection::PromptMediaProjectionRuntime>>,
 ) -> ProviderDeltaStream {
     execute_provider_prompt_stream_with_capture_mode(
         config,
@@ -209,6 +211,7 @@ pub(crate) fn execute_provider_prompt_capture_stream(
         public_ai_runtime,
         true,
         None,
+        media_projection,
     )
 }
 
@@ -295,6 +298,7 @@ fn execute_provider_prompt_stream_with_capture_mode(
     public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
     capture_only: bool,
     prompt_intervention: Option<RuntimePromptIntervention>,
+    media_projection: Option<Arc<dyn crate::prompt_media_projection::PromptMediaProjectionRuntime>>,
 ) -> ProviderDeltaStream {
     let Some(public_ai_runtime) = public_ai_runtime else {
         return one_shot_provider_error_stream(
@@ -448,6 +452,7 @@ fn execute_provider_prompt_stream_with_capture_mode(
                 transport_request,
                 public_execution,
                 reasoning_effort,
+                media_projection,
             )
         } else {
             crate::agent_runtime::provider_transport_vulcan::execute_vulcan_public_stream(

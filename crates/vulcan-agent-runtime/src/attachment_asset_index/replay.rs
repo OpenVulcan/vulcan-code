@@ -144,6 +144,66 @@ pub fn resolve_owned_attachment_resource(
     )
 }
 
+/// Resolves metadata for canonical `reference` under exact `session_id` and `workspace_path` without reading resource bytes.
+/// 在精确`session_id`及`workspace_path`下解析规范`reference`元数据，不读取资源字节。
+/// Returns original managed identity after owner, containment and size checks; the caller must validate content after admission.
+/// 在所有者、边界和大小检查后返回原托管身份；调用方必须在准入后验证内容。
+pub(crate) fn resolve_owned_attachment_resource_metadata(
+    workspace_path: &str,
+    session_id: &str,
+    reference: &str,
+) -> Result<ConversationAttachment, String> {
+    if session_id.trim().is_empty() {
+        return Err(String::from(
+            "Attachment resource resolution requires an owning conversation id.",
+        ));
+    }
+    // Dynamic bindings accept the disclosed opaque id, never an alias that normalizes into another source.
+    // 动态绑定接受披露的不透明ID，绝不接受规范化成另一来源的别名。
+    let asset_id = reference
+        .strip_prefix("attachment://")
+        .filter(|id| {
+            !id.is_empty()
+                && id.trim() == *id
+                && !id.chars().any(|character| {
+                    character.is_control() || character == '/' || character == '\\'
+                })
+        })
+        .ok_or_else(|| String::from("Invalid canonical attachment resource locator."))?;
+    // Keep the validated exact spelling when selecting the existing owner-scoped record.
+    // 选择既有所有者范围记录时保持已校验精确拼写。
+    let reference = format!("attachment://{asset_id}");
+    resolve_indexed_attachment_resource_metadata_internal(
+        workspace_path,
+        Some(session_id),
+        &reference,
+        None,
+    )
+}
+
+/// Resolves declared fixed-tool `reference` under `session_id` in `workspace_path`, enforcing `expected_kind` without reading bytes.
+/// 在`workspace_path`中按`session_id`解析固定工具声明的`reference`，执行`expected_kind`约束但不读取字节。
+/// Returns metadata for either legacy disclosed locator form; the media planner must admit it before content verification.
+/// 为两种旧披露定位符形态返回元数据；媒体规划器必须先准入，然后才能验证内容。
+pub(crate) fn resolve_owned_attachment_resource_metadata_for_kind(
+    workspace_path: &str,
+    session_id: &str,
+    reference: &str,
+    expected_kind: ConversationAttachmentKind,
+) -> Result<ConversationAttachment, String> {
+    if session_id.trim().is_empty() {
+        return Err(String::from(
+            "Attachment resource resolution requires an owning conversation id.",
+        ));
+    }
+    resolve_indexed_attachment_resource_metadata_internal(
+        workspace_path,
+        Some(session_id),
+        reference,
+        Some(expected_kind),
+    )
+}
+
 /// Resolves one immutable managed attachment for a host-owned draft mutation before it has canonical message ownership.
 /// 在托管附件拥有规范消息所有权之前，为宿主持有的草稿变更解析一条不可变托管附件。
 ///
@@ -186,6 +246,35 @@ fn resolve_indexed_attachment_resource_internal(
     owner_session_id: Option<&str>,
     reference: &str,
     expected_kind: ConversationAttachmentKind,
+) -> Result<ConversationAttachment, String> {
+    // Existing full-verification callers retain their strict content check after common metadata admission.
+    // 既有完整校验调用者在共同元数据准入后保留严格内容检查。
+    let attachment = resolve_indexed_attachment_resource_metadata_internal(
+        workspace_path,
+        owner_session_id,
+        reference,
+        Some(expected_kind),
+    )?;
+    // Only the immutable registered digest can authorize the already selected managed entity.
+    // 只有不可变注册摘要可以授权已选定托管实体。
+    let actual_sha256 = attachment_record_sha256(Path::new(&attachment.local_path))?;
+    if attachment.source_sha256.as_deref() != Some(actual_sha256.as_str()) {
+        return Err(String::from(
+            "Managed attachment resource content no longer matches its canonical digest.",
+        ));
+    }
+    Ok(attachment)
+}
+
+/// Resolves exact indexed metadata for `reference` in `workspace_path`, optionally enforcing the declared owner and modality.
+/// 在`workspace_path`中解析`reference`精确索引元数据，可选执行声明的所有者及模态约束。
+/// Returns containment- and size-checked original facts without reading content; callers must verify bytes after policy admission.
+/// 不读取内容即返回通过边界及大小检查的原始事实；调用者必须在策略准入后验证字节。
+fn resolve_indexed_attachment_resource_metadata_internal(
+    workspace_path: &str,
+    owner_session_id: Option<&str>,
+    reference: &str,
+    expected_kind: Option<ConversationAttachmentKind>,
 ) -> Result<ConversationAttachment, String> {
     let reference = reference.trim().replace('\\', "/");
     if reference.is_empty() {
@@ -237,7 +326,7 @@ fn resolve_indexed_attachment_resource_internal(
             "Attachment resource is no longer available for understanding.",
         ));
     }
-    if record.kind != expected_kind {
+    if expected_kind.is_some_and(|expected| record.kind != expected) {
         return Err(String::from(
             "Attachment resource modality does not match the invoked understanding tool.",
         ));
@@ -268,12 +357,6 @@ fn resolve_indexed_attachment_resource_internal(
         .ok_or_else(|| {
             String::from("Managed attachment resource has no canonical SHA-256 digest.")
         })?;
-    let actual_sha256 = attachment_record_sha256(&canonical_path)?;
-    if actual_sha256 != expected_sha256 {
-        return Err(String::from(
-            "Managed attachment resource content no longer matches its canonical digest.",
-        ));
-    }
     let resource_path = crate::attachment_assets::managed_attachment_resource_path(
         workspace_path,
         &canonical_path,
@@ -286,7 +369,7 @@ fn resolve_indexed_attachment_resource_internal(
         source_path: None,
         asset_id: Some(record.asset_id.clone()),
         byte_len: record.byte_len,
-        source_sha256: Some(actual_sha256),
+        source_sha256: Some(expected_sha256.to_string()),
         delivery_mode: None,
         preview_local_path: None,
         mime_type: record.mime_type.clone(),
@@ -353,6 +436,106 @@ mod tests {
         )
         .expect("attachment should be assigned to the conversation");
         (workspace, attachment)
+    }
+
+    /// Metadata admission retains original digest and ownership without reading content before policy checks.
+    /// 元数据准入保留原始摘要和所有权，不在策略检查之前读取内容。
+    #[test]
+    fn owned_resource_metadata_defers_content_verification_without_losing_identity() {
+        // One temporary, already promoted file supplies the canonical session owner.
+        // 一个临时、已提升文件提供规范会话所有者。
+        let (workspace, attachment) = owned_fixture();
+        // The fixture's exact asset id is the only lookup authority.
+        // 夹具精确资产ID是唯一查询权威。
+        let reference = format!(
+            "attachment://{}",
+            attachment.asset_id.as_deref().expect("fixture asset")
+        );
+        // Read the original registered proof before fault injection.
+        // 故障注入之前读取原注册证明。
+        let original = resolve_owned_attachment_resource_metadata(
+            &workspace.path().to_string_lossy(),
+            "session-owner",
+            &reference,
+        )
+        .expect("owned metadata");
+        assert_eq!(original.source_sha256, attachment.source_sha256);
+        assert_eq!(original.mime_type, attachment.mime_type);
+        // Same-length corruption distinguishes metadata-only admission from the legacy full integrity check.
+        // 同长度损坏区分仅元数据准入和旧完整校验。
+        fs::write(
+            &original.local_path,
+            vec![b'x'; original.byte_len.expect("fixture size") as usize],
+        )
+        .expect("fixture mutation");
+        assert_eq!(
+            resolve_owned_attachment_resource_metadata(
+                &workspace.path().to_string_lossy(),
+                "session-owner",
+                &reference
+            )
+            .expect("metadata does not read bytes")
+            .source_sha256,
+            original.source_sha256
+        );
+        // Fixed media facades retain their disclosed project-relative form with the same metadata-first ordering.
+        // 固定媒体外壳以相同元数据优先顺序保留其披露的项目相对形态。
+        assert_eq!(
+            resolve_owned_attachment_resource_metadata_for_kind(
+                &workspace.path().to_string_lossy(),
+                "session-owner",
+                original
+                    .resource_path
+                    .as_deref()
+                    .expect("canonical resource path"),
+                ConversationAttachmentKind::File
+            )
+            .expect("fixed tool metadata")
+            .source_sha256,
+            original.source_sha256
+        );
+        assert!(
+            resolve_owned_attachment_resource_metadata_for_kind(
+                &workspace.path().to_string_lossy(),
+                "session-owner",
+                &reference,
+                ConversationAttachmentKind::Image
+            )
+            .is_err()
+        );
+        assert!(
+            resolve_owned_attachment_resource(
+                &workspace.path().to_string_lossy(),
+                "session-owner",
+                &reference,
+                attachment.kind
+            )
+            .expect_err("full verification still rejects corruption")
+            .contains("canonical digest")
+        );
+        assert!(
+            resolve_owned_attachment_resource_metadata(
+                &workspace.path().to_string_lossy(),
+                "session-other",
+                &reference
+            )
+            .expect_err("other owner")
+            .contains("not owned")
+        );
+        for invalid in [
+            format!(" {reference}"),
+            format!("{reference}/other"),
+            "attachment:\\alias".to_string(),
+        ] {
+            assert!(
+                resolve_owned_attachment_resource_metadata(
+                    &workspace.path().to_string_lossy(),
+                    "session-owner",
+                    &invalid
+                )
+                .is_err()
+            );
+        }
     }
 
     /// Verifies both stable locator forms resolve only for the owning session and exact modality.

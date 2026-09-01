@@ -151,8 +151,8 @@ pub(crate) fn commit_prepared_stream_failure(
 /// `session_id` 标识当前活跃 WebUI 会话。
 /// `stream_task_started_at` is used for latency tracing.
 /// `stream_task_started_at` 用于延迟追踪。
-/// `auto_compaction_already_attempted` prevents repeated automatic compaction loops.
-/// `auto_compaction_already_attempted` 防止重复进入自动压缩循环。
+/// `restart_state` prevents repeated compaction while preserving configuration restart debt across an actual compaction restart.
+/// `restart_state`防止重复压缩，同时跨真实压缩重启保留配置重启消耗。
 /// `active_stream_task_id` limits cleanup to the task handling this prepared event.
 /// `active_stream_task_id` 将清理限制为处理当前 Prepared 事件的任务。
 /// `expected_kernel_generation` and `expected_kernel_turn_id` preserve the immutable owner across a compaction restart.
@@ -162,7 +162,7 @@ pub(crate) fn commit_prepared_stream_failure(
 /// 返回值
 /// A control-flow action telling the caller whether to continue or stop the current task.
 /// 返回控制流动作，告知调用方继续当前任务还是停止当前任务。
-pub(crate) async fn handle_prepared_stream_event(
+pub(super) async fn handle_prepared_stream_event(
     app: &ServiceEventEmitter,
     task_state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
@@ -171,7 +171,7 @@ pub(crate) async fn handle_prepared_stream_event(
     preparation: ExecutionPreparation,
     session_id: SessionId,
     stream_task_started_at: i128,
-    auto_compaction_already_attempted: bool,
+    restart_state: StreamRestartState,
     active_stream_task_id: Uuid,
     expected_kernel_generation: u64,
     expected_kernel_turn_id: &str,
@@ -233,7 +233,7 @@ pub(crate) async fn handle_prepared_stream_event(
         ),
     );
     let auto_compaction_started_at = current_unix_millis_value();
-    let auto_compaction_result = if auto_compaction_already_attempted {
+    let auto_compaction_result = if restart_state.auto_compaction_already_attempted {
         Ok(None)
     } else {
         maybe_auto_compact_webui_session_before_provider_request(
@@ -251,7 +251,7 @@ pub(crate) async fn handle_prepared_stream_event(
         "after_precheck_26_auto_compaction_checked",
         format!(
             "session={session_id} already_attempted={} elapsed_ms={}",
-            auto_compaction_already_attempted,
+            restart_state.auto_compaction_already_attempted,
             current_unix_millis_value().saturating_sub(auto_compaction_started_at)
         ),
     );
@@ -271,7 +271,7 @@ pub(crate) async fn handle_prepared_stream_event(
             if !owns_active_stream_entry {
                 return PreparedStreamEventAction::Restarted;
             }
-            spawn_agent_stream_task_with_auto_compaction_state(
+            spawn_agent_stream_task_with_restart_state(
                 app.clone(),
                 task_state.clone(),
                 controller_runtime.clone(),
@@ -279,7 +279,7 @@ pub(crate) async fn handle_prepared_stream_event(
                 updated_request,
                 expected_kernel_generation,
                 expected_kernel_turn_id.to_string(),
-                true,
+                restart_state.with_auto_compaction_attempted(true),
             );
             PreparedStreamEventAction::Restarted
         }

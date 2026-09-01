@@ -705,6 +705,10 @@ pub struct PersistedAiConfiguration {
     /// 后台账号用量刷新间隔秒数。
     #[serde(default = "default_usage_refresh_interval_seconds")]
     pub usage_refresh_interval_seconds: u64,
+    /// Explicit media policy; absence keeps defaults in memory without rewriting configuration.
+    /// 显式媒体策略；缺失时仅在内存使用默认值，不回写配置。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_delivery_policy: Option<crate::MediaDeliveryPolicy>,
     /// Sparse user-defined provider priorities; missing entries inherit zero.
     /// 稀疏的用户自定义供应商优先级；缺失项继承零。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -947,6 +951,7 @@ impl Default for PersistedAiConfiguration {
         Self {
             schema_version: PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION,
             usage_refresh_interval_seconds: default_usage_refresh_interval_seconds(),
+            media_delivery_policy: None,
             provider_priority_overrides: BTreeMap::new(),
             custom_providers: BTreeMap::new(),
             custom_provider_file_refs: BTreeSet::new(),
@@ -1374,6 +1379,7 @@ impl PersistedAiConfiguration {
         changed |= self.normalize_media_understanding_backend_options();
         self.context_compaction_window_nodes.validate()?;
         self.validate_context_window_policy_layers()?;
+        self.effective_media_delivery_policy().validate()?;
         Ok(changed)
     }
 

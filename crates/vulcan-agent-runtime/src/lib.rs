@@ -32,7 +32,9 @@ pub mod data_plane {
 }
 pub mod luaskills_runtime;
 pub mod mcp;
+pub mod media_resource_runtime;
 mod media_understanding;
+pub mod prompt_media_projection;
 pub mod provider_input_normalizer;
 mod provider_tool_bridge;
 pub mod session_event_runtime;

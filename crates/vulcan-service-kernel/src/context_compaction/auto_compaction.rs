@@ -264,6 +264,7 @@ async fn maybe_auto_compact_webui_session_with_mode(
         session_id,
         compaction_plan.plan,
         compaction_plan.full_context_state,
+        compaction_plan.media_projection,
         Some((request, preparation)),
         model_target,
     ) {
@@ -433,6 +434,10 @@ pub(crate) fn webui_auto_context_compaction_failure_count(
 /// 承载一份仅从可靠 V1 Provider 投影派生的上下文压缩计划。
 #[derive(Debug, Clone)]
 pub(crate) struct WebuiContextCompactionPlan {
+    /// Exact frozen prompt-media source owner from the same snapshot as the transcript plan.
+    /// 与转录计划来自相同快照的精确冻结提示词媒体来源所有者。
+    pub(crate) media_projection:
+        Arc<dyn vulcan_agent_runtime::prompt_media_projection::PromptMediaProjectionRuntime>,
     /// Frozen compaction source and retained-tail policy.
     /// 冻结的压缩来源与保留尾部策略。
     pub(crate) plan: CompactionPlan,
@@ -460,11 +465,15 @@ pub(crate) fn webui_context_compaction_plan_from_v1(
     let projected_messages = snapshot
         .sourced_items
         .iter()
-        .filter_map(compaction_message_from_v1_projection)
+        .enumerate()
+        .filter_map(|(index, projected)| {
+            compaction_message_from_v1_projection(projected)
+                .map(|message| message.map(|(message, seq)| (message, seq, index)))
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let full_session_messages = projected_messages
         .iter()
-        .map(|(message, _)| message.clone())
+        .map(|(message, _, _)| message.clone())
         .collect::<Vec<_>>();
     if full_session_messages.is_empty() {
         return Err(empty_error.to_string());
@@ -485,8 +494,8 @@ pub(crate) fn webui_context_compaction_plan_from_v1(
         .ok_or_else(|| String::from("V1 compaction plan has no retained tail boundary"))?;
     let retained_from_seq = projected_messages
         .iter()
-        .find(|(message, _)| message.id == *retained_message_id)
-        .map(|(_, source_seq)| *source_seq)
+        .find(|(message, _, _)| message.id == *retained_message_id)
+        .map(|(_, source_seq, _)| *source_seq)
         .ok_or_else(|| {
             format!(
                 "V1 compaction retained message `{retained_message_id}` has no durable source seq"
@@ -494,7 +503,27 @@ pub(crate) fn webui_context_compaction_plan_from_v1(
         })?;
     let full_context_state = conversation_state_from_session_messages(&full_session_messages)
         .map_err(|error| format!("failed to build V1 compaction conversation state: {error}"))?;
+    // Capture the existing catalog owner without retaining the service mutex during resource preparation.
+    // 捕获既有目录所有者，不在资源准备期间持有服务互斥锁。
+    let resource_registry = Arc::clone(
+        &state
+            .lock()
+            .map_err(|error| error.to_string())?
+            .project_resource_catalog_registry,
+    );
+    // Exact source indexes come from this same projection traversal, never parsed from message names.
+    // 精确来源索引来自相同投影遍历，绝不从消息名称解析。
+    let media_projection = crate::agent_stream::frozen_prompt_media_projection(
+        snapshot,
+        session_id.to_string(),
+        projected_messages
+            .iter()
+            .map(|(message, _, index)| (message.id.clone(), *index))
+            .collect(),
+        resource_registry,
+    )?;
     Ok(WebuiContextCompactionPlan {
+        media_projection,
         plan,
         full_context_state,
         retained_from_seq,
@@ -843,6 +872,9 @@ pub(crate) fn build_webui_context_compaction_job_request(
     session_id: SessionId,
     plan: CompactionPlan,
     full_context_state: SessionConversationState,
+    media_projection: Arc<
+        dyn vulcan_agent_runtime::prompt_media_projection::PromptMediaProjectionRuntime,
+    >,
     source_execution: Option<(&ExecutionPreparationRequest, &ExecutionPreparation)>,
     model_target: PromptCompactionModelTarget,
 ) -> Result<PromptCompactionJobRequest, String> {
@@ -933,7 +965,7 @@ pub(crate) fn build_webui_context_compaction_job_request(
         });
     // launchContext reuses an already materialized ordinary turn when available; manual compaction derives only persisted session controls.
     // launchContext 优先复用已经物化的普通回合；手动压缩仅从持久化会话控制派生。
-    let launch_context = match source_execution {
+    let mut launch_context = match source_execution {
         Some((source_request, _)) => {
             PromptCompactionLaunchContext::from_execution_request(source_request)
         }
@@ -946,6 +978,7 @@ pub(crate) fn build_webui_context_compaction_job_request(
         }
     };
     let budget_snapshot = context_compaction_budget_snapshot_from_state(state, session_id);
+    launch_context.media_projection = Some(media_projection);
     Ok(PromptCompactionJobRequest {
         session_id,
         session_title: current_session_title_from_state(state, session_id),

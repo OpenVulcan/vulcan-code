@@ -5,7 +5,7 @@ use std::path::Path;
 
 use vulcan_agent_runtime::attachment_asset_index::release_staged_attachment_ref;
 use vulcan_core::types::ConversationAttachment;
-use vulcan_service_api::{PendingPromptSummary, ServiceEventEmitter};
+use vulcan_service_api::{PendingPromptEditOutcome, PendingPromptSummary, ServiceEventEmitter};
 use vulcan_session_core::v1::config::QueuedInputIdentity;
 use vulcan_session_core::v1::document::QueuedInputDraftReceipt;
 use vulcan_session_core::v1::event::{EventBody, QueuedInputResolutionKind};
@@ -182,12 +182,12 @@ pub(crate) fn rebuild_pending_prompt_panel_from_v1(
     Ok(true)
 }
 
-/// Reads the exact durable resolution timestamp for a moved queue entry.
-/// 读取一条已移动队列条目的精确持久化处置时间戳。
-fn moved_pending_prompt_timestamp(
+/// Reads a previously committed move timestamp before attempting the idempotent mutation.
+/// 在尝试幂等变更前读取先前已提交的移动时间戳。
+fn existing_moved_pending_prompt_timestamp(
     handle: &SessionHandle,
     identity: &QueuedInputIdentity,
-) -> Result<i64, String> {
+) -> Result<Option<i64>, String> {
     handle
         .read(|document| {
             document.events().iter().find_map(|event| {
@@ -200,8 +200,7 @@ fn moved_pending_prompt_timestamp(
                     .then_some(event.updated_at_ms)
             })
         })
-        .map_err(|error| format!("读取 V1 待发送消息处置事实失败：{error}"))?
-        .ok_or_else(|| String::from("V1 待发送消息已移动，但缺少对应的持久化处置事实。"))
+        .map_err(|error| format!("读取 V1 待发送消息处置事实失败：{error}"))
 }
 
 /// Builds the edit response only from the durable draft receipt and project resources.
@@ -225,6 +224,34 @@ fn pending_prompt_summary_from_durable_draft(
     }
 }
 
+/// Builds a committed edit outcome while retaining every post-commit projection fault as one warning.
+/// 构建已提交编辑结果，并把每项提交后投影故障保留为一条警告。
+fn committed_pending_prompt_edit_outcome(
+    entry: PendingPromptSummary,
+    panel_projection: Result<bool, String>,
+    delta_projection: Result<u64, String>,
+) -> PendingPromptEditOutcome {
+    let mut projection_warnings = Vec::new();
+    if let Err(error) = panel_projection {
+        projection_warnings.push(format!("刷新队列投影失败：{error}"));
+    }
+    if let Err(error) = delta_projection {
+        projection_warnings.push(format!("发布队列变更事件失败：{error}"));
+    }
+    // Post-commit projection faults are explicit warnings and never disguise the durable move as failure.
+    // 提交后的投影故障以明确警告返回，绝不把持久移动伪装成失败。
+    let projection_warning = (!projection_warnings.is_empty()).then(|| {
+        format!(
+            "待发送提示词已恢复，但局部投影需要重新刷新：{}",
+            projection_warnings.join("；")
+        )
+    });
+    PendingPromptEditOutcome {
+        entry,
+        projection_warning,
+    }
+}
+
 /// Restores one visible pending prompt into the WebUI composer and removes it from the queue.
 /// 将单条可见待发送提示词恢复到 WebUI 输入区，并从队列中移除。
 ///
@@ -245,48 +272,57 @@ pub(super) async fn service_edit_pending_prompt(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     entry_id: String,
-) -> Result<PendingPromptSummary, String> {
+) -> Result<PendingPromptEditOutcome, String> {
     let selected_session_id = selected_session_id_from_state(&state)?;
     let client_action_id = pending_prompt_action_id(&entry_id)?;
     let handle = session_v1_handle_from_state(&state, selected_session_id).await?;
     let identity = pending_prompt_queue_identity(handle.as_ref(), &client_action_id)?;
     let attachment_transition =
         pending_prompt_attachment_transition(&state, selected_session_id, &entry_id)?;
-    let now_ms = current_v1_goal_unix_millis()?;
-    let receipt = handle
-        .move_queued_input_to_draft(identity, now_ms)
-        .map_err(|error| format!("把 V1 待发送消息恢复为草稿失败：{error}"))?;
     let locator = handle
         .storage_locator()
         .map_err(|error| format!("读取 V1 会话资源定位失败：{error}"))?;
     let project_directory = locator.project_directory();
     let catalog = load_project_resource_catalog(&project_directory)
         .map_err(|error| format!("加载 V1 项目资源目录失败：{error}"))?;
+    let existing_moved_at_ms = existing_moved_pending_prompt_timestamp(handle.as_ref(), &identity)?;
+    let now_ms = current_v1_goal_unix_millis()?;
+    let receipt = handle
+        .move_queued_input_to_draft(identity, now_ms)
+        .map_err(|error| format!("把 V1 待发送消息恢复为草稿失败：{error}"))?;
     let QueuedInputDraftReceipt { identity, draft } = receipt.value;
     let attachments = conversation_attachments_from_resource_ids(
         &project_directory,
         &catalog,
         &draft.resource_ids,
     );
-    let created_at_ms = moved_pending_prompt_timestamp(handle.as_ref(), &identity)?;
+    // A new move is committed at `now_ms`; an idempotent retry keeps the original durable timestamp.
+    // 新移动在 `now_ms` 提交；幂等重试保留原始持久化时间戳。
+    let created_at_ms = existing_moved_at_ms.unwrap_or(now_ms);
     let summary = pending_prompt_summary_from_durable_draft(
         &identity,
         &draft.text,
         &attachments,
         created_at_ms,
     );
-    rebuild_pending_prompt_panel_from_v1(
+    // The durable move is already committed. Projection failure must not disguise it as a pre-commit error.
+    // 持久移动已经提交；投影失败不能伪装成提交前错误。
+    let panel_projection = rebuild_pending_prompt_panel_from_v1(
         &state,
         selected_session_id,
         handle.as_ref(),
         &project_directory,
         &catalog,
-    )?;
+    );
     if let Some(transition) = attachment_transition {
         commit_pending_prompt_attachment_lease_transition(transition);
     }
-    emit_pending_prompts_changed_delta(&app, &state, selected_session_id)?;
-    Ok(summary)
+    let delta_projection = emit_pending_prompts_changed_delta(&app, &state, selected_session_id);
+    Ok(committed_pending_prompt_edit_outcome(
+        summary,
+        panel_projection,
+        delta_projection,
+    ))
 }
 
 /// Removes one visible pending prompt from the selected conversation queue.
@@ -432,4 +468,32 @@ pub(super) async fn service_reorder_pending_prompts(
     )?;
     emit_pending_prompts_changed_delta(&app, &state, selected_session_id)?;
     Ok(receipt.changed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A durable edit remains a successful typed outcome when both local projections fail afterwards.
+    /// 持久编辑完成后即使两个本地投影均失败，也仍返回成功的强类型结果。
+    #[test]
+    fn committed_edit_preserves_entry_across_projection_failures() {
+        let entry = PendingPromptSummary {
+            id: String::from("queued-action"),
+            prompt: String::from("exact queued target"),
+            preview: String::from("exact queued target"),
+            attachments: Vec::new(),
+            state: String::from("ready"),
+            created_at: String::from("1"),
+        };
+        let outcome = committed_pending_prompt_edit_outcome(
+            entry.clone(),
+            Err(String::from("panel unavailable")),
+            Err(String::from("delta unavailable")),
+        );
+        assert_eq!(outcome.entry, entry);
+        let warning = outcome.projection_warning.expect("controlled warning");
+        assert!(warning.contains("panel unavailable"));
+        assert!(warning.contains("delta unavailable"));
+    }
 }

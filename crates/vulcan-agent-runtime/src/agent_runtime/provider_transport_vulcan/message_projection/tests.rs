@@ -4,11 +4,12 @@
 use super::*;
 use crate::attachment_assets::{AttachmentDescriptor, stage_attachment_bytes};
 use serde_json::json;
+use vulcan_core::types::ConversationAttachmentKind;
 
-/// Verifies final provider projection replaces an integrity-invalid historical attachment with model-safe metadata.
-/// 验证最终 Provider 投影会用模型安全元数据替换完整性失效的历史附件。
+/// Verifies the provisional bridge does not materialize an attachment whose prompt-owned delivery proof is absent.
+/// 验证临时桥接不会物化缺失提示词所有投递证明的附件。
 #[test]
-fn provider_projection_rejects_same_length_mutated_managed_attachment() {
+fn provider_projection_defers_unproven_attachment_integrity_to_prompt_owner() {
     // workspace owns the indexed attachment and is removed after the projection assertion.
     // workspace 持有索引附件，并在投影断言后移除。
     let workspace = std::env::temp_dir().join(format!(
@@ -62,7 +63,7 @@ fn provider_projection_rejects_same_length_mutated_managed_attachment() {
             .any(|item| matches!(item, ContentItem::Resource { .. }))
     );
     assert!(projected.content.iter().any(|item| {
-        matches!(item, ContentItem::Text { text } if text.contains("managed resource no longer exists"))
+        matches!(item, ContentItem::Text { text } if text.contains("no prompt-owned media delivery proof"))
     }));
 
     std::fs::remove_dir_all(&workspace).expect("test workspace should be removed");

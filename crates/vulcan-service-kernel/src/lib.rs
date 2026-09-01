@@ -204,6 +204,7 @@ mod service_state_access;
 mod session_goal_lifecycle;
 mod session_goals;
 mod session_hydration;
+mod session_media_resources_v1;
 mod session_model_projection_v1;
 mod session_plan_runtime;
 mod session_request_config_v1;

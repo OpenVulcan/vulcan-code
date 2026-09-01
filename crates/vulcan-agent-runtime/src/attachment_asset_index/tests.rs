@@ -14,6 +14,7 @@ use crate::attachment_assets::{
     attachment_descriptor_from_mime_type, resolve_attachment_replay_path,
     resolve_managed_attachment_root, stage_attachment_bytes,
 };
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
 
@@ -27,6 +28,29 @@ fn unique_workspace_directory() -> std::path::PathBuf {
     let directory = std::env::temp_dir().join(format!("vulcan-attachment-index-{unique_id}"));
     std::fs::create_dir_all(&directory).expect("temporary workspace directory should create");
     directory
+}
+
+/// Existing-root aliases resolve to one transaction owner so source holds and cleanup cannot race through different locks.
+/// 已存在根目录的别名解析为同一事务所有者，避免来源持有与清理通过不同锁竞争。
+#[test]
+fn attachment_index_lock_canonicalizes_existing_root_aliases() {
+    let workspace = unique_workspace_directory();
+    let attachment = build_test_attachment(
+        &workspace,
+        "lock-alias.bin",
+        ConversationAttachmentKind::File,
+        "application/json",
+    );
+    let timestamp = current_attachment_timestamp_parts();
+    record_staged_attachment(&workspace.to_string_lossy(), &attachment, &timestamp)
+        .expect("indexed attachment");
+    let root = resolve_managed_attachment_root(&workspace.to_string_lossy());
+    let aliased_root = root.join("index").join("..");
+    let canonical =
+        super::storage::attachment_index_transaction_lock(&root).expect("canonical owner");
+    let aliased =
+        super::storage::attachment_index_transaction_lock(&aliased_root).expect("alias owner");
+    assert!(Arc::ptr_eq(&canonical, &aliased));
 }
 
 /// Stages one temporary managed attachment inside a unique workspace directory for testing.

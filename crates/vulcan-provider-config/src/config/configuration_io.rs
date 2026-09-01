@@ -1,6 +1,9 @@
 use super::*;
 use std::io::Read;
 
+#[cfg(test)]
+mod media_delivery_tests;
+
 /// Maximum bytes accepted for any persisted Vulcan Code configuration document.
 /// 任一持久化 Vulcan Code 配置文档允许接受的最大字节数。
 const PERSISTED_CONFIGURATION_MAX_BYTES: u64 = 64 * 1024 * 1024;
@@ -356,6 +359,11 @@ fn parse_public_ai_connections_text(text: &str) -> Result<PublicAiConnectionsFil
             file.schema_version
         ));
     }
+    // Optional old settings retain memory defaults, but explicit invalid media policies fail closed.
+    // 旧版缺失设置保留内存默认值，但显式无效媒体策略必须拒绝。
+    file.configuration
+        .effective_media_delivery_policy()
+        .validate()?;
     Ok(file)
 }
 
@@ -476,6 +484,9 @@ fn save_public_ai_connections_at_path(
     path: &Path,
     store: &crate::manifest_store::ManifestStoreLayout,
 ) -> Result<(), String> {
+    // Validate before serializing or starting the cross-file persistence transaction.
+    // 在序列化或开始跨文件持久化事务之前完成校验。
+    configuration.effective_media_delivery_policy().validate()?;
     let projected = crate::custom_manifest::project_persisted_configuration(configuration);
     let file = PublicAiConnectionsFile {
         schema_version: 1,

@@ -103,6 +103,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
             public,
             controller_config,
             controller_snapshot,
+            source_message_positions: _,
             budget,
             context_budget,
             request_budget_guard,
@@ -111,6 +112,12 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
         self.live_sender
             .send(Ok(ProviderStreamDelta::RequestPrepared {
                 candidate: ProviderRequestPreparationCandidate {
+                    media_context: Some(
+                        crate::agent_runtime::events::ProviderRequestMediaContext {
+                            execution: std::sync::Arc::clone(&self.media_execution),
+                            session_scope_id: self.cache_scope_id.clone(),
+                        },
+                    ),
                     exact_request: public,
                     controller_config,
                     controller_snapshot,
@@ -152,7 +159,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
             })? {
             PreparedPhysicalApi::RequestConfigurationChanged => {
                 return Err(VulcanCoreError::ProviderRouteSwitchRequired {
-                    message: String::from("The session request configuration changed before dispatch."),
+                    message: String::from("The captured session inputs or request configuration changed before dispatch."),
                 });
             }
             PreparedPhysicalApi::SessionV1 {

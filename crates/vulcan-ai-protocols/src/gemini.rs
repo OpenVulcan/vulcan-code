@@ -507,7 +507,7 @@ fn encode_gemini_parts(
 
 /// Encodes one host-resolved resource into a Gemini file or inline-data part.
 /// 将一个宿主已解析资源编码为 Gemini 文件或内联数据 Part。
-fn encode_gemini_resource(
+pub(crate) fn encode_gemini_resource(
     resource: &vulcan_ai_contract::ResourceReference,
 ) -> Result<Value, ProtocolConversionError> {
     if resource.image_detail.is_some() {

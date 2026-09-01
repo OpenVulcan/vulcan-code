@@ -16,6 +16,14 @@ export function mediaUploadProgressKey(progress: MediaUploadProgressChangedDelta
   return JSON.stringify([progress.clientSubmissionId, progress.fileIndex]);
 }
 
+// Reports whether exact `progress` is a failed conversation upload requiring a retained-attachment notice.
+// 判断精确`progress`是否为需要提示附件仍保留的会话上传失败。
+// Returns false for cancellation, successful transfers and independent extension operations; never infers purpose from an ID prefix.
+// 对取消、成功传输及独立扩展操作返回假；绝不从ID前缀推测用途。
+export function isConversationUploadFailure(progress: MediaUploadProgressChangedDelta): boolean {
+  return progress.operationId === "conversation.media_input" && progress.phase === "failed";
+}
+
 // reduceMediaUploadProgress replaces one active file or removes only that file on a terminal event.
 // reduceMediaUploadProgress 替换一个活动文件，或在终态事件到达时仅移除该文件。
 //

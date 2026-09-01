@@ -30,6 +30,7 @@ use super::{
     media_candidates::{
         PublicAiMediaUnderstandingModelCandidate, build_media_understanding_model_candidates,
     },
+    media_delivery_settings::PublicAiMediaDeliverySettingsSnapshot,
     provider_tools::filter_current_provider_tool_selections,
 };
 
@@ -38,6 +39,9 @@ use super::{
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PublicAiSettingsSnapshot {
+    /// Effective media policy, its independent revision and backend configuration limits.
+    /// 生效媒体策略、其独立修订及后端配置限制。
+    media_delivery: PublicAiMediaDeliverySettingsSnapshot,
     /// System-level sparse Codex context-window policy inherited by every route.
     /// 所有路由继承的系统级稀疏 Codex 上下文窗口策略。
     context_window_policy_overrides: ContextWindowPolicyOverrides,
@@ -720,6 +724,7 @@ pub(super) fn build_public_ai_settings_snapshot(
         .filter(|(connection_id, _)| runtime_connection_ids.contains(connection_id.as_str()))
         .collect();
     Ok(PublicAiSettingsSnapshot {
+        media_delivery: PublicAiMediaDeliverySettingsSnapshot::from_configuration(configuration)?,
         context_window_policy_overrides: configuration.context_window_policy_overrides,
         context_compaction_window_nodes: configuration.context_compaction_window_nodes.clone(),
         provider_context_window_policy_overrides: configuration

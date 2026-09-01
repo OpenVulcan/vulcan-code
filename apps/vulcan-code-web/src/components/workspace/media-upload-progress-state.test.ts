@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MediaUploadProgressChangedDelta } from "@/types";
 import {
+  isConversationUploadFailure,
   mediaUploadProgressKey,
   reduceMediaUploadProgress,
 } from "@/components/workspace/media-upload-progress-state";
@@ -28,7 +29,7 @@ function mediaProgress(
     manifestRevision: 1,
     manifestGeneration: 2,
     routeRevision: "route-1",
-    operationId: "conversation_media_input",
+    operationId: "conversation.media_input",
     uploadChannelId: "upload-1",
     fileName: `video-${fileIndex}.mp4`,
     mediaKind: "video",
@@ -42,6 +43,20 @@ function mediaProgress(
 }
 
 describe("media upload progress state", () => {
+  // Failure notices use the declared operation and terminal phase, not a transfer naming convention.
+  // 失败通知使用声明操作及终态阶段，而非传输命名约定。
+  it("notifies only failed conversation uploads without treating cancellation as failure", () => {
+    // This exact backend operation owns the persisted attachment after upload failure.
+    // 此精确后端操作在上传失败后持有已保存附件。
+    const failed = mediaProgress(0, "failed");
+    expect(isConversationUploadFailure(failed)).toBe(true);
+    expect(isConversationUploadFailure({ ...failed, phase: "cancelled" })).toBe(false);
+    expect(isConversationUploadFailure({ ...failed, phase: "completed" })).toBe(false);
+    expect(isConversationUploadFailure({ ...failed, phase: "uploading" })).toBe(false);
+    expect(isConversationUploadFailure({ ...failed, operationId: "image_understand" })).toBe(false);
+    expect(isConversationUploadFailure({ ...failed, operationId: "conversation_media_input" })).toBe(false);
+    expect(isConversationUploadFailure({ ...failed, clientSubmissionId: "unrelated-prefix" })).toBe(true);
+  });
   it("keeps sibling files from one submission as independent rows", () => {
     const first = mediaProgress(0, "uploading");
     const second = mediaProgress(1, "preparing");

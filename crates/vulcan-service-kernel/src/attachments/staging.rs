@@ -200,12 +200,26 @@ pub(crate) async fn service_reconcile_composer_attachment_draft(
         project_id.as_deref(),
         conversation_id.as_deref(),
     )?;
-    let scope = composer_attachment_draft_scope(&draft_slot_key)?;
+    // Validate the exact slot owner before changing any managed asset lease.
+    // 改变任何托管资产租约之前验证精确槽位所有者。
+    let scope = composer_attachment_draft_scope_for_owner(
+        &draft_slot_key,
+        project_id.as_deref(),
+        conversation_id.as_deref(),
+    )?;
     let attachments = attachments
         .into_iter()
-        .map(|summary| {
-            resolve_composer_attachment_summary_for_workspace(&workspace_path, summary)
-                .and_then(composer_attachment_summary_to_core)
+        .filter_map(|summary| {
+            if let Some(resource_id) = summary.project_resource_id {
+                // Project resources are retained by the V1 catalog, never by an asset-index staging lease.
+                // 项目资源由V1目录保留，绝不由资产索引暂存租约保留。
+                let validation = if conversation_id.is_none() { Err(String::from("Project draft references require a materialized session.")) } else {
+                    crate::conversation_resources_v1::checked_resource_id(resource_id).and_then(|_| crate::conversation_resources_v1::validate_project_resource_attachment_reference(&summary))
+                };
+                return validation.err().map(Err);
+            }
+            Some(resolve_composer_attachment_summary_for_workspace(&workspace_path, summary)
+                .and_then(composer_attachment_summary_to_core))
         })
         .collect::<Result<Vec<_>, _>>()?;
     reconcile_staged_attachment_ref_scope(&workspace_path, &scope, attachments.as_slice())
@@ -240,6 +254,44 @@ pub(crate) fn composer_attachment_draft_scope(draft_slot_key: &str) -> Result<St
         ));
     }
     Ok(format!("composer-draft:v1:{draft_slot_key}"))
+}
+
+/// Validates `draft_slot_key` against the selected `conversation_id` or new-draft `project_id`.
+/// 对照所选`conversation_id`或新草稿`project_id`验证`draft_slot_key`。
+/// Returns the canonical lease scope only for that exact owner; workspace is the declared ownerless draft.
+/// 仅对该精确所有者返回规范租约作用域；工作区是声明的无主草稿。
+pub(crate) fn composer_attachment_draft_scope_for_owner(
+    draft_slot_key: &str,
+    project_id: Option<&str>,
+    conversation_id: Option<&str>,
+) -> Result<String, String> {
+    // Syntax alone cannot prevent a different draft in the same project from acquiring this lease.
+    // 仅语法校验无法阻止同项目另一草稿取得本租约。
+    let scope = composer_attachment_draft_scope(draft_slot_key)?;
+    // Session identity is canonicalized by the existing parser, matching prompt submission admission.
+    // 会话身份由既有解析器规范化，与提示词提交准入一致。
+    let expected = match conversation_id {
+        Some(conversation_id) => {
+            // Only a valid exact session may own a conversation slot.
+            // 只有有效精确会话可以持有会话槽位。
+            let session_id = parse_session_id(conversation_id.trim())
+                .ok_or_else(|| String::from("Attachment conversation id is invalid."))?;
+            format!("conversation:{session_id}")
+        }
+        None => format!(
+            "new:{}",
+            project_id
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("workspace")
+        ),
+    };
+    if draft_slot_key.trim() != expected {
+        return Err(String::from(
+            "Composer attachment draft slot does not own the selected conversation target.",
+        ));
+    }
+    Ok(scope)
 }
 
 /// Resolves the project workspace path used to stage one composer attachment.
@@ -519,6 +571,58 @@ mod tests {
                 "invalid draft slot should fail: {invalid:?}"
             );
         }
+    }
+
+    /// Verifies planning, reconciliation and submission use the same exact draft owner.
+    /// 验证规划、协调及提交使用相同精确草稿所有者。
+    #[test]
+    fn composer_attachment_draft_scope_requires_selected_owner() {
+        // The selected session is canonical and cannot acquire another conversation's lease.
+        // 所选会话具有规范身份，不能取得另一会话的租约。
+        let conversation_id = SessionId::new_v4().to_string();
+        // The canonical selected slot is accepted even with boundary whitespace.
+        // 即使有边界空白，也接受规范所选槽位。
+        let slot = format!("conversation:{conversation_id}");
+        assert_eq!(
+            composer_attachment_draft_scope_for_owner(
+                &format!(" {slot} "),
+                Some("project-a"),
+                Some(&conversation_id)
+            )
+            .unwrap(),
+            format!("composer-draft:v1:{slot}")
+        );
+        for invalid in [
+            format!("conversation:{}", SessionId::new_v4()),
+            String::from("new:project-a"),
+        ] {
+            assert!(
+                composer_attachment_draft_scope_for_owner(
+                    &invalid,
+                    Some("project-a"),
+                    Some(&conversation_id)
+                )
+                .is_err()
+            );
+        }
+        assert!(composer_attachment_draft_scope_for_owner(&slot, Some("project-a"), None).is_err());
+        assert!(
+            composer_attachment_draft_scope_for_owner(
+                "conversation:invalid",
+                None,
+                Some("invalid")
+            )
+            .is_err()
+        );
+        assert!(
+            composer_attachment_draft_scope_for_owner("new:project-a", Some(" project-a "), None)
+                .is_ok()
+        );
+        assert!(
+            composer_attachment_draft_scope_for_owner("new:project-b", Some("project-a"), None)
+                .is_err()
+        );
+        assert!(composer_attachment_draft_scope_for_owner("new:workspace", None, None).is_ok());
     }
 
     /// Verifies conversation-owned attachment staging resolves the owning project path.

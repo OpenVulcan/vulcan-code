@@ -4,8 +4,8 @@
 use super::tool_targets::ResolvedProviderToolTarget;
 use super::{PublicAiRuntime, ResolvedPublicAiSelection, current_unix_millis};
 use crate::{
-    PersistedAiConfiguration, ProviderExecutionClient, ProviderToolCapabilityKind,
-    ProviderToolTargetSelection,
+    MediaUploadCancellation, PersistedAiConfiguration, ProviderExecutionClient,
+    ProviderToolCapabilityKind, ProviderToolTargetSelection,
 };
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -16,28 +16,8 @@ use std::sync::{
 use uuid::Uuid;
 use vulcan_ai_contract::ResourceKind;
 
-/// Reports whether one media-understanding source must use an available provider upload channel.
-/// 判断一个媒体理解源是否必须使用可用的 Provider 上传通道。
-///
-/// # Parameters
-/// 参数
-/// `kind` is the exact media modality, `upload_available` reflects the frozen route contract, and
-/// `source_byte_len` is the immutable source length observed before preparation.
-/// `kind` 是精确媒体模态，`upload_available` 反映冻结路由契约，`source_byte_len` 是准备前观察到的不可变源长度。
-///
-/// # Returns
-/// 返回值
-/// `true` for every upload-capable video and for upload-capable image/audio sources above the shared inline ceiling.
-/// 对全部具备上传能力的视频，以及超过共享内联上限且具备上传能力的图片/音频返回 `true`。
-fn media_understanding_uses_provider_upload(
-    kind: ResourceKind,
-    upload_available: bool,
-    source_byte_len: u64,
-) -> bool {
-    upload_available
-        && (kind == ResourceKind::Video
-            || source_byte_len > crate::PREFERRED_INLINE_MEDIA_MAX_BYTES)
-}
+mod model_replacement_policy;
+use model_replacement_policy::ModelReplacementMediaTarget;
 
 /// One immutable media reference prepared for a model-replacement understanding request.
 /// 为模型代替理解请求准备的一条不可变媒体引用。
@@ -54,6 +34,12 @@ pub struct PreparedLocalMediaReference {
 /// Carries the complete immutable admission for one local-media preparation.
 /// 携带一次本地媒体准备所需的完整不可变准入信息。
 pub struct PrepareLocalMediaRequest<'a> {
+    /// Original filename from the canonical resource owner, independent of its physical path.
+    /// 来自规范资源所有者、独立于物理路径的原始文件名。
+    pub file_name: &'a str,
+    /// Immutable canonical source identity supplied by the host resource owner, not inferred from a cache hit.
+    /// 宿主资源所有者提供的不可变规范源身份，不从缓存命中推断。
+    pub expected_source_identity: &'a crate::PreparedMediaSourceIdentity,
     /// Exact resolved Provider selection used for preparation and caching.
     /// 用于准备与缓存的精确已解析供应商选择。
     pub selection: &'a ResolvedPublicAiSelection,
@@ -86,13 +72,31 @@ pub struct PrepareLocalMediaRequest<'a> {
 pub(super) struct RuntimeMediaUploadProgressContext {
     /// Host callback installed by the service boundary.
     /// 服务边界安装的宿主回调。
-    observer: crate::RuntimeMediaUploadProgressObserver,
+    pub(super) observer: crate::RuntimeMediaUploadProgressObserver,
     /// Stable non-secret event fields reused by every lifecycle phase.
     /// 每个生命周期阶段复用的稳定非秘密事件字段。
     pub(super) base: crate::RuntimeMediaUploadProgressEvent,
     /// Latest transferred byte count retained for cancellation and failure terminal events.
     /// 为取消与失败终态事件保留的最近已传输字节数。
     pub(super) last_bytes_sent: Arc<AtomicU64>,
+    /// Serialized event delivery rejects late progress after a terminal event without calling observers under a lock.
+    /// 串行事件投递拒绝终态后的迟到进度，且不在持锁时调用观察器。
+    pub(super) dispatch_state: Arc<std::sync::Mutex<RuntimeMediaUploadDispatchState>>,
+}
+
+/// Serializes one transfer's observer callbacks and seals its terminal boundary.
+/// 串行化一次传输的观察器回调并封闭其终态边界。
+#[derive(Default)]
+pub(super) struct RuntimeMediaUploadDispatchState {
+    /// Pending ordered events; consecutive byte-progress replacements are coalesced.
+    /// 待发送有序事件；连续字节进度替换项会合并。
+    pending: std::collections::VecDeque<crate::RuntimeMediaUploadProgressEvent>,
+    /// True while exactly one caller drains callbacks outside the state mutex.
+    /// 恰有一个调用方在状态互斥锁外排空回调时为真。
+    draining: bool,
+    /// Once sealed, no later callback can reopen this progress row.
+    /// 封闭后，后续回调不能重新打开此进度行。
+    terminal: bool,
 }
 
 impl RuntimeMediaUploadProgressContext {
@@ -110,7 +114,6 @@ impl RuntimeMediaUploadProgressContext {
         total_bytes: Option<u64>,
         error: Option<String>,
     ) {
-        self.last_bytes_sent.store(bytes_sent, Ordering::Release);
         // event preserves stable route identity while replacing only lifecycle facts.
         // event 保留稳定路由身份，仅替换生命周期事实。
         let mut event = self.base.clone();
@@ -118,7 +121,55 @@ impl RuntimeMediaUploadProgressContext {
         event.bytes_sent = bytes_sent;
         event.total_bytes = total_bytes;
         event.error = error;
-        (self.observer)(event);
+        {
+            // Only queue ownership is locked; observer callbacks can safely reenter emission.
+            // 仅锁定队列所有权；观察器回调可以安全重入发射。
+            let mut state = self
+                .dispatch_state
+                .lock()
+                .expect("media progress dispatch mutex poisoned");
+            if state.terminal {
+                return;
+            }
+            state.terminal = matches!(
+                phase,
+                crate::RuntimeMediaUploadPhase::Completed
+                    | crate::RuntimeMediaUploadPhase::Failed
+                    | crate::RuntimeMediaUploadPhase::Cancelled
+            );
+            self.last_bytes_sent.store(bytes_sent, Ordering::Release);
+            if phase == crate::RuntimeMediaUploadPhase::Uploading
+                && state
+                    .pending
+                    .back()
+                    .is_some_and(|last| last.phase == crate::RuntimeMediaUploadPhase::Uploading)
+            {
+                state.pending.pop_back();
+            }
+            state.pending.push_back(event);
+            if state.draining {
+                return;
+            }
+            state.draining = true;
+        }
+        loop {
+            // Pop and release before calling the host, preserving FIFO order without lock inversion.
+            // 弹出后先释放锁再调用宿主，保持先入先出顺序且避免锁反转。
+            let event = {
+                let mut state = self
+                    .dispatch_state
+                    .lock()
+                    .expect("media progress dispatch mutex poisoned");
+                match state.pending.pop_front() {
+                    Some(event) => event,
+                    None => {
+                        state.draining = false;
+                        return;
+                    }
+                }
+            };
+            (self.observer)(event);
+        }
     }
 
     /// Builds the byte callback consumed by the generic upload engine.
@@ -146,6 +197,9 @@ impl RuntimeMediaUploadProgressContext {
 /// Emits a cancelled terminal event when an in-flight media upload future is dropped.
 /// 当进行中的媒体上传 Future 被丢弃时发出取消终态事件。
 pub(super) struct RuntimeMediaUploadTerminalGuard {
+    /// Optional transfer-local cancellation for background work when its owning future is dropped.
+    /// 所有Future被丢弃时取消后台工作的可选传输局部令牌。
+    cancellation_on_drop: Option<MediaUploadCancellation>,
     /// Exact progress context retained until a normal terminal phase is emitted.
     /// 保留到正常终态发出为止的精确进度上下文。
     context: Option<RuntimeMediaUploadProgressContext>,
@@ -166,7 +220,22 @@ impl RuntimeMediaUploadTerminalGuard {
     /// 进度可见时返回已启用守卫，否则返回惰性守卫。
     pub(super) fn new(context: Option<&RuntimeMediaUploadProgressContext>) -> Self {
         Self {
+            cancellation_on_drop: None,
             context: context.cloned(),
+        }
+    }
+
+    /// Arms the existing terminal guard for `context` and the exact transfer-local `cancellation` token.
+    /// 为`context`及精确传输局部`cancellation`令牌启用既有终态守卫。
+    /// Returns a guard that cancels background work even when no UI observer is installed.
+    /// 返回即使未安装UI观察器也会取消后台工作的守卫。
+    pub(super) fn new_cancellable(
+        context: Option<&RuntimeMediaUploadProgressContext>,
+        cancellation: &MediaUploadCancellation,
+    ) -> Self {
+        Self {
+            context: context.cloned(),
+            cancellation_on_drop: Some(cancellation.clone()),
         }
     }
 
@@ -174,6 +243,7 @@ impl RuntimeMediaUploadTerminalGuard {
     /// 在正常终态事件发出后解除丢弃回退。
     pub(super) fn disarm(&mut self) {
         self.context = None;
+        self.cancellation_on_drop = None;
     }
 }
 
@@ -181,6 +251,9 @@ impl Drop for RuntimeMediaUploadTerminalGuard {
     /// Emits cancellation with the latest observed byte count when still armed.
     /// 仍启用时使用最近观测字节数发出取消事件。
     fn drop(&mut self) {
+        if let Some(cancellation) = self.cancellation_on_drop.take() {
+            cancellation.cancel();
+        }
         let Some(context) = self.context.take() else {
             return;
         };
@@ -218,8 +291,8 @@ impl PublicAiRuntime {
         Ok(())
     }
 
-    /// Prepares and caches one local media input for an exact resolved conversation route.
-    /// 为一条精确解析后的会话路由准备并缓存一个本地媒体输入。
+    /// Prepares and caches one fresh independent model-replacement media invocation.
+    /// 准备并缓存一次新的独立模型代替媒体调用。
     ///
     /// # Parameters
     /// 参数
@@ -238,6 +311,8 @@ impl PublicAiRuntime {
         request: PrepareLocalMediaRequest<'_>,
     ) -> Result<PreparedLocalMediaReference, String> {
         let PrepareLocalMediaRequest {
+            file_name,
+            expected_source_identity,
             selection,
             owner_session_id,
             operation_id,
@@ -258,30 +333,55 @@ impl PublicAiRuntime {
             kind,
             mime_type,
         )?;
-        if kind == ResourceKind::Video && upload_contract.is_none() {
-            return Err(format!(
-                "Video resource `{}` has no declared provider upload channel; refusing Base64 fallback.",
-                local_path.display()
-            ));
-        }
         // sourceByteLen freezes the policy decision before cache lookup and physical preparation.
         // sourceByteLen 在缓存查询与真实准备前冻结策略判定。
-        let source_byte_len = tokio::fs::metadata(local_path)
-            .await
-            .map_err(|error| {
-                format!(
-                    "Media-understanding source `{}` could not be inspected: {error}",
-                    local_path.display()
-                )
-            })?
-            .len();
-        // useProviderUpload keeps small image/audio inputs inline while requiring video uploads and
-        // selecting any declared media channel above the shared inline-preference threshold.
-        // useProviderUpload 让小型图片/音频保持内联，同时强制视频上传，并在超过共享内联阈值时选择任意已声明媒体通道。
-        let use_provider_upload = media_understanding_uses_provider_upload(
-            kind,
-            upload_contract.is_some(),
-            source_byte_len,
+        let source_metadata = tokio::fs::metadata(local_path).await.map_err(|error| {
+            format!("Media-understanding source metadata could not be inspected: {error}")
+        })?;
+        if !source_metadata.is_file() {
+            return Err(String::from(
+                "Media extension source must be a regular file.",
+            ));
+        }
+        // Freeze the observed length and exact action before cache hashing or Base64 allocation.
+        // 在缓存哈希或 Base64 分配前冻结观测长度及精确动作。
+        let source_byte_len = source_metadata.len();
+        // The model-resolved route supplies MIME, count and hard limits independently of soft policy.
+        // 经模型解析的路由提供 MIME、数量与硬限制，独立于软策略。
+        let materialization = ModelReplacementMediaTarget {
+            policy: selection.media_delivery_policy,
+            profile_id: &selection.route.protocol_route.protocol_profile_id,
+            model_inputs: &selection.model.capabilities.input_resources,
+            constraint: selection
+                .route
+                .protocol_route
+                .input_resource_constraints
+                .iter()
+                .find(|constraint| constraint.resource_kind == kind),
+            upload: upload_contract.as_ref(),
+        }
+        .plan(kind, mime_type, source_byte_len)?;
+        // Size and policy admission precede hashing, and the hash must still belong to the canonical resource owner.
+        // 大小和策略准入先于哈希，且哈希仍必须属于规范资源所有者。
+        if source_byte_len != expected_source_identity.byte_len {
+            return Err(String::from(
+                "Media resource size differs from its canonical source identity.",
+            ));
+        }
+        let source_identity = self
+            .execution_client
+            .read_admitted_media_source_identity(local_path, source_byte_len, Some(cancellation))
+            .await?;
+        if &source_identity != expected_source_identity {
+            return Err(String::from(
+                "Media resource content differs from its canonical source identity.",
+            ));
+        }
+        // Only a real upload action can reuse a provider reference or emit transfer progress.
+        // 仅真实上传动作可以复用供应商引用或发出传输进度。
+        let use_provider_upload = matches!(
+            materialization,
+            crate::LocalMediaMaterialization::ProviderUpload { .. }
         );
         if use_provider_upload {
             let contract = upload_contract.as_ref().ok_or_else(|| {
@@ -303,11 +403,12 @@ impl PublicAiRuntime {
         if use_provider_upload
             && let Some(cached_reference) = self
                 .execution_client
-                .prepared_media_reference(
+                .prepared_media_reference_for_admitted_source(
                     &selection.route,
                     local_path,
                     kind,
                     mime_type,
+                    expected_source_identity,
                     owner_session_id,
                     Some(cancellation),
                 )
@@ -336,11 +437,7 @@ impl PublicAiRuntime {
                     ResourceKind::Image => "image",
                     ResourceKind::Video => "video",
                     ResourceKind::Audio => "audio",
-                    ResourceKind::File => {
-                        return Err(String::from(
-                            "Model-replacement media progress does not accept generic files.",
-                        ));
-                    }
+                    ResourceKind::File => "file",
                 };
                 // uploadChannelId is resolved by the same route function used by media preparation.
                 // uploadChannelId 由媒体准备使用的同一路由函数解析。
@@ -355,15 +452,6 @@ impl PublicAiRuntime {
                 // totalBytes reuses the policy snapshot and is rechecked by physical preparation.
                 // totalBytes 复用策略快照，并由真实准备再次校验。
                 let total_bytes = source_byte_len;
-                // fileName is derived only from the canonical workspace path.
-                // fileName 仅从规范工作区路径派生。
-                let file_name = local_path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .filter(|value| !value.is_empty())
-                    .ok_or_else(|| {
-                        String::from("Media-understanding source has no valid file name.")
-                    })?;
                 Some(RuntimeMediaUploadProgressContext {
                     observer,
                     base: crate::RuntimeMediaUploadProgressEvent {
@@ -391,6 +479,7 @@ impl PublicAiRuntime {
                         error: None,
                     },
                     last_bytes_sent: Arc::new(AtomicU64::new(0)),
+                    dispatch_state: Arc::default(),
                 })
             } else {
                 None
@@ -441,20 +530,23 @@ impl PublicAiRuntime {
                 .await?;
             // prepared binds any native provider reference to the verified local source fingerprint.
             // prepared 将任意供应商原生引用绑定到已验证本地来源指纹。
-            self.execution_client
+            let prepared = self.execution_client
                 .prepare_local_media(
                     &selection.route,
                     selection.model.id.as_str(),
                     &secret,
-                    local_path,
+                    crate::AdmittedLocalMediaSource { path: local_path, file_name, mime_type, identity: expected_source_identity },
                     kind,
-                    mime_type,
                     true,
-                    use_provider_upload,
+                    materialization,
                     observed_progress,
                     cancellation,
                 )
-                .await
+                .await?;
+            if &prepared.source_identity() != expected_source_identity {
+                return Err(String::from("Media resource changed during preparation; native content was not sent to the model."));
+            }
+            Ok(prepared)
         }
         .await;
         let prepared = match preparation_result {
@@ -602,6 +694,7 @@ fn provider_tool_media_upload_binding_is_cacheable(
 /// reuse a still-valid provider object without pretending that a session context exists.
 /// 模型扩展工具没有会话媒体账本。本缓存只按供应商上传契约与源字节作用域，后续独立工具调用
 /// 可以复用仍有效的供应商对象，但不会伪造会话上下文。
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn prepare_provider_tool_media_upload(
     execution_client: &ProviderExecutionClient,
     resolved: &ResolvedProviderToolTarget,
@@ -610,6 +703,8 @@ pub(super) async fn prepare_provider_tool_media_upload(
     credential_profile: &crate::CredentialProfile,
     workspace_root: Option<&Path>,
     capability: ProviderToolCapabilityKind,
+    media_delivery_policy: crate::MediaDeliveryPolicy,
+    media_sources: &[crate::ProviderToolMediaSource],
 ) -> Result<
     Option<(
         ProviderToolMediaUploadPreflight,
@@ -651,7 +746,13 @@ pub(super) async fn prepare_provider_tool_media_upload(
     // Collection bindings remain owned by the generic upload materializer. The process-local
     // understanding cache has a one-resource scalar key and must not narrow valid array contracts.
     // 集合绑定继续由通用上传物化器持有。进程级理解缓存使用单资源标量键，不得收窄有效数组契约。
-    if !provider_tool_media_upload_binding_is_cacheable(binding) {
+    if !provider_tool_media_upload_binding_is_cacheable(binding)
+        || operation.upload_bindings.len() != 1
+        || media_sources.len() > 1
+        || !arguments
+            .pointer(source_pointer.as_str())
+            .is_some_and(serde_json::Value::is_string)
+    {
         return Ok(None);
     }
     let source_reference = arguments
@@ -663,32 +764,64 @@ pub(super) async fn prepare_provider_tool_media_upload(
                 "Media-understanding upload source `{source_pointer}` must be one non-empty local path."
             )
         })?;
+    if media_sources
+        .first()
+        .is_some_and(|source| source.reference != source_reference)
+    {
+        return Err(String::from(
+            "Host media source does not match the exact cacheable upload binding.",
+        ));
+    }
+    // Cache admission uses the same frozen independent policy as actual materialization.
+    // 缓存准入使用与实际物化相同的冻结独立策略。
+    let mut planner = crate::MediaDeliveryPlanner::new(
+        media_delivery_policy,
+        crate::MediaDeliveryPurpose::IndependentExtension,
+    )?;
     let inspection = crate::upload_engine::inspect_operation_upload_route(
         binding,
         source_reference,
-        1,
         workspace_root,
         &resolved.upload_channels,
         credential_profile.credential_role.as_deref(),
+        &mut planner,
+        &operation.input_resources,
+        media_sources,
     )
     .await?;
-    if matches!(
-        inspection.channel.primitive,
-        Some(crate::UploadPrimitiveKind::InlineDataUrl | crate::UploadPrimitiveKind::InlineBase64)
-    ) {
-        if resource_kind == ResourceKind::Video {
-            return Err(String::from(
-                "Video-understanding tool uploads must use a provider resource channel; Base64 is forbidden.",
-            ));
-        }
+    if crate::upload_engine::upload_channel_delivery_kind(&inspection.channel)?
+        != crate::upload_engine::UploadChannelDeliveryKind::ProviderUpload
+    {
         return Ok(None);
+    }
+    // This direct operation entry has no model-scoped signing binding; cache reuse cannot conceal that gap.
+    // 此直连操作入口没有模型作用域签名绑定；缓存复用不能掩盖这一缺口。
+    if inspection.channel.primitive == Some(crate::UploadPrimitiveKind::SignedObjectUpload) {
+        return Err(String::from(
+            "The direct media operation has no host-owned model binding for its upload signing contract.",
+        ));
     }
     let Some(local_path) = inspection.resource.local_path.as_ref() else {
         return Ok(None);
     };
     let source_identity = execution_client
-        .read_media_source_identity(local_path, None)
+        .read_admitted_media_source_identity(local_path, inspection.resource.byte_len, None)
         .await?;
+    if source_identity.byte_len != inspection.resource.byte_len {
+        return Err(String::from(
+            "Media source size changed after extension admission.",
+        ));
+    }
+    if inspection
+        .resource
+        .source_identity
+        .as_ref()
+        .is_some_and(|expected| expected != &source_identity)
+    {
+        return Err(String::from(
+            "Host media source changed after registration.",
+        ));
+    }
     let cached_reference = execution_client
         .prepared_provider_tool_media_reference(
             resolved.connection.provider_id.as_str(),
@@ -698,6 +831,7 @@ pub(super) async fn prepare_provider_tool_media_upload(
             local_path,
             resource_kind,
             inspection.resource.mime_type.as_str(),
+            &source_identity,
             None,
         )
         .await?;
@@ -760,6 +894,8 @@ pub(super) async fn provider_tool_media_upload_progress_context(
     arguments: &serde_json::Value,
     credential_profile: &crate::CredentialProfile,
     workspace_root: Option<&Path>,
+    media_delivery_policy: crate::MediaDeliveryPolicy,
+    media_sources: &[crate::ProviderToolMediaSource],
 ) -> Result<Option<RuntimeMediaUploadProgressContext>, String> {
     // observer and owner are both required to route a user-visible progress replacement.
     // observer 与 owner 必须同时存在，才能路由面向用户的进度替换事件。
@@ -803,6 +939,11 @@ pub(super) async fn provider_tool_media_upload_progress_context(
             operation.operation_id
         ));
     }
+    // Multi-resource operations remain on the generic path and cannot masquerade as one scalar transfer.
+    // 多资源操作保留在通用路径，不能伪装成一次标量传输。
+    if operation.upload_bindings.len() != 1 || binding.item_source_path.is_some() {
+        return Ok(None);
+    }
     // sourceValue is the exact native argument preserved until upload materialization.
     // sourceValue 是保留到上传物化阶段的精确原生参数。
     let source_value = arguments.pointer(source_pointer.as_str()).ok_or_else(|| {
@@ -810,52 +951,61 @@ pub(super) async fn provider_tool_media_upload_progress_context(
             "Media-understanding upload source `{source_pointer}` is missing after argument projection."
         )
     })?;
-    // sourceReference and itemCount retain the scalar versus explicit one-item-array contract.
-    // sourceReference 与 itemCount 保留标量与显式单项数组契约。
-    let (source_reference, item_count) = match source_value {
-        serde_json::Value::String(reference) if !reference.trim().is_empty() => {
-            (reference.as_str(), 1_usize)
-        }
-        serde_json::Value::Array(values) if values.len() == 1 => {
-            let reference = values[0]
-                .as_str()
-                .filter(|value| !value.trim().is_empty())
-                .ok_or_else(|| {
-                    String::from(
-                        "Media-understanding upload array must contain one non-empty local path.",
-                    )
-                })?;
-            (reference, values.len())
-        }
-        _ => {
-            return Err(String::from(
-                "Media-understanding upload source must be one non-empty local path.",
-            ));
-        }
+    // Scalar and explicit one-item arrays both materialize exactly one file per upload call.
+    // 标量和显式单项数组均在每次上传调用中物化一个文件。
+    let source_reference = match source_value {
+        serde_json::Value::String(reference) if !reference.trim().is_empty() => reference.as_str(),
+        serde_json::Value::Array(values) if values.len() == 1 => values[0]
+            .as_str()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                String::from(
+                    "Media-understanding upload array must contain one non-empty local path.",
+                )
+            })?,
+        _ => return Ok(None),
     };
     // uploadRoute repeats the generic engine preflight and suppresses progress for non-reporting
     // channels such as inline data conversion.
     // uploadRoute 重复通用引擎预检，并对不报告进度的通道（例如内联数据转换）抑制进度。
+    // Progress projection repeats the same policy without reserving a separate request budget.
+    // 进度投影重复相同策略，不为请求额外预留预算。
+    let mut planner = crate::MediaDeliveryPlanner::new(
+        media_delivery_policy,
+        crate::MediaDeliveryPurpose::IndependentExtension,
+    )?;
     let inspection = crate::upload_engine::inspect_operation_upload_route(
         binding,
         source_reference,
-        item_count,
         workspace_root,
         &resolved.upload_channels,
         credential_profile.credential_role.as_deref(),
+        &mut planner,
+        &operation.input_resources,
+        media_sources,
     )
     .await?;
-    if !inspection.channel.progress_supported {
+    if !inspection.channel.progress_supported
+        || crate::upload_engine::upload_channel_delivery_kind(&inspection.channel)?
+            != crate::upload_engine::UploadChannelDeliveryKind::ProviderUpload
+        || inspection.resource.local_path.is_none()
+    {
         return Ok(None);
     }
     let upload_channel_id = inspection.channel.upload_channel_id;
     let total_bytes = inspection.resource.byte_len;
     // fileName is derived only from the already validated local path argument.
     // fileName 仅从已校验的本地路径参数派生。
-    let file_name = Path::new(source_reference)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .filter(|value| !value.is_empty())
+    let file_name = inspection
+        .resource
+        .file_name
+        .as_deref()
+        .or_else(|| {
+            Path::new(source_reference)
+                .file_name()
+                .and_then(|value| value.to_str())
+                .filter(|value| !value.is_empty())
+        })
         .ok_or_else(|| String::from("Media-understanding upload path has no valid file name."))?;
     Ok(Some(RuntimeMediaUploadProgressContext {
         observer,
@@ -880,6 +1030,7 @@ pub(super) async fn provider_tool_media_upload_progress_context(
             error: None,
         },
         last_bytes_sent: Arc::new(AtomicU64::new(0)),
+        dispatch_state: Arc::default(),
     }))
 }
 

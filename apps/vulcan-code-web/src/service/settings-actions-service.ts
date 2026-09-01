@@ -14,6 +14,7 @@ import type {
   PublicAiCustomModelProtocolPreference,
   PublicAiModelCapabilityOverrides,
   PublicAiContextWindowPolicyOverrides,
+  PublicAiMediaDeliveryPolicy,
   PublicAiContextCompactionWindowConfiguration,
   PublicAiModelOverrides,
   PublicAiInferenceRoute,
@@ -598,6 +599,31 @@ export async function loadPublicAiSessionProviderToolSelections(
   return serviceClient.request(
     "service_public_ai_session_provider_tool_selections",
     { conversationId },
+  );
+}
+
+// Saves complete `policy` unchanged and returns the backend's published settings snapshot.
+// 原样保存完整 `policy`，返回后端已发布的设置快照。
+// expectedRevision is the editor's last read fingerprint; stale writes fail without overwriting newer values.
+// expectedRevision 是编辑器最后读取的指纹；陈旧写入失败，不覆盖较新值。
+export async function savePublicAiMediaDeliveryPolicy(
+  policy: PublicAiMediaDeliveryPolicy,
+  expectedRevision: string,
+): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_media_delivery_policy",
+    { request: { policy, expected_revision: expectedRevision } },
+  );
+}
+
+// Explicitly restores backend defaults and returns their snapshot without inventing browser defaults.
+// 显式恢复后端默认值并返回其快照，不在浏览器中自造默认值。
+// expectedRevision binds the reset to the values the user saw; errors leave backend settings unchanged.
+// expectedRevision 把重置绑定到用户看到的值；出错时后端设置保持不变。
+export async function resetPublicAiMediaDeliveryPolicy(expectedRevision: string): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_reset_public_ai_media_delivery_policy",
+    { request: { expected_revision: expectedRevision } },
   );
 }
 

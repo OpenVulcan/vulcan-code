@@ -22,6 +22,7 @@ mod catalog;
 mod catalog_policy;
 mod catalog_sources;
 mod catalog_views;
+mod conversation_media;
 mod credentials;
 mod media;
 mod model_execution;

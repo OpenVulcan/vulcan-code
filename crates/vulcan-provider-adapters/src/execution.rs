@@ -31,8 +31,8 @@ pub(crate) use failure::{
 };
 use prepared_media::PreparedMediaCacheEntry;
 pub use prepared_media::{
-    CONVERSATION_MEDIA_INPUT_OPERATION_ID, ConversationMediaUploadContract,
-    ConversationPreparedMediaRetention, PREFERRED_INLINE_MEDIA_MAX_BYTES,
+    AdmittedLocalMediaSource, CONVERSATION_MEDIA_INPUT_OPERATION_ID,
+    ConversationMediaUploadContract, ConversationPreparedMediaRetention, LocalMediaMaterialization,
     PreparedConversationMedia, PreparedMediaReferenceSnapshot, PreparedMediaSourceIdentity,
 };
 pub(crate) use projection_profiles::{

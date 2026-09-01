@@ -1,4 +1,5 @@
 import React from "react";
+import { composerAttachmentIdentity } from "@/service/composer-attachment-reference";
 import {
   BrainCircuit,
   CheckCircle2,
@@ -386,7 +387,7 @@ export function ComposerAttachmentStrip(props: {
   return (
     <div className="composer-attachment-strip">
       {props.attachments.map((attachment, index) => {
-        const attachmentId = attachment.assetId?.trim() ?? "";
+        const attachmentId = composerAttachmentIdentity(attachment, index);
         const preparation = attachmentId ? props.preparations?.[attachmentId] : undefined;
         const progress = attachmentId ? props.progresses?.[attachmentId] : undefined;
         const totalBytes = progress?.totalBytes ?? null;

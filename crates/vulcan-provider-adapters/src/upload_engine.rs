@@ -12,8 +12,9 @@
 //! 端点路径。
 
 use crate::{
-    CredentialExecutionSecret, CredentialProfile, MediaUploadCancellation,
-    MediaUploadProgressCallback, ServiceEntry, UploadPrimitiveKind, UploadReferenceEncoding,
+    CredentialExecutionSecret, CredentialProfile, MediaUploadCancellation, MediaUploadFailure,
+    MediaUploadProgressCallback, MediaUploadStage, ServiceEntry, UploadPrimitiveKind,
+    UploadReferenceEncoding,
 };
 use async_stream::stream;
 use base64::Engine;
@@ -23,6 +24,15 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+
+mod delivery_policy;
+mod file_create_body;
+mod inputs;
+use delivery_policy::resolve_operation_delivery_channel;
+pub(crate) use delivery_policy::{
+    UploadChannelDeliveryKind, resolve_real_upload_channel, upload_channel_delivery_kind,
+};
+pub(crate) use inputs::operation_upload_inputs;
 use std::future::Future;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
@@ -32,6 +42,12 @@ use tokio::io::AsyncReadExt;
 /// 一个需要经上传通道物化的规范输入资源。
 #[derive(Debug, Clone)]
 pub(crate) struct UploadResource {
+    /// Optional immutable source proof supplied by the host resource owner, never by AI arguments.
+    /// 由宿主资源所有者而非AI参数提供的可选不可变来源证据。
+    pub source_identity: Option<crate::PreparedMediaSourceIdentity>,
+    /// Original catalog filename when the physical entity is digest-addressed.
+    /// 物理实体使用摘要寻址时的原目录文件名。
+    pub file_name: Option<String>,
     /// Local file path when the resource is host-backed.
     /// 资源由宿主文件承载时的本地路径。
     pub local_path: Option<PathBuf>,
@@ -72,7 +88,7 @@ pub(crate) struct UploadedResourceReference {
 
 /// One completely preflighted resource upload before any network side effect.
 /// 任何网络副作用发生前完成全部预检的一项资源上传。
-struct PreparedOperationUpload {
+struct PreparedOperationUpload<'a> {
     /// Index of the owning operation binding.
     /// 所属操作绑定的索引。
     binding_index: usize,
@@ -85,6 +101,20 @@ struct PreparedOperationUpload {
     /// Canonical resource with stable bytes/metadata.
     /// 携带稳定字节/元数据的规范资源。
     resource: UploadResource,
+    /// Borrowed canonical Base64 payload decoded only after the complete operation passes preflight.
+    /// 仅在完整操作通过预检后才解码的借用规范 Base64 负载。
+    inline_base64: Option<&'a str>,
+}
+
+/// Source metadata with an optional borrowed Data URL payload; no decoded bytes are allocated yet.
+/// 来源元数据及可选借用 Data URL 负载；此时尚未分配解码字节。
+struct OperationUploadSource<'a> {
+    /// Exact source metadata for policy and upload-contract checks.
+    /// 用于策略与上传契约检查的精确来源元数据。
+    resource: UploadResource,
+    /// Canonical encoded input borrowed from immutable operation arguments.
+    /// 从不可变操作参数借用的规范编码输入。
+    inline_base64: Option<&'a str>,
 }
 
 /// Carries the exact local operation upload resource and selected channel after bounded preflight.
@@ -102,6 +132,12 @@ pub(crate) struct OperationUploadRouteInspection {
 /// Frozen host dependencies used to materialize one operation's uploads.
 /// 用于物化一次操作上传的冻结宿主依赖。
 pub(crate) struct OperationUploadExecutionContext<'a> {
+    /// Explicit host-resolved sources indexed by their exact model-visible locator, outside the JSON contract.
+    /// 按精确模型可见定位符匹配、位于JSON契约之外的显式宿主解析来源。
+    pub media_sources: &'a [crate::ProviderToolMediaSource],
+    /// Host-frozen independent-extension policy; never derived from AI arguments.
+    /// 宿主冻结的独立扩展策略，绝不从 AI 参数派生。
+    pub media_delivery_policy: crate::MediaDeliveryPolicy,
     /// HTTP client whose redirect and timeout policy applies to every upload.
     /// 对每次上传应用重定向与超时策略的 HTTP 客户端。
     pub http: &'a reqwest::Client,
@@ -191,150 +227,114 @@ pub(crate) async fn materialize_operation_uploads(
     if operation.upload_bindings.is_empty() {
         return Ok(arguments);
     }
+    // One planner accounts for all media bindings in canonical input order before any materialization.
+    // 同一规划器在任何物化之前按规范输入顺序统计全部媒体绑定。
+    let mut planner = crate::MediaDeliveryPlanner::new(
+        context.media_delivery_policy,
+        crate::MediaDeliveryPurpose::IndependentExtension,
+    )?;
     let mut prepared = Vec::new();
+    // Track exact host locators consumed by declared bindings; unused proofs must never permit URI leakage.
+    // 追踪声明绑定消费的精确宿主定位符；未消费证据绝不能允许URI泄露。
+    let mut consumed_sources = std::collections::BTreeSet::new();
     let mut source_was_array = BTreeMap::new();
-    for (binding_index, binding) in operation.upload_bindings.iter().enumerate() {
-        let Some(source) = arguments.pointer(&binding.source_path) else {
-            if binding.required {
-                return Err(format!(
-                    "Operation `{}` requires upload source `{}`.",
-                    operation.operation_id, binding.source_path
-                ));
-            }
-            continue;
-        };
-        if let Some(item_source_path) = binding.item_source_path.as_deref() {
-            let items = source.as_array().ok_or_else(|| {
-                format!(
-                    "Operation `{}` item upload source `{}` must be an array.",
-                    operation.operation_id, binding.source_path
-                )
-            })?;
-            if items.is_empty() && binding.required && binding.item_match_path.is_none() {
-                return Err(format!(
-                    "Operation `{}` requires a non-empty item upload source `{}`.",
-                    operation.operation_id, binding.source_path
-                ));
-            }
-            for (item_index, item) in items.iter().enumerate() {
-                if let (Some(match_path), Some(match_value)) = (
-                    binding.item_match_path.as_deref(),
-                    binding.item_match_value.as_ref(),
-                ) && item.pointer(match_path) != Some(match_value)
-                {
-                    continue;
-                }
-                let Some(value) = item.pointer(item_source_path) else {
-                    if binding.required {
-                        return Err(format!(
-                            "Operation `{}` item upload source `{}{}/{}` is required.",
-                            operation.operation_id,
-                            binding.source_path,
-                            item_index,
-                            item_source_path.trim_start_matches('/')
-                        ));
-                    }
-                    continue;
-                };
-                let reference = value
-                    .as_str()
-                    .filter(|value| !value.trim().is_empty())
-                    .ok_or_else(|| {
-                        format!(
-                            "Operation `{}` item upload source `{}{}/{}` must be a non-empty string.",
-                            operation.operation_id,
-                            binding.source_path,
-                            item_index,
-                            item_source_path.trim_start_matches('/')
-                        )
-                    })?;
-                let resource = prepare_operation_upload_resource(
-                    binding,
-                    reference,
-                    items.len(),
-                    context.workspace_root,
-                    context.channels,
-                    context.credential_profile.credential_role.as_deref(),
-                )
-                .await?;
-                let channel = resolve_upload_channel(
-                    context.channels,
-                    &binding.upload_channel_refs,
-                    &resource,
-                    context.credential_profile.credential_role.as_deref(),
-                )?
-                .clone();
-                validate_upload_resource(&channel, &resource)?;
-                prepared.push(PreparedOperationUpload {
-                    binding_index,
-                    item_index: Some(item_index),
-                    channel,
-                    resource,
-                });
-            }
-            continue;
-        }
-        let values = match source {
-            Value::String(_) => {
-                source_was_array.insert(binding_index, false);
-                std::slice::from_ref(source)
-            }
-            Value::Array(values) if !values.is_empty() => {
-                source_was_array.insert(binding_index, true);
-                values.as_slice()
-            }
-            Value::Array(_) if !binding.required => continue,
-            _ => {
-                return Err(format!(
-                    "Operation `{}` upload source `{}` must be a non-empty string or string array.",
-                    operation.operation_id, binding.source_path
-                ));
-            }
-        };
-        for value in values {
-            let reference = value
-                .as_str()
-                .filter(|value| !value.trim().is_empty())
-                .ok_or_else(|| {
-                    format!(
-                        "Operation `{}` upload source `{}` contains a non-string or empty item.",
-                        operation.operation_id, binding.source_path
-                    )
-                })?;
-            let resource = prepare_operation_upload_resource(
-                binding,
-                reference,
-                values.len(),
-                context.workspace_root,
+    for input in operation_upload_inputs(operation, &arguments)? {
+        // Resolution and materialization consume the same exact declared occurrences.
+        // 解析和物化消费相同精确声明出现。
+        let binding = &operation.upload_bindings[input.binding_index];
+        source_was_array.insert(input.binding_index, input.source_was_array);
+        // Host metadata precedes admission; no source bytes are read here.
+        // 宿主元数据先于准入；此处不读取来源字节。
+        let source = prepare_operation_upload_resource(
+            binding,
+            input.reference,
+            context.workspace_root,
+            context.media_sources,
+        )
+        .await?;
+        consumed_sources.insert(input.reference);
+        // One frozen policy accounts for every declared occurrence, including repeated sources.
+        // 同一冻结策略统计每个声明出现，包括重复来源。
+        let channel = resolve_operation_delivery_channel(
+            context.channels,
+            &binding.upload_channel_refs,
+            &source.resource,
+            context.credential_profile.credential_role.as_deref(),
+            &mut planner,
+            &operation.input_resources,
+        )?
+        .clone();
+        prepared.push(PreparedOperationUpload {
+            binding_index: input.binding_index,
+            item_index: input.item_index,
+            channel,
+            resource: source.resource,
+            inline_base64: source.inline_base64,
+        });
+    }
+    if media_sources_are_unconsumed(context.media_sources, &consumed_sources) {
+        return Err(String::from(
+            "Host media source is not consumed by an exact operation upload binding.",
+        ));
+    }
+    // Validate deferred payload shape and model-scoped signing before the first network side effect.
+    // 在首个网络副作用之前校验延迟负载形态与模型作用域签名。
+    for upload in &prepared {
+        // Model-scoped signing must be executable even when a small resource prefers inline delivery.
+        // 即使小资源偏好内联投递，模型作用域签名仍必须具备可执行条件。
+        let real_channel = if upload.resource.remote_url.is_some() {
+            None
+        } else {
+            resolve_real_upload_channel(
                 context.channels,
-                context.credential_profile.credential_role.as_deref(),
-            )
-            .await?;
-            let channel = resolve_upload_channel(
-                context.channels,
-                &binding.upload_channel_refs,
-                &resource,
+                &operation.upload_bindings[upload.binding_index].upload_channel_refs,
+                &upload.resource,
                 context.credential_profile.credential_role.as_deref(),
             )?
-            .clone();
-            validate_upload_resource(&channel, &resource)?;
-            prepared.push(PreparedOperationUpload {
-                binding_index,
-                item_index: None,
-                channel,
-                resource,
-            });
+        };
+        if real_channel.is_some_and(|channel| {
+            channel.primitive == Some(UploadPrimitiveKind::SignedObjectUpload)
+        }) && context.model_id.is_none()
+        {
+            return Err(String::from(
+                "The selected upload signing contract requires an exact host-owned model identifier.",
+            ));
+        }
+        if let Some(encoded) = upload.inline_base64 {
+            validate_operation_base64_payload(encoded, upload.resource.byte_len)?;
         }
     }
+    // Verify all admitted host sources before the first upload, so a corrupt later item cannot cause partial dispatch.
+    // 在首次上传前验证全部已准入宿主来源，防止后项损坏导致部分分派。
+    for upload in &prepared {
+        verify_host_upload_source(&upload.resource, context.cancellation).await?;
+    }
     let mut references = BTreeMap::<usize, Vec<(Option<usize>, Value)>>::new();
-    for upload in prepared {
+    for mut upload in prepared {
+        // Decode only an admitted resource after every binding has passed limits and shape validation.
+        // 仅在全部绑定通过限制与形态校验后，解码一个已准入资源。
+        if let Some(encoded) = upload.inline_base64 {
+            upload.resource.inline_bytes = Some(
+                base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .map_err(|error| {
+                        format!("Operation upload Data URL base64 is invalid: {error}")
+                    })?,
+            );
+        }
         let materialized = materialize_upload(
             UploadExecutionContext {
                 http: context.http,
                 entry: context.entry,
                 secret: context.secret,
                 credential_profile: context.credential_profile,
-                progress: context.progress.clone(),
+                progress: if upload_channel_delivery_kind(&upload.channel)?
+                    == UploadChannelDeliveryKind::ProviderUpload
+                {
+                    context.progress.clone()
+                } else {
+                    None
+                },
                 cancellation: context.cancellation,
                 model_id: context.model_id,
                 fixture_loopback_origin: context.fixture_loopback_origin,
@@ -523,73 +523,95 @@ pub(crate) fn materialize_cached_scalar_operation_upload(
 /// # Parameters
 /// 参数
 /// `binding` owns MIME and channel references; `reference` is an exact local path/Data URL/HTTPS
-/// URL; `item_count` is the complete source-field cardinality; `workspace_root` bounds local
-/// paths; `channels` and `credential_role` authorize allocation before Base64 decoding.
+/// URL; `workspace_root` bounds ordinary local paths and `media_sources` supplies explicit host-owned identities.
 /// `binding` 持有 MIME 与通道引用；`reference` 是精确本地路径/Data URL/HTTPS URL；
-/// `item_count` 是完整来源字段基数；`workspace_root` 约束本地路径；`channels` 与
-/// `credential_role` 在 Base64 解码前授权内存分配。
+/// `workspace_root`约束普通本地路径，`media_sources`提供明确宿主持有身份。
+/// Each result is one file in one materialization, not the cardinality of its argument array.
+/// 每个结果均是一次物化中的一个文件，而非其参数数组的基数。
 ///
 /// # Returns
 /// 返回值
 /// A stable resource descriptor ready for channel selection and limit validation.
 /// 返回可用于通道选择与限制校验的稳定资源描述符。
-async fn prepare_operation_upload_resource(
+async fn prepare_operation_upload_resource<'a>(
     binding: &crate::OperationUploadBinding,
-    reference: &str,
-    item_count: usize,
+    reference: &'a str,
     workspace_root: Option<&Path>,
-    channels: &[crate::UploadChannelDeclaration],
-    credential_role: Option<&str>,
-) -> Result<UploadResource, String> {
+    media_sources: &[crate::ProviderToolMediaSource],
+) -> Result<OperationUploadSource<'a>, String> {
+    // Only an exact host-proven reference bypasses workspace-path inference; no alternate names or fields are searched.
+    // 仅精确宿主已证明引用可跳过工作区路径推断，不搜索其他名称或字段。
+    let mut matching = media_sources
+        .iter()
+        .filter(|source| source.reference == reference);
+    if let Some(source) = matching.next() {
+        if matching.next().is_some() || !source.local_path.is_absolute() {
+            return Err(String::from(
+                "Host media source identity is ambiguous or invalid.",
+            ));
+        }
+        validate_operation_source_mime(binding, &source.mime_type)?;
+        // Catalog metadata remains authoritative even when the physical entity has no extension.
+        // 即使物理实体没有扩展名，目录元数据仍是权威。
+        return Ok(OperationUploadSource {
+            resource: UploadResource {
+                source_identity: Some(source.source_identity.clone()),
+                file_name: Some(source.file_name.clone()),
+                local_path: Some(source.local_path.clone()),
+                inline_bytes: None,
+                mime_type: source.mime_type.clone(),
+                byte_len: source.source_identity.byte_len,
+                remote_url: None,
+                item_count: 1,
+            },
+            inline_base64: None,
+        });
+    }
+    if reference.starts_with("project-resource:") || reference.starts_with("attachment:") {
+        return Err(String::from(
+            "Media resource locator has no host-owned source resolution.",
+        ));
+    }
     if let Some(payload) = reference.strip_prefix("data:") {
+        // The exact Data URL shape is validated without allocating its decoded payload.
+        // 校验精确 Data URL 形态，不分配其解码负载。
         let (metadata, encoded) = payload
             .split_once(',')
             .ok_or_else(|| String::from("Operation upload source carries a malformed Data URL."))?;
-        let mut metadata_parts = metadata.split(';');
-        let mime_type = metadata_parts.next().unwrap_or_default();
-        if mime_type.is_empty() || !metadata_parts.any(|part| part == "base64") {
-            return Err(String::from(
-                "Operation upload Data URL must declare a MIME type and base64 encoding.",
-            ));
-        }
-        // decodedByteLen is computed without allocation so the exact selected channel can
-        // enforce max_bytes before Base64 decoding duplicates the caller-owned input in memory.
-        // decodedByteLen 在不分配内存的情况下计算，使精确选中的通道能在 Base64 解码把
-        // 调用方输入复制到内存前强制 max_bytes。
+        let mime_type = metadata
+            .strip_suffix(";base64")
+            .filter(|mime| !mime.is_empty() && !mime.contains(';'))
+            .ok_or_else(|| {
+                String::from(
+                    "Operation upload Data URL must declare one MIME type and base64 encoding.",
+                )
+            })?;
+        validate_operation_source_mime(binding, mime_type)?;
+        // Shape-only length calculation precedes policy checks; no raw payload is retained.
+        // 仅依据形态计算长度发生在策略检查之前，不保留原始负载。
         let decoded_byte_len = standard_base64_decoded_len(encoded)?;
-        let predecode_resource = UploadResource {
-            local_path: None,
-            inline_bytes: None,
-            mime_type: mime_type.to_string(),
-            byte_len: decoded_byte_len,
-            remote_url: None,
-            item_count: item_count as u64,
-        };
-        let predecode_channel = resolve_upload_channel(
-            channels,
-            &binding.upload_channel_refs,
-            &predecode_resource,
-            credential_role,
-        )?;
-        validate_upload_resource(predecode_channel, &predecode_resource)?;
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(encoded)
-            .map_err(|error| format!("Operation upload Data URL base64 is invalid: {error}"))?;
-        if bytes.len() as u64 != decoded_byte_len {
+        if decoded_byte_len > crate::MEDIA_INLINE_RAW_HARD_LIMIT_BYTES {
             return Err(String::from(
-                "Operation upload Data URL decoded length disagrees with its canonical Base64 shape.",
+                "Media extension cannot process this file: the inline source is too large for the host memory limit.",
             ));
         }
-        return Ok(UploadResource {
-            local_path: None,
-            inline_bytes: Some(bytes),
-            mime_type: mime_type.to_string(),
-            byte_len: decoded_byte_len,
-            remote_url: None,
-            item_count: item_count as u64,
+        return Ok(OperationUploadSource {
+            resource: UploadResource {
+                source_identity: None,
+                file_name: None,
+                local_path: None,
+                inline_bytes: None,
+                mime_type: mime_type.to_string(),
+                byte_len: decoded_byte_len,
+                remote_url: None,
+                item_count: 1,
+            },
+            inline_base64: Some(encoded),
         });
     }
     if reference.starts_with("https://") {
+        // Remote passthrough has unknown source size and is never downloaded as an inline fallback.
+        // 远程直通的来源大小未知，绝不下载为内联回退。
         let url = reqwest::Url::parse(reference)
             .map_err(|_| String::from("Operation upload source is not a valid HTTPS URL."))?;
         if url.scheme() != "https"
@@ -602,36 +624,44 @@ async fn prepare_operation_upload_resource(
             ));
         }
         let mime_type = operation_upload_mime(binding, url.path())?;
-        return Ok(UploadResource {
-            local_path: None,
-            inline_bytes: None,
-            mime_type,
-            byte_len: 0,
-            remote_url: Some(reference.to_string()),
-            item_count: item_count as u64,
+        return Ok(OperationUploadSource {
+            resource: UploadResource {
+                source_identity: None,
+                file_name: None,
+                local_path: None,
+                inline_bytes: None,
+                mime_type,
+                byte_len: 0,
+                remote_url: Some(reference.to_string()),
+                item_count: 1,
+            },
+            inline_base64: None,
         });
     }
+    // Workspace resolution and file metadata establish local source size before any file read.
+    // 工作区解析与文件元数据在任何文件读取之前确定本地来源大小。
     let path = canonical_workspace_upload_path(workspace_root, reference).await?;
     let metadata = tokio::fs::metadata(&path).await.map_err(|error| {
-        format!(
-            "Operation upload source `{}` could not be inspected: {error}",
-            path.display()
-        )
+        format!("Operation upload source metadata could not be inspected: {error}")
     })?;
     if !metadata.is_file() {
-        return Err(format!(
-            "Operation upload source `{}` is not a regular file.",
-            path.display()
+        return Err(String::from(
+            "Operation upload source must be a regular file.",
         ));
     }
     let mime_type = operation_upload_mime(binding, reference)?;
-    Ok(UploadResource {
-        local_path: Some(path),
-        inline_bytes: None,
-        mime_type,
-        byte_len: metadata.len(),
-        remote_url: None,
-        item_count: item_count as u64,
+    Ok(OperationUploadSource {
+        resource: UploadResource {
+            source_identity: None,
+            file_name: None,
+            local_path: Some(path),
+            inline_bytes: None,
+            mime_type,
+            byte_len: metadata.len(),
+            remote_url: None,
+            item_count: 1,
+        },
+        inline_base64: None,
     })
 }
 
@@ -649,32 +679,36 @@ async fn prepare_operation_upload_resource(
 /// 返回值
 /// A fully validated operation upload route inspection.
 /// 完成全部校验的操作上传路由预检结果。
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn inspect_operation_upload_route(
     binding: &crate::OperationUploadBinding,
     reference: &str,
-    item_count: usize,
     workspace_root: Option<&Path>,
     channels: &[crate::UploadChannelDeclaration],
     credential_role: Option<&str>,
+    planner: &mut crate::MediaDeliveryPlanner,
+    input_resources: &[vulcan_ai_contract::ResourceKind],
+    media_sources: &[crate::ProviderToolMediaSource],
 ) -> Result<OperationUploadRouteInspection, String> {
-    let resource = prepare_operation_upload_resource(
-        binding,
-        reference,
-        item_count,
-        workspace_root,
-        channels,
-        credential_role,
-    )
-    .await?;
-    let channel = resolve_upload_channel(
+    let source =
+        prepare_operation_upload_resource(binding, reference, workspace_root, media_sources)
+            .await?;
+    let channel = resolve_operation_delivery_channel(
         channels,
         &binding.upload_channel_refs,
-        &resource,
+        &source.resource,
         credential_role,
+        planner,
+        input_resources,
     )?
     .clone();
-    validate_upload_resource(&channel, &resource)?;
-    Ok(OperationUploadRouteInspection { channel, resource })
+    if let Some(encoded) = source.inline_base64 {
+        validate_operation_base64_payload(encoded, source.resource.byte_len)?;
+    }
+    Ok(OperationUploadRouteInspection {
+        channel,
+        resource: source.resource,
+    })
 }
 
 /// Computes the exact decoded byte length of one canonical standard-Base64 value.
@@ -710,6 +744,35 @@ fn standard_base64_decoded_len(encoded: &str) -> Result<u64, String> {
         .and_then(|groups| groups.checked_mul(3))
         .and_then(|bytes| bytes.checked_sub(padding))
         .ok_or_else(|| String::from("Operation upload Data URL decoded length overflows."))
+}
+
+/// Validates canonical `encoded` content against `expected_bytes` using one bounded stack buffer.
+/// 使用一个有界栈缓冲区，按照 `expected_bytes` 校验规范 `encoded` 内容。
+/// Returns no retained payload; invalid alphabet, padding or byte counts fail before any upload.
+/// 不返回保留负载；无效字符、填充或字节数在任何上传之前失败。
+fn validate_operation_base64_payload(encoded: &str, expected_bytes: u64) -> Result<(), String> {
+    // Each full chunk is a multiple of four and needs exactly three quarters as many output bytes.
+    // 每个完整分块是四的倍数，输出字节数精确为其四分之三。
+    let mut scratch = [0_u8; 12 * 1024];
+    // Summed decoded length also rejects premature padding before the last chunk.
+    // 解码长度总和也能拒绝最后一个分块之前的过早填充。
+    let mut decoded = 0_u64;
+    for chunk in encoded.as_bytes().chunks(16 * 1024) {
+        // Validation shares the exact strict decoder used by materialization without heap allocation.
+        // 校验复用物化所用的精确严格解码器，不进行堆分配。
+        let count = base64::engine::general_purpose::STANDARD
+            .decode_slice(chunk, &mut scratch)
+            .map_err(|error| format!("Operation upload Data URL base64 is invalid: {error}"))?;
+        decoded = decoded
+            .checked_add(count as u64)
+            .ok_or_else(|| String::from("Operation Base64 decoded size overflowed."))?;
+    }
+    if decoded != expected_bytes {
+        return Err(String::from(
+            "Operation upload Data URL decoded length disagrees with its canonical Base64 shape.",
+        ));
+    }
+    Ok(())
 }
 
 /// Resolves one local upload source inside an explicit workspace without following symlinks.
@@ -815,6 +878,33 @@ fn operation_upload_mime(
         .ok_or_else(|| {
             format!("Operation upload extension `{extension}` is not mapped by the binding.")
         })
+}
+
+/// Validates authoritative `mime_type` against the exact fixed MIME or declared multi-format mapping in `binding`.
+/// 对照`binding`中的精确固定MIME或声明多格式映射验证权威`mime_type`。
+/// Returns success without inferring from a digest path; known MIME cannot widen the binding's supported formats.
+/// 不从摘要路径推断即返回成功；已知MIME不能扩大绑定支持的格式。
+fn validate_operation_source_mime(
+    binding: &crate::OperationUploadBinding,
+    mime_type: &str,
+) -> Result<(), String> {
+    // Fixed MIME takes precedence, matching the existing local-path format resolver.
+    // 固定MIME具有优先权，与既有本地路径格式解析器一致。
+    let accepted = if let Some(declared) = binding.mime_type.as_deref() {
+        declared.eq_ignore_ascii_case(mime_type)
+    } else {
+        binding.mime_types_by_extension.is_empty()
+            || binding
+                .mime_types_by_extension
+                .values()
+                .any(|declared| declared.eq_ignore_ascii_case(mime_type))
+    };
+    if !accepted {
+        return Err(String::from(
+            "Media source MIME does not match the declared operation binding.",
+        ));
+    }
+    Ok(())
 }
 
 /// Writes one absolute JSON Pointer while rejecting scalar ancestors and array expansion.
@@ -952,52 +1042,6 @@ fn operation_pointer_tokens(pointer: &str) -> Result<Vec<String>, String> {
         .collect()
 }
 
-/// Selects the first channel whose canonical input path matches the operation's channel refs.
-/// 从操作通道引用中选择首个规范输入路径匹配的通道。
-///
-/// The selection is reference-driven: the operation names exact channel ids and the engine
-/// matches by resource kind, never by provider-named enumeration (plan §R9.5). A channel whose
-/// `upload_channel_id` appears in `channel_refs` and whose accepted MIME allowlist covers the
-/// resource wins; absent a MIME allowlist the first declared reference wins.
-/// 选择按引用驱动：操作命名精确通道 ID，引擎按资源类别匹配，绝不按供应商命名枚举
-/// （方案 §R9.5）。出现在 `channel_refs` 中且其 MIME 允许列表覆盖资源的通道胜出；
-/// 无 MIME 允许列表时首个声明的引用胜出。
-pub(crate) fn resolve_upload_channel<'a>(
-    channels: &'a [crate::UploadChannelDeclaration],
-    channel_refs: &[String],
-    resource: &UploadResource,
-    credential_role: Option<&str>,
-) -> Result<&'a crate::UploadChannelDeclaration, String> {
-    for reference in channel_refs {
-        let Some(channel) = channels
-            .iter()
-            .find(|channel| &channel.upload_channel_id == reference)
-        else {
-            return Err(format!(
-                "Operation references unknown upload channel `{reference}`."
-            ));
-        };
-        let role_matches = channel
-            .credential_role
-            .as_deref()
-            .is_none_or(|required_role| Some(required_role) == credential_role);
-        if role_matches
-            && (channel.accepted_mime_types.is_empty()
-                || channel
-                    .accepted_mime_types
-                    .iter()
-                    .any(|accepted| accepted == &resource.mime_type))
-        {
-            return Ok(channel);
-        }
-    }
-    Err(format!(
-        "No declared upload channel accepts MIME type `{}` and credential role `{}` for the referenced channels.",
-        resource.mime_type,
-        credential_role.unwrap_or("none"),
-    ))
-}
-
 /// Enforces every bounded upload limit before any network call (plan §R9.5).
 /// 在任何网络调用前强制全部有界上传限制（方案 §R9.5）。
 ///
@@ -1013,46 +1057,30 @@ pub(crate) fn resolve_upload_channel<'a>(
 pub(crate) fn validate_upload_resource(
     channel: &crate::UploadChannelDeclaration,
     resource: &UploadResource,
-) -> Result<(), String> {
+) -> Result<(), MediaUploadFailure> {
     if !channel.accepted_mime_types.is_empty()
         && !channel
             .accepted_mime_types
             .iter()
             .any(|accepted| accepted == &resource.mime_type)
     {
-        return Err(format!(
-            "Upload channel `{}` rejects MIME type `{}` (allowed: {}).",
-            channel.upload_channel_id,
-            resource.mime_type,
-            channel.accepted_mime_types.join(", ")
-        ));
-    }
-    if resource.mime_type.starts_with("video/")
-        && matches!(
-            channel.primitive,
-            Some(UploadPrimitiveKind::InlineDataUrl | UploadPrimitiveKind::InlineBase64)
-        )
-    {
-        return Err(format!(
-            "Upload channel `{}` cannot materialize video as Base64; a provider resource upload channel is required.",
-            channel.upload_channel_id
-        ));
+        return Err(MediaUploadFailure::UnsupportedMime);
     }
     if let Some(max_bytes) = channel.max_bytes
         && resource.byte_len > max_bytes
     {
-        return Err(format!(
-            "Upload channel `{}` rejects resource of {} bytes (limit {}).",
-            channel.upload_channel_id, resource.byte_len, max_bytes
-        ));
+        return Err(MediaUploadFailure::SourceTooLarge {
+            actual_bytes: resource.byte_len,
+            max_bytes,
+        });
     }
     if let Some(max_count) = channel.max_count
         && resource.item_count > max_count
     {
-        return Err(format!(
-            "Upload channel `{}` rejects {} items (limit {}).",
-            channel.upload_channel_id, resource.item_count, max_count
-        ));
+        return Err(MediaUploadFailure::TooManyResources {
+            actual_count: resource.item_count,
+            max_count,
+        });
     }
     // Network-bound primitives always carry an explicit HTTPS host and absolute path; the
     // validator guarantees this at compile time, but the engine re-checks so a malformed
@@ -1068,12 +1096,10 @@ pub(crate) fn validate_upload_resource(
                 | UploadPrimitiveKind::SignedObjectUpload
         )
     ) {
-        let host = channel.endpoint_host.as_deref().ok_or_else(|| {
-            format!(
-                "Upload channel `{}` declares a network primitive without an explicit host.",
-                channel.upload_channel_id
-            )
-        })?;
+        let host = channel
+            .endpoint_host
+            .as_deref()
+            .ok_or(MediaUploadFailure::InvalidContract)?;
         if host.is_empty()
             || host.contains(['/', '\\', '@', ':', ' '])
             || host.starts_with('.')
@@ -1081,22 +1107,14 @@ pub(crate) fn validate_upload_resource(
                 .chars()
                 .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '.')
         {
-            return Err(format!(
-                "Upload channel `{}` declares an unsafe host `{host}`.",
-                channel.upload_channel_id
-            ));
+            return Err(MediaUploadFailure::InvalidContract);
         }
-        let path = channel.endpoint_path.as_deref().ok_or_else(|| {
-            format!(
-                "Upload channel `{}` declares a network primitive without an endpoint path.",
-                channel.upload_channel_id
-            )
-        })?;
+        let path = channel
+            .endpoint_path
+            .as_deref()
+            .ok_or(MediaUploadFailure::InvalidContract)?;
         if !path.starts_with('/') || path.contains(['?', '#']) {
-            return Err(format!(
-                "Upload channel `{}` declares an unsafe endpoint path `{path}`.",
-                channel.upload_channel_id
-            ));
+            return Err(MediaUploadFailure::InvalidContract);
         }
     }
     Ok(())
@@ -1120,11 +1138,20 @@ pub(crate) async fn materialize_upload(
     context: UploadExecutionContext<'_>,
     channel: &crate::UploadChannelDeclaration,
     resource: &UploadResource,
-) -> Result<UploadedResourceReference, String> {
+) -> Result<UploadedResourceReference, MediaUploadFailure> {
     validate_upload_resource(channel, resource)?;
     if context.cancellation.is_cancelled() {
-        return Err(String::from("media upload cancelled"));
+        return Err(MediaUploadFailure::Cancelled);
     }
+    verify_host_upload_source(resource, context.cancellation)
+        .await
+        .map_err(|_| {
+            if context.cancellation.is_cancelled() {
+                MediaUploadFailure::Cancelled
+            } else {
+                MediaUploadFailure::SourceUnavailable
+            }
+        })?;
     let network_bound = matches!(
         channel.primitive,
         Some(
@@ -1135,12 +1162,9 @@ pub(crate) async fn materialize_upload(
         )
     );
     if network_bound {
-        let timeout_ms = channel.timeout_ms.ok_or_else(|| {
-            format!(
-                "Network upload channel `{}` has no total timeout.",
-                channel.upload_channel_id
-            )
-        })?;
+        let timeout_ms = channel
+            .timeout_ms
+            .ok_or(MediaUploadFailure::InvalidContract)?;
         return await_network_upload_with_timeout(
             channel.upload_channel_id.as_str(),
             timeout_ms,
@@ -1169,22 +1193,18 @@ async fn await_network_upload_with_timeout<F>(
     channel_id: &str,
     timeout_ms: u64,
     upload: F,
-) -> Result<UploadedResourceReference, String>
+) -> Result<UploadedResourceReference, MediaUploadFailure>
 where
-    F: Future<Output = Result<UploadedResourceReference, String>>,
+    F: Future<Output = Result<UploadedResourceReference, MediaUploadFailure>>,
 {
     if !(1_000..=crate::provider_manifest::MAX_ASYNC_TIMEOUT_MS).contains(&timeout_ms) {
-        return Err(format!(
-            "Network upload channel `{channel_id}` total timeout must be within 1000..={} ms.",
-            crate::provider_manifest::MAX_ASYNC_TIMEOUT_MS
-        ));
+        return Err(MediaUploadFailure::InvalidContract);
     }
     tokio::time::timeout(Duration::from_millis(timeout_ms), upload)
         .await
-        .map_err(|_| {
-            format!(
-                "Upload channel `{channel_id}` exceeded its declared {timeout_ms} ms total timeout."
-            )
+        .map_err(|_| MediaUploadFailure::Timeout {
+            channel_id: channel_id.into(),
+            timeout_ms,
         })?
 }
 
@@ -1204,10 +1224,12 @@ async fn materialize_upload_inner(
     context: UploadExecutionContext<'_>,
     channel: &crate::UploadChannelDeclaration,
     resource: &UploadResource,
-) -> Result<UploadedResourceReference, String> {
+) -> Result<UploadedResourceReference, MediaUploadFailure> {
     match channel.primitive {
         Some(UploadPrimitiveKind::InlineDataUrl) => {
-            let bytes = read_inline_bytes(resource).await?;
+            let bytes = read_inline_bytes(resource)
+                .await
+                .map_err(|_| MediaUploadFailure::SourceUnavailable)?;
             let encoded = base64::Engine::encode(
                 &base64::engine::general_purpose::STANDARD,
                 bytes.as_slice(),
@@ -1222,7 +1244,9 @@ async fn materialize_upload_inner(
             })
         }
         Some(UploadPrimitiveKind::InlineBase64) => {
-            let bytes = read_inline_bytes(resource).await?;
+            let bytes = read_inline_bytes(resource)
+                .await
+                .map_err(|_| MediaUploadFailure::SourceUnavailable)?;
             let encoded = base64::Engine::encode(
                 &base64::engine::general_purpose::STANDARD,
                 bytes.as_slice(),
@@ -1237,13 +1261,12 @@ async fn materialize_upload_inner(
             })
         }
         Some(UploadPrimitiveKind::RemoteUrlPassthrough) => {
-            let url = resource.remote_url.clone().ok_or_else(|| {
-                format!(
-                    "Upload channel `{}` is a URL passthrough but the resource carries no remote URL.",
-                    channel.upload_channel_id
-                )
-            })?;
-            validate_remote_url_passthrough(channel, url.as_str())?;
+            let url = resource
+                .remote_url
+                .clone()
+                .ok_or(MediaUploadFailure::SourceUnavailable)?;
+            validate_remote_url_passthrough(channel, url.as_str())
+                .map_err(|_| MediaUploadFailure::InvalidReference)?;
             Ok(UploadedResourceReference {
                 reference: url.clone(),
                 encoding: channel
@@ -1263,12 +1286,9 @@ async fn materialize_upload_inner(
             if channel.signing_primitive
                 == Some(crate::UploadSigningPrimitiveKind::TemporaryOssPolicy) =>
         {
-            let model_id = context.model_id.ok_or_else(|| {
-                format!(
-                    "Upload channel `{}` requires an exact model identifier.",
-                    channel.upload_channel_id
-                )
-            })?;
+            let model_id = context
+                .model_id
+                .ok_or(MediaUploadFailure::InvalidContract)?;
             let reference =
                 upload_temporary_oss_object(&context, model_id, channel, resource).await?;
             Ok(UploadedResourceReference {
@@ -1281,14 +1301,12 @@ async fn materialize_upload_inner(
             })
         }
         Some(UploadPrimitiveKind::PresignedFormUpload)
-        | Some(UploadPrimitiveKind::SignedObjectUpload) => Err(format!(
-            "Upload channel `{}` uses primitive `{:?}` which requires a registered signing primitive; the engine does not guess signatures.",
-            channel.upload_channel_id, channel.primitive
-        )),
-        Some(UploadPrimitiveKind::ManagedAssetReference) | None => Err(format!(
-            "Upload channel `{}` does not declare an executable upload primitive.",
-            channel.upload_channel_id
-        )),
+        | Some(UploadPrimitiveKind::SignedObjectUpload) => {
+            Err(MediaUploadFailure::MissingSigningPrimitive)
+        }
+        Some(UploadPrimitiveKind::ManagedAssetReference) | None => {
+            Err(MediaUploadFailure::InvalidContract)
+        }
     }
 }
 
@@ -1392,59 +1410,61 @@ async fn upload_temporary_oss_object(
     model_id: &str,
     channel: &crate::UploadChannelDeclaration,
     resource: &UploadResource,
-) -> Result<String, String> {
+) -> Result<String, MediaUploadFailure> {
     if !channel
         .method
         .as_deref()
         .is_some_and(|method| method.eq_ignore_ascii_case("GET"))
     {
-        return Err(format!(
-            "Upload channel `{}` temporary OSS policy method must be GET.",
-            channel.upload_channel_id
-        ));
+        return Err(MediaUploadFailure::InvalidContract);
     }
-    let canonical = validate_signed_upload_source(channel, resource).await?;
-    let mut policy_url = channel_origin_url(channel, context.fixture_loopback_origin)?;
+    let canonical = validate_signed_upload_source(channel, resource)
+        .await
+        .map_err(|_| MediaUploadFailure::SourceUnavailable)?;
+    let mut policy_url = channel_origin_url(channel, context.fixture_loopback_origin)
+        .map_err(|_| MediaUploadFailure::InvalidContract)?;
     policy_url
         .query_pairs_mut()
         .append_pair("action", "getPolicy")
         .append_pair("model", model_id);
-    let policy_headers = upload_headers(context.entry, context.credential_profile, context.secret)?;
+    let policy_headers = upload_headers(context.entry, context.credential_profile, context.secret)
+        .map_err(|_| MediaUploadFailure::InvalidContract)?;
     let policy_response = tokio::select! {
         response = context.http
             .get(policy_url)
             .headers(policy_headers)
             .send() => response
-                .map_err(|error| format!("Temporary OSS policy request failed: {error}"))?,
-        _ = context.cancellation.wait() => return Err(String::from("media upload cancelled")),
+                .map_err(|error| MediaUploadFailure::transport(MediaUploadStage::Signing, &error))?,
+        _ = context.cancellation.wait() => return Err(MediaUploadFailure::Cancelled),
     };
-    let policy_status = policy_response.status();
-    let policy_text = tokio::select! {
-        result = crate::provider_tool_execution::read_bounded_provider_response(
-            policy_response,
-            "Temporary OSS policy",
-        ) => result?,
-        _ = context.cancellation.wait() => return Err(String::from("media upload cancelled")),
-    };
-    if context.cancellation.is_cancelled() {
-        return Err(String::from("media upload cancelled"));
-    }
-    if !policy_status.is_success() {
-        return Err(crate::provider_tool_execution::format_http_error(
-            "Temporary OSS policy",
-            policy_status.as_u16(),
-            policy_text.as_str(),
-        ));
-    }
+    let policy_text =
+        read_upload_response(context, policy_response, MediaUploadStage::Signing).await?;
     let policy = serde_json::from_value::<TemporaryOssPolicyEnvelope>(
         crate::provider_tool_execution::parse_bounded_provider_json(
             policy_text.as_str(),
             "Temporary OSS policy",
-        )?,
+        )
+        .map_err(|_| MediaUploadFailure::InvalidResponse {
+            stage: MediaUploadStage::Signing,
+        })?,
     )
-    .map_err(|error| format!("Temporary OSS policy structure is invalid: {error}"))?;
-    let upload_url = validate_temporary_oss_policy(channel, &policy.data)?;
-    let digest = hash_signed_upload_source(canonical.as_path(), context.cancellation).await?;
+    .map_err(|_| MediaUploadFailure::InvalidResponse {
+        stage: MediaUploadStage::Signing,
+    })?;
+    let upload_url = validate_temporary_oss_policy(channel, &policy.data).map_err(|_| {
+        MediaUploadFailure::InvalidResponse {
+            stage: MediaUploadStage::Signing,
+        }
+    })?;
+    let digest = hash_signed_upload_source(canonical.as_path(), context.cancellation)
+        .await
+        .map_err(|_| {
+            if context.cancellation.is_cancelled() {
+                MediaUploadFailure::Cancelled
+            } else {
+                MediaUploadFailure::SourceUnavailable
+            }
+        })?;
     let file_name = format!(
         "resource-{}{}",
         &digest[..16],
@@ -1456,25 +1476,23 @@ async fn upload_temporary_oss_object(
         file_name
     );
     if object_key.starts_with('/') || object_key.contains("../") || object_key.contains("\\..") {
-        return Err(String::from(
-            "Temporary OSS policy returned an unsafe object directory.",
-        ));
+        return Err(MediaUploadFailure::InvalidResponse {
+            stage: MediaUploadStage::Signing,
+        });
     }
     // file freezes the exact source object that will be streamed after the policy handshake.
     // file 在策略握手后冻结将被流式传输的精确源对象。
     let file = tokio::fs::File::open(canonical)
         .await
-        .map_err(|error| format!("Signed upload source cannot be opened: {error}"))?;
+        .map_err(|_| MediaUploadFailure::SourceUnavailable)?;
     // opened_metadata prevents a path replacement from changing the validated transfer length.
     // opened_metadata 防止路径替换改变已经校验的传输长度。
     let opened_metadata = file
         .metadata()
         .await
-        .map_err(|error| format!("Signed upload source metadata is unavailable: {error}"))?;
+        .map_err(|_| MediaUploadFailure::SourceUnavailable)?;
     if !opened_metadata.is_file() || opened_metadata.len() != resource.byte_len {
-        return Err(String::from(
-            "Signed upload source changed after policy materialization.",
-        ));
+        return Err(MediaUploadFailure::SourceChanged);
     }
     // expected_size is the only byte budget exposed to the network stream.
     // expected_size 是向网络流暴露的唯一字节预算。
@@ -1520,7 +1538,7 @@ async fn upload_temporary_oss_object(
     )
     .file_name(file_name)
     .mime_str(resource.mime_type.as_str())
-    .map_err(|error| format!("Signed upload MIME type is invalid: {error}"))?;
+    .map_err(|_| MediaUploadFailure::InvalidContract)?;
     let form = reqwest::multipart::Form::new()
         .text("OSSAccessKeyId", policy.data.oss_access_key_id)
         .text("Signature", policy.data.signature)
@@ -1533,34 +1551,14 @@ async fn upload_temporary_oss_object(
     let upload_response = tokio::select! {
         response = context.http.post(upload_url).multipart(form).send() => response.map_err(|error| {
             if context.cancellation.is_cancelled() {
-                String::from("media upload cancelled")
+                MediaUploadFailure::Cancelled
             } else {
-                format!("Temporary OSS upload failed: {error}")
+                MediaUploadFailure::transport(MediaUploadStage::Transfer, &error)
             }
         })?,
-        _ = context.cancellation.wait() => return Err(String::from("media upload cancelled")),
+        _ = context.cancellation.wait() => return Err(MediaUploadFailure::Cancelled),
     };
-    if context.cancellation.is_cancelled() {
-        return Err(String::from("media upload cancelled"));
-    }
-    let upload_status = upload_response.status();
-    let upload_text = tokio::select! {
-        result = crate::provider_tool_execution::read_bounded_provider_response(
-            upload_response,
-            "Temporary OSS upload",
-        ) => result?,
-        _ = context.cancellation.wait() => return Err(String::from("media upload cancelled")),
-    };
-    if context.cancellation.is_cancelled() {
-        return Err(String::from("media upload cancelled"));
-    }
-    if !upload_status.is_success() {
-        return Err(crate::provider_tool_execution::format_http_error(
-            "Temporary OSS upload",
-            upload_status.as_u16(),
-            upload_text.as_str(),
-        ));
-    }
+    read_upload_response(context, upload_response, MediaUploadStage::Transfer).await?;
     Ok(format!("oss://{object_key}"))
 }
 
@@ -1751,6 +1749,85 @@ fn temporary_upload_extension(mime_type: &str) -> &'static str {
     }
 }
 
+/// Checks whether any host source is absent from `consumed` exact binding references.
+/// 检查是否存在未被`consumed`精确绑定引用消费的宿主来源。
+fn media_sources_are_unconsumed(
+    sources: &[crate::ProviderToolMediaSource],
+    consumed: &std::collections::BTreeSet<&str>,
+) -> bool {
+    sources
+        .iter()
+        .any(|source| !consumed.contains(source.reference.as_str()))
+}
+
+/// Verifies `resource` against its optional host identity with bounded reads and `cancellation`, returning no media allocation.
+/// 使用有界读取及`cancellation`按可选宿主身份验证`resource`，不返回媒体内存分配。
+pub(crate) async fn verify_host_upload_source(
+    resource: &UploadResource,
+    cancellation: &MediaUploadCancellation,
+) -> Result<(), String> {
+    // Ordinary workspace sources have no earlier catalog proof; explicitly resolved sources always retain one.
+    // 普通工作区来源没有更早的目录证据；显式解析来源始终保留一份证据。
+    let Some(expected) = resource.source_identity.as_ref() else {
+        return Ok(());
+    };
+    if expected.byte_len != resource.byte_len {
+        return Err(String::from(
+            "Host media source size differs from its registered identity.",
+        ));
+    }
+    // Open only the exact path supplied by the resource owner, never any AI-visible locator.
+    // 只打开资源所有者提供的精确路径，绝不打开AI可见定位符。
+    let path = resource
+        .local_path
+        .as_ref()
+        .ok_or_else(|| String::from("Host media source lost its local entity."))?;
+    // All filesystem failures use a safe diagnostic without private entity paths.
+    // 全部文件系统失败使用不含私有实体路径的安全诊断。
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(|_| String::from("Host media source is unavailable."))?;
+    // Metadata from the opened handle prevents size changes before any source read.
+    // 已打开句柄的元数据阻止读取来源前的大小变化。
+    let metadata = file
+        .metadata()
+        .await
+        .map_err(|_| String::from("Host media source metadata is unavailable."))?;
+    if !metadata.is_file() || metadata.len() != expected.byte_len {
+        return Err(String::from(
+            "Host media source changed after registration.",
+        ));
+    }
+    // One extra byte detects growth while bounding all IO by the admitted size.
+    // 一个额外字节检测增长，同时按准入大小约束全部IO。
+    let mut reader = file.take(expected.byte_len.saturating_add(1));
+    // A fixed buffer keeps hashing memory independent of upload size.
+    // 固定缓冲区使哈希内存独立于上传大小。
+    let mut buffer = [0_u8; 64 * 1024];
+    // Both byte count and digest come from the same opened source.
+    // 字节数量及摘要均来自同一已打开来源。
+    let mut digest = Sha256::new();
+    // The actual byte count is checked separately from the declared metadata.
+    // 实际字节数量独立于声明元数据检查。
+    let mut count = 0_u64;
+    loop {
+        // Cancellation interrupts the bounded read and never emits an upload progress event.
+        // 取消中断有界读取，且绝不产生上传进度事件。
+        let read = tokio::select! { result = reader.read(&mut buffer) => result.map_err(|_| String::from("Host media source could not be verified."))?, _ = cancellation.wait() => return Err(String::from("media upload cancelled")) };
+        if read == 0 {
+            break;
+        }
+        count += read as u64;
+        digest.update(&buffer[..read]);
+    }
+    if count != expected.byte_len || hex::encode(digest.finalize()) != expected.content_sha256 {
+        return Err(String::from(
+            "Host media source changed after registration.",
+        ));
+    }
+    Ok(())
+}
+
 /// Reads the exact inline resource bytes without touching the network.
 /// 在不触网的情况下读取精确内联资源字节。
 async fn read_inline_bytes(resource: &UploadResource) -> Result<Vec<u8>, String> {
@@ -1820,6 +1897,15 @@ async fn read_inline_bytes(resource: &UploadResource) -> Result<Vec<u8>, String>
             path.display(),
             bytes.len(),
             resource.byte_len
+        ));
+    }
+    if resource
+        .source_identity
+        .as_ref()
+        .is_some_and(|expected| hex::encode(Sha256::digest(&bytes)) != expected.content_sha256)
+    {
+        return Err(String::from(
+            "Host media source changed while reading inline bytes.",
         ));
     }
     Ok(bytes)
@@ -1900,26 +1986,18 @@ fn channel_origin_url(
 fn read_response_reference(
     channel: &crate::UploadChannelDeclaration,
     body: &Value,
-) -> Result<(Option<String>, Option<String>), String> {
-    let read = |pointer: &Option<String>| -> Result<Option<String>, String> {
+) -> Result<(Option<String>, Option<String>), MediaUploadFailure> {
+    let read = |pointer: &Option<String>| -> Result<Option<String>, MediaUploadFailure> {
         let Some(pointer) = pointer.as_deref() else {
             return Ok(None);
         };
-        let value = body.pointer(pointer).ok_or_else(|| {
-            format!(
-                "Upload channel `{}` response is missing pointer `{pointer}`.",
-                channel.upload_channel_id
-            )
-        })?;
+        let value = body
+            .pointer(pointer)
+            .ok_or(MediaUploadFailure::MissingReference)?;
         let text = value
             .as_str()
             .filter(|text| !text.trim().is_empty())
-            .ok_or_else(|| {
-                format!(
-                    "Upload channel `{}` pointer `{pointer}` is not a non-empty string.",
-                    channel.upload_channel_id
-                )
-            })?;
+            .ok_or(MediaUploadFailure::InvalidReference)?;
         Ok(Some(text.to_string()))
     };
     let response_id = read(&channel.response_id_pointer)?;
@@ -2129,78 +2207,100 @@ fn render_reference(
     channel: &crate::UploadChannelDeclaration,
     response_id: Option<String>,
     response_url: Option<String>,
-) -> Result<String, String> {
+) -> Result<String, MediaUploadFailure> {
     let encoding = channel
         .reference_encoding
         .unwrap_or(UploadReferenceEncoding::ProviderFileId);
     let reference = match encoding {
-        UploadReferenceEncoding::ProviderFileId => response_id.ok_or_else(|| {
-            format!(
-                "Upload channel `{}` requires a response id but the response carried none.",
-                channel.upload_channel_id
-            )
-        }),
-        UploadReferenceEncoding::ResponseUrl => response_url.ok_or_else(|| {
-            format!(
-                "Upload channel `{}` requires a response url but the response carried none.",
-                channel.upload_channel_id
-            )
-        }),
+        UploadReferenceEncoding::ProviderFileId => {
+            response_id.ok_or(MediaUploadFailure::MissingReference)
+        }
+        UploadReferenceEncoding::ResponseUrl => {
+            response_url.ok_or(MediaUploadFailure::MissingReference)
+        }
         UploadReferenceEncoding::Template => {
-            let template = channel.reference_template.as_deref().ok_or_else(|| {
-                format!(
-                    "Upload channel `{}` uses template encoding without a template.",
-                    channel.upload_channel_id
-                )
-            })?;
+            let template = channel
+                .reference_template
+                .as_deref()
+                .ok_or(MediaUploadFailure::InvalidContract)?;
             let id = response_id.as_deref().unwrap_or_default();
             let url = response_url.as_deref().unwrap_or_default();
             Ok(template.replace("{id}", id).replace("{url}", url))
         }
     }?;
-    validate_prepared_reference(channel, reference.as_str())?;
+    validate_prepared_reference(channel, reference.as_str())
+        .map_err(|_| MediaUploadFailure::InvalidReference)?;
     Ok(reference)
 }
 
 /// Performs one bounded multipart file upload through a declared channel.
 /// 通过声明的通道执行一次有界 Multipart 文件上传。
+/// Reads the successful body of `response` at exact `stage` under the owning `context` cancellation.
+/// 在所属`context`取消边界下读取精确`stage`的`response`成功正文。
+/// Returns a bounded body, or an HTTP status captured before any untrusted error-body read or decoding.
+/// 返回有界正文，或在读取/解码任何不可信错误正文之前捕获的HTTP状态。
+async fn read_upload_response(
+    context: &UploadExecutionContext<'_>,
+    response: reqwest::Response,
+    stage: MediaUploadStage,
+) -> Result<String, MediaUploadFailure> {
+    if context.cancellation.is_cancelled() {
+        return Err(MediaUploadFailure::Cancelled);
+    }
+    // Error status is authoritative even if its response body is malformed, oversized or never finishes.
+    // 即使错误响应正文畸形、超大或永不结束，错误状态仍为权威。
+    let status = response.status();
+    if !status.is_success() {
+        return Err(MediaUploadFailure::Http {
+            stage,
+            status: status.as_u16(),
+        });
+    }
+    tokio::select! {
+        biased;
+        _ = context.cancellation.wait() => Err(MediaUploadFailure::Cancelled),
+        body = crate::provider_tool_execution::read_bounded_provider_response(response, "Media upload") => {
+            body.map_err(|_| MediaUploadFailure::InvalidResponse { stage })
+        }
+    }
+}
+
+/// Streams exact `resource` bytes via the declared multipart `channel` under frozen `context`.
+/// 在冻结`context`下通过声明的multipart `channel`流式传输精确`resource`字节。
+/// Returns a validated provider reference or typed source, transport, HTTP or response failure.
+/// 返回已验证供应商引用或强类型来源、传输、HTTP及响应失败。
 async fn upload_multipart_file(
     context: &UploadExecutionContext<'_>,
     channel: &crate::UploadChannelDeclaration,
     resource: &UploadResource,
-) -> Result<UploadedResourceReference, String> {
-    let local_path = resource.local_path.as_ref().ok_or_else(|| {
-        format!(
-            "Upload channel `{}` multipart upload requires a local file source.",
-            channel.upload_channel_id
-        )
-    })?;
+) -> Result<UploadedResourceReference, MediaUploadFailure> {
+    let local_path = resource
+        .local_path
+        .as_ref()
+        .ok_or(MediaUploadFailure::SourceUnavailable)?;
     // file freezes the exact source object before its metadata and byte stream are validated.
     // file 在校验元数据与字节流前冻结精确源对象。
-    let file = tokio::fs::File::open(local_path).await.map_err(|error| {
-        format!(
-            "Upload source `{}` cannot be opened: {error}",
-            local_path.display()
-        )
-    })?;
+    let file = tokio::fs::File::open(local_path)
+        .await
+        .map_err(|_| MediaUploadFailure::SourceUnavailable)?;
     // metadata is read from the opened handle so path replacement cannot bypass the length gate.
     // metadata 从已打开句柄读取，因此路径替换无法绕过长度门。
     let metadata = file
         .metadata()
         .await
-        .map_err(|error| format!("Upload source metadata could not be read: {error}"))?;
+        .map_err(|_| MediaUploadFailure::SourceUnavailable)?;
     if !metadata.is_file() || metadata.len() != resource.byte_len {
-        return Err(format!(
-            "Upload source `{}` changed during preparation ({} != {}).",
-            local_path.display(),
-            metadata.len(),
-            resource.byte_len
-        ));
+        return Err(MediaUploadFailure::SourceChanged);
     }
-    let file_name = local_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
+    let file_name = resource
+        .file_name
+        .as_deref()
+        .or_else(|| {
+            local_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+        })
         .unwrap_or("resource.bin")
         .to_string();
     // total_bytes is the only byte budget exposed to the multipart network stream.
@@ -2208,11 +2308,17 @@ async fn upload_multipart_file(
     let total_bytes = resource.byte_len;
     let upload_cancellation = context.cancellation.clone();
     let upload_progress = context.progress.clone();
+    // Hash the actual network body when an earlier host identity exists.
+    // 存在较早宿主身份时，对实际网络正文计算哈希。
+    let expected_identity = resource.source_identity.clone();
     let byte_stream = stream! {
         // source is hard-capped even if another writer grows the opened file during transfer.
         // source 被硬性限制，即使其他写入者在传输期间扩大已打开文件也不会越界。
         let mut source = tokio_util::io::ReaderStream::new(file.take(total_bytes));
         let mut sent = 0_u64;
+        // The transfer digest covers exactly the chunks exposed to the HTTP body.
+        // 传输摘要覆盖向HTTP正文暴露的精确数据块。
+        let mut digest = Sha256::new();
         while let Some(chunk) = source.next().await {
             if upload_cancellation.is_cancelled() {
                 yield Err(std::io::Error::new(
@@ -2229,6 +2335,7 @@ async fn upload_multipart_file(
                 }
             };
             sent = sent.saturating_add(chunk.len() as u64);
+            digest.update(&chunk);
             if let Some(callback) = upload_progress.as_ref() {
                 callback(sent, Some(total_bytes));
             }
@@ -2240,6 +2347,9 @@ async fn upload_multipart_file(
                 "upload source length changed during transfer",
             ));
         }
+        if expected_identity.is_some_and(|expected| hex::encode(digest.finalize()) != expected.content_sha256) {
+            yield Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "upload source digest changed during transfer"));
+        }
     };
     let part = reqwest::multipart::Part::stream_with_length(
         reqwest::Body::wrap_stream(byte_stream),
@@ -2247,55 +2357,40 @@ async fn upload_multipart_file(
     )
     .file_name(file_name)
     .mime_str(resource.mime_type.as_str())
-    .map_err(|error| format!("Upload MIME type is invalid: {error}"))?;
+    .map_err(|_| MediaUploadFailure::InvalidContract)?;
     let field_name = channel.file_field.as_deref().unwrap_or("file").to_string();
     let mut form = reqwest::multipart::Form::new().part(field_name, part);
     for (name, value) in &channel.fixed_fields {
         form = form.text(name.clone(), value.clone());
     }
-    let url = channel_origin_url(channel, context.fixture_loopback_origin)?;
+    let url = channel_origin_url(channel, context.fixture_loopback_origin)
+        .map_err(|_| MediaUploadFailure::InvalidContract)?;
     let method = channel.method.as_deref().unwrap_or("POST");
     if method != "POST" {
-        return Err(format!(
-            "Upload channel `{}` multipart upload only supports POST, found `{method}`.",
-            channel.upload_channel_id
-        ));
+        return Err(MediaUploadFailure::InvalidContract);
     }
-    let mut headers = upload_headers(context.entry, context.credential_profile, context.secret)?;
+    let mut headers = upload_headers(context.entry, context.credential_profile, context.secret)
+        .map_err(|_| MediaUploadFailure::InvalidContract)?;
     headers.remove(reqwest::header::CONTENT_TYPE);
     let response = tokio::select! {
         response = context.http.post(url.as_str()).headers(headers).multipart(form).send() => response
             .map_err(|error| {
                 if context.cancellation.is_cancelled() {
-                    String::from("media upload cancelled")
+                    MediaUploadFailure::Cancelled
                 } else {
-                    format!("Upload to `{url}` failed: {error}")
+                    MediaUploadFailure::transport(MediaUploadStage::Transfer, &error)
                 }
             })?,
-        _ = context.cancellation.wait() => return Err(String::from("media upload cancelled")),
+        _ = context.cancellation.wait() => return Err(MediaUploadFailure::Cancelled),
     };
-    if context.cancellation.is_cancelled() {
-        return Err(String::from("media upload cancelled"));
-    }
-    let status = response.status();
-    let body = tokio::select! {
-        body = crate::provider_tool_execution::read_bounded_provider_response(response, "Upload") => body?,
-        _ = context.cancellation.wait() => return Err(String::from("media upload cancelled")),
-    };
-    if !status.is_success() {
-        // label retains the non-secret channel identity without exposing the raw provider body.
-        // label 保留非秘密通道身份，且不暴露原始供应商正文。
-        let label = format!("Upload channel `{}`", channel.upload_channel_id);
-        return Err(crate::provider_tool_execution::format_http_error(
-            label.as_str(),
-            status.as_u16(),
-            body.as_str(),
-        ));
-    }
+    let body = read_upload_response(context, response, MediaUploadStage::Transfer).await?;
     let parsed = crate::provider_tool_execution::parse_bounded_provider_json(
         body.as_str(),
         "Upload response",
-    )?;
+    )
+    .map_err(|_| MediaUploadFailure::InvalidResponse {
+        stage: MediaUploadStage::Transfer,
+    })?;
     let (response_id, response_url) = read_response_reference(channel, &parsed)?;
     let reference = render_reference(channel, response_id.clone(), response_url.clone())?;
     Ok(UploadedResourceReference {
@@ -2310,69 +2405,64 @@ async fn upload_multipart_file(
 
 /// Performs one bounded provider file-create JSON request through a declared channel.
 /// 通过声明的通道执行一次有界供应商文件创建 JSON 请求。
+/// `context` owns HTTP/progress/cancellation, `channel` freezes wire fields and reference rules, and `resource` supplies the original source proof.
+/// `context`持有HTTP/进度/取消，`channel`冻结线上字段及引用规则，`resource`提供原来源证明。
+/// Returns the validated native reference only after source-body completion, or a typed source/transport/response failure.
+/// 仅在来源正文完成后返回已验证原生引用，否则返回强类型来源/传输/响应失败。
 async fn upload_provider_file_create(
     context: &UploadExecutionContext<'_>,
     channel: &crate::UploadChannelDeclaration,
     resource: &UploadResource,
-) -> Result<UploadedResourceReference, String> {
-    let bytes = read_inline_bytes(resource).await?;
-    let mut payload = serde_json::Map::new();
-    for (name, value) in &channel.fixed_fields {
-        payload.insert(name.clone(), Value::String(value.clone()));
-    }
-    payload.insert(
-        "mime_type".to_string(),
-        Value::String(resource.mime_type.clone()),
-    );
-    payload.insert(
-        "content_base64".to_string(),
-        Value::String(base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            bytes.as_slice(),
-        )),
-    );
-    let url = channel_origin_url(channel, context.fixture_loopback_origin)?;
+) -> Result<UploadedResourceReference, MediaUploadFailure> {
+    // Stream original bytes inside one unchanged JSON request instead of allocating the whole file and Base64 value.
+    // 在一个不变JSON请求内流式传输原始字节，不再分配整文件及Base64值。
+    let file_create_body::PreparedFileCreateBody {
+        body,
+        content_length,
+        mut completion,
+    } = file_create_body::prepare_file_create_body(
+        resource,
+        &channel.fixed_fields,
+        context.progress.clone(),
+        context.cancellation.clone(),
+    )
+    .await?;
+    let url = channel_origin_url(channel, context.fixture_loopback_origin)
+        .map_err(|_| MediaUploadFailure::InvalidContract)?;
     let method = channel.method.as_deref().unwrap_or("POST");
     if method != "POST" {
-        return Err(format!(
-            "Upload channel `{}` file-create only supports POST, found `{method}`.",
-            channel.upload_channel_id
-        ));
+        return Err(MediaUploadFailure::InvalidContract);
     }
-    let headers = upload_headers(context.entry, context.credential_profile, context.secret)?;
+    let headers = upload_headers(context.entry, context.credential_profile, context.secret)
+        .map_err(|_| MediaUploadFailure::InvalidContract)?;
     let response = tokio::select! {
-        response = context.http.post(url.as_str()).headers(headers).json(&Value::Object(payload)).send() => response
+        response = context.http.post(url.as_str()).headers(headers).header(reqwest::header::CONTENT_LENGTH, content_length).body(reqwest::Body::wrap_stream(body)).send() => response
             .map_err(|error| {
                 if context.cancellation.is_cancelled() {
-                    String::from("media upload cancelled")
+                    MediaUploadFailure::Cancelled
+                } else if let Ok(Err(failure)) = completion.try_recv() {
+                    failure
                 } else {
-                    format!("Upload to `{url}` failed: {error}")
+                    MediaUploadFailure::transport(MediaUploadStage::Transfer, &error)
                 }
             })?,
-        _ = context.cancellation.wait() => return Err(String::from("media upload cancelled")),
+        _ = context.cancellation.wait() => return Err(MediaUploadFailure::Cancelled),
     };
-    if context.cancellation.is_cancelled() {
-        return Err(String::from("media upload cancelled"));
-    }
-    let status = response.status();
-    let body = tokio::select! {
-        body = crate::provider_tool_execution::read_bounded_provider_response(response, "Upload") => body?,
-        _ = context.cancellation.wait() => return Err(String::from("media upload cancelled")),
-    };
-    if !status.is_success() {
-        // label retains the non-secret channel identity without exposing the raw provider body.
-        // label 保留非秘密通道身份，且不暴露原始供应商正文。
-        let label = format!("Upload channel `{}`", channel.upload_channel_id);
-        return Err(crate::provider_tool_execution::format_http_error(
-            label.as_str(),
-            status.as_u16(),
-            body.as_str(),
-        ));
+    let body = read_upload_response(context, response, MediaUploadStage::Transfer).await?;
+    // Even a syntactically valid early success cannot publish a reference before streamed source validation completes.
+    // 即使提前成功的语法有效，也不能在流式来源校验完成前发布引用。
+    tokio::select! {
+        biased;
+        _ = context.cancellation.wait() => return Err(MediaUploadFailure::Cancelled),
+        result = completion => result.map_err(|_| MediaUploadFailure::SourceUnavailable)??,
     }
     let parsed = crate::provider_tool_execution::parse_bounded_provider_json(
         body.as_str(),
         "Upload response",
-    )?;
+    )
+    .map_err(|_| MediaUploadFailure::InvalidResponse {
+        stage: MediaUploadStage::Transfer,
+    })?;
     let (response_id, response_url) = read_response_reference(channel, &parsed)?;
     let reference = render_reference(channel, response_id.clone(), response_url.clone())?;
     Ok(UploadedResourceReference {
@@ -2441,6 +2531,40 @@ mod tests {
     use super::*;
     use crate::UploadChannelDeclaration;
     use std::collections::BTreeMap;
+
+    mod http_failures;
+    mod policy;
+
+    /// Selects test `resource` through the production planner with default independent policy.
+    /// 使用默认独立策略，通过生产规划器选择测试 `resource` 的通道。
+    /// `channels`, `references` and `credential_role` retain exact manifest authorization; returns its result.
+    /// `channels`、`references` 与 `credential_role` 保留精确清单授权，返回生产规划结果。
+    fn select_test_channel<'a>(
+        channels: &'a [UploadChannelDeclaration],
+        references: &[String],
+        resource: &UploadResource,
+        credential_role: Option<&str>,
+    ) -> Result<&'a UploadChannelDeclaration, String> {
+        // Every test invocation receives a fresh request budget, never a duplicate test-only resolver.
+        // 每次测试调用接收新的请求预算，不使用重复的测试专用解析器。
+        let mut planner = crate::MediaDeliveryPlanner::new(
+            crate::MediaDeliveryPolicy::default(),
+            crate::MediaDeliveryPurpose::IndependentExtension,
+        )?;
+        resolve_operation_delivery_channel(
+            channels,
+            references,
+            resource,
+            credential_role,
+            &mut planner,
+            &[
+                vulcan_ai_contract::ResourceKind::Image,
+                vulcan_ai_contract::ResourceKind::Audio,
+                vulcan_ai_contract::ResourceKind::Video,
+                vulcan_ai_contract::ResourceKind::File,
+            ],
+        )
+    }
 
     /// Verifies Coding uploads carry the same Kimi device identity as conversation execution.
     /// 验证 Coding 上传携带与会话执行相同的 Kimi 设备身份。
@@ -2535,6 +2659,8 @@ mod tests {
 
     fn resource(mime_type: &str, byte_len: u64) -> UploadResource {
         UploadResource {
+            source_identity: None,
+            file_name: None,
             local_path: None,
             inline_bytes: Some(vec![0_u8; byte_len as usize]),
             mime_type: mime_type.to_string(),
@@ -2617,7 +2743,7 @@ mod tests {
         );
         let error = validate_upload_resource(&channel, &resource("video/mp4", 16))
             .expect_err("rejected MIME must fail");
-        assert!(error.contains("rejects MIME type"), "error: {error}");
+        assert_eq!(error, MediaUploadFailure::UnsupportedMime);
     }
 
     /// Verifies a byte length beyond the channel limit fails before any network call.
@@ -2632,7 +2758,13 @@ mod tests {
         );
         let error = validate_upload_resource(&channel, &resource("image/png", 2_048))
             .expect_err("oversized upload must fail");
-        assert!(error.contains("rejects resource of"), "error: {error}");
+        assert_eq!(
+            error,
+            MediaUploadFailure::SourceTooLarge {
+                actual_bytes: 2048,
+                max_bytes: 1024
+            }
+        );
     }
 
     /// Verifies an item count beyond the channel limit fails before any network call.
@@ -2649,7 +2781,13 @@ mod tests {
         resource.item_count = 2;
         let error =
             validate_upload_resource(&channel, &resource).expect_err("excess count must fail");
-        assert!(error.contains("rejects 2 items"), "error: {error}");
+        assert_eq!(
+            error,
+            MediaUploadFailure::TooManyResources {
+                actual_count: 2,
+                max_count: 1
+            }
+        );
     }
 
     /// Verifies production operation materialization rewrites only declared argument pointers.
@@ -2671,6 +2809,8 @@ mod tests {
         });
         let materialized = materialize_operation_uploads(
             OperationUploadExecutionContext {
+                media_sources: &[],
+                media_delivery_policy: crate::MediaDeliveryPolicy::default(),
                 http: &reqwest::Client::new(),
                 entry: &dummy_entry(),
                 secret: &dummy_secret(),
@@ -2717,6 +2857,8 @@ mod tests {
         });
         let error = materialize_operation_uploads(
             OperationUploadExecutionContext {
+                media_sources: &[],
+                media_delivery_policy: crate::MediaDeliveryPolicy::default(),
                 http: &reqwest::Client::new(),
                 entry: &dummy_entry(),
                 secret: &dummy_secret(),
@@ -2733,7 +2875,10 @@ mod tests {
         )
         .await
         .expect_err("second oversized item must fail before upload");
-        assert!(error.contains("rejects resource"), "error: {error}");
+        assert!(
+            error.contains("too large for the selected upload interface"),
+            "error: {error}"
+        );
     }
 
     /// Verifies inline data-url materialization produces the canonical data URL reference.
@@ -2816,6 +2961,8 @@ mod tests {
         // resource freezes the earlier one-byte observation while the on-disk source is now larger.
         // resource 冻结此前的一字节观测，而磁盘来源现在已经更大。
         let resource = UploadResource {
+            source_identity: None,
+            file_name: None,
             local_path: Some(path),
             inline_bytes: None,
             mime_type: String::from("image/png"),
@@ -2850,6 +2997,8 @@ mod tests {
         // resource intentionally understates its caller-owned inline payload length.
         // resource 故意低报调用方持有的内联负载长度。
         let resource = UploadResource {
+            source_identity: None,
+            file_name: None,
             local_path: None,
             inline_bytes: Some(b"expanded".to_vec()),
             mime_type: String::from("image/png"),
@@ -2940,19 +3089,51 @@ mod tests {
         );
     }
 
-    /// Verifies a video resource cannot select an inline Base64 upload primitive.
-    /// 验证视频资源不能选择内联 Base64 上传原语。
+    /// Verifies declared inline video is admitted by policy instead of an unconditional modality ban.
+    /// 验证已声明内联视频由策略准入，而非被无条件模态禁令拒绝。
     #[test]
-    fn video_upload_rejects_inline_base64_channels() {
+    fn video_upload_uses_configured_inline_policy() {
         let channel = channel(
             UploadPrimitiveKind::InlineDataUrl,
             vec![String::from("video/mp4")],
             None,
             None,
         );
-        let error = validate_upload_resource(&channel, &resource("video/mp4", 4))
-            .expect_err("video Base64 materialization must be rejected");
-        assert!(error.contains("Base64"));
+        // Primitive validation remains independent of the resource delivery policy.
+        // 原语校验保持独立于资源投递策略。
+        validate_upload_resource(&channel, &resource("video/mp4", 4))
+            .expect("declared inline video primitive");
+        // The default independent threshold admits small video and rejects oversized video explicitly.
+        // 默认独立阈值允许小视频，并明确拒绝超大视频。
+        let channels = [channel];
+        let mut planner = crate::MediaDeliveryPlanner::new(
+            crate::MediaDeliveryPolicy::default(),
+            crate::MediaDeliveryPurpose::IndependentExtension,
+        )
+        .expect("valid policy");
+        assert!(
+            resolve_operation_delivery_channel(
+                &channels,
+                &[String::from("test.channel")],
+                &resource("video/mp4", 4),
+                None,
+                &mut planner,
+                &[vulcan_ai_contract::ResourceKind::Video]
+            )
+            .is_ok()
+        );
+        assert!(
+            resolve_operation_delivery_channel(
+                &channels,
+                &[String::from("test.channel")],
+                &resource("video/mp4", 10 * 1024 * 1024 + 1),
+                None,
+                &mut planner,
+                &[vulcan_ai_contract::ResourceKind::Video]
+            )
+            .expect_err("oversized video")
+            .contains("inline size limit")
+        );
     }
 
     /// Verifies the signed primitives refuse to guess a signature contract.
@@ -2982,10 +3163,7 @@ mod tests {
         )
         .await
         .expect_err("signed primitive without signing contract must fail");
-        assert!(
-            error.contains("does not guess signatures"),
-            "error: {error}"
-        );
+        assert_eq!(error, MediaUploadFailure::MissingSigningPrimitive);
     }
 
     /// Verifies the runtime refuses a network timeout outside the validated manifest range.
@@ -2995,11 +3173,11 @@ mod tests {
         let error = await_network_upload_with_timeout(
             "test.channel",
             999,
-            std::future::pending::<Result<UploadedResourceReference, String>>(),
+            std::future::pending::<Result<UploadedResourceReference, MediaUploadFailure>>(),
         )
         .await
         .expect_err("an out-of-range timeout must fail before awaiting the upload");
-        assert!(error.contains("within 1000..="), "error: {error}");
+        assert_eq!(error, MediaUploadFailure::InvalidContract);
     }
 
     /// Verifies expiration drops a still-pending upload and reports the owning channel.
@@ -3009,13 +3187,16 @@ mod tests {
         let error = await_network_upload_with_timeout(
             "test.channel",
             1_000,
-            std::future::pending::<Result<UploadedResourceReference, String>>(),
+            std::future::pending::<Result<UploadedResourceReference, MediaUploadFailure>>(),
         )
         .await
         .expect_err("a pending upload must terminate at its total timeout");
-        assert!(
-            error.contains("test.channel") && error.contains("1000 ms total timeout"),
-            "error: {error}"
+        assert_eq!(
+            error,
+            MediaUploadFailure::Timeout {
+                channel_id: "test.channel".into(),
+                timeout_ms: 1000
+            }
         );
     }
 
@@ -3084,7 +3265,7 @@ mod tests {
         // declared reference and selects the multipart channel by reference + MIME allowlist.
         // 图片通道无法接受视频资源，引擎继续检查下一声明引用并按引用 + MIME 允许列表
         // 选择 Multipart 通道。
-        let selected = resolve_upload_channel(
+        let selected = select_test_channel(
             &channels,
             &[String::from("inline.png"), String::from("multipart.video")],
             &resource("video/mp4", 16),
@@ -3098,7 +3279,7 @@ mod tests {
 
         // The first declared reference wins when its MIME allowlist covers the resource.
         // 首个声明引用在其 MIME 允许列表覆盖资源时胜出。
-        let selected = resolve_upload_channel(
+        let selected = select_test_channel(
             &channels,
             &[String::from("inline.png"), String::from("multipart.video")],
             &resource("image/png", 16),
@@ -3107,7 +3288,7 @@ mod tests {
         .expect("image channel must accept the image resource");
         assert_eq!(selected.upload_channel_id, "inline.png");
 
-        let error = resolve_upload_channel(
+        let error = select_test_channel(
             &channels,
             &[String::from("inline.png")],
             &resource("audio/wav", 16),
@@ -3116,7 +3297,7 @@ mod tests {
         .expect_err("no channel accepts wav");
         assert!(error.contains("accepts MIME type"), "error: {error}");
 
-        let error = resolve_upload_channel(
+        let error = select_test_channel(
             &channels,
             &[String::from("missing.channel")],
             &resource("image/png", 16),
@@ -3140,7 +3321,7 @@ mod tests {
         let channels = [channel];
         let references = [String::from("test.channel")];
 
-        let error = resolve_upload_channel(
+        let error = select_test_channel(
             &channels,
             &references,
             &resource("image/png", 16),
@@ -3152,7 +3333,7 @@ mod tests {
             "error: {error}"
         );
 
-        let selected = resolve_upload_channel(
+        let selected = select_test_channel(
             &channels,
             &references,
             &resource("image/png", 16),
@@ -3222,7 +3403,7 @@ mod tests {
         let mut open = channel(UploadPrimitiveKind::InlineBase64, Vec::new(), None, None);
         open.upload_channel_id = String::from("open.channel");
         let channels = [open];
-        let selected = resolve_upload_channel(
+        let selected = select_test_channel(
             &channels,
             &[String::from("open.channel")],
             &resource("application/octet-stream", 16),

@@ -1,11 +1,11 @@
 //! Public request assembly and frozen tool/continuation projection.
 //! 公共请求组装与冻结的工具及延续信息投影。
 
-use super::input_resources::{InlineResourceProjectionBudget, resolve_public_message_resources};
 use super::message_projection::{core_message_text, core_message_to_public};
 use super::{VulcanPublicContractAdapter, provider_failure};
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use async_trait::async_trait;
+use std::collections::BTreeMap;
 use vulcan_ai_contract::{
     AiContinuation, AiExecutionRequest, AiMessage, AiOperation, ContentItem, MessageRole,
     NativeToolKind, ParallelToolCallPolicy, ReasoningOutputPolicy, ResourceKind,
@@ -34,6 +34,10 @@ pub(crate) struct VulcanPublicContractRequest {
     /// Exact canonical controller snapshot used to build this public request.
     /// 用于构建当前公共请求的精确规范控制器快照。
     pub(crate) controller_snapshot: CoreConversationSnapshot,
+    /// Exact source IDs mapped to positions at assembly time, excluding synthetic system messages.
+    /// 组装时映射至位置的精确来源ID，不包含合成系统消息。
+    #[serde(skip)]
+    pub(crate) source_message_positions: BTreeMap<String, usize>,
     /// Exact canonical snapshot used by the request budget guard.
     /// 请求预算门使用的精确规范快照。
     pub(crate) budget: CoreProviderRequestSnapshot,
@@ -166,7 +170,20 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
                 provider_context_items: Vec::new(),
             });
         }
+        // Record identities beside insertion so capture never guesses a system-prefix offset.
+        // 在插入位置旁记录身份，使捕获绝不猜测系统前缀偏移。
+        let mut source_message_positions = BTreeMap::new();
         for message in &snapshot.messages {
+            if message.id.trim().is_empty()
+                || source_message_positions
+                    .insert(message.id.clone(), messages.len())
+                    .is_some()
+            {
+                return Err(provider_failure(
+                    self.provider_id(),
+                    "Provider source message identities are empty or duplicated.",
+                ));
+            }
             let public_message = core_message_to_public(
                 message,
                 self.provider_id(),
@@ -177,21 +194,8 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
             )?;
             messages.push(public_message);
         }
-        // Newer canonical messages reserve the bounded inline budget first while final wire order stays unchanged.
-        // 较新的规范消息优先占用有界内联预算，同时最终 Wire 顺序保持不变。
-        let mut inline_resource_budget = InlineResourceProjectionBudget::default();
-        for public_message in messages.iter_mut().rev() {
-            resolve_public_message_resources(
-                public_message,
-                &self.route,
-                self.model_id.as_str(),
-                self.input_resources.as_slice(),
-                &self.client,
-                Some(self.cache_scope_id.as_str()),
-                &mut inline_resource_budget,
-            )
-            .await?;
-        }
+        // Native user media is prepared only by its exact prompt owner after this pure candidate stage.
+        // 原生用户媒体只在本纯候选阶段之后由精确提示词所有者准备。
         // continuation is emitted only after the Core configuration proves the exact append-only boundary.
         // continuation 仅在 Core 配置证明精确追加边界后才会发出。
         let continuation = build_public_continuation(
@@ -267,6 +271,7 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
             public: rebuilt_public,
             controller_config: config.clone(),
             controller_snapshot: snapshot.clone(),
+            source_message_positions,
             budget,
             context_budget: None,
             request_budget_guard: None,

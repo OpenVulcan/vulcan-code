@@ -117,6 +117,9 @@ pub enum ProjectedItem {
 /// 一条 Provider 投影项及其精确可靠来源范围。
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourcedProjectedItem {
+    /// Host-only parameters from this exact user prompt; never serialized into Provider-visible items.
+    /// 来自此精确用户提示词的宿主参数，绝不序列化到Provider可见项。
+    pub user_prompt_parameters: Option<crate::v1::UserPromptParameters>,
     /// Inclusive first main-event seq that produced the projected item.
     /// 产出该投影项的主事件包含式起始 seq。
     pub source_from_seq: Seq,
@@ -400,6 +403,7 @@ pub fn project_provider_items_with_sources(
     let mut items: Vec<SourcedProjectedItem> = prefix_states
         .iter()
         .map(|state| SourcedProjectedItem {
+            user_prompt_parameters: None,
             source_from_seq: state.source_seq,
             source_to_seq: state.source_seq,
             item: ProjectedItem::SystemText {
@@ -463,11 +467,18 @@ pub fn project_provider_items_with_sources(
                         context_key: context.context_key.clone(),
                         text: context.content.clone(),
                     },
+                    user_prompt_parameters: None,
                 });
             }
             EventBody::UserInput(input) => {
+                // Projection may consume a directly loaded event range; validate host parameters before forwarding them.
+                // 投影可能消费直接加载的事件范围；转交宿主参数之前先校验。
+                if let Some(parameters) = &input.parameters {
+                    parameters.validate(&input.resource_ids)?;
+                }
                 flush_pending(&mut items, &mut pending)?;
                 items.push(SourcedProjectedItem {
+                    user_prompt_parameters: input.parameters.clone(),
                     source_from_seq: event.seq,
                     source_to_seq: event.seq,
                     item: ProjectedItem::UserInput {
@@ -520,6 +531,7 @@ pub fn project_provider_items_with_sources(
                                 status: projected_tool_status_name(tool.status),
                             })?;
                     group.results.push(SourcedProjectedItem {
+                        user_prompt_parameters: None,
                         source_from_seq: event.seq,
                         source_to_seq: event.seq,
                         item: ProjectedItem::ToolResult {
@@ -540,6 +552,7 @@ pub fn project_provider_items_with_sources(
                     item: ProjectedItem::SubagentReturnText {
                         text: return_event.content.clone(),
                     },
+                    user_prompt_parameters: None,
                 });
             }
             EventBody::ApiStats(_) => {}
@@ -646,6 +659,7 @@ fn emit_group(
     items.push(SourcedProjectedItem {
         source_from_seq,
         source_to_seq,
+        user_prompt_parameters: None,
         item: ProjectedItem::AssistantText {
             text: group.text,
             reasoning: group.reasoning,

@@ -7,6 +7,17 @@ use serde_json::{Map, Value, json};
 /// Converts a canonical Responses request into an OpenAI-compatible Chat request.
 /// 将规范 Responses 请求转换为 OpenAI 兼容 Chat 请求。
 pub fn responses_to_chat_completions(body: Value) -> Result<Value, LlmCoreError> {
+    responses_to_chat_completions_with_media(body, None)
+}
+
+/// Converts `body` using an explicitly authorized internal media projector, preserving other semantics.
+/// 使用显式授权的内部媒体投影器转换 `body`，保留其他语义。
+/// `media` is absent for standard public conversion; returns exact Chat JSON or a projection error.
+/// 标准公共转换不提供 `media`；返回精确 Chat JSON 或投影错误。
+pub(crate) fn responses_to_chat_completions_with_media(
+    body: Value,
+    media: Option<crate::internal_media::InternalMediaProjector<'_>>,
+) -> Result<Value, LlmCoreError> {
     let mut result = Map::new();
     copy_if_present(&body, &mut result, "model");
     copy_if_present(&body, &mut result, "stream");
@@ -32,7 +43,7 @@ pub fn responses_to_chat_completions(body: Value) -> Result<Value, LlmCoreError>
         }
     }
     if let Some(input) = body.get("input") {
-        append_input_as_chat_messages(input, &mut messages)?;
+        append_input_as_chat_messages(input, &mut messages, media)?;
     }
     result.insert(
         "messages".to_string(),
@@ -146,15 +157,16 @@ fn instruction_text(value: &Value) -> String {
 fn append_input_as_chat_messages(
     input: &Value,
     messages: &mut Vec<Value>,
+    media: Option<crate::internal_media::InternalMediaProjector<'_>>,
 ) -> Result<(), LlmCoreError> {
     match input {
         Value::String(text) => messages.push(json!({"role":"user","content":text})),
         Value::Array(items) => {
             for item in items {
-                append_input_item(item, messages)?;
+                append_input_item(item, messages, media)?;
             }
         }
-        Value::Object(_) => append_input_item(input, messages)?,
+        Value::Object(_) => append_input_item(input, messages, media)?,
         _ => {
             return Err(LlmCoreError::new(
                 "Responses input must be a string, object, or array.",
@@ -166,7 +178,11 @@ fn append_input_as_chat_messages(
 
 /// Converts one Responses input item to one or more Chat messages.
 /// 将一个 Responses 输入项转换为一条或多条 Chat 消息。
-fn append_input_item(item: &Value, messages: &mut Vec<Value>) -> Result<(), LlmCoreError> {
+fn append_input_item(
+    item: &Value,
+    messages: &mut Vec<Value>,
+    media: Option<crate::internal_media::InternalMediaProjector<'_>>,
+) -> Result<(), LlmCoreError> {
     let kind = item
         .get("type")
         .and_then(Value::as_str)
@@ -177,7 +193,8 @@ fn append_input_item(item: &Value, messages: &mut Vec<Value>) -> Result<(), LlmC
             // Normalize developer to the system role used by the compatible Chat contract.
             // 将 developer 规范化为兼容 Chat 契约使用的 system 角色。
             let role = if role == "developer" { "system" } else { role };
-            let content = map_message_content(item.get("content").unwrap_or(&Value::Null))?;
+            let content =
+                map_message_content(item.get("content").unwrap_or(&Value::Null), role, media)?;
             let mut message = json!({"role": role, "content": content});
             if let Some(reasoning) = item.get("reasoning_content") {
                 message["reasoning_content"] = reasoning.clone();
@@ -298,13 +315,17 @@ fn append_chat_function_call(
 
 /// Maps one Responses message content value to Chat content.
 /// 将一个 Responses 消息内容值映射为 Chat 内容。
-fn map_message_content(content: &Value) -> Result<Value, LlmCoreError> {
+fn map_message_content(
+    content: &Value,
+    role: &str,
+    media: Option<crate::internal_media::InternalMediaProjector<'_>>,
+) -> Result<Value, LlmCoreError> {
     match content {
         Value::String(_) => Ok(content.clone()),
         Value::Array(parts) => {
             let mapped = parts
                 .iter()
-                .map(map_content_part)
+                .map(|part| map_content_part(part, role, media))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(Value::Array(mapped))
         }
@@ -317,7 +338,11 @@ fn map_message_content(content: &Value) -> Result<Value, LlmCoreError> {
 
 /// Maps one content part, including the provider-neutral image shape.
 /// 映射一个内容部分，包括供应商无关的图片形状。
-fn map_content_part(part: &Value) -> Result<Value, LlmCoreError> {
+fn map_content_part(
+    part: &Value,
+    role: &str,
+    media: Option<crate::internal_media::InternalMediaProjector<'_>>,
+) -> Result<Value, LlmCoreError> {
     let kind = part
         .get("type")
         .and_then(Value::as_str)
@@ -329,6 +354,9 @@ fn map_content_part(part: &Value) -> Result<Value, LlmCoreError> {
         })),
         "input_image" | "image_url" => responses_image_to_chat_part(part),
         "input_file" => responses_file_to_chat_part(part),
+        crate::INTERNAL_RESOURCE_PART_TYPE => {
+            crate::internal_media::project_internal_part(part, role, media)
+        }
         other => Err(LlmCoreError::new(format!(
             "Responses content part type `{other}` is not supported by the Chat adapter."
         ))),

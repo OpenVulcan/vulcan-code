@@ -29,6 +29,9 @@ pub struct AvailableProviderToolTarget {
 /// Frozen internal provider tool route resolved before secret loading.
 /// 秘密加载前解析的冻结内部供应商工具路由。
 pub(super) struct ResolvedProviderToolTarget {
+    /// New-invocation media policy from this target's generation; retained task observation has no new media admission.
+    /// 新调用从目标同代际取得的媒体策略；保留任务的状态观察不进行新的媒体准入。
+    pub(super) media_delivery_policy: Option<crate::MediaDeliveryPolicy>,
     /// Exact configured credential.
     /// 精确已配置凭据。
     pub(super) connection: CredentialConnection,
@@ -370,6 +373,10 @@ impl PublicAiRuntime {
         // configuration belongs to the retained immutable generation.
         // configuration 属于保留的不变代际。
         let configuration = generation.configuration.as_ref();
+        // Freeze policy from the authoritative generation, not the legacy caller configuration argument.
+        // 从权威代际冻结策略，不使用旧调用者配置参数。
+        let media_delivery_policy = configuration.effective_media_delivery_policy();
+        media_delivery_policy.validate()?;
         let system = ProviderRegistry::from_catalog(generation.manifests.as_ref())?;
         let registry =
             ProviderRegistry::effective_from_system(system, &configuration.custom_providers)?;
@@ -483,6 +490,7 @@ impl PublicAiRuntime {
             generation.manifests.content_sha256, connection.id, target.target_id
         );
         Ok(ResolvedProviderToolTarget {
+            media_delivery_policy: Some(media_delivery_policy),
             connection,
             entry,
             target,

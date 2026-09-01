@@ -134,6 +134,7 @@ fn golden_user_input() {
         2,
         1,
         EventBody::UserInput(UserInputEvent {
+            parameters: None,
             client_action_id: ClientActionId::try_new("golden-user-input").unwrap(),
             input_id: PendingInputId::try_new(3).unwrap(),
             input_source: UserInputSource::QueuedScheduled,
@@ -498,6 +499,7 @@ fn all_kinds_round_trip() {
             1,
             EventVisibility::Provider,
             EventBody::UserInput(UserInputEvent {
+                parameters: None,
                 client_action_id: ClientActionId::try_new("round-trip-root").unwrap(),
                 input_id: PendingInputId::try_new(1).unwrap(),
                 input_source: UserInputSource::Root,
@@ -643,6 +645,7 @@ fn unknown_visibility_is_rejected() {
         1,
         EventVisibility::Provider,
         EventBody::UserInput(UserInputEvent {
+            parameters: None,
             client_action_id: ClientActionId::try_new("unknown-visibility-root").unwrap(),
             input_id: PendingInputId::try_new(1).unwrap(),
             input_source: UserInputSource::Root,

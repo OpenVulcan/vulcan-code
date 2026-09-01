@@ -1161,7 +1161,7 @@ fn encode_content_items(
 /// 返回值
 /// Returns an Anthropic image block or a controlled conversion error.
 /// 返回 Anthropic 图片块或受控转换错误。
-fn encode_anthropic_image(
+pub(crate) fn encode_anthropic_image(
     resource: &vulcan_ai_contract::ResourceReference,
 ) -> Result<Value, ProtocolConversionError> {
     if resource.image_detail.is_some() {
@@ -1224,7 +1224,7 @@ fn encode_anthropic_image(
 /// 返回值
 /// Returns a video block or a controlled MIME/data-URL conversion error.
 /// 返回视频内容块，或受控的 MIME/Data URL 转换错误。
-fn encode_anthropic_video(
+pub(crate) fn encode_anthropic_video(
     resource: &vulcan_ai_contract::ResourceReference,
 ) -> Result<Value, ProtocolConversionError> {
     let url = resource.url.as_deref().ok_or_else(|| {

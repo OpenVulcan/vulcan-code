@@ -33,33 +33,32 @@ use crate::conversation_resources_v1::{
 };
 use crate::session_runtime_registry_v1::{ContinuationDispatchGuard, SessionHandle};
 use crate::session_v1_lifecycle::{
-    CreateRootSessionV1Request, create_and_register_root_session_v1, get_or_load_session_v1,
-    register_project_attachments_v1,
+    CreateRootSessionV1Request, PromptAttachmentOrigin, create_and_register_root_session_v1,
+    get_or_load_session_v1, register_project_prompt_attachments_v1,
 };
 
 use super::{
     ControllerRuntimeHandle, ExistingSubmissionAdmissionAuthorization, MaterializedPromptSession,
     PromptSessionMaterializationKind, SharedServiceBridgeState, active_kernel_session_ids,
     capture_preserved_workspace_run_state, capture_webui_prompt_preparation_generation,
-    capture_webui_prompt_preparation_workspace, commit_prepared_submission_media_ledger,
-    composer_attachment_draft_scope, composer_attachment_summary_to_core,
-    composer_attachment_summary_to_provider_core, composer_attachment_workspace_path_from_snapshot,
-    current_unix_millis_text, current_unix_millis_value, emit_pending_prompts_changed_delta,
+    capture_webui_prompt_preparation_workspace, composer_attachment_draft_scope,
+    composer_attachment_summary_to_core, composer_attachment_summary_to_provider_core,
+    composer_attachment_workspace_path_from_snapshot, current_unix_millis_text,
+    current_unix_millis_value, defer_attachment_delivery_to_v1, emit_pending_prompts_changed_delta,
     emit_service_event_with_trace, enqueue_webui_pending_prompt_from_submission,
     hydrate_retained_submission_session_if_needed, load_workspace_for_submission,
     mark_webui_prompt_preparation_failed, mark_webui_prompt_snapshot_preparing,
     materialize_prompt_session, owning_project_id_for_session, parse_prompt_session_target,
-    parse_session_id, persist_initial_submission_goal, prepare_submission_media,
-    preserve_active_session_run_state, provider_tool_capability_key,
-    queued_dispatch_authority_for_client_action, refresh_exact_vmm_hook_session_projection,
-    resolve_composer_attachment_summary_for_workspace, retain_slow_submission_diagnostic,
-    retained_submission_snapshot_has_session_context, retained_submission_snapshot_is_usable,
-    runtime_parts_from_state, session_has_blocking_system_prompt_work,
-    session_process_public_ai_selection, spawn_service_task, start_exact_v1_queued_turn,
-    start_reserved_webui_session_kernel_user_turn, start_webui_precheck_or_continue,
-    start_webui_session_kernel_user_turn, webui_session_kernel_has_active_turn,
-    webui_shared_prompt_precheck_plan, webui_submit_trace, webui_trace_if_slow,
-    webui_vmm_runtime_readiness,
+    parse_session_id, persist_initial_submission_goal, preserve_active_session_run_state,
+    provider_tool_capability_key, queued_dispatch_authority_for_client_action,
+    refresh_exact_vmm_hook_session_projection, resolve_composer_attachment_summary_for_workspace,
+    retain_slow_submission_diagnostic, retained_submission_snapshot_has_session_context,
+    retained_submission_snapshot_is_usable, runtime_parts_from_state,
+    session_has_blocking_system_prompt_work, session_process_public_ai_selection,
+    spawn_service_task, start_exact_v1_queued_turn, start_reserved_webui_session_kernel_user_turn,
+    start_webui_precheck_or_continue, start_webui_session_kernel_user_turn,
+    webui_session_kernel_has_active_turn, webui_shared_prompt_precheck_plan, webui_submit_trace,
+    webui_trace_if_slow, webui_vmm_runtime_readiness,
 };
 mod activation;
 mod preflight;
@@ -2021,6 +2020,8 @@ async fn materialize_submission_session_v1(
     client_submission_id: &str,
     root_text: &str,
     attachments: &[vulcan_core::types::ConversationAttachment],
+    media_origins: &[PromptAttachmentOrigin],
+    accepted_input: Option<&ClientInputSubmission>,
     hidden_model_guidance: Option<&str>,
     submission_mode: &ConversationSubmissionMode,
     existing_authority: Option<&ExistingSubmissionV1Authority>,
@@ -2062,11 +2063,13 @@ async fn materialize_submission_session_v1(
             // resource_ids are resolved before root publication; permanent
             // project resources may survive a later root failure by contract.
             // resource_ids 在根发布前解析；按契约，永久项目资源可在后续根发布失败后保留。
-            let resource_ids = register_project_attachments_v1(
+            let (resource_ids, parameters) = register_project_prompt_attachments_v1(
                 controller_runtime,
                 resource_registry.as_ref(),
                 project_id,
                 attachments,
+                media_origins,
+                accepted_input,
             )
             .map_err(|error| error.to_string())?;
             create_and_register_root_session_v1(
@@ -2076,11 +2079,12 @@ async fn materialize_submission_session_v1(
                     session_id: materialized_session.session_id,
                     project_id: project_id.to_string(),
                     title: materialized_session.session_title.clone(),
-                    root_submission: ClientInputSubmission::new(
+                    root_submission: ClientInputSubmission {
+                        parameters,
                         client_action_id,
-                        root_text,
+                        text: root_text.to_string(),
                         resource_ids,
-                    ),
+                    },
                     now_ms,
                 },
             )
@@ -2101,11 +2105,13 @@ async fn materialize_submission_session_v1(
                     authority.handle.session_id()
                 ));
             }
-            let resource_ids = register_project_attachments_v1(
+            let (resource_ids, parameters) = register_project_prompt_attachments_v1(
                 controller_runtime,
                 resource_registry.as_ref(),
                 authority.project_id.as_str(),
                 attachments,
+                media_origins,
+                accepted_input,
             )
             .map_err(|error| error.to_string())?;
             match submission_mode {
@@ -2113,21 +2119,26 @@ async fn materialize_submission_session_v1(
                     authority
                         .handle
                         .submit_root_input(
-                            ClientInputSubmission::new(client_action_id, root_text, resource_ids),
+                            ClientInputSubmission {
+                                parameters,
+                                client_action_id,
+                                text: root_text.to_string(),
+                                resource_ids,
+                            },
                             now_ms,
                         )
                         .map_err(|error| error.to_string())?;
                 }
                 ConversationSubmissionMode::Continuation => {
+                    // Continuation keeps the same admitted preparation instead of recreating origin from the current model.
+                    // 继续输入保留同一准入准备，而非根据当前模型重新创建原身份。
+                    let mut continuation =
+                        ContinuationRequest::new(client_action_id, root_text, resource_ids)
+                            .with_hidden_model_guidance(hidden_model_guidance.map(str::to_string));
+                    continuation.submission.parameters = parameters;
                     authority
                         .handle
-                        .continue_turn(
-                            ContinuationRequest::new(client_action_id, root_text, resource_ids)
-                                .with_hidden_model_guidance(
-                                    hidden_model_guidance.map(str::to_string),
-                                ),
-                            now_ms,
-                        )
+                        .continue_turn(continuation, now_ms)
                         .map_err(|error| error.to_string())?;
                 }
             }
@@ -2245,22 +2256,11 @@ async fn service_start_conversation_execution(
     // submission_session_id 是保留状态与水合查找使用的已有会话身份。
     let submission_session_id = submission_target.existing_session_id();
     if let Some(draft_slot_key) = draft_slot_key.as_deref() {
-        let expected_draft_slot_key = match submission_session_id {
-            Some(session_id) => format!("conversation:{session_id}"),
-            None => format!(
-                "new:{}",
-                project_id
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or("workspace")
-            ),
-        };
-        if draft_slot_key.trim() != expected_draft_slot_key {
-            return Err(String::from(
-                "Composer attachment draft slot does not own the selected conversation target.",
-            ));
-        }
+        crate::attachments::composer_attachment_draft_scope_for_owner(
+            draft_slot_key,
+            project_id.as_deref(),
+            conversation_id.as_deref(),
+        )?;
     }
     // Measures retained workspace reuse without cloning the full workbench snapshot on the hot path.
     // 衡量保留工作区复用，并避免在热路径克隆完整工作台快照。
@@ -2356,6 +2356,28 @@ async fn service_start_conversation_execution(
         .map(|authority| authority.handle.storage_locator())
         .transpose()
         .map_err(|error| error.to_string())?;
+    // Client action identity selects its accepted input even after the composer lease has been promoted or released.
+    // 即使输入区租约已经提升或释放，客户端动作身份仍可选择其已接纳输入。
+    let accepted_action_id =
+        ClientActionId::try_new(client_submission_id.clone()).map_err(|error| error.to_string())?;
+    // Read the exact V1 owner; a missing input means a new admission, not a search through current or latest drafts.
+    // 读取精确V1所有者；输入缺失表示新准入，不搜索当前或最近草稿。
+    let accepted_input = match existing_submission_v1_authority.as_ref() {
+        Some(authority) => authority
+            .handle
+            .read(|document| document.client_input_for_action(&accepted_action_id))
+            .map_err(|error| error.to_string())?
+            .map_err(|error| error.to_string())?,
+        None => None,
+    };
+    if accepted_input
+        .as_ref()
+        .is_some_and(|accepted| accepted.text != prompt)
+    {
+        return Err(String::from(
+            "Client input retry text differs from its originally accepted input.",
+        ));
+    }
     // attachmentWorkspacePath binds every browser-provided asset id to the loaded authoritative project before any path can be read or persisted.
     // attachmentWorkspacePath 在读取或持久化任何路径前，把每个浏览器提供的资产标识绑定到已加载的权威项目。
     let attachment_workspace_path = composer_attachment_workspace_path_from_snapshot(
@@ -2376,7 +2398,7 @@ async fn service_start_conversation_execution(
                             )
                         })?,
                         resource_id,
-                    )
+                    ).map(|mut canonical| { canonical.prompt_source = summary.prompt_source; canonical })
                 }
                 None => resolve_composer_attachment_summary_for_workspace(
                     &attachment_workspace_path,
@@ -2393,6 +2415,58 @@ async fn service_start_conversation_execution(
         .map(composer_attachment_summary_to_core)
         .collect::<Result<Vec<_>, _>>()?;
     let attachments_for_draft_promotion = attachments.clone();
+    // Capture each managed draft's exact lease-bound origin before queue admission or lease promotion can release it.
+    // 在队列准入或租约提升可能释放它之前，捕获每个托管草稿精确租约绑定原身份。
+    let media_origins = attachments
+        .iter()
+        .zip(&authoritative_attachment_summaries)
+        .map(|(attachment, summary)| {
+            if let Some(raw_resource_id) = summary.project_resource_id {
+                // The existing project ID stays authoritative; preparation comes from its exact source occurrence only.
+                // 既有项目ID保持权威；准备只来自其精确来源出现。
+                let resource_id =
+                    crate::conversation_resources_v1::checked_resource_id(raw_resource_id)?;
+                // Retry proof is restored later from the accepted input; no current source or draft may replace it.
+                // 重试证明稍后从已接纳输入恢复；当前来源或草稿不能替代它。
+                let preparation = if accepted_input.is_some() {
+                    vulcan_session_core::v1::UserPromptResourcePreparation::Unproven
+                } else if let Some(source) = &summary.prompt_source {
+                    existing_submission_v1_authority
+                        .as_ref()
+                        .ok_or_else(|| {
+                            String::from(
+                                "Project input source requires its exact V1 session owner.",
+                            )
+                        })?
+                        .handle
+                        .read(|document| {
+                            document.user_prompt_resource_preparation(source, resource_id)
+                        })
+                        .map_err(|error| error.to_string())?
+                        .map_err(|error| error.to_string())?
+                } else {
+                    vulcan_session_core::v1::UserPromptResourcePreparation::Unproven
+                };
+                Ok(PromptAttachmentOrigin::Project {
+                    resource_id,
+                    preparation: Box::new(preparation),
+                })
+            } else {
+                // Only fresh staged input may consult its live composer lease. Exact retries intentionally skip this access.
+                // 只有新暂存输入可查询其活动输入区租约；精确重试有意跳过此访问。
+                let origin = if accepted_input.is_some() {
+                    None
+                } else if let Some(scope) = attachment_draft_scope.as_deref() {
+                    vulcan_agent_runtime::attachment_asset_index::load_attachment_draft_media(
+                        attachment, scope,
+                    )?
+                } else {
+                    None
+                };
+                Ok(PromptAttachmentOrigin::Staged(origin.map(Box::new)))
+            }
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     // requestedProviderAttachments carries only a conservative metadata-only reduction; every
     // byte-exposing mode is recomputed from the exact route at the actual dispatch boundary.
     // requestedProviderAttachments 仅携带保守的仅元数据降级；每种暴露字节的模式都会在实际分发边界
@@ -2419,11 +2493,13 @@ async fn service_start_conversation_execution(
         // resourceIds preserve the authoritative browser attachment order and are permanent
         // project resources independent of the transient compatibility queue.
         // resourceIds 保留浏览器附件的权威顺序，并作为独立于瞬时兼容队列的永久项目资源。
-        let resource_ids = register_project_attachments_v1(
+        let (resource_ids, parameters) = register_project_prompt_attachments_v1(
             &controller_runtime,
             resource_registry.as_ref(),
             v1_authority.project_id.as_str(),
             attachments.as_slice(),
+            &media_origins,
+            accepted_input.as_ref(),
         )
         .map_err(|error| error.to_string())?;
         let client_action_id = ClientActionId::try_new(client_submission_id.clone())
@@ -2436,7 +2512,12 @@ async fn service_start_conversation_execution(
             &agent_runtime,
             ExistingSubmissionQueueInput {
                 v1_handle: Arc::clone(&v1_authority.handle),
-                v1_submission: ClientInputSubmission::new(client_action_id, prompt, resource_ids),
+                v1_submission: ClientInputSubmission {
+                    parameters,
+                    client_action_id,
+                    text: prompt,
+                    resource_ids,
+                },
                 session_id,
                 workspace_path: attachment_workspace_path,
                 hidden_model_guidance,
@@ -2471,27 +2552,9 @@ async fn service_start_conversation_execution(
         }
         return Ok(acknowledgement);
     }
-    // Media preparation starts only after queue admission so a queued prompt uploads at its real dispatch boundary.
-    // 媒体准备仅在队列准入判断后开始，确保排队提示词在实际分发边界上传媒体。
-    // submissionMediaRuntimeState carries the exact persisted lease identity from the loaded
-    // workspace snapshot without re-reading mutable service state during upload.
-    // submissionMediaRuntimeState 从已加载工作区快照携带精确持久化租约身份，上传期间不再读取
-    // 可变服务状态。
-    let submission_media_runtime_state = submission_session_id
-        .and_then(|session_id| workspace_snapshot.session_runtime_state.get(&session_id));
-    let prepared_submission_projection = prepare_submission_media(
-        &app,
-        &state,
-        &agent_runtime,
-        client_submission_id.as_str(),
-        submission_session_id,
-        submission_media_runtime_state,
-        model_selection.as_ref(),
-        requested_provider_attachments.as_slice(),
-    )
-    .await?;
-    let provider_attachments = prepared_submission_projection.provider_attachments;
-    let prepared_submission_media = prepared_submission_projection.prepared_media;
+    // The provisional legacy request must not upload or inline bytes before prompt-owned V1 preparation.
+    // 临时旧请求不能在提示词所有的V1准备之前上传或内联字节。
+    let provider_attachments = defer_attachment_delivery_to_v1(&requested_provider_attachments);
     let materialize_started_at = current_unix_millis_value();
     // materialization_project_id pins a new session to the exact project selected under preflight ownership.
     // materialization_project_id 将新会话固定到预检所有权下选择的精确项目。
@@ -2525,6 +2588,8 @@ async fn service_start_conversation_execution(
         client_submission_id.as_str(),
         prompt.as_str(),
         attachments.as_slice(),
+        &media_origins,
+        accepted_input.as_ref(),
         hidden_model_guidance.as_deref(),
         &submission_mode,
         existing_submission_v1_authority.as_ref(),
@@ -2675,22 +2740,6 @@ async fn service_start_conversation_execution(
     // Restored transitional preparation cannot own V1 continuation identity; the durable admission does.
     // 恢复的过渡准备态不能拥有 V1 Continue 身份；该身份由可靠准入事实拥有。
     precheck_start.continuation_action_id = continuation_action_id.clone();
-    if let Err(error) = commit_prepared_submission_media_ledger(
-        &mut workspace_snapshot,
-        session_id,
-        precheck_start.canonical_user_message_id.as_deref(),
-        prepared_submission_media,
-    ) {
-        return Err(cleanup_submission_after_prompt_turn_start(
-            &app,
-            &state,
-            &agent_runtime,
-            session_id,
-            &precheck_start.preparation_turn_id,
-            error,
-        )
-        .await);
-    }
     let accepted_message_id = precheck_start.visible_user_prompt_record_id.clone();
     let submission_target_label = if submission_session_id.is_some() {
         "existing"

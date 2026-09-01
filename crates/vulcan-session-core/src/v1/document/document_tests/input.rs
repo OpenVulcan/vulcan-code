@@ -662,6 +662,9 @@ fn reload_rejects_reused_queue_restored_draft_identity() -> Result<(), DomainErr
         input_id: receipt.input_id,
     };
     doc.metadata.input_state.draft = DraftState {
+        resource_sources: Vec::new(),
+        staged_attachment_ids: Vec::new(),
+        parameters: None,
         text: "draft".to_string(),
         resource_ids: Vec::new(),
         restored_from_queue: Some(identity),

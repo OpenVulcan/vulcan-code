@@ -47,6 +47,9 @@ use vulcan_workspace_store::workspace_store::{
     flush_session_v1_candidate, load_session_v1_full, publish_edit_session_v1,
 };
 
+mod request_preparation;
+pub(crate) use request_preparation::SessionPhysicalPreparation;
+
 #[cfg(test)]
 use vulcan_session_core::v1::document::RootInputReplacement;
 #[cfg(test)]
@@ -59,6 +62,9 @@ pub(crate) enum SessionFlushReason {
     /// A root or scheduled input became part of the stream.
     /// 根输入或已调度输入进入主事件流。
     InputAccepted,
+    /// One completed prompt resource result is durable before the first physical request.
+    /// 一项已完成提示词资源结果在首次物理请求之前可靠落盘。
+    PromptResourcePrepared,
     /// A physical Provider API start fact must precede network dispatch.
     /// 物理 Provider API 开始事实必须先于网络派发落盘。
     ApiStarted,
@@ -179,6 +185,9 @@ pub(crate) enum SuccessfulTurnSettlement {
 /// 在 API 启动前由唯一会话 owner 捕获的不可变 V1 账本投影。
 #[derive(Debug, Clone)]
 pub(crate) struct SessionProviderProjectionSnapshot {
+    /// Exact pending prompt sequences admitted by Core before their first physical API.
+    /// 在首次物理API前由Core准入的精确待准备提示词序号。
+    pub(crate) preparing_user_prompt_media_seqs: Vec<Seq>,
     /// Persisted segment generation that owns the exact event range.
     /// 拥有精确事件区间的持久化分片代次。
     pub(crate) segment_generation: u64,
@@ -209,6 +218,9 @@ pub(crate) struct SessionProviderProjectionSnapshot {
 /// 从一份不可变 V1 快照构建的传输载荷与投影证明。
 #[derive(Debug)]
 pub(crate) struct SessionPreparedPhysicalRequest<T> {
+    /// Newly prepared origins to freeze on their exact user prompts with the durable API start.
+    /// 随可靠API起始冻结到各自精确用户提示词的新准备原身份。
+    pub(crate) user_prompt_media: Vec<vulcan_session_core::v1::UserPromptMediaBinding>,
     /// Exact transport value that may be released only after durable API start.
     /// 仅在 API 起始可靠落盘后才能放行的精确传输值。
     pub(crate) transport: T,
@@ -856,6 +868,9 @@ pub(crate) struct SessionHandle {
     /// Same-session memory-mutation and volatile-publish ordering serializer.
     /// 同会话内存修改与 volatile 发布顺序串行器。
     mutation_publisher: Mutex<()>,
+    /// Single-flight request preparation without holding synchronous mutation or writer guards across awaits.
+    /// 请求准备单飞门，不跨异步等待持有同步修改或写入器守卫。
+    physical_request_preparation: Arc<AsyncMutex<()>>,
     /// Physical persistence implementation.
     /// 物理持久化实现。
     backend: Arc<dyn SessionPersistenceBackend>,
@@ -903,6 +918,7 @@ impl SessionHandle {
             document: Mutex::new(document),
             writer: Mutex::new(()),
             mutation_publisher: Mutex::new(()),
+            physical_request_preparation: Arc::new(AsyncMutex::new(())),
             backend: Arc::new(FileSessionPersistenceBackend {
                 locator: locator.clone(),
             }),
@@ -936,6 +952,7 @@ impl SessionHandle {
             document: Mutex::new(document),
             writer: Mutex::new(()),
             mutation_publisher: Mutex::new(()),
+            physical_request_preparation: Arc::new(AsyncMutex::new(())),
             backend,
             locator: None,
             provider_api_trace_store: None,
@@ -1234,6 +1251,8 @@ impl SessionHandle {
         &self,
         text: String,
         resource_ids: Vec<ResourceId>,
+        staged_attachment_ids: Vec<Option<String>>,
+        resource_sources: Vec<Option<vulcan_session_core::v1::UserPromptResourceSource>>,
         now_ms: i64,
     ) -> Result<SessionConditionalMutationReceipt<DraftMutationReceipt>, SessionRuntimeError> {
         self.mutate_durable_if_changed(
@@ -1241,7 +1260,13 @@ impl SessionHandle {
             SessionFlushReason::MetadataChanged,
             move |document| {
                 document
-                    .set_draft(text, resource_ids, now_ms)
+                    .set_draft_with_resource_sources(
+                        text,
+                        resource_ids,
+                        staged_attachment_ids,
+                        resource_sources,
+                        now_ms,
+                    )
                     .map(session_change_from_idempotent)
             },
         )
@@ -1376,21 +1401,21 @@ impl SessionHandle {
     /// # Parameters
     /// 参数
     /// `purpose`, `request`, `locked_baseline`, and `continuation_action_id` are typed request
-    /// facts; `build` consumes the immutable durable V1 projection and returns the only transport
-    /// value that may be released.
+    /// facts; `build` consumes the immutable durable V1 projection and its scoped completion authority,
+    /// returning the only transport value that may be released or an explicit stale-result rejection.
     /// `purpose`、`request`、`locked_baseline` 与 `continuation_action_id` 是强类型请求事实；
-    /// `build` 消费不可变可靠 V1 投影并返回唯一允许放行的传输值。
+    /// `build`消费不可变可靠V1投影及其作用域完成权限，返回唯一允许放行的传输值或明确陈旧结果拒绝。
     ///
     /// # Returns
     /// 返回值
     /// Returns a receipt only after prior state, `api_started`, and any fresh baseline are durable.
     /// 仅在先前状态、`api_started` 与首次基线全部可靠落盘后返回回执。
-    /// Returns `None` when a newer pending selection requires rebuilding the undispatched candidate.
-    /// 新的待生效选择要求重建尚未派发的候选时返回 `None`。
-    /// The complete prepare boundary is serialized by `mutation_publisher`.
-    /// 完整准备边界由 `mutation_publisher` 串行化。
-    pub(crate) fn prepare_physical_api_durable<T>(
-        &self,
+    /// Returns `None` when pending selection or an external document frontier changed before commit; own completion writes require real durable recapture.
+    /// 待生效选择或外部文档前沿在提交之前变化时返回`None`；自身完成写入要求真实可靠重捕获。
+    /// The asynchronous preparation gate serializes builders; writer/publisher guards cover capture and commit only.
+    /// 异步准备门串行化构建者；写入器与发布器守卫仅覆盖捕获和提交。
+    pub(crate) async fn prepare_physical_api_durable<T, BuildFuture>(
+        self: &Arc<Self>,
         purpose: ApiPurposeKind,
         request: ApiRequestSnapshot,
         locked_baseline: LockedBaselineProjection,
@@ -1398,68 +1423,115 @@ impl SessionHandle {
         now_ms: i64,
         build: impl FnOnce(
             SessionProviderProjectionSnapshot,
-        ) -> Result<SessionPreparedPhysicalRequest<T>, SessionRuntimeError>,
+            Arc<SessionPhysicalPreparation>,
+        ) -> BuildFuture,
     ) -> Result<
         Option<SessionConditionalMutationReceipt<SessionPreparedPhysicalApi<T>>>,
         SessionRuntimeError,
-    > {
+    >
+    where
+        BuildFuture: std::future::Future<
+                Output = Result<Option<SessionPreparedPhysicalRequest<T>>, SessionRuntimeError>,
+            >,
+    {
+        // Serialize whole preparations without holding the synchronous document or persistence locks across I/O.
+        // 串行化完整准备，不跨输入输出持有同步文档或持久化锁。
+        let lease = Arc::new(
+            Arc::clone(&self.physical_request_preparation)
+                .lock_owned()
+                .await,
+        );
         self.ensure_admitted(SessionMutationAdmission::ExistingTurn)?;
-        let _writer = self
-            .writer
-            .lock()
-            .map_err(|_| SessionRuntimeError::WriterLockPoisoned)?;
-        let _publisher = self
-            .mutation_publisher
-            .lock()
-            .map_err(|_| SessionRuntimeError::MutationPublisherLockPoisoned)?;
-        let prior_revision = self
-            .document
-            .lock()
-            .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?
-            .memory_revision();
-        self.flush_through_with_writer_and_publisher_locked(prior_revision)?;
-        // A picker write may arrive after construction. Rebuild before promotion, without a failed API or a false switch record.
-        // 选择器写入可能晚于请求构建；必须在提升前重建，不制造失败 API 或虚假切换记录。
-        let selection_changed = self
-            .document
-            .lock()
-            .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?
-            .metadata
-            .config
-            .pending_request
-            .as_ref()
-            .is_some_and(|pending| {
-                pending.provider.as_deref() != Some(request.provider.as_str())
-                    || pending.connection_id != request.connection_id
-                    || pending.model.as_deref() != Some(request.model.as_str())
-                    || vulcan_session_core::v1::config::canonical_request_thinking_level(
-                        pending.thinking_level.as_deref(),
-                    ) != vulcan_session_core::v1::config::canonical_request_thinking_level(
-                        request.thinking_level.as_deref(),
-                    )
-                    || pending.temperature != request.temperature
-            });
-        if selection_changed {
-            return Ok(None);
-        }
-        // pendingPromotion is owned by the same serialized Provider permit boundary that captures
-        // the projection and starts the next physical API. No legacy runtime document participates.
-        // pendingPromotion 由捕获投影并启动下一次物理 API 的同一串行 Provider permit 边界拥有；
-        // 旧运行态文档不再参与该事务。
-        let pending_promotion = self.mutate_in_memory_if_changed_with_publisher_locked(
-            SessionFlushReason::ApiStarted,
-            |document| {
-                if document.metadata.config.pending_request.is_none() {
-                    return Ok(SessionMutationChange::Unchanged(()));
+        // Phase one captures a durable frontier while the existing writer and publisher preserve ordering.
+        // 第一阶段捕获可靠前沿，既有写入器与发布器保持顺序。
+        let snapshot = {
+            let _writer = self
+                .writer
+                .lock()
+                .map_err(|_| SessionRuntimeError::WriterLockPoisoned)?;
+            let _publisher = self
+                .mutation_publisher
+                .lock()
+                .map_err(|_| SessionRuntimeError::MutationPublisherLockPoisoned)?;
+            let prior_revision = self
+                .document
+                .lock()
+                .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?
+                .memory_revision();
+            self.flush_through_with_writer_and_publisher_locked(prior_revision)?;
+            {
+                // Reject an absent turn or an already running API before expensive resource preparation begins.
+                // 在昂贵资源准备开始之前，拒绝缺失回合或已经运行中的 API。
+                let document = self
+                    .document
+                    .lock()
+                    .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?;
+                if document.active_turn().is_none_or(|turn| turn.closed) {
+                    return Err(DomainError::NoActiveTurn.into());
                 }
-                let turn_id = document.active_turn().map(|active| active.turn_id);
-                document.promote_pending_request(turn_id, now_ms)?;
-                Ok(SessionMutationChange::Changed(()))
-            },
-        )?;
-        self.flush_through_with_writer_and_publisher_locked(pending_promotion.revision)?;
-        let snapshot = self.capture_provider_projection_snapshot_with_publisher_locked()?;
-        let prepared = build(snapshot.clone())?;
+                if document.active_api().is_some() {
+                    return Err(DomainError::NoActiveApi.into());
+                }
+            }
+            // A picker write may arrive after construction. Rebuild before promotion, without a failed API or a false switch record.
+            // 选择器写入可能晚于请求构建；必须在提升前重建，不制造失败 API 或虚假切换记录。
+            let selection_changed = self
+                .document
+                .lock()
+                .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?
+                .metadata
+                .config
+                .pending_request
+                .as_ref()
+                .is_some_and(|pending| {
+                    pending.provider.as_deref() != Some(request.provider.as_str())
+                        || pending.connection_id != request.connection_id
+                        || pending.model.as_deref() != Some(request.model.as_str())
+                        || vulcan_session_core::v1::config::canonical_request_thinking_level(
+                            pending.thinking_level.as_deref(),
+                        ) != vulcan_session_core::v1::config::canonical_request_thinking_level(
+                            request.thinking_level.as_deref(),
+                        )
+                        || pending.temperature != request.temperature
+                });
+            if selection_changed {
+                return Ok(None);
+            }
+            // pendingPromotion is owned by the same serialized Provider permit boundary that captures
+            // the projection and starts the next physical API. No legacy runtime document participates.
+            // pendingPromotion 由捕获投影并启动下一次物理 API 的同一串行 Provider permit 边界拥有；
+            // 旧运行态文档不再参与该事务。
+            let pending_promotion = self.mutate_in_memory_if_changed_with_publisher_locked(
+                SessionFlushReason::ApiStarted,
+                |document| {
+                    if document.metadata.config.pending_request.is_none() {
+                        return Ok(SessionMutationChange::Unchanged(()));
+                    }
+                    let turn_id = document.active_turn().map(|active| active.turn_id);
+                    document.promote_pending_request(turn_id, now_ms)?;
+                    Ok(SessionMutationChange::Changed(()))
+                },
+            )?;
+            self.flush_through_with_writer_and_publisher_locked(pending_promotion.revision)?;
+            self.capture_provider_projection_snapshot_with_publisher_locked()?
+        };
+        // Completed-result workers retain this same lease if the asynchronous builder is dropped.
+        // 异步构建者被丢弃时，已完成结果工作线程保留同一租约。
+        let preparation = Arc::new(SessionPhysicalPreparation::new(
+            Arc::clone(self),
+            lease,
+            snapshot.clone(),
+        ));
+        // Phase two may read media, upload or encode asynchronously after both synchronous guards are gone.
+        // 第二阶段仅在两个同步守卫释放后，才可异步读取媒体、上传或编码。
+        // Keep the potentially large media/encoding future off every enclosing async frame without spawning detached work.
+        // 将可能较大的媒体及编码Future移出各层外围异步帧，不启动分离工作。
+        let Some(prepared) = Box::pin(build(snapshot, Arc::clone(&preparation))).await? else {
+            return Ok(None);
+        };
+        // Only the official durable recapture can advance request proof after this preparation's own writes.
+        // 本准备自身写入之后，只有正式可靠重捕获可以推进请求证明。
+        let snapshot = preparation.last_snapshot()?;
         if prepared.projection.segment_generation != snapshot.segment_generation
             || prepared.projection.document_revision != snapshot.document_revision
             || prepared.projection.retained_from_seq != snapshot.retained_from_seq
@@ -1469,21 +1541,52 @@ impl SessionHandle {
                 String::from("request proof does not match the captured durable V1 frontier"),
             ));
         }
+        // Reacquire the same owner's locks before accepting any prepared result.
+        // 接受任何准备结果之前，重新取得同一所有者的锁。
+        self.ensure_admitted(SessionMutationAdmission::ExistingTurn)?;
+        let _writer = self
+            .writer
+            .lock()
+            .map_err(|_| SessionRuntimeError::WriterLockPoisoned)?;
+        let _publisher = self
+            .mutation_publisher
+            .lock()
+            .map_err(|_| SessionRuntimeError::MutationPublisherLockPoisoned)?;
+        if preparation.invalidated()? {
+            return Ok(None);
+        }
+        {
+            // Any intervening generation or revision change invalidates the prepared transport, even without a picker change.
+            // 任何期间发生的代际或修订变化都会使准备传输失效，即使选择器没有变化。
+            let document = self
+                .document
+                .lock()
+                .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?;
+            if document.segment_generation() != snapshot.segment_generation
+                || document.memory_revision() != snapshot.document_revision
+                || document.durable_revision() != snapshot.document_revision
+            {
+                return Ok(None);
+            }
+        }
         let expected_request = request.clone();
         let expected_projection = prepared.projection.clone();
         let expected_request_budget_evidence = prepared.request_budget_evidence.clone();
         let receipt = self.mutate_in_memory_if_changed_with_publisher_locked(
             SessionFlushReason::ApiStarted,
             move |document| {
-                let mutation = document.prepare_and_start_api(PrepareAndStartApiInput {
-                    purpose,
-                    request,
-                    request_budget_evidence: prepared.request_budget_evidence,
-                    projection: prepared.projection,
-                    locked_baseline,
-                    continuation_action_id,
-                    now_ms,
-                })?;
+                let mutation = document.prepare_and_start_api_with_user_prompt_media(
+                    PrepareAndStartApiInput {
+                        purpose,
+                        request,
+                        request_budget_evidence: prepared.request_budget_evidence,
+                        projection: prepared.projection,
+                        locked_baseline,
+                        continuation_action_id,
+                        now_ms,
+                    },
+                    prepared.user_prompt_media,
+                )?;
                 match mutation {
                     IdempotentMutation::Committed(core_start) => {
                         Ok(SessionMutationChange::Changed(SessionPreparedPhysicalApi {
@@ -1568,7 +1671,13 @@ impl SessionHandle {
             .locator
             .as_ref()
             .ok_or(SessionRuntimeError::ProviderProjectionRequiresStorageLocator)?;
-        let (segment_generation, document_revision, retained_from_seq, through_seq) = {
+        let (
+            segment_generation,
+            document_revision,
+            retained_from_seq,
+            through_seq,
+            preparing_user_prompt_media_seqs,
+        ) = {
             let document = self
                 .document
                 .lock()
@@ -1607,6 +1716,7 @@ impl SessionHandle {
                 document.memory_revision(),
                 retained_from_seq,
                 Seq::try_new(through_value)?,
+                document.preparing_user_prompt_media_seqs(),
             )
         };
         let range = locator.load_event_range(Seq::try_new(1)?, through_seq)?;
@@ -1633,6 +1743,7 @@ impl SessionHandle {
             .map(|projected| projected.item.clone())
             .collect();
         Ok(SessionProviderProjectionSnapshot {
+            preparing_user_prompt_media_seqs,
             segment_generation,
             document_revision,
             retained_from_seq,
@@ -3740,6 +3851,7 @@ impl SessionRuntimeRegistry {
 
 #[cfg(test)]
 mod tests {
+    mod request_preparation;
     use super::*;
     use std::path::PathBuf;
     use std::sync::Barrier;
@@ -4075,8 +4187,8 @@ mod tests {
 
     /// The physical Provider permit promotes the exact pending request before request capture.
     /// 物理 Provider 许可会在捕获请求前提升精确待生效配置。
-    #[test]
-    fn physical_provider_permit_promotes_pending_thinking_before_api_start() {
+    #[tokio::test]
+    async fn physical_provider_permit_promotes_pending_thinking_before_api_start() {
         // Both historical encodings are accepted as the same setting, not a perpetual route change.
         // 两种历史编码均作为同一设置接受，不能造成永久路由切换循环。
         for (stored_level, request_level) in [
@@ -4144,7 +4256,9 @@ mod tests {
 
             // Simulate a picker write overtaking construction for every request control.
             // 模拟选择器写入超越请求构建，覆盖每一种请求控制项。
-            let revision_before = handle.read(|document| document.memory_revision()).unwrap();
+            let revision_before = handle
+                .read(|document| document.memory_revision())
+                .expect("read pre-preparation revision");
             for field in 0..5 {
                 let mut stale = request.clone();
                 match field {
@@ -4155,17 +4269,18 @@ mod tests {
                     _ => stale.temperature = Some(0.1),
                 }
                 let receipt = handle
-                    .prepare_physical_api_durable::<()>(
+                    .prepare_physical_api_durable::<(), _>(
                         ApiPurposeKind::MainGeneration,
                         stale,
                         LockedBaselineProjection::empty(),
                         None,
                         4,
-                        |_| {
+                        |_, _preparation| async {
                             panic!("stale candidate must be rebuilt before projection or promotion")
                         },
                     )
-                    .unwrap();
+                    .await
+                    .expect("stale selection returns a rebuild without starting an API");
                 assert!(receipt.is_none());
                 handle
                     .read(|document| {
@@ -4177,7 +4292,7 @@ mod tests {
                             EventBody::RequestConfigChanged(_) | EventBody::DisplayNote(_)
                         )));
                     })
-                    .unwrap();
+                    .expect("verify unchanged stale-request state");
             }
 
             let receipt = handle
@@ -4187,8 +4302,9 @@ mod tests {
                     LockedBaselineProjection::empty(),
                     None,
                     4,
-                    move |snapshot| {
-                        Ok(SessionPreparedPhysicalRequest {
+                    move |snapshot, _preparation| async move {
+                        Ok(Some(SessionPreparedPhysicalRequest {
+                            user_prompt_media: Vec::new(),
                             transport: (),
                             projection: ProviderProjectionProof {
                                 segment_generation: snapshot.segment_generation,
@@ -4198,9 +4314,10 @@ mod tests {
                                 fingerprint_sha256,
                             },
                             request_budget_evidence: test_provider_request_budget_evidence(),
-                        })
+                        }))
                     },
                 )
+                .await
                 .expect("prepare physical API after pending promotion")
                 .expect("candidate matches pending selection");
 

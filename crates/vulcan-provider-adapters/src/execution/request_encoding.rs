@@ -19,12 +19,12 @@ use vulcan_ai_protocols::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
     CLAUDE_CODE_MESSAGES_PROFILE_ID, GEMINI_GENERATE_CONTENT_PROFILE_ID,
     GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_CODEX_RESPONSES_PROFILE_ID,
-    OPENAI_RESPONSES_PROFILE_ID, gemini_generate_content_path, gemini_replay_signature_payload,
-    wrap_openai_reasoning_signature,
+    OPENAI_RESPONSES_PROFILE_ID, gemini_replay_signature_payload, wrap_openai_reasoning_signature,
 };
 use vulcan_llm_core::{
     AnthropicReasoningMode, EncodedWireRequest, ProviderRouteContext, UpstreamProtocol,
-    converted_protocol_headers, encode_codex_responses_request, project_responses_for_provider,
+    encode_internal_responses_request, project_internal_request_for_provider,
+    validate_target_media_projection,
 };
 
 impl ProviderExecutionClient {
@@ -47,20 +47,9 @@ impl ProviderExecutionClient {
     ) -> Result<EncodedWireRequest, ProviderExecutionFailure> {
         validate_request_policy(route, request)?;
         validate_request_projection_guards_before_encoding(route, request)?;
-        let mut baseline_request = request.clone();
-        if route.protocol_route.protocol_profile_id != OPENAI_CODEX_RESPONSES_PROFILE_ID {
-            // Only the Codex Responses route owns a wire-level previous_response_id cursor. Other
-            // protocols keep the continuation as a local append-only proof and replay full history.
-            // 只有 Codex Responses 路由拥有线路级 previous_response_id 游标；其他协议仅把延续状态
-            // 用作本地追加边界证明，并完整重放历史。
-            baseline_request.continuation = None;
-        }
-        // The extracted LLM core owns the canonical Codex Responses request body.
-        // 提取后的 LLM 核心拥有规范 Codex Responses 请求正文的唯一编码权。
-        let encoded = encode_codex_responses_request(&baseline_request).map_err(|error| {
-            pre_dispatch_failure(format!("LLM core request encoding failed: {error}"))
-        })?;
-        let encoded = project_responses_baseline_for_provider(route, request, encoded)?;
+        // Internal media stays typed until the exact target profile projects every resource.
+        // 内部媒体保持强类型，直到精确目标 Profile 投影全部资源。
+        let encoded = project_internal_baseline_for_provider(route, request)?;
         project_provider_request(route, request, encoded)
     }
 
@@ -234,77 +223,53 @@ pub(super) fn validate_request_projection_guards_before_encoding(
     Ok(())
 }
 
-/// Projects the canonical Responses body into the exact Chat upstream shape.
-/// 将规范 Responses 正文投影为精确的 Chat 上游形状。
-///
-/// The target route still supplies its exact path and fixed headers, while the
-/// request body is derived from the same Responses encoder used by the public
-/// baseline. This keeps provider conversion independent from the caller-facing
-/// protocol selected by a legacy route.
-/// 目标路由仍然提供精确路径和固定请求头，但请求正文统一来自公共基线使用的
-/// Responses 编码器。这样供应商转换不会依赖旧路由暴露给调用方的协议形状。
-fn project_responses_baseline_for_provider(
+/// Encodes typed `request` once and projects its complete media contract for the frozen `route`.
+/// 对强类型 `request` 只编码一次，为冻结 `route` 投影其完整媒体契约。
+/// Returns the target wire request or a pre-dispatch failure, without protocol fallback.
+/// 返回目标线路请求或分派前失败，不执行协议回退。
+fn project_internal_baseline_for_provider(
     route: &ProviderExecutionRoute,
     request: &AiExecutionRequest,
-    mut encoded: EncodedWireRequest,
 ) -> Result<EncodedWireRequest, ProviderExecutionFailure> {
-    // nativeCodexResponses is the single frozen authority for retaining Codex transport identity.
-    // nativeCodexResponses 是保留 Codex 传输身份的唯一冻结权威。
-    let native_codex_responses = route_uses_native_codex_responses(route);
+    // Exact protocol selection occurs before any encoding; there is no standard-Responses preflight.
+    // 精确协议选择先于任意编码，不再经过标准 Responses 前置编码。
     let Some(upstream_protocol) = upstream_protocol_for_route(route) else {
-        // A standalone decoder does not prove that this Responses-first path can encode its protocol.
-        // 独立解码器存在，并不能证明这条 Responses 优先链路能够编码对应协议。
         return Err(pre_dispatch_failure(format!(
             "No Responses request converter is registered for protocol `{}`; dispatch was not attempted.",
             route.protocol_route.protocol_profile_id
         )));
     };
-    if !native_codex_responses {
-        // Canonical Codex encoding is an internal body baseline. Every other declared protocol
-        // replaces its headers with only the target protocol's own required headers.
-        // 规范 Codex 编码只是内部正文基线。其他已声明协议必须把请求头替换为目标协议自身所需头。
-        encoded.headers = converted_protocol_headers(upstream_protocol);
-    }
-    if matches!(upstream_protocol, UpstreamProtocol::OpenAiResponses) {
-        return Ok(encoded);
-    }
-
+    // This immutable clone retains canonical history while adapting only target-owned replay evidence.
+    // 此不可变输入的克隆保留规范历史，仅适配目标持有的重放证据。
     let mut canonical_request = request.clone();
-    // Cross-protocol routes must replay complete history because a target protocol cannot reuse
-    // a continuation cursor issued under another protocol identity.
-    // 跨协议路由必须重放完整历史，因为目标协议不能复用另一协议身份签发的延续游标。
-    canonical_request.continuation = None;
-    prepare_target_reasoning_replay_for_responses(&mut canonical_request, upstream_protocol);
-    let mut canonical_body = encode_codex_responses_request(&canonical_request)
-        .map_err(|error| {
-            pre_dispatch_failure(format!("LLM core request encoding failed: {error}"))
-        })?
-        .body;
-    attach_target_tool_replay_to_responses(&mut canonical_body, request, upstream_protocol)?;
-    if let Some(output_token_limit) = canonical_request.output_token_limit {
-        // Codex omits this optional wire field, while Anthropic conversion requires the caller-resolved limit.
-        // Codex 会省略该可选线路字段，而 Anthropic 转换需要调用方已解析出的输出上限。
-        canonical_body["max_output_tokens"] = json!(output_token_limit);
+    if !route_uses_native_codex_responses(route) {
+        // Other targets replay full history; they cannot reuse the Codex wire cursor.
+        // 其他目标重放完整历史，不能复用 Codex 线路游标。
+        canonical_request.continuation = None;
     }
-    let anthropic_reasoning_mode = if route.entry.request_projector == RequestProjectorKind::Direct
-    {
-        AnthropicReasoningMode::NativeBudget
-    } else {
-        AnthropicReasoningMode::ProviderSpecific
-    };
+    prepare_target_reasoning_replay_for_responses(&mut canonical_request, upstream_protocol);
+    // A non-serializable internal owner preserves audio/video and all original resource fields.
+    // 不可序列化的内部所有者保留音视频及全部原始资源字段。
+    let mut internal = encode_internal_responses_request(&canonical_request).map_err(|error| {
+        pre_dispatch_failure(format!("LLM core request encoding failed: {error}"))
+    })?;
+    attach_target_tool_replay_to_responses(internal.body_mut(), request, upstream_protocol)?;
+    // The declared projector, not provider name inference, owns Anthropic reasoning translation.
+    // 已声明投影器持有 Anthropic 思考转换，不根据供应商名称推断。
     let context = ProviderRouteContext {
         upstream_protocol,
-        anthropic_reasoning_mode,
+        anthropic_reasoning_mode: if route.entry.request_projector == RequestProjectorKind::Direct {
+            AnthropicReasoningMode::NativeBudget
+        } else {
+            AnthropicReasoningMode::ProviderSpecific
+        },
     };
-    encoded.body = project_responses_for_provider(canonical_body, &context).map_err(|error| {
-        pre_dispatch_failure(format!("LLM provider conversion failed: {error}"))
-    })?;
-    if matches!(upstream_protocol, UpstreamProtocol::GeminiGenerateContent) {
-        // Gemini selects the model in the dynamic path instead of retaining it in the converted body.
-        // Gemini 通过动态路径选择模型，而不是把模型标识保留在转换后的正文中。
-        encoded.path = gemini_generate_content_path(request.model_id.as_str());
-    }
-    Ok(encoded)
+    project_internal_request_for_provider(
+        internal,
+        &context,
+        route.protocol_route.protocol_profile_id.as_str(),
+    )
+    .map_err(|error| pre_dispatch_failure(format!("LLM provider conversion failed: {error}")))
 }
 
 /// Rewraps same-provider Gemini reasoning signatures for the internal Responses conversion body.
@@ -433,6 +398,13 @@ pub(super) fn project_provider_request(
         project_custom_model_request(projection, request, &mut encoded)?;
     }
     validate_structured_output_projection(route, request, &encoded)?;
+    // Provider mappings cannot reintroduce internal media or broaden the selected protocol family.
+    // 供应商映射不能重新引入内部媒体或扩大选中协议族的能力。
+    validate_target_media_projection(
+        route.protocol_route.protocol_profile_id.as_str(),
+        &encoded.body,
+    )
+    .map_err(|error| pre_dispatch_failure(format!("Final media projection is invalid: {error}")))?;
     Ok(encoded)
 }
 

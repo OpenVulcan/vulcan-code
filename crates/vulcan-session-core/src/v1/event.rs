@@ -406,6 +406,10 @@ pub enum UserInputSource {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UserInputEvent {
+    /// Host-owned parameters for this prompt occurrence; absent legacy data must not be guessed as pending.
+    /// 本次提示词出现位置的宿主参数；缺失的旧数据不能被猜测为待准备状态。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<super::user_prompt::UserPromptParameters>,
     /// Stable external idempotency identity of the client submission.
     /// 客户端提交的稳定外部幂等身份。
     pub client_action_id: ClientActionId,
@@ -445,6 +449,10 @@ pub enum QueuedInputResolutionKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QueuedInputResolutionEvent {
+    /// Original admitted prompt parameters retained for exact queue resolution and restored-draft retries.
+    /// 为精确队列终结及恢复草稿重试保留的原准入提示词参数。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<crate::v1::UserPromptParameters>,
     /// Original external idempotency identity of the queued submission.
     /// 原始排队提交的外部幂等身份。
     pub client_action_id: ClientActionId,

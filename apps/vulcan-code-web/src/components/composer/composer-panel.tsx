@@ -62,13 +62,17 @@ import { ComposerPanelAttachmentPreviewStrip } from "@/components/composer/compo
 import { ComposerGoalDialog } from "@/components/composer/composer-panel/goal-dialog";
 import { ComposerPanelToolbarRight } from "@/components/composer/composer-panel/toolbar-right";
 import { useComposerGoalController } from "@/components/composer/composer-panel/use-composer-goal-controller";
-import { useComposerSessionDraft } from "@/components/composer/composer-panel/use-composer-session-draft";
+import {
+  useComposerSessionDraft,
+  type ComposerQueuedDraftReplacementToken,
+} from "@/components/composer/composer-panel/use-composer-session-draft";
 import { useComposerModelSelection } from "@/components/composer/composer-panel/use-composer-model-selection";
 import { useComposerSlashCommands } from "@/components/composer/composer-panel/use-composer-slash-commands";
 import { useComposerSendController } from "@/components/composer/composer-panel/use-composer-send-controller";
 import { useComposerPlanMode } from "@/components/composer/composer-panel/use-composer-plan-mode";
 import { useComposerDraftSessionSettings } from "@/components/composer/composer-panel/use-composer-draft-session-settings";
 import { useComposerAttachmentPreparation } from "@/components/composer/composer-panel/use-composer-attachment-preparation";
+import { useComposerAttachmentRemoval } from "@/components/composer/composer-panel/use-composer-attachment-removal";
 export { ComposerSessionProgressCapsule } from "@/components/composer/composer-panel/progress-capsule";
 // ComposerPanel renders the first-version message input surface.
 // ComposerPanel 渲染第一版消息输入区域。
@@ -230,6 +234,18 @@ export function ComposerPanel(props: {
   // composerTextareaRef focuses the prompt field from global workspace typing.
   // composerTextareaRef 用于从工作台全局输入聚焦提示词输入框。
   const composerTextareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+  // pendingPromptEditRef synchronously excludes duplicate edits and competing submissions.
+  // pendingPromptEditRef 同步排除重复编辑与竞争提交。
+  const pendingPromptEditRef = React.useRef(false);
+  // isPendingPromptEditing disables interactive draft mutation while one queue replacement is in flight.
+  // isPendingPromptEditing 在一次队列替换进行期间禁用交互式草稿变更。
+  const [isPendingPromptEditing, setIsPendingPromptEditing] = React.useState(false);
+  // pendingPromptRecoveryToken keeps an ambiguous acknowledgement frozen until authoritative reload succeeds.
+  // pendingPromptRecoveryToken 在权威重载成功前保持不明确确认处于冻结状态。
+  const [pendingPromptRecoveryToken, setPendingPromptRecoveryToken] = React.useState<ComposerQueuedDraftReplacementToken | null>(null);
+  // isPendingPromptEditActive exposes the synchronous replacement gate to the send controller.
+  // isPendingPromptEditActive 向发送控制器暴露同步替换门控。
+  const isPendingPromptEditActive = React.useCallback(() => pendingPromptEditRef.current, []);
   // composerDraft owns text, attachments, slot persistence, and submission rollback as one transaction.
   // composerDraft 将文本、附件、草稿槽持久化与提交回滚作为一个事务管理。
   const composerDraft = useComposerSessionDraft({
@@ -257,8 +273,65 @@ export function ComposerPanel(props: {
     clearForSubmission,
     restoreFailedSubmission,
     restoreInputToSlot,
-    replaceDraft,
+    prepareQueuedDraftReplacement,
+    completeQueuedDraftReplacement,
+    recoverQueuedDraftReplacement,
   } = composerDraft;
+  // releasePendingPromptEditGate releases both synchronous and rendered mutation barriers.
+  // releasePendingPromptEditGate 同时释放同步与已渲染的变更屏障。
+  const releasePendingPromptEditGate = React.useCallback(() => {
+    pendingPromptEditRef.current = false;
+    setIsPendingPromptEditing(false);
+  }, []);
+
+  React.useEffect(() => {
+    if (!pendingPromptRecoveryToken) {
+      return;
+    }
+    // disposed prevents a recovery result from releasing a later component owner.
+    // disposed 防止恢复结果释放较晚的组件owner。
+    let disposed = false;
+    // retryTimer owns only the next bounded reconnect attempt.
+    // retryTimer 仅持有下一次有界重连尝试。
+    let retryTimer: number | null = null;
+    // retryDelayMs backs off repeated local-service outages without allowing stale draft writes.
+    // retryDelayMs 对重复本地服务中断进行退避，同时不允许陈旧草稿写入。
+    let retryDelayMs = 250;
+    // recover reloads the exact captured owner and releases the gate only after an authoritative response.
+    // recover 重新加载精确捕获owner，并仅在获得权威响应后释放门控。
+    const recover = async () => {
+      try {
+        await recoverQueuedDraftReplacement(pendingPromptRecoveryToken);
+        if (disposed) {
+          return;
+        }
+        setPendingPromptRecoveryToken(null);
+        releasePendingPromptEditGate();
+      } catch (error) {
+        if (disposed) {
+          return;
+        }
+        props.onTrace?.("pending_prompt.edit_recovery_waiting", {
+          draftSlotKey: pendingPromptRecoveryToken.owner.draftSlotKey,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        retryTimer = window.setTimeout(() => { void recover(); }, retryDelayMs);
+        retryDelayMs = Math.min(retryDelayMs * 2, 5_000);
+      }
+    };
+    void recover();
+    return () => {
+      disposed = true;
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+      }
+    };
+  }, [
+    pendingPromptRecoveryToken,
+    props.onTrace,
+    recoverQueuedDraftReplacement,
+    releasePendingPromptEditGate,
+  ]);
   // draftSessionSettings owns overrides that cannot be persisted until a new conversation materializes.
   // draftSessionSettings 持有新会话物化前无法持久化的覆盖项。
   const draftSessionSettings = useComposerDraftSessionSettings(
@@ -359,16 +432,38 @@ export function ComposerPanel(props: {
     routeSelectionPending,
     attachments,
   });
-  // handleRemoveComposerAttachment cancels the stable transfer before removing the canonical draft asset.
-  // handleRemoveComposerAttachment 在移除规范草稿资源前取消稳定传输。
+  // removePreparedAttachment binds asynchronous removal to the exact draft owner and object.
+  // removePreparedAttachment 将异步移除绑定到精确草稿所有者与对象。
+  const removePreparedAttachment = useComposerAttachmentRemoval({
+    draftSlotKey,
+    attachments,
+    preparation: attachmentPreparation,
+    remove: removeComposerAttachment,
+  });
+  // handleRemoveComposerAttachment reports failed cancellation without discarding its retryable attachment.
+  // handleRemoveComposerAttachment 报告取消失败，但不丢弃可重试附件。
   const handleRemoveComposerAttachment = React.useCallback((index: number) => {
-    const attachmentId = attachments[index]?.assetId?.trim();
-    if (attachmentId) {
-      void attachmentPreparation.cancel(attachmentId);
+    if (pendingPromptEditRef.current) {
+      return;
     }
-    void attachmentPreparation.reconcileDraft(attachments.filter((_, currentIndex) => currentIndex !== index));
-    removeComposerAttachment(index);
-  }, [attachmentPreparation, attachments, removeComposerAttachment]);
+    void removePreparedAttachment(index).catch((error: unknown) => {
+      toast.error(error instanceof Error ? error.message : String(error));
+    });
+  }, [removePreparedAttachment]);
+  // handleAttachmentPicker blocks new file selection while a queued prompt owns the draft gate.
+  // handleAttachmentPicker 在队列提示词持有草稿门控期间阻止新的文件选择。
+  const handleAttachmentPicker = React.useCallback((kind: string | null) => {
+    if (!pendingPromptEditRef.current) {
+      openAttachmentPicker(kind);
+    }
+  }, [openAttachmentPicker]);
+  // handleAttachmentRetry blocks transfer retries that would mutate the replacement draft interval.
+  // handleAttachmentRetry 阻止会在替换草稿区间内产生变更的传输重试。
+  const handleAttachmentRetry = React.useCallback((attachmentId: string) => {
+    if (!pendingPromptEditRef.current) {
+      void attachmentPreparation.retry(attachmentId);
+    }
+  }, [attachmentPreparation]);
   // handlePersistedModelChoiceChange tracks the exact optimistic write started by either picker.
   // handlePersistedModelChoiceChange 跟踪任一选择器启动的精确乐观写入。
   const handlePersistedModelChoiceChange = React.useCallback((choice: ModelPickerChoice) => {
@@ -454,6 +549,7 @@ export function ComposerPanel(props: {
   // 发送控制器管理重复门控、停止路由、草稿消费与失败恢复。
   const {
     canAutoSubmitCreatedGoal,
+    isSubmissionActive,
     sendDraft,
     submitCreatedGoal,
   } = useComposerSendController({
@@ -468,6 +564,7 @@ export function ComposerPanel(props: {
     clearSessionSettings: draftSessionSettings.clearSubmissionSettings,
     beforeSubmit: flushComposerRouteSelections,
     isConversationRunning: props.isConversationRunning,
+    isDraftReplacementActive: isPendingPromptEditActive,
     clearForSubmission,
     restoreFailedSubmission,
     restoreInputToSlot,
@@ -478,6 +575,7 @@ export function ComposerPanel(props: {
   // handleComposerSend blocks user submissions until invalid capability routes are confirmed.
   // handleComposerSend 在无效能力路由重新确认前阻止用户提交。
   const handleComposerSend = React.useCallback(async () => {
+    if (pendingPromptEditRef.current) return;
     if (providerToolSettingsBlocked && !props.isConversationRunning) return;
     if (attachmentPreparation.blocksSubmission) {
       toast.info(t("composer.attachment.preparationBlocked").replace(
@@ -513,16 +611,90 @@ export function ComposerPanel(props: {
   // handlePendingPromptEdit restores one queued prompt into the composer draft.
   // handlePendingPromptEdit 将单条排队提示词恢复到输入区草稿。
   const handlePendingPromptEdit = React.useCallback(async (entryId: string) => {
-    props.onTrace?.("pending_prompt.edit", { entryId });
-    const entry = await props.onEditPendingPrompt(entryId);
-    if (!entry) {
+    if (pendingPromptEditRef.current || isSubmissionActive()) {
       return;
     }
-    const replacementAttachments = entry.attachments ?? [];
-    void attachmentPreparation.reconcileDraft(replacementAttachments);
-    replaceDraft(entry.prompt, replacementAttachments);
-    window.requestAnimationFrame(() => composerTextareaRef.current?.focus({ preventScroll: true }));
-  }, [attachmentPreparation, props.onEditPendingPrompt, props.onTrace, replaceDraft]);
+    pendingPromptEditRef.current = true;
+    setIsPendingPromptEditing(true);
+    props.onTrace?.("pending_prompt.edit", { entryId });
+    // token exists only after every earlier draft write has reached its durable boundary.
+    // token 仅在全部较早草稿写入到达持久边界后存在。
+    let token: ComposerQueuedDraftReplacementToken | null = null;
+    // recoveryScheduled keeps the mutation gate closed across an ambiguous RPC acknowledgement.
+    // recoveryScheduled 在RPC确认不明确时持续关闭变更门控。
+    let recoveryScheduled = false;
+    try {
+      token = await prepareQueuedDraftReplacement();
+      const entry = await props.onEditPendingPrompt(entryId);
+      if (!entry) {
+        recoveryScheduled = true;
+        setPendingPromptRecoveryToken(token);
+        return;
+      }
+      const replacementAttachments = entry.attachments ?? [];
+      const appliedToActiveOwner = completeQueuedDraftReplacement(
+        token,
+        entry.prompt,
+        replacementAttachments,
+      );
+      if (appliedToActiveOwner) {
+        try {
+          await attachmentPreparation.reconcileDraft(replacementAttachments);
+        } catch (error) {
+          // The durable queued target is already applied; a lease projection fault remains retryable in place.
+          // 持久队列目标已经应用；租约投影故障保留为原位可重试状态。
+          toast.error(error instanceof Error ? error.message : String(error));
+        }
+        window.requestAnimationFrame(() => composerTextareaRef.current?.focus({ preventScroll: true }));
+      }
+    } catch (error) {
+      if (token) {
+        recoveryScheduled = true;
+        setPendingPromptRecoveryToken(token);
+      }
+      toast.error(t("composer.error.draftPersistFailed"), {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      if (!recoveryScheduled) {
+        releasePendingPromptEditGate();
+      }
+    }
+  }, [
+    attachmentPreparation,
+    completeQueuedDraftReplacement,
+    isSubmissionActive,
+    prepareQueuedDraftReplacement,
+    props.onEditPendingPrompt,
+    props.onTrace,
+    releasePendingPromptEditGate,
+    t,
+  ]);
+  // handlePendingPromptInsert excludes insertion while an exact queue edit owns the queue.
+  // handlePendingPromptInsert 在精确队列编辑持有队列期间排除插入操作。
+  const handlePendingPromptInsert = React.useCallback((entryId: string) => {
+    if (!pendingPromptEditRef.current) {
+      void props.onInsertPendingPrompt(entryId);
+    }
+  }, [props.onInsertPendingPrompt]);
+  // handlePendingPromptRemove excludes removal while an exact queue edit owns the queue.
+  // handlePendingPromptRemove 在精确队列编辑持有队列期间排除移除操作。
+  const handlePendingPromptRemove = React.useCallback((entryId: string) => {
+    if (!pendingPromptEditRef.current) {
+      void props.onRemovePendingPrompt(entryId);
+    }
+  }, [props.onRemovePendingPrompt]);
+  // handlePendingPromptReorder excludes reordering while an exact queue edit owns the queue.
+  // handlePendingPromptReorder 在精确队列编辑持有队列期间排除重排操作。
+  const handlePendingPromptReorder = React.useCallback((
+    entryIds: string[],
+    draggedEntryId: string,
+    targetEntryId: string | null,
+  ) => {
+    if (!pendingPromptEditRef.current) {
+      void props.onReorderPendingPrompts(entryIds, draggedEntryId, targetEntryId);
+    }
+  }, [props.onReorderPendingPrompts]);
 
   // Goal controller state and actions isolate goal lifecycle orchestration from the composer input flow.
   // 目标控制器状态与操作将目标生命周期编排从输入区输入流程中隔离出来。
@@ -595,7 +767,11 @@ export function ComposerPanel(props: {
     // handleGlobalWorkspaceTyping redirects ordinary workspace typing into the composer.
     // handleGlobalWorkspaceTyping 将工作台中的普通键入重定向到输入区。
     const handleGlobalWorkspaceTyping = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || !isComposerPrintableKey(event)) {
+      if (
+        pendingPromptEditRef.current
+        || event.defaultPrevented
+        || !isComposerPrintableKey(event)
+      ) {
         return;
       }
       const inputOwner = getWorkspaceInputOwner();
@@ -623,12 +799,13 @@ export function ComposerPanel(props: {
     <TooltipProvider delayDuration={500}>
       {props.pendingPrompts.length ? (
         <PendingPromptQueueStrip
+          disabled={isPendingPromptEditing}
           entries={props.pendingPrompts}
           onTrace={props.onTrace}
           onEdit={(entryId) => void handlePendingPromptEdit(entryId)}
-          onInsert={(entryId) => void props.onInsertPendingPrompt(entryId)}
-          onRemove={(entryId) => void props.onRemovePendingPrompt(entryId)}
-          onReorder={(entryIds, draggedEntryId, targetEntryId) => void props.onReorderPendingPrompts(entryIds, draggedEntryId, targetEntryId)}
+          onInsert={handlePendingPromptInsert}
+          onRemove={handlePendingPromptRemove}
+          onReorder={handlePendingPromptReorder}
         />
       ) : null}
       {visibleSessionGoal ? (
@@ -645,13 +822,14 @@ export function ComposerPanel(props: {
         className={cn("composer-panel", isAttachmentDragOver && "attachment-drag-over")}
         data-workspace-input-owner="composer"
         onDragLeave={() => setIsAttachmentDragOver(false)}
-        onDragOver={handleComposerDragOver}
-        onDrop={handleComposerDrop}
+        onDragOver={isPendingPromptEditing ? undefined : handleComposerDragOver}
+        onDrop={isPendingPromptEditing ? undefined : handleComposerDrop}
         onKeyDownCapture={handleComposerContainerKeyDown}
       >
         <input
           accept={attachmentInputAccept}
           className="composer-attachment-input"
+          disabled={isPendingPromptEditing}
           multiple
           onChange={handleAttachmentInputChange}
           ref={attachmentFileInputRef}
@@ -665,7 +843,7 @@ export function ComposerPanel(props: {
               progresses={attachmentPreparation.progresses}
               onOpenMedia={setComposerMediaPlayer}
               onRemove={handleRemoveComposerAttachment}
-              onRetry={(attachmentId) => void attachmentPreparation.retry(attachmentId)}
+              onRetry={handleAttachmentRetry}
               resolveMediaSourceUrl={props.resolveMediaSourceUrl}
             />
             {attachmentPreparation.metadataOnlyCount > 0 ? (
@@ -678,7 +856,7 @@ export function ComposerPanel(props: {
             ) : null}
           </>
         ) : null}
-        {slashPanelVisible ? (
+        {slashPanelVisible && !isPendingPromptEditing ? (
           <ComposerSlashCommandPanel
             commands={visibleSlashCommands}
             highlightedIndex={Math.min(slashHighlightedIndex, visibleSlashCommands.length - 1)}
@@ -689,9 +867,10 @@ export function ComposerPanel(props: {
         ) : null}
         <Textarea
           aria-label={t("composer.aria.input")}
+          disabled={isPendingPromptEditing}
           onChange={(event) => handleDraftInputChange(event.currentTarget.value)}
           onKeyDown={handleComposerKeyDown}
-          onPaste={handleComposerPaste}
+          onPaste={isPendingPromptEditing ? undefined : handleComposerPaste}
           placeholder={placeholder}
           ref={composerTextareaRef}
           value={draftInput}
@@ -717,7 +896,7 @@ export function ComposerPanel(props: {
               draftKnowledgeSelection={draftSessionSettings.knowledgeSelection}
               onDraftKnowledgeSelectionChange={draftSessionSettings.setKnowledgeSelection}
               onOpenKnowledge={props.onOpenKnowledge}
-              onPick={openAttachmentPicker}
+              onPick={handleAttachmentPicker}
               onThinkingDisplayModeChange={props.onThinkingDisplayModeChange}
               onOpenGoal={() => void openGoalDialog()}
               onPlanModeChange={(enabled) => void handlePlanModeChange(enabled)}
@@ -777,7 +956,7 @@ export function ComposerPanel(props: {
             modelContextLimit={activeProviderModelSummary?.model.contextLimit ?? null}
             draftInput={draftInput}
             isConversationRunning={props.isConversationRunning}
-            sendBlocked={providerToolSettingsBlocked || attachmentPreparation.blocksSubmission}
+            sendBlocked={isPendingPromptEditing || providerToolSettingsBlocked || attachmentPreparation.blocksSubmission}
             onReasoningEffortChange={(value) => void handleReasoningEffortChange(value)}
             onSetSessionContextCompactionWindow={props.onSetSessionContextCompactionWindow}
             onSend={() => void handleComposerSend()}

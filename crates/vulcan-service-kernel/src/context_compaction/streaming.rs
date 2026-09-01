@@ -200,6 +200,9 @@ pub(crate) fn spawn_webui_context_compaction_task(
     trigger: String,
     plan: CompactionPlan,
     full_context_state: SessionConversationState,
+    media_projection: Arc<
+        dyn vulcan_agent_runtime::prompt_media_projection::PromptMediaProjectionRuntime,
+    >,
     retained_from_seq: Seq,
     model_target: PromptCompactionModelTarget,
 ) -> Result<(), String> {
@@ -209,6 +212,7 @@ pub(crate) fn spawn_webui_context_compaction_task(
         session_id,
         plan.clone(),
         full_context_state,
+        media_projection,
         None,
         model_target,
     );

@@ -918,6 +918,9 @@ impl PublicAiRuntime {
             ));
         }
         Ok(ResolvedProviderToolTarget {
+            // Observing an existing task never reads new inputs or substitutes the current media policy.
+            // 观察既有任务绝不读取新输入，也不替换为当前媒体策略。
+            media_delivery_policy: None,
             connection,
             entry,
             target,

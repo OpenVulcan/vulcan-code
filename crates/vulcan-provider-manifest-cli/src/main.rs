@@ -806,12 +806,16 @@ fn cmd_fixture_check(args: &[String]) -> Result<(), CliError> {
         .enable_all()
         .build()
         .map_err(|error| format!("fixture runtime could not start: {error}"))?;
-    let executable = runtime.block_on(
+    // fixtureSuite is pinned before first poll so the expanded media execution future never occupies the CLI main stack.
+    // fixtureSuite 在首次轮询前固定到堆上，避免扩展后的媒体执行Future占用CLI主线程栈。
+    let fixture_suite = Box::pin(async {
         vulcan_provider_adapters::provider_manifest_fixture::execute_provider_manifest_fixture_suite(
             &fixtures_directory,
             &directory,
-        ),
-    )?;
+        )
+        .await
+    });
+    let executable = runtime.block_on(fixture_suite)?;
     for result in &executable {
         println!(
             "{}: executed (output {}, {} HTTP interaction(s))",

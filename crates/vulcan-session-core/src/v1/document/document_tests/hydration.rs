@@ -418,6 +418,7 @@ fn rebuild_rejects_multiple_open_turns() {
             1,
             EventVisibility::Provider,
             EventBody::UserInput(UserInputEvent {
+                parameters: None,
                 input_id: PendingInputId::try_new(1).unwrap(),
                 client_action_id: ClientActionId::try_new("multiple-open-turn-a").unwrap(),
                 input_source: UserInputSource::Root,
@@ -430,6 +431,7 @@ fn rebuild_rejects_multiple_open_turns() {
             2,
             EventVisibility::Provider,
             EventBody::UserInput(UserInputEvent {
+                parameters: None,
                 input_id: PendingInputId::try_new(2).unwrap(),
                 client_action_id: ClientActionId::try_new("multiple-open-turn-b").unwrap(),
                 input_source: UserInputSource::Root,
@@ -454,6 +456,7 @@ fn rebuild_rejects_multiple_open_turns() {
 #[test]
 fn rebuild_rejects_bad_turn_closure_sequences() {
     let user_input = EventBody::UserInput(UserInputEvent {
+        parameters: None,
         input_id: PendingInputId::try_new(1).unwrap(),
         client_action_id: ClientActionId::try_new("turn-closure-root").unwrap(),
         input_source: UserInputSource::Root,
@@ -514,6 +517,7 @@ fn rebuild_rejects_bad_turn_closure_sequences() {
             1,
             EventVisibility::UiOnly,
             EventBody::UserInput(UserInputEvent {
+                parameters: None,
                 input_id: PendingInputId::try_new(2).unwrap(),
                 client_action_id: ClientActionId::try_new("turn-closure-after-stats").unwrap(),
                 input_source: UserInputSource::PendingInTurn,
@@ -548,6 +552,7 @@ fn rebuild_rejects_invalid_group_structures() {
             1,
             EventVisibility::Provider,
             EventBody::UserInput(UserInputEvent {
+                parameters: None,
                 input_id: PendingInputId::try_new(1).unwrap(),
                 client_action_id: ClientActionId::try_new("interleaved-root").unwrap(),
                 input_source: UserInputSource::Root,
@@ -579,6 +584,7 @@ fn rebuild_rejects_invalid_group_structures() {
             1,
             EventVisibility::Provider,
             EventBody::UserInput(UserInputEvent {
+                parameters: None,
                 input_id: PendingInputId::try_new(1).unwrap(),
                 client_action_id: ClientActionId::try_new("spans-turns-root-a").unwrap(),
                 input_source: UserInputSource::Root,
@@ -594,6 +600,7 @@ fn rebuild_rejects_invalid_group_structures() {
             2,
             EventVisibility::Provider,
             EventBody::UserInput(UserInputEvent {
+                parameters: None,
                 input_id: PendingInputId::try_new(2).unwrap(),
                 client_action_id: ClientActionId::try_new("spans-turns-root-b").unwrap(),
                 input_source: UserInputSource::Root,
@@ -620,6 +627,7 @@ fn rebuild_rejects_invalid_group_structures() {
             1,
             EventVisibility::Provider,
             EventBody::UserInput(UserInputEvent {
+                parameters: None,
                 input_id: PendingInputId::try_new(1).unwrap(),
                 client_action_id: ClientActionId::try_new("reopened-root").unwrap(),
                 input_source: UserInputSource::Root,

@@ -32,9 +32,11 @@ const ATTACHMENT_TIMESTAMP_FORMAT: &[time::format_description::FormatItem<'stati
     format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
 
 mod cleanup;
+mod draft_media;
 mod lifecycle;
 mod media_references;
 mod replay;
+mod source_hold;
 mod storage;
 #[cfg(test)]
 mod tests;
@@ -42,6 +44,11 @@ mod timestamp;
 mod types;
 
 pub use cleanup::{execute_attachment_cleanup, preview_attachment_cleanup};
+pub use draft_media::{
+    AttachmentDraftMediaDelivery, AttachmentDraftMediaOrigin, complete_attachment_draft_upload,
+    load_attachment_draft_media, record_attachment_draft_media, record_attachment_draft_upload,
+    register_attachment_draft_upload_handoff, retain_draft_attachment_source,
+};
 pub use lifecycle::{
     acquire_staged_attachment_ref, discard_unreferenced_staged_attachment,
     promote_staged_attachment_to_message_ref, reconcile_staged_attachment_ref_scope,
@@ -52,6 +59,10 @@ pub use replay::{
     load_attachment_asset_record_for_attachment, resolve_attachment_replay_status,
     resolve_indexed_attachment_resource, resolve_owned_attachment_resource,
 };
+pub(crate) use replay::{
+    resolve_owned_attachment_resource_metadata, resolve_owned_attachment_resource_metadata_for_kind,
+};
+pub use source_hold::AttachmentSourceHold;
 pub use timestamp::{current_attachment_timestamp_parts, parse_attachment_cleanup_cutoff_date};
 pub use types::{
     AttachmentAssetRecord, AttachmentCleanupPreview, AttachmentCleanupReport,

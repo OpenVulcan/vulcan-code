@@ -43,6 +43,7 @@ import { resolveEmptyWorkbenchDraftRoute } from "@/components/workspace/workbenc
 import { MediaUploadProgressPanel } from "@/components/workspace/media-upload-progress-panel";
 import { ComposerMediaUploadProgressContext } from "@/components/composer/composer-media-upload-context";
 import {
+  isConversationUploadFailure,
   mediaUploadProgressKey,
   reduceMediaUploadProgress,
 } from "@/components/workspace/media-upload-progress-state";
@@ -1616,6 +1617,14 @@ export function WorkbenchLayout(props: {
         }
         const progress = envelope.delta.payload;
         setMediaUploadProgresses((current) => reduceMediaUploadProgress(current, progress));
+        // Accepted failed conversation uploads close the progress row but retain a visible attachment notice.
+        // 已接纳的会话上传失败会关闭进度行，同时保留可见附件通知。
+        if (isConversationUploadFailure(progress)) {
+          toast.error(i18n.t("conversation.submission.uploadFailed"), {
+            id: `media-upload-failure:${mediaUploadProgressKey(progress)}`,
+            description: `${progress.fileName}\n${i18n.t("conversation.submission.uploadFailedAttachmentKept")}${progress.error ? `\n${progress.error}` : ""}`,
+          });
+        }
         acceptedEnvelopes.push(envelope);
         nextAcceptedRevision = envelope.generation;
         continue;
@@ -1820,6 +1829,7 @@ export function WorkbenchLayout(props: {
     acceptProjectRemovalTransition,
     props.onWorkbenchDeltaConsumed,
     props.workbenchDelta,
+    i18n.t,
   ]);
 
   // Complete draft materialization only after the authoritative sidebar row becomes visible.

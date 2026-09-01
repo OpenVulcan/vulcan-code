@@ -540,7 +540,13 @@ pub async fn execute_provider_manifest_fixture_suite(
     }
     let mut results = Vec::with_capacity(fixture_paths.len());
     for fixture_path in fixture_paths {
-        results.push(execute_fixture_document(fixture_path.as_path(), manifests_directory).await?);
+        // fixtureFuture keeps each expanded execution state off the fixture-check caller stack.
+        // fixtureFuture 使每份扩展执行状态脱离fixture-check调用栈。
+        let fixture_future = Box::pin(execute_fixture_document(
+            fixture_path.as_path(),
+            manifests_directory,
+        ));
+        results.push(fixture_future.await?);
     }
     Ok(results)
 }
@@ -571,8 +577,14 @@ async fn execute_fixture_document(
                 .map_err(|error| {
                     format!("Fixture `{}` is invalid: {error}", fixture_path.display())
                 })?;
-            execute_provider_manifest_execution_fixture(fixture, fixture_path, manifests_directory)
-                .await
+            // executionFuture isolates the full upload/async execution state from the document dispatcher.
+            // executionFuture 将完整上传/异步执行状态与文档分派器隔离。
+            Box::pin(execute_provider_manifest_execution_fixture(
+                fixture,
+                fixture_path,
+                manifests_directory,
+            ))
+            .await
         }
         PROFILE_FIXTURE_SCHEMA_VERSION => {
             let fixture: ProviderManifestProfileFixture = serde_json::from_value(document)
@@ -671,8 +683,10 @@ async fn execute_provider_manifest_execution_fixture(
                 entry.id
             )
         })?;
-        crate::upload_engine::materialize_operation_uploads(
+        Box::pin(crate::upload_engine::materialize_operation_uploads(
             crate::upload_engine::OperationUploadExecutionContext {
+                media_sources: &[],
+                media_delivery_policy: crate::MediaDeliveryPolicy::default(),
                 http: &http,
                 entry: &entry,
                 secret: &secret,
@@ -686,7 +700,7 @@ async fn execute_provider_manifest_execution_fixture(
             },
             &operation,
             canonical_arguments,
-        )
+        ))
         .await?
     };
     let execution: Result<FixtureExecutionOutcome, String> = async {
@@ -697,7 +711,7 @@ async fn execute_provider_manifest_execution_fixture(
                     operation.operation_id
                 )
             })?;
-            let started = crate::provider_tool_execution::start_provider_async_task(
+            let started = Box::pin(crate::provider_tool_execution::start_provider_async_task(
                 crate::provider_tool_execution::ProviderAsyncExecutionContext {
                     http: &http,
                     entry: &entry,
@@ -708,23 +722,23 @@ async fn execute_provider_manifest_execution_fixture(
                 },
                 arguments,
                 Some(async_execution),
-            )
+            ))
             .await?;
             let recovery = started.recovery.clone();
             if fixture.cancel_after_start {
-                crate::provider_tool_execution::cancel_provider_async_task(
+                Box::pin(crate::provider_tool_execution::cancel_provider_async_task(
                     &http,
                     &entry,
                     &target,
                     started.provider_task_id.as_str(),
                     &secret,
                     Some(async_execution),
-                )
+                ))
                 .await?;
                 return Ok(FixtureExecutionOutcome::Cancelled);
             }
             for _ in 0..fixture.interactions.len() {
-                match crate::provider_tool_execution::poll_provider_async_task(
+                match Box::pin(crate::provider_tool_execution::poll_provider_async_task(
                     crate::provider_tool_execution::ProviderAsyncExecutionContext {
                         http: &http,
                         entry: &entry,
@@ -736,7 +750,7 @@ async fn execute_provider_manifest_execution_fixture(
                     started.provider_task_id.as_str(),
                     &recovery,
                     Some(async_execution),
-                )
+                ))
                 .await?
                 {
                     ProviderAsyncTaskPoll::Pending(_) => continue,
@@ -753,7 +767,7 @@ async fn execute_provider_manifest_execution_fixture(
                 "Fixture task did not reach a terminal result.",
             ))
         } else {
-            crate::provider_tool_execution::execute_provider_tool(
+            Box::pin(crate::provider_tool_execution::execute_provider_tool(
                 &http,
                 &entry,
                 &target,
@@ -761,7 +775,7 @@ async fn execute_provider_manifest_execution_fixture(
                 &response_profiles,
                 arguments,
                 &secret,
-            )
+            ))
             .await
             .map(FixtureExecutionOutcome::Output)
         }

@@ -1147,6 +1147,14 @@ impl PublicAiRuntime {
         runtime_configuration: &PersistedAiConfiguration,
         system_manifests: Arc<crate::provider_manifest::ResolvedProviderCatalog>,
     ) -> Result<(), String> {
+        // Reject invalid media settings before acquiring mutation ownership or publishing catalogs.
+        // 在获取修改所有权或发布目录之前拒绝无效媒体设置。
+        published_configuration
+            .effective_media_delivery_policy()
+            .validate()?;
+        runtime_configuration
+            .effective_media_delivery_policy()
+            .validate()?;
         let _mutation_guard = self
             .catalog_mutation_lock
             .lock()

@@ -561,7 +561,7 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
         } => {
             let result = match event.v1_lifecycle.as_ref() {
                 Some(ProviderV1LifecycleFacts::ExcludedNonSession) => {
-                    Ok(candidate.into_excluded_non_session())
+                    candidate.into_excluded_non_session()
                 }
                 Some(ProviderV1LifecycleFacts::RequestPrepared(facts)) => provider_v1_sink
                     .prepare_request(facts.clone(), candidate)

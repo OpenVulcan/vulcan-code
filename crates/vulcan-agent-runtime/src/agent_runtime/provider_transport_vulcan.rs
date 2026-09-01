@@ -25,6 +25,7 @@ use vulcan_provider_adapters::{
 use vulcan_session_core::v1::context::LockedBaselineProjection;
 
 mod accumulator;
+mod capture_media;
 mod generated_resources;
 mod input_resources;
 mod message_projection;
@@ -87,6 +88,9 @@ pub(crate) fn execute_vulcan_public_stream(
     resolved: ResolvedPublicAiExecution,
     reasoning_effort: Option<ReasoningEffort>,
 ) -> ProviderDeltaStream {
+    // Share the same resolved execution with V1 preparation instead of reconstructing a second route or policy.
+    // 与V1准备共享同一已解析执行，不重建第二条路线或策略。
+    let resolved = std::sync::Arc::new(resolved);
     let provider_request_trace_enabled = request.provider_request_trace_enabled;
     let cache_scope_id = request.session_id.to_string();
     let workspace_path = request.workspace_path.clone();
@@ -119,12 +123,12 @@ pub(crate) fn execute_vulcan_public_stream(
                 prompt_cache.clone(),
                 reasoning_effort,
                 resolved.overrides.model_parameters.clone(),
-                resolved.model.capabilities.input_resources.clone(),
                 resolved.model.capabilities.output_resources.clone(),
                 workspace_path.clone(),
                 live_sender,
                 dynamic_prompt_layers.clone(),
                 locked_baseline.clone(),
+                std::sync::Arc::clone(&resolved),
             )
         },
         "Vulcan 公共契约",
@@ -148,7 +152,13 @@ pub(crate) fn capture_vulcan_public_stream(
     request: ProviderTransportExecutionRequest,
     resolved: ResolvedPublicAiExecution,
     reasoning_effort: Option<ReasoningEffort>,
+    media_projection: Option<
+        std::sync::Arc<dyn crate::prompt_media_projection::PromptMediaProjectionRuntime>,
+    >,
 ) -> ProviderDeltaStream {
+    // Capture retains the same explicit execution even though it does not commit a V1 request.
+    // 即使捕获不提交V1请求，也保留同一明确执行。
+    let resolved = std::sync::Arc::new(resolved);
     let cache_scope_id = request.session_id.to_string();
     let workspace_path = request.workspace_path.clone();
     let output_token_limit = resolved_public_output_token_limit(
@@ -168,26 +178,34 @@ pub(crate) fn capture_vulcan_public_stream(
             false,
             resolved.route.clone(),
             resolved.model.id.clone(),
-            cache_scope_id,
+            cache_scope_id.clone(),
             resolved.credential.clone(),
             resolved.client.clone(),
             provider_tool_definitions,
-            resolved.model.capabilities.provider_native_tools,
+            resolved.model.capabilities.provider_native_tools.clone(),
             output_token_limit,
             prompt_cache,
             reasoning_effort,
-            resolved.overrides.model_parameters,
-            resolved.model.capabilities.input_resources,
-            resolved.model.capabilities.output_resources,
+            resolved.overrides.model_parameters.clone(),
+            resolved.model.capabilities.output_resources.clone(),
             workspace_path,
             live_sender,
             prepared.dynamic_prompt_layers,
             prepared.locked_baseline,
+            std::sync::Arc::clone(&resolved),
         );
-        let public_request = adapter
+        let mut public_request = adapter
             .build_request(&prepared.core_snapshot, &controller_config)
             .await
             .map_err(|error| error.to_string())?;
+        capture_media::prepare_capture_user_media(
+            &mut public_request,
+            crate::agent_runtime::events::ProviderRequestMediaContext {
+                execution: std::sync::Arc::clone(&resolved),
+                session_scope_id: cache_scope_id,
+            },
+            media_projection.as_deref(),
+        ).await?;
         // secret is resolved at capture time so previews observe the same latest-revision boundary as execution.
         // secret 在捕获时解析，使预览与执行观察到相同的最新修订版边界。
         let secret = resolved
@@ -212,6 +230,9 @@ pub(crate) fn capture_vulcan_public_stream(
 /// 将 Vulcan 公共请求与事件桥接到宿主控制器。
 #[derive(Clone)]
 pub(crate) struct VulcanPublicContractAdapter {
+    /// Shared authority for the exact media policy and route used by host-owned V1 preparation.
+    /// 宿主V1准备用到的精确媒体策略与路线共享权威。
+    media_execution: std::sync::Arc<ResolvedPublicAiExecution>,
     /// Frozen system-setting decision for grouped request and raw-response tracing.
     /// 当前控制器运行期间冻结的分组请求与原始返回追踪系统设置决策。
     provider_request_trace_enabled: bool,
@@ -255,9 +276,6 @@ pub(crate) struct VulcanPublicContractAdapter {
     /// Validated model-specific values.
     /// 已校验模型独立参数值。
     model_parameters: std::collections::BTreeMap<String, ModelParameterValue>,
-    /// Resource kinds declared by the exact discovered model.
-    /// 精确发现模型声明的资源类别。
-    input_resources: Vec<ResourceKind>,
     /// Output resource kinds declared by the exact discovered model.
     /// 精确发现模型声明的输出资源类别。
     output_resources: Vec<ResourceKind>,
@@ -288,6 +306,8 @@ impl VulcanPublicContractAdapter {
     /// `provider_request_trace_enabled` 冻结持久化诊断开关；`route`、`credential` 与 `client`
     /// 标识精确执行路径；`tools` 是宿主工具定义；`output_token_limit`、`prompt_cache` 与
     /// `model_parameters` 在分派前解析；`live_sender` 将工具构造投影到 WebUI。
+    /// `media_execution` retains this exact resolved route, model, credential lease and media policy for V1 preparation.
+    /// `media_execution`为V1准备保留本精确已解析路线、模型、凭据租约和媒体策略。
     ///
     /// # Returns
     /// 返回值
@@ -306,12 +326,12 @@ impl VulcanPublicContractAdapter {
         prompt_cache: PromptCachePolicy,
         reasoning_effort: Option<ReasoningEffort>,
         model_parameters: std::collections::BTreeMap<String, ModelParameterValue>,
-        input_resources: Vec<ResourceKind>,
         output_resources: Vec<ResourceKind>,
         workspace_path: String,
         live_sender: ProviderLiveDeltaSender,
         dynamic_prompt_layers: CoreProviderPromptLayers,
         locked_baseline: LockedBaselineProjection,
+        media_execution: std::sync::Arc<ResolvedPublicAiExecution>,
     ) -> Self {
         // toolSources preserves exact source ownership before protocol projection removes host metadata.
         // toolSources 在协议投影移除宿主元数据前保留精确来源归属。
@@ -323,6 +343,7 @@ impl VulcanPublicContractAdapter {
         // publicTools 应用与独立远端压缩相同的路由绑定 Schema 投影。
         let public_tools = project_public_tool_definitions(&route, tools);
         Self {
+            media_execution,
             provider_request_trace_enabled,
             provider_api_trace_attempt_state: std::sync::Arc::new(std::sync::Mutex::new(
                 ProviderApiTraceAttemptState::default(),
@@ -339,7 +360,6 @@ impl VulcanPublicContractAdapter {
             prompt_cache,
             reasoning_effort,
             model_parameters,
-            input_resources,
             output_resources,
             workspace_path,
             live_sender,

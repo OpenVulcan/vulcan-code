@@ -33,6 +33,15 @@ pub fn record_staged_attachment(
         .iter_mut()
         .find(|record| record.asset_id == asset_id)
     {
+        if !existing_record.draft_media.is_empty()
+            && (existing_record.source_sha256 != attachment.source_sha256
+                || existing_record.byte_len != attachment.byte_len
+                || existing_record.mime_type != attachment.mime_type)
+        {
+            return Err(String::from(
+                "Staged attachment source cannot change while its original draft media intent is retained.",
+            ));
+        }
         existing_record.kind = attachment.kind.clone();
         existing_record.original_file_name = attachment.file_name.clone();
         existing_record.managed_path = attachment.local_path.clone();
@@ -66,6 +75,8 @@ pub fn record_staged_attachment(
             session_ids: Vec::new(),
             message_ids: Vec::new(),
             staging_refs: Vec::new(),
+            draft_media: BTreeMap::new(),
+            draft_media_handoffs: BTreeMap::new(),
             media_references: Vec::new(),
             deletion_pending: false,
             purged_at_local_text: None,
@@ -130,7 +141,7 @@ pub fn reconcile_staged_attachment_ref_scope(
     let transaction_lock = attachment_index_transaction_lock(&asset_root)?;
     // transactionGuard remains held through validation, reference replacement, orphan deletion, and publication.
     // transactionGuard 在校验、引用替换、孤儿删除与发布期间持续持有。
-    let _transaction_guard = transaction_lock.lock().map_err(|error| {
+    let transaction_guard = transaction_lock.lock().map_err(|error| {
         format!(
             "failed to lock attachment index transaction `{}`: {error}",
             asset_root.display()
@@ -150,6 +161,7 @@ pub fn reconcile_staged_attachment_ref_scope(
             }
             (false, true) => {
                 record.staging_refs.retain(|entry| entry != scope);
+                record.draft_media.remove(scope);
                 released_asset_ids.insert(record.asset_id.clone());
                 changed = true;
             }
@@ -161,8 +173,10 @@ pub fn reconcile_staged_attachment_ref_scope(
         .iter()
         .enumerate()
         .filter_map(|(index, record)| {
-            (released_asset_ids.contains(&record.asset_id) && !attachment_record_has_refs(record))
-                .then_some(index)
+            (released_asset_ids.contains(&record.asset_id)
+                && !attachment_record_has_refs(record)
+                && !transaction_guard.source_is_held(&record.asset_id))
+            .then_some(index)
         })
         .collect::<Vec<_>>();
     let mut persisted_during_discard = false;
@@ -239,6 +253,9 @@ pub fn promote_staged_attachment_to_message_ref(
             record
                 .staging_refs
                 .retain(|scope| !released_staging_scopes.contains(scope.as_str()));
+            record
+                .draft_media
+                .retain(|scope, _| !released_staging_scopes.contains(scope.as_str()));
             if record.staging_refs.len() != previous_len {
                 changed = true;
             }
@@ -271,7 +288,7 @@ pub fn discard_unreferenced_staged_attachment(
     let transaction_lock = attachment_index_transaction_lock(&asset_root)?;
     // transaction_guard prevents a concurrent reference acquisition after the unreferenced check.
     // transaction_guard 防止并发引用在无引用检查之后被新增。
-    let _transaction_guard = transaction_lock.lock().map_err(|error| {
+    let transaction_guard = transaction_lock.lock().map_err(|error| {
         format!(
             "failed to lock attachment index transaction `{}`: {error}",
             asset_root.display()
@@ -285,7 +302,9 @@ pub fn discard_unreferenced_staged_attachment(
     else {
         return Ok(false);
     };
-    if attachment_record_has_refs(&document.assets[index]) {
+    if attachment_record_has_refs(&document.assets[index])
+        || transaction_guard.source_is_held(asset_id)
+    {
         return Ok(false);
     }
     discard_attachment_record_at(&asset_root, &mut document, index)?;
@@ -310,7 +329,7 @@ pub(super) fn update_staged_attachment_refs(
     let transaction_lock = attachment_index_transaction_lock(&asset_root)?;
     // transaction_guard spans missing-record validation, lease mutation, deletion, and persistence.
     // transaction_guard 覆盖缺失记录校验、租约变更、删除与持久化。
-    let _transaction_guard = transaction_lock.lock().map_err(|error| {
+    let transaction_guard = transaction_lock.lock().map_err(|error| {
         format!(
             "failed to lock attachment index transaction `{}`: {error}",
             asset_root.display()
@@ -342,6 +361,7 @@ pub(super) fn update_staged_attachment_refs(
         } else {
             let previous_len = record.staging_refs.len();
             record.staging_refs.retain(|existing| existing != scope);
+            record.draft_media.remove(scope);
             if record.staging_refs.len() != previous_len {
                 changed = true;
             }
@@ -354,8 +374,10 @@ pub(super) fn update_staged_attachment_refs(
             .iter()
             .enumerate()
             .filter_map(|(index, record)| {
-                (asset_ids.contains(&record.asset_id) && !attachment_record_has_refs(record))
-                    .then_some(index)
+                (asset_ids.contains(&record.asset_id)
+                    && !attachment_record_has_refs(record)
+                    && !transaction_guard.source_is_held(&record.asset_id))
+                .then_some(index)
             })
             .collect::<Vec<_>>();
         for index in removable_indices.into_iter().rev() {

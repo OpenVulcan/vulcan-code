@@ -13,6 +13,8 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+mod user_prompt;
+
 use vulcan_session_core::v1::config::{MetadataDocument, PendingRequestConfig};
 use vulcan_session_core::v1::context::{
     CompactionNode, CompactionsDocument, LockedBaselineProjection, LockedBaselineSegmentInput,

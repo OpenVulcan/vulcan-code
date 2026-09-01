@@ -36,10 +36,37 @@ type SharedProviderRequestDurabilitySender =
 type SharedProviderRequestPreparationSender =
     Arc<Mutex<Option<oneshot::Sender<Result<PreparedPhysicalApi, String>>>>>;
 
+/// Immutable media execution captured by the selected adapter before V1 preparation.
+/// 在V1准备前由选中适配器捕获的不可变媒体执行。
+#[derive(Clone)]
+pub struct ProviderRequestMediaContext {
+    /// The exact execution already selected by this adapter, including policy, capabilities and credential lease.
+    /// 此适配器已经选择的精确执行，包含策略、能力及凭据租约。
+    pub execution: Arc<vulcan_provider_adapters::ResolvedPublicAiExecution>,
+    /// Original session scope retained for upload contracts without reading mutable global selection.
+    /// 上传契约保留的原会话作用域，不读取可变全局选择。
+    pub session_scope_id: String,
+}
+
+impl std::fmt::Debug for ProviderRequestMediaContext {
+    /// Formats only non-secret identities into `formatter`; never prints credentials, route URLs or media.
+    /// 仅向`formatter`格式化非秘密身份，绝不打印凭据、路线URL或媒体。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProviderRequestMediaContext")
+            .field("model_id", &self.execution.model.id)
+            .field("session_scope_id", &self.session_scope_id)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Immutable transport candidate produced before the V1 session owner rebuilds the request.
-/// V1 会话所有者重建请求前产生的不可变传输候选。
+/// V1会话所有者重建请求前产生的不可变传输候选。
 #[derive(Debug, Clone)]
 pub struct ProviderRequestPreparationCandidate {
+    /// Frozen media execution for real session requests; state-only and excluded fixtures may omit it.
+    /// 真实会话请求的冻结媒体执行；仅状态和排除夹具可以省略。
+    pub media_context: Option<ProviderRequestMediaContext>,
     /// Candidate request assembled from pre-gate controller state; it is never dispatched directly.
     /// 从闸门前控制器状态组装的候选请求；该对象绝不被直接分派。
     pub exact_request: AiExecutionRequest,
@@ -98,25 +125,50 @@ impl ProviderRequestPreparationCandidate {
     ///
     /// # Returns
     /// 返回值
-    /// Returns an excluded permit with the candidate fields moved without reconstruction.
-    /// 返回一份排除许可，并原样移动候选字段且不执行重建。
-    pub fn into_excluded_non_session(self) -> PreparedPhysicalApi {
-        PreparedPhysicalApi::ExcludedNonSession {
+    /// Returns an excluded permit only when every resource already has provider-safe source semantics.
+    /// 仅当每项资源已经具备供应商安全来源语义时返回排除许可。
+    pub fn into_excluded_non_session(self) -> Result<PreparedPhysicalApi, String> {
+        let has_unprepared_resource = self
+            .exact_request
+            .resources
+            .iter()
+            .chain(self.exact_request.messages.iter().flat_map(|message| {
+                message.content.iter().filter_map(|item| match item {
+                    vulcan_ai_contract::ContentItem::Resource { resource } => Some(resource),
+                    _ => None,
+                })
+            }))
+            .any(non_session_resource_requires_prompt_owner);
+        if has_unprepared_resource {
+            return Err(String::from(
+                "A non-session Provider request contains an unprepared host resource; route it through the session media owner or an explicit AI extension pipeline.",
+            ));
+        }
+        Ok(PreparedPhysicalApi::ExcludedNonSession {
             exact_request: self.exact_request,
             controller_config: self.controller_config,
             controller_snapshot: self.controller_snapshot,
             request_snapshot: self.request_snapshot,
             context_budget: self.context_budget,
-        }
+        })
     }
+}
+
+/// Returns whether one resource still requires a session media owner or dedicated extension preparation.
+/// 返回一项资源是否仍需会话媒体owner或专用扩展准备。
+fn non_session_resource_requires_prompt_owner(
+    resource: &vulcan_ai_contract::ResourceReference,
+) -> bool {
+    resource.source_kind == vulcan_ai_contract::ResourceSourceKind::HostResolved
+        || resource.local_path.is_some()
 }
 
 /// Exact physical Provider request released by the unique preparation owner.
 /// 由唯一准备所有者放行的精确物理 Provider 请求。
 #[derive(Debug, Clone)]
 pub enum PreparedPhysicalApi {
-    /// A newer user selection requires rebuilding this undispatched candidate on the same logical turn.
-    /// 新的用户选择要求在同一逻辑回合内重建尚未派发的候选请求。
+    /// Newer session inputs or configuration require rebuilding this undispatched candidate on the same logical turn.
+    /// 较新的会话输入或配置要求在同一逻辑回合内重建尚未派发的候选请求。
     RequestConfigurationChanged,
     /// A V1 session request rebuilt from the durable event ledger and committed before dispatch.
     /// 从可靠事件账本重建并在分派前完成提交的 V1 会话请求。
@@ -659,4 +711,44 @@ pub enum ExecutionStreamEvent {
     /// Terminal execution report emitted exactly once at the end of the run.
     /// 在运行结束时恰好发出一次的最终执行报告。
     Finished(ExecutionRunReport),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Non-session permits accept only already prepared standard sources and reject every host-owned source.
+    /// 非会话许可仅接纳已经准备的标准来源，并拒绝全部宿主持有来源。
+    #[test]
+    fn non_session_resources_require_explicit_preparation() {
+        // resource builds one minimal reference whose source semantics are the only tested dimension.
+        // resource 构建一个最小引用，来源语义是唯一被测维度。
+        let resource = |source_kind, local_path| vulcan_ai_contract::ResourceReference {
+            id: String::from("resource"),
+            kind: vulcan_ai_contract::ResourceKind::Image,
+            media_type: Some(String::from("image/png")),
+            source_kind,
+            file_name: None,
+            image_detail: None,
+            resource_path: None,
+            local_path,
+            url: Some(String::from("https://safe.example/image.png")),
+        };
+        assert!(non_session_resource_requires_prompt_owner(&resource(
+            vulcan_ai_contract::ResourceSourceKind::HostResolved,
+            None,
+        )));
+        assert!(non_session_resource_requires_prompt_owner(&resource(
+            vulcan_ai_contract::ResourceSourceKind::RemoteUrl,
+            Some(String::from("C:/private/image.png")),
+        )));
+        assert!(!non_session_resource_requires_prompt_owner(&resource(
+            vulcan_ai_contract::ResourceSourceKind::RemoteUrl,
+            None,
+        )));
+        assert!(!non_session_resource_requires_prompt_owner(&resource(
+            vulcan_ai_contract::ResourceSourceKind::InlineData,
+            None,
+        )));
+    }
 }

@@ -8,6 +8,7 @@ pub mod anthropic;
 pub mod cohere;
 pub mod gemini;
 pub mod interactions;
+mod media_capabilities;
 pub mod openai;
 pub(crate) mod openai_stream;
 pub mod registry;
@@ -17,6 +18,7 @@ pub use anthropic::*;
 pub use cohere::*;
 pub use gemini::*;
 pub use interactions::*;
+pub use media_capabilities::protocol_profile_supports_media_source;
 pub use openai::*;
 pub use registry::*;
 pub use shared::*;
@@ -66,64 +68,12 @@ pub fn protocol_profile_supports_local_media_type(
     kind: ResourceKind,
     media_type: &str,
 ) -> bool {
-    // normalizedMediaType keeps aliases outside the protocol registry and compares exact encoder labels.
-    // normalizedMediaType 将别名处理留在协议注册表之外，并与编码器标签做精确比较。
-    let normalized_media_type = media_type.trim().to_ascii_lowercase();
-    match protocol_profile_id {
-        OPENAI_CHAT_PROFILE_ID => match kind {
-            ResourceKind::Image | ResourceKind::Video => true,
-            ResourceKind::Audio => matches!(
-                normalized_media_type.as_str(),
-                "audio/wav"
-                    | "audio/x-wav"
-                    | "audio/mpeg"
-                    | "audio/mp3"
-                    | "audio/aiff"
-                    | "audio/x-aiff"
-                    | "audio/aac"
-                    | "audio/ogg"
-                    | "audio/flac"
-                    | "audio/mp4"
-                    | "audio/m4a"
-                    | "audio/x-m4a"
-            ),
-            ResourceKind::File => false,
-        },
-        OPENAI_RESPONSES_PROFILE_ID | OPENAI_CODEX_RESPONSES_PROFILE_ID => {
-            kind == ResourceKind::Image
-        }
-        ANTHROPIC_MESSAGES_PROFILE_ID | CLAUDE_CODE_MESSAGES_PROFILE_ID => {
-            kind == ResourceKind::Image
-                && matches!(
-                    normalized_media_type.as_str(),
-                    "image/jpeg" | "image/png" | "image/gif" | "image/webp"
-                )
-        }
-        ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID => match kind {
-            ResourceKind::Image => matches!(
-                normalized_media_type.as_str(),
-                "image/jpeg" | "image/png" | "image/gif" | "image/webp"
-            ),
-            ResourceKind::Video => matches!(
-                normalized_media_type.as_str(),
-                "video/mp4"
-                    | "video/x-msvideo"
-                    | "video/quicktime"
-                    | "video/mov"
-                    | "video/x-matroska"
-            ),
-            ResourceKind::Audio | ResourceKind::File => false,
-        },
-        GEMINI_GENERATE_CONTENT_PROFILE_ID
-        | GEMINI_INTERACTIONS_PROFILE_ID
-        | GOOGLE_CODE_ASSIST_PROFILE_ID => {
-            matches!(
-                kind,
-                ResourceKind::Image | ResourceKind::Video | ResourceKind::Audio
-            )
-        }
-        _ => false,
-    }
+    protocol_profile_supports_media_source(
+        protocol_profile_id,
+        kind,
+        media_type,
+        vulcan_ai_contract::ResourceSourceKind::InlineData,
+    )
 }
 
 /// Rejects route-bound provider context before encoding through a different wire protocol.

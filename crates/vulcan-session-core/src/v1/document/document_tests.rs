@@ -20,6 +20,7 @@ mod selection;
 mod subagent;
 mod tools;
 mod turns;
+mod user_prompt;
 
 use super::*;
 use crate::v1::config::{

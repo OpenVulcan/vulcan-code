@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { mediaDeliverySettingsFixture } from "@/test-fixtures/media-delivery"
 
 import {
   accountActuallyDiscoveredModel,
@@ -100,6 +101,7 @@ function snapshotFixture(): PublicAiSettingsSnapshot {
   const betaOnly = modelFixture("beta/chat", "Beta Only", 32_000)
   return {
     usageRefreshIntervalSeconds: 300,
+    mediaDelivery: mediaDeliverySettingsFixture(),
     contextCompactionWindowNodes: {
       nodes: [
         { id: "compression-window-1", tokens: 200_000 },

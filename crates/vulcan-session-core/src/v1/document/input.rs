@@ -16,12 +16,41 @@ use crate::v1::event::{
     UserInputEvent, UserInputSource,
 };
 use crate::v1::ids::{ClientActionId, PendingInputId, ResourceId, Seq, TurnId};
+use crate::v1::user_prompt::initial_preparation_matches;
 use std::collections::{BTreeMap, BTreeSet};
+
+/// Validates exact ordered staged `attachment_ids` against `resource_ids`; absence never invents old asset lineage.
+/// 根据`resource_ids`校验精确有序暂存`attachment_ids`；缺失绝不虚构旧资产来源。
+/// Returns an explicit domain error for mismatched counts or invalid opaque identifiers.
+/// 数量不匹配或不透明标识无效时返回明确领域错误。
+fn validate_draft_attachment_ids(
+    attachment_ids: &[Option<String>],
+    resource_ids: &[ResourceId],
+) -> Result<(), DomainError> {
+    if (!attachment_ids.is_empty() && attachment_ids.len() != resource_ids.len())
+        || attachment_ids.iter().flatten().any(|id| {
+            id.is_empty()
+                || id.trim() != id
+                || id.len() > 1024
+                || id.chars().any(|character| {
+                    character.is_control() || matches!(character, '/' | '\\' | ':')
+                })
+        })
+    {
+        return Err(DomainError::InvalidQueuedInputOrder {
+            field: "draft_staged_attachment_identity",
+        });
+    }
+    Ok(())
+}
 
 /// One client-authored input carrying its durable RPC idempotency identity.
 /// 一条携带持久化 RPC 幂等身份的客户端输入。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientInputSubmission {
+    /// Optional host-proven earlier preparation; omission creates fresh pending parameters only at new input admission.
+    /// 可选宿主已证明更早准备；仅在新输入准入时将省略值创建为新的待准备参数。
+    pub parameters: Option<crate::v1::UserPromptParameters>,
     /// Stable external idempotency identity supplied by the client.
     /// 客户端提供的稳定外部幂等身份。
     pub client_action_id: ClientActionId,
@@ -53,10 +82,38 @@ impl ClientInputSubmission {
         resource_ids: Vec<ResourceId>,
     ) -> Self {
         Self {
+            parameters: None,
             client_action_id,
             text: text.into(),
             resource_ids,
         }
+    }
+
+    /// Attaches host-proven `parameters` to this exact ordered input; returns an error before admission if ownership differs.
+    /// 将宿主已证明`parameters`附着到本精确有序输入；归属不符时在准入前返回错误。
+    pub fn with_parameters(
+        mut self,
+        parameters: crate::v1::UserPromptParameters,
+    ) -> Result<Self, DomainError> {
+        parameters.validate_pending(&self.resource_ids)?;
+        self.parameters = Some(parameters);
+        Ok(self)
+    }
+}
+
+/// Resolves explicitly optional `parameters` for a new input with ordered `resource_ids`; never used to hydrate old metadata.
+/// 为有序`resource_ids`的新输入解析明确可选的`parameters`；绝不用于补水旧元数据。
+pub(super) fn new_input_parameters(
+    resource_ids: &[ResourceId],
+    parameters: Option<crate::v1::UserPromptParameters>,
+) -> Result<Option<crate::v1::UserPromptParameters>, DomainError> {
+    if let Some(parameters) = parameters {
+        parameters.validate_pending(resource_ids)?;
+        Ok(Some(parameters))
+    } else {
+        Ok(crate::v1::UserPromptParameters::for_new_resources(
+            resource_ids,
+        ))
     }
 }
 
@@ -225,6 +282,48 @@ pub(super) fn validate_client_action_history(
     metadata: &MetadataDocument,
     events: &[ConversationEvent],
 ) -> Result<(), DomainError> {
+    if !metadata.input_state.draft.resource_sources.is_empty()
+        && (metadata.input_state.draft.resource_sources.len()
+            != metadata.input_state.draft.resource_ids.len()
+            || metadata
+                .input_state
+                .draft
+                .resource_sources
+                .iter()
+                .enumerate()
+                .any(|(position, source)| {
+                    source.is_some()
+                        && metadata
+                            .input_state
+                            .draft
+                            .staged_attachment_ids
+                            .get(position)
+                            .is_some_and(Option::is_some)
+                }))
+    {
+        return Err(DomainError::InvalidQueuedInputOrder {
+            field: "draft_resource_sources",
+        });
+    }
+    validate_draft_attachment_ids(
+        &metadata.input_state.draft.staged_attachment_ids,
+        &metadata.input_state.draft.resource_ids,
+    )?;
+    // Validate persisted input parameters without synthesizing new intent for legacy absent data.
+    // 校验持久输入参数，不为缺失旧数据合成新意图。
+    if let Some(parameters) = &metadata.input_state.draft.parameters {
+        parameters.validate_pending(&metadata.input_state.draft.resource_ids)?;
+    }
+    for pending in &metadata.input_state.pending_in_turn_inputs {
+        if let Some(parameters) = &pending.parameters {
+            parameters.validate_pending(&pending.resource_ids)?;
+        }
+    }
+    for queued in &metadata.input_state.queued_inputs {
+        if let Some(parameters) = &queued.parameters {
+            parameters.validate_pending(&queued.resource_ids)?;
+        }
+    }
     let mut metadata_ids = BTreeSet::new();
     for client_action_id in metadata
         .input_state
@@ -258,6 +357,9 @@ pub(super) fn validate_client_action_history(
     for event in events {
         if let EventBody::UserInput(input) = &event.event {
             validate_user_input(input.text.clone(), &input.resource_ids)?;
+            if let Some(parameters) = &input.parameters {
+                parameters.validate(&input.resource_ids)?;
+            }
         }
         if let Some(client_action_id) = event_client_action_id(event) {
             if metadata_ids.contains(client_action_id) {
@@ -358,6 +460,9 @@ pub(super) fn validate_queued_input_resolution_history(
             continue;
         };
         validate_user_input(resolution.text.clone(), &resolution.resource_ids)?;
+        if let Some(parameters) = &resolution.parameters {
+            parameters.validate_pending(&resolution.resource_ids)?;
+        }
         if event.visibility != EventVisibility::UiOnly {
             return Err(DomainError::InvalidQueuedInputOrder {
                 field: "resolution_event_shape",
@@ -420,7 +525,11 @@ pub(super) fn validate_queued_input_resolution_history(
                         && draft_identity.client_action_id == resolution.client_action_id
                         && draft_identity.input_id == resolution.input_id
                         && metadata.input_state.draft.text == resolution.text
-                        && metadata.input_state.draft.resource_ids == resolution.resource_ids;
+                        && metadata.input_state.draft.resource_ids == resolution.resource_ids
+                        && initial_preparation_matches(
+                            metadata.input_state.draft.parameters.as_ref(),
+                            resolution.parameters.as_ref(),
+                        );
                     if !exact_moved_draft {
                         return Err(DomainError::InvalidQueuedInputOrder {
                             field: "resolution_draft_identity_conflict",
@@ -454,6 +563,10 @@ pub(super) fn validate_queued_input_resolution_history(
                         if pending.turn_id != turn_id
                             || pending.text != resolution.text
                             || pending.resource_ids != resolution.resource_ids
+                            || !initial_preparation_matches(
+                                pending.parameters.as_ref(),
+                                resolution.parameters.as_ref(),
+                            )
                             || exact_pending
                         {
                             return Err(DomainError::InvalidQueuedInputOrder {
@@ -479,6 +592,10 @@ pub(super) fn validate_queued_input_resolution_history(
                             || input.input_source != UserInputSource::PendingInTurn
                             || input.text != resolution.text
                             || input.resource_ids != resolution.resource_ids
+                            || !initial_preparation_matches(
+                                input.parameters.as_ref(),
+                                resolution.parameters.as_ref(),
+                            )
                             || exact_streamed
                         {
                             return Err(DomainError::InvalidQueuedInputOrder {
@@ -521,7 +638,11 @@ pub(super) fn validate_queued_input_resolution_history(
             && !(draft_identity.client_action_id == resolution.client_action_id
                 && draft_identity.input_id == resolution.input_id
                 && metadata.input_state.draft.text == resolution.text
-                && metadata.input_state.draft.resource_ids == resolution.resource_ids)
+                && metadata.input_state.draft.resource_ids == resolution.resource_ids
+                && initial_preparation_matches(
+                    metadata.input_state.draft.parameters.as_ref(),
+                    resolution.parameters.as_ref(),
+                ))
         {
             return Err(DomainError::InvalidQueuedInputOrder {
                 field: "resolution_draft_identity_conflict",
@@ -534,6 +655,186 @@ pub(super) fn validate_queued_input_resolution_history(
 // Keep all mutations on the single authoritative document instance.
 // 所有修改仍作用于唯一权威文档实例。
 impl SessionDocument {
+    /// Reads the exact accepted input for `client_action_id` across its declared queue, pending and event lifecycle.
+    /// 沿已声明的队列、待处理及事件生命周期读取`client_action_id`对应的精确已接纳输入。
+    /// Returns immutable input facts, including current prompt parameters; never reads the mutable composer draft or guesses the latest input.
+    /// 返回不可变输入事实及当前提示词参数；绝不读取可变输入区草稿或猜测最近输入。
+    pub fn client_input_for_action(
+        &self,
+        client_action_id: &ClientActionId,
+    ) -> Result<Option<ClientInputSubmission>, DomainError> {
+        // A promoted input can have a terminal queue receipt and one live owner with identical admission facts.
+        // 已提升输入可以同时拥有终结队列回执及一个具有相同准入事实的活动所有者。
+        let mut resolved: Option<(PendingInputId, ClientInputSubmission)> = None;
+        // The declared lifecycle permits one live owner and at most one terminal queue receipt.
+        // 已声明生命周期允许一个活动所有者及至多一个终结队列回执。
+        let mut live_seen = false;
+        // A second receipt is corruption, not another candidate source to silently prefer.
+        // 第二个回执是损坏，而非另一个可静默优先的候选来源。
+        let mut receipt_seen = false;
+        // Merge only exact lifecycle records; conflicting identities or proofs are explicit invariant failures.
+        // 仅合并精确生命周期记录；身份或证明冲突是显式不变量失败。
+        let mut retain = |input_id: PendingInputId,
+                          text: &str,
+                          resource_ids: &[ResourceId],
+                          parameters: Option<&crate::v1::UserPromptParameters>,
+                          terminal_receipt: bool|
+         -> Result<(), DomainError> {
+            // State locations are explicit protocol variants, not guessed alternative field paths.
+            // 状态位置是显式协议变体，而非猜测的替代字段路径。
+            let seen = if terminal_receipt {
+                &mut receipt_seen
+            } else {
+                &mut live_seen
+            };
+            if std::mem::replace(seen, true) {
+                return Err(DomainError::InvalidQueuedInputOrder {
+                    field: "duplicate_client_input_source",
+                });
+            }
+            if let Some(parameters) = parameters {
+                parameters.validate(resource_ids)?;
+            }
+            if let Some((existing_id, existing)) = &resolved {
+                if *existing_id != input_id
+                    || existing.text != text
+                    || existing.resource_ids != resource_ids
+                    || !initial_preparation_matches(existing.parameters.as_ref(), parameters)
+                {
+                    return Err(DomainError::InvalidQueuedInputOrder {
+                        field: "client_input_source_conflict",
+                    });
+                }
+                // A stream owner's later frozen result adds real first-request facts without replacing its immutable admission proof.
+                // 入流所有者后续冻结结果增加真实首次请求事实，但不替换不可变准入证明。
+                if !parameters.is_some_and(|parameters| {
+                    matches!(
+                        parameters.media_delivery,
+                        crate::v1::UserPromptMediaDelivery::Frozen { .. }
+                            | crate::v1::UserPromptMediaDelivery::Preparing { .. }
+                    )
+                }) {
+                    return Ok(());
+                }
+            }
+            resolved = Some((
+                input_id,
+                ClientInputSubmission {
+                    client_action_id: client_action_id.clone(),
+                    text: text.to_owned(),
+                    resource_ids: resource_ids.to_vec(),
+                    parameters: parameters.cloned(),
+                },
+            ));
+            Ok(())
+        };
+        for queued in &self.metadata.input_state.queued_inputs {
+            if queued.client_action_id == *client_action_id {
+                retain(
+                    queued.input_id,
+                    &queued.text,
+                    &queued.resource_ids,
+                    queued.parameters.as_ref(),
+                    false,
+                )?;
+            }
+        }
+        for pending in &self.metadata.input_state.pending_in_turn_inputs {
+            if pending.client_action_id == *client_action_id {
+                retain(
+                    pending.input_id,
+                    &pending.text,
+                    &pending.resource_ids,
+                    pending.parameters.as_ref(),
+                    false,
+                )?;
+            }
+        }
+        for event in &self.events {
+            match &event.event {
+                EventBody::QueuedInputResolution(resolution)
+                    if resolution.client_action_id == *client_action_id =>
+                {
+                    retain(
+                        resolution.input_id,
+                        &resolution.text,
+                        &resolution.resource_ids,
+                        resolution.parameters.as_ref(),
+                        true,
+                    )?
+                }
+                EventBody::UserInput(input) if input.client_action_id == *client_action_id => {
+                    retain(
+                        input.input_id,
+                        &input.text,
+                        &input.resource_ids,
+                        input.parameters.as_ref(),
+                        false,
+                    )?
+                }
+                _ => {}
+            }
+        }
+        Ok(resolved.map(|(_, input)| input))
+    }
+
+    /// Resolves `source` in this exact document and verifies its position still names `resource_id`.
+    /// 在本精确文档解析`source`，并验证其位置仍指向`resource_id`。
+    /// Returns known preparation, explicit not-yet-prepared intent, or unknown history; contradictory resource references fail without substitution.
+    /// 返回已知准备、明确尚未准备意图或未知历史；矛盾资源引用失败，不进行替代。
+    pub fn user_prompt_resource_preparation(
+        &self,
+        source: &crate::v1::UserPromptResourceSource,
+        resource_id: ResourceId,
+    ) -> Result<crate::v1::UserPromptResourcePreparation, DomainError> {
+        use crate::v1::{UserPromptMediaDelivery, UserPromptResourcePreparation};
+        // Lookup is by immutable accepted input identity, never by repeated content or current composer text.
+        // 按不可变已接纳输入身份查询，绝不按重复内容或当前输入区正文查询。
+        let Some(input) = self.client_input_for_action(&source.client_action_id)? else {
+            return Ok(UserPromptResourcePreparation::Unproven);
+        };
+        if input.resource_ids.get(source.resource_position) != Some(&resource_id) {
+            return Err(crate::v1::user_prompt::invalid_prompt_media(
+                "source_resource_occurrence",
+            ));
+        }
+        // Old missing parameters remain unknown rather than gaining the new-intent constructor's semantics.
+        // 旧缺失参数保持未知，不获得新意图构造器的语义。
+        let Some(parameters) = input.parameters else {
+            return Ok(UserPromptResourcePreparation::Unproven);
+        };
+        if parameters
+            .unproven_resource_positions
+            .binary_search(&source.resource_position)
+            .is_ok()
+        {
+            return Ok(UserPromptResourcePreparation::Unproven);
+        }
+        match &parameters.media_delivery {
+            UserPromptMediaDelivery::Frozen { origin } => {
+                Ok(UserPromptResourcePreparation::Prepared(
+                    origin.resources[source.resource_position].clone(),
+                ))
+            }
+            UserPromptMediaDelivery::Pending | UserPromptMediaDelivery::Preparing { .. } => Ok(
+                match parameters.original_resource(source.resource_position) {
+                    Some(prepared) => UserPromptResourcePreparation::Prepared(prepared.clone()),
+                    None => {
+                        // A stale Pending event beyond its first API cannot gain new upload eligibility when copied.
+                        // 越过首次API的陈旧Pending事件被复制时不能取得新上传资格。
+                        let source_event = self.events.iter().find(|event| matches!(&event.event, EventBody::UserInput(input) if input.client_action_id == source.client_action_id));
+                        if source_event.is_some_and(|event| !self.preparing_user_prompt_media_seqs().contains(&event.seq()))
+                        || self.events.iter().any(|event| matches!(&event.event, EventBody::QueuedInputResolution(resolution) if resolution.client_action_id == source.client_action_id && resolution.resolution == QueuedInputResolutionKind::Removed)) {
+                        UserPromptResourcePreparation::Unproven
+                    } else {
+                        UserPromptResourcePreparation::Pending
+                    }
+                    }
+                },
+            ),
+        }
+    }
+
     /// Submits a root user prompt as a fresh turn.
     /// 以全新回合提交一条根用户提示词。
     pub fn submit_root_input(
@@ -542,13 +843,20 @@ impl SessionDocument {
         now_ms: i64,
     ) -> Result<IdempotentMutation<TurnId>, DomainError> {
         let ClientInputSubmission {
+            parameters,
             client_action_id,
             text,
             resource_ids,
         } = submission;
-        if let Some(existing_turn_id) =
-            self.existing_root_submission(&client_action_id, &text, &resource_ids)?
-        {
+        // New admission normalizes omission; persisted queue/history never uses this constructor.
+        // 新准入规范化省略值；持久队列及历史绝不使用此构造器。
+        let parameters = new_input_parameters(&resource_ids, parameters)?;
+        if let Some(existing_turn_id) = self.existing_root_submission(
+            &client_action_id,
+            &text,
+            &resource_ids,
+            parameters.as_ref(),
+        )? {
             return Ok(IdempotentMutation::Idempotent(existing_turn_id));
         }
         self.require_client_action_unused(&client_action_id)?;
@@ -605,6 +913,7 @@ impl SessionDocument {
             Some(turn_id),
             EventVisibility::Provider,
             EventBody::UserInput(UserInputEvent {
+                parameters,
                 client_action_id,
                 input_id,
                 input_source: UserInputSource::Root,
@@ -645,13 +954,20 @@ impl SessionDocument {
         now_ms: i64,
     ) -> Result<IdempotentMutation<EnqueueInputReceipt>, DomainError> {
         let ClientInputSubmission {
+            parameters,
             client_action_id,
             text,
             resource_ids,
         } = submission;
-        if let Some(existing_receipt) =
-            self.existing_enqueue_receipt(&client_action_id, &text, &resource_ids)?
-        {
+        // Freeze admission proof before this input waits behind another turn.
+        // 在本输入等待另一回合之前冻结准入证明。
+        let parameters = new_input_parameters(&resource_ids, parameters)?;
+        if let Some(existing_receipt) = self.existing_enqueue_receipt(
+            &client_action_id,
+            &text,
+            &resource_ids,
+            parameters.as_ref(),
+        )? {
             return Ok(IdempotentMutation::Idempotent(existing_receipt));
         }
         self.require_client_action_unused(&client_action_id)?;
@@ -697,6 +1013,7 @@ impl SessionDocument {
                 Some(scheduled_turn_id),
                 EventVisibility::Provider,
                 EventBody::UserInput(UserInputEvent {
+                    parameters,
                     client_action_id: client_action_id.clone(),
                     input_id,
                     input_source: UserInputSource::QueuedScheduled,
@@ -742,6 +1059,7 @@ impl SessionDocument {
         let mut staged_metadata = self.metadata.clone();
         consume_matching_draft(&mut staged_metadata, &text, &resource_ids);
         staged_metadata.input_state.queued_inputs.push(QueuedInput {
+            parameters,
             client_action_id: client_action_id.clone(),
             input_id,
             text,
@@ -776,18 +1094,129 @@ impl SessionDocument {
         resource_ids: Vec<ResourceId>,
         now_ms: i64,
     ) -> Result<IdempotentMutation<DraftMutationReceipt>, DomainError> {
-        validate_timestamp("updated_at_ms", now_ms)?;
-        let text = text.into();
-        if self.metadata.input_state.draft.text == text
-            && self.metadata.input_state.draft.resource_ids == resource_ids
+        // Existing callers edit resource-only drafts; unchanged occurrences retain their already-known lineage.
+        // 既有调用方编辑仅资源草稿；不变出现保留其已经知道的来源。
+        let attachment_ids = if self.metadata.input_state.draft.resource_ids == resource_ids {
+            self.metadata
+                .input_state
+                .draft
+                .staged_attachment_ids
+                .clone()
+        } else {
+            Vec::new()
+        };
+        self.set_draft_with_staged_attachments(text, resource_ids, attachment_ids, now_ms)
+    }
+
+    /// Replaces draft `text` and ordered `resource_ids` with host-verified per-occurrence `staged_attachment_ids` at `now_ms`.
+    /// 在`now_ms`以宿主已验证逐出现`staged_attachment_ids`替换草稿`text`及有序`resource_ids`。
+    /// Returns a durable mutation receipt; text-only edits retain preparation, while changed intentions clear it.
+    /// 返回可靠修改回执；仅正文编辑保留准备，变化意图清除准备。
+    pub fn set_draft_with_staged_attachments(
+        &mut self,
+        text: impl Into<String>,
+        resource_ids: Vec<ResourceId>,
+        staged_attachment_ids: Vec<Option<String>>,
+        now_ms: i64,
+    ) -> Result<IdempotentMutation<DraftMutationReceipt>, DomainError> {
+        // Existing callers retain source references only when they preserve the exact staged/resource occurrence sequence.
+        // 既有调用方只有保留精确暂存及资源出现序列时，才保留来源引用。
+        let sources = if self.metadata.input_state.draft.resource_ids == resource_ids
+            && (self.metadata.input_state.draft.staged_attachment_ids == staged_attachment_ids
+                || (self
+                    .metadata
+                    .input_state
+                    .draft
+                    .staged_attachment_ids
+                    .is_empty()
+                    && staged_attachment_ids.iter().all(Option::is_none)))
         {
+            self.metadata.input_state.draft.resource_sources.clone()
+        } else {
+            Vec::new()
+        };
+        self.set_draft_with_resource_sources(
+            text,
+            resource_ids,
+            staged_attachment_ids,
+            sources,
+            now_ms,
+        )
+    }
+
+    /// Replaces draft `text` and ordered `resource_ids` using explicit staged identities and accepted-input `resource_sources` at `now_ms`.
+    /// 在`now_ms`以显式暂存身份及已接纳输入`resource_sources`替换草稿`text`和有序`resource_ids`。
+    /// Returns an idempotent durable mutation, preserving source proof through reorder without matching content or guessing old origins.
+    /// 返回幂等可靠修改，通过重排保留来源证明，不匹配内容或猜测旧原身份。
+    pub fn set_draft_with_resource_sources(
+        &mut self,
+        text: impl Into<String>,
+        resource_ids: Vec<ResourceId>,
+        mut staged_attachment_ids: Vec<Option<String>>,
+        mut resource_sources: Vec<Option<crate::v1::UserPromptResourceSource>>,
+        now_ms: i64,
+    ) -> Result<IdempotentMutation<DraftMutationReceipt>, DomainError> {
+        validate_timestamp("updated_at_ms", now_ms)?;
+        validate_draft_attachment_ids(&staged_attachment_ids, &resource_ids)?;
+        if !resource_sources.is_empty() && resource_sources.len() != resource_ids.len() {
+            return Err(DomainError::InvalidQueuedInputOrder {
+                field: "draft_resource_sources",
+            });
+        }
+        if resource_sources.iter().all(Option::is_none) {
+            resource_sources.clear();
+        }
+        if staged_attachment_ids.iter().all(Option::is_none) {
+            staged_attachment_ids.clear();
+        }
+        // Identical content can be explicitly attached twice under different asset ids; do not collapse those intentions.
+        // 相同内容可用不同资产ID显式附加两次；不能合并这些意图。
+        let same_intentions = self.metadata.input_state.draft.resource_ids == resource_ids
+            && self.metadata.input_state.draft.staged_attachment_ids == staged_attachment_ids
+            && self.metadata.input_state.draft.resource_sources == resource_sources;
+        // Resolve every explicit source before publishing any draft mutation, including equal-content reordered resources.
+        // 发布任何草稿修改前解析全部显式来源，包括相同内容的重排资源。
+        let mut preparations = Vec::with_capacity(resource_ids.len());
+        for (position, resource_id) in resource_ids.iter().enumerate() {
+            match (
+                staged_attachment_ids.get(position).and_then(Option::as_ref),
+                resource_sources.get(position).and_then(Option::as_ref),
+            ) {
+                (Some(_), Some(_)) => {
+                    return Err(DomainError::InvalidQueuedInputOrder {
+                        field: "draft_resource_source_conflict",
+                    });
+                }
+                (Some(_), None) => {
+                    preparations.push(crate::v1::UserPromptResourcePreparation::Pending)
+                }
+                (None, Some(source)) => {
+                    preparations.push(self.user_prompt_resource_preparation(source, *resource_id)?)
+                }
+                (None, None) => {
+                    preparations.push(crate::v1::UserPromptResourcePreparation::Unproven)
+                }
+            }
+        }
+        let text = text.into();
+        if self.metadata.input_state.draft.text == text && same_intentions {
             return Ok(IdempotentMutation::Idempotent(DraftMutationReceipt {
                 draft: self.metadata.input_state.draft.clone(),
             }));
         }
         let draft = DraftState {
+            parameters: if same_intentions {
+                self.metadata.input_state.draft.parameters.clone()
+            } else {
+                crate::v1::UserPromptParameters::for_resource_preparations(
+                    &resource_ids,
+                    preparations,
+                )?
+            },
             text,
             resource_ids,
+            staged_attachment_ids,
+            resource_sources,
             restored_from_queue: None,
         };
         self.metadata.input_state.draft = draft.clone();
@@ -852,6 +1281,19 @@ impl SessionDocument {
             return Ok(IdempotentMutation::Idempotent(QueuedInputDraftReceipt {
                 identity,
                 draft: DraftState {
+                    resource_sources: resolution
+                        .resource_ids
+                        .iter()
+                        .enumerate()
+                        .map(|(resource_position, _)| {
+                            Some(crate::v1::UserPromptResourceSource {
+                                client_action_id: resolution.client_action_id.clone(),
+                                resource_position,
+                            })
+                        })
+                        .collect(),
+                    staged_attachment_ids: Vec::new(),
+                    parameters: resolution.parameters.clone(),
                     text: resolution.text.clone(),
                     resource_ids: resolution.resource_ids.clone(),
                     restored_from_queue: Some(QueuedInputIdentity {
@@ -864,6 +1306,19 @@ impl SessionDocument {
         let index = self.require_queued_input_index(&identity)?;
         let queued = self.metadata.input_state.queued_inputs[index].clone();
         let draft = DraftState {
+            resource_sources: queued
+                .resource_ids
+                .iter()
+                .enumerate()
+                .map(|(resource_position, _)| {
+                    Some(crate::v1::UserPromptResourceSource {
+                        client_action_id: queued.client_action_id.clone(),
+                        resource_position,
+                    })
+                })
+                .collect(),
+            staged_attachment_ids: Vec::new(),
+            parameters: queued.parameters.clone(),
             text: queued.text.clone(),
             resource_ids: queued.resource_ids.clone(),
             restored_from_queue: Some(identity.clone()),
@@ -877,6 +1332,7 @@ impl SessionDocument {
             None,
             EventVisibility::UiOnly,
             EventBody::QueuedInputResolution(QueuedInputResolutionEvent {
+                parameters: queued.parameters,
                 client_action_id: queued.client_action_id,
                 input_id: queued.input_id,
                 resolution: QueuedInputResolutionKind::MovedToDraft,
@@ -939,6 +1395,7 @@ impl SessionDocument {
             None,
             EventVisibility::UiOnly,
             EventBody::QueuedInputResolution(QueuedInputResolutionEvent {
+                parameters: queued.parameters,
                 client_action_id: queued.client_action_id,
                 input_id: queued.input_id,
                 resolution: QueuedInputResolutionKind::Removed,
@@ -1023,6 +1480,7 @@ impl SessionDocument {
             Some(turn_id),
             EventVisibility::UiOnly,
             EventBody::QueuedInputResolution(QueuedInputResolutionEvent {
+                parameters: queued.parameters.clone(),
                 client_action_id: queued.client_action_id.clone(),
                 input_id: queued.input_id,
                 resolution: QueuedInputResolutionKind::PromotedToPendingInTurn,
@@ -1037,6 +1495,7 @@ impl SessionDocument {
             .input_state
             .pending_in_turn_inputs
             .push(PendingInTurnInput {
+                parameters: queued.parameters,
                 client_action_id: queued.client_action_id,
                 input_id: queued.input_id,
                 turn_id,
@@ -1202,13 +1661,20 @@ impl SessionDocument {
         now_ms: i64,
     ) -> Result<IdempotentMutation<PendingInputId>, DomainError> {
         let ClientInputSubmission {
+            parameters,
             client_action_id,
             text,
             resource_ids,
         } = submission;
-        if let Some(existing_input_id) =
-            self.existing_pending_submission(&client_action_id, &text, &resource_ids)?
-        {
+        // Supplementary input retains the caller's earlier preparation until its actual stream position is created.
+        // 补充输入保留调用方更早准备，直到创建其真实入流位置。
+        let parameters = new_input_parameters(&resource_ids, parameters)?;
+        if let Some(existing_input_id) = self.existing_pending_submission(
+            &client_action_id,
+            &text,
+            &resource_ids,
+            parameters.as_ref(),
+        )? {
             return Ok(IdempotentMutation::Idempotent(existing_input_id));
         }
         self.require_client_action_unused(&client_action_id)?;
@@ -1223,6 +1689,7 @@ impl SessionDocument {
             .input_state
             .pending_in_turn_inputs
             .push(PendingInTurnInput {
+                parameters,
                 client_action_id,
                 input_id,
                 turn_id,
@@ -1252,6 +1719,7 @@ impl SessionDocument {
         client_action_id: &ClientActionId,
         text: &str,
         resource_ids: &[ResourceId],
+        parameters: Option<&crate::v1::UserPromptParameters>,
     ) -> Result<Option<TurnId>, DomainError> {
         for event in &self.events {
             let EventBody::UserInput(input) = &event.event else {
@@ -1263,6 +1731,7 @@ impl SessionDocument {
             if input.input_source == UserInputSource::Root
                 && input.text == text
                 && input.resource_ids == resource_ids
+                && initial_preparation_matches(input.parameters.as_ref(), parameters)
             {
                 return event
                     .turn_id
@@ -1283,12 +1752,16 @@ impl SessionDocument {
         client_action_id: &ClientActionId,
         text: &str,
         resource_ids: &[ResourceId],
+        parameters: Option<&crate::v1::UserPromptParameters>,
     ) -> Result<Option<EnqueueInputReceipt>, DomainError> {
         for queued in &self.metadata.input_state.queued_inputs {
             if queued.client_action_id != *client_action_id {
                 continue;
             }
-            if queued.text == text && queued.resource_ids == resource_ids {
+            if queued.text == text
+                && queued.resource_ids == resource_ids
+                && initial_preparation_matches(queued.parameters.as_ref(), parameters)
+            {
                 return Ok(Some(EnqueueInputReceipt {
                     client_action_id: client_action_id.clone(),
                     input_id: queued.input_id,
@@ -1304,7 +1777,10 @@ impl SessionDocument {
             if resolution.client_action_id != *client_action_id {
                 continue;
             }
-            if resolution.text == text && resolution.resource_ids == resource_ids {
+            if resolution.text == text
+                && resolution.resource_ids == resource_ids
+                && initial_preparation_matches(resolution.parameters.as_ref(), parameters)
+            {
                 return Ok(Some(EnqueueInputReceipt {
                     client_action_id: client_action_id.clone(),
                     input_id: resolution.input_id,
@@ -1322,7 +1798,10 @@ impl SessionDocument {
             .filter(|identity| identity.client_action_id == *client_action_id)
         {
             let draft = &self.metadata.input_state.draft;
-            if draft.text == text && draft.resource_ids == resource_ids {
+            if draft.text == text
+                && draft.resource_ids == resource_ids
+                && initial_preparation_matches(draft.parameters.as_ref(), parameters)
+            {
                 return Ok(Some(EnqueueInputReceipt {
                     client_action_id: client_action_id.clone(),
                     input_id: identity.input_id,
@@ -1341,6 +1820,7 @@ impl SessionDocument {
             if input.input_source == UserInputSource::QueuedScheduled
                 && input.text == text
                 && input.resource_ids == resource_ids
+                && initial_preparation_matches(input.parameters.as_ref(), parameters)
             {
                 return Ok(Some(EnqueueInputReceipt {
                     client_action_id: client_action_id.clone(),
@@ -1482,12 +1962,16 @@ impl SessionDocument {
         client_action_id: &ClientActionId,
         text: &str,
         resource_ids: &[ResourceId],
+        parameters: Option<&crate::v1::UserPromptParameters>,
     ) -> Result<Option<PendingInputId>, DomainError> {
         for pending in &self.metadata.input_state.pending_in_turn_inputs {
             if pending.client_action_id != *client_action_id {
                 continue;
             }
-            if pending.text == text && pending.resource_ids == resource_ids {
+            if pending.text == text
+                && pending.resource_ids == resource_ids
+                && initial_preparation_matches(pending.parameters.as_ref(), parameters)
+            {
                 return Ok(Some(pending.input_id));
             }
             return Err(client_action_conflict(client_action_id));
@@ -1501,6 +1985,7 @@ impl SessionDocument {
                 && input.input_source == UserInputSource::PendingInTurn
                 && input.text == text
                 && input.resource_ids == resource_ids
+                && initial_preparation_matches(input.parameters.as_ref(), parameters)
                 && existing_input_id.replace(input.input_id).is_none()
             {
                 continue;

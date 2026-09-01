@@ -324,6 +324,8 @@ export type TranslationKey =
   | "conversation.submission.creating"
   | "conversation.submission.preparing"
   | "conversation.submission.uploading"
+  | "conversation.submission.uploadFailed"
+  | "conversation.submission.uploadFailedAttachmentKept"
   | "conversation.submission.uploadProgress"
   | "conversation.submission.cancelling"
   | "conversation.loading.requesting"
@@ -2366,6 +2368,30 @@ export type TranslationKey =
   | "settings.contextWindowPolicy.title"
   | "settings.contextWindowPolicy.description"
   | "settings.contextBasics.title"
+  | "settings.mediaDelivery.title"
+  | "settings.mediaDelivery.description"
+  | "settings.mediaDelivery.uploadRule"
+  | "settings.mediaDelivery.historyRule"
+  | "settings.mediaDelivery.conversation"
+  | "settings.mediaDelivery.extension"
+  | "settings.mediaDelivery.kind"
+  | "settings.mediaDelivery.image"
+  | "settings.mediaDelivery.audio"
+  | "settings.mediaDelivery.video"
+  | "settings.mediaDelivery.file"
+  | "settings.mediaDelivery.withUpload"
+  | "settings.mediaDelivery.withoutUpload"
+  | "settings.mediaDelivery.aggregate"
+  | "settings.mediaDelivery.rawMaximum"
+  | "settings.mediaDelivery.totalMaximum"
+  | "settings.mediaDelivery.failureRule"
+  | "settings.mediaDelivery.invalidNumber"
+  | "settings.mediaDelivery.invalidLimit"
+  | "settings.mediaDelivery.invalidFraction"
+  | "settings.mediaDelivery.conflict"
+  | "settings.mediaDelivery.save"
+  | "settings.mediaDelivery.reset"
+  | "settings.mediaDelivery.reload"
   | "settings.contextBasics.description"
   | "settings.contextBasics.loading"
   | "settings.contextBasics.saveSystemDefault"
@@ -3224,6 +3250,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.submission.creating": "正在创建会话",
     "conversation.submission.preparing": "正在准备工作区",
     "conversation.submission.uploading": "正在上传媒体",
+    "conversation.submission.uploadFailed": "附件上传失败",
+    "conversation.submission.uploadFailedAttachmentKept": "文件仍作为附件保留，本轮未发送文件内容。",
     "conversation.submission.uploadProgress": "媒体上传进度",
     "conversation.submission.cancelling": "正在取消上传",
     "conversation.loading.requesting": "正在请求会话数据",
@@ -5250,6 +5278,30 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.contextWindowPolicy.title": "上下文窗口策略",
     "settings.contextWindowPolicy.description": "按原始模型窗口计算：默认 95% 有效窗口、90% 自动压缩线；留空表示继承上级设置。",
     "settings.contextBasics.title": "上下文基础设置",
+    "settings.mediaDelivery.title": "媒体投递阈值",
+    "settings.mediaDelivery.description": "主会话与独立 AI 扩展分别配置；单位 KiB（1 KiB = 1024 字节）。每项阈值包含边界值，零表示禁用该分支的 Base64，不影响附件保存。",
+    "settings.mediaDelivery.uploadRule": "有真实上传时，小于等于相应阈值可直接内联，否则上传；无上传时使用独立阈值。模型、协议和上传接口硬限制始终优先，接口超限不能改走 Base64。",
+    "settings.mediaDelivery.historyRule": "这些阈值用于新的投递意图；切换模型不会把旧上传资源重新上传，历史原投递身份保持不变。",
+    "settings.mediaDelivery.conversation": "主会话（含子智能体会话）",
+    "settings.mediaDelivery.extension": "独立 AI 扩展",
+    "settings.mediaDelivery.kind": "媒体类型",
+    "settings.mediaDelivery.image": "图片",
+    "settings.mediaDelivery.audio": "音频",
+    "settings.mediaDelivery.video": "视频",
+    "settings.mediaDelivery.file": "文件 / PDF",
+    "settings.mediaDelivery.withUpload": "有上传时内联上限",
+    "settings.mediaDelivery.withoutUpload": "无上传时内联上限",
+    "settings.mediaDelivery.aggregate": "单次请求累计 Base64 编码预算",
+    "settings.mediaDelivery.rawMaximum": "后端允许的单项原始阈值上限",
+    "settings.mediaDelivery.totalMaximum": "后端允许的累计编码预算上限",
+    "settings.mediaDelivery.failureRule": "超限时主会话保留附件并提供安全地址；独立扩展明确报告无法理解或处理文件。Base64 膨胀、协议封装及实际上下文限制会进一步收紧可发送大小。",
+    "settings.mediaDelivery.invalidNumber": "请输入非负十进制 KiB 数值，不能留空或使用指数格式。",
+    "settings.mediaDelivery.invalidLimit": "输入超过后端允许的上限，请检查字段及下方限制说明。",
+    "settings.mediaDelivery.invalidFraction": "KiB 数值换算后必须是整数字节，最小可设置单位为 1 字节。",
+    "settings.mediaDelivery.conflict": "后台媒体设置已变化，未覆盖新设置。请重新载入后再编辑。",
+    "settings.mediaDelivery.save": "保存媒体设置",
+    "settings.mediaDelivery.reset": "恢复后端默认值",
+    "settings.mediaDelivery.reload": "重新载入并放弃本地编辑",
     "settings.contextBasics.description": "配置模型上下文窗口、自动压缩和回退缓冲策略，并集中管理请求重试与用量计费。",
     "settings.contextBasics.loading": "正在读取基础设置…",
     "settings.contextBasics.saveSystemDefault": "保存系统默认",
@@ -6122,6 +6174,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.submission.creating": "Creating conversation",
     "conversation.submission.preparing": "Preparing workspace",
     "conversation.submission.uploading": "Uploading media",
+    "conversation.submission.uploadFailed": "Attachment upload failed",
+    "conversation.submission.uploadFailedAttachmentKept": "The file remains attached. Its content was not sent in this turn.",
     "conversation.submission.uploadProgress": "Media upload progress",
     "conversation.submission.cancelling": "Cancelling upload",
     "conversation.loading.requesting": "Requesting conversation data",
@@ -8148,6 +8202,30 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.contextWindowPolicy.title": "Context-window policy",
     "settings.contextWindowPolicy.description": "Calculated from the raw model window: 95% effective window and 90% automatic compaction by default; empty values inherit the stronger layer.",
     "settings.contextBasics.title": "Context basics",
+    "settings.mediaDelivery.title": "Media delivery limits",
+    "settings.mediaDelivery.description": "Configure conversations and independent AI extensions separately. Values use KiB (1 KiB = 1024 bytes), inclusively. Zero disables Base64 for that case, not attachment storage.",
+    "settings.mediaDelivery.uploadRule": "With a real upload route, files at or below its inline threshold may be inlined; otherwise they are uploaded. Without upload, a separate threshold applies. Model, protocol and upload-interface hard limits always take precedence.",
+    "settings.mediaDelivery.historyRule": "These thresholds apply to new delivery intents. Model switching does not reupload historical resources or replace their original delivery identity.",
+    "settings.mediaDelivery.conversation": "Conversations (including sub-agents)",
+    "settings.mediaDelivery.extension": "Independent AI extensions",
+    "settings.mediaDelivery.kind": "Media type",
+    "settings.mediaDelivery.image": "Image",
+    "settings.mediaDelivery.audio": "Audio",
+    "settings.mediaDelivery.video": "Video",
+    "settings.mediaDelivery.file": "File / PDF",
+    "settings.mediaDelivery.withUpload": "Inline limit with upload",
+    "settings.mediaDelivery.withoutUpload": "Inline limit without upload",
+    "settings.mediaDelivery.aggregate": "Total Base64 budget per request",
+    "settings.mediaDelivery.rawMaximum": "Backend maximum raw threshold",
+    "settings.mediaDelivery.totalMaximum": "Backend maximum encoded budget",
+    "settings.mediaDelivery.failureRule": "Over-limit conversation inputs remain attachments with safe addresses; independent extensions explicitly report that they cannot understand or process the file. Base64 expansion, protocol framing and context limits further constrain delivery.",
+    "settings.mediaDelivery.invalidNumber": "Enter a non-negative decimal KiB value; blanks and exponential notation are not accepted.",
+    "settings.mediaDelivery.invalidLimit": "An input exceeds the backend ceiling. Check the field and the limits below.",
+    "settings.mediaDelivery.invalidFraction": "The KiB value must convert to whole bytes; the smallest configurable unit is one byte.",
+    "settings.mediaDelivery.conflict": "Media settings changed on the server and were not overwritten. Reload before editing.",
+    "settings.mediaDelivery.save": "Save media settings",
+    "settings.mediaDelivery.reset": "Restore backend defaults",
+    "settings.mediaDelivery.reload": "Reload and discard local edits",
     "settings.contextBasics.description": "Configure model context windows, automatic compaction, and fallback buffers while managing request retry, usage, and billing in one place.",
     "settings.contextBasics.loading": "Loading basic settings…",
     "settings.contextBasics.saveSystemDefault": "Save system default",

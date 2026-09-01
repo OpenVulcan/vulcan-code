@@ -472,6 +472,10 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         request.temperature = runtime_state.active_temperature;
     }
     request.controller_runtime = Some(controller_runtime.clone());
+    // Explicit media tools resolve logical resource addresses through the same V1 session registry as dispatch.
+    // 显式媒体工具通过与分派相同的V1会话注册表解析逻辑资源地址。
+    request.media_resource_runtime =
+        Some(crate::session_media_resources_v1::session_v1_media_resource_runtime(state)?);
     // Native Goal tools receive the exact request session's V1 domain port; no SQLite store is exposed.
     // 原生 Goal 工具取得精确请求会话的 V1 领域端口；不再暴露 SQLite 存储。
     request.native_goal_runtime = Some(crate::session_goals::session_v1_native_goal_runtime(

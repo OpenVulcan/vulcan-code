@@ -3,6 +3,62 @@
 
 use super::*;
 
+/// Verifies the real browser snapshot retains all media fields and does not persist defaults.
+/// 验证真实浏览器快照保留全部媒体字段，且不持久化默认值。
+#[test]
+fn settings_snapshot_projects_exact_media_delivery_policy() {
+    // This runtime uses bundled declarations only and cannot send paid requests.
+    // 此运行时仅使用内置声明，不能发送付费请求。
+    let runtime =
+        PublicAiRuntime::unavailable().expect("media policy fixture or operation must be valid");
+    // The configuration initially has no explicit media policy.
+    // 配置最初没有显式媒体策略。
+    let mut configuration = PersistedAiConfiguration::default();
+    // The actual full settings builder must publish the same nested wire shape as the client types.
+    // 实际完整设置构建器必须发布与客户端类型一致的嵌套线协议结构。
+    let initial = serde_json::to_value(
+        build_public_ai_settings_snapshot(&runtime, &configuration)
+            .expect("media policy fixture or operation must be valid"),
+    )
+    .expect("media policy fixture or operation must be valid");
+    assert_eq!(
+        initial["mediaDelivery"]["policy"]["conversation"]["image"]["without_upload_max_bytes"],
+        524_288
+    );
+    assert!(configuration.media_delivery_policy.is_none());
+    // Zero remains an explicit saved value instead of being treated as a missing field.
+    // 零保持为显式保存值，不被当成缺失字段。
+    let mut policy = configuration.effective_media_delivery_policy();
+    policy.conversation.image.without_upload_max_bytes = 0;
+    configuration
+        .set_media_delivery_policy(policy)
+        .expect("media policy fixture or operation must be valid");
+    runtime
+        .replace_configuration(configuration.clone())
+        .expect("media policy fixture or operation must be valid");
+    // The published snapshot is built from the exact updated owner.
+    // 已发布快照从精确更新后的所有者构建。
+    let updated = serde_json::to_value(
+        build_public_ai_settings_snapshot(&runtime, &configuration)
+            .expect("media policy fixture or operation must be valid"),
+    )
+    .expect("media policy fixture or operation must be valid");
+    assert_eq!(
+        updated["mediaDelivery"]["policy"],
+        serde_json::to_value(policy).expect("media policy fixture or operation must be valid")
+    );
+    assert_eq!(
+        updated["mediaDelivery"]["revision"],
+        policy
+            .fingerprint()
+            .expect("media policy fixture or operation must be valid")
+    );
+    assert_ne!(
+        initial["mediaDelivery"]["revision"],
+        updated["mediaDelivery"]["revision"]
+    );
+}
+
 /// Verifies browser settings retain diagnostics without projecting an isolated provider account.
 /// 验证浏览器设置会保留诊断，同时不投影已隔离供应商账号。
 #[test]

@@ -70,6 +70,14 @@ pub struct AttachmentAssetRecord {
     /// 在该托管资产成为消息历史前，当前保留它的瞬时暂存作用域集合。
     #[serde(default)]
     pub staging_refs: Vec<String>,
+    /// Original media intent per live composer draft lease, never a file-global last-model cache.
+    /// 每个活动输入区草稿租约的原媒体意图，绝不是文件全局最近模型缓存。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub draft_media: BTreeMap<String, super::draft_media::AttachmentDraftMediaOrigin>,
+    /// Exact upload handoffs captured before draft lease release, keyed by original intent rather than current scope.
+    /// 草稿租约释放前捕获的精确上传交接，以原意图而非当前作用域为键。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub draft_media_handoffs: BTreeMap<String, super::draft_media::AttachmentDraftMediaHandoff>,
     /// Provider-internal media references bound to this immutable asset and an exact route scope.
     /// 绑定到该不可变资产及精确路线作用域的供应商内部媒体引用。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

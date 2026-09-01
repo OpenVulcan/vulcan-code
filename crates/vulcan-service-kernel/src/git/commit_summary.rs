@@ -579,6 +579,7 @@ async fn run_git_commit_summary_model(
         runtime_system_updates: Vec::new(),
         controller_runtime: None,
         native_goal_runtime: None,
+        media_resource_runtime: None,
         knowledge_access: None,
         session_goal_context: None,
         session_plan_context: None,
@@ -616,7 +617,7 @@ async fn run_git_commit_summary_model(
             } => {
                 let result = match event.v1_lifecycle {
                     Some(ProviderV1LifecycleFacts::ExcludedNonSession) => {
-                        Ok(candidate.into_excluded_non_session())
+                        candidate.into_excluded_non_session()
                     }
                     _ => Err(String::from(
                         "Git commit summary Provider preparation is not marked as excluded from the session ledger.",

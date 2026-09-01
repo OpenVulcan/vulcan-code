@@ -50,8 +50,10 @@ pub use provider_api_trace::{
 pub use resource_catalog::{
     MISSING_RESOURCE_PLACEHOLDER, ProjectResourceCatalog, ProjectResourceCatalogError,
     ProjectResourceCatalogRegistry, ProjectResourceRegistration, ProjectResourceResolution,
-    ProviderBinding, ResourceCatalogEntry, add_project_resource, load_project_resource_catalog,
-    project_resource_catalog_path, resolve_project_resource,
+    ProjectResourceSource, ProjectResourceUploadReceipt, ProviderBinding, ResourceCatalogEntry,
+    add_project_resource, load_project_resource_catalog, parse_project_resource_locator,
+    project_resource_catalog_path, project_resource_locator, resolve_project_resource,
+    resolve_project_resource_source,
 };
 #[cfg(feature = "test-support")]
 pub use session_v1_store::create_session_v1_storage_fixture;

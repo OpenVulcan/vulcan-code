@@ -167,113 +167,118 @@ async fn capability_metadata_rpc_does_not_load_turns_or_write_on_read() {
 /// 新进程可读取已存选择，并通过实际 RPC 路由重建结构损坏的附加项。
 #[tokio::test(flavor = "current_thread")]
 async fn capability_metadata_reopen_and_rebuild_rpc_preserves_conversation() {
-    let session_id = SessionId::from_u128(0x62c3);
-    let fixture = TestControllerRuntimeRoot::new(session_id);
-    let (client, controller) = fixture.attached_controller_runtime_handle().await;
-    let locator = fixture.v1_storage_locator();
-    let path = fixture.v1_session_directory().join("metadata.json");
-    let initial: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    let explicit = ProviderToolSelectionConfig {
-        initialized: true,
-        overridden: true,
-        enabled_capabilities: vec!["web_search".into()],
-        ..Default::default()
-    };
-    locator
-        .save_unloaded_provider_tool_selection(explicit.clone(), 2)
-        .unwrap();
-    // Each bridge has a new registry and no runtime adapter, matching a newly reopened application.
-    // 每个桥都有新注册表且无运行态适配器，对应重新打开的应用。
-    for attempt in 0..2 {
-        let mut bridge = test_service_state_with_parent_session(session_id);
-        bridge.controller_runtime = Some(controller.clone());
-        bridge.agent_runtime = Some(test_agent_runtime_bridge());
-        let state = Arc::new(Mutex::new(bridge));
-        let emitter = ServiceEventEmitter::new(Vec::new());
-        let settings = crate::rpc_dispatch::dispatch_service_rpc(
-            emitter.clone(),
-            state.clone(),
-            "service_public_ai_session_provider_tool_selections".into(),
-            Some(serde_json::json!({"conversationId": session_id.to_string()})),
-        )
-        .await
-        .unwrap();
-        if attempt == 0 {
-            assert_eq!(
-                settings["enabledCapabilities"],
-                serde_json::json!(["web_search"])
-            );
-            let mut damaged: serde_json::Value =
-                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-            *damaged
-                .pointer_mut("/config/selection/provider_tools")
-                .unwrap() = serde_json::json!("broken addon");
-            std::fs::write(&path, serde_json::to_vec(&damaged).unwrap()).unwrap();
-            assert!(
-                service_public_ai_session_provider_tool_selections(
-                    emitter.clone(),
-                    state.clone(),
-                    session_id.to_string()
-                )
-                .await
-                .is_err()
-            );
-            let rebuilt = crate::rpc_dispatch::dispatch_service_rpc(
-                emitter,
+    // scenario is heap-owned because the complete reopened service bridge and RPC futures exceed the default test-thread stack when combined.
+    // scenario 固定在堆上，因为完整重开服务桥与RPC Future组合后会超过默认测试线程栈。
+    Box::pin(async {
+        let session_id = SessionId::from_u128(0x62c3);
+        let fixture = TestControllerRuntimeRoot::new(session_id);
+        let (client, controller) = Box::pin(fixture.attached_controller_runtime_handle()).await;
+        let locator = fixture.v1_storage_locator();
+        let path = fixture.v1_session_directory().join("metadata.json");
+        let initial: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let explicit = ProviderToolSelectionConfig {
+            initialized: true,
+            overridden: true,
+            enabled_capabilities: vec!["web_search".into()],
+            ..Default::default()
+        };
+        locator
+            .save_unloaded_provider_tool_selection(explicit.clone(), 2)
+            .unwrap();
+        // Each bridge has a new registry and no runtime adapter, matching a newly reopened application.
+        // 每个桥都有新注册表且无运行态适配器，对应重新打开的应用。
+        for attempt in 0..2 {
+            let mut bridge = test_service_state_with_parent_session(session_id);
+            bridge.controller_runtime = Some(controller.clone());
+            bridge.agent_runtime = Some(test_agent_runtime_bridge());
+            let state = Arc::new(Mutex::new(bridge));
+            let emitter = ServiceEventEmitter::new(Vec::new());
+            let settings = Box::pin(crate::rpc_dispatch::dispatch_service_rpc(
+                emitter.clone(),
                 state.clone(),
-                "service_rebuild_public_ai_session_provider_tool_selections".into(),
+                "service_public_ai_session_provider_tool_selections".into(),
                 Some(serde_json::json!({"conversationId": session_id.to_string()})),
-            )
+            ))
             .await
             .unwrap();
-            assert_eq!(rebuilt["enabledCapabilities"], serde_json::json!([]));
-        } else {
-            assert_eq!(settings["enabledCapabilities"], serde_json::json!([]));
+            if attempt == 0 {
+                assert_eq!(
+                    settings["enabledCapabilities"],
+                    serde_json::json!(["web_search"])
+                );
+                let mut damaged: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                *damaged
+                    .pointer_mut("/config/selection/provider_tools")
+                    .unwrap() = serde_json::json!("broken addon");
+                std::fs::write(&path, serde_json::to_vec(&damaged).unwrap()).unwrap();
+                assert!(
+                    Box::pin(service_public_ai_session_provider_tool_selections(
+                        emitter.clone(),
+                        state.clone(),
+                        session_id.to_string()
+                    ))
+                    .await
+                    .is_err()
+                );
+                let rebuilt = Box::pin(crate::rpc_dispatch::dispatch_service_rpc(
+                    emitter,
+                    state.clone(),
+                    "service_rebuild_public_ai_session_provider_tool_selections".into(),
+                    Some(serde_json::json!({"conversationId": session_id.to_string()})),
+                ))
+                .await
+                .unwrap();
+                assert_eq!(rebuilt["enabledCapabilities"], serde_json::json!([]));
+            } else {
+                assert_eq!(settings["enabledCapabilities"], serde_json::json!([]));
+            }
+            let guard = state.lock().unwrap();
+            assert!(guard.session_runtime_registry.get(session_id).is_err());
+            assert!(
+                guard
+                    .workspace_snapshot
+                    .as_ref()
+                    .unwrap()
+                    .session_runtime_state
+                    .is_empty()
+            );
         }
-        let guard = state.lock().unwrap();
-        assert!(guard.session_runtime_registry.get(session_id).is_err());
-        assert!(
-            guard
-                .workspace_snapshot
-                .as_ref()
+        let persisted = locator.read_provider_tool_selection().unwrap();
+        assert!(persisted.initialized);
+        assert!(!persisted.overridden);
+        let mut final_metadata: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        // Mask exactly the addon and its revision/time, then compare every remaining metadata field.
+        // 仅屏蔽附加项及其修订/时间，然后比较全部剩余元数据字段。
+        for key in [
+            "/config/selection/provider_tools",
+            "/document_revision",
+            "/updated_at_ms",
+        ] {
+            *final_metadata.pointer_mut(key).unwrap() = initial
+                .pointer(key)
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+        }
+        let mut expected = initial;
+        // provider_tools is an optional serde-default addon and may be absent in fresh metadata.
+        // provider_tools 是具有 serde 默认值的可选附加项，新元数据可能不包含它。
+        if expected
+            .pointer("/config/selection/provider_tools")
+            .is_none()
+        {
+            expected
+                .pointer_mut("/config/selection")
                 .unwrap()
-                .session_runtime_state
-                .is_empty()
-        );
-    }
-    let persisted = locator.read_provider_tool_selection().unwrap();
-    assert!(persisted.initialized);
-    assert!(!persisted.overridden);
-    let mut final_metadata: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    // Mask exactly the addon and its revision/time, then compare every remaining metadata field.
-    // 仅屏蔽附加项及其修订/时间，然后比较全部剩余元数据字段。
-    for key in [
-        "/config/selection/provider_tools",
-        "/document_revision",
-        "/updated_at_ms",
-    ] {
-        *final_metadata.pointer_mut(key).unwrap() = initial
-            .pointer(key)
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-    }
-    let mut expected = initial;
-    // provider_tools is an optional serde-default addon and may be absent in fresh metadata.
-    // provider_tools 是具有 serde 默认值的可选附加项，新元数据可能不包含它。
-    if expected
-        .pointer("/config/selection/provider_tools")
-        .is_none()
-    {
-        expected
-            .pointer_mut("/config/selection")
-            .unwrap()
-            .as_object_mut()
-            .unwrap()
-            .insert("provider_tools".into(), serde_json::Value::Null);
-    }
-    assert_eq!(final_metadata, expected);
-    assert!(vulcan_workspace_store::workspace_store::load_session_v1_tail(&locator).is_ok());
-    client.shutdown().await.unwrap();
+                .as_object_mut()
+                .unwrap()
+                .insert("provider_tools".into(), serde_json::Value::Null);
+        }
+        assert_eq!(final_metadata, expected);
+        assert!(vulcan_workspace_store::workspace_store::load_session_v1_tail(&locator).is_ok());
+        Box::pin(client.shutdown()).await.unwrap();
+    })
+    .await;
 }

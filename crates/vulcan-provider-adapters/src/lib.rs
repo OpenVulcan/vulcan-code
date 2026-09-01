@@ -18,8 +18,12 @@ mod discovery_signature;
 pub mod execution;
 pub mod graph;
 pub(crate) mod media;
+pub mod media_delivery;
+mod media_failure;
+mod media_upload_deadline;
 mod native_inference;
 pub mod oauth;
+mod operation_media_source;
 pub mod provider_manifest;
 pub mod provider_manifest_fixture;
 mod provider_operational_telemetry;
@@ -30,6 +34,10 @@ mod reasoning_catalog;
 pub mod registry;
 pub mod runtime;
 mod upload_engine;
+
+pub use operation_media_source::{
+    ProviderToolMediaSource, ProviderToolMediaSourceResolver, ProviderToolResourceContext,
+};
 
 pub use client::*;
 pub use common_model_capabilities::*;
@@ -46,6 +54,9 @@ pub use media::{
     MediaUploadCancellation, MediaUploadProgressCallback, RuntimeMediaUploadPhase,
     RuntimeMediaUploadProgressEvent, RuntimeMediaUploadProgressObserver,
 };
+pub use media_delivery::*;
+pub use media_failure::{MediaUploadFailure, MediaUploadStage};
+pub use media_upload_deadline::MediaUploadDeadline;
 pub use native_inference::registered_native_action_binding_id;
 pub use oauth::*;
 pub use provider_manifest::*;

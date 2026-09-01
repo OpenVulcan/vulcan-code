@@ -1,8 +1,10 @@
 import React from "react";
+import { composerAttachmentIdentity as attachmentIdentity } from "@/service/composer-attachment-reference";
 import type { ComposerModelSelectionSnapshot } from "@/components/composer/composer-model";
 import { useComposerMediaUploadProgresses } from "@/components/composer/composer-media-upload-context";
 import {
   cancelConversationSubmission,
+  discardComposerAttachmentPlans,
   planComposerAttachments,
   prepareComposerAttachment,
   reconcileComposerAttachmentDraftLease,
@@ -12,6 +14,23 @@ import type {
   ComposerAttachmentSummary,
   MediaUploadProgressChangedDelta,
 } from "@/types";
+
+// ComposerUploadCancellation retains the exact operation until cancellation is positively settled.
+// ComposerUploadCancellation 保留精确操作，直至取消已得到明确结算确认。
+interface ComposerUploadCancellation {
+  // scopeKey identifies the draft owner, independently of the rendered model.
+  // scopeKey 标识草稿所有者，不依赖当前渲染模型。
+  scopeKey: string;
+  // preparation preserves the real transfer id for cancellation retries.
+  // preparation 保留真实传输标识，用于取消重试。
+  preparation: ComposerAttachmentPreparationSummary;
+  // completion rejects on an unknown cancellation outcome; it never grants resource release then.
+  // completion 在取消结果未知时拒绝，绝不据此允许释放资源。
+  completion: Promise<void>;
+  // failed permits an explicit retry to issue a new cancellation for the same operation.
+  // failed 允许显式重试为同一操作重新发送取消请求。
+  failed: boolean;
+}
 
 // ComposerAttachmentPreparationController exposes draft preparation state and stable user actions.
 // ComposerAttachmentPreparationController 暴露草稿准备状态与稳定用户动作。
@@ -43,17 +62,6 @@ export interface ComposerAttachmentPreparationController {
   // Reconciles the exact draft owner before a local attachment-set replacement is published.
   // 在发布本地附件集合替换前协调精确草稿所有者。
   reconcileDraft: (attachments: ComposerAttachmentSummary[]) => Promise<void>;
-}
-
-// attachmentIdentity resolves the service-issued stable identity required by planning and cancellation.
-// attachmentIdentity 解析规划与取消所需的服务签发稳定身份。
-// Parameters: attachment is one canonical staged composer resource.
-// 参数：attachment 是一条规范已暂存输入区资源。
-// Returns: the stable asset id, or null when the service violated the staging contract.
-// 返回值：稳定资源标识；若服务违反暂存契约则返回 null。
-function attachmentIdentity(attachment: ComposerAttachmentSummary): string | null {
-  const identity = attachment.assetId?.trim();
-  return identity ? identity : null;
 }
 
 // composerAttachmentRouteReadyForPlanning closes every optimistic or unresolved route window.
@@ -108,28 +116,27 @@ export function composerAttachmentPlansMatchDraft(
 // composerAttachmentUploadTransferIds 返回单份响应中全部由后端持有的上传规划标识。
 // Parameters: planned contains the exact rows returned by one planning RPC.
 // 参数：planned 包含单次规划 RPC 返回的精确记录。
-// Returns: unique non-empty transfer ids that must be consumed or explicitly cancelled.
-// 返回值：必须被消费或显式取消的唯一非空传输标识。
+// Returns: unique non-empty view ids that must be consumed or discarded without cancelling their original upload.
+// 返回值：必须被消费或丢弃的唯一非空视图标识，丢弃不能取消其原上传。
 export function composerAttachmentUploadTransferIds(
   planned: readonly ComposerAttachmentPreparationSummary[],
 ): string[] {
   return Array.from(new Set(planned
-    .filter((preparation) => preparation.deliveryPlan === "upload_reference")
+    .filter((preparation) => preparation.deliveryPlan === "upload_reference" && preparation.phase === "upload_queued" && preparation.blocksSubmission)
     .map((preparation) => preparation.transferId.trim())
     .filter(Boolean)));
 }
 
-// cancelUnconsumedComposerAttachmentPlans releases backend plans rejected by the current draft generation.
-// cancelUnconsumedComposerAttachmentPlans 释放被当前草稿代际拒绝的后端上传规划。
+// discardUnconsumedComposerAttachmentPlans releases rejected view plans without stopping their original physical upload.
+// discardUnconsumedComposerAttachmentPlans 释放被拒绝的视图计划，不停止其原实体上传。
 // Parameters: planned is a complete or malformed planning response that will not be consumed.
 // 参数：planned 是一份不会被消费的完整或异常规划响应。
 // Returns: a settled boundary after every unique backend plan has received cancellation.
 // 返回值：全部唯一后端规划都收到取消请求后的已完成边界。
-async function cancelUnconsumedComposerAttachmentPlans(
+async function discardUnconsumedComposerAttachmentPlans(
   planned: readonly ComposerAttachmentPreparationSummary[],
 ): Promise<void> {
-  await Promise.allSettled(composerAttachmentUploadTransferIds(planned)
-    .map((transferId) => cancelConversationSubmission(transferId)));
+  await discardComposerAttachmentPlans(composerAttachmentUploadTransferIds(planned));
 }
 
 // composerAttachmentCancelledState revokes one active transfer while preserving metadata disclosure.
@@ -155,19 +162,17 @@ export function composerAttachmentCancelledState(
 // queueComposerDraftLeaseAfterCancellation 将资源释放严格排在供应商取消边界之后。
 // Parameters: current is the existing lease queue and cancellation is the active transfer cancellation.
 // 参数：current 是现有租约队列，cancellation 是活跃传输取消任务。
-// Returns: a non-rejecting queue tail that settles only after both boundaries complete.
-// 返回值：一个不拒绝的队列尾，仅在两个边界都完成后结束。
+// Returns: a queue tail that preserves cancellation failure after both boundaries settle.
+// 返回值：两个边界都结束后仍保留取消失败的队列尾。
 export function queueComposerDraftLeaseAfterCancellation(
   current: Promise<void>,
   cancellation: Promise<unknown>,
 ): Promise<void> {
-  return current.then(
-    () => cancellation,
-    () => cancellation,
-  ).then(
-    () => undefined,
-    () => undefined,
-  );
+  // Observe cancellation immediately, even while an older lease operation is still pending.
+  // 即使较早的租约操作仍在等待，也立即观察取消结果。
+  return Promise.allSettled([current, cancellation]).then(([, result]) => {
+    if (result.status === "rejected") throw result.reason;
+  });
 }
 
 // useComposerAttachmentPreparation plans and prepares attachments before prompt submission.
@@ -211,9 +216,18 @@ export function useComposerAttachmentPreparation(options: {
   // retryPlanningTransfers records the exact retry plan currently allowed to publish per attachment.
   // retryPlanningTransfers 记录每个附件当前获准发布结果的精确重试规划。
   const retryPlanningTransfers = React.useRef(new Map<string, string>());
+  // cancellations survive projection changes and failed queue tails until an explicit settled acknowledgement.
+  // cancellations 跨投影变化和失败队列尾保留，直到获得显式结算确认。
+  const cancellations = React.useRef(new Map<string, ComposerUploadCancellation>());
+  // cancellationScope freezes the exact owner, without treating model switches as new owners.
+  // cancellationScope 冻结精确所有者，不将切模型视为更换所有者。
+  const cancellationScope = JSON.stringify([options.draftSlotKey, options.projectId, options.conversationId]);
   // planningPending exposes the plan interval as an explicit send barrier.
   // planningPending 把规划区间作为显式发送屏障暴露。
   const [planningPending, setPlanningPending] = React.useState(false);
+  // planningRetry resumes a route projection previously stopped by an explicitly retried cancellation.
+  // planningRetry 恢复先前被显式重试取消阻止的路线投影。
+  const [planningRetry, setPlanningRetry] = React.useState(0);
   // leaseQueue serializes exact-set replacements so an older async request cannot reacquire a removed attachment.
   // leaseQueue 串行化精确集合替换，避免较早异步请求重新取得已移除附件。
   const leaseQueue = React.useRef<Promise<void>>(Promise.resolve());
@@ -248,8 +262,9 @@ export function useComposerAttachmentPreparation(options: {
   // attachmentSignature changes only when the canonical draft set changes.
   // attachmentSignature 仅在规范草稿集合变化时改变。
   const attachmentSignature = React.useMemo(
-    () => JSON.stringify(options.attachments.map((attachment) => [
-      attachmentIdentity(attachment) ?? "missing",
+    () => JSON.stringify(options.attachments.map((attachment, position) => [
+      attachmentIdentity(attachment, position) ?? "missing",
+      attachment.promptSource ?? null,
       attachment.byteLen ?? -1,
       attachment.mimeType,
       attachment.sourceSha256 ?? "",
@@ -290,12 +305,81 @@ export function useComposerAttachmentPreparation(options: {
   // attachmentById provides one unique canonical resource for each service-issued identity.
   // attachmentById 为每个服务签发身份提供唯一规范资源。
   const attachmentById = React.useMemo(() => {
-    const entries = canonicalAttachments.flatMap((attachment) => {
-      const identity = attachmentIdentity(attachment);
+    const entries = canonicalAttachments.flatMap((attachment, position) => {
+      const identity = attachmentIdentity(attachment, position);
       return identity ? [[identity, attachment] as const] : [];
     });
     return new Map(entries);
   }, [canonicalAttachments]);
+
+  // cancel retains a failed operation for retry and grants release only after the service settles it.
+  // cancel 保留失败操作以供重试，仅在服务完成结算后允许释放。
+  // Parameter: attachmentId selects the exact rendered occurrence; rejection leaves its source protected.
+  // 参数：attachmentId 选择精确渲染出现；拒绝时其来源仍受保护。
+  const cancel = React.useCallback(async (attachmentId: string) => {
+    // existing remains authoritative even when a new route has replaced the visible preparation.
+    // 即使新路线已经替换可见准备状态，existing 仍然具有取消权威性。
+    const existing = Array.from(cancellations.current.values()).find((entry) => (
+      entry.scopeKey === cancellationScope && entry.preparation.attachmentId === attachmentId
+    ));
+    if (existing && !existing.failed) return existing.completion;
+    // preparation comes only from the retained operation or the exact current projection.
+    // preparation 仅来自保留操作或精确当前投影。
+    const preparation = existing ? existing.preparation : preparationsRef.current[attachmentId];
+    if (!preparation) return;
+    retryPlanningTransfers.current.delete(attachmentId);
+    // transferId must never be replaced by a synthetic cancellation id before acknowledgement.
+    // 获得确认前绝不能以合成取消标识替换 transferId。
+    const transferId = preparation.transferId;
+    if (preparation.phase === "cancelled") return;
+    if (transferId.startsWith("draft-media-retry-planning:")) {
+      commitPreparations((current) => ({
+        ...current,
+        [attachmentId]: composerAttachmentCancelledState(preparation, `draft-media-cancelled:${crypto.randomUUID()}`),
+      }));
+      return;
+    }
+    // entry is installed before the first asynchronous continuation or any lease reconciliation.
+    // entry 在首个异步延续以及任何租约协调前安装。
+    const entry: ComposerUploadCancellation = {
+      scopeKey: cancellationScope,
+      preparation,
+      failed: false,
+      completion: Promise.resolve(),
+    };
+    cancellations.current.set(transferId, entry);
+    commitPreparations((current) => ({
+      ...current,
+      [attachmentId]: { ...preparation, blocksSubmission: true, reason: "draft_upload_cancellation_pending", error: null },
+    }));
+    entry.completion = cancelConversationSubmission(transferId).then(() => {
+      commitPreparations((current) => current[attachmentId]?.transferId === transferId ? {
+        ...current,
+        [attachmentId]: composerAttachmentCancelledState(preparation, `draft-media-cancelled:${crypto.randomUUID()}`),
+      } : current);
+      cancellations.current.delete(transferId);
+    }, (error: unknown) => {
+      entry.failed = true;
+      // failure preserves the real id and a blocking retry action rather than pretending cancellation succeeded.
+      // failure 保留真实标识与阻塞式重试动作，不假装取消成功。
+      entry.preparation = {
+        ...preparation,
+        phase: "failed",
+        blocksSubmission: true,
+        reason: "draft_upload_cancellation_failed",
+        error: error instanceof Error ? error.message : String(error),
+      };
+      commitPreparations((current) => current[attachmentId]?.transferId === transferId
+        ? { ...current, [attachmentId]: entry.preparation }
+        : { ...current });
+      throw error;
+    });
+    leaseQueue.current = queueComposerDraftLeaseAfterCancellation(leaseQueue.current, entry.completion);
+    // Observing rejection prevents a detached queue tail from becoming an unhandled promise.
+    // 观察拒绝，避免分离的队列尾成为未处理 Promise。
+    void leaseQueue.current.catch(() => undefined);
+    await entry.completion;
+  }, [cancellationScope, commitPreparations]);
 
   // enqueueDraftLeaseReconciliation orders one exact backend owner replacement after every earlier replacement.
   // enqueueDraftLeaseReconciliation 将单次精确后端所有者替换排在全部先前替换之后。
@@ -310,6 +394,13 @@ export function useComposerAttachmentPreparation(options: {
     );
     const request = async () => {
       try {
+        // A swallowed predecessor cannot erase an unresolved cancellation retained by the owner.
+        // 被前序队列处理过的错误不能抹除所有者保留的未确认取消。
+        await Promise.all(Array.from(cancellations.current.values())
+          .filter((entry) => entry.scopeKey === cancellationScope)
+          .map((entry) => entry.completion));
+        // The boolean reports a changed set; both true and false acknowledge a successful exact-set reconciliation.
+        // 布尔值报告集合是否变化；真与假均确认精确集合协调成功。
         await reconcileComposerAttachmentDraftLease(
           options.projectId,
           options.conversationId,
@@ -332,7 +423,7 @@ export function useComposerAttachmentPreparation(options: {
     const result = leaseQueue.current.then(request, request);
     leaseQueue.current = result.catch(() => undefined);
     return result;
-  }, [options.conversationId, options.draftSlotKey, options.projectId]);
+  }, [cancellationScope, options.conversationId, options.draftSlotKey, options.projectId]);
 
   React.useEffect(() => {
     if (!canonicalAttachments.length) {
@@ -353,7 +444,9 @@ export function useComposerAttachmentPreparation(options: {
     attachment: ComposerAttachmentSummary,
     preparation: ComposerAttachmentPreparationSummary,
   ) => {
-    const attachmentId = attachmentIdentity(attachment);
+    // The selected service plan already matched the exact current occurrence map before execution.
+    // 所选服务规划在执行前已经匹配精确当前出现映射。
+    const attachmentId = preparation.attachmentId;
     if (!attachmentId || !modelSelectionSnapshot) {
       return;
     }
@@ -374,7 +467,7 @@ export function useComposerAttachmentPreparation(options: {
         attachment,
         preparation,
       );
-      if (planningGeneration.current !== generation) {
+      if (planningGeneration.current !== generation || cancellations.current.has(preparation.transferId)) {
         return;
       }
       commitPreparations((current) => {
@@ -384,7 +477,7 @@ export function useComposerAttachmentPreparation(options: {
           : current;
       });
     } catch (error) {
-      if (planningGeneration.current !== generation) {
+      if (planningGeneration.current !== generation || cancellations.current.has(preparation.transferId)) {
         return;
       }
       // failureText is user-visible diagnostic text while the canonical attachment remains available as metadata.
@@ -415,12 +508,6 @@ export function useComposerAttachmentPreparation(options: {
     const generation = planningGeneration.current + 1;
     planningGeneration.current = generation;
     retryPlanningTransfers.current.clear();
-    const formerTransfers = Object.values(preparationsRef.current)
-      .filter((preparation) => preparation.blocksSubmission)
-      .map((preparation) => preparation.transferId);
-    for (const transferId of formerTransfers) {
-      void cancelConversationSubmission(transferId);
-    }
     if (!canonicalAttachments.length) {
       setPlanningPending(false);
       commitPreparations(() => ({}));
@@ -448,16 +535,22 @@ export function useComposerAttachmentPreparation(options: {
     let disposed = false;
     setPlanningPending(true);
     commitPreparations(() => ({}));
-    void planComposerAttachments(
-      options.projectId,
-      options.conversationId,
-      generation,
-      modelSelectionSnapshot,
-      canonicalAttachments,
-    )
+    // An unresolved cancellation retains ownership even when this effect now projects another model.
+    // 即使本 effect 当前投影另一模型，未确认取消仍保留所有权。
+    void Promise.all(Array.from(cancellations.current.values())
+      .filter((entry) => entry.scopeKey === cancellationScope)
+      .map((entry) => entry.completion))
+      .then(() => disposed ? [] : planComposerAttachments(
+        options.projectId,
+        options.conversationId,
+        options.draftSlotKey,
+        generation,
+        modelSelectionSnapshot,
+        canonicalAttachments,
+      ))
       .then(async (planned) => {
         if (disposed || planningGeneration.current !== generation) {
-          await cancelUnconsumedComposerAttachmentPlans(planned);
+          await discardUnconsumedComposerAttachmentPlans(planned);
           return;
         }
         if (!composerAttachmentPlansMatchDraft(
@@ -466,14 +559,14 @@ export function useComposerAttachmentPreparation(options: {
           generation,
           options.routePlanningRevision,
         )) {
-          await cancelUnconsumedComposerAttachmentPlans(planned);
+          await discardUnconsumedComposerAttachmentPlans(planned);
           throw new Error("Attachment route planning returned a mismatched draft or route identity.");
         }
         const next = Object.fromEntries(planned.map((preparation) => [preparation.attachmentId, preparation]));
         commitPreparations(() => next);
         setPlanningPending(false);
         for (const preparation of planned) {
-          if (preparation.deliveryPlan !== "upload_reference") {
+          if (preparation.deliveryPlan !== "upload_reference" || preparation.phase !== "upload_queued" || !preparation.blocksSubmission) {
             continue;
           }
           const attachment = attachmentById.get(preparation.attachmentId);
@@ -486,8 +579,8 @@ export function useComposerAttachmentPreparation(options: {
         if (disposed || planningGeneration.current !== generation) {
           return;
         }
-        const degraded = Object.fromEntries(canonicalAttachments.map((attachment) => {
-          const attachmentId = attachmentIdentity(attachment) as string;
+        const degraded = Object.fromEntries(canonicalAttachments.map((attachment, position) => {
+          const attachmentId = attachmentIdentity(attachment, position) as string;
           return [attachmentId, {
             attachmentId,
             generation,
@@ -505,12 +598,8 @@ export function useComposerAttachmentPreparation(options: {
       });
     return () => {
       disposed = true;
-      const activeTransferIds = Object.values(preparationsRef.current)
-        .filter((preparation) => preparation.blocksSubmission)
-        .map((preparation) => preparation.transferId);
-      for (const transferId of activeTransferIds) {
-        void cancelConversationSubmission(transferId);
-      }
+      // A view change is not user cancellation. The original preparation RPC retains its physical owner.
+      // 视图变化不是用户取消。原准备RPC继续持有其实体所有者。
     };
   }, [
     attachmentById,
@@ -519,11 +608,15 @@ export function useComposerAttachmentPreparation(options: {
     executePreparation,
     modelSelectionSnapshot,
     options.conversationId,
+    options.draftSlotKey,
     options.projectId,
     options.routePlanningRevision,
     options.routeSelectionPending,
     expectedLeaseSignature,
     leaseCommittedSignature,
+    cancel,
+    cancellationScope,
+    planningRetry,
   ]);
 
   // progresses selects only transfer rows that still belong to the current canonical draft.
@@ -536,7 +629,8 @@ export function useComposerAttachmentPreparation(options: {
       if (
         attachmentId
         && attachmentById.has(attachmentId)
-        && preparation?.transferId === progress.clientSubmissionId
+        && preparation?.deliveryPlan === "upload_reference"
+        && (preparation.physicalTransferId ?? preparation.transferId) === progress.clientSubmissionId
       ) {
         rows[attachmentId] = progress;
       }
@@ -553,7 +647,8 @@ export function useComposerAttachmentPreparation(options: {
       let changed = false;
       for (const [attachmentId, progress] of Object.entries(progresses)) {
         const preparation = next[attachmentId];
-        if (!preparation || preparation.transferId !== progress.clientSubmissionId) {
+        if (!preparation || (preparation.physicalTransferId ?? preparation.transferId) !== progress.clientSubmissionId
+          || cancellations.current.has(preparation.transferId)) {
           continue;
         }
         const phase = progress.phase === "awaiting_provider_confirmation"
@@ -571,6 +666,27 @@ export function useComposerAttachmentPreparation(options: {
   // retry replans one closed upload under the current exact route and installs a new transfer identity.
   // retry 在当前精确路由下重新规划单条已封闭上传，并安装新的传输身份。
   const retry = React.useCallback(async (attachmentId: string) => {
+    // An unknown cancellation is retried as cancellation, never as another provider upload.
+    // 未知取消结果只重试取消，绝不当作另一次供应商上传重试。
+    // cancelledOperation is the exact retained cancellation, independently of current route projection.
+    // cancelledOperation 是精确保留的取消，不依赖当前路线投影。
+    const cancelledOperation = Array.from(cancellations.current.values()).find((entry) => (
+      entry.scopeKey === cancellationScope && entry.preparation.attachmentId === attachmentId
+    ));
+    if (cancelledOperation) {
+      // needsProjection distinguishes retrying the original cancellation from retrying a blocked new route.
+      // needsProjection 区分重试原取消与恢复被阻止的新路线。
+      const needsProjection = preparationsRef.current[attachmentId]?.transferId !== cancelledOperation.preparation.transferId;
+      try {
+        await cancel(attachmentId);
+        await enqueueDraftLeaseReconciliation(canonicalAttachments);
+        if (needsProjection) setPlanningRetry((current) => current + 1);
+      } catch {
+        // The retained cancellation or lease state already exposes the exact retryable failure.
+        // 保留的取消或租约状态已经暴露精确可重试失败。
+      }
+      return;
+    }
     if (leaseError && attachmentById.has(attachmentId)) {
       try {
         await enqueueDraftLeaseReconciliation(canonicalAttachments);
@@ -585,7 +701,7 @@ export function useComposerAttachmentPreparation(options: {
     if (
       !preparation
       || !attachment
-      || preparation.deliveryPlan !== "upload_reference"
+      || (preparation.deliveryPlan !== "upload_reference" && preparation.reason !== "original_upload_requires_explicit_retry")
       || !composerAttachmentRouteReadyForPlanning(
         modelSelectionSnapshot,
         options.routePlanningRevision,
@@ -616,15 +732,17 @@ export function useComposerAttachmentPreparation(options: {
       const plannedRows = await planComposerAttachments(
         options.projectId,
         options.conversationId,
+        options.draftSlotKey,
         generation,
         modelSelectionSnapshot,
         [attachment],
+        true,
       );
       if (
         planningGeneration.current !== generation
         || retryPlanningTransfers.current.get(attachmentId) !== retryPlanningTransferId
       ) {
-        await cancelUnconsumedComposerAttachmentPlans(plannedRows);
+        await discardUnconsumedComposerAttachmentPlans(plannedRows);
         return;
       }
       if (
@@ -635,7 +753,7 @@ export function useComposerAttachmentPreparation(options: {
           options.routePlanningRevision,
         )
       ) {
-        await cancelUnconsumedComposerAttachmentPlans(plannedRows);
+        await discardUnconsumedComposerAttachmentPlans(plannedRows);
         throw new Error("Attachment retry planning returned a mismatched draft or route identity.");
       }
       const planned = plannedRows[0];
@@ -648,7 +766,7 @@ export function useComposerAttachmentPreparation(options: {
       }
       retryPlanningTransfers.current.delete(attachmentId);
       commitPreparations((current) => ({ ...current, [attachmentId]: planned }));
-      if (planned.deliveryPlan === "upload_reference") {
+      if (planned.deliveryPlan === "upload_reference" && planned.phase === "upload_queued" && planned.blocksSubmission) {
         await executePreparation(generation, attachment, planned);
       }
     } catch (error) {
@@ -679,55 +797,19 @@ export function useComposerAttachmentPreparation(options: {
   }, [
     attachmentById,
     canonicalAttachments,
+    cancel,
+    cancellationScope,
     commitPreparations,
     enqueueDraftLeaseReconciliation,
     executePreparation,
     leaseError,
     modelSelectionSnapshot,
     options.conversationId,
+    options.draftSlotKey,
     options.projectId,
     options.routePlanningRevision,
     options.routeSelectionPending,
   ]);
-
-  // cancel stops the exact active transfer and closes its UI state without removing canonical attachment data.
-  // cancel 停止精确活跃传输并封闭其界面状态，但不移除规范附件数据。
-  const cancel = React.useCallback(async (attachmentId: string) => {
-    const preparation = preparationsRef.current[attachmentId];
-    if (!preparation) {
-      return;
-    }
-    retryPlanningTransfers.current.delete(attachmentId);
-    // transferId is captured before publishing cancellation so no later retry can be cancelled accidentally.
-    // transferId 在发布取消前捕获，避免意外取消后续重试。
-    const transferId = preparation.transferId;
-    // cancelledTransferId revokes the active transfer identity before the asynchronous cancellation reaches the provider.
-    // cancelledTransferId 在异步取消到达供应商前撤销活跃传输身份。
-    const cancelledTransferId = `draft-media-cancelled:${crypto.randomUUID()}`;
-    commitPreparations((current) => {
-      const active = current[attachmentId];
-      if (!active || active.transferId !== transferId) {
-        return current;
-      }
-      return {
-        ...current,
-        [attachmentId]: composerAttachmentCancelledState(active, cancelledTransferId),
-      };
-    });
-    if (transferId.startsWith("draft-media-retry-planning:")) {
-      return;
-    }
-    // cancellation begins immediately while leaseQueue prevents the managed file from being released early.
-    // cancellation 立即开始，同时 leaseQueue 防止托管文件被提前释放。
-    const cancellation = cancelConversationSubmission(transferId);
-    leaseQueue.current = queueComposerDraftLeaseAfterCancellation(leaseQueue.current, cancellation);
-    try {
-      await cancellation;
-    } catch {
-      // The revoked transfer identity keeps any late completion non-authoritative after local cancellation failure.
-      // 已撤销的传输身份保证本地取消失败后的迟到完成结果仍无权威性。
-    }
-  }, [commitPreparations]);
 
   // reconcileDraft publishes one explicit local set replacement, including an empty set after user removal.
   // reconcileDraft 发布一次显式本地集合替换，包括用户移除后的空集合。
@@ -738,8 +820,11 @@ export function useComposerAttachmentPreparation(options: {
   // projectForSubmission keeps canonical draft state untouched while freezing current delivery outcomes.
   // projectForSubmission 在冻结当前传输结果的同时保持规范草稿状态不变。
   const projectForSubmission = React.useCallback((attachments: ComposerAttachmentSummary[]) => {
-    return attachments.map((attachment) => {
-      const attachmentId = attachmentIdentity(attachment);
+    return attachments.map((attachment, position) => {
+      // Existing project inputs carry source identities only; request-local modes must not enter the strict project-reference DTO.
+      // 既有项目输入只携带来源身份；请求局部方式不能进入严格项目引用DTO。
+      if (attachment.projectResourceId != null) return attachment;
+      const attachmentId = attachmentIdentity(attachment, position);
       const preparation = attachmentId ? preparationsRef.current[attachmentId] : undefined;
       if (!preparation) {
         return attachment;
@@ -754,10 +839,9 @@ export function useComposerAttachmentPreparation(options: {
   // visiblePreparations projects one retryable lease failure onto every affected attachment tile.
   // visiblePreparations 将一条可重试租约失败投影到每个受影响附件卡片。
   const visiblePreparations = React.useMemo(() => {
-    if (!leaseError) {
-      return preparations;
-    }
-    return Object.fromEntries(Array.from(attachmentById.keys()).map((attachmentId) => [
+    // visible retains cancellation failures independently of route planning or lease error projections.
+    // visible 独立于路线规划和租约错误投影保留取消失败。
+    const visible = !leaseError ? { ...preparations } : Object.fromEntries(Array.from(attachmentById.keys()).map((attachmentId) => [
       attachmentId,
       {
         attachmentId,
@@ -771,17 +855,27 @@ export function useComposerAttachmentPreparation(options: {
         error: leaseError,
       },
     ]));
-  }, [attachmentById, leaseError, preparations]);
+    for (const entry of cancellations.current.values()) {
+      if (entry.scopeKey === cancellationScope && attachmentById.has(entry.preparation.attachmentId)) {
+        visible[entry.preparation.attachmentId] = {
+          ...entry.preparation,
+          blocksSubmission: true,
+          reason: entry.failed ? "draft_upload_cancellation_failed" : "draft_upload_cancellation_pending",
+        };
+      }
+    }
+    return visible;
+  }, [attachmentById, cancellationScope, leaseError, preparations]);
   const blocksSubmission = planningPending
     || leaseError !== null
-    || Object.values(preparations).some((preparation) => preparation.blocksSubmission);
+    || Object.values(visiblePreparations).some((preparation) => preparation.blocksSubmission);
   const blockingCount = planningPending
     ? canonicalAttachments.length
     : leaseError
       ? canonicalAttachments.length
-      : Object.values(preparations).filter((preparation) => preparation.blocksSubmission).length;
-  const metadataOnlyCount = Object.values(preparations).filter((preparation) => (
-    preparation.reason !== "draft_lease_persistence_failed"
+      : Object.values(visiblePreparations).filter((preparation) => preparation.blocksSubmission).length;
+  const metadataOnlyCount = Object.values(visiblePreparations).filter((preparation) => (
+    !preparation.blocksSubmission
     && (preparation.deliveryPlan === "metadata_only"
       || preparation.phase === "failed"
       || preparation.phase === "cancelled")
@@ -818,8 +912,9 @@ function canonicalDraftLeaseSignature(
     draftSlotKey,
     projectId,
     conversationId,
-    attachments.map((attachment) => [
-      attachmentIdentity(attachment),
+    attachments.map((attachment, position) => [
+      attachmentIdentity(attachment, position),
+      attachment.promptSource ?? null,
       attachment.byteLen ?? null,
       attachment.sourceSha256 ?? null,
     ]),

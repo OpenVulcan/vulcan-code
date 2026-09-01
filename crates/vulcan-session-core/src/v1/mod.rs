@@ -24,6 +24,7 @@ pub mod ids;
 pub mod projection;
 pub mod service_dto;
 pub mod stats;
+pub mod user_prompt;
 
 #[cfg(test)]
 mod tests;
@@ -68,3 +69,8 @@ pub use ids::{
     SUBAGENT_TASK_ID_MAX_BYTES, Seq, SubagentTaskId, ToolCallId, TurnId,
 };
 pub use stats::{AggregatedUsage, StatBucket, TurnStatBuckets, UsageSnapshot, goal_budget_tokens};
+pub use user_prompt::{
+    UserPromptMediaBinding, UserPromptMediaDelivery, UserPromptMediaOrigin, UserPromptMediaRoute,
+    UserPromptParameters, UserPromptResourceBinding, UserPromptResourceDelivery,
+    UserPromptResourceDeliveryKind, UserPromptResourcePreparation, UserPromptResourceSource,
+};

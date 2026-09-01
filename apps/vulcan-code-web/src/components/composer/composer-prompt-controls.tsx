@@ -39,6 +39,9 @@ export function PendingPromptQueueStrip(props: {
   // Queue entries returned by the selected conversation snapshot.
   // 当前选中会话快照返回的队列条目。
   entries: PendingPromptSummary[];
+  // disabled freezes queue mutation while another exact queue transaction is in flight.
+  // disabled 在另一项精确队列事务进行期间冻结队列变更。
+  disabled?: boolean;
   // Optional trace callback for row-level UI interactions.
   // 行级 UI 交互使用的可选埋点回调。
   onTrace?: ComposerTraceCallback;
@@ -67,6 +70,9 @@ export function PendingPromptQueueStrip(props: {
   // handleDragEnd persists the service-compatible drop target derived from the visual dnd order.
   // handleDragEnd 从可视拖拽顺序推导与服务兼容的落点并持久化。
   const handleDragEnd = React.useCallback((event: DragEndEvent) => {
+    if (props.disabled) {
+      return;
+    }
     const activeId = String(event.active.id);
     const overId = event.over ? String(event.over.id) : null;
     if (!overId || activeId === overId) {
@@ -90,6 +96,7 @@ export function PendingPromptQueueStrip(props: {
           <div className="pending-prompt-list">
             {props.entries.map((entry) => (
               <PendingPromptQueueRow
+                disabled={props.disabled}
                 entry={entry}
                 key={entry.id}
                 onEdit={props.onEdit}
@@ -111,6 +118,9 @@ function PendingPromptQueueRow(props: {
   // Queue entry rendered by this row.
   // 当前行渲染的队列条目。
   entry: PendingPromptSummary;
+  // disabled blocks sorting and every row action during a competing queue transaction.
+  // disabled 在竞争队列事务期间阻止排序与全部行操作。
+  disabled?: boolean;
   // Optional trace callback for row-level UI interactions.
   // 行级 UI 交互使用的可选埋点回调。
   onTrace?: ComposerTraceCallback;
@@ -127,7 +137,10 @@ function PendingPromptQueueRow(props: {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
-  const sortable = useVerticalSortableItem(props.entry.id, props.entry.state === "inserted");
+  const sortable = useVerticalSortableItem(
+    props.entry.id,
+    Boolean(props.disabled || props.entry.state === "inserted"),
+  );
   const attachmentText = props.entry.attachments.length
     ? `  · ${formatPendingPromptTranslation(t, "pendingPrompt.attachmentCount", { count: String(props.entry.attachments.length) })}`
     : "";
@@ -159,7 +172,7 @@ function PendingPromptQueueRow(props: {
             <Button
               className={cn("pending-prompt-guide-button", props.entry.state === "inserted" && "inserted")}
               aria-label={props.entry.state === "inserted" ? t("pendingPrompt.inserted") : t("pendingPrompt.insert")}
-              disabled={props.entry.state === "inserted"}
+              disabled={Boolean(props.disabled || props.entry.state === "inserted")}
               onClick={() => {
                 props.onTrace?.("pending_prompt.row.insert", {
                   entryId: props.entry.id,
@@ -181,6 +194,7 @@ function PendingPromptQueueRow(props: {
           <>
             <Button
               aria-label={t("pendingPrompt.delete")}
+              disabled={props.disabled}
               onClick={() => {
                 props.onTrace?.("pending_prompt.row.remove", { entryId: props.entry.id });
                 props.onRemove(props.entry.id);
@@ -193,6 +207,7 @@ function PendingPromptQueueRow(props: {
             </Button>
             <Button
               aria-label={t("pendingPrompt.edit")}
+              disabled={props.disabled}
               onClick={() => {
                 props.onTrace?.("pending_prompt.row.edit", { entryId: props.entry.id });
                 props.onEdit(props.entry.id);

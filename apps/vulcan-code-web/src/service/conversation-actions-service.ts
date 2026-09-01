@@ -3,6 +3,7 @@ import type {
   ComposerAttachmentPreparationSummary,
   ComposerAttachmentSummary,
   PendingPromptSummary,
+  PendingPromptEditOutcome,
   ContextCompactionWindowNodeId,
   SessionAddonsChangedResponse,
   SessionGoalUserStatusUpdate,
@@ -225,11 +226,13 @@ export async function forkConversationGenerationV1(
   );
 }
 
-// cancelConversationSubmission cancels pre-dispatch media preparation by client submission id.
-// cancelConversationSubmission 按客户端提交标识取消分派前媒体准备。
+// cancelConversationSubmission requests cancellation by client submission id and acknowledges only after the exact upload owner settles.
+// cancelConversationSubmission 按客户端提交标识请求取消，并仅在精确上传所有者结算后确认。
 export async function cancelConversationSubmission(clientSubmissionId: string): Promise<boolean> {
   if (!hasServiceRuntime()) {
-    return false;
+    // No transport cannot prove that the provider operation has settled; only an actual RPC may report absence.
+    // 缺少传输不能证明供应商操作已结算；只有真实 RPC 才能报告操作不存在。
+    throw new Error("Submission cancellation requires an available service runtime.");
   }
   return serviceClient.request<boolean>("service_cancel_conversation_submission", {
     clientSubmissionId,
@@ -610,9 +613,13 @@ export async function setSessionOutputStyle(
 export async function planComposerAttachments(
   projectId: string | null,
   conversationId: string | null,
+  draftSlotKey: string,
   generation: number,
   modelSelection: ComposerModelSelectionSnapshot,
   attachments: ComposerAttachmentSummary[],
+  // Explicit user retry is the only way to restart an original upload without a live plan or operation.
+  // 对没有活动计划或操作的原上传，只有用户显式重试才允许再次启动。
+  retryUploads = false,
 ): Promise<ComposerAttachmentPreparationSummary[]> {
   if (!hasServiceRuntime()) {
     return attachments.map((attachment) => ({
@@ -629,8 +636,17 @@ export async function planComposerAttachments(
   }
   return serviceClient.request<ComposerAttachmentPreparationSummary[]>(
     "service_plan_composer_attachments",
-    { projectId, conversationId, generation, modelSelection, attachments },
+    { projectId, conversationId, draftSlotKey, generation, modelSelection, attachments, retryUploads },
   );
+}
+
+// discardComposerAttachmentPlans removes unused view plans without cancelling any original upload.
+// discardComposerAttachmentPlans 移除未使用视图计划，不取消任何原上传。
+// Parameter: transferIds contains service-issued view identities; returns the number actually discarded.
+// 参数：transferIds 包含服务签发视图身份；返回实际丢弃数量。
+export async function discardComposerAttachmentPlans(transferIds: string[]): Promise<number> {
+  if (!hasServiceRuntime()) throw new Error("Discarding attachment plans requires an available service runtime.");
+  return serviceClient.request<number>("service_discard_composer_attachment_plans", { transferIds });
 }
 
 // prepareComposerAttachment executes one planned provider upload without submitting the prompt.
@@ -673,7 +689,9 @@ export async function reconcileComposerAttachmentDraftLease(
   attachments: ComposerAttachmentSummary[],
 ): Promise<boolean> {
   if (!hasServiceRuntime()) {
-    return false;
+    // Only a real service response may acknowledge an unchanged set; unavailable transport must remain an error.
+    // 只有真实服务响应可以确认集合未变；传输不可用必须保持错误。
+    throw new Error("Attachment draft reconciliation requires an available service runtime.");
   }
   return serviceClient.request<boolean>("service_reconcile_composer_attachment_draft", {
     projectId,
@@ -756,11 +774,11 @@ export async function closeSubagentTask(parentConversationId: string, taskId: st
 
 // editPendingPrompt restores one queued prompt from the selected conversation queue.
 // editPendingPrompt 从当前选中会话队列恢复单条排队提示词。
-export async function editPendingPrompt(entryId: string): Promise<PendingPromptSummary | null> {
+export async function editPendingPrompt(entryId: string): Promise<PendingPromptEditOutcome | null> {
   if (!hasServiceRuntime()) {
     return null;
   }
-  return serviceClient.request<PendingPromptSummary>("service_edit_pending_prompt", { entryId });
+  return serviceClient.request<PendingPromptEditOutcome>("service_edit_pending_prompt", { entryId });
 }
 
 // insertPendingPrompt routes one visible queue item through the shared pending-prompt router.

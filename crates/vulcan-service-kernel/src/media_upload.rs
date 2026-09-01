@@ -12,8 +12,7 @@ use vulcan_core::types::{
 use vulcan_provider_adapters::{
     CONVERSATION_MEDIA_INPUT_OPERATION_ID, MediaUploadCancellation, MediaUploadProgressCallback,
     ProviderOperationalProfileRevision, ProviderOperationalTelemetryEvent,
-    ProviderOperationalTelemetryEventName, ResourceReferencePolicy,
-    record_provider_operational_telemetry,
+    ProviderOperationalTelemetryEventName, record_provider_operational_telemetry,
 };
 use vulcan_service_api::{
     ComposerAttachmentDeliveryPlan, ComposerAttachmentPreparationPhase,
@@ -22,9 +21,23 @@ use vulcan_service_api::{
 };
 use vulcan_workbench_model::{SessionMediaReferenceEntry, SessionMediaReferenceScope};
 
+mod composer_policy;
+mod draft_execution;
+mod registration;
+use composer_policy::ComposerMediaDeliveryPlanner;
+pub(crate) use composer_policy::media_receipt_is_usable;
+pub(crate) use draft_execution::discard_composer_attachment_plans;
+#[cfg(test)]
+pub(crate) use draft_execution::tests::exercise_draft_upload_reservation_lifecycle;
+use draft_execution::{
+    DraftUploadIntentIdentity, DraftUploadObservation, DraftUploadObserver, DraftUploadPreparation,
+    DraftUploadReservation,
+};
+use registration::{PendingMediaUpload, PendingMediaUploadRegistration};
+
 /// Process-local pending media submissions keyed by the client submission id.
 /// 按客户端提交标识索引的进程内待处理媒体提交。
-static PENDING_MEDIA_UPLOADS: OnceLock<StdMutex<BTreeMap<String, MediaUploadCancellation>>> =
+static PENDING_MEDIA_UPLOADS: OnceLock<StdMutex<BTreeMap<String, PendingMediaUpload>>> =
     OnceLock::new();
 
 /// Process-local frozen draft plans keyed by their service-issued transfer identity.
@@ -35,14 +48,6 @@ static DRAFT_MEDIA_UPLOAD_PLANS: OnceLock<StdMutex<BTreeMap<String, DraftMediaUp
 /// Maximum lifetime for an unconsumed process-local draft upload plan.
 /// 未消费进程内草稿上传计划的最长存活时间。
 const DRAFT_MEDIA_UPLOAD_PLAN_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
-
-/// Host hard limit for original inline attachment bytes on routes without usable upload.
-/// 没有可用上传路线时原始附件内联字节的宿主硬上限。
-const COMPOSER_INLINE_ORIGINAL_MAX_BYTES: u64 = 2 * 1024 * 1024;
-
-/// Host request-wide Base64 budget shared by all draft attachments planned for inline delivery.
-/// 所有计划内联传输的草稿附件共享的宿主请求级 Base64 预算。
-const COMPOSER_INLINE_AGGREGATE_BASE64_MAX_BYTES: u64 = 2 * 1024 * 1024;
 
 /// Immutable non-secret route identity copied into every progress and telemetry event for one file.
 /// 为单个文件复制到每条进度与遥测事件的不可变非秘密路由身份。
@@ -83,14 +88,17 @@ struct MediaUploadTelemetryIdentity {
     response_profiles: Vec<ProviderOperationalProfileRevision>,
 }
 
-/// Retains one non-persisted upload plan and its frozen route contract until preparation starts.
-/// 在准备开始前保留一份不持久化的上传计划及其冻结路由契约。
+/// Retains one view plan; its reservation alone owns original intent and physical execution authority.
+/// 保留一份视图计划；其许可独占原意图与实体执行权威。
 struct DraftMediaUploadPlan {
+    /// Shared single-use physical start, independent of the view generation.
+    /// 共享且只能消费一次的实体启动，独立于视图代际。
+    reservation: Arc<DraftUploadReservation>,
     /// Non-secret caller and route identity authorized by this plan.
     /// 本计划授权的非秘密调用方与路线身份。
     identity: DraftMediaUploadPlanIdentity,
-    /// Frozen route and live credential lease used by the physical upload.
-    /// 真实上传使用的冻结路由与实时凭据租约。
+    /// Current view's frozen route for receipt projection; physical work uses the reservation's original execution.
+    /// 当前视图用于回执投影的冻结路线；实体工作使用许可中的原执行。
     execution: Arc<vulcan_provider_adapters::ResolvedPublicAiExecution>,
     /// Process-local creation instant used only for orphan cleanup.
     /// 仅用于孤儿清理的进程内创建时刻。
@@ -128,18 +136,6 @@ pub(crate) struct PreparedSubmissionMedia {
     /// Provider-native references that must be attached to the canonical user-message owner.
     /// 必须附加到规范用户消息所有者上的供应商原生引用。
     pub(crate) references: Vec<PreparedSubmissionMediaReference>,
-}
-
-/// Carries the authoritative request-local attachment projection and its prepared references.
-/// 携带权威的单次请求局部附件投影及其已准备引用。
-#[derive(Debug, Clone, Default)]
-pub(crate) struct PreparedSubmissionMediaProjection {
-    /// Provider-facing attachment copies projected from the exact frozen execution route.
-    /// 从精确冻结执行路线投影得到的 Provider 侧附件副本。
-    pub(crate) provider_attachments: Vec<ConversationAttachment>,
-    /// Provider-native references prepared against the same frozen execution route.
-    /// 针对同一冻结执行路线准备的 Provider 原生引用。
-    pub(crate) prepared_media: PreparedSubmissionMedia,
 }
 
 /// Carries one durable media-ledger candidate without exposing provider secrets.
@@ -188,45 +184,6 @@ pub(crate) struct PreparedSubmissionMediaReference {
     /// Provider reference expiry time in Unix milliseconds.
     /// 供应商引用过期时间的 Unix 毫秒值。
     pub(crate) expires_at_unix_millis: u64,
-    /// Historical canonical user-message owners that still retain this source.
-    /// 仍保留该源文件的历史规范用户消息所有者。
-    pub(crate) owner_message_ids: BTreeSet<String>,
-    /// Whether the current submission owner should be attached after turn admission.
-    /// 是否应在本轮回合准入后附加当前提交所有者。
-    pub(crate) attach_current_owner: bool,
-}
-
-impl PreparedSubmissionMediaReference {
-    /// Converts the preparation result into a durable session-ledger entry.
-    /// 将准备结果转换为可持久化的会话账本条目。
-    pub(crate) fn into_ledger_entry(
-        self,
-        owner_message_id: Option<&str>,
-    ) -> SessionMediaReferenceEntry {
-        let owner_message_ids = self.owner_message_ids;
-        let attach_current_owner = self.attach_current_owner;
-        let mut entry = SessionMediaReferenceEntry {
-            source_sha256: self.source_sha256,
-            source_byte_len: self.source_byte_len,
-            provider_id: self.provider_id,
-            service_entry_id: self.service_entry_id,
-            upload_channel_id: self.upload_channel_id,
-            upload_contract_fingerprint: self.upload_contract_fingerprint,
-            reference_scope: self.reference_scope,
-            connection_id: self.connection_id,
-            session_id: self.session_id,
-            resource_kind: self.resource_kind,
-            mime_type: self.mime_type,
-            provider_reference: self.provider_reference,
-            created_at_unix_millis: self.created_at_unix_millis,
-            expires_at_unix_millis: self.expires_at_unix_millis,
-            owner_message_ids,
-        };
-        if attach_current_owner && let Some(owner_message_id) = owner_message_id {
-            entry.owner_message_ids.insert(owner_message_id.to_string());
-        }
-        entry
-    }
 }
 
 impl PreparedSubmissionMedia {
@@ -239,7 +196,7 @@ impl PreparedSubmissionMedia {
 
 /// Returns the process-local pending media cancellation registry.
 /// 返回进程内待处理媒体取消注册表。
-fn pending_media_uploads() -> &'static StdMutex<BTreeMap<String, MediaUploadCancellation>> {
+fn pending_media_uploads() -> &'static StdMutex<BTreeMap<String, PendingMediaUpload>> {
     PENDING_MEDIA_UPLOADS.get_or_init(|| StdMutex::new(BTreeMap::new()))
 }
 
@@ -273,7 +230,7 @@ fn retain_live_draft_media_upload_plans(plans: &mut BTreeMap<String, DraftMediaU
 /// Success after every plan is visible, or an explicit collision without partial insertion.
 /// 全部计划可见后返回成功；发生冲突时不进行部分插入并返回显式错误。
 fn register_draft_media_upload_plans(
-    plans: Vec<(String, DraftMediaUploadPlan)>,
+    mut plans: Vec<(String, DraftMediaUploadPlan)>,
 ) -> Result<(), String> {
     if plans.is_empty() {
         return Ok(());
@@ -301,12 +258,43 @@ fn register_draft_media_upload_plans(
             "Draft media upload plan `{transfer_id}` already exists."
         ));
     }
+    // Merge concurrent view publications under the existing locks before exposing any of this batch.
+    // 在暴露本批次任何计划之前，在既有锁内合并并发视图发布。
+    let pending = pending_media_uploads()
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let mut incoming_reservations = BTreeMap::<String, Arc<DraftUploadReservation>>::new();
+    for (_, plan) in &mut plans {
+        // A delayed view already tied to a started operation must never be rebound to a newer explicit retry.
+        // 已绑定启动操作的延迟视图绝不能重新绑定到更新的显式重试。
+        if plan.reservation.started.get().is_some() {
+            continue;
+        }
+        if let Some(retained) =
+            draft_execution::find_reservation(&plan.reservation.identity, &registry, &pending)?
+        {
+            plan.reservation = retained;
+        } else if let Some(retained) =
+            incoming_reservations.get(&plan.reservation.identity.intent_id)
+        {
+            if retained.identity != plan.reservation.identity {
+                return Err(String::from(
+                    "Draft upload batch contains conflicting intent owners.",
+                ));
+            }
+            plan.reservation = Arc::clone(retained);
+        }
+        incoming_reservations.insert(
+            plan.reservation.identity.intent_id.clone(),
+            Arc::clone(&plan.reservation),
+        );
+    }
     registry.extend(plans);
     Ok(())
 }
 
-/// Atomically consumes one draft upload plan and publishes its cancellation token.
-/// 原子消费一份草稿上传计划并发布其取消令牌。
+/// Atomically consumes a view plan and either claims its original start or registers an independent observer.
+/// 原子消费视图计划，取得原启动权限或登记独立观察者。
 ///
 /// # Parameters
 /// # 参数
@@ -316,15 +304,15 @@ fn register_draft_media_upload_plans(
 ///
 /// # Returns
 /// # 返回值
-/// The unique frozen plan and registered cancellation token, or an explicit controlled error.
-/// 返回唯一冻结计划与已注册取消令牌，或返回显式受控错误。
+/// The validated view plan and a physical owner or observer, or an explicit controlled error.
+/// 返回已校验视图计划及实体所有者或观察者，或返回显式受控错误。
 fn consume_draft_media_upload_plan(
     transfer_id: &str,
     workspace_path: &str,
     conversation_id: &Option<String>,
     model_selection: &SubmissionModelSelection,
     preparation: &ComposerAttachmentPreparationSummary,
-) -> Result<(DraftMediaUploadPlan, MediaUploadCancellation), String> {
+) -> Result<(DraftMediaUploadPlan, DraftUploadPreparation), String> {
     let mut registry = draft_media_upload_plans()
         .lock()
         .map_err(|error| format!("failed to lock draft media upload plans: {error}"))?;
@@ -343,22 +331,66 @@ fn consume_draft_media_upload_plan(
             "Composer attachment preparation does not match its service-issued frozen upload plan.",
         ));
     }
-    // pending is locked after the plan registry; cancellation uses the same order so no unobservable gap exists.
-    // pending 在计划注册表之后加锁；取消路径使用相同顺序，因此不存在不可观测间隙。
+    // Register under the plan owner using the same plan-then-pending lock order as cancellation.
+    // 在计划所有者内登记，使用与取消相同的计划锁先于待处理锁顺序。
     let mut pending = pending_media_uploads()
         .lock()
-        .map_err(|error| format!("failed to lock pending media uploads: {error}"))?;
+        .map_err(|error| error.to_string())?;
     if pending.contains_key(transfer_id) {
-        return Err(format!(
-            "client submission `{transfer_id}` is already preparing media"
-        ));
+        return Err(String::from("Draft view preparation is already active."));
     }
-    let frozen_plan = registry.remove(transfer_id).ok_or_else(|| {
-        format!("Draft media upload plan `{transfer_id}` is missing, expired, or already consumed.")
-    })?;
-    let cancellation = MediaUploadCancellation::new();
-    pending.insert(transfer_id.to_string(), cancellation.clone());
-    Ok((frozen_plan, cancellation))
+    // Every view shares the same once-set operation, including observers that start after it has settled.
+    // 每个视图共享同一个仅设置一次的操作，包含在其结算后才开始的观察者。
+    let start = if let Some(operation) = frozen_plan.reservation.started.get() {
+        let observer = DraftUploadObserver {
+            alias_id: transfer_id.to_owned(),
+            operation: operation.clone(),
+        };
+        pending.insert(
+            transfer_id.to_owned(),
+            PendingMediaUpload {
+                draft: Some(Arc::clone(&frozen_plan.reservation)),
+                cancellation: operation.cancellation.clone(),
+                settled: operation.settled.clone(),
+            },
+        );
+        DraftUploadPreparation::Observe(observer)
+    } else {
+        let cancellation = MediaUploadCancellation::new();
+        let (settled, settlement) = tokio::sync::watch::channel(false);
+        let operation = DraftUploadObservation {
+            transfer_id: transfer_id.to_owned(),
+            cancellation: cancellation.clone(),
+            settled: settlement.clone(),
+        };
+        frozen_plan
+            .reservation
+            .started
+            .set(operation)
+            .map_err(|_| String::from("Draft upload start was already claimed."))?;
+        pending.insert(
+            transfer_id.to_owned(),
+            PendingMediaUpload {
+                draft: Some(Arc::clone(&frozen_plan.reservation)),
+                cancellation: cancellation.clone(),
+                settled: settlement,
+            },
+        );
+        DraftUploadPreparation::Start(PendingMediaUploadRegistration::new(
+            transfer_id.to_owned(),
+            cancellation,
+            settled,
+        ))
+    };
+    drop(pending);
+    // The plan cannot change while this guard is held; explicitly undo registration on an invariant failure.
+    // 持有守卫期间计划不能变化；不变量失败时显式撤销登记。
+    let Some(frozen_plan) = registry.remove(transfer_id) else {
+        return Err(String::from(
+            "Validated draft media upload plan disappeared before consumption.",
+        ));
+    };
+    Ok((frozen_plan, start))
 }
 
 /// Validates one caller preparation against the exact non-secret frozen plan identity.
@@ -392,9 +424,12 @@ fn draft_media_upload_plan_matches(
 
 /// Registers one submission before any workspace or transcript mutation occurs.
 /// 在任何工作区或转录变更前注册一条提交。
+/// Returns its unique terminal owner; dropping the owner settles cancellation waiters and removes only this operation.
+/// 返回其唯一终态所有者；丢弃所有者会结算取消等待者，并仅移除本操作。
+#[cfg(test)]
 pub(crate) fn register_media_upload(
     client_submission_id: &str,
-) -> Result<MediaUploadCancellation, String> {
+) -> Result<PendingMediaUploadRegistration, String> {
     if client_submission_id.trim().is_empty() {
         return Err(String::from("client submission id must not be empty"));
     }
@@ -407,37 +442,90 @@ pub(crate) fn register_media_upload(
             "client submission `{client_submission_id}` is already preparing media"
         ));
     }
-    pending.insert(client_submission_id.to_string(), cancellation.clone());
-    Ok(cancellation)
+    // A cancellation acknowledgement waits for the actual owner to settle, not just for its token to be signalled.
+    // 取消确认等待实际所有者结算，而非仅等待其令牌被通知。
+    let (settled, settlement) = tokio::sync::watch::channel(false);
+    pending.insert(
+        client_submission_id.to_string(),
+        PendingMediaUpload {
+            draft: None,
+            cancellation: cancellation.clone(),
+            settled: settlement,
+        },
+    );
+    Ok(PendingMediaUploadRegistration::new(
+        client_submission_id.to_string(),
+        cancellation,
+        settled,
+    ))
 }
 
-/// Cancels one pending submission without touching persisted conversation state.
-/// 取消一条待处理提交，但不触碰持久化会话状态。
-pub(crate) fn cancel_media_upload(client_submission_id: &str) -> Result<bool, String> {
-    // plans and pending use the same lock order as the consume transition.
-    // plans 与 pending 使用和消费迁移相同的加锁顺序。
-    let mut plans = draft_media_upload_plans()
-        .lock()
-        .map_err(|error| format!("failed to lock draft media upload plans: {error}"))?;
-    retain_live_draft_media_upload_plans(&mut plans);
-    let removed_draft_plan = plans.remove(client_submission_id).is_some();
-    let pending = pending_media_uploads()
-        .lock()
-        .map_err(|error| format!("failed to lock pending media uploads: {error}"))?;
-    let cancellation = pending.get(client_submission_id).cloned();
-    if let Some(cancellation) = cancellation {
-        cancellation.cancel();
-        return Ok(true);
+/// Requests cancellation for exact `client_submission_id` and acknowledges only after its active owner settles, without changing conversation history.
+/// 为精确`client_submission_id`请求取消，并仅在活动所有者结算后确认，不修改会话历史。
+/// Returns false for no active work, true after removing an unconsumed plan or settling the exact running operation, or an explicit settlement failure.
+/// 无活动工作时返回假，移除未消费计划或结算精确运行操作后返回真，结算失败则明确报错。
+pub(crate) async fn cancel_media_upload(client_submission_id: &str) -> Result<bool, String> {
+    // Capture the exact operation without holding either registry mutex across cancellation or settlement waiting.
+    // 捕获精确操作，不在取消或结算等待期间持有任一注册表互斥锁。
+    let (removed_draft_plan, operation) = {
+        // plans and pending use the same lock order as the consume transition.
+        // plans 与 pending 使用和消费迁移相同的加锁顺序。
+        let mut plans = draft_media_upload_plans()
+            .lock()
+            .map_err(|error| format!("failed to lock draft media upload plans: {error}"))?;
+        retain_live_draft_media_upload_plans(&mut plans);
+        let removed_draft_plan = plans.remove(client_submission_id);
+        // Cancelling an unstarted shared permission also revokes every other queued view of that permission.
+        // 取消未启动的共享许可时，也撤销该许可的其他全部排队视图。
+        if let Some(plan) = &removed_draft_plan
+            && plan.reservation.started.get().is_none()
+        {
+            let cancellation = MediaUploadCancellation::new();
+            cancellation.cancel();
+            let (_, settled) = tokio::sync::watch::channel(true);
+            plan.reservation
+                .started
+                .set(DraftUploadObservation {
+                    transfer_id: client_submission_id.to_owned(),
+                    cancellation,
+                    settled,
+                })
+                .map_err(|_| String::from("Draft start changed during cancellation."))?;
+        }
+        let pending = pending_media_uploads()
+            .lock()
+            .map_err(|error| format!("failed to lock pending media uploads: {error}"))?;
+        // An explicit user cancellation of an unconsumed observing view also targets its original operation.
+        // 用户显式取消未消费的观察视图时，也针对其原操作。
+        let operation = pending.get(client_submission_id).cloned().or_else(|| {
+            removed_draft_plan.as_ref().and_then(|plan| {
+                plan.reservation
+                    .started
+                    .get()
+                    .map(|original| PendingMediaUpload {
+                        draft: Some(Arc::clone(&plan.reservation)),
+                        cancellation: original.cancellation.clone(),
+                        settled: original.settled.clone(),
+                    })
+            })
+        });
+        (removed_draft_plan.is_some(), operation)
+    };
+    if let Some(mut operation) = operation {
+        operation.cancellation.cancel();
+        loop {
+            // Completion can precede this first poll; watch retains that exact terminal fact.
+            // 完成可先于首次轮询；watch保留该精确终态事实。
+            let settled = *operation.settled.borrow_and_update();
+            if settled {
+                return Ok(true);
+            }
+            operation.settled.changed().await.map_err(|_| {
+                String::from("Media upload settlement ended without a terminal acknowledgement.")
+            })?;
+        }
     }
     Ok(removed_draft_plan)
-}
-
-/// Removes the exact submission registration after upload preparation reaches a terminal state.
-/// 媒体准备到达终态后移除精确提交注册。
-fn remove_media_upload(client_submission_id: &str) {
-    if let Ok(mut pending) = pending_media_uploads().lock() {
-        pending.remove(client_submission_id);
-    }
 }
 
 /// Resolves one provider-neutral direct-delivery decision from the exact frozen execution route.
@@ -446,144 +534,105 @@ fn composer_attachment_delivery_plan(
     execution: &vulcan_provider_adapters::ResolvedPublicAiExecution,
     attachment: &ConversationAttachment,
 ) -> Result<(ComposerAttachmentDeliveryPlan, &'static str), String> {
-    let resource_kind = attachment_kind(attachment.kind.clone());
-    let constraint = execution
-        .route
-        .protocol_route
-        .input_resource_constraints
-        .iter()
-        .find(|constraint| constraint.resource_kind == resource_kind);
-    // originalByteLen is authoritative staged metadata; an absent value cannot be treated as an empty file.
-    // originalByteLen 是权威暂存元数据；缺失值不能被当作空文件处理。
-    let Some(original_byte_len) = attachment.byte_len else {
-        return Ok((
-            ComposerAttachmentDeliveryPlan::MetadataOnly,
-            "attachment_size_is_unknown",
-        ));
-    };
-    let original_is_native = submission_attachment_is_native(
-        execution.route.protocol_route.protocol_profile_id.as_str(),
-        &execution.model.capabilities,
-        attachment,
-    );
-    let original_fits_constraint = constraint.is_none_or(|constraint| {
-        (constraint.accepted_mime_types.is_empty()
-            || constraint
-                .accepted_mime_types
-                .iter()
-                .any(|mime_type| mime_type.eq_ignore_ascii_case(&attachment.mime_type)))
-            && constraint
-                .max_bytes
-                .is_none_or(|max_bytes| original_byte_len <= max_bytes)
-    });
-    if original_is_native && original_fits_constraint {
-        let upload_contract = execution.client.conversation_media_upload_contract(
-            &execution.route,
-            resource_kind,
-            attachment.mime_type.as_str(),
-        )?;
-        let remote_only = constraint.is_some_and(|constraint| {
-            constraint.reference_policy == ResourceReferencePolicy::RemoteOnly
-        });
-        let upload_required = resource_kind == vulcan_ai_contract::ResourceKind::Video
-            || original_byte_len > vulcan_provider_adapters::PREFERRED_INLINE_MEDIA_MAX_BYTES
-            || remote_only;
-        if upload_required && upload_contract.is_some() {
-            return Ok((
-                ComposerAttachmentDeliveryPlan::UploadReference,
-                "provider_upload_reference_required",
-            ));
-        }
-        if !remote_only && original_byte_len <= COMPOSER_INLINE_ORIGINAL_MAX_BYTES {
-            return Ok((
-                ComposerAttachmentDeliveryPlan::InlineOriginal,
-                "original_bytes_fit_host_inline_budget",
-            ));
-        }
-    }
-    if attachment.kind == ConversationAttachmentKind::Image
-        && let Some(preview_path) = attachment
-            .preview_local_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        && let Ok(preview_metadata) = std::fs::metadata(preview_path)
-    {
-        let mut preview = attachment.clone();
-        preview.local_path = preview_path.to_string();
-        preview.mime_type = String::from("image/jpeg");
-        preview.byte_len = Some(preview_metadata.len());
-        let preview_is_native = submission_attachment_is_native(
-            execution.route.protocol_route.protocol_profile_id.as_str(),
-            &execution.model.capabilities,
-            &preview,
-        );
-        let preview_fits_constraint = constraint.is_none_or(|constraint| {
-            constraint.reference_policy != ResourceReferencePolicy::RemoteOnly
-                && (constraint.accepted_mime_types.is_empty()
-                    || constraint
-                        .accepted_mime_types
-                        .iter()
-                        .any(|mime_type| mime_type.eq_ignore_ascii_case("image/jpeg")))
-                && constraint
-                    .max_bytes
-                    .is_none_or(|max_bytes| preview_metadata.len() <= max_bytes)
-        });
-        if preview_is_native
-            && preview_fits_constraint
-            && preview_metadata.len() <= COMPOSER_INLINE_ORIGINAL_MAX_BYTES
-        {
-            return Ok((
-                ComposerAttachmentDeliveryPlan::InlineDerivedPreview,
-                "derived_image_preview_fits_inline_budget",
-            ));
-        }
-    }
-    Ok((
-        ComposerAttachmentDeliveryPlan::MetadataOnly,
-        "selected_route_cannot_consume_attachment_bytes",
-    ))
+    ComposerMediaDeliveryPlanner::new(execution.media_delivery_policy)?.plan(execution, attachment)
 }
 
-/// Applies frozen route count limits and the host-wide inline Base64 budget to one direct resource.
-/// 对单个直接资源应用冻结路由数量限制与宿主级内联 Base64 总预算。
-///
-/// Parameters: `resource_kind` and `max_count` describe the frozen route constraint, while
-/// `inline_raw_bytes` is present only for an inline projection; both accumulators are mutated only
-/// when the resource remains directly deliverable.
-/// 参数：`resource_kind` 与 `max_count` 描述冻结路由约束，`inline_raw_bytes` 仅在内联投影时存在；
-/// 两个累计器只会在资源仍可直接传递时保留变更。
-///
-/// Returns: `None` when admitted, otherwise the stable metadata-only degradation reason.
-/// 返回值：准入时返回 `None`，否则返回稳定的仅元数据降级原因。
-fn apply_composer_direct_resource_limits(
-    resource_kind: vulcan_ai_contract::ResourceKind,
-    max_count: Option<u64>,
-    inline_raw_bytes: Option<u64>,
-    direct_resource_counts: &mut BTreeMap<vulcan_ai_contract::ResourceKind, u64>,
-    inline_base64_bytes: &mut u64,
-) -> Option<&'static str> {
-    let direct_count = direct_resource_counts.entry(resource_kind).or_default();
-    *direct_count = direct_count.saturating_add(1);
-    if max_count.is_some_and(|limit| *direct_count > limit) {
-        *direct_count = direct_count.saturating_sub(1);
-        return Some("frozen_route_resource_count_exceeded");
+/// Captures the exact non-secret model route from frozen `execution` for one prompt-owned media intention.
+/// 从冻结`execution`捕获精确非秘密模型路线，用于一个提示词所有媒体意图。
+fn composer_media_original_route(
+    execution: &vulcan_provider_adapters::ResolvedPublicAiExecution,
+) -> vulcan_session_core::v1::UserPromptMediaRoute {
+    vulcan_session_core::v1::UserPromptMediaRoute {
+        provider_id: execution.route.provider.id.clone(),
+        service_entry_id: execution.route.entry.id.clone(),
+        connection_id: execution.route.connection.id.clone(),
+        model_id: execution.model.id.clone(),
+        protocol_profile_id: execution.route.protocol_route.protocol_profile_id.clone(),
     }
-    let inline_raw_bytes = inline_raw_bytes?;
-    // encodedBytes computes exact padded Base64 length without allocating the payload.
-    // encodedBytes 在不分配负载的情况下计算精确的带填充 Base64 长度。
-    let encoded_bytes = inline_raw_bytes
-        .saturating_add(2)
-        .checked_div(3)
-        .unwrap_or_default()
-        .saturating_mul(4);
-    let next_inline_bytes = inline_base64_bytes.checked_add(encoded_bytes);
-    if next_inline_bytes.is_none_or(|value| value > COMPOSER_INLINE_AGGREGATE_BASE64_MAX_BYTES) {
-        *direct_count = direct_count.saturating_sub(1);
-        return Some("host_inline_aggregate_budget_exceeded");
+}
+
+/// Exercises the real composer decision for one fixture occurrence without exposing the private planner in production.
+/// 为一次夹具出现执行真实输入区决策，不在生产暴露私有规划器。
+/// `execution`, `attachment`, `original`, and `session_id` are exact host facts; returns the selected mode and safe reason.
+/// `execution`、`attachment`、`original`和`session_id`是精确宿主事实；返回选中方式及安全原因。
+#[cfg(test)]
+pub(crate) fn test_composer_draft_decision(
+    execution: &vulcan_provider_adapters::ResolvedPublicAiExecution,
+    attachment: &ConversationAttachment,
+    original: &vulcan_agent_runtime::attachment_asset_index::AttachmentDraftMediaOrigin,
+    session_id: &str,
+) -> Result<(ComposerAttachmentDeliveryPlan, &'static str), String> {
+    ComposerMediaDeliveryPlanner::new(execution.media_delivery_policy)?.plan_draft(
+        execution,
+        attachment,
+        Some(original),
+        Some(session_id),
+    )
+}
+
+/// Converts one exact completed draft `reference` into the existing private project receipt using its frozen `execution` and canonical `attachment`.
+/// 根据冻结`execution`及规范`attachment`，将精确已完成草稿`reference`转换为既有私有项目回执。
+fn draft_upload_binding(
+    reference: &PreparedSubmissionMediaReference,
+    execution: &vulcan_provider_adapters::ResolvedPublicAiExecution,
+    attachment: &ConversationAttachment,
+) -> Result<vulcan_workspace_store::workspace_store::ProviderBinding, String> {
+    // Resource kind belongs to the canonical attachment, never to a guessed reference string format.
+    // 资源类别属于规范附件，绝不来自猜测的引用字符串格式。
+    let kind = attachment_kind(attachment.kind.clone());
+    // Only the already selected upload contract defines the reference representation.
+    // 只有已经选中的上传契约定义引用表示形式。
+    let contract = execution
+        .client
+        .conversation_media_upload_contract(&execution.route, kind, &attachment.mime_type)?
+        .ok_or_else(|| String::from("Draft upload receipt has no exact consuming contract."))?;
+    if reference.provider_id != execution.route.provider.id
+        || reference.service_entry_id != execution.route.entry.id
+        || reference.upload_channel_id != contract.upload_channel_id
+        || reference.upload_contract_fingerprint != contract.contract_fingerprint
+        || attachment.source_sha256.as_deref() != Some(reference.source_sha256.as_str())
+        || attachment.byte_len != Some(reference.source_byte_len)
+        || reference.mime_type != attachment.mime_type
+        || reference.resource_kind != resource_kind_text(kind)
+    {
+        return Err(String::from(
+            "Draft upload result differs from its frozen source or route.",
+        ));
     }
-    *inline_base64_bytes = next_inline_bytes.unwrap_or(*inline_base64_bytes);
-    None
+    execution.client.validate_conversation_media_reference(
+        &execution.route,
+        kind,
+        &attachment.mime_type,
+        &reference.provider_reference,
+    )?;
+    // Private provider values remain in the resource store; prompt parameters will receive only their fingerprint.
+    // 私有供应商值保留在资源存储；提示词参数只接收其指纹。
+    let binding = vulcan_workspace_store::workspace_store::ProviderBinding {
+        provider: reference.provider_id.clone(),
+        connection_id: Some(execution.route.connection.id.clone()),
+        media_id: reference.provider_reference.clone(),
+        upload_receipt: Some(
+            vulcan_workspace_store::workspace_store::ProjectResourceUploadReceipt {
+                draft_intent_id: None,
+                version: 1,
+                service_entry_id: reference.service_entry_id.clone(),
+                upload_channel_id: reference.upload_channel_id.clone(),
+                upload_contract_fingerprint: reference.upload_contract_fingerprint.clone(),
+                resource_kind: kind,
+                mime_type: reference.mime_type.clone(),
+                source_kind: vulcan_provider_adapters::media_upload_source_kind(
+                    contract.reference_encoding,
+                ),
+                session_scope_id: reference.session_id.clone(),
+                created_at_unix_millis: reference.created_at_unix_millis,
+                expires_at_unix_millis: reference.expires_at_unix_millis,
+            },
+        ),
+    };
+    binding
+        .upload_receipt_fingerprint(&reference.source_sha256, reference.source_byte_len)
+        .map_err(|error| error.to_string())?;
+    Ok(binding)
 }
 
 /// Applies one service-owned delivery plan to an isolated Provider attachment copy.
@@ -639,78 +688,6 @@ fn apply_composer_delivery_plan_to_attachment(
     };
     projected.delivery_mode = Some(delivery_mode);
     projected
-}
-
-/// Recomputes every direct attachment projection from one exact frozen Provider execution.
-/// 从一项精确冻结的 Provider 执行重新计算每个直接附件投影。
-///
-/// # Parameters
-/// 参数
-/// `execution` owns the exact route, model, account, MIME constraints, and upload contract;
-/// `attachments` contain authoritative source facts plus an optional metadata-only reduction.
-/// `execution` 持有精确路线、模型、账号、MIME 约束与上传契约；`attachments` 包含权威源事实以及
-/// 可选的仅元数据降级请求。
-///
-/// # Returns
-/// 返回值
-/// Provider-facing copies that obey route count limits and the request-wide inline Base64 budget.
-/// 返回遵守路线数量限制与请求级内联 Base64 预算的 Provider 侧副本。
-fn project_composer_attachments_for_execution(
-    execution: &vulcan_provider_adapters::ResolvedPublicAiExecution,
-    attachments: &[ConversationAttachment],
-) -> Result<Vec<ConversationAttachment>, String> {
-    let mut direct_resource_counts = BTreeMap::new();
-    let mut inline_base64_bytes = 0_u64;
-    attachments
-        .iter()
-        .map(|attachment| {
-            // metadataOnly is the sole browser-originated reduction accepted by this boundary;
-            // every mode that exposes bytes is recomputed below.
-            // metadataOnly 是此边界唯一接受的浏览器来源降级；每种暴露字节的模式均在下方重算。
-            if attachment.delivery_mode == Some(ConversationAttachmentDeliveryMode::MetadataOnly) {
-                return Ok(apply_composer_delivery_plan_to_attachment(
-                    attachment,
-                    ComposerAttachmentDeliveryPlan::MetadataOnly,
-                ));
-            }
-            let (mut delivery_plan, _) = composer_attachment_delivery_plan(execution, attachment)?;
-            if delivery_plan != ComposerAttachmentDeliveryPlan::MetadataOnly {
-                let resource_kind = attachment_kind(attachment.kind.clone());
-                let inline_raw_bytes = match delivery_plan {
-                    ComposerAttachmentDeliveryPlan::InlineOriginal => attachment.byte_len,
-                    ComposerAttachmentDeliveryPlan::InlineDerivedPreview => attachment
-                        .preview_local_path
-                        .as_deref()
-                        .and_then(|path| std::fs::metadata(path).ok())
-                        .map(|metadata| metadata.len()),
-                    ComposerAttachmentDeliveryPlan::UploadReference
-                    | ComposerAttachmentDeliveryPlan::MetadataOnly => None,
-                };
-                let max_count = execution
-                    .route
-                    .protocol_route
-                    .input_resource_constraints
-                    .iter()
-                    .find(|constraint| constraint.resource_kind == resource_kind)
-                    .and_then(|constraint| constraint.max_count);
-                if apply_composer_direct_resource_limits(
-                    resource_kind,
-                    max_count,
-                    inline_raw_bytes,
-                    &mut direct_resource_counts,
-                    &mut inline_base64_bytes,
-                )
-                .is_some()
-                {
-                    delivery_plan = ComposerAttachmentDeliveryPlan::MetadataOnly;
-                }
-            }
-            Ok(apply_composer_delivery_plan_to_attachment(
-                attachment,
-                delivery_plan,
-            ))
-        })
-        .collect()
 }
 
 /// Parses an optional composer conversation identity without silently changing its route scope.
@@ -783,16 +760,25 @@ pub(crate) async fn service_plan_composer_attachments(
     state: SharedServiceBridgeState,
     project_id: Option<String>,
     conversation_id: Option<String>,
+    draft_slot_key: String,
     generation: u64,
     model_selection: SubmissionModelSelection,
     attachments: Vec<ComposerAttachmentSummary>,
+    retry_uploads: bool,
 ) -> Result<Vec<ComposerAttachmentPreparationSummary>, String> {
+    // The frontend's lease barrier precedes planning; the host verifies the exact live scope again for each asset.
+    // 前端租约屏障先于规划；宿主仍为每个资产重新核对精确活动作用域。
+    let draft_scope = crate::attachments::composer_attachment_draft_scope_for_owner(
+        &draft_slot_key,
+        project_id.as_deref(),
+        conversation_id.as_deref(),
+    )?;
     let workspace_path = composer_attachment_workspace_path(
         &state,
         project_id.as_deref(),
         conversation_id.as_deref(),
     )?;
-    let (_, agent_runtime, _, _, _) = runtime_parts_from_state(&state)?;
+    let (controller_runtime, agent_runtime, _, _, _) = runtime_parts_from_state(&state)?;
     let session_id = composer_media_session_id(conversation_id.as_deref())?;
     let session_runtime_state = composer_media_session_route_state(&state, session_id)?;
     let execution = Arc::new(
@@ -808,13 +794,146 @@ pub(crate) async fn service_plan_composer_attachments(
     // uploadPlans are published only after every attachment has been validated and planned.
     // uploadPlans 仅在全部附件完成校验与规划后统一发布。
     let mut upload_plans = Vec::new();
-    // directResourceCounts applies each route's request-wide limit before any draft upload starts.
-    // directResourceCounts 在任何草稿上传开始前应用每条路线的请求级数量上限。
-    let mut direct_resource_counts = BTreeMap::<vulcan_ai_contract::ResourceKind, u64>::new();
-    // inlineBase64Bytes applies one request-wide host budget after exact Base64 expansion.
-    // inlineBase64Bytes 在精确 Base64 膨胀后应用请求级宿主预算。
-    let mut inline_base64_bytes = 0u64;
-    for summary in attachments {
+    // Freeze one shared policy budget before any draft upload plan is published.
+    // 在任何草稿上传计划发布前冻结一个共享策略预算。
+    let mut media_planner = ComposerMediaDeliveryPlanner::new(execution.media_delivery_policy)?;
+    // Project references use their exact V1 owner and one catalog snapshot, without acquiring a staging lease.
+    // 项目引用使用精确V1所有者及一份目录快照，不取得暂存租约。
+    let project_context = if attachments
+        .iter()
+        .any(|attachment| attachment.project_resource_id.is_some())
+    {
+        // An unmaterialized composer cannot name another session's project resource.
+        // 未物化输入区不能引用另一会话的项目资源。
+        let session_id = session_id.ok_or_else(|| {
+            String::from("Project composer attachments require a materialized V1 session.")
+        })?;
+        // Clone the existing unique registry owner before asynchronous loading.
+        // 异步加载之前克隆既有唯一注册表所有者。
+        let registry = Arc::clone(
+            &state
+                .lock()
+                .map_err(|error| error.to_string())?
+                .session_runtime_registry,
+        );
+        // Exact session loading never falls back to another project or a latest global conversation.
+        // 精确会话加载绝不回退到另一项目或最近全局会话。
+        let handle = crate::session_v1_lifecycle::get_or_load_session_v1(
+            &controller_runtime,
+            &registry,
+            session_id,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        // The locator supplies the sole project partition for all source and receipt lookups.
+        // 定位器为全部来源及回执查询提供唯一项目分区。
+        let locator = handle
+            .storage_locator()
+            .map_err(|error| error.to_string())?;
+        // Only metadata is loaded during planning; source bytes remain deferred.
+        // 规划期间只加载元数据；来源字节保持延迟读取。
+        let catalog = vulcan_workspace_store::workspace_store::load_project_resource_catalog(
+            &locator.project_directory(),
+        )
+        .map_err(|error| error.to_string())?;
+        Some((handle, locator, catalog))
+    } else {
+        None
+    };
+    for (position, summary) in attachments.into_iter().enumerate() {
+        if let Some(raw_resource_id) = summary.project_resource_id {
+            crate::conversation_resources_v1::validate_project_resource_attachment_reference(
+                &summary,
+            )?;
+            // The exact occurrence carries its original input anchor independently of this rendered position.
+            // 精确出现独立于本次渲染位置携带其原输入锚点。
+            let resource_id =
+                crate::conversation_resources_v1::checked_resource_id(raw_resource_id)?;
+            // The branch above created the project owner only for real project references.
+            // 上述分支只为真实项目引用创建项目所有者。
+            let (handle, locator, catalog) = project_context.as_ref().ok_or_else(|| {
+                String::from("Project attachment planning has no exact source owner.")
+            })?;
+            // Rebuild canonical display facts from metadata rather than trusting browser fields or loading the whole file.
+            // 从元数据重建规范显示事实，不信任浏览器字段，也不加载整个文件。
+            let attachment = composer_attachment_summary_to_core(
+                crate::conversation_resources_v1::composer_attachment_from_project_resource_v1(
+                    locator,
+                    raw_resource_id,
+                )?,
+            )?;
+            // Missing source proof remains unknown; identical ResourceIds never select a replacement source occurrence.
+            // 缺失来源证明保持未知；相同ResourceId绝不选择替代来源出现。
+            let preparation = match &summary.prompt_source {
+                Some(source) => handle
+                    .read(|document| document.user_prompt_resource_preparation(source, resource_id))
+                    .map_err(|error| error.to_string())?
+                    .map_err(|error| error.to_string())?,
+                None => vulcan_session_core::v1::UserPromptResourcePreparation::Unproven,
+            };
+            // The catalog row is exact and immutable, including all append-only private receipts.
+            // 目录行是精确且不可变的，包含全部仅追加私有回执。
+            let entry = catalog
+                .entries
+                .iter()
+                .find(|entry| entry.resource_id == resource_id)
+                .ok_or_else(|| {
+                    String::from("Project attachment catalog entry disappeared during planning.")
+                })?;
+            // Availability checks use metadata only and reserve no budget for unavailable sources.
+            // 可用性检查只使用元数据，不为不可用来源预留预算。
+            let (delivery_plan, reason) =
+                if vulcan_workspace_store::workspace_store::resolve_project_resource_source(
+                    &locator.project_directory(),
+                    catalog,
+                    resource_id,
+                )
+                .is_ok_and(|source| source.is_some())
+                {
+                    media_planner.plan_project(
+                        &execution,
+                        &attachment,
+                        entry,
+                        &preparation,
+                        locator.session_id(),
+                    )?
+                } else {
+                    (
+                        ComposerAttachmentDeliveryPlan::MetadataOnly,
+                        "project_source_unavailable",
+                    )
+                };
+            // Existing completed uploads are already ready; genuinely unprepared project media is prepared only by its next prompt.
+            // 既有完成上传已经就绪；真正未准备的项目媒体只由其下一提示词准备。
+            let restored_upload = matches!(preparation, vulcan_session_core::v1::UserPromptResourcePreparation::Prepared(ref original) if matches!(original.delivery, vulcan_session_core::v1::UserPromptResourceDeliveryKind::Uploaded { .. } | vulcan_session_core::v1::UserPromptResourceDeliveryKind::UploadPending { draft_intent_id: Some(_), .. }));
+            summaries.push(ComposerAttachmentPreparationSummary {
+                attachment_id: format!("project-resource:{raw_resource_id}:{position}"),
+                generation,
+                transfer_id: format!("project-media-view:{}", uuid::Uuid::new_v4()),
+                physical_transfer_id: None,
+                delivery_plan,
+                phase: if delivery_plan == ComposerAttachmentDeliveryPlan::MetadataOnly {
+                    ComposerAttachmentPreparationPhase::MetadataOnly
+                } else if delivery_plan == ComposerAttachmentDeliveryPlan::UploadReference
+                    && restored_upload
+                {
+                    ComposerAttachmentPreparationPhase::DirectReady
+                } else {
+                    ComposerAttachmentPreparationPhase::LocalReady
+                },
+                blocks_submission: false,
+                route_revision: Some(execution.route.route_revision.clone()),
+                reason: if delivery_plan == ComposerAttachmentDeliveryPlan::UploadReference
+                    && !restored_upload
+                {
+                    "project_preparation_deferred_to_prompt".into()
+                } else {
+                    reason.into()
+                },
+                error: None,
+            });
+            continue;
+        }
         let attachment = composer_attachment_summary_to_core(
             resolve_composer_attachment_summary_for_workspace(&workspace_path, summary)?,
         )?;
@@ -825,55 +944,147 @@ pub(crate) async fn service_plan_composer_attachments(
             .filter(|value| !value.is_empty())
             .ok_or_else(|| String::from("Composer attachment is missing its stable asset id."))?
             .to_string();
-        let (mut delivery_plan, mut reason) =
-            composer_attachment_delivery_plan(execution.as_ref(), &attachment)?;
-        let resource_kind = attachment_kind(attachment.kind.clone());
-        let inline_raw_bytes = match delivery_plan {
-            ComposerAttachmentDeliveryPlan::InlineOriginal => attachment.byte_len,
-            ComposerAttachmentDeliveryPlan::InlineDerivedPreview => attachment
-                .preview_local_path
-                .as_deref()
-                .and_then(|path| std::fs::metadata(path).ok())
-                .map(|metadata| metadata.len()),
-            ComposerAttachmentDeliveryPlan::UploadReference
-            | ComposerAttachmentDeliveryPlan::MetadataOnly => None,
-        };
-        if delivery_plan != ComposerAttachmentDeliveryPlan::MetadataOnly {
-            let max_count = execution
-                .route
-                .protocol_route
-                .input_resource_constraints
-                .iter()
-                .find(|constraint| constraint.resource_kind == resource_kind)
-                .and_then(|constraint| constraint.max_count);
-            if let Some(limit_reason) = apply_composer_direct_resource_limits(
-                resource_kind,
-                max_count,
-                inline_raw_bytes,
-                &mut direct_resource_counts,
-                &mut inline_base64_bytes,
-            ) {
-                delivery_plan = ComposerAttachmentDeliveryPlan::MetadataOnly;
-                reason = limit_reason;
+        // Read original intent from its exact live lease, never from the most recent provider cache entry.
+        // 从精确活动租约读取原意图，绝不使用最近供应商缓存条目。
+        let mut original =
+            vulcan_agent_runtime::attachment_asset_index::load_attachment_draft_media(
+                &attachment,
+                &draft_scope,
+            )?;
+        // Decide one chronological occurrence with the shared batch budget.
+        // 使用共享批次预算决定一次时序出现。
+        let (mut delivery_plan, mut reason) = media_planner.plan_draft(
+            execution.as_ref(),
+            &attachment,
+            original.as_ref(),
+            conversation_id.as_deref(),
+        )?;
+        // Only the actual first writer may create an automatic first physical-start permission.
+        // 只有真正首次写入者可以创建自动首次实体启动许可。
+        let mut created_original = false;
+        if original.is_none()
+            && matches!(
+                delivery_plan,
+                ComposerAttachmentDeliveryPlan::InlineOriginal
+                    | ComposerAttachmentDeliveryPlan::UploadReference
+            )
+        {
+            // The first admitted native plan owns the draft mode even if a later model only displays its address.
+            // 首次准入原生规划持有草稿方式，即使后续模型只显示其地址。
+            let delivery = if delivery_plan == ComposerAttachmentDeliveryPlan::InlineOriginal {
+                vulcan_agent_runtime::attachment_asset_index::AttachmentDraftMediaDelivery::Inline
+            } else {
+                // Reuse the exact route resolver; no fallback interface is introduced for provenance storage.
+                // 复用精确路线解析器；来源存储不引入回退接口。
+                let contract = execution
+                    .client
+                    .conversation_media_upload_contract(
+                        &execution.route,
+                        attachment_kind(attachment.kind.clone()),
+                        &attachment.mime_type,
+                    )?
+                    .ok_or_else(|| String::from("Draft upload plan has no exact contract."))?;
+                vulcan_agent_runtime::attachment_asset_index::AttachmentDraftMediaDelivery::Upload {
+                    upload_channel_id: contract.upload_channel_id,
+                    upload_contract_fingerprint: contract.contract_fingerprint,
+                    receipt: None,
+                }
+            };
+            // Atomic first-writer selection prevents later model planning from overwriting the first intention.
+            // 原子首次写入选择阻止后续模型规划覆盖首次意图。
+            let proposed =
+                vulcan_agent_runtime::attachment_asset_index::AttachmentDraftMediaOrigin::new(
+                    &attachment,
+                    composer_media_original_route(&execution),
+                    delivery,
+                )?;
+            // A concurrent winner requires a fresh whole-batch plan rather than double-reserving this resource's budget.
+            // 并发胜出者要求重新规划整批，而不是为本资源重复预留预算。
+            let retained =
+                vulcan_agent_runtime::attachment_asset_index::record_attachment_draft_media(
+                    &attachment,
+                    &draft_scope,
+                    proposed.clone(),
+                )?;
+            if retained.original_route != proposed.original_route
+                || retained.delivery != proposed.delivery
+            {
+                return Err(String::from(
+                    "Draft media original intent changed during planning; replan the exact draft.",
+                ));
             }
+            created_original = retained.intent_id == proposed.intent_id;
+            original = Some(retained);
+        }
+        // A restored receipt is already ready and must not schedule another upload or synthetic progress.
+        // 已恢复回执已经就绪，不能调度另一上传或伪造进度。
+        let upload_ready = original.as_ref().is_some_and(|original| matches!(original.delivery, vulcan_agent_runtime::attachment_asset_index::AttachmentDraftMediaDelivery::Upload { receipt: Some(_), .. }));
+        // Metadata views may observe the original transfer for removal, but never receive new start authority.
+        // 元数据视图可以为移除而观察原传输，但绝不获得新启动权限。
+        let reservation = if let Some(original) = original.as_ref().filter(|original| matches!(original.delivery, vulcan_agent_runtime::attachment_asset_index::AttachmentDraftMediaDelivery::Upload { receipt: None, .. })) {
+            draft_execution::resolve_reservation(DraftUploadIntentIdentity {
+                workspace_path: workspace_path.clone(),
+                draft_scope: draft_scope.clone(),
+                intent_id: original.intent_id.clone(),
+                attachment_id: attachment_id.clone(),
+            }, &execution, delivery_plan == ComposerAttachmentDeliveryPlan::UploadReference && (created_original || retry_uploads))?
+        } else {
+            None
+        };
+        if delivery_plan == ComposerAttachmentDeliveryPlan::UploadReference
+            && !upload_ready
+            && reservation.is_none()
+        {
+            // An old pending intention without a live execution/plan is not proof that its upload never started.
+            // 没有活动执行或计划的旧待回执意图，不能证明其上传从未开始。
+            media_planner.discard_upload_count(attachment_kind(attachment.kind.clone()))?;
+            delivery_plan = ComposerAttachmentDeliveryPlan::MetadataOnly;
+            reason = "original_upload_requires_explicit_retry";
         }
         let phase = match delivery_plan {
             ComposerAttachmentDeliveryPlan::UploadReference => {
-                ComposerAttachmentPreparationPhase::UploadQueued
+                if upload_ready {
+                    ComposerAttachmentPreparationPhase::DirectReady
+                } else {
+                    ComposerAttachmentPreparationPhase::UploadQueued
+                }
             }
             ComposerAttachmentDeliveryPlan::MetadataOnly => {
-                ComposerAttachmentPreparationPhase::MetadataOnly
+                if reason == "original_upload_requires_explicit_retry" {
+                    ComposerAttachmentPreparationPhase::Failed
+                } else {
+                    ComposerAttachmentPreparationPhase::MetadataOnly
+                }
             }
             ComposerAttachmentDeliveryPlan::InlineOriginal
             | ComposerAttachmentDeliveryPlan::InlineDerivedPreview => {
                 ComposerAttachmentPreparationPhase::LocalReady
             }
         };
-        let transfer_id = format!("draft-media:{}", uuid::Uuid::new_v4());
-        if delivery_plan == ComposerAttachmentDeliveryPlan::UploadReference {
+        // A foreign metadata view points cancellation at the real original operation, not a fabricated new upload.
+        // 外部模型的元数据视图将取消指向真实原操作，而非虚构的新上传。
+        let transfer_id = if delivery_plan == ComposerAttachmentDeliveryPlan::MetadataOnly {
+            reservation
+                .as_ref()
+                .and_then(|reservation| reservation.started.get())
+                .map(|operation| operation.transfer_id.clone())
+                .unwrap_or_else(|| format!("draft-media-view:{}", uuid::Uuid::new_v4()))
+        } else {
+            format!("draft-media:{}", uuid::Uuid::new_v4())
+        };
+        // Actual progress remains attached to the original operation even for a later observing view.
+        // 即使是后续观察视图，实际进度也始终附着于原操作。
+        let physical_transfer_id = reservation
+            .as_ref()
+            .and_then(|reservation| reservation.started.get())
+            .map(|operation| operation.transfer_id.clone());
+        if delivery_plan == ComposerAttachmentDeliveryPlan::UploadReference && !upload_ready {
             upload_plans.push((
                 transfer_id.clone(),
                 DraftMediaUploadPlan {
+                    reservation: reservation.ok_or_else(|| {
+                        String::from("Draft upload has no start or observation reservation.")
+                    })?,
                     identity: DraftMediaUploadPlanIdentity {
                         workspace_path: workspace_path.clone(),
                         conversation_id: conversation_id.clone(),
@@ -891,9 +1102,11 @@ pub(crate) async fn service_plan_composer_attachments(
             attachment_id,
             generation,
             transfer_id,
+            physical_transfer_id,
             delivery_plan,
             phase,
-            blocks_submission: delivery_plan == ComposerAttachmentDeliveryPlan::UploadReference,
+            blocks_submission: delivery_plan == ComposerAttachmentDeliveryPlan::UploadReference
+                && !upload_ready,
             route_revision: Some(execution.route.route_revision.clone()),
             reason: reason.to_string(),
             error: None,
@@ -903,8 +1116,8 @@ pub(crate) async fn service_plan_composer_attachments(
     Ok(summaries)
 }
 
-/// Executes one previously planned provider upload and returns a closed draft state.
-/// 执行一个先前规划的供应商上传并返回封闭草稿状态。
+/// Starts or observes the exact original upload and returns a closed state for this caller's view.
+/// 启动或观察精确原上传，并返回当前调用方视图的封闭状态。
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn service_prepare_composer_attachment(
     app: ServiceEventEmitter,
@@ -937,13 +1150,109 @@ pub(crate) async fn service_prepare_composer_attachment(
     // 运行时与会话校验先于计划消费，避免被拒绝的请求遗留无法回收的待上传登记。
     let (_, agent_runtime, _, _, _) = runtime_parts_from_state(&state)?;
     let session_id = composer_media_session_id(conversation_id.as_deref())?;
-    let (frozen_plan, cancellation) = consume_draft_media_upload_plan(
+    let (frozen_plan, start) = consume_draft_media_upload_plan(
         preparation.transfer_id.as_str(),
         workspace_path.as_str(),
         &conversation_id,
         &model_selection,
         &preparation,
     )?;
+    // Rebuild progress identity from the consumed reservation instead of echoing an untrusted browser hint.
+    // 从已消费许可重建进度身份，不回显不可信浏览器提示。
+    let preparation = ComposerAttachmentPreparationSummary {
+        physical_transfer_id: Some(
+            frozen_plan
+                .reservation
+                .started
+                .get()
+                .ok_or_else(|| String::from("Consumed draft upload has no original operation."))?
+                .transfer_id
+                .clone(),
+        ),
+        ..preparation
+    };
+    // A later model view waits for the exact original operation; dropping this RPC cannot cancel its owner.
+    // 后续模型视图等待精确原操作；丢弃本RPC不能取消其所有者。
+    let mut registration = match start {
+        DraftUploadPreparation::Start(registration) => registration,
+        DraftUploadPreparation::Observe(observer) => {
+            observer.operation.clone().wait().await?;
+            return draft_execution::project_observed_upload(
+                &frozen_plan,
+                &attachment,
+                conversation_id.as_deref(),
+                preparation,
+            );
+        }
+    };
+    // The unique registration guard spans every early return and transfers to any known-result worker before its next await.
+    // 唯一登记守卫覆盖每个提前返回，并在下一次等待前交给任何已知结果工作线程。
+    let cancellation = registration.cancellation.clone();
+    // Validate original ownership and acquire physical source protection in one asset-index transaction.
+    // 在同一资产索引事务内校验原所有权并取得实体来源保护。
+    let original = registration.retain_draft_source(
+        &attachment,
+        &frozen_plan.reservation.identity.draft_scope,
+        &frozen_plan.reservation.identity.intent_id,
+    )?;
+    if matches!(
+        original.delivery,
+        vulcan_agent_runtime::attachment_asset_index::AttachmentDraftMediaDelivery::Upload {
+            receipt: Some(_),
+            ..
+        }
+    ) {
+        // A concurrent exact upload already finished; return its current view without another upload or fake progress.
+        // 并发精确上传已经完成；不执行另一上传或伪造进度，直接返回其当前视图。
+        let projection =
+            ComposerMediaDeliveryPlanner::new(frozen_plan.execution.media_delivery_policy)
+                .and_then(|mut planner| {
+                    planner.plan_draft(
+                        &frozen_plan.execution,
+                        &attachment,
+                        Some(&original),
+                        conversation_id.as_deref(),
+                    )
+                });
+        // The original reference may have expired since planning; report metadata without replacement upload.
+        // 原引用可能在规划后过期；报告元数据，不进行替代上传。
+        let (delivery_plan, reason) = projection?;
+        return Ok(ComposerAttachmentPreparationSummary {
+            delivery_plan,
+            phase: if delivery_plan == ComposerAttachmentDeliveryPlan::UploadReference {
+                ComposerAttachmentPreparationPhase::DirectReady
+            } else {
+                ComposerAttachmentPreparationPhase::MetadataOnly
+            },
+            blocks_submission: false,
+            reason: reason.into(),
+            error: None,
+            ..preparation
+        });
+    }
+    if !matches!(
+        original.delivery,
+        vulcan_agent_runtime::attachment_asset_index::AttachmentDraftMediaDelivery::Upload {
+            receipt: None,
+            ..
+        }
+    ) {
+        return Err(String::from(
+            "Draft preparation requires its original unfinished upload intention.",
+        ));
+    }
+    // The consumed plan selected upload before any I/O; later soft inline preferences cannot reclassify this intention.
+    // 已消费规划在任何I/O之前选定上传；后续软内联偏好不能重新分类此意图。
+    let upload_attachment = apply_composer_delivery_plan_to_attachment(
+        &attachment,
+        ComposerAttachmentDeliveryPlan::UploadReference,
+    );
+    // Retain frozen receipt authority after the preparation helper consumes its execution clone.
+    // 准备辅助函数消费执行克隆后，仍保留冻结回执权威。
+    let receipt_execution = Arc::clone(&frozen_plan.reservation.execution);
+    // Only the actual parent token proves user cancellation; timeout text or a channel name cannot classify it.
+    // 只有实际父令牌证明用户取消；超时文本或通道名称不能决定此分类。
+    let cancellation_observer = cancellation.clone();
     let result = prepare_submission_media_with_frozen_execution(
         &app,
         &state,
@@ -952,19 +1261,53 @@ pub(crate) async fn service_prepare_composer_attachment(
         session_id,
         None,
         Some(&model_selection),
-        std::slice::from_ref(&attachment),
-        frozen_plan.execution,
+        std::slice::from_ref(&upload_attachment),
+        Arc::clone(&frozen_plan.reservation.execution),
         cancellation,
     )
     .await;
     match result {
         Ok(prepared) => {
-            for reference in &prepared.references {
-                vulcan_agent_runtime::attachment_asset_index::record_attachment_media_reference(
+            // One draft preparation owns exactly one source and cannot report readiness without one proven receipt.
+            // 一次草稿准备精确持有一个来源，缺少已证明回执时不能报告就绪。
+            let [reference] = prepared.references.as_slice() else {
+                return Err(String::from(
+                    "Draft upload did not produce exactly one original source receipt.",
+                ));
+            };
+            // Bind completion to the original lease or its exact registered prompt handoff, never the current draft.
+            // 将完成绑定到原租约或其精确已登记提示词交接，绝不绑定当前草稿。
+            let binding = draft_upload_binding(reference, &receipt_execution, &attachment)?;
+            // Capture the existing catalog owner before the next await; known completion must survive RPC future cancellation.
+            // 在下一次等待前捕获既有目录所有者；已知完成必须跨RPC Future取消保留。
+            let resource_registry = state
+                .lock()
+                .map_err(|_| {
+                    String::from("Service state is unavailable during draft upload completion.")
+                })?
+                .project_resource_catalog_registry
+                .clone();
+            // Known successful publication keeps the same pending owner alive if the requesting RPC future is dropped.
+            // 即使请求RPC Future被丢弃，已知成功发布也保持同一待处理所有者存活。
+            registration.spawn_known_completion(move || {
+                vulcan_agent_runtime::attachment_asset_index::complete_attachment_draft_upload(
                     &attachment,
-                    attachment_media_reference_from_prepared(reference),
+                    &frozen_plan.reservation.identity.draft_scope,
+                    &original,
+                    binding,
+                    &resource_registry,
                 )?;
-            }
+                // Preserve the existing route cache only after the original intent has durably accepted this result.
+                // 仅在原意图可靠接纳本结果后保留既有路线缓存。
+                for reference in &prepared.references {
+                    vulcan_agent_runtime::attachment_asset_index::record_attachment_media_reference(
+                        &attachment, attachment_media_reference_from_prepared(reference),
+                    )?;
+                }
+                Ok::<(), String>(())
+            })
+            .await
+            .map_err(|_| String::from("Draft upload completion worker failed."))??;
             Ok(ComposerAttachmentPreparationSummary {
                 phase: ComposerAttachmentPreparationPhase::DirectReady,
                 blocks_submission: false,
@@ -972,12 +1315,14 @@ pub(crate) async fn service_prepare_composer_attachment(
                 ..preparation
             })
         }
-        Err(error) if error.contains("cancelled") => Ok(ComposerAttachmentPreparationSummary {
-            phase: ComposerAttachmentPreparationPhase::Cancelled,
-            blocks_submission: false,
-            error: None,
-            ..preparation
-        }),
+        Err(_) if cancellation_observer.is_cancelled() => {
+            Ok(ComposerAttachmentPreparationSummary {
+                phase: ComposerAttachmentPreparationPhase::Cancelled,
+                blocks_submission: false,
+                error: None,
+                ..preparation
+            })
+        }
         Err(error) => Ok(ComposerAttachmentPreparationSummary {
             phase: ComposerAttachmentPreparationPhase::Failed,
             blocks_submission: false,
@@ -1145,72 +1490,21 @@ fn emit_media_operational_telemetry(
     }
 }
 
-/// Prepares every local attachment before session materialization and provider dispatch.
-/// 在会话物化与供应商分派前准备所有本地附件。
-///
-/// # Parameters
-/// 参数
-/// `app` and `state` carry ordered progress events without persisting ephemeral byte counters.
-/// `app` 与 `state` 发送有序进度事件，但不持久化临时字节计数。
-/// `agent_runtime` resolves the exact selected account and provider route; `client_submission_id`
-/// owns cancellation and progress; `session_id` scopes the immutable route lease;
-/// `session_runtime_state` supplies the persisted lease identity; `model_selection` is the exact
-/// composer snapshot; and `attachments` are the already validated core attachments.
-/// `agent_runtime` 解析精确选定的账号与供应商路由；`client_submission_id` 持有取消与进度；
-/// `session_id` 约束不可变路由租约；`session_runtime_state` 提供持久化租约身份；
-/// `model_selection` 是精确输入区快照；`attachments` 是已经校验的核心附件。
-///
-/// # Returns
-/// 返回值
-/// One authoritative Provider attachment projection and every prepared reference produced from the
-/// same frozen execution, or an explicit lease, capability, credential, upload, cancellation, or
-/// projection error.
-/// 返回从同一冻结执行生成的一份权威 Provider 附件投影与全部已准备引用；否则返回明确的租约、能力、
-/// 凭据、上传、取消或投影错误。
-pub(crate) async fn prepare_submission_media(
-    app: &ServiceEventEmitter,
-    state: &SharedServiceBridgeState,
-    agent_runtime: &AgentRuntimeBridge,
-    client_submission_id: &str,
-    session_id: Option<SessionId>,
-    session_runtime_state: Option<&vulcan_workbench_model::SessionRuntimeStateEntry>,
-    model_selection: Option<&SubmissionModelSelection>,
+/// Defers every provisional `attachment` to the authoritative V1 request preparation without reading or uploading media.
+/// 将每个临时`attachment`延迟到权威V1请求准备，不读取或上传媒体。
+/// Returns request-local metadata-only copies; canonical prompt state and its original delivery remain unchanged.
+/// 返回请求局部仅元数据副本；规范提示词状态及其原投递保持不变。
+pub(crate) fn defer_attachment_delivery_to_v1(
     attachments: &[ConversationAttachment],
-) -> Result<PreparedSubmissionMediaProjection, String> {
-    if attachments.is_empty()
-        && !session_runtime_state.is_some_and(session_runtime_state_has_attachment)
-    {
-        return Ok(PreparedSubmissionMediaProjection::default());
-    }
-    let execution = Arc::new(
-        resolve_submission_media_execution(
-            agent_runtime,
-            session_id,
-            session_runtime_state,
-            model_selection,
-        )
-        .await?,
-    );
-    let provider_attachments =
-        project_composer_attachments_for_execution(execution.as_ref(), attachments)?;
-    let cancellation = register_media_upload(client_submission_id)?;
-    let prepared_media = prepare_submission_media_with_frozen_execution(
-        app,
-        state,
-        agent_runtime,
-        client_submission_id,
-        session_id,
-        session_runtime_state,
-        model_selection,
-        provider_attachments.as_slice(),
-        execution,
-        cancellation,
-    )
-    .await?;
-    Ok(PreparedSubmissionMediaProjection {
-        provider_attachments,
-        prepared_media,
-    })
+) -> Vec<ConversationAttachment> {
+    attachments
+        .iter()
+        .cloned()
+        .map(|mut attachment| {
+            attachment.delivery_mode = Some(ConversationAttachmentDeliveryMode::MetadataOnly);
+            attachment
+        })
+        .collect()
 }
 
 /// Executes media preparation with a service-issued frozen route and live credential lease.
@@ -1239,7 +1533,7 @@ async fn prepare_submission_media_with_frozen_execution(
     execution: Arc<vulcan_provider_adapters::ResolvedPublicAiExecution>,
     cancellation: MediaUploadCancellation,
 ) -> Result<PreparedSubmissionMedia, String> {
-    let result = prepare_submission_media_inner(
+    prepare_submission_media_inner(
         app,
         state,
         agent_runtime,
@@ -1251,41 +1545,7 @@ async fn prepare_submission_media_with_frozen_execution(
         &cancellation,
         Some(execution),
     )
-    .await;
-    remove_media_upload(client_submission_id);
-    result
-}
-
-/// Commits prepared video references together with their canonical user-message owner.
-/// 将已准备视频引用与其规范用户消息所有者一并提交。
-pub(crate) fn commit_prepared_submission_media_ledger(
-    workspace_snapshot: &mut WorkspaceSnapshot,
-    session_id: SessionId,
-    owner_message_id: Option<&str>,
-    prepared: PreparedSubmissionMedia,
-) -> Result<(), String> {
-    if prepared.references.is_empty() {
-        return Ok(());
-    }
-    let runtime_state = workspace_snapshot
-        .session_runtime_state
-        .get_mut(&session_id)
-        .ok_or_else(|| String::from("Media reference ledger session runtime state is missing."))?;
-    for reference in prepared.references {
-        // A reference without a historical owner and without a newly admitted canonical owner
-        // is request-scoped only and must not become an orphaned durable ledger entry.
-        // 没有历史所有者且没有新准入规范所有者的引用仅属于请求作用域，不得成为孤立持久账本条目。
-        if reference.owner_message_ids.is_empty()
-            && (!reference.attach_current_owner || owner_message_id.is_none())
-        {
-            continue;
-        }
-        runtime_state
-            .media_reference_ledger
-            .upsert(reference.into_ledger_entry(owner_message_id));
-    }
-    runtime_state.updated_at = current_unix_millis_text();
-    Ok(())
+    .await
 }
 
 /// Resolves media preparation through the same immutable session route as provider dispatch.
@@ -1433,8 +1693,15 @@ async fn prepare_submission_media_inner(
     let conversation_id = session_id.map(|session_id| session_id.to_string());
     let provider_id = execution.route.provider.id.clone();
     let model_id = execution.model.id.clone();
+    // Only explicit current attachments own new preparation; history remains with its chronological prompt owner.
+    // 只有显式当前附件持有新准备意图；历史仍归其时序提示词所有者。
+    // Filter before counting progress rows so skipped history neither uploads nor inflates the current batch.
+    // 在统计进度行前过滤，使跳过的历史既不上传也不扩大当前批次数量。
     let preparation_attachments =
-        collect_media_preparation_attachments(session_runtime_state, attachments);
+        collect_media_preparation_attachments(session_runtime_state, attachments)
+            .into_iter()
+            .filter(|attachment| attachment.attach_current_owner)
+            .collect::<Vec<_>>();
     let file_count = preparation_attachments.len();
     let mut prepared_submission_media = PreparedSubmissionMedia::default();
     for (file_index, preparation_attachment) in preparation_attachments.iter().enumerate() {
@@ -1445,17 +1712,8 @@ async fn prepare_submission_media_inner(
         if attachment.delivery_mode == Some(ConversationAttachmentDeliveryMode::MetadataOnly) {
             continue;
         }
-        // Bridged attachments, including MIME formats unsupported by the selected wire encoder,
-        // remain local until the fixed understanding tool is actually invoked.
-        // 桥接附件（包括所选 Wire 编码器不支持的 MIME 格式）保持本地，直到固定理解工具被实际调用。
-        let native_media = submission_attachment_is_native(
-            execution.route.protocol_route.protocol_profile_id.as_str(),
-            &execution.model.capabilities,
-            attachment,
-        );
-        if !native_media {
-            continue;
-        }
+        // The shared frozen composer projection already validated both inline and uploaded reference forms.
+        // 共用的冻结输入区投影已经验证内联和上传引用两种形态。
         let upload_contract = execution.client.conversation_media_upload_contract(
             &execution.route,
             resource_kind,
@@ -1481,6 +1739,11 @@ async fn prepare_submission_media_inner(
         if !host_upload_required {
             continue;
         }
+        // One selected-channel deadline starts before replay-path, source fingerprint, cache or credential preparation.
+        // 单一选中通道截止时间在回放路径、来源指纹、缓存或凭据准备之前启动。
+        let deadline =
+            vulcan_provider_adapters::MediaUploadDeadline::for_contract(&upload_contract)
+                .map_err(|failure| failure.to_string())?;
         let session_scope_id = session_id.map(|session_id| session_id.to_string());
         if upload_contract.reference_scope
             == vulcan_provider_adapters::UploadReferenceScope::Session
@@ -1491,8 +1754,22 @@ async fn prepare_submission_media_inner(
                 upload_contract.upload_channel_id
             ));
         }
-        let Some(media_source_path) =
-            media_preparation_replay_path(attachment, preparation_attachment.attach_current_owner)?
+        // Offload exact local metadata lookup so the async parent can observe its original deadline while the OS call settles.
+        // 转移精确本地元数据查询，使异步父任务可在操作系统调用结算期间观察原截止时间。
+        let path_attachment = attachment.clone();
+        // This owner bit comes from the actual preparation occurrence, not a current UI selection.
+        // 本所有权位来自实际准备出现，而非当前UI选择。
+        let attach_current_owner = preparation_attachment.attach_current_owner;
+        let Some(media_source_path) = deadline
+            .wait(
+                cancellation,
+                tokio::task::spawn_blocking(move || {
+                    media_preparation_replay_path(&path_attachment, attach_current_owner)
+                }),
+            )
+            .await
+            .map_err(|failure| failure.to_string())?
+            .map_err(|_| String::from("Media source metadata worker failed."))??
         else {
             // Historical unavailable media remains canonical and is downgraded to metadata by the
             // final provider-input projection; it must not abort a new user turn.
@@ -1500,10 +1777,22 @@ async fn prepare_submission_media_inner(
             // 新的用户轮次。
             continue;
         };
-        let source_identity = execution
-            .client
-            .read_media_source_identity(media_source_path.as_path(), Some(cancellation))
-            .await?;
+        // Source size was admitted by the frozen composer policy and remains the bound for every subsequent read.
+        // 来源大小已由冻结输入区策略准入，并持续约束后续每次读取。
+        let admitted_byte_len = attachment.byte_len.ok_or_else(|| {
+            String::from("Prepared attachment requires an exact admitted source size.")
+        })?;
+        let source_identity = deadline
+            .wait(
+                cancellation,
+                execution.client.read_admitted_media_source_identity(
+                    media_source_path.as_path(),
+                    admitted_byte_len,
+                    Some(cancellation),
+                ),
+            )
+            .await
+            .map_err(|failure| failure.to_string())??;
         // The managed source is immutable. A changed length or digest invalidates both reuse and a
         // fresh upload, while final request normalization degrades the canonical attachment to metadata.
         // 托管源是不可变的。长度或摘要变化会同时使复用与新上传失效，最终请求归一化会把规范附件
@@ -1553,14 +1842,14 @@ async fn prepare_submission_media_inner(
                     created_at_unix_millis: 0,
                     expires_at_unix_millis: u64::MAX,
                 };
-            if let Some(indexed_reference) =
-                vulcan_agent_runtime::attachment_asset_index::find_attachment_media_reference(
-                    attachment,
-                    &indexed_query,
-                    now_unix_millis,
-                )?
+            // The exact asset-index read has the same budget and cannot block the async caller past expiry.
+            // 精确资产索引读取具有相同预算，不能使异步调用方阻塞超过到期时间。
+            let indexed_attachment = attachment.clone();
+            if let Some(indexed_reference) = deadline.wait(cancellation, tokio::task::spawn_blocking(move || vulcan_agent_runtime::attachment_asset_index::find_attachment_media_reference(
+                    &indexed_attachment, &indexed_query, now_unix_millis,
+                ))).await.map_err(|failure| failure.to_string())?.map_err(|_| String::from("Media receipt lookup worker failed."))??
             {
-                execution
+                deadline.wait(cancellation, execution
                     .client
                     .remember_persisted_media_reference(
                         &execution.route,
@@ -1573,13 +1862,9 @@ async fn prepare_submission_media_inner(
                         session_scope_id.as_deref(),
                         indexed_reference.created_at_unix_millis,
                         indexed_reference.expires_at_unix_millis,
-                    )
-                    .await?;
+                    )).await.map_err(|failure| failure.to_string())??;
                 prepared_submission_media.push_reference(
-                    prepared_media_reference_from_attachment_index(
-                        &indexed_reference,
-                        preparation_attachment.attach_current_owner,
-                    ),
+                    prepared_media_reference_from_attachment_index(&indexed_reference),
                 );
                 continue;
             }
@@ -1613,38 +1898,46 @@ async fn prepare_submission_media_inner(
             })
             .cloned();
         if let Some(source_ledger_reference) = source_ledger_reference {
-            execution
-                .client
-                .remember_persisted_media_reference(
-                    &execution.route,
-                    media_source_path.as_path(),
-                    resource_kind,
-                    attachment.mime_type.as_str(),
-                    source_ledger_reference.provider_reference.clone(),
-                    source_ledger_reference.source_sha256.as_str(),
-                    source_ledger_reference.source_byte_len,
-                    session_scope_id.as_deref(),
-                    source_ledger_reference.created_at_unix_millis,
-                    source_ledger_reference.expires_at_unix_millis,
+            deadline
+                .wait(
+                    cancellation,
+                    execution.client.remember_persisted_media_reference(
+                        &execution.route,
+                        media_source_path.as_path(),
+                        resource_kind,
+                        attachment.mime_type.as_str(),
+                        source_ledger_reference.provider_reference.clone(),
+                        source_ledger_reference.source_sha256.as_str(),
+                        source_ledger_reference.source_byte_len,
+                        session_scope_id.as_deref(),
+                        source_ledger_reference.created_at_unix_millis,
+                        source_ledger_reference.expires_at_unix_millis,
+                    ),
                 )
-                .await?;
+                .await
+                .map_err(|failure| failure.to_string())??;
             prepared_submission_media.push_reference(prepared_media_reference_from_ledger(
                 &source_ledger_reference,
-                preparation_attachment.attach_current_owner,
             ));
             continue;
         }
-        if let Some(prepared_reference) = execution
-            .client
-            .prepared_media_reference(
-                &execution.route,
-                media_source_path.as_path(),
-                resource_kind,
-                attachment.mime_type.as_str(),
-                session_scope_id.as_deref(),
-                Some(cancellation),
+        if let Some(prepared_reference) = deadline
+            .wait(
+                cancellation,
+                execution
+                    .client
+                    .prepared_media_reference_for_admitted_source(
+                        &execution.route,
+                        media_source_path.as_path(),
+                        resource_kind,
+                        attachment.mime_type.as_str(),
+                        &source_identity,
+                        session_scope_id.as_deref(),
+                        Some(cancellation),
+                    ),
             )
             .await
+            .map_err(|failure| failure.to_string())?
             .filter(|reference| {
                 // Re-attaching an expired local video is a new upload intent; an old history replay is not.
                 // 重新附加已过期本地视频代表新的上传意图；历史回放不代表新的上传意图。
@@ -1666,8 +1959,6 @@ async fn prepare_submission_media_inner(
                 prepared_reference.created_at_unix_millis,
                 prepared_reference.expires_at_unix_millis,
                 session_scope_id.as_deref(),
-                preparation_attachment.owner_message_ids.clone(),
-                preparation_attachment.attach_current_owner,
             ));
             continue;
         }
@@ -1764,28 +2055,43 @@ async fn prepare_submission_media_inner(
         let first_used_at_unix_millis = current_unix_millis_u64();
         // Physical media upload reads the same latest credential revision as conversation requests.
         // 媒体物理上传与会话请求一样读取同一份最新凭据修订版。
-        let prepared = async {
-            let secret = execution.credential.resolve_for_request().await?;
-            execution
-                .client
-                .prepare_local_media(
-                    &execution.route,
-                    model_id.as_str(),
-                    &secret,
-                    media_source_path.as_path(),
-                    resource_kind,
-                    attachment.mime_type.as_str(),
-                    false,
-                    true,
-                    Some(progress),
-                    cancellation,
-                )
-                .await
-        }
-        .await;
+        let prepared = deadline
+            .wait(cancellation, async {
+                let secret = execution
+                    .credential
+                    .resolve_for_request()
+                    .await
+                    .map_err(|_| {
+                        vulcan_provider_adapters::MediaUploadFailure::CredentialUnavailable
+                    })?;
+                execution
+                    .client
+                    .prepare_local_media_typed(
+                        &execution.route,
+                        model_id.as_str(),
+                        &secret,
+                        vulcan_provider_adapters::AdmittedLocalMediaSource {
+                            path: media_source_path.as_path(),
+                            file_name: &attachment.file_name,
+                            mime_type: &attachment.mime_type,
+                            identity: &source_identity,
+                        },
+                        resource_kind,
+                        false,
+                        vulcan_provider_adapters::LocalMediaMaterialization::ProviderUpload {
+                            source_byte_len: source_identity.byte_len,
+                        },
+                        Some(progress),
+                        cancellation,
+                    )
+                    .await
+            })
+            .await
+            .and_then(|result| result)
+            .map_err(|failure| failure.to_string());
         let prepared = match prepared {
             Ok(prepared) => prepared,
-            Err(error) if cancellation.is_cancelled() || error == "media upload cancelled" => {
+            Err(_) if cancellation.is_cancelled() => {
                 emit_media_operational_telemetry(
                     &identity,
                     ProviderOperationalTelemetryEventName::ProviderUploadCancelled,
@@ -1900,8 +2206,6 @@ async fn prepare_submission_media_inner(
             prepared_created_at_unix_millis,
             prepared_expires_at_unix_millis,
             session_scope_id.as_deref(),
-            preparation_attachment.owner_message_ids.clone(),
-            preparation_attachment.attach_current_owner,
         ));
         emit_media_operational_telemetry(
             &identity,
@@ -1958,25 +2262,6 @@ fn media_preparation_replay_path(
         "Attachment `{}` is no longer available for media preparation.",
         attachment.file_name
     ))
-}
-
-/// Reports whether the active canonical conversation still contains any attachment.
-/// 判断活动规范会话中是否仍包含任意附件。
-fn session_runtime_state_has_attachment(
-    runtime_state: &vulcan_workbench_model::SessionRuntimeStateEntry,
-) -> bool {
-    runtime_state
-        .conversation_state
-        .messages
-        .iter()
-        .any(|message| {
-            let vulcan_context::SessionConversationPayload::UserText { attachments, .. } =
-                &message.payload
-            else {
-                return false;
-            };
-            !attachments.is_empty()
-        })
 }
 
 /// Decides whether one prepared reference may satisfy the current attachment intent.
@@ -2061,11 +2346,13 @@ fn collect_media_preparation_attachments(
         }
     }
     for attachment in attachments {
-        if let Some(existing) = collected
-            .iter_mut()
-            .find(|existing| same_media_preparation_attachment(&existing.attachment, attachment))
-        {
-            existing.attach_current_owner = true;
+        if let Some(existing) = collected.iter_mut().find(|existing| {
+            existing.attach_current_owner
+                && same_media_preparation_attachment(&existing.attachment, attachment)
+        }) {
+            // Deduplicate only this explicit submission; never merge its new receipt with historical prompt owners.
+            // 仅对本次显式提交去重，绝不把其新回执与历史提示词所有者合并。
+            existing.attachment = attachment.clone();
         } else {
             collected.push(MediaPreparationAttachment {
                 attachment: attachment.clone(),
@@ -2081,7 +2368,6 @@ fn collect_media_preparation_attachments(
 /// 将已持久化账本条目转换为当前提交结果形状。
 fn prepared_media_reference_from_ledger(
     entry: &SessionMediaReferenceEntry,
-    attach_current_owner: bool,
 ) -> PreparedSubmissionMediaReference {
     PreparedSubmissionMediaReference {
         source_sha256: entry.source_sha256.clone(),
@@ -2098,8 +2384,6 @@ fn prepared_media_reference_from_ledger(
         provider_reference: entry.provider_reference.clone(),
         created_at_unix_millis: entry.created_at_unix_millis,
         expires_at_unix_millis: entry.expires_at_unix_millis,
-        owner_message_ids: entry.owner_message_ids.clone(),
-        attach_current_owner,
     }
 }
 
@@ -2130,7 +2414,6 @@ fn attachment_media_reference_from_prepared(
 /// 将一条附件索引引用转换为当前提交结果形状。
 fn prepared_media_reference_from_attachment_index(
     entry: &vulcan_agent_runtime::attachment_asset_index::AttachmentMediaReferenceRecord,
-    attach_current_owner: bool,
 ) -> PreparedSubmissionMediaReference {
     PreparedSubmissionMediaReference {
         source_sha256: entry.source_sha256.clone(),
@@ -2147,8 +2430,6 @@ fn prepared_media_reference_from_attachment_index(
         provider_reference: entry.provider_reference.clone(),
         created_at_unix_millis: entry.created_at_unix_millis,
         expires_at_unix_millis: entry.expires_at_unix_millis,
-        owner_message_ids: BTreeSet::new(),
-        attach_current_owner,
     }
 }
 
@@ -2164,8 +2445,6 @@ fn prepared_media_reference_from_source(
     created_at_unix_millis: u64,
     expires_at_unix_millis: u64,
     session_scope_id: Option<&str>,
-    owner_message_ids: BTreeSet<String>,
-    attach_current_owner: bool,
 ) -> PreparedSubmissionMediaReference {
     let reference_scope = match upload_contract.reference_scope {
         vulcan_provider_adapters::UploadReferenceScope::ProviderProtocol => {
@@ -2196,8 +2475,6 @@ fn prepared_media_reference_from_source(
         provider_reference,
         created_at_unix_millis,
         expires_at_unix_millis,
-        owner_message_ids,
-        attach_current_owner,
     }
 }
 
@@ -2223,38 +2500,6 @@ fn session_media_reference_scope(
             SessionMediaReferenceScope::Session
         }
     }
-}
-
-/// Reports whether one attachment can use the selected model's exact native request route.
-/// 判断一个附件是否可使用所选模型的精确原生请求路由。
-///
-/// # Parameters
-/// 参数
-/// `protocol_profile_id` identifies the frozen encoder, `capabilities` contains the effective
-/// model contract, and `attachment` contains the actual media kind and MIME type.
-/// `protocol_profile_id` 标识冻结编码器，`capabilities` 包含生效模型契约，`attachment` 包含实际媒体类型与 MIME。
-///
-/// # Returns
-/// 返回值
-/// `true` only when model declaration, modality projector, and format-sensitive encoder agree.
-/// 仅当模型声明、模态投影器与格式敏感编码器全部一致时返回 `true`。
-fn submission_attachment_is_native(
-    protocol_profile_id: &str,
-    capabilities: &vulcan_ai_contract::ModelCapabilities,
-    attachment: &ConversationAttachment,
-) -> bool {
-    // resourceKind normalizes the core attachment category for model and protocol comparison.
-    // resourceKind 归一化核心附件类别，用于模型与协议比较。
-    let resource_kind = attachment_kind(attachment.kind.clone());
-    // protocolSupported reuses the request normalizer's exact kind-and-MIME predicate so
-    // pre-dispatch preparation and final message projection cannot diverge.
-    // protocolSupported 复用请求归一化器的精确类型与 MIME 判定，确保分派前准备与最终消息投影不会分叉。
-    let protocol_supported =
-        vulcan_agent_runtime::provider_input_normalizer::protocol_profile_supports_attachment(
-            protocol_profile_id,
-            attachment,
-        );
-    capabilities.input_resources.contains(&resource_kind) && protocol_supported
 }
 
 /// Emits one ordered ephemeral progress delta and advances the shared workbench revision.
@@ -2318,19 +2563,37 @@ fn resource_kind_text(kind: vulcan_ai_contract::ResourceKind) -> &'static str {
     }
 }
 
+/// Runs the real project composer planner for one canonical fixture occurrence without exposing the planner type in production.
+/// 为一个规范夹具出现运行真实项目输入区规划器，不在生产暴露规划器类型。
+/// Inputs are exact frozen execution, metadata, source proof and session; returns the actual mode and safe reason.
+/// 输入为精确冻结执行、元数据、来源证明及会话；返回真实方式和安全原因。
+#[cfg(test)]
+pub(crate) fn test_composer_project_decision(
+    execution: &vulcan_provider_adapters::ResolvedPublicAiExecution,
+    attachment: &ConversationAttachment,
+    entry: &vulcan_workspace_store::workspace_store::ResourceCatalogEntry,
+    preparation: &vulcan_session_core::v1::UserPromptResourcePreparation,
+    session_id: &str,
+) -> Result<(ComposerAttachmentDeliveryPlan, &'static str), String> {
+    ComposerMediaDeliveryPlanner::new(execution.media_delivery_policy)?.plan_project(
+        execution,
+        attachment,
+        entry,
+        preparation,
+        session_id,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        COMPOSER_INLINE_AGGREGATE_BASE64_MAX_BYTES, DraftMediaUploadPlanIdentity,
-        apply_composer_delivery_plan_to_attachment, apply_composer_direct_resource_limits,
+        DraftMediaUploadPlanIdentity, apply_composer_delivery_plan_to_attachment,
         collect_media_preparation_attachments, draft_media_upload_plan_matches,
-        media_preparation_replay_path, register_media_upload, remove_media_upload,
-        submission_attachment_is_native,
+        media_preparation_replay_path, register_media_upload,
         submission_media_reference_is_usable_for_current_attachment,
     };
     use crate::conversation_submission::SubmissionModelSelection;
-    use std::collections::{BTreeMap, BTreeSet};
-    use vulcan_ai_contract::{ModelCapabilities, ResourceKind};
+    use std::collections::BTreeSet;
     use vulcan_context::{SessionConversationMessage, SessionConversationPayload};
     use vulcan_core::types::{
         ConversationAttachment, ConversationAttachmentDeliveryMode, ConversationAttachmentKind,
@@ -2450,6 +2713,7 @@ mod tests {
             attachment_id: String::from("asset-a"),
             generation: 7,
             transfer_id: String::from("draft-media:transfer-a"),
+            physical_transfer_id: None,
             delivery_plan: ComposerAttachmentDeliveryPlan::UploadReference,
             phase: ComposerAttachmentPreparationPhase::UploadQueued,
             blocks_submission: true,
@@ -2501,18 +2765,18 @@ mod tests {
     #[test]
     fn duplicate_submission_registration_is_rejected() {
         let client_submission_id = "media-upload-duplicate-test";
-        let _cancellation = register_media_upload(client_submission_id).expect("first register");
+        let registration = register_media_upload(client_submission_id).expect("first register");
         match register_media_upload(client_submission_id) {
             Err(error) => assert!(error.contains("already preparing media")),
             Ok(_) => panic!("duplicate registration must be rejected"),
         }
-        remove_media_upload(client_submission_id);
+        drop(registration);
     }
 
-    /// Verifies every historical video keeps its real owners while current reuse adds only the new owner.
-    /// 验证每个历史视频保留真实所有者，而当前复用只追加新的所有者。
+    /// Verifies current reattachment is a distinct intent and cannot rebind any historical receipt owner.
+    /// 验证当前重新附加属于独立意图，不能重新绑定任何历史回执所有者。
     #[test]
-    fn historical_video_owners_are_merged_without_rebinding_history() {
+    fn historical_video_owners_stay_separate_from_current_upload_intent() {
         let mut first_video = attachment(ConversationAttachmentKind::Video);
         first_video.local_path = String::from("first.mp4");
         let mut second_video = attachment(ConversationAttachmentKind::Video);
@@ -2535,20 +2799,35 @@ mod tests {
             },
         ];
 
+        // The current request projection is distinct from the canonical attachment stored in earlier prompts.
+        // 当前请求投影区别于更早提示词中保存的规范附件。
+        first_video.delivery_mode = Some(ConversationAttachmentDeliveryMode::InlineOriginal);
         let collected = collect_media_preparation_attachments(
             Some(&runtime_state),
             std::slice::from_ref(&first_video),
         );
-        assert_eq!(collected.len(), 2);
+        assert_eq!(collected.len(), 3);
         let first = collected
             .iter()
-            .find(|candidate| candidate.attachment.local_path == "first.mp4")
+            .find(|candidate| {
+                !candidate.attach_current_owner && candidate.attachment.local_path == "first.mp4"
+            })
             .expect("first historical video should be collected");
         assert_eq!(
             first.owner_message_ids,
             BTreeSet::from([String::from("old-a"), String::from("old-b")])
         );
-        assert!(first.attach_current_owner);
+        assert!(!first.attach_current_owner);
+        assert_eq!(first.attachment.delivery_mode, None);
+        let current = collected
+            .iter()
+            .find(|candidate| candidate.attach_current_owner)
+            .expect("explicit current intent must remain separate");
+        assert!(current.owner_message_ids.is_empty());
+        assert_eq!(
+            current.attachment.delivery_mode,
+            Some(ConversationAttachmentDeliveryMode::InlineOriginal)
+        );
         let second = collected
             .iter()
             .find(|candidate| candidate.attachment.local_path == "second.mp4")
@@ -2649,28 +2928,6 @@ mod tests {
         );
     }
 
-    /// Verifies bridge admission never reclassifies a format-incompatible attachment as native.
-    /// 验证桥接准入绝不会把格式不兼容的附件重新归类为原生附件。
-    #[test]
-    fn understanding_bridge_preserves_format_incompatible_audio_as_local() {
-        // capabilities declares audio at model level while the frozen encoder cannot encode Opus.
-        // capabilities 在模型级声明音频，但冻结编码器无法编码 Opus。
-        let capabilities = ModelCapabilities {
-            input_resources: vec![ResourceKind::Audio],
-            ..ModelCapabilities::default()
-        };
-        // opusAttachment is bridge-eligible but must not start native preparation.
-        // opusAttachment 可由桥接处理，但不得启动原生准备。
-        let mut opus_attachment = attachment(ConversationAttachmentKind::Audio);
-        opus_attachment.file_name = String::from("voice.opus");
-        opus_attachment.mime_type = String::from("audio/opus");
-        assert!(!submission_attachment_is_native(
-            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
-            &capabilities,
-            &opus_attachment,
-        ));
-    }
-
     /// Verifies no current or historical projection reuses an expired provider reference.
     /// 验证当前与历史投影都不会复用已过期的供应商引用。
     #[test]
@@ -2686,76 +2943,5 @@ mod tests {
             u64::MAX,
             u64::MAX,
         ));
-    }
-
-    /// Verifies route count rejection does not consume a direct-resource slot.
-    /// 验证路由数量拒绝不会额外占用直接资源名额。
-    #[test]
-    fn composer_direct_resource_count_limit_preserves_admitted_total() {
-        let mut counts = BTreeMap::new();
-        let mut inline_base64_bytes = 0;
-        assert_eq!(
-            apply_composer_direct_resource_limits(
-                ResourceKind::Image,
-                Some(1),
-                None,
-                &mut counts,
-                &mut inline_base64_bytes,
-            ),
-            None
-        );
-        assert_eq!(
-            apply_composer_direct_resource_limits(
-                ResourceKind::Image,
-                Some(1),
-                None,
-                &mut counts,
-                &mut inline_base64_bytes,
-            ),
-            Some("frozen_route_resource_count_exceeded")
-        );
-        assert_eq!(counts.get(&ResourceKind::Image), Some(&1));
-        assert_eq!(inline_base64_bytes, 0);
-    }
-
-    /// Verifies exact padded Base64 accounting admits the boundary and rejects the next byte.
-    /// 验证精确的带填充 Base64 计数会准入边界值并拒绝后续一个字节。
-    #[test]
-    fn composer_inline_aggregate_budget_uses_exact_base64_length() {
-        let mut counts = BTreeMap::new();
-        let mut inline_base64_bytes = 0;
-        // boundaryRawBytes expands to exactly the frozen two-mebibyte Base64 budget.
-        // boundaryRawBytes 恰好膨胀为冻结的二 MiB Base64 总预算。
-        let boundary_raw_bytes = COMPOSER_INLINE_AGGREGATE_BASE64_MAX_BYTES / 4 * 3;
-        assert_eq!(
-            apply_composer_direct_resource_limits(
-                ResourceKind::Image,
-                None,
-                Some(boundary_raw_bytes),
-                &mut counts,
-                &mut inline_base64_bytes,
-            ),
-            None
-        );
-        assert_eq!(
-            inline_base64_bytes,
-            COMPOSER_INLINE_AGGREGATE_BASE64_MAX_BYTES
-        );
-        assert_eq!(
-            apply_composer_direct_resource_limits(
-                ResourceKind::File,
-                None,
-                Some(1),
-                &mut counts,
-                &mut inline_base64_bytes,
-            ),
-            Some("host_inline_aggregate_budget_exceeded")
-        );
-        assert_eq!(counts.get(&ResourceKind::Image), Some(&1));
-        assert_eq!(counts.get(&ResourceKind::File), Some(&0));
-        assert_eq!(
-            inline_base64_bytes,
-            COMPOSER_INLINE_AGGREGATE_BASE64_MAX_BYTES
-        );
     }
 }

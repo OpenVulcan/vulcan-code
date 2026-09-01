@@ -1101,6 +1101,7 @@ mod tests {
             next_resource_id: 4,
         };
         let queued_input = QueuedInput {
+            parameters: None,
             client_action_id: ClientActionId::try_new("queued-resource-order")
                 .expect("client action should be valid"),
             input_id: PendingInputId::try_new(7).expect("pending input id should be valid"),

@@ -722,8 +722,27 @@ fn should_rollover_with_limits(event_count: u64, byte_len: usize, limits: &Flush
 /// Returns whether one tail still carries open entities that forbid sealing.
 /// 返回一个尾段是否仍携带禁止封口的开放实体。
 fn tail_has_open_entities(events: &[ConversationEvent]) -> bool {
+    // Newly admitted media prompts must remain mutable until their first preparation is frozen.
+    // 新准入媒体提示词必须在首次准备冻结之前保持可变。
+    // A later API or turn boundary ends that opportunity; unresolved old history must not pin the tail forever.
+    // 后续API或回合边界会结束此机会；未解析旧历史不能永久占住尾段。
+    let mut pending_prompt_media = false;
     for event in events {
         match &event.event {
+            EventBody::UserInput(input)
+                if input.parameters.as_ref().is_some_and(|parameters| {
+                    matches!(
+                        parameters.media_delivery,
+                        vulcan_session_core::v1::UserPromptMediaDelivery::Pending
+                            | vulcan_session_core::v1::UserPromptMediaDelivery::Preparing { .. }
+                    )
+                }) =>
+            {
+                pending_prompt_media = true;
+            }
+            EventBody::ApiStarted(_) | EventBody::TurnStats(_) => {
+                pending_prompt_media = false;
+            }
             EventBody::ToolCall(tool) => {
                 if matches!(
                     tool.status,
@@ -742,6 +761,9 @@ fn tail_has_open_entities(events: &[ConversationEvent]) -> bool {
             }
             _ => {}
         }
+    }
+    if pending_prompt_media {
+        return true;
     }
     // An API group without its terminal stats is still open.
     // 没有终态统计的 API 组仍然开放。

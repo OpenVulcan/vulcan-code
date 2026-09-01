@@ -73,7 +73,7 @@ pub(crate) fn media_understanding_input_schema(
             (path_argument): {
                 "type": "string",
                 "minLength": 1,
-                "description": "Canonical project-relative attachment resource path or attachment:// resource id disclosed in the conversation. Absolute paths are not accepted."
+                "description": "Exact project-resource:// id, canonical project-relative attachment path, or attachment:// id disclosed in this conversation. Project resources are resolved only within the invoking session's project. Absolute host paths are not accepted."
             },
             "prompt": {
                 "type": "string",
@@ -167,6 +167,7 @@ pub(crate) fn build_model_replacement_media_candidate(
     capability: ProviderToolCapabilityKind,
     selection: ActiveAiModelSelection,
     reasoning_effort: Option<ReasoningEffort>,
+    media_resource_runtime: Option<Arc<dyn crate::media_resource_runtime::MediaResourceRuntime>>,
 ) -> Result<VulcanToolCandidate, String> {
     // toolId is determined only by media semantics and never by the replacement model.
     // toolId 仅由媒体语义决定，绝不由替代模型决定。
@@ -245,6 +246,9 @@ pub(crate) fn build_model_replacement_media_candidate(
             // invocationWorkspace remains the only local filesystem boundary.
             // invocationWorkspace 保持为唯一本地文件系统边界。
             let invocation_workspace = workspace_root.clone();
+            // The host port retains exact project identity across root and child tool invocations.
+            // 宿主端口跨根与子工具调用保留精确项目身份。
+            let invocation_resources = media_resource_runtime.clone();
             Box::pin(async move {
                 execute_model_replacement_media_understanding(
                     invocation_runtime,
@@ -254,6 +258,7 @@ pub(crate) fn build_model_replacement_media_candidate(
                     reasoning_effort,
                     arguments,
                     Some(context.session_id),
+                    invocation_resources.as_deref(),
                 )
                 .await
             })
@@ -272,6 +277,7 @@ async fn execute_model_replacement_media_understanding(
     reasoning_effort: Option<ReasoningEffort>,
     arguments: Value,
     owner_session_id: Option<String>,
+    media_resource_runtime: Option<&dyn crate::media_resource_runtime::MediaResourceRuntime>,
 ) -> Result<VulcanToolInvocationResult, String> {
     // pathArgument is the only accepted media path field for this capability.
     // pathArgument 是当前能力唯一接受的媒体路径字段。
@@ -311,6 +317,7 @@ async fn execute_model_replacement_media_understanding(
         owner_session_id.as_deref(),
         capability,
         media_reference,
+        media_resource_runtime,
     )
     .await?;
     let media_path = PathBuf::from(attachment.local_path.as_str());
@@ -320,29 +327,27 @@ async fn execute_model_replacement_media_understanding(
         .ok_or_else(|| format!("Capability `{capability:?}` has no media resource kind."))?;
     // mimeType is the canonical staged MIME and must also agree with the closed host format registry.
     // mimeType 是规范暂存 MIME，且必须同时与封闭宿主格式注册表一致。
-    let registered_mime_type = media_understanding_mime_type(resource_kind, &media_path)?;
+    let registered_mime_type =
+        media_understanding_mime_type(resource_kind, Path::new(&attachment.file_name))?;
     if registered_mime_type != attachment.mime_type {
         return Err(String::from(
             "Canonical attachment MIME no longer matches the registered media format.",
         ));
     }
     let mime_type = attachment.mime_type.as_str();
-    // protocolProfileId is the exact immutable encoder selected with the replacement account route.
-    // protocolProfileId 是随替代账号路由选定的精确不可变编码器。
-    let protocol_profile_id = resolved_selection
-        .route
-        .protocol_route
-        .protocol_profile_id
-        .as_str();
-    if !vulcan_ai_protocols::protocol_profile_supports_local_media_type(
-        protocol_profile_id,
-        resource_kind,
-        mime_type,
-    ) {
-        return Err(format!(
-            "Replacement protocol profile `{protocol_profile_id}` cannot encode `{mime_type}` as `{resource_kind:?}`; media upload was not started."
-        ));
-    }
+    // Both asset and project resolvers return exact immutable source metadata; absence cannot be guessed from the path.
+    // 资产与项目解析器均返回精确不可变源元数据；缺失时不能从路径猜测。
+    let expected_source_identity = vulcan_provider_adapters::PreparedMediaSourceIdentity {
+        byte_len: attachment
+            .byte_len
+            .ok_or_else(|| String::from("Media resource has no canonical byte length."))?,
+        content_sha256: attachment
+            .source_sha256
+            .clone()
+            .ok_or_else(|| String::from("Media resource has no canonical content digest."))?,
+    };
+    // The runtime jointly validates upload reference and inline capabilities before any preparation.
+    // 运行时在任何准备之前联合验证上传引用与内联能力。
     // cancellation connects preparation to this invocation lifetime.
     // cancellation 将准备过程与本次调用生命周期连接起来。
     let cancellation = MediaUploadCancellation::new();
@@ -357,6 +362,8 @@ async fn execute_model_replacement_media_understanding(
     // preparedReference 是不可变的请求自有内容，因此协议编码绝不重新打开该路径。
     let prepared_media = runtime
         .prepare_and_remember_local_media(vulcan_provider_adapters::PrepareLocalMediaRequest {
+            file_name: &attachment.file_name,
+            expected_source_identity: &expected_source_identity,
             selection: &resolved_selection,
             owner_session_id: owner_session_id.as_deref(),
             operation_id: upload_operation_id.as_str(),
@@ -401,10 +408,7 @@ async fn execute_model_replacement_media_understanding(
         kind: resource_kind,
         media_type: Some(mime_type.to_string()),
         source_kind,
-        file_name: media_path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .map(str::to_owned),
+        file_name: Some(attachment.file_name.clone()),
         image_detail: None,
         resource_path: attachment.resource_path.clone(),
         local_path: None,
@@ -1152,7 +1156,27 @@ pub(crate) async fn resolve_media_understanding_attachment(
     owner_session_id: Option<&str>,
     capability: ProviderToolCapabilityKind,
     reference: &str,
+    media_resource_runtime: Option<&dyn crate::media_resource_runtime::MediaResourceRuntime>,
 ) -> Result<vulcan_core::types::ConversationAttachment, String> {
+    // Project resource locators use the V1 session authority; legacy asset locators retain their explicit legacy resolver.
+    // 项目资源定位符使用V1会话权威；旧资产定位符保留其明确的旧解析器。
+    if let Some(resource_id) =
+        vulcan_workspace_store::workspace_store::parse_project_resource_locator(reference)?
+    {
+        let owner = owner_session_id.ok_or_else(|| {
+            String::from("Project media resources require an owning conversation id.")
+        })?;
+        let runtime = media_resource_runtime.ok_or_else(|| {
+            String::from("Project media resource resolution is unavailable for this invocation.")
+        })?;
+        return runtime
+            .resolve_project_media(
+                owner,
+                resource_id,
+                media_understanding_attachment_kind(capability)?,
+            )
+            .await;
+    }
     let workspace_root = workspace_root.ok_or_else(|| {
         String::from("Media-understanding resources require an active workspace root.")
     })?;
@@ -1164,7 +1188,7 @@ pub(crate) async fn resolve_media_understanding_attachment(
     let owner_session_id = owner_session_id.to_string();
     let reference = reference.to_string();
     tokio::task::spawn_blocking(move || {
-        crate::attachment_asset_index::resolve_owned_attachment_resource(
+        crate::attachment_asset_index::resolve_owned_attachment_resource_metadata_for_kind(
             workspace_path.as_str(),
             owner_session_id.as_str(),
             reference.as_str(),
@@ -1175,8 +1199,8 @@ pub(crate) async fn resolve_media_understanding_attachment(
     .map_err(|error| format!("Media-understanding resource resolver task failed: {error}"))?
 }
 
-/// Rewrites the safe AI-visible locator in one media-tool argument object to its internal local path.
-/// 将媒体工具参数对象中的安全 AI 可见定位符改写为内部本地路径。
+/// Resolves the safe AI-visible locator while carrying its private source metadata outside tool arguments.
+/// 解析安全AI可见定位符，同时在工具参数之外传递其私有来源元数据。
 ///
 /// # Parameters
 /// 参数
@@ -1187,14 +1211,15 @@ pub(crate) async fn resolve_media_understanding_attachment(
 ///
 /// # Returns
 /// 返回值
-/// A request-local argument copy containing an internal path for the provider adapter only.
-/// 返回仅供 Provider Adapter 使用、包含内部路径的单次请求局部参数副本。
+/// Canonical arguments plus an exact host source; private paths and source proofs never enter provider JSON.
+/// 返回规范参数及精确宿主来源；私有路径和来源证据绝不进入供应商JSON。
 pub(crate) async fn resolve_media_understanding_resource_arguments(
     workspace_root: Option<&Path>,
     owner_session_id: Option<&str>,
     capability: ProviderToolCapabilityKind,
     arguments: Value,
-) -> Result<Value, String> {
+    media_resource_runtime: Option<&dyn crate::media_resource_runtime::MediaResourceRuntime>,
+) -> Result<(Value, vulcan_provider_adapters::ProviderToolMediaSource), String> {
     let path_argument = media_understanding_path_argument(capability)
         .ok_or_else(|| format!("Capability `{capability:?}` has no media path argument."))?;
     let reference = arguments
@@ -1209,17 +1234,36 @@ pub(crate) async fn resolve_media_understanding_resource_arguments(
         owner_session_id,
         capability,
         reference,
+        media_resource_runtime,
     )
     .await?;
+    // The host proof binds the exact normalized argument to its catalog identity, not its digest filename.
+    // 宿主证据将精确规范化参数绑定到目录身份，而非摘要文件名。
+    let source = vulcan_provider_adapters::ProviderToolMediaSource {
+        reference: reference.to_string(),
+        local_path: PathBuf::from(attachment.local_path),
+        file_name: attachment.file_name,
+        mime_type: attachment.mime_type,
+        source_identity: vulcan_provider_adapters::PreparedMediaSourceIdentity {
+            byte_len: attachment.byte_len.ok_or_else(|| {
+                String::from("Resolved media source has no registered byte length.")
+            })?,
+            content_sha256: attachment
+                .source_sha256
+                .ok_or_else(|| String::from("Resolved media source has no registered digest."))?,
+        },
+    };
+    // Keep only the safe canonical locator in the operation argument projection.
+    // 操作参数投影中只保留安全规范定位符。
     let mut resolved = arguments;
     resolved
         .as_object_mut()
         .ok_or_else(|| String::from("Media-understanding arguments must be a JSON object."))?
         .insert(
             path_argument.to_string(),
-            Value::String(attachment.local_path),
+            Value::String(source.reference.clone()),
         );
-    Ok(resolved)
+    Ok((resolved, source))
 }
 
 /// Resolves one exact MIME type from the shared host attachment format registry.
@@ -1259,6 +1303,8 @@ fn media_understanding_mime_type(kind: ResourceKind, path: &Path) -> Result<&'st
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod project_resources;
 
     /// Verifies that backend switching cannot change any media-understanding input schema.
     /// 验证后端切换无法改变任何媒体理解输入 Schema。

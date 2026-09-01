@@ -18,6 +18,12 @@ pub fn preview_attachment_cleanup(
 ) -> Result<AttachmentCleanupPreview, String> {
     let cutoff_date = parse_attachment_cleanup_cutoff_date(cutoff_date_text)?;
     let asset_root = resolve_managed_attachment_root(workspace_path);
+    // Preview uses the same owner as purge selection so active physical readers cannot appear removable.
+    // 预览与清理选择使用同一所有者，避免将活动实体读取者展示为可删除。
+    let transaction_lock = attachment_index_transaction_lock(&asset_root)?;
+    let transaction_guard = transaction_lock
+        .lock()
+        .map_err(|_| String::from("Attachment cleanup preview owner is unavailable."))?;
     let document = load_attachment_asset_index_document(&asset_root)?;
     let cutoff_text = cutoff_date
         .format(ATTACHMENT_DATE_FORMAT)
@@ -31,6 +37,7 @@ pub fn preview_attachment_cleanup(
     for record in document.assets.iter().filter(|record| {
         record.purged_at_unix_millis.is_none()
             && !attachment_record_has_transient_refs(record)
+            && !transaction_guard.source_is_held(&record.asset_id)
             && selection.includes(record.kind.clone())
             && record.staged_date_text.as_str() < cutoff_text.as_str()
     }) {
@@ -68,7 +75,7 @@ pub fn execute_attachment_cleanup(
     let transaction_lock = attachment_index_transaction_lock(&asset_root)?;
     // transaction_guard covers selection, purge marking, file deletion, and final diagnostic persistence.
     // transaction_guard 覆盖选择、清理标记、文件删除与最终诊断持久化。
-    let _transaction_guard = transaction_lock.lock().map_err(|error| {
+    let transaction_guard = transaction_lock.lock().map_err(|error| {
         format!(
             "failed to lock attachment index transaction `{}`: {error}",
             asset_root.display()
@@ -84,6 +91,7 @@ pub fn execute_attachment_cleanup(
         .filter_map(|(index, record)| {
             (record.purged_at_unix_millis.is_none()
                 && !attachment_record_has_transient_refs(record)
+                && !transaction_guard.source_is_held(&record.asset_id)
                 && selection.includes(record.kind.clone())
                 && record.staged_date_text.as_str() < cutoff_text.as_str())
             .then_some(index)

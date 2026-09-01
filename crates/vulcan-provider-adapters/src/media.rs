@@ -9,8 +9,8 @@ use tokio::sync::Notify;
 /// 报告已传输的源字节数与可选的源文件大小。
 pub type MediaUploadProgressCallback = Arc<dyn Fn(u64, Option<u64>) + Send + Sync>;
 
-/// Closed lifecycle phase emitted for a media transfer started by an AI-visible understanding tool.
-/// AI 可见理解工具发起媒体传输时发出的封闭生命周期阶段。
+/// Closed lifecycle phase emitted by a conversation or AI-extension media transfer.
+/// 会话或AI扩展媒体传输发出的封闭生命周期阶段。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeMediaUploadPhase {
     /// The route and local source have been validated before transfer.
@@ -25,8 +25,8 @@ pub enum RuntimeMediaUploadPhase {
     /// Preparation failed with one controlled diagnostic.
     /// 准备过程以一条受控诊断失败。
     Failed,
-    /// The owning tool execution was cancelled or dropped before completion.
-    /// 所属工具执行在完成前被取消或丢弃。
+    /// The owning request or tool execution was cancelled or dropped before completion.
+    /// 所属请求或工具执行在完成前被取消或丢弃。
     Cancelled,
 }
 
@@ -73,8 +73,8 @@ pub struct RuntimeMediaUploadProgressEvent {
     /// User-visible source file name.
     /// 面向用户展示的源文件名。
     pub file_name: String,
-    /// Stable image, video, or audio kind.
-    /// 稳定的图片、视频或音频类型。
+    /// Stable image, video, audio or file kind.
+    /// 稳定的图片、视频、音频或文件类型。
     pub media_kind: String,
     /// Current transfer lifecycle phase.
     /// 当前传输生命周期阶段。
@@ -90,8 +90,8 @@ pub struct RuntimeMediaUploadProgressEvent {
     pub error: Option<String>,
 }
 
-/// Host observer for media-understanding upload progress.
-/// 媒体理解上传进度的宿主观察器。
+/// Existing host observer shared by conversation and AI-extension uploads.
+/// 会话和AI扩展上传共用的既有宿主观察器。
 pub type RuntimeMediaUploadProgressObserver =
     Arc<dyn Fn(RuntimeMediaUploadProgressEvent) + Send + Sync>;
 
@@ -127,6 +127,12 @@ impl MediaUploadCancellation {
         self.cancelled.load(Ordering::Acquire)
     }
 
+    /// Returns whether `other` is a clone of this exact operation's state and notifier, not merely equally cancelled.
+    /// 返回`other`是否克隆自本精确操作的状态及通知器，而非仅具有相同取消状态。
+    pub fn same_operation(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.cancelled, &other.cancelled) && Arc::ptr_eq(&self.notify, &other.notify)
+    }
+
     /// Waits for a cancellation notification.
     /// 等待取消通知。
     pub async fn wait(&self) {
@@ -151,6 +157,23 @@ impl MediaUploadCancellation {
 mod tests {
     use super::MediaUploadCancellation;
     use std::time::Duration;
+
+    /// Equal cancellation values do not imply shared operation ownership; only a clone shares both signal components.
+    /// 相同取消值不表示共享操作所有权；只有克隆共享两个信号组件。
+    #[test]
+    fn cancellation_identity_is_not_its_boolean_state() {
+        // Distinct operations deliberately start with the same uncancelled state.
+        // 不同操作有意从相同未取消状态开始。
+        let first = MediaUploadCancellation::new();
+        let cloned = first.clone();
+        let second = MediaUploadCancellation::new();
+        assert!(first.same_operation(&cloned));
+        assert!(!first.same_operation(&second));
+        first.cancel();
+        second.cancel();
+        assert!(first.same_operation(&cloned));
+        assert!(!first.same_operation(&second));
+    }
 
     /// Verifies that a cancellation requested before waiting is still observed immediately.
     /// 验证在等待前发出的取消请求仍会被立即观察到。

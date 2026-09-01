@@ -173,12 +173,71 @@ impl PublicAiRuntime {
         owner_session_id: Option<String>,
         workspace_root: Option<&Path>,
     ) -> Result<ProviderToolExecutionResult, String> {
+        self.execute_provider_tool_target_with_media_sources(
+            configuration,
+            capability,
+            selection,
+            arguments,
+            owner_session_id,
+            crate::ProviderToolResourceContext {
+                workspace_root,
+                media_sources: &[],
+                source_resolver: None,
+            },
+        )
+        .await
+    }
+
+    /// Executes exact `selection` and `arguments` with session-resolved `media_sources` kept outside tool JSON.
+    /// 使用保留在工具JSON之外、由会话解析的`media_sources`执行精确`selection`及`arguments`。
+    /// `configuration` freezes policy, `capability` fixes the tool, and owner/workspace retain their existing task and path boundaries.
+    /// `configuration`冻结策略，`capability`固定工具，所有者及工作区保留既有任务和路径边界。
+    /// Returns the normalized provider result or an explicit admission, integrity or execution error.
+    /// 返回归一化供应商结果或明确准入、完整性、执行错误。
+    pub async fn execute_provider_tool_target_with_media_sources(
+        &self,
+        configuration: &PersistedAiConfiguration,
+        capability: ProviderToolCapabilityKind,
+        selection: &ProviderToolTargetSelection,
+        arguments: serde_json::Value,
+        owner_session_id: Option<String>,
+        resource_context: crate::ProviderToolResourceContext<'_>,
+    ) -> Result<ProviderToolExecutionResult, String> {
+        // Workspace paths and resolved project entities retain separate, explicit authorities.
+        // 工作区路径和已解析项目实体保留分离、明确的权威。
+        let crate::ProviderToolResourceContext {
+            workspace_root,
+            media_sources,
+            source_resolver,
+        } = resource_context;
+        if source_resolver.is_some() && !media_sources.is_empty() {
+            return Err(String::from(
+                "Provider tool media sources must have one explicit host resolution authority.",
+            ));
+        }
         if !capability.is_ai_visible() {
             return Err(format!(
                 "Capability `{capability:?}` is internal inference and cannot execute as an AI-visible provider tool."
             ));
         }
         let resolved = self.resolve_provider_tool_target(configuration, capability, selection)?;
+        if !media_sources.is_empty()
+            && resolved
+                .operation
+                .as_ref()
+                .is_none_or(|operation| operation.upload_bindings.is_empty())
+        {
+            return Err(String::from(
+                "The selected provider tool has no declared binding for host media resources.",
+            ));
+        }
+        // Freeze the host policy before credential, cache, upload or provider execution awaits.
+        // 在凭据、缓存、上传或供应商执行的异步等待之前冻结宿主策略。
+        let media_delivery_policy = resolved.media_delivery_policy.ok_or_else(|| {
+            String::from(
+                "A new provider-tool invocation requires its generation-frozen media policy.",
+            )
+        })?;
         let diagnostic_context = resolved.diagnostic_context();
         // operationTimeout is Manifest-owned for declarative operations; legacy code targets use
         // one explicit host ceiling instead of inheriting the streaming client's unlimited body.
@@ -218,6 +277,24 @@ impl PublicAiRuntime {
             arguments,
         )
         .map_err(|error| diagnose_provider_tool_failure(error, diagnostic_context.as_str()))?;
+        // Host source resolution uses the already frozen operation, not a second target lookup after awaiting I/O.
+        // 宿主来源解析使用已经冻结的操作，不在等待输入输出后再次查询目标。
+        let resolved_media_sources = if let Some(resolver) = source_resolver {
+            tokio::time::timeout(
+                remaining_provider_operation_timeout(operation_deadline, "Provider tool host resource resolution")?,
+                crate::operation_media_source::resolve_declared_operation_media_sources(resolved.operation.as_ref(), &arguments, resolver),
+            ).await.map_err(|_| diagnose_provider_tool_failure(String::from("Provider tool host resource resolution exceeded the frozen operation timeout."), diagnostic_context.as_str()))?
+                .map_err(|error| diagnose_provider_tool_failure(error, diagnostic_context.as_str()))?
+        } else {
+            Vec::new()
+        };
+        // The two declared API modes are exclusive: resolve now, or consume previously resolved host proofs.
+        // 两种声明API模式互斥：现在解析，或者消费此前解析的宿主证明。
+        let media_sources = if source_resolver.is_some() {
+            resolved_media_sources.as_slice()
+        } else {
+            media_sources
+        };
         let secret = tokio::time::timeout(
             remaining_provider_operation_timeout(
                 operation_deadline,
@@ -274,6 +351,8 @@ impl PublicAiRuntime {
                     credential_profile,
                     workspace_root,
                     capability,
+                    media_delivery_policy,
+                    media_sources,
                 ),
             )
             .await
@@ -353,6 +432,8 @@ impl PublicAiRuntime {
                     &arguments,
                     credential_profile,
                     workspace_root,
+                    media_delivery_policy,
+                    media_sources,
                 )
                 .await
                 .map_err(|error| {
@@ -387,6 +468,8 @@ impl PublicAiRuntime {
                     )?,
                     crate::upload_engine::materialize_operation_uploads(
                         crate::upload_engine::OperationUploadExecutionContext {
+                            media_sources,
+                            media_delivery_policy,
                             http: &self.execution_client.http,
                             entry: &resolved.entry,
                             secret: &secret,

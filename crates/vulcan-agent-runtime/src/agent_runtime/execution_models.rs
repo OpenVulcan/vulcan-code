@@ -444,6 +444,10 @@ pub struct ExecutionPreparationRequest {
     /// Optional host-injected V1 Goal domain port used by native Goal tools.
     /// 原生 Goal 工具使用的可选宿主注入 V1 Goal 领域端口。
     pub native_goal_runtime: Option<Arc<dyn crate::tooling::native::NativeGoalRuntime>>,
+    /// Host-owned V1 project resource resolver for explicit media tool calls, inherited by child executions.
+    /// 显式媒体工具调用使用的宿主V1项目资源解析器，由子执行继承。
+    pub media_resource_runtime:
+        Option<Arc<dyn crate::media_resource_runtime::MediaResourceRuntime>>,
     /// Optional project-authorized knowledge-library access snapshot for native tools.
     /// 原生工具使用的可选项目授权知识库访问快照。
     pub knowledge_access: Option<ExecutionKnowledgeAccessContext>,

@@ -80,6 +80,20 @@ pub struct PendingPromptSummary {
     pub created_at: String,
 }
 
+/// Returns a committed pending-prompt edit even when a later queue-panel projection needs refresh.
+/// 即使后续队列面板投影需要刷新，也返回已经提交的待发送提示词编辑。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingPromptEditOutcome {
+    /// Exact prompt now owned by the durable draft.
+    /// 当前由持久草稿持有的精确提示词。
+    pub entry: PendingPromptSummary,
+    /// Controlled post-commit projection warning; absence means every local projection was refreshed.
+    /// 受控的提交后投影警告；缺失表示全部本地投影均已刷新。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection_warning: Option<String>,
+}
+
 /// Describes one slash command visible to composer clients.
 /// 描述输入区客户端可见的单个 slash 指令。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]

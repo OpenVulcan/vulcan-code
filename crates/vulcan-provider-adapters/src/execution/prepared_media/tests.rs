@@ -3,6 +3,7 @@
 
 use super::super::test_support::bundled_manifest_route;
 use super::*;
+use std::sync::Arc;
 use vulcan_ai_protocols::{
     ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
 };
@@ -409,9 +410,15 @@ async fn prepared_inline_media_read_binds_retained_bytes_to_fingerprint() {
 
     // prepared contains both the retained request bytes and their content-addressed identity.
     // prepared 同时包含请求保留字节及其内容寻址身份。
-    let prepared = read_prepared_media_source(path.as_path(), None, None, true)
-        .await
-        .expect("inline media should be read once into request ownership");
+    let prepared = read_prepared_media_source(
+        path.as_path(),
+        None,
+        None,
+        true,
+        Some(expected_bytes.len() as u64),
+    )
+    .await
+    .expect("inline media should be read once into request ownership");
 
     assert_eq!(
         prepared.retained_bytes.as_deref(),
@@ -424,4 +431,273 @@ async fn prepared_inline_media_read_binds_retained_bytes_to_fingerprint() {
     tokio::fs::remove_file(path.as_path())
         .await
         .expect("inline media fixture should be removed");
+}
+
+/// Verifies changed preflight size is rejected before any bytes are retained or reported as read.
+/// 验证预检大小变化时，在保留或报告读取任何字节之前拒绝处理。
+#[tokio::test]
+async fn prepared_inline_media_read_rejects_growth_after_planning() {
+    // The isolated directory owns all fixture bytes and removes them on drop.
+    // 隔离目录持有全部夹具字节，并在释放时移除它们。
+    let directory = tempfile::tempdir().expect("isolated media directory");
+    // A larger physical source must never replace the previously admitted three-byte snapshot.
+    // 更大的物理来源绝不能替换此前准入的三字节快照。
+    let path = directory.path().join("grown.mp4");
+    tokio::fs::write(&path, b"four")
+        .await
+        .expect("grown source");
+    // No progress callback may be invoked before the changed-size failure.
+    // 大小变化失败之前不得调用任何进度回调。
+    let progress: MediaUploadProgressCallback =
+        Arc::new(|_, _| panic!("read started before size check"));
+    let error = read_prepared_media_source(&path, Some(progress), None, true, Some(3))
+        .await
+        .err()
+        .expect("changed preflight size must fail");
+    assert!(error.contains("size changed after delivery planning"));
+}
+
+/// Verifies exact inline video materialization and a missing planned upload never silently interconvert.
+/// 验证精确内联视频物化与缺失的已规划上传绝不会静默互相转换。
+#[tokio::test]
+async fn prepared_local_media_obeys_planned_video_action_without_upload_fallback() {
+    // All dependencies are isolated and this route has no real upload channel.
+    // 全部依赖均隔离，此路由没有真实上传通道。
+    let directory = tempfile::tempdir().expect("isolated video directory");
+    let path = directory.path().join("clip.mp4");
+    tokio::fs::write(&path, b"abc")
+        .await
+        .expect("tiny video bytes");
+    let route = bundled_manifest_route("openrouter", "public-api", OPENAI_CHAT_PROFILE_ID);
+    let client = ProviderExecutionClient::new(
+        reqwest::Client::new(),
+        Arc::new(
+            vulcan_ai_protocols::ProtocolRegistry::first_batch().expect("registered profiles"),
+        ),
+    );
+    let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("offline-test-secret"))
+        .expect("test credential")
+        .execution_secret()
+        .expect("execution secret");
+    let cancellation = MediaUploadCancellation::new();
+    // Capture the authoritative fixture identity before any policy-selected preparation.
+    // 在任何策略选择的准备之前捕获权威夹具身份。
+    let identity = client
+        .read_admitted_media_source_identity(&path, 3, Some(&cancellation))
+        .await
+        .expect("fixture identity");
+    let inline = client
+        .prepare_local_media(
+            &route,
+            "test-model",
+            &secret,
+            AdmittedLocalMediaSource {
+                path: &path,
+                file_name: "clip.mp4",
+                mime_type: "video/mp4",
+                identity: &identity,
+            },
+            ResourceKind::Video,
+            true,
+            LocalMediaMaterialization::Inline { source_byte_len: 3 },
+            None,
+            &cancellation,
+        )
+        .await
+        .expect("planned small inline video");
+    assert_eq!(
+        inline.prepared_reference(),
+        Some("data:video/mp4;base64,YWJj")
+    );
+    let error = client
+        .prepare_local_media(
+            &route,
+            "test-model",
+            &secret,
+            AdmittedLocalMediaSource {
+                path: &path,
+                file_name: "clip.mp4",
+                mime_type: "video/mp4",
+                identity: &identity,
+            },
+            ResourceKind::Video,
+            true,
+            LocalMediaMaterialization::ProviderUpload { source_byte_len: 3 },
+            None,
+            &cancellation,
+        )
+        .await
+        .expect_err("missing upload cannot fall back");
+    assert!(error.contains("inline fallback is forbidden"));
+    // Replacing bytes without changing length must not redefine this attachment's original identity.
+    // 替换字节但不改变长度，不能重新定义本附件的原始身份。
+    tokio::fs::write(&path, b"xyz")
+        .await
+        .expect("replace exact fixture bytes");
+    // Admission retains the previous hash even when new bytes would otherwise fit all soft limits.
+    // 即使新字节仍满足全部软限制，准入仍保留原摘要。
+    let changed = client
+        .prepare_local_media_typed(
+            &route,
+            "test-model",
+            &secret,
+            AdmittedLocalMediaSource {
+                path: &path,
+                file_name: "clip.mp4",
+                mime_type: "video/mp4",
+                identity: &identity,
+            },
+            ResourceKind::Video,
+            true,
+            LocalMediaMaterialization::Inline { source_byte_len: 3 },
+            None,
+            &cancellation,
+        )
+        .await
+        .expect_err("same-size content drift");
+    assert_eq!(changed, MediaUploadFailure::SourceChanged);
+}
+
+/// Verifies the public admitted-identity reader rejects size drift and cancellation instead of hashing new source bytes.
+/// 验证公开已准入身份读取器拒绝大小漂移和取消，而不是哈希新的来源字节。
+#[tokio::test]
+async fn admitted_source_identity_keeps_policy_size_and_cancellation() {
+    // This test owns its source and does not contact any provider.
+    // 本测试持有自己的来源，不联系任何供应商。
+    let directory = tempfile::tempdir().expect("isolated admitted source directory");
+    let path = directory.path().join("source.bin");
+    tokio::fs::write(&path, b"abc").await.expect("write source");
+    // The ordinary execution client exercises the public production identity entry point.
+    // 普通执行客户端用于检验公开生产身份入口。
+    let client = ProviderExecutionClient::new(
+        reqwest::Client::new(),
+        Arc::new(vulcan_ai_protocols::ProtocolRegistry::first_batch().expect("protocol registry")),
+    );
+    let identity = client
+        .read_admitted_media_source_identity(&path, 3, None)
+        .await
+        .expect("admitted bytes");
+    assert_eq!(identity.byte_len, 3);
+    assert_eq!(identity.content_sha256, hex::encode(Sha256::digest(b"abc")));
+    tokio::fs::write(&path, b"four").await.expect("grow source");
+    assert!(
+        client
+            .read_admitted_media_source_identity(&path, 3, None)
+            .await
+            .expect_err("size drift")
+            .contains("size changed after delivery planning")
+    );
+    // Cancellation remains effective even if a new caller supplies the current physical size.
+    // 即使新调用方提供当前物理大小，取消仍然生效。
+    let cancellation = MediaUploadCancellation::new();
+    cancellation.cancel();
+    assert!(
+        client
+            .read_admitted_media_source_identity(&path, 4, Some(&cancellation))
+            .await
+            .is_err()
+    );
+}
+
+/// Pre-cancelled preparation never polls a source operation, even when that operation is immediately ready.
+/// 预先取消的准备绝不轮询来源操作，即使该操作立即就绪。
+#[tokio::test]
+async fn prepared_source_io_precancelled_does_not_poll() {
+    // The flag observes actual operation polling, not a synthetic progress callback.
+    // 标志观察实际操作轮询，而非合成进度回调。
+    let polled = std::sync::atomic::AtomicBool::new(false);
+    // Cancellation belongs to the same source operation.
+    // 取消属于同一来源操作。
+    let cancellation = MediaUploadCancellation::new();
+    cancellation.cancel();
+    // This ready operation must never run after pre-cancellation.
+    // 预先取消后，此就绪操作绝不能运行。
+    let result = await_prepared_source_io(
+        Some(&cancellation),
+        async {
+            polled.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(7_u8)
+        },
+        "Source read failed",
+    )
+    .await;
+    assert_eq!(result, Err(String::from("media upload cancelled")));
+    assert!(!polled.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+/// Cancellation interrupts an already pending source operation without waiting for the filesystem future to finish.
+/// 取消中断已经等待中的来源操作，不等待文件系统Future完成。
+#[tokio::test]
+async fn prepared_source_io_cancels_while_operation_is_pending() {
+    // The start signal makes cancellation deterministic without sleeping.
+    // 启动信号使取消确定可测，不使用休眠。
+    let (started, ready) = tokio::sync::oneshot::channel();
+    // The parent owns cancellation while the task borrows its owned clone for the exact operation.
+    // 父级持有取消，任务为精确操作借用自身拥有的克隆。
+    let cancellation = MediaUploadCancellation::new();
+    // Preserve the exact signal across task ownership transfer.
+    // 跨任务所有权移交保留精确信号。
+    let owned = cancellation.clone();
+    // A permanently pending operation models an unresponsive source read without touching external storage.
+    // 永久等待操作模拟无响应来源读取，不触碰外部存储。
+    let task = tokio::spawn(async move {
+        await_prepared_source_io(
+            Some(&owned),
+            async {
+                let _ = started.send(());
+                std::future::pending::<std::io::Result<()>>().await
+            },
+            "Source read failed",
+        )
+        .await
+    });
+    ready.await.expect("operation started");
+    cancellation.cancel();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("prompt cancellation")
+            .expect("source task"),
+        Err(String::from("media upload cancelled"))
+    );
+}
+
+/// Same-poll cancellation beats a successful source result and prevents any returned bytes from being used.
+/// 同次轮询取消优先于成功来源结果，防止任何返回字节被使用。
+#[tokio::test]
+async fn prepared_source_io_same_poll_cancellation_wins() {
+    // Simulate a completion callback cancelling the parent before its operation returns.
+    // 模拟完成回调在操作返回前取消父级。
+    let cancellation = MediaUploadCancellation::new();
+    // The operation is ready, but its successful value has no authority after cancellation.
+    // 操作已经就绪，但取消后其成功值不再具有使用权限。
+    let result = await_prepared_source_io(
+        Some(&cancellation),
+        async {
+            cancellation.cancel();
+            Ok(7_u8)
+        },
+        "Source read failed",
+    )
+    .await;
+    assert_eq!(result, Err(String::from("media upload cancelled")));
+}
+
+/// The declared tokenless cache branch remains usable and source diagnostics never echo private I/O error strings.
+/// 声明的无令牌缓存分支保持可用，来源诊断绝不回显私有IO错误字符串。
+#[tokio::test]
+async fn prepared_source_io_preserves_optional_reads_and_safe_errors() {
+    assert_eq!(
+        await_prepared_source_io(None, async { Ok(7_u8) }, "Source read failed").await,
+        Ok(7)
+    );
+    // This artificial OS diagnostic must stay outside the public error boundary.
+    // 此人为操作系统诊断必须保持在公开错误边界之外。
+    let result = await_prepared_source_io::<()>(
+        None,
+        async { Err(std::io::Error::other("private-source-path-and-secret")) },
+        "Source read failed",
+    )
+    .await;
+    assert_eq!(result, Err(String::from("Source read failed.")));
 }

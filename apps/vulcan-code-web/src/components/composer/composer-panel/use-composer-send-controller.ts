@@ -54,6 +54,9 @@ export interface UseComposerSendControllerOptions {
   // Whether the selected backend conversation currently has an active run.
   // 当前选中的后端会话是否存在活动运行。
   isConversationRunning: boolean;
+  // Reports whether an exact queue-to-draft replacement currently owns the composer mutation gate.
+  // 报告精确队列转草稿替换当前是否持有输入区变更门控。
+  isDraftReplacementActive: () => boolean;
   // Captures and clears the active draft before an ordinary send.
   // 在普通发送前捕获并清理当前草稿。
   clearForSubmission: () => Promise<ComposerDraftSubmissionSnapshot>;
@@ -80,6 +83,9 @@ export interface ComposerSendController {
   // Whether a new goal may automatically submit its first backend turn.
   // 新目标是否可以自动提交第一个后端轮次。
   canAutoSubmitCreatedGoal: boolean;
+  // Reports the synchronous submission gate for mutually exclusive draft replacement actions.
+  // 为互斥的草稿替换操作报告同步提交门控。
+  isSubmissionActive: () => boolean;
   // Validates, consumes, and sends the current draft or stops an empty running conversation.
   // 校验、消费并发送当前草稿，或停止空草稿的运行中会话。
   sendDraft: () => Promise<void>;
@@ -135,7 +141,7 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
   // beginSubmission acquires the component-wide submission gate synchronously.
   // beginSubmission 同步获取组件范围内的提交门控。
   const beginSubmission = React.useCallback(() => {
-    if (submittingRef.current) {
+    if (submittingRef.current || options.isDraftReplacementActive()) {
       return false;
     }
     submittingRef.current = true;
@@ -148,7 +154,10 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
   const finishSubmission = React.useCallback(() => {
     submittingRef.current = false;
     setIsSubmitting(false);
-  }, []);
+  }, [options.isDraftReplacementActive]);
+  // isSubmissionActive exposes the synchronous gate to other draft-mutating transactions.
+  // isSubmissionActive 向其他草稿变更事务暴露同步门控。
+  const isSubmissionActive = React.useCallback(() => submittingRef.current, []);
   // requestStop routes one stop request and optionally records an explicit stop-button trace.
   // requestStop 路由一次停止请求，并可选记录显式停止按钮追踪。
   const requestStop = React.useCallback(async (traceExplicitStop: boolean) => {
@@ -308,6 +317,7 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
 
   return {
     canAutoSubmitCreatedGoal,
+    isSubmissionActive,
     sendDraft,
     stopConversation,
     submitCreatedGoal,

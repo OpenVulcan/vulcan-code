@@ -521,6 +521,10 @@ pub struct QueuedInputIdentity {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DraftState {
+    /// Immutable prompt preparation retained for the same ordered attachment intentions, including text-only edits.
+    /// 为相同有序附件意图保留的不可变提示词准备，包括仅正文编辑。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<crate::v1::UserPromptParameters>,
     /// Draft text.
     /// 草稿正文。
     pub text: String,
@@ -528,6 +532,14 @@ pub struct DraftState {
     /// 附着在草稿上的有序项目资源 id。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resource_ids: Vec<ResourceId>,
+    /// Exact staged asset id per resource occurrence; empty means legacy or project-only attachments without staged lineage.
+    /// 每个资源出现的精确暂存资产ID；空数组表示旧记录或没有暂存来源的纯项目附件。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub staged_attachment_ids: Vec<Option<String>>,
+    /// Exact accepted-input source per project-resource occurrence; empty means no verifiable source references.
+    /// 每个项目资源出现的精确已接纳输入来源；空数组表示没有可验证来源引用。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_sources: Vec<Option<crate::v1::UserPromptResourceSource>>,
     /// Queue identity retained only while this exact draft was restored from a queued input.
     /// 仅当当前精确草稿由排队输入恢复时保留的队列身份。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -539,6 +551,10 @@ pub struct DraftState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PendingInTurnInput {
+    /// Prompt-owned preparation captured at admission, never recomputed from the later active model.
+    /// 准入时捕获的提示词所有准备，绝不根据后续活动模型重算。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<crate::v1::UserPromptParameters>,
     /// Stable external idempotency identity of the client action.
     /// 客户端动作的稳定外部幂等身份。
     pub client_action_id: ClientActionId,
@@ -565,6 +581,10 @@ pub struct PendingInTurnInput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QueuedInput {
+    /// Prompt-owned preparation captured before queueing; missing legacy data stays unknown.
+    /// 排队之前捕获的提示词所有准备；缺失旧数据保持未知。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<crate::v1::UserPromptParameters>,
     /// Stable external idempotency identity of the client action.
     /// 客户端动作的稳定外部幂等身份。
     pub client_action_id: ClientActionId,

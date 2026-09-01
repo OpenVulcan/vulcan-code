@@ -52,8 +52,11 @@ use vulcan_session_core::v1::ids::{ApiCallId, RequestStreamId, ResourceId, Seq, 
 use vulcan_session_core::v1::projection::{ProjectedItem, ProjectedSystemRole};
 use vulcan_workbench_model::SessionId;
 use vulcan_workspace_store::workspace_store::{
-    ProjectResourceCatalogError, ProjectResourceCatalogRegistry, ProjectResourceResolution,
-    load_project_resource_catalog, resolve_project_resource,
+    ProjectResourceCatalogError, ProjectResourceCatalogRegistry, load_project_resource_catalog,
+};
+#[cfg(test)]
+use vulcan_workspace_store::workspace_store::{
+    ProjectResourceResolution, resolve_project_resource,
 };
 
 use crate::session_runtime_registry_v1::{
@@ -62,6 +65,9 @@ use crate::session_runtime_registry_v1::{
     SessionRuntimeError, SuccessfulTurnSettlement,
 };
 use crate::state::SharedServiceBridgeState;
+
+mod media;
+pub(crate) use media::frozen_prompt_media_projection;
 
 /// Acquires the optional V1 sink once for the complete lifetime of one stream task.
 /// 为一个流任务的完整生命周期一次性获取可选 V1 sink。
@@ -591,11 +597,11 @@ fn rebuild_provider_transport_candidate(
     snapshot: SessionProviderProjectionSnapshot,
     facts: &ProviderV1RequestFacts,
     mut candidate: ProviderRequestPreparationCandidate,
+    mut prepared_media: media::PreparedV1UserMedia,
 ) -> Result<SessionPreparedPhysicalRequest<ProviderRequestPreparationCandidate>, SessionRuntimeError>
 {
     validate_provider_transport_candidate(facts, &candidate)?;
-    let catalog = load_project_resource_catalog(&snapshot.project_directory)
-        .map_err(provider_projection_runtime_error)?;
+    validate_prompt_media_preparation_frontier(&snapshot)?;
     let mut request_messages = Vec::new();
     let mut controller_messages = Vec::new();
     let mut system_prompt_parts = Vec::new();
@@ -635,12 +641,18 @@ fn rebuild_provider_transport_candidate(
                 request_messages.push(text_ai_message(message_role, text.clone()));
             }
             ProjectedItem::UserInput { text, resource_ids } => {
-                let content = project_user_content(
-                    &snapshot.project_directory,
-                    &catalog,
-                    text,
-                    resource_ids,
-                )?;
+                // Resource-bearing prompts must use the exact prevalidated result, never an unconditional Base64 fallback.
+                // 带资源提示词必须使用精确预校验结果，绝不使用无条件Base64回退。
+                let (content, attachments) = if resource_ids.is_empty() {
+                    (vec![ContentItem::Text { text: text.clone() }], Vec::new())
+                } else {
+                    let prepared = prepared_media.prompts.remove(&index).ok_or_else(|| {
+                        provider_projection_runtime_error(
+                            "V1 user resources have no exact prepared prompt result",
+                        )
+                    })?;
+                    (prepared.content, prepared.attachments)
+                };
                 latest_user_prompt = text.clone();
                 request_messages.push(AiMessage {
                     role: MessageRole::User,
@@ -651,7 +663,7 @@ fn rebuild_provider_transport_candidate(
                     id: message_id,
                     payload: ConversationPayload::UserText {
                         text: text.clone(),
-                        attachments: Vec::new(),
+                        attachments,
                     },
                 });
             }
@@ -819,6 +831,7 @@ fn rebuild_provider_transport_candidate(
         .finalize_v1_request_budget(&projection, snapshot.provider_usage_budget_anchor.as_ref())
         .map_err(provider_projection_runtime_error)?;
     Ok(SessionPreparedPhysicalRequest {
+        user_prompt_media: prepared_media.bindings,
         transport: candidate,
         projection,
         request_budget_evidence,
@@ -886,6 +899,47 @@ fn validate_provider_transport_candidate(
             ),
         ));
     }
+    if let Some(context) = &candidate.media_context {
+        // The carrier must be the same frozen execution as this request, not a new global model selection.
+        // 载体必须来自本请求相同的冻结执行，而非新的全局模型选择。
+        let execution = &context.execution;
+        if execution.model.id != facts.request.model
+            || execution.route.provider.id != facts.request.provider
+            || Some(execution.route.connection.id.as_str())
+                != facts.request.connection_id.as_deref()
+            || Some(execution.route.protocol_route.protocol_profile_id.as_str())
+                != facts.request.profile.as_deref()
+            || candidate.exact_request.cache_scope_id.as_deref()
+                != Some(context.session_scope_id.as_str())
+        {
+            return Err(provider_projection_runtime_error(
+                "V1 media execution differs from the frozen request route or session scope",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validates Core-owned new prompt eligibility in `snapshot` before any resource I/O can begin.
+/// 在任何资源IO开始前校验`snapshot`中由Core持有的新提示词资格。
+/// Returns an explicit invariant error for reordered, missing or non-pending eligible prompt identities.
+/// 对乱序、缺失或并非待准备的合格提示词身份返回明确不变量错误。
+fn validate_prompt_media_preparation_frontier(
+    snapshot: &SessionProviderProjectionSnapshot,
+) -> Result<(), SessionRuntimeError> {
+    // Eligibility is chronological and must point to one exact user prompt occurrence, never a resource-cache owner.
+    // 资格遵循时序，必须指向一次精确用户提示词出现，而非资源缓存所有者。
+    if snapshot.preparing_user_prompt_media_seqs.windows(2).any(|pair| pair[0] >= pair[1])
+        || snapshot.preparing_user_prompt_media_seqs.iter().any(|seq| {
+            !snapshot.sourced_items.iter().any(|item| {
+                item.source_from_seq == *seq && item.source_to_seq == *seq
+                    && matches!(&item.item, ProjectedItem::UserInput { resource_ids, .. } if !resource_ids.is_empty())
+            && item.user_prompt_parameters.as_ref().is_some_and(|parameters| matches!(parameters.media_delivery, vulcan_session_core::v1::UserPromptMediaDelivery::Pending | vulcan_session_core::v1::UserPromptMediaDelivery::Preparing { .. }))
+            })
+        })
+    {
+        return Err(provider_projection_runtime_error("V1 prompt media preparation frontier does not match chronological source projection"));
+    }
     Ok(())
 }
 
@@ -925,64 +979,17 @@ fn text_ai_message(role: MessageRole, text: String) -> AiMessage {
     }
 }
 
-/// Resolves one ordered V1 user input into exact text/resource request content.
-/// 把一条有序 V1 用户输入解析为精确的文本/资源请求内容。
-fn project_user_content(
-    project_directory: &std::path::Path,
-    catalog: &vulcan_workspace_store::workspace_store::ProjectResourceCatalog,
-    text: &str,
-    resource_ids: &[ResourceId],
-) -> Result<Vec<ContentItem>, SessionRuntimeError> {
-    let mut content = Vec::with_capacity(resource_ids.len().saturating_add(1));
-    if !text.is_empty() {
-        content.push(ContentItem::Text {
-            text: text.to_owned(),
-        });
-    }
-    for resource_id in resource_ids {
-        match resolve_project_resource(project_directory, catalog, *resource_id)
-            .map_err(provider_projection_runtime_error)?
-        {
-            ProjectResourceResolution::Available { entry, bytes } => {
-                let media_type = entry.mime.clone();
-                let mime = media_type
-                    .clone()
-                    .unwrap_or_else(|| String::from("application/octet-stream"));
-                content.push(ContentItem::Resource {
-                    resource: ResourceReference {
-                        id: format!("project-resource-{}", resource_id.value()),
-                        kind: resource_kind_from_mime(&mime),
-                        media_type,
-                        source_kind: ResourceSourceKind::InlineData,
-                        file_name: Some(entry.original_name),
-                        image_detail: None,
-                        resource_path: None,
-                        local_path: None,
-                        url: Some(format!(
-                            "data:{mime};base64,{}",
-                            BASE64_STANDARD.encode(bytes)
-                        )),
-                    },
-                });
-            }
-            ProjectResourceResolution::Missing { placeholder, .. } => {
-                content.push(ContentItem::Text {
-                    text: placeholder.to_owned(),
-                });
-            }
-        }
-    }
-    Ok(content)
-}
-
 /// Maps a validated MIME value to the Provider-neutral resource category.
 /// 把经过校验的 MIME 值映射到 Provider 中立资源类别。
 fn resource_kind_from_mime(mime: &str) -> ResourceKind {
-    if mime.starts_with("image/") {
+    // MIME classification follows the case-insensitive target registry without changing the persisted source MIME.
+    // MIME分类遵循不区分大小写的目标注册表，不改变持久化来源MIME。
+    let normalized = mime.to_ascii_lowercase();
+    if normalized.starts_with("image/") {
         ResourceKind::Image
-    } else if mime.starts_with("audio/") {
+    } else if normalized.starts_with("audio/") {
         ResourceKind::Audio
-    } else if mime.starts_with("video/") {
+    } else if normalized.starts_with("video/") {
         ResourceKind::Video
     } else {
         ResourceKind::File
@@ -1098,17 +1105,49 @@ impl ProviderV1StreamSink {
         let continuation_action_id = facts.continuation_action_id.clone();
         let prepared_at_ms = facts.prepared_at_ms;
         let facts_for_build = facts.clone();
+        // Private upload receipts use the existing project owner; prompt identity remains in the session owner.
+        // 私有上传回执使用既有项目所有者；提示词身份仍归会话所有者。
+        let resource_registry = Arc::clone(&self.project_resource_catalog_registry);
         let project_directory = self.handle.storage_locator()?.project_directory();
-        let receipt = self.handle.prepare_physical_api_durable(
-            purpose,
-            request,
-            locked_baseline.clone(),
-            continuation_action_id,
-            prepared_at_ms,
-            move |snapshot| {
-                rebuild_provider_transport_candidate(snapshot, &facts_for_build, candidate)
-            },
-        )?;
+        let receipt = self
+            .handle
+            .prepare_physical_api_durable(
+                purpose,
+                request,
+                locked_baseline.clone(),
+                continuation_action_id,
+                prepared_at_ms,
+                move |snapshot, preparation| async move {
+                    // Plan and materialize all resources before the durable API permit, outside both session locks.
+                    // 在可靠API许可之前、两把会话锁之外规划和物化全部资源。
+                    let prepared_media = media::prepare_v1_user_media_durable(
+                        &snapshot,
+                        candidate.media_context.as_ref(),
+                        resource_registry,
+                        Arc::clone(&preparation),
+                    )
+                    .await?;
+                    // Blocking resource reads and encoding run outside the session writer and publisher locks.
+                    // 阻塞资源读取与编码在会话写入器、发布器锁之外运行。
+                    tokio::task::spawn_blocking(move || {
+                        // Rebuild from a real durable recapture after our own prompt writes; external changes still require a fresh request.
+                        // 自身提示词写入后从真实可靠重捕获重建；外部变化仍要求全新请求。
+                        let Some(snapshot) = preparation.recapture()? else {
+                            return Ok(None);
+                        };
+                        rebuild_provider_transport_candidate(
+                            snapshot,
+                            &facts_for_build,
+                            candidate,
+                            prepared_media,
+                        )
+                        .map(Some)
+                    })
+                    .await
+                    .map_err(|error| SessionRuntimeError::BlockingTaskJoin(error.to_string()))?
+                },
+            )
+            .await?;
         let Some(receipt) = receipt else {
             return Ok(PreparedPhysicalApi::RequestConfigurationChanged);
         };
@@ -1959,6 +1998,51 @@ mod tests {
         }
     }
 
+    /// Verifies exact pending prompt eligibility is checked before resource access, including missing or ranged identities.
+    /// 验证资源访问前检查精确待准备提示词资格，包括缺失或区间身份。
+    #[test]
+    fn prompt_media_frontier_rejects_non_exact_source_before_io()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Only one exact source event owns this resource occurrence and its pending parameters.
+        // 只有一个精确来源事件持有此次资源出现及待准备参数。
+        let seq = Seq::try_new(2)?;
+        let resources = vec![ResourceId::try_new(1)?];
+        let item = ProjectedItem::UserInput {
+            text: "prompt".into(),
+            resource_ids: resources.clone(),
+        };
+        let mut snapshot = SessionProviderProjectionSnapshot {
+            preparing_user_prompt_media_seqs: vec![seq],
+            segment_generation: 1,
+            document_revision: 1,
+            retained_from_seq: Seq::try_new(1)?,
+            through_seq: seq,
+            items: vec![item.clone()],
+            sourced_items: vec![vulcan_session_core::v1::projection::SourcedProjectedItem {
+                user_prompt_parameters:
+                    vulcan_session_core::v1::UserPromptParameters::for_new_resources(&resources),
+                source_from_seq: seq,
+                source_to_seq: seq,
+                item,
+            }],
+            project_directory: PathBuf::new(),
+            provider_usage_budget_anchor: None,
+        };
+        validate_prompt_media_preparation_frontier(&snapshot)?;
+        snapshot.sourced_items[0].source_to_seq = Seq::try_new(3)?;
+        assert!(validate_prompt_media_preparation_frontier(&snapshot).is_err());
+        snapshot.sourced_items[0].source_to_seq = seq;
+        snapshot.sourced_items[0].user_prompt_parameters = None;
+        assert!(validate_prompt_media_preparation_frontier(&snapshot).is_err());
+        snapshot.sourced_items[0].user_prompt_parameters =
+            vulcan_session_core::v1::UserPromptParameters::for_new_resources(&resources);
+        snapshot.preparing_user_prompt_media_seqs = vec![seq, seq];
+        assert!(validate_prompt_media_preparation_frontier(&snapshot).is_err());
+        snapshot.preparing_user_prompt_media_seqs = vec![Seq::try_new(9)?];
+        assert!(validate_prompt_media_preparation_frontier(&snapshot).is_err());
+        Ok(())
+    }
+
     /// Returns one successful terminal fact for the supplied tool count.
     /// 为给定工具数量返回一份成功终态事实。
     fn terminal_facts(tool_call_count: usize) -> ProviderV1ApiTerminalFacts {
@@ -2008,6 +2092,7 @@ mod tests {
         let facts = request_facts();
         let legacy_message = text_ai_message(MessageRole::User, String::from("legacy-message"));
         let candidate = ProviderRequestPreparationCandidate {
+            media_context: None,
             exact_request: AiExecutionRequest {
                 operation: AiOperation::ConversationRespond,
                 model_id: facts.request.model.clone(),
@@ -2079,6 +2164,7 @@ mod tests {
             locked_baseline: LockedBaselineProjection::empty(),
         };
         let snapshot = SessionProviderProjectionSnapshot {
+            preparing_user_prompt_media_seqs: Vec::new(),
             segment_generation: 4,
             document_revision: 7,
             retained_from_seq: Seq::try_new(1).expect("valid retained seq"),
@@ -2092,8 +2178,13 @@ mod tests {
             provider_usage_budget_anchor: None,
         };
 
-        let rebuilt = rebuild_provider_transport_candidate(snapshot, &facts, candidate)
-            .expect("rebuild the exact V1 request");
+        let rebuilt = rebuild_provider_transport_candidate(
+            snapshot,
+            &facts,
+            candidate,
+            media::PreparedV1UserMedia::default(),
+        )
+        .expect("rebuild the exact V1 request");
         let serialized = serde_json::to_string(&rebuilt.transport.exact_request.messages)
             .expect("serialize rebuilt request messages");
         assert!(serialized.contains("durable-v1-message"));

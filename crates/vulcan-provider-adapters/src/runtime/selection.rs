@@ -43,6 +43,9 @@ pub struct ResolvedPublicAiSelection {
     /// Local model execution overrides.
     /// 本地模型执行覆盖。
     pub overrides: crate::ModelExecutionOverrides,
+    /// Complete media settings frozen independently of manifest and credential revisions.
+    /// 独立于清单与凭据修订冻结的完整媒体设置。
+    pub media_delivery_policy: crate::MediaDeliveryPolicy,
     /// Runtime catalog revision frozen with this selection.
     /// 与此选择一同冻结的运行时目录修订。
     pub catalog_revision: String,
@@ -676,7 +679,12 @@ impl PublicAiRuntime {
         route.manifest_revision = protocol_binding.manifest_revision;
         route.manifest_generation = catalog_snapshot.manifests.generation;
         route.route_revision = route_revision.clone();
+        // Validate the captured configuration before exposing a frozen selection.
+        // 公开冻结选择前校验已捕获配置。
+        let media_delivery_policy = configuration.effective_media_delivery_policy();
+        media_delivery_policy.validate()?;
         Ok(ResolvedPublicAiSelection {
+            media_delivery_policy,
             route,
             model,
             overrides,

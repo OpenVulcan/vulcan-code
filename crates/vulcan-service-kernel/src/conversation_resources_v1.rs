@@ -177,8 +177,8 @@ pub(crate) fn resource_summary_from_resolution(
     }
 }
 
-/// Rebuilds one canonical composer attachment from an exact V1 project resource.
-/// 从一个精确 V1 项目资源重建一条规范输入区附件。
+/// Rebuilds canonical composer metadata from an exact V1 project resource without reading or re-registering media bytes.
+/// 从精确V1项目资源重建规范输入区元数据，不读取或重新注册媒体字节。
 ///
 /// # Parameters
 /// 参数
@@ -187,8 +187,8 @@ pub(crate) fn resource_summary_from_resolution(
 ///
 /// # Returns
 /// 返回值
-/// Returns an integrity-validated host attachment carrying the logical ResourceId, or an explicit missing/corrupt failure.
-/// 返回一条携带逻辑 ResourceId 且通过完整性校验的宿主附件；资源缺失或损坏时显式失败。
+/// Returns catalog-validated metadata carrying the logical ResourceId; actual source availability and integrity are checked at media delivery.
+/// 返回携带逻辑ResourceId且通过目录校验的元数据；实际来源可用性及完整性在媒体投递时检查。
 pub(crate) fn composer_attachment_from_project_resource_v1(
     locator: &SessionV1StorageLocator,
     raw_resource_id: u64,
@@ -197,15 +197,16 @@ pub(crate) fn composer_attachment_from_project_resource_v1(
     let project_directory = locator.project_directory();
     let catalog = load_project_resource_catalog(&project_directory)
         .map_err(|error| format!("failed to load project resource catalog: {error}"))?;
-    let ProjectResourceResolution::Available { entry, bytes } =
-        resolve_project_resource(&project_directory, &catalog, resource_id)
-            .map_err(|error| format!("failed to resolve project resource: {error}"))?
-    else {
-        return Err(format!(
-            "project resource {} is missing and cannot be submitted",
-            resource_id.value()
-        ));
-    };
+    let entry = catalog
+        .entries
+        .into_iter()
+        .find(|entry| entry.resource_id == resource_id)
+        .ok_or_else(|| {
+            format!(
+                "project resource {} has no catalog entry",
+                resource_id.value()
+            )
+        })?;
     let mime_type = entry
         .mime
         .clone()
@@ -215,6 +216,7 @@ pub(crate) fn composer_attachment_from_project_resource_v1(
         .to_string_lossy()
         .into_owned();
     Ok(ComposerAttachmentSummary {
+        prompt_source: None,
         kind: composer_attachment_kind_from_mime(&mime_type).to_string(),
         file_name: entry.original_name,
         local_path,
@@ -222,7 +224,7 @@ pub(crate) fn composer_attachment_from_project_resource_v1(
         resource_path: None,
         source_path: None,
         asset_id: None,
-        byte_len: Some(bytes.len() as u64),
+        byte_len: Some(entry.size),
         source_sha256: Some(entry.sha256),
         delivery_plan: None,
         preview_local_path: None,

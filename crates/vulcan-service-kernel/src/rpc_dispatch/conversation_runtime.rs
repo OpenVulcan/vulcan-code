@@ -10,6 +10,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_continue_conversation",
     "service_cancel_conversation_submission",
     "service_plan_composer_attachments",
+    "service_discard_composer_attachment_plans",
     "service_prepare_composer_attachment",
     "service_stop_conversation_run",
     "service_stop_command_session",
@@ -108,22 +109,30 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
-        "service_cancel_conversation_submission" => rpc_json_result(
-            rpc_required_param::<String>(params, "clientSubmissionId").and_then(
-                |client_submission_id| cancel_media_upload(client_submission_id.as_str()),
-            ),
-        ),
+        "service_cancel_conversation_submission" => {
+            // The browser's draft lease barrier requires settled upload ownership, not merely a sent cancellation signal.
+            // 浏览器草稿租约屏障要求上传所有权已结算，而非仅发送取消信号。
+            let client_submission_id = rpc_required_param::<String>(params, "clientSubmissionId")?;
+            rpc_json_result(cancel_media_upload(client_submission_id.as_str()).await)
+        }
         "service_plan_composer_attachments" => rpc_json_result(
             service_plan_composer_attachments(
                 state,
                 rpc_optional_param(params, "projectId")?,
                 rpc_optional_param(params, "conversationId")?,
+                rpc_required_param(params, "draftSlotKey")?,
                 rpc_required_param(params, "generation")?,
                 rpc_required_param(params, "modelSelection")?,
                 rpc_required_param(params, "attachments")?,
+                rpc_optional_param(params, "retryUploads")?.unwrap_or(false),
             )
             .await,
         ),
+        "service_discard_composer_attachment_plans" => {
+            rpc_json_result(crate::media_upload::discard_composer_attachment_plans(
+                rpc_required_param(params, "transferIds")?,
+            ))
+        }
         "service_prepare_composer_attachment" => rpc_json_result(
             service_prepare_composer_attachment(
                 app,

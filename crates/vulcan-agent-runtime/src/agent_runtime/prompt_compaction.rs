@@ -108,6 +108,10 @@ impl PromptCompactionModelTarget {
 /// 在压缩期间复现普通回合提示词与工具可见性所需的不可变会话控制。
 #[derive(Debug, Clone)]
 pub struct PromptCompactionLaunchContext {
+    /// Exact frozen user-prompt media authority for the selected history; never inferred from files or model caches.
+    /// 所选历史的精确冻结用户提示词媒体权威；绝不从文件或模型缓存推断。
+    pub media_projection:
+        Option<Arc<dyn crate::prompt_media_projection::PromptMediaProjectionRuntime>>,
     /// Exact execution mode used to resolve mode-specific tools.
     /// 用于解析模式专属工具的精确执行模式。
     pub execution_mode: String,
@@ -180,6 +184,7 @@ impl Default for PromptCompactionLaunchContext {
     /// 返回构建模式执行且不含会话专属覆盖的上下文。
     fn default() -> Self {
         Self {
+            media_projection: None,
             execution_mode: String::from("build"),
             runtime_policy: ExecutionRuntimePolicy::main_session(),
             agent_prompt_snapshot: None,
@@ -218,6 +223,9 @@ impl PromptCompactionLaunchContext {
     /// 返回一份不可变压缩启动上下文，并有意排除动态会话覆盖层。
     pub fn from_execution_request(request: &ExecutionPreparationRequest) -> Self {
         Self {
+            // Compaction planning supplies its own exact source snapshot after the ordinary controls are copied.
+            // 普通控制复制后，由压缩规划提供自身精确来源快照。
+            media_projection: None,
             execution_mode: request.execution_mode.clone(),
             runtime_policy: request.runtime_policy,
             agent_prompt_snapshot: request.agent_prompt_snapshot.clone(),
@@ -646,20 +654,22 @@ async fn try_remote_responses_compaction(
     }
     // preparedExecution freezes one route for lossless history projection and the eventual dispatch.
     // preparedExecution 为无损历史投影与最终分派冻结同一路由。
-    let prepared_execution = match runtime
-        .prepare_responses_compact_execution(
-            model_target.provider_id.as_str(),
-            model_target.connection_id.as_str(),
-            model_target.model_id.as_str(),
-        )
-        .await
-    {
-        Ok(execution) => execution,
-        Err(failure) => {
-            remote_compaction_failure_allows_local_fallback(&failure)?;
-            return Ok(None);
-        }
-    };
+    let prepared_execution = Arc::new(
+        match runtime
+            .prepare_responses_compact_execution(
+                model_target.provider_id.as_str(),
+                model_target.connection_id.as_str(),
+                model_target.model_id.as_str(),
+            )
+            .await
+        {
+            Ok(execution) => execution,
+            Err(failure) => {
+                remote_compaction_failure_allows_local_fallback(&failure)?;
+                return Ok(None);
+            }
+        },
+    );
     // toolingRequest resolves the exact model-visible tool snapshot used by an ordinary cache-preserving turn.
     // toolingRequest 解析普通缓存保留回合使用的精确模型可见工具快照。
     let mut tooling_request = build_prompt_compaction_launch_request(
@@ -732,6 +742,7 @@ async fn try_remote_responses_compaction(
         &plan.source_messages,
         &prepared_execution,
         Some(compaction_session_scope_id.as_str()),
+        launch_context.media_projection.as_deref(),
     )
     .await
     .map_err(|error| format!("Remote Responses compaction input projection failed: {error}"))?;
@@ -1536,6 +1547,7 @@ fn build_prompt_compaction_launch_request(
         runtime_system_updates: Vec::new(),
         controller_runtime: None,
         native_goal_runtime: None,
+        media_resource_runtime: None,
         knowledge_access: None,
         session_goal_context: None,
         session_plan_context: launch_context.session_plan_context.clone(),

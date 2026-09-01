@@ -175,9 +175,15 @@ impl SessionDocument {
     /// 返回可从持久化事件重建的 receipt；精确重试返回原 receipt 且不推进文档修订。
     pub fn continue_open_turn(
         &mut self,
-        request: ContinuationRequest,
+        mut request: ContinuationRequest,
         now_ms: i64,
     ) -> Result<IdempotentMutation<ContinueTurnReceipt>, DomainError> {
+        // Continuation is new user input; normalize only its submitted parameters before retry comparison.
+        // 继续输入属于新用户输入；重试比较前只规范化其提交参数。
+        request.submission.parameters = super::input::new_input_parameters(
+            &request.submission.resource_ids,
+            request.submission.parameters.take(),
+        )?;
         if let Some(receipt) = self.existing_continuation_receipt(&request)? {
             return Ok(IdempotentMutation::Idempotent(receipt));
         }
@@ -196,6 +202,7 @@ impl SessionDocument {
             hidden_model_guidance,
         } = request;
         let ClientInputSubmission {
+            parameters,
             client_action_id,
             text,
             resource_ids,
@@ -224,6 +231,7 @@ impl SessionDocument {
                 Some(turn_id),
                 EventVisibility::Provider,
                 EventBody::UserInput(UserInputEvent {
+                    parameters,
                     client_action_id: client_action_id.clone(),
                     input_id,
                     input_source: UserInputSource::PendingInTurn,
@@ -393,6 +401,10 @@ impl SessionDocument {
                     || value.input_source != UserInputSource::PendingInTurn
                     || value.text != request.submission.text
                     || value.resource_ids != request.submission.resource_ids
+                    || !crate::v1::user_prompt::initial_preparation_matches(
+                        value.parameters.as_ref(),
+                        request.submission.parameters.as_ref(),
+                    )
                 {
                     return Err(client_action_conflict(action_id));
                 }
@@ -718,6 +730,7 @@ impl SessionDocument {
                 Some(turn_id),
                 EventVisibility::Provider,
                 EventBody::UserInput(UserInputEvent {
+                    parameters: queued.parameters,
                     client_action_id: queued.client_action_id.clone(),
                     input_id: queued.input_id,
                     input_source: UserInputSource::QueuedScheduled,

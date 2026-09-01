@@ -244,13 +244,20 @@ export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptio
   // handleEditPendingPrompt 将单条排队提示词恢复到当前输入区。
   const handleEditPendingPrompt = React.useCallback(async (entryId: string): Promise<PendingPromptSummary | null> => {
     try {
-      const pendingPrompt = await editPendingPrompt(entryId);
-      if (!pendingPrompt) {
+      const outcome = await editPendingPrompt(entryId);
+      if (!outcome) {
         return null;
       }
-      const snapshot = await loadWorkbenchSnapshot();
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      return pendingPrompt;
+      if (outcome.projectionWarning) toast.warning(outcome.projectionWarning);
+      try {
+        const snapshot = await loadWorkbenchSnapshot();
+        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+      } catch (nextError) {
+        // The queue-to-draft commit remains authoritative even when the subsequent workbench refresh fails.
+        // 即使后续工作台刷新失败，队列到草稿提交仍保持权威。
+        toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      }
+      return outcome.entry;
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
       return null;

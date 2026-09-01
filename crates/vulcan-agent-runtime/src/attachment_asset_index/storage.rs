@@ -1,3 +1,4 @@
+use super::source_hold::AttachmentIndexTransaction;
 use super::*;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -6,8 +7,9 @@ use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 /// Retains weak per-index locks so unrelated workspace attachment indexes can mutate concurrently.
 /// 保留按索引划分的弱引用锁，使无关工作区附件索引可以并发变更。
-static ATTACHMENT_INDEX_TRANSACTION_LOCKS: LazyLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static ATTACHMENT_INDEX_TRANSACTION_LOCKS: LazyLock<
+    Mutex<HashMap<PathBuf, Weak<Mutex<AttachmentIndexTransaction>>>>,
+> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Resolves the shared transaction lock for one exact attachment index file.
 /// 解析单个精确附件索引文件的共享事务锁。
@@ -23,10 +25,24 @@ static ATTACHMENT_INDEX_TRANSACTION_LOCKS: LazyLock<Mutex<HashMap<PathBuf, Weak<
 /// 返回一个共享互斥锁，仅串行化当前索引的完整读取、变更与保存周期。
 pub(super) fn attachment_index_transaction_lock(
     asset_root: &Path,
-) -> Result<Arc<Mutex<()>>, String> {
-    // index_file is the actual persistence target and therefore the only valid lock identity.
-    // index_file 是真实持久化目标，因此是唯一有效的锁身份。
-    let index_file = resolve_attachment_index_file(asset_root);
+) -> Result<Arc<Mutex<AttachmentIndexTransaction>>, String> {
+    // Existing roots are canonicalized so Windows separator/case aliases cannot create two owners for one index.
+    // 对已存在的根目录进行规范化，避免Windows分隔符或大小写别名为同一索引创建两个所有者。
+    // A missing root cannot contain an indexed source or active hold, so its prospective path remains sufficient.
+    // 不存在的根目录不可能包含已索引来源或活动持有，因此其预期路径已经足够。
+    let lock_root = if asset_root.exists() {
+        fs::canonicalize(asset_root).map_err(|error| {
+            format!(
+                "failed to canonicalize attachment index root `{}`: {error}",
+                asset_root.display()
+            )
+        })?
+    } else {
+        asset_root.to_path_buf()
+    };
+    // index_file is the physical persistence target and therefore the only valid lock identity.
+    // index_file 是真实物理持久化目标，因此是唯一有效的锁身份。
+    let index_file = resolve_attachment_index_file(&lock_root);
     // registry holds weak references so completed workspaces do not accumulate permanent lock entries.
     // registry 保存弱引用，使已经结束的工作区不会永久积累锁条目。
     let mut registry = ATTACHMENT_INDEX_TRANSACTION_LOCKS.lock().map_err(|error| {
@@ -39,7 +55,7 @@ pub(super) fn attachment_index_transaction_lock(
 
     // transaction_lock is inserted before the registry guard is released, closing duplicate-lock races.
     // transaction_lock 在注册表守卫释放前插入，从而关闭重复建锁竞态。
-    let transaction_lock = Arc::new(Mutex::new(()));
+    let transaction_lock = Arc::new(Mutex::new(AttachmentIndexTransaction::default()));
     registry.insert(index_file, Arc::downgrade(&transaction_lock));
     Ok(transaction_lock)
 }

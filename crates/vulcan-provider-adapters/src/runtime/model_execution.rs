@@ -73,6 +73,9 @@ fn validate_responses_compact_execution_route(
 /// Carries frozen route inputs and one live credential lease resolved before controller dispatch.
 /// 承载控制器分派前解析完成的冻结路由输入与一份实时凭据租约。
 pub struct ResolvedPublicAiExecution {
+    /// Frozen non-secret media telemetry identity and the existing host observer.
+    /// 冻结的非秘密媒体遥测身份及既有宿主观察器。
+    pub(super) media_upload_telemetry: super::conversation_media::FrozenMediaUploadTelemetry,
     /// Exact provider execution route.
     /// 精确供应商执行路由。
     pub route: ProviderExecutionRoute,
@@ -85,6 +88,9 @@ pub struct ResolvedPublicAiExecution {
     /// Local model execution overrides.
     /// 本地模型执行覆盖。
     pub overrides: crate::ModelExecutionOverrides,
+    /// Media settings copied from the frozen selection, never re-read during execution.
+    /// 从冻结选择复制的媒体设置，执行期间不重新读取。
+    pub media_delivery_policy: crate::MediaDeliveryPolicy,
     /// Model-level protocol binding that produced this execution.
     /// 产生此执行的模型级协议绑定。
     pub protocol_binding: crate::provider_manifest::ModelProtocolBinding,
@@ -197,7 +203,20 @@ impl PublicAiRuntime {
         // The initial resolution preserves the pre-dispatch credential failure boundary without freezing this value for execution.
         // 初始解析保留分派前凭据失败边界，但不会把该值冻结给后续执行。
         credential.resolve_for_request().await?;
+        // Capture the installed observer without holding its registry lock across callbacks or uploads.
+        // 捕获已安装观察器，不在回调或上传期间持有其注册表锁。
+        let media_upload_observer = self
+            .runtime_media_upload_progress_observer
+            .read()
+            .map_err(|_| String::from("The runtime media upload observer lock is poisoned."))?
+            .clone();
         Ok(ResolvedPublicAiExecution {
+            media_upload_telemetry: super::conversation_media::FrozenMediaUploadTelemetry {
+                observer: media_upload_observer,
+                manifest_generation: selection.manifest_generation,
+                route_revision: selection.route_revision,
+            },
+            media_delivery_policy: selection.media_delivery_policy,
             route: selection.route,
             model: selection.model,
             credential,
@@ -567,9 +586,12 @@ impl PublicAiRuntime {
     /// 返回绑定路由的不透明结果，或分派前后产生的受控失败。
     pub async fn execute_prepared_responses_compact(
         &self,
-        execution: ResolvedPublicAiExecution,
+        execution: impl Into<std::sync::Arc<ResolvedPublicAiExecution>>,
         request: AiExecutionRequest,
     ) -> Result<ResponsesCompactExecution, ProviderExecutionFailure> {
+        // Media projection and compact dispatch may share the same immutable execution without resolving it again.
+        // 媒体投影和压缩分派可以共享同一个不可变执行，无需再次解析。
+        let execution = execution.into();
         if request.operation != AiOperation::ConversationRespond
             || !request.resources.is_empty()
             || request.continuation.is_some()

@@ -43,6 +43,10 @@ pub struct ComposerAttachmentSummary {
     /// V1 持久化草稿使用的可选项目级资源身份。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_resource_id: Option<u64>,
+    /// Exact original input occurrence for a project resource, resolved only inside the owning V1 session.
+    /// 项目资源的精确原输入出现，仅在所属V1会话内解析。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_source: Option<vulcan_session_core::v1::UserPromptResourceSource>,
     /// Project-relative canonical resource path safe for model and host-tool projection.
     /// 可安全投影给模型与宿主工具的项目相对规范资源路径。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -140,6 +144,10 @@ pub struct ComposerAttachmentPreparationSummary {
     /// Exact client transfer identity used by progress and cancellation.
     /// 供进度与取消使用的精确客户端传输标识。
     pub transfer_id: String,
+    /// Original physical progress identity when this view observes a previously started upload.
+    /// 当本视图观察此前启动的上传时，保留原实体进度身份。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub physical_transfer_id: Option<String>,
     /// Frozen provider-neutral direct-delivery decision.
     /// 冻结的供应商中立直接传输决策。
     pub delivery_plan: ComposerAttachmentDeliveryPlan,

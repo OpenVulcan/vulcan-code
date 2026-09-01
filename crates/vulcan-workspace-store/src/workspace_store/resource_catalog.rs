@@ -19,6 +19,15 @@ use vulcan_session_core::v1::{JS_SAFE_INTEGER_MAX, ResourceId};
 
 use crate::workspace_store::session_v1::atomic_io::write_file_atomic;
 
+mod source;
+mod upload_receipt;
+
+pub use source::{
+    ProjectResourceSource, parse_project_resource_locator, project_resource_locator,
+    resolve_project_resource_source,
+};
+pub use upload_receipt::ProjectResourceUploadReceipt;
+
 /// File name of the project resource catalog.
 /// 项目资源目录的文件名。
 pub const RESOURCE_CATALOG_FILE: &str = "resource_catalog.json";
@@ -46,6 +55,10 @@ pub struct ProviderBinding {
     /// External media id returned by the Provider.
     /// Provider 返回的外部媒体 id。
     pub media_id: String,
+    /// Verified upload facts; absence marks a legacy binding that cannot prove historical delivery.
+    /// 已验证上传事实；缺失表示无法证明历史投递的旧绑定。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upload_receipt: Option<ProjectResourceUploadReceipt>,
 }
 
 /// One catalog entry of a reusable project resource.
@@ -724,41 +737,16 @@ pub fn resolve_project_resource(
     catalog: &ProjectResourceCatalog,
     resource_id: ResourceId,
 ) -> Result<ProjectResourceResolution, ProjectResourceCatalogError> {
-    validate_project_resource_catalog(catalog)?;
-    let Some(entry) = catalog
-        .entries
-        .iter()
-        .find(|entry| entry.resource_id == resource_id)
-    else {
+    // Resolve metadata and containment before reading; a changed source cannot force an unbounded allocation.
+    // 先解析元数据及包含关系再读取；变化来源不能迫使无界内存分配。
+    let Some(source) = resolve_project_resource_source(project_dir, catalog, resource_id)? else {
         return Ok(missing_resource(resource_id));
     };
-    let path = canonical_entity_path(project_dir, &entry.sha256);
-    let bytes = match fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(missing_resource(resource_id));
-        }
-        Err(error) => {
-            return Err(ProjectResourceCatalogError::CatalogRead {
-                path,
-                detail: error.to_string(),
-            });
-        }
-    };
-    let actual_sha256 = sha256_hex(&bytes);
-    if bytes.len() as u64 != entry.size || actual_sha256 != entry.sha256 {
-        return Err(ProjectResourceCatalogError::EntityCorrupt {
-            path,
-            detail: format!(
-                "expected size={} sha256={}, actual size={} sha256={actual_sha256}",
-                entry.size,
-                entry.sha256,
-                bytes.len()
-            ),
-        });
-    }
+    // The catalog size is exact, and the bounded reader verifies the final immutable digest.
+    // 目录大小是精确值，有界读取器验证最终不可变摘要。
+    let bytes = source.read_bounded(source.entry.size)?;
     Ok(ProjectResourceResolution::Available {
-        entry: entry.clone(),
+        entry: source.entry,
         bytes,
     })
 }
@@ -821,6 +809,19 @@ fn validate_project_resource_catalog(
                 ),
             });
         }
+        for binding in &entry.provider_bindings {
+            binding.validate_upload_receipt()?;
+            // Optional catalog MIME uses the same octet-stream default as the canonical V1 resource resolver.
+            // 可选目录MIME使用与规范V1资源解析器相同的二进制流默认值。
+            if let Some(receipt) = &binding.upload_receipt
+                && receipt.mime_type != entry.mime.as_deref().unwrap_or("application/octet-stream")
+            {
+                return Err(ProjectResourceCatalogError::InvalidCatalog {
+                    detail: "upload receipt MIME differs from its project resource".to_string(),
+                });
+            }
+        }
+        upload_receipt::validate_draft_intent_receipts(&entry.provider_bindings)?;
         let expected_path = canonical_entity_relative_path(&entry.sha256);
         if entry.entity_relative_path != expected_path {
             return Err(ProjectResourceCatalogError::InvalidCatalog {

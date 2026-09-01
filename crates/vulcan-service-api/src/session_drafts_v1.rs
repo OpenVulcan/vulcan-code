@@ -45,6 +45,12 @@ pub struct SessionDraftV1Response {
     /// Ordered resource projections matching metadata input state exactly.
     /// 与 metadata 输入状态精确匹配的有序资源投影。
     pub resources: Vec<SessionResourceSummaryV1>,
+    /// Exact staged asset id per resource occurrence; null retains a project-only reference without inventing provenance.
+    /// 每个资源出现的精确暂存资产ID；空值保留纯项目引用，不虚构来源。
+    pub staged_attachment_ids: Vec<Option<String>>,
+    /// Ordered original input occurrences for project-only resources, never inferred from the resource id or filename.
+    /// 纯项目资源的有序原输入出现，绝不从资源ID或文件名推断。
+    pub resource_sources: Vec<Option<vulcan_session_core::v1::UserPromptResourceSource>>,
 }
 
 #[cfg(test)]

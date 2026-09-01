@@ -255,6 +255,7 @@ pub(crate) async fn service_compact_selected_conversation_context(
         MANUAL_CONTEXT_COMPACTION_TRIGGER.to_string(),
         compaction_plan.plan,
         compaction_plan.full_context_state,
+        compaction_plan.media_projection,
         compaction_plan.retained_from_seq,
         model_target,
     )?;
@@ -379,6 +380,11 @@ async fn service_stop_conversation_run_owned(
     // The aborted stream cannot publish its normal Finished event, so Stop owns the V1 API interruption.
     // 被中止的流无法发布正常 Finished 事件，因此 Stop 负责 V1 API 中断事实。
     let goal_handle = session_v1_handle_from_state(&state, target_session_id).await?;
+    // The stream is aborted, but completed upload-result workers may still own its original preparation lease.
+    // 流已中止，但已完成上传结果工作线程可能仍持有其原准备租约。
+    // Settle those exact results before Stop can close or seal the prompt; this guard also excludes replacement preparation.
+    // 在Stop可能闭合或封存提示词之前结算这些精确结果；本守卫同时排除替代准备。
+    let _preparation_settlement = goal_handle.acquire_request_preparation_settlement().await;
     let stop_interruption_at_ms = current_v1_goal_unix_millis()?;
     let interruption_receipt = goal_handle
         .mutate_durable_if_changed(

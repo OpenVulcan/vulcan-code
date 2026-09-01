@@ -1,4 +1,5 @@
 import type { ComposerAttachmentSummary } from "@/types";
+import { parseComposerPromptSource } from "@/service/composer-attachment-reference";
 
 // ComposerSessionPersistedDraftV1 is the exact browser-local draft envelope for the first desktop contract.
 // ComposerSessionPersistedDraftV1 是第一版桌面契约使用的精确浏览器本地草稿信封。
@@ -66,6 +67,7 @@ function composerSessionPersistableAttachment(
     fileName: attachment.fileName,
     localPath: attachment.localPath,
     projectResourceId: attachment.projectResourceId,
+    promptSource: attachment.promptSource == null ? attachment.promptSource : { ...attachment.promptSource },
     resourcePath: attachment.resourcePath,
     sourcePath: attachment.sourcePath,
     assetId: attachment.assetId,
@@ -87,6 +89,14 @@ function composerSessionAttachmentFromStorage(value: unknown): ComposerAttachmen
     return null;
   }
   const candidate = value as Record<string, unknown>;
+  // Browser storage is untrusted; preserve only an explicitly valid original input occurrence.
+  // 浏览器存储不可信；只保留显式有效的原输入出现。
+  let promptSource: ComposerAttachmentSummary["promptSource"];
+  try {
+    promptSource = candidate.promptSource === undefined ? undefined : parseComposerPromptSource(candidate.promptSource);
+  } catch {
+    return null;
+  }
   if (
     typeof candidate.kind !== "string"
     || typeof candidate.fileName !== "string"
@@ -107,6 +117,7 @@ function composerSessionAttachmentFromStorage(value: unknown): ComposerAttachmen
     fileName: candidate.fileName,
     localPath: candidate.localPath,
     projectResourceId: candidate.projectResourceId,
+    promptSource,
     resourcePath: candidate.resourcePath,
     sourcePath: candidate.sourcePath,
     assetId: candidate.assetId,

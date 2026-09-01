@@ -1,4 +1,5 @@
 import type { ServiceClient } from "@/service/client";
+import { parseComposerPromptSource } from "@/service/composer-attachment-reference";
 import {
   parseSessionResourceSummaryV1,
   sessionResourceClientV1,
@@ -92,22 +93,62 @@ export function parseSessionDraftV1(
   expectedSessionId: string,
   resources: SessionResourceRpcV1,
 ): SessionDraftV1 {
-  const record = exactObject(payload, ["sessionId", "text", "resources"], "session draft response");
+  const record = exactObject(payload, ["sessionId", "text", "resources", "stagedAttachmentIds", "resourceSources"], "session draft response");
   if (record.sessionId !== expectedSessionId) {
     throw new Error("Session draft response owner does not match the request.");
   }
   if (typeof record.text !== "string" || !Array.isArray(record.resources)) {
     throw new Error("Session draft response has an invalid text or resource list.");
   }
+  // The service owns the exact occurrence mapping; a file hash or last-upload cache cannot replace it.
+  // 服务持有精确出现映射；文件摘要或最近上传缓存不能替代它。
+  const stagedAttachmentIds = record.stagedAttachmentIds;
+  if (!Array.isArray(stagedAttachmentIds) || stagedAttachmentIds.length !== record.resources.length
+    || stagedAttachmentIds.some((id: unknown) => id !== null && (typeof id !== "string" || id.length === 0 || id.trim() !== id || id.length > 1024 || /[\u0000-\u001f\u007f-\u009f/\\:]/u.test(id)))) {
+    throw new Error("Session draft response has invalid staged attachment identities.");
+  }
+  // Original input positions are explicit service facts, never derived from repeated ResourceIds.
+  // 原输入位置是显式服务事实，绝不从重复ResourceId推导。
+  if (!Array.isArray(record.resourceSources) || record.resourceSources.length !== record.resources.length) {
+    throw new Error("Session draft response has invalid resource sources.");
+  }
+  // Validate every source before publishing any partially parsed attachment array.
+  // 发布任何部分解析附件数组前，校验全部来源。
+  const resourceSources = record.resourceSources.map(parseComposerPromptSource);
   return {
     sessionId: expectedSessionId,
     text: record.text,
-    attachments: record.resources.map((value) =>
-      attachmentFromResourceSummary(
+    attachments: record.resources.map((value, index) => {
+      // Parse resource metadata before assigning its explicit staged occurrence identity.
+      // 分配其显式暂存出现身份之前，解析资源元数据。
+      const resource = parseSessionResourceSummaryV1(value);
+      // Null deliberately denotes a project-only reference, including legacy drafts.
+      // 空值明确表示纯项目引用，包括旧草稿。
+      const stagedId = stagedAttachmentIds[index] as string | null;
+      // Staged assets and project-input occurrences are disjoint ownership forms.
+      // 暂存资产与项目输入出现是互斥所有权形式。
+      const promptSource = resourceSources[index];
+      if (stagedId !== null && promptSource !== null) {
+        throw new Error("Session draft attachment has conflicting staged and prompt source identities.");
+      }
+      if (stagedId !== null && resource.availability === "missing") {
+        throw new Error("Session draft staged attachment has no authoritative resource metadata.");
+      }
+      // Preview URLs remain project-scoped; future mutations resolve the exact managed asset id at the host.
+      // 预览URL保持项目作用域；后续修改在宿主解析精确托管资产ID。
+      const attachment = attachmentFromResourceSummary(
         expectedSessionId,
-        parseSessionResourceSummaryV1(value),
+        resource,
         resources,
-      )),
+      );
+      if (stagedId !== null) {
+        delete attachment.projectResourceId;
+        attachment.assetId = stagedId;
+      } else if (promptSource !== null) {
+        attachment.promptSource = promptSource;
+      }
+      return attachment;
+    }),
   };
 }
 

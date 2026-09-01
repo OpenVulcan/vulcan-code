@@ -75,6 +75,20 @@ export interface ComposerDraftSubmissionSnapshot {
   attachments: ComposerAttachmentSummary[];
 }
 
+/** ComposerQueuedDraftReplacementToken binds one queue edit to the owner that initiated it.
+ * ComposerQueuedDraftReplacementToken 把一次队列编辑绑定到发起它的 owner。
+ */
+export interface ComposerQueuedDraftReplacementToken {
+  /** Exact owner captured before the queue-to-draft RPC begins.
+   * 队列转草稿 RPC 开始前捕获的精确 owner。
+   */
+  owner: ComposerDraftOwnerV1;
+  /** Monotonic operation generation rejecting overlapping replacement completion.
+   * 拒绝重叠替换完成的单调操作代际。
+   */
+  generation: number;
+}
+
 /** UseComposerSessionDraftState exposes one coherent composer-draft transaction boundary.
  * UseComposerSessionDraftState 暴露一个完整一致的输入区草稿事务边界。
  */
@@ -107,6 +121,24 @@ export interface UseComposerSessionDraftState extends Omit<UseComposerAttachment
    * 通过显式排队输入编辑操作替换当前完整草稿。
    */
   replaceDraft: (input: string, attachments: ComposerAttachmentSummary[]) => void;
+  /** Flushes the current owner and returns its identity before a queued-input replacement RPC.
+   * 在队列输入替换 RPC 前刷新当前 owner 并返回其身份。
+   */
+  prepareQueuedDraftReplacement: () => Promise<ComposerQueuedDraftReplacementToken>;
+  /** Applies a committed queued-input replacement to its captured owner in exact order.
+   * 按精确顺序把已提交的队列输入替换应用到其捕获 owner。
+   */
+  completeQueuedDraftReplacement: (
+    token: ComposerQueuedDraftReplacementToken,
+    input: string,
+    attachments: ComposerAttachmentSummary[],
+  ) => boolean;
+  /** Reloads the authoritative owner after an ambiguous queue-edit acknowledgement.
+   * 在队列编辑确认不明确后重新加载权威 owner。
+   */
+  recoverQueuedDraftReplacement: (
+    token: ComposerQueuedDraftReplacementToken,
+  ) => Promise<void>;
 }
 
 /** Process-wide serialized writer preserving one ordering authority per materialized session.
@@ -213,6 +245,7 @@ export function useComposerSessionDraft(
   const hydratingOwnerKeyRef = React.useRef<string | null>(null);
   const ownerApplyBlockRef = React.useRef<ExpectedComposerDraftStateV1 | null>(null);
   const suppressedUiStateRef = React.useRef<ExpectedComposerDraftStateV1 | null>(null);
+  const queuedDraftReplacementGenerationRef = React.useRef(0);
   const inputRef = React.useRef(initialDraft.input);
   const attachmentsRef = React.useRef<ComposerAttachmentSummary[]>(initialDraft.attachments);
   const [draftInput, setDraftInput] = React.useState(initialDraft.input);
@@ -223,7 +256,12 @@ export function useComposerSessionDraft(
     conversationId: options.conversationId,
     onStageAttachmentBytes: options.onStageAttachmentBytes,
   });
-  const { attachments, setAttachments, ...attachmentControls } = attachmentState;
+  const {
+    attachments,
+    setAttachments,
+    invalidatePendingAttachmentStaging,
+    ...attachmentControls
+  } = attachmentState;
 
   React.useLayoutEffect(() => {
     inputRef.current = draftInput;
@@ -249,6 +287,7 @@ export function useComposerSessionDraft(
       draftSlotKey: draftKey,
       sessionId: options.conversationId,
     };
+    invalidatePendingAttachmentStaging();
     activeOwnerRef.current = nextOwner;
     ownerInitializedRef.current = true;
     suppressedUiStateRef.current = null;
@@ -325,7 +364,7 @@ export function useComposerSessionDraft(
       });
     };
     hydrate();
-  }, [draftKey, options.conversationId, setAttachments, t]);
+  }, [draftKey, invalidatePendingAttachmentStaging, options.conversationId, setAttachments, t]);
 
   React.useEffect(() => {
     if (!ownerInitializedRef.current) {
@@ -469,6 +508,7 @@ export function useComposerSessionDraft(
   ) => {
     const owner = activeOwnerRef.current;
     const detachedAttachments = cloneAttachments(nextAttachments);
+    invalidatePendingAttachmentStaging();
     inputRef.current = input;
     attachmentsRef.current = detachedAttachments;
     persistDraftOwner(owner, input, detachedAttachments);
@@ -479,17 +519,89 @@ export function useComposerSessionDraft(
     };
     setDraftInput(input);
     setAttachments(detachedAttachments);
-  }, [setAttachments]);
+  }, [invalidatePendingAttachmentStaging, setAttachments]);
+
+  /** Flushes every earlier write before the durable queue-to-draft mutation is admitted.
+   * 在持久队列转草稿变更准入前刷新全部较早写入。
+   */
+  const prepareQueuedDraftReplacement = React.useCallback(async (): Promise<ComposerQueuedDraftReplacementToken> => {
+    const owner = { ...activeOwnerRef.current };
+    if (
+      hydratingOwnerKeyRef.current === owner.draftSlotKey
+      || ownerApplyBlockRef.current?.draftSlotKey === owner.draftSlotKey
+    ) {
+      throw new Error("Materialized session draft has not completed authoritative hydration.");
+    }
+    invalidatePendingAttachmentStaging();
+    persistDraftOwner(owner, inputRef.current, attachmentsRef.current);
+    if (owner.sessionId) {
+      await sessionDraftWriteCoordinatorV1.flush(owner.sessionId);
+    }
+    const generation = queuedDraftReplacementGenerationRef.current + 1;
+    queuedDraftReplacementGenerationRef.current = generation;
+    return { owner, generation };
+  }, [invalidatePendingAttachmentStaging]);
+
+  /** Projects one committed replacement without redirecting it when the user changed sessions mid-flight.
+   * 投影一份已提交替换；用户在请求期间切换会话时不会把它重定向到新会话。
+   */
+  const completeQueuedDraftReplacement = React.useCallback((
+    token: ComposerQueuedDraftReplacementToken,
+    input: string,
+    nextAttachments: ComposerAttachmentSummary[],
+  ) => {
+    if (token.generation !== queuedDraftReplacementGenerationRef.current) {
+      return false;
+    }
+    const detachedAttachments = cloneAttachments(nextAttachments);
+    const currentOwner = activeOwnerRef.current;
+    if (
+      currentOwner.draftSlotKey !== token.owner.draftSlotKey
+      || currentOwner.sessionId !== token.owner.sessionId
+    ) {
+      persistDraftOwner(token.owner, input, detachedAttachments);
+      return false;
+    }
+    replaceDraft(input, detachedAttachments);
+    return true;
+  }, [replaceDraft]);
+
+  /** Reconciles an uncertain RPC acknowledgement from the durable session draft without guessing commit state.
+   * 从持久会话草稿协调不确定的RPC确认，绝不猜测提交状态。
+   */
+  const recoverQueuedDraftReplacement = React.useCallback(async (
+    token: ComposerQueuedDraftReplacementToken,
+  ) => {
+    if (token.generation !== queuedDraftReplacementGenerationRef.current) {
+      return;
+    }
+    if (!token.owner.sessionId) {
+      throw new Error("Queued prompt recovery requires a materialized session owner.");
+    }
+    const restoredDraft = await sessionDraftClientV1.read(token.owner.sessionId);
+    const currentOwner = activeOwnerRef.current;
+    if (
+      currentOwner.draftSlotKey !== token.owner.draftSlotKey
+      || currentOwner.sessionId !== token.owner.sessionId
+    ) {
+      return;
+    }
+    replaceDraft(restoredDraft.text, restoredDraft.attachments);
+  }, [replaceDraft]);
 
   return {
     ...attachmentControls,
     draftSlotKey: draftKey,
     attachments,
+    invalidatePendingAttachmentStaging,
     draftInput,
     setDraftInput,
     clearForSubmission,
     restoreFailedSubmission,
     restoreInputToSlot,
     replaceDraft,
+    prepareQueuedDraftReplacement,
+    completeQueuedDraftReplacement,
+    recoverQueuedDraftReplacement,
   };
 }

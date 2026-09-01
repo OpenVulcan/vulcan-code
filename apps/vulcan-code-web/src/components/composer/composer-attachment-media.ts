@@ -1,9 +1,9 @@
 import { type GeneratedMediaAttachment } from "@/components/media/generated-media";
 import type { ComposerAttachmentSummary } from "@/types";
 
-// COMPOSER_INLINE_ORIGINAL_MAX_BYTES mirrors the host request-copy inline budget.
-// COMPOSER_INLINE_ORIGINAL_MAX_BYTES 与宿主请求副本内联预算保持一致。
-const COMPOSER_INLINE_ORIGINAL_MAX_BYTES = 2 * 1024 * 1024;
+// COMPOSER_DERIVED_PREVIEW_MAX_BYTES mirrors only the host preview-sidecar file limit, never a delivery threshold.
+// COMPOSER_DERIVED_PREVIEW_MAX_BYTES 仅对应宿主预览旁路文件限制，绝不是投递阈值。
+const COMPOSER_DERIVED_PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
 
 // COMPOSER_DERIVED_PREVIEW_MAX_EDGE bounds full-frame previews without cropping user content.
 // COMPOSER_DERIVED_PREVIEW_MAX_EDGE 在不裁剪用户内容的前提下限制完整画面预览边长。
@@ -44,7 +44,7 @@ export function inferComposerAttachmentKindFromFile(file: File): string | null {
 // Returns: a bounded derivative file, or null when no derivative is required or decoding fails.
 // 返回值：受限的派生文件；无需派生或解码失败时返回 null。
 export async function createComposerImagePreviewFile(file: File): Promise<File | null> {
-  if (file.size <= COMPOSER_INLINE_ORIGINAL_MAX_BYTES || inferComposerAttachmentKindFromFile(file) !== "image") {
+  if (file.size <= COMPOSER_DERIVED_PREVIEW_MAX_BYTES || inferComposerAttachmentKindFromFile(file) !== "image") {
     return null;
   }
   try {
@@ -68,10 +68,10 @@ export async function createComposerImagePreviewFile(file: File): Promise<File |
     context.fillRect(0, 0, canvas.width, canvas.height);
     context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
     bitmap.close();
-    // blob uses a conservative JPEG quality so the derivative remains below the host inline budget in normal cases.
-    // blob 使用保守 JPEG 质量，使派生图在常见情况下保持低于宿主内联预算。
+    // blob uses a conservative JPEG quality so the derivative stays within the preview-sidecar storage limit.
+    // blob 使用保守 JPEG 质量，使派生图保持在预览旁路存储限制内。
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.78));
-    if (!blob || blob.size > COMPOSER_INLINE_ORIGINAL_MAX_BYTES) {
+    if (!blob || blob.size > COMPOSER_DERIVED_PREVIEW_MAX_BYTES) {
       return null;
     }
     const sourceStem = file.name.replace(/\.[^.]+$/, "") || "image";

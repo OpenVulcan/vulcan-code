@@ -621,6 +621,18 @@ impl SessionDocument {
         &mut self,
         input: PrepareAndStartApiInput,
     ) -> Result<IdempotentMutation<PreparedApiStart>, DomainError> {
+        self.prepare_and_start_api_with_user_prompt_media(input, Vec::new())
+    }
+
+    /// Atomically freezes `prompt_media` on their user events and starts the exact physical request in `input`.
+    /// 将`prompt_media`原子冻结到各自用户事件，并启动`input`中的精确物理请求。
+    /// Returns one shared revision boundary; failed API validation cannot leave a partially frozen prompt.
+    /// 返回同一修订边界；API校验失败不能留下部分冻结的提示词。
+    pub fn prepare_and_start_api_with_user_prompt_media(
+        &mut self,
+        input: PrepareAndStartApiInput,
+        prompt_media: Vec<crate::v1::UserPromptMediaBinding>,
+    ) -> Result<IdempotentMutation<PreparedApiStart>, DomainError> {
         let PrepareAndStartApiInput {
             purpose,
             request,
@@ -630,10 +642,34 @@ impl SessionDocument {
             continuation_action_id,
             now_ms,
         } = input;
+        // A newly frozen prompt must use the exact captured request route, never a later global selection.
+        // 新冻结提示词必须使用精确捕获请求路线，绝不能使用后来的全局选择。
+        for binding in &prompt_media {
+            let route = &binding.origin.route;
+            if route.provider_id != request.provider
+                || route.model_id != request.model
+                || Some(route.connection_id.as_str()) != request.connection_id.as_deref()
+                || Some(route.protocol_profile_id.as_str()) != request.profile.as_deref()
+            {
+                return Err(crate::v1::user_prompt::invalid_prompt_media(
+                    "captured_request_route_mismatch",
+                ));
+            }
+        }
         validate_api_continuation_binding_shape(purpose, continuation_action_id.as_ref())?;
         if let Some(action_id) = continuation_action_id.as_ref()
             && let Some(receipt) = self.existing_api_start_for_action(action_id)?
         {
+            // Repeating an old API cannot use its idempotency key to freeze any later prompt.
+            // 重复旧API不能借助其幂等键冻结任何较晚提示词。
+            if !self
+                .stage_user_prompt_media(prompt_media, now_ms)?
+                .is_empty()
+            {
+                return Err(crate::v1::user_prompt::invalid_prompt_media(
+                    "idempotent_request_has_new_prompt_media",
+                ));
+            }
             return Ok(IdempotentMutation::Idempotent(receipt));
         }
         validate_timestamp("api_started.now_ms", now_ms)?;
@@ -666,6 +702,10 @@ impl SessionDocument {
             return Err(DomainError::NoActiveApi);
         }
         self.ensure_transition_capacity(1, 1)?;
+
+        // Prompt origin belongs to its chronological user event, never to ApiStarted or a cache's latest value.
+        // 提示词原身份属于其时序用户事件，绝不属于ApiStarted或缓存的最近值。
+        let staged_prompt_events = self.stage_user_prompt_media(prompt_media, now_ms)?;
 
         let mut staged_runtime_lock = self.runtime_lock.clone();
         let locked_sources = locked_baseline.into_locked_sources();
@@ -706,6 +746,16 @@ impl SessionDocument {
             }),
             now_ms,
         )?;
+        // All fallible checks are complete; update prompts and append the API in one failure-atomic revision.
+        // 所有可能失败的检查均已完成；在一个失败原子修订内更新提示词并追加API。
+        let mut changed_seqs = staged_prompt_events
+            .iter()
+            .map(|(_, event)| event.seq())
+            .collect::<Vec<_>>();
+        for (index, event) in staged_prompt_events {
+            self.events[index] = event;
+        }
+        changed_seqs.push(started_seq);
         self.runtime_lock = staged_runtime_lock;
         self.metadata = staged_metadata;
         self.id_allocator = staged_allocator;
@@ -728,7 +778,7 @@ impl SessionDocument {
         } else {
             vec![DirtyFile::ActiveTail]
         };
-        self.bump_revision(&dirty, now_ms, &[started_seq]);
+        self.bump_revision(&dirty, now_ms, &changed_seqs);
         Ok(IdempotentMutation::Committed(PreparedApiStart {
             api_call_id,
             started_seq,
@@ -1263,6 +1313,9 @@ impl SessionDocument {
         let had_pending_inputs = !pending_inputs.is_empty();
         for pending in &pending_inputs {
             validate_user_input(pending.text.clone(), &pending.resource_ids)?;
+            if let Some(parameters) = &pending.parameters {
+                parameters.validate_pending(&pending.resource_ids)?;
+            }
             if pending.turn_id != api.turn_id {
                 return Err(DomainError::InvalidQueuedInputOrder {
                     field: "pending_input_turn_mismatch",
@@ -1426,6 +1479,7 @@ impl SessionDocument {
                 Some(api.turn_id),
                 EventVisibility::Provider,
                 EventBody::UserInput(UserInputEvent {
+                    parameters: pending.parameters,
                     client_action_id: pending.client_action_id,
                     input_id: pending.input_id,
                     input_source: UserInputSource::PendingInTurn,
@@ -1548,6 +1602,9 @@ impl SessionDocument {
         let pending_inputs = self.metadata.input_state.pending_in_turn_inputs.clone();
         for pending in &pending_inputs {
             validate_user_input(pending.text.clone(), &pending.resource_ids)?;
+            if let Some(parameters) = &pending.parameters {
+                parameters.validate_pending(&pending.resource_ids)?;
+            }
         }
         let promotable_count = pending_inputs
             .iter()
@@ -1636,6 +1693,7 @@ impl SessionDocument {
                 Some(api.turn_id),
                 EventVisibility::Provider,
                 EventBody::UserInput(UserInputEvent {
+                    parameters: pending.parameters,
                     client_action_id: pending.client_action_id,
                     input_id: pending.input_id,
                     input_source: UserInputSource::PendingInTurn,

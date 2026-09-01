@@ -10,6 +10,93 @@ use crate::parse_openai_model_catalog;
 use std::sync::Arc;
 use vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID;
 
+/// Verifies tool policy belongs to the published generation rather than the ignored caller configuration.
+/// 验证工具策略属于已发布代际，而不是被忽略的调用者配置参数。
+#[test]
+fn provider_tool_media_policy_is_frozen_with_published_generation() {
+    // Isolated runtime and configuration use a bundled non-network target for resolution only.
+    // 隔离运行时与配置仅使用内置目标进行解析，不发起网络调用。
+    let runtime = PublicAiRuntime::unavailable().expect("isolated runtime");
+    let mut configuration = PersistedAiConfiguration::default();
+    let mut account = connection("policy-account");
+    account.provider_id = String::from("tavily");
+    account.service_entry_id = String::from("public-api");
+    configuration
+        .connection_graph
+        .add_connection(&runtime.providers().expect("bundled providers"), account)
+        .expect("policy account");
+    // Distinct valid values make an accidental caller-configuration read observable.
+    // 不同的有效值使意外读取调用者配置能够被观察到。
+    let mut first_policy = crate::MediaDeliveryPolicy::default();
+    first_policy
+        .independent_extension
+        .video
+        .with_upload_max_bytes = 1;
+    configuration
+        .set_media_delivery_policy(first_policy)
+        .expect("first policy");
+    // Explicit activation is the only publication boundary used by this test.
+    // 显式激活是本测试唯一使用的发布边界。
+    let executor = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("test executor");
+    executor
+        .block_on(runtime.activate_staged_manifest_catalogs(&configuration, &[]))
+        .expect("first generation");
+    // The exact available target supplies identity instead of a guessed target name.
+    // 精确可用目标提供身份，不猜测目标名称。
+    let available = runtime
+        .available_provider_tool_targets(&configuration)
+        .expect("available targets")
+        .into_iter()
+        .find(|available| {
+            available.target.contract.capability == ProviderToolCapabilityKind::WebSearch
+        })
+        .expect("bundled search target");
+    let selection = ProviderToolTargetSelection {
+        connection_id: available.connection_id,
+        target_id: available.target.target_id,
+    };
+    let first = runtime
+        .resolve_provider_tool_target(
+            &configuration,
+            ProviderToolCapabilityKind::WebSearch,
+            &selection,
+        )
+        .expect("frozen first target");
+    assert_eq!(first.media_delivery_policy, Some(first_policy));
+    // Merely passing an unpublished configuration must not override the retained generation.
+    // 仅传入未发布配置不得覆盖保留代际。
+    let mut second_policy = first_policy;
+    second_policy
+        .independent_extension
+        .video
+        .with_upload_max_bytes = 2;
+    configuration
+        .set_media_delivery_policy(second_policy)
+        .expect("second policy");
+    let unpublished = runtime
+        .resolve_provider_tool_target(
+            &configuration,
+            ProviderToolCapabilityKind::WebSearch,
+            &selection,
+        )
+        .expect("retained generation");
+    assert_eq!(unpublished.media_delivery_policy, Some(first_policy));
+    executor
+        .block_on(runtime.activate_staged_manifest_catalogs(&configuration, &[]))
+        .expect("second generation");
+    let second = runtime
+        .resolve_provider_tool_target(
+            &configuration,
+            ProviderToolCapabilityKind::WebSearch,
+            &selection,
+        )
+        .expect("newly frozen target");
+    assert_eq!(second.media_delivery_policy, Some(second_policy));
+    assert_eq!(first.media_delivery_policy, Some(first_policy));
+}
+
 /// Verifies one full custom manifest publishes tool targets only at the explicit activation boundary.
 /// 验证一份完整自定义 Manifest 仅在显式激活边界发布工具目标。
 #[test]

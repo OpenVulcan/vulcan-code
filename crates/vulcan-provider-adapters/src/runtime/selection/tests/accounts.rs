@@ -326,6 +326,75 @@ fn connection_model_selection_uses_exact_session_account() {
     assert_ne!(selection.route_revision, other_selection.route_revision);
 }
 
+/// Verifies settings publication affects new selections without changing an already frozen policy.
+/// 验证设置发布只影响新选择，不改变已经冻结的策略。
+#[test]
+fn media_delivery_policy_is_frozen_separately_from_route_revision() {
+    // The fixture owns an offline exact account and catalog.
+    // 夹具持有离线精确账号及目录。
+    let (runtime, mut configuration) = two_account_runtime();
+    // The original selection keeps the default media policy snapshot.
+    // 原始选择保持默认媒体策略快照。
+    let original = runtime
+        .resolve_connection_model_selection(
+            &configuration,
+            "one",
+            "openrouter",
+            "openai/gpt-5.6-sol",
+        )
+        .expect("media policy fixture or operation must be valid");
+    // Change only an extension threshold, without changing model, route or manifests.
+    // 仅修改扩展阈值，不修改模型、路由或清单。
+    let mut policy = configuration.effective_media_delivery_policy();
+    policy.independent_extension.video.without_upload_max_bytes = 1234;
+    configuration
+        .set_media_delivery_policy(policy)
+        .expect("media policy fixture or operation must be valid");
+    runtime
+        .replace_configuration(configuration.clone())
+        .expect("media policy fixture or operation must be valid");
+    // A new selection captures the new settings while retaining the same route identity.
+    // 新选择捕获新设置，同时保留相同路由身份。
+    let updated = runtime
+        .resolve_connection_model_selection(
+            &configuration,
+            "one",
+            "openrouter",
+            "openai/gpt-5.6-sol",
+        )
+        .expect("media policy fixture or operation must be valid");
+    assert_eq!(
+        original.media_delivery_policy,
+        crate::MediaDeliveryPolicy::default()
+    );
+    assert_eq!(updated.media_delivery_policy, policy);
+    assert_eq!(original.route_revision, updated.route_revision);
+    assert_ne!(
+        original
+            .media_delivery_policy
+            .fingerprint()
+            .expect("media policy fixture or operation must be valid"),
+        updated
+            .media_delivery_policy
+            .fingerprint()
+            .expect("media policy fixture or operation must be valid")
+    );
+    // A direct runtime caller cannot bypass validation by assigning the public persisted field.
+    // 直接运行时调用者不能通过赋值公开持久化字段绕过校验。
+    let previous = runtime
+        .configuration_snapshot()
+        .expect("media policy fixture or operation must be valid");
+    policy.version += 1;
+    configuration.media_delivery_policy = Some(policy);
+    assert!(runtime.replace_configuration(configuration).is_err());
+    assert_eq!(
+        runtime
+            .configuration_snapshot()
+            .expect("media policy fixture or operation must be valid"),
+        previous
+    );
+}
+
 /// Verifies one active selection remains bound to its exact account snapshot.
 /// 验证活动选择始终绑定其精确账号快照。
 #[test]

@@ -1,5 +1,5 @@
-//! Responses-first LLM conversion and accounting primitives.
-//! 以 Responses 为首要基线的 LLM 转换与计费原语。
+//! Responses-style internal semantics, exact target wire conversion and accounting primitives.
+//! Responses 风格内部语义、精确目标线路转换与计费原语。
 
 use std::collections::BTreeMap;
 
@@ -12,7 +12,11 @@ mod protocol_implementation;
 pub use protocol_implementation::shared;
 pub use protocol_implementation::*;
 
+mod internal_media;
 mod reasoning;
+pub use internal_media::project_internal_request_for_provider;
+mod media_wire_validation;
+pub use media_wire_validation::validate_target_media_projection;
 mod reasoning_bridge;
 mod responses_to_anthropic;
 mod responses_to_chat;
@@ -99,7 +103,10 @@ pub fn project_responses_for_provider(
     context: &ProviderRouteContext,
 ) -> Result<serde_json::Value, LlmCoreError> {
     match context.upstream_protocol {
-        UpstreamProtocol::OpenAiResponses => Ok(body),
+        UpstreamProtocol::OpenAiResponses => {
+            validate_target_media_projection(OPENAI_RESPONSES_PROFILE_ID, &body)?;
+            Ok(body)
+        }
         UpstreamProtocol::OpenAiChatCompletions => responses_to_chat_completions(body),
         UpstreamProtocol::AnthropicMessages => {
             responses_to_anthropic_messages_for_route(body, context.anthropic_reasoning_mode)

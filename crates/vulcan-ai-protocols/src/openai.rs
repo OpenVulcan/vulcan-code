@@ -4,6 +4,11 @@
 use crate::{EncodedWireRequest, ProtocolConversionError, ProtocolProfile, ProtocolStreamDecoder};
 use serde_json::{Value, json};
 use std::collections::HashSet;
+
+mod internal_input;
+pub use internal_input::{
+    INTERNAL_RESOURCE_PART_TYPE, InternalResponsesRequest, encode_internal_responses_request,
+};
 use vulcan_ai_contract::{
     APPLY_PATCH_TOOL_NAME, AiExecutionRequest, ContentItem, MessageRole, NativeToolKind,
     ParallelToolCallPolicy, PromptCachePolicy, ReasoningOutputPolicy, RequestUsage,
@@ -217,72 +222,7 @@ impl ProtocolProfile for OpenAiCodexResponsesProfile {
         &self,
         request: &AiExecutionRequest,
     ) -> Result<EncodedWireRequest, ProtocolConversionError> {
-        require_default_cache_policy(&request.prompt_cache, self.id())?;
-        let continuation = validated_responses_continuation(request, self.id())?;
-        let input = encode_responses_input(request, false, continuation)?;
-        let instructions = encode_codex_instructions(request)?;
-        let tools = encode_codex_responses_tools(request);
-        let mut body = json!({
-            "model": request.model_id,
-            "instructions": instructions,
-            "input": input,
-            "tool_choice": "auto",
-            "parallel_tool_calls": !matches!(
-                request.parallel_tool_calls,
-                ParallelToolCallPolicy::Disabled
-            ),
-            "stream": true,
-            "store": false,
-            "include": ["reasoning.encrypted_content"],
-        });
-        if body["instructions"].as_str().is_some_and(str::is_empty) {
-            body.as_object_mut()
-                .expect("Codex Responses request body is an object")
-                .remove("instructions");
-        }
-        if !tools.is_empty() {
-            body["tools"] = Value::Array(tools);
-        }
-        if let Some(continuation) = continuation {
-            body["previous_response_id"] = Value::String(continuation.provider_message_id.clone());
-        }
-        if let Some(effort) = request.reasoning_effort {
-            body["reasoning"] = json!({
-                "effort": effort.as_str(),
-            });
-            project_responses_reasoning_output(request.reasoning_output, &mut body["reasoning"])?;
-        }
-        project_responses_request_controls(request, &mut body)?;
-        let mut headers = std::collections::BTreeMap::from([
-            (
-                String::from("originator"),
-                String::from(CODEX_RESPONSES_ORIGINATOR),
-            ),
-            (
-                String::from("user-agent"),
-                String::from(CODEX_RESPONSES_USER_AGENT),
-            ),
-        ]);
-        if let Some(cache_scope_id) = request.cache_scope_id.as_deref() {
-            body["prompt_cache_key"] = Value::String(cache_scope_id.to_string());
-            body["client_metadata"] = json!({
-                "session_id": cache_scope_id,
-                "thread_id": cache_scope_id,
-            });
-            headers.insert(
-                String::from("x-client-request-id"),
-                cache_scope_id.to_string(),
-            );
-            headers.insert(String::from("session-id"), cache_scope_id.to_string());
-            // Root Vulcan task sessions map to both official Codex session and thread identities.
-            // Vulcan 根任务会话同时映射为官方 Codex 的会话身份与线程身份。
-            headers.insert(String::from("thread-id"), cache_scope_id.to_string());
-        }
-        Ok(EncodedWireRequest {
-            path: String::from("/responses"),
-            headers,
-            body,
-        })
+        internal_input::encode_request_envelope(request, &mut encode_responses_resource)
     }
 
     /// Creates one isolated Codex Responses stream decoder.
@@ -669,6 +609,26 @@ fn encode_responses_input(
     include_system_messages: bool,
     continuation: Option<&vulcan_ai_contract::AiContinuation>,
 ) -> Result<Vec<Value>, ProtocolConversionError> {
+    encode_responses_input_with_resources(
+        request,
+        include_system_messages,
+        continuation,
+        &mut encode_responses_resource,
+    )
+}
+
+/// Encodes `request` with the selected resource projector while preserving message and replay order.
+/// 使用选中的资源投影器编码 `request`，同时保持消息与重放顺序。
+/// `include_system_messages` and `continuation` retain the existing role and cursor contract.
+/// `include_system_messages` 与 `continuation` 保持既有角色和游标契约。
+/// Returns ordered input items or an exact content/replay conversion error.
+/// 返回有序输入项，或精确的内容与重放转换错误。
+fn encode_responses_input_with_resources(
+    request: &AiExecutionRequest,
+    include_system_messages: bool,
+    continuation: Option<&vulcan_ai_contract::AiContinuation>,
+    resource_encoder: internal_input::ResponsesResourceEncoder<'_>,
+) -> Result<Vec<Value>, ProtocolConversionError> {
     let mut input = Vec::new();
     let message_start = continuation
         .map(|continuation| continuation.covered_message_count)
@@ -809,7 +769,7 @@ fn encode_responses_input(
                             "text": encode_json_or_string(value)?,
                         })),
                         ContentItem::Resource { resource } if message.role == MessageRole::User => {
-                            content.push(encode_responses_resource(resource)?)
+                            content.push(resource_encoder(resource)?)
                         }
                         _ => {
                             return Err(ProtocolConversionError::new(
@@ -909,7 +869,7 @@ fn push_responses_assistant_text(input: &mut Vec<Value>, text: &mut String) {
 
 /// Encodes one standard Responses image or file input without losing its source-field semantics.
 /// 编码一项标准 Responses 图片或文件输入，且不丢失其来源字段语义。
-fn encode_responses_resource(
+pub(crate) fn encode_responses_resource(
     resource: &vulcan_ai_contract::ResourceReference,
 ) -> Result<Value, ProtocolConversionError> {
     use vulcan_ai_contract::{ResourceKind, ResourceSourceKind};
@@ -1087,7 +1047,7 @@ fn encode_codex_instructions(
 /// 返回值
 /// Returns the exact registered OpenRouter/OpenAI-compatible content block.
 /// 返回精确注册的 OpenRouter/OpenAI 兼容内容块。
-fn encode_chat_resource(
+pub(crate) fn encode_chat_resource(
     resource: &vulcan_ai_contract::ResourceReference,
 ) -> Result<Value, ProtocolConversionError> {
     match resource.kind {

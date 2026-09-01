@@ -252,6 +252,8 @@ mod tests {
         assert!(methods.contains("service_search_knowledge_library"));
         assert!(methods.contains("service_search_knowledge"));
         assert!(methods.contains("service_set_session_knowledge_libraries"));
+        assert!(methods.contains("service_save_public_ai_media_delivery_policy"));
+        assert!(methods.contains("service_reset_public_ai_media_delivery_policy"));
     }
 
     /// Verifies unknown methods retain the browser bridge's canonical diagnostic.

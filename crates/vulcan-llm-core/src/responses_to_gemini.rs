@@ -11,6 +11,18 @@ pub fn responses_to_gemini_generate_content(
     body: Value,
     code_assist: bool,
 ) -> Result<Value, LlmCoreError> {
+    responses_to_gemini_generate_content_with_media(body, code_assist, None)
+}
+
+/// Converts `body` with the declared `code_assist` envelope and optional trusted internal `media`.
+/// 使用声明的 `code_assist` 封装与可选可信内部 `media` 转换 `body`。
+/// Returns Gemini JSON or an exact projection error; no protocol selection is inferred.
+/// 返回 Gemini JSON 或精确投影错误，不推断协议选择。
+pub(crate) fn responses_to_gemini_generate_content_with_media(
+    body: Value,
+    code_assist: bool,
+    media: Option<crate::internal_media::InternalMediaProjector<'_>>,
+) -> Result<Value, LlmCoreError> {
     let model = required_string(&body, "/model", "Responses model")?;
     let mut function_names = BTreeMap::new();
     collect_function_names(body.get("input"), &mut function_names)?;
@@ -21,7 +33,13 @@ pub fn responses_to_gemini_generate_content(
     }
     let mut contents = Vec::new();
     if let Some(input) = body.get("input") {
-        append_gemini_input(input, &mut system_parts, &mut contents, &function_names)?;
+        append_gemini_input(
+            input,
+            &mut system_parts,
+            &mut contents,
+            &function_names,
+            media,
+        )?;
     }
     normalize_gemini_contents(&mut contents)?;
 
@@ -63,8 +81,19 @@ pub fn responses_to_gemini_generate_content(
 /// Converts one canonical Responses request into the revised Gemini Interactions schema.
 /// 将一份规范 Responses 请求转换为修订版 Gemini Interactions 结构。
 pub fn responses_to_gemini_interactions(body: Value) -> Result<Value, LlmCoreError> {
+    responses_to_gemini_interactions_with_media(body, None)
+}
+
+/// Converts `body` into Interactions while using `media` only for trusted internal resources.
+/// 将 `body` 转换为 Interactions，仅对可信内部资源使用 `media`。
+/// Returns the exact Interactions shape or an unsupported resource/control error.
+/// 返回精确 Interactions 结构，或不支持的资源与控制项错误。
+pub(crate) fn responses_to_gemini_interactions_with_media(
+    body: Value,
+    media: Option<crate::internal_media::InternalMediaProjector<'_>>,
+) -> Result<Value, LlmCoreError> {
     let model = required_string(&body, "/model", "Responses model")?.to_string();
-    let generated = responses_to_gemini_generate_content(body, false)?;
+    let generated = responses_to_gemini_generate_content_with_media(body, false, media)?;
     let input =
         gemini_contents_to_interaction_steps(generated.get("contents").unwrap_or(&Value::Null))?;
     let mut interaction = json!({
@@ -401,15 +430,18 @@ fn append_gemini_input(
     system_parts: &mut Vec<Value>,
     contents: &mut Vec<Value>,
     function_names: &BTreeMap<String, String>,
+    media: Option<crate::internal_media::InternalMediaProjector<'_>>,
 ) -> Result<(), LlmCoreError> {
     match input {
         Value::String(text) => contents.push(json!({"role":"user","parts":[{"text":text}]})),
         Value::Array(items) => {
             for item in items {
-                append_gemini_item(item, system_parts, contents, function_names)?;
+                append_gemini_item(item, system_parts, contents, function_names, media)?;
             }
         }
-        Value::Object(_) => append_gemini_item(input, system_parts, contents, function_names)?,
+        Value::Object(_) => {
+            append_gemini_item(input, system_parts, contents, function_names, media)?
+        }
         Value::Null => {}
         _ => {
             return Err(LlmCoreError::new(
@@ -427,6 +459,7 @@ fn append_gemini_item(
     system_parts: &mut Vec<Value>,
     contents: &mut Vec<Value>,
     function_names: &BTreeMap<String, String>,
+    media: Option<crate::internal_media::InternalMediaProjector<'_>>,
 ) -> Result<(), LlmCoreError> {
     let kind = item
         .get("type")
@@ -500,10 +533,10 @@ fn append_gemini_item(
         "message" => {
             let role = item.get("role").and_then(Value::as_str).unwrap_or("user");
             if matches!(role, "system" | "developer") {
-                append_message_parts(item, system_parts, "system", function_names)?;
+                append_message_parts(item, system_parts, "system", function_names, media)?;
             } else {
                 let gemini_role = if role == "assistant" { "model" } else { "user" };
-                append_message_parts(item, contents, gemini_role, function_names)?;
+                append_message_parts(item, contents, gemini_role, function_names, media)?;
             }
         }
         "input_file" => push_gemini_part(contents, "user", gemini_file_part(item)?),
@@ -523,6 +556,7 @@ fn append_message_parts(
     target: &mut Vec<Value>,
     role: &str,
     _function_names: &BTreeMap<String, String>,
+    media: Option<crate::internal_media::InternalMediaProjector<'_>>,
 ) -> Result<(), LlmCoreError> {
     let content = item.get("content").unwrap_or(&Value::Null);
     match content {
@@ -543,6 +577,9 @@ fn append_message_parts(
                     }
                     "input_image" | "image_url" => converted.push(gemini_image_part(part)?),
                     "input_file" => converted.push(gemini_file_part(part)?),
+                    crate::INTERNAL_RESOURCE_PART_TYPE => converted.push(
+                        crate::internal_media::project_internal_part(part, role, media)?,
+                    ),
                     "refusal" => converted.push(
                         json!({"text":required_string(part,"/refusal","Responses refusal")?}),
                     ),

@@ -141,6 +141,11 @@ impl SessionDocument {
                 unreachable!("generation target was validated as a root user input")
             };
             user_input.text = input.replacement.text;
+            // An explicit replacement is a new prompt intent; retained earlier prompts keep their frozen parameters.
+            // 显式替换是新提示词意图；此前保留的提示词继续持有各自冻结参数。
+            user_input.parameters = crate::v1::UserPromptParameters::for_new_resources(
+                &input.replacement.ordered_resource_ids,
+            );
             user_input.resource_ids = input.replacement.ordered_resource_ids;
         })?;
 

@@ -19,6 +19,18 @@ pub(crate) fn responses_to_anthropic_messages_for_route(
     body: Value,
     reasoning_mode: AnthropicReasoningMode,
 ) -> Result<Value, LlmCoreError> {
+    responses_to_anthropic_messages_with_media(body, reasoning_mode, None)
+}
+
+/// Converts `body` with exact `reasoning_mode` and optional trusted internal `media` projection.
+/// 使用精确 `reasoning_mode` 与可选可信内部 `media` 投影转换 `body`。
+/// Returns Anthropic JSON or an explicit mapping error; standard callers cannot inject private media.
+/// 返回 Anthropic JSON 或明确映射错误；标准调用者不能注入私有媒体。
+pub(crate) fn responses_to_anthropic_messages_with_media(
+    body: Value,
+    reasoning_mode: AnthropicReasoningMode,
+    media: Option<crate::internal_media::InternalMediaProjector<'_>>,
+) -> Result<Value, LlmCoreError> {
     let model = required_string(&body, "/model", "Responses model")?;
     let mut result = Map::new();
     result.insert(String::from("model"), Value::String(model.to_string()));
@@ -30,7 +42,7 @@ pub(crate) fn responses_to_anthropic_messages_for_route(
 
     let mut messages = Vec::new();
     if let Some(input) = body.get("input") {
-        append_anthropic_input(input, &mut messages)?;
+        append_anthropic_input(input, &mut messages, media)?;
     }
     normalize_anthropic_messages(&mut messages)?;
     result.insert(String::from("messages"), Value::Array(messages));
@@ -137,7 +149,11 @@ fn append_text_value(
 
 /// Appends one Responses input value to ordered Anthropic messages.
 /// 将一个 Responses input 值追加到有序 Anthropic 消息中。
-fn append_anthropic_input(input: &Value, messages: &mut Vec<Value>) -> Result<(), LlmCoreError> {
+fn append_anthropic_input(
+    input: &Value,
+    messages: &mut Vec<Value>,
+    media: Option<crate::internal_media::InternalMediaProjector<'_>>,
+) -> Result<(), LlmCoreError> {
     match input {
         Value::String(text) => push_anthropic_block(
             messages,
@@ -149,10 +165,10 @@ fn append_anthropic_input(input: &Value, messages: &mut Vec<Value>) -> Result<()
         ),
         Value::Array(items) => {
             for item in items {
-                append_anthropic_item(item, messages)?;
+                append_anthropic_item(item, messages, media)?;
             }
         }
-        Value::Object(_) => append_anthropic_item(input, messages)?,
+        Value::Object(_) => append_anthropic_item(input, messages, media)?,
         Value::Null => {}
         _ => {
             return Err(LlmCoreError::new(
@@ -165,7 +181,11 @@ fn append_anthropic_input(input: &Value, messages: &mut Vec<Value>) -> Result<()
 
 /// Converts one Responses input item into Anthropic blocks without dropping unsupported content.
 /// 将一个 Responses 输入项转换为 Anthropic 内容块，不静默丢弃不支持的内容。
-fn append_anthropic_item(item: &Value, messages: &mut Vec<Value>) -> Result<(), LlmCoreError> {
+fn append_anthropic_item(
+    item: &Value,
+    messages: &mut Vec<Value>,
+    media: Option<crate::internal_media::InternalMediaProjector<'_>>,
+) -> Result<(), LlmCoreError> {
     let item_type = item
         .get("type")
         .and_then(Value::as_str)
@@ -213,7 +233,7 @@ fn append_anthropic_item(item: &Value, messages: &mut Vec<Value>) -> Result<(), 
             } else {
                 "user"
             };
-            append_message_blocks(item, role, messages)?;
+            append_message_blocks(item, role, messages, media)?;
         }
         "input_file" => {
             let document = anthropic_document_block(item)?;
@@ -234,6 +254,7 @@ fn append_message_blocks(
     item: &Value,
     role: &str,
     messages: &mut Vec<Value>,
+    media: Option<crate::internal_media::InternalMediaProjector<'_>>,
 ) -> Result<(), LlmCoreError> {
     let content = item.get("content").unwrap_or(&Value::Null);
     match content {
@@ -256,6 +277,13 @@ fn append_message_blocks(
                     }
                     "input_file" => {
                         push_anthropic_block(messages, role, anthropic_document_block(part)?);
+                    }
+                    crate::INTERNAL_RESOURCE_PART_TYPE => {
+                        push_anthropic_block(
+                            messages,
+                            role,
+                            crate::internal_media::project_internal_part(part, role, media)?,
+                        );
                     }
                     "refusal" => {
                         let text = required_string(part, "/refusal", "Responses refusal")?;
@@ -318,7 +346,7 @@ fn anthropic_image_block(item: &Value) -> Result<Value, LlmCoreError> {
 
 /// Creates one Anthropic document block from standard Responses file URL or data.
 /// 根据标准 Responses 文件 URL 或数据创建一个 Anthropic document 块。
-fn anthropic_document_block(item: &Value) -> Result<Value, LlmCoreError> {
+pub(crate) fn anthropic_document_block(item: &Value) -> Result<Value, LlmCoreError> {
     if item.get("file_id").is_some() {
         return Err(LlmCoreError::new(
             "Responses file_id cannot be projected across providers to Anthropic.",

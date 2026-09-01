@@ -333,7 +333,7 @@ impl SessionDocument {
     /// whole stream is still the tail (plan 5.2.15).
     /// 最后一个分片条目是活动尾段；分片映射为空说明整个流仍是尾段(计划
     /// 5.2.15)。
-    fn active_tail_start(&self) -> Seq {
+    pub(super) fn active_tail_start(&self) -> Seq {
         match self.metadata.split_list.last() {
             Some(last) => last.start_seq,
             None => Seq::try_new(1).expect("the first seq is always valid"),

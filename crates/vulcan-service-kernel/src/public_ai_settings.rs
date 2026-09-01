@@ -10,6 +10,7 @@ mod inference_settings;
 mod inference_testing;
 mod inference_validation;
 mod media_candidates;
+mod media_delivery_settings;
 mod model_selection;
 mod model_settings;
 mod oauth;
@@ -51,6 +52,9 @@ pub(super) use general_settings::{
 };
 // Preserve nested browser snapshot contracts even when serialization infers their types.
 // 即使序列化推导嵌套类型，也保留原浏览器快照契约。
+pub(super) use media_delivery_settings::{
+    service_reset_public_ai_media_delivery_policy, service_save_public_ai_media_delivery_policy,
+};
 use snapshot::build_public_ai_settings_snapshot;
 #[expect(
     unused_imports,

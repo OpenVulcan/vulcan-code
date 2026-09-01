@@ -1,22 +1,17 @@
 //! Canonical conversation and route-owned replay projection for requests and compaction.
 //! 请求与压缩使用的规范会话及路由持有重放投影。
 
-use super::input_resources::{InlineResourceProjectionBudget, resolve_public_message_resources};
 use super::provider_failure;
-use crate::agent_runtime::provider_attachment::build_missing_attachment_replay_text;
 use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
-use crate::attachment_assets::resolve_attachment_replay_path;
 use serde_json::Value;
 use std::collections::BTreeSet;
 use vulcan_ai_contract::{
-    AiMessage, ContentItem, MessageRole, ProviderReplayEnvelope, ResourceKind, ResourceReference,
-    ToolCall as PublicToolCall, ToolResult, canonicalize_codex_responses_replay_items,
-    is_replayable_codex_responses_item,
+    AiMessage, ContentItem, MessageRole, ProviderReplayEnvelope, ToolCall as PublicToolCall,
+    ToolResult, canonicalize_codex_responses_replay_items, is_replayable_codex_responses_item,
 };
 use vulcan_context::{SessionConversationState, SessionMessageEntry};
 use vulcan_core::types::{
-    ConversationAttachmentKind, ConversationPayload as CoreConversationPayload,
-    CoreError as VulcanCoreError,
+    ConversationPayload as CoreConversationPayload, CoreError as VulcanCoreError,
 };
 use vulcan_provider_adapters::ResolvedPublicAiExecution;
 
@@ -40,8 +35,9 @@ use vulcan_provider_adapters::ResolvedPublicAiExecution;
 pub(crate) async fn build_responses_compaction_messages(
     conversation_state: &SessionConversationState,
     source: &[SessionMessageEntry],
-    resolved: &ResolvedPublicAiExecution,
+    resolved: &std::sync::Arc<ResolvedPublicAiExecution>,
     session_scope_id: Option<&str>,
+    media_projection: Option<&dyn crate::prompt_media_projection::PromptMediaProjectionRuntime>,
 ) -> Result<Vec<AiMessage>, String> {
     // sourceIds is the exact planner-selected canonical window and rejects ambiguous duplicates.
     // sourceIds 是规划器精确选中的规范窗口，并拒绝有歧义的重复标识。
@@ -54,6 +50,30 @@ pub(crate) async fn build_responses_compaction_messages(
             "Remote Responses compaction source contains duplicate message identities.",
         ));
     }
+    // The host projection uses the same ordered source window and frozen execution as compact dispatch.
+    // 宿主投影使用与压缩分派相同的有序来源窗口和冻结执行。
+    let mut projected_media = if let Some(projection) = media_projection {
+        projection
+            .project_readonly(
+                &source
+                    .iter()
+                    .map(|message| message.id.clone())
+                    .collect::<Vec<_>>(),
+                crate::agent_runtime::events::ProviderRequestMediaContext {
+                    execution: std::sync::Arc::clone(resolved),
+                    session_scope_id: session_scope_id
+                        .ok_or_else(|| {
+                            String::from(
+                                "Prompt-owned media compaction requires an exact session scope.",
+                            )
+                        })?
+                        .to_string(),
+                },
+            )
+            .await?
+    } else {
+        Default::default()
+    };
     // snapshot validates canonical identities before any route-specific projection runs.
     // snapshot 在执行任何路由专属投影前校验规范身份。
     let snapshot = build_core_conversation_snapshot(conversation_state)?;
@@ -71,6 +91,12 @@ pub(crate) async fn build_responses_compaction_messages(
             continue;
         }
         projected_ids.insert(message.id.as_str());
+        if let Some(projected) = projected_media.remove(&message.id) {
+            // The exact user prompt already has its native or safe-address content; never run the legacy cache projector over it.
+            // 精确用户提示词已经具有原生或安全地址内容；绝不再对它运行旧缓存投影器。
+            messages.push(projected);
+            continue;
+        }
         // publicMessage uses the normal request bridge so tool and provider item shapes cannot diverge.
         // publicMessage 使用普通请求桥接，避免工具与供应商项形态发生分歧。
         let public_message = core_message_to_public(
@@ -84,27 +110,13 @@ pub(crate) async fn build_responses_compaction_messages(
         .map_err(|error| error.to_string())?;
         messages.push(public_message);
     }
-    if projected_ids != source_ids {
+    if projected_ids != source_ids || !projected_media.is_empty() {
         return Err(String::from(
             "Remote Responses compaction source no longer matches the canonical conversation.",
         ));
     }
-    // Newer compacted messages reserve inline bytes before older history to preserve current-turn relevance.
-    // 较新的压缩消息先于旧历史保留内联字节，以保持当前回合相关性。
-    let mut inline_resource_budget = InlineResourceProjectionBudget::default();
-    for public_message in messages.iter_mut().rev() {
-        resolve_public_message_resources(
-            public_message,
-            &resolved.route,
-            resolved.model.id.as_str(),
-            resolved.model.capabilities.input_resources.as_slice(),
-            &resolved.client,
-            session_scope_id,
-            &mut inline_resource_budget,
-        )
-        .await
-        .map_err(|error| error.to_string())?;
-    }
+    // Prompt-owned resources have already passed the shared chronological planner; no second budget/cache pass is permitted.
+    // 提示词所有资源已经通过共享时序规划器；不允许第二次预算或缓存遍历。
     messages.retain(|message| {
         !message.content.is_empty() || !message.provider_context_items.is_empty()
     });
@@ -120,48 +132,9 @@ pub(super) fn core_message_to_public(
     model_id: &str,
 ) -> Result<AiMessage, VulcanCoreError> {
     match &message.payload {
-        CoreConversationPayload::UserText { text, attachments } => {
-            let mut content = vec![ContentItem::Text { text: text.clone() }];
-            for (index, attachment) in attachments.iter().enumerate() {
-                // replay_path is the only host path allowed to reach provider projection after index-backed integrity verification.
-                // replay_path 是经过索引完整性校验后唯一允许进入 Provider 投影的宿主路径。
-                let Some(replay_path) = resolve_attachment_replay_path(attachment) else {
-                    content.push(ContentItem::Text {
-                        text: build_missing_attachment_replay_text(attachment),
-                    });
-                    continue;
-                };
-                let resource_id = attachment
-                    .asset_id
-                    .clone()
-                    .unwrap_or_else(|| format!("{}:attachment:{index}", message.id));
-                let kind = match attachment.kind {
-                    ConversationAttachmentKind::Audio => ResourceKind::Audio,
-                    ConversationAttachmentKind::Image => ResourceKind::Image,
-                    ConversationAttachmentKind::Video => ResourceKind::Video,
-                    ConversationAttachmentKind::Pdf => ResourceKind::File,
-                    ConversationAttachmentKind::File => ResourceKind::File,
-                };
-                content.push(ContentItem::Resource {
-                    resource: ResourceReference {
-                        id: resource_id,
-                        kind,
-                        media_type: Some(attachment.mime_type.clone()),
-                        source_kind: vulcan_ai_contract::ResourceSourceKind::HostResolved,
-                        file_name: Some(attachment.file_name.clone()),
-                        image_detail: None,
-                        resource_path: attachment.resource_path.clone(),
-                        local_path: Some(replay_path.to_string_lossy().into_owned()),
-                        url: None,
-                    },
-                });
-            }
-            Ok(AiMessage {
-                role: MessageRole::User,
-                content,
-                provider_context_items: Vec::new(),
-            })
-        }
+        CoreConversationPayload::UserText { text, attachments } => Ok(
+            super::input_resources::unprepared_user_message(text, attachments),
+        ),
         CoreConversationPayload::Assistant {
             text,
             reasoning,

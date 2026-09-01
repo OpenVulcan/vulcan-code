@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { mediaDeliverySettingsFixture } from "@/test-fixtures/media-delivery";
 
 import type { PublicAiContextCompactionWindowNode, PublicAiSettingsSnapshot } from "@/types";
 import {
@@ -28,6 +29,7 @@ function contextCompactionWindowNodesFixture(): PublicAiContextCompactionWindowN
 function settingsFixture(): PublicAiSettingsSnapshot {
   return {
     usageRefreshIntervalSeconds: 300,
+    mediaDelivery: mediaDeliverySettingsFixture(),
     contextCompactionWindowNodes: {
       nodes: [
         { id: "compression-window-1", tokens: 200_000 },

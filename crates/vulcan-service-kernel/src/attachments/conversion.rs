@@ -96,6 +96,7 @@ pub(crate) fn composer_attachment_summary_from_core(
     attachment: &ConversationAttachment,
 ) -> ComposerAttachmentSummary {
     ComposerAttachmentSummary {
+        prompt_source: None,
         kind: attachment.kind.modality_name().to_string(),
         file_name: attachment.file_name.clone(),
         local_path: attachment.local_path.clone(),
@@ -162,6 +163,11 @@ pub(crate) fn resolve_composer_attachment_summary_for_workspace(
     if summary.project_resource_id.is_some() {
         return Err(String::from(
             "Project ResourceId attachments require the V1 session resource authority.",
+        ));
+    }
+    if summary.prompt_source.is_some() {
+        return Err(String::from(
+            "A staged attachment cannot claim a project prompt source.",
         ));
     }
     let expected_kind = parse_composer_attachment_kind(&summary.kind)?;
@@ -354,6 +360,7 @@ mod tests {
             write_attachment_image_preview_sidecar(&attachment, &[0xff_u8, 0xd8, 0xff, 0xd9])
                 .expect("canonical preview should stage");
         let forged = ComposerAttachmentSummary {
+            prompt_source: None,
             kind: String::from("image"),
             file_name: String::from("forged.jpg"),
             local_path: String::from("C:/forged/source.jpg"),
@@ -393,6 +400,7 @@ mod tests {
     #[test]
     fn provider_conversion_discards_browser_direct_delivery_modes() {
         let summary = ComposerAttachmentSummary {
+            prompt_source: None,
             kind: String::from("image"),
             file_name: String::from("canonical.png"),
             local_path: String::from("D:/workspace/.vulcan/attachments/canonical.png"),
@@ -425,6 +433,7 @@ mod tests {
     #[test]
     fn provider_conversion_retains_metadata_only_reduction() {
         let summary = ComposerAttachmentSummary {
+            prompt_source: None,
             kind: String::from("video"),
             file_name: String::from("clip.mp4"),
             local_path: String::from("D:/workspace/.vulcan/attachments/clip.mp4"),

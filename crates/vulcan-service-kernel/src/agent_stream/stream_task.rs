@@ -11,6 +11,7 @@ mod prepared;
 mod provider_route_switch;
 mod request_phase;
 mod request_trace;
+mod restart_state;
 mod runtime_event;
 mod stream_exit;
 
@@ -28,6 +29,7 @@ use prepared::{PreparedStreamEventAction, handle_prepared_stream_event};
 use provider_route_switch::refreshed_execution_request_after_pending_provider_route_switch;
 use request_phase::{RequestPhaseStreamEvent, handle_request_phase_stream_event};
 use request_trace::StreamRequestTraceState;
+use restart_state::{StreamRestartState, commit_configuration_reprepare_limit};
 use runtime_event::{handle_runtime_stream_event, runtime_event_hook_policy_for_execution_scope};
 pub(crate) use stream_exit::StreamTaskExitOutcome;
 pub(crate) use stream_exit::{StreamTaskExitReason, handle_stream_task_exit};
@@ -118,6 +120,9 @@ pub(crate) async fn persist_v1_execution_failure_boundary(
     let handle = crate::session_goal_lifecycle::registered_session_v1_handle_from_state(
         task_state, session_id,
     )?;
+    // Failed or cancelled builders can leave only already-completed result workers; settle them before closing this turn.
+    // 失败或取消构建者可能仅留下已完成结果工作线程；在闭合本回合前结算它们。
+    let _preparation_settlement = handle.acquire_request_preparation_settlement().await;
     let now_ms = current_v1_unix_millis()?;
     handle
         .mutate_durable_if_changed_async(
@@ -279,7 +284,7 @@ pub(crate) fn spawn_agent_stream_task(
     expected_kernel_generation: u64,
     expected_kernel_turn_id: String,
 ) {
-    spawn_agent_stream_task_with_auto_compaction_state(
+    spawn_agent_stream_task_with_restart_state(
         app,
         state,
         controller_runtime,
@@ -287,12 +292,12 @@ pub(crate) fn spawn_agent_stream_task(
         request,
         expected_kernel_generation,
         expected_kernel_turn_id,
-        false,
+        StreamRestartState::default(),
     );
 }
 
-/// Spawns one background task that forwards agent runtime stream events with per-request auto-compaction state.
-/// 启动一个携带单请求自动压缩状态的后台任务，将 Agent 运行时流事件转发到 WebUI 状态。
+/// Spawns one background task with bounded configuration-restart and independent auto-compaction state.
+/// 启动一个携带有界配置重启及独立自动压缩状态的后台任务。
 ///
 /// # Parameters
 /// # 参数
@@ -308,9 +313,11 @@ pub(crate) fn spawn_agent_stream_task(
 /// `request` 是当前用户回合的待执行请求。
 /// `expected_kernel_generation` and `expected_kernel_turn_id` preserve exact ownership across compaction restarts.
 /// `expected_kernel_generation` 与 `expected_kernel_turn_id` 跨压缩重启保留精确所有权。
-/// `auto_compaction_already_attempted` prevents repeated automatic compaction loops for one user request.
-/// `auto_compaction_already_attempted` 防止单个用户请求反复进入自动压缩循环。
-pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
+/// `restart_state` preserves both guards across every same-owner restart, resetting configuration churn only after a durable API permit.
+/// `restart_state`跨每次同所有者重启保留两个守卫，仅在可靠API许可后重置配置抖动。
+/// Returns after scheduling the task under the existing registration and failure-ownership gates.
+/// 在既有登记及失败所有权闸门下调度任务后返回。
+fn spawn_agent_stream_task_with_restart_state(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     controller_runtime: ControllerRuntimeHandle,
@@ -318,7 +325,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
     request: ExecutionPreparationRequest,
     expected_kernel_generation: u64,
     expected_kernel_turn_id: String,
-    auto_compaction_already_attempted: bool,
+    mut restart_state: StreamRestartState,
 ) {
     let session_id = request.session_id;
     // expectedKernelGenerationOption retains the existing terminalization interface while registration uses the required generation directly.
@@ -539,7 +546,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                         preparation,
                         session_id,
                         stream_task_started_at,
-                        auto_compaction_already_attempted,
+                        restart_state,
                         active_stream_task_id,
                         expected_kernel_generation,
                         &expected_kernel_turn_id,
@@ -572,7 +579,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                         }
                         (Some(_), Some(ProviderV1LifecycleFacts::ExcludedNonSession))
                         | (None, Some(ProviderV1LifecycleFacts::ExcludedNonSession)) => {
-                            Ok(candidate.into_excluded_non_session())
+                            candidate.into_excluded_non_session()
                         }
                         (Some(_), _) => {
                             Err(ProviderV1SinkError::MissingTypedRequestFacts.to_string())
@@ -586,6 +593,9 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                             "Provider preparation is missing its typed lifecycle facts.",
                         )),
                     };
+                    // A real permit is the only progress boundary that replenishes configuration-restart allowance.
+                    // 真实许可是唯一补充配置重启额度的进展边界。
+                    restart_state.observe_preparation(&permit_result);
                     if let Err(error) = permit_result.as_ref() {
                         prepared_retry_checkpoint_error = Some(error.clone());
                         eprintln!(
@@ -965,6 +975,16 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     reason,
                     provider_request_continuation,
                 } => {
+                    if !restart_state.try_configuration_restart() {
+                        commit_configuration_reprepare_limit(
+                            &app,
+                            &task_state,
+                            session_id,
+                            active_stream_task_id,
+                        )
+                        .await;
+                        return;
+                    }
                     match refreshed_execution_request_after_context_compaction_policy_change(
                         &task_state,
                         active_stream_task_id,
@@ -991,7 +1011,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                             if !owns_active_stream_entry {
                                 return;
                             }
-                            spawn_agent_stream_task_with_auto_compaction_state(
+                            spawn_agent_stream_task_with_restart_state(
                                 app.clone(),
                                 task_state.clone(),
                                 controller_runtime.clone(),
@@ -999,7 +1019,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                                 updated_request,
                                 expected_kernel_generation,
                                 expected_kernel_turn_id.clone(),
-                                false,
+                                restart_state.with_auto_compaction_attempted(false),
                             );
                             return;
                         }
@@ -1036,6 +1056,16 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     reason,
                     provider_request_continuation,
                 } => {
+                    if !restart_state.try_configuration_restart() {
+                        commit_configuration_reprepare_limit(
+                            &app,
+                            &task_state,
+                            session_id,
+                            active_stream_task_id,
+                        )
+                        .await;
+                        return;
+                    }
                     match refreshed_execution_request_after_pending_provider_route_switch(
                         &task_state,
                         &agent_runtime,
@@ -1065,7 +1095,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                             if !owns_active_stream_entry {
                                 return;
                             }
-                            spawn_agent_stream_task_with_auto_compaction_state(
+                            spawn_agent_stream_task_with_restart_state(
                                 app.clone(),
                                 task_state.clone(),
                                 controller_runtime.clone(),
@@ -1073,7 +1103,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                                 updated_request,
                                 expected_kernel_generation,
                                 expected_kernel_turn_id.clone(),
-                                false,
+                                restart_state.with_auto_compaction_attempted(false),
                             );
                             return;
                         }
@@ -1109,7 +1139,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     conversation_state,
                     reason,
                 } => {
-                    if auto_compaction_already_attempted {
+                    if restart_state.auto_compaction_already_attempted {
                         eprintln!(
                             "[webui-service] repeated mid-turn context compaction rejected: session={session_id} reason={reason}"
                         );
@@ -1189,7 +1219,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                             if !owns_active_stream_entry {
                                 return;
                             }
-                            spawn_agent_stream_task_with_auto_compaction_state(
+                            spawn_agent_stream_task_with_restart_state(
                                 app.clone(),
                                 task_state.clone(),
                                 controller_runtime.clone(),
@@ -1197,7 +1227,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                                 updated_request,
                                 expected_kernel_generation,
                                 expected_kernel_turn_id.clone(),
-                                true,
+                                restart_state.with_auto_compaction_attempted(true),
                             );
                             return;
                         }

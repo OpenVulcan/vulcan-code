@@ -156,6 +156,7 @@ pub(crate) fn build_provider_tool_candidates(
         BTreeMap<String, vulcan_workbench_model::SessionMediaUnderstandingMode>,
     >,
     suppress_web_search: bool,
+    media_resource_runtime: Option<Arc<dyn crate::media_resource_runtime::MediaResourceRuntime>>,
 ) -> Result<Vec<VulcanToolCandidate>, String> {
     apply_session_provider_tool_selections(
         &mut configuration,
@@ -208,6 +209,7 @@ pub(crate) fn build_provider_tool_candidates(
             configuration.clone(),
             workspace_root.clone(),
             selected,
+            media_resource_runtime.clone(),
         )?);
     }
     // mediaUnderstandingSelections is a closed provider-tool or model-replacement union that
@@ -248,6 +250,7 @@ pub(crate) fn build_provider_tool_candidates(
                     configuration.clone(),
                     workspace_root.clone(),
                     selected,
+                    media_resource_runtime.clone(),
                 )?);
             }
             MediaUnderstandingBackendSelection::ModelReplacement {
@@ -270,6 +273,7 @@ pub(crate) fn build_provider_tool_candidates(
                     capability,
                     selection,
                     reasoning_effort,
+                    media_resource_runtime.clone(),
                 )?);
             }
         }
@@ -288,6 +292,7 @@ pub(crate) fn build_provider_tool_candidates(
             workspace_root.clone(),
             Arc::clone(&extension_catalog),
             capability,
+            media_resource_runtime.clone(),
         ));
     }
     Ok(candidates)
@@ -465,6 +470,7 @@ fn build_model_extension_executor_candidate(
     workspace_root: Option<PathBuf>,
     catalog: Arc<BTreeMap<ProviderToolCapabilityKind, Vec<AvailableProviderToolTarget>>>,
     capability: ProviderToolCapabilityKind,
+    media_resource_runtime: Option<Arc<dyn crate::media_resource_runtime::MediaResourceRuntime>>,
 ) -> VulcanToolCandidate {
     let tool_id = model_extension_tool_id(capability);
     VulcanToolCandidate {
@@ -484,8 +490,11 @@ fn build_model_extension_executor_candidate(
             let configuration = configuration.clone();
             let workspace_root = workspace_root.clone();
             let catalog = Arc::clone(&catalog);
+            // Keep the host resource authority from this execution, independent of model-supplied arguments.
+            // 保持来自本执行的宿主资源权威，独立于模型提供参数。
+            let media_resource_runtime = media_resource_runtime.clone();
             Box::pin(async move {
-                let owner_session_id = Some(context.session_id);
+                let owner_session_id = Some(context.session_id.clone());
                 let (model, provider_arguments) = parse_model_extension_invocation(arguments)?;
                 let selected = catalog
                     .get(&capability)
@@ -513,14 +522,26 @@ fn build_model_extension_executor_candidate(
                     Arc::clone(&runtime),
                     owner_session_id.clone(),
                 );
+                // Resolve only bindings from the runtime's one frozen operation, with this exact invoking session.
+                // 只使用本精确发起会话解析运行时唯一冻结操作中的绑定。
+                let source_resolver =
+                    crate::media_resource_runtime::SessionProviderToolMediaSourceResolver {
+                        runtime: media_resource_runtime.as_deref(),
+                        workspace_root: workspace_root.as_deref(),
+                        session_id: &context.session_id,
+                    };
                 let result = runtime
-                    .execute_provider_tool_target_for_owner_in_workspace(
+                    .execute_provider_tool_target_with_media_sources(
                         &configuration,
                         capability,
                         &selection,
                         provider_arguments,
                         owner_session_id,
-                        workspace_root.as_deref(),
+                        vulcan_provider_adapters::ProviderToolResourceContext {
+                            workspace_root: workspace_root.as_deref(),
+                            media_sources: &[],
+                            source_resolver: Some(&source_resolver),
+                        },
                     )
                     .await?;
                 // rendered uses one canonical media result shape for understanding capabilities.
@@ -578,7 +599,7 @@ fn model_extension_tool_id(capability: ProviderToolCapabilityKind) -> &'static s
 /// 返回要求调用前先查询参数的面向模型说明。
 fn model_extension_tool_description(capability: ProviderToolCapabilityKind) -> String {
     format!(
-        "Executes the `{}` model extension. You MUST call `{MODEL_EXTENSION_PARAMETERS_TOOL_ID}` for this capability immediately before use, then pass one returned model id and args conforming exactly to that model's schema. Never guess or reuse stale model-specific arguments.",
+        "Executes the `{}` model extension. You MUST call `{MODEL_EXTENSION_PARAMETERS_TOOL_ID}` for this capability immediately before use, then pass one returned model id and args conforming exactly to that model's schema. Never guess or reuse stale model-specific arguments. Declared media-source fields can use a canonical project-resource://ID or an owned attachment://ID from this conversation. The host resolves only declared media bindings and applies independent extension size limits; an oversized or unsupported file returns an explicit error, not an address-only understanding result.",
         model_extension_tool_id(capability)
     )
 }
@@ -744,7 +765,7 @@ fn render_model_extension_parameters(
         "capability": capability_name,
         "models": models,
         "instruction": if catalog.contains_key(&capability) {
-            "Choose one returned model and pass args matching its exact args_schema."
+            "Choose one returned model and pass args matching its exact args_schema. In declared media-source fields, a canonical project-resource://ID or owned attachment://ID retains the current conversation's original file metadata and is resolved by the host before provider dispatch. Do not infer alternate source fields."
         } else {
             "No native model is currently enabled for this extension capability."
         }
@@ -945,6 +966,7 @@ fn build_direct_provider_tool_candidate(
     configuration: PersistedAiConfiguration,
     workspace_root: Option<PathBuf>,
     selected: AvailableProviderToolTarget,
+    media_resource_runtime: Option<Arc<dyn crate::media_resource_runtime::MediaResourceRuntime>>,
 ) -> Result<VulcanToolCandidate, String> {
     // targetSelection freezes the exact target and credential independently from mutable defaults.
     // targetSelection 独立于可变默认值冻结精确目标与凭据。
@@ -1004,26 +1026,33 @@ fn build_direct_provider_tool_candidate(
             let workspace_root = workspace_root.clone();
             let target_selection = target_selection.clone();
             let media_input_projection = media_input_projection.clone();
+            // The exact host resource resolver follows the invoking session, not a model-selected project.
+            // 精确宿主资源解析器遵循发起会话，而非模型选择的项目。
+            let media_resource_runtime = media_resource_runtime.clone();
             Box::pin(async move {
                 let owner_session_id = Some(context.session_id);
                 let mut cancellation_guard = ProviderTaskCancellationOnDrop::new(
                     Arc::clone(&runtime),
                     owner_session_id.clone(),
                 );
-                // resolvedArguments replaces only the safe conversation-owned resource locator with
-                // an internal path before provider-native projection.
-                // resolvedArguments 仅在供应商原生投影前把会话所有的安全资源定位符替换为内部路径。
-                let resolved_arguments = if media_understanding_tool_id(capability).is_some() {
-                    resolve_media_understanding_resource_arguments(
-                        workspace_root.as_deref(),
-                        owner_session_id.as_deref(),
-                        capability,
-                        arguments,
-                    )
-                    .await?
-                } else {
-                    arguments
-                };
+                // Resolved sources travel outside JSON while arguments retain only their safe locators.
+                // 解析来源在JSON之外传递，参数只保留其安全定位符。
+                let (resolved_arguments, media_sources) =
+                    if media_understanding_tool_id(capability).is_some() {
+                        // Fixed media tools own one explicit resource, including its original filename and digest.
+                        // 固定媒体工具持有一个显式资源，包括其原始文件名及摘要。
+                        let (resolved, source) = resolve_media_understanding_resource_arguments(
+                            workspace_root.as_deref(),
+                            owner_session_id.as_deref(),
+                            capability,
+                            arguments,
+                            media_resource_runtime.as_deref(),
+                        )
+                        .await?;
+                        (resolved, vec![source])
+                    } else {
+                        (arguments, Vec::new())
+                    };
                 // projectedArguments maps the fixed facade only through reviewed target metadata.
                 // projectedArguments 仅通过已审核目标元数据映射固定外壳。
                 let projected_arguments = if media_understanding_tool_id(capability).is_some() {
@@ -1041,13 +1070,17 @@ fn build_direct_provider_tool_candidate(
                     resolved_arguments
                 };
                 let result = runtime
-                    .execute_provider_tool_target_for_owner_in_workspace(
+                    .execute_provider_tool_target_with_media_sources(
                         &configuration,
                         capability,
                         &target_selection,
                         projected_arguments,
                         owner_session_id,
-                        workspace_root.as_deref(),
+                        vulcan_provider_adapters::ProviderToolResourceContext {
+                            workspace_root: workspace_root.as_deref(),
+                            media_sources: &media_sources,
+                            source_resolver: None,
+                        },
                     )
                     .await?;
                 // rendered uses one canonical media result shape for understanding capabilities.

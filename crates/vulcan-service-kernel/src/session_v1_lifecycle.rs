@@ -359,6 +359,255 @@ pub(crate) fn register_project_attachments_v1(
         .map_err(SessionV1LifecycleError::from)
 }
 
+/// Explicit source owner for one ordered prompt attachment, distinguishing staged assets from existing project occurrences.
+/// 一个有序提示词附件的显式来源所有者，区分暂存资产与既有项目出现。
+#[derive(Debug, Clone)]
+pub(crate) enum PromptAttachmentOrigin {
+    /// A newly staged asset and its optional original composer preparation.
+    /// 新暂存资产及其可选原输入区准备。
+    Staged(Option<Box<vulcan_agent_runtime::attachment_asset_index::AttachmentDraftMediaOrigin>>),
+    /// An existing project ResourceId and preparation resolved from its exact original input position.
+    /// 既有项目ResourceId及从其精确原输入位置解析的准备。
+    Project {
+        /// Immutable existing logical resource, not a newly allocated staged copy.
+        /// 不可变既有逻辑资源，而非新分配暂存副本。
+        resource_id: ResourceId,
+        /// Known, pending or explicitly unproven preparation owned by the source occurrence.
+        /// 来源出现持有的已知、待准备或明确未经证明的准备。
+        preparation: Box<vulcan_session_core::v1::UserPromptResourcePreparation>,
+    },
+}
+
+/// Resolves ordered `attachments` using explicit optional project `existing_ids`; only staged occurrences read/register new bytes.
+/// 使用显式可选项目`existing_ids`解析有序`attachments`；只有暂存出现读取或注册新字节。
+/// The exact controller/project owner validates all existing catalog identities before any staged registration and returns IDs in input order.
+/// 精确控制器及项目所有者在暂存注册之前校验全部既有目录身份，按输入顺序返回ID。
+pub(crate) fn register_project_attachment_occurrences_v1(
+    controller: &ControllerRuntimeHandle,
+    registry: &ProjectResourceCatalogRegistry,
+    project_id: &str,
+    attachments: &[ConversationAttachment],
+    existing_ids: &[Option<ResourceId>],
+) -> Result<Vec<ResourceId>, String> {
+    if attachments.len() != existing_ids.len() {
+        return Err(String::from(
+            "Attachment occurrence identity count is invalid.",
+        ));
+    }
+    // Existing logical identities belong to the same partition used by session persistence.
+    // 既有逻辑身份属于会话持久化使用的同一分区。
+    let project = project_resource_directory_v1(
+        &controller.data_root,
+        SESSION_V1_STORAGE_PARTITION,
+        project_id,
+    )
+    .map_err(|error| error.to_string())?;
+    if existing_ids.iter().any(Option::is_some) {
+        // Read catalog metadata once; source bytes are deliberately deferred to the final V1 media gate.
+        // 只读取一次目录元数据；来源字节有意延迟至最终V1媒体门。
+        let catalog =
+            vulcan_workspace_store::workspace_store::load_project_resource_catalog(&project)
+                .map_err(|error| error.to_string())?;
+        for (attachment, resource_id) in attachments.iter().zip(existing_ids) {
+            if let Some(resource_id) = resource_id {
+                // Exact logical identity is mandatory; identical content in another row is not a substitute.
+                // 必须具有精确逻辑身份；另一条目中的相同内容不能替代。
+                let entry = catalog
+                    .entries
+                    .iter()
+                    .find(|entry| entry.resource_id == *resource_id)
+                    .ok_or_else(|| {
+                        String::from(
+                            "Existing attachment resource is absent from the project catalog.",
+                        )
+                    })?;
+                // Metadata and private path must come from this catalog owner, not from client-supplied source hints.
+                // 元数据及私有路径必须来自本目录所有者，而非客户端提供的来源提示。
+                let path = project
+                    .join(&entry.entity_relative_path)
+                    .to_string_lossy()
+                    .into_owned();
+                if attachment.asset_id.is_some()
+                    || attachment.source_path.is_some()
+                    || attachment.resource_path.is_some()
+                    || attachment.source_sha256.as_deref() != Some(entry.sha256.as_str())
+                    || attachment.byte_len != Some(entry.size)
+                    || attachment.mime_type
+                        != entry.mime.as_deref().unwrap_or("application/octet-stream")
+                    || attachment.file_name != entry.original_name
+                    || vulcan_runtime_assets::native_host_path_text(&attachment.local_path)
+                        != vulcan_runtime_assets::native_host_path_text(&path)
+                {
+                    return Err(String::from(
+                        "Existing attachment metadata differs from its exact project catalog owner.",
+                    ));
+                }
+            }
+        }
+    }
+    // Only explicit staged occurrences acquire permanent resources; project references never re-upload or reread here.
+    // 只有显式暂存出现取得永久资源；项目引用在此绝不重新上传或读取。
+    let staged = attachments
+        .iter()
+        .zip(existing_ids)
+        .filter_map(|(attachment, resource_id)| resource_id.is_none().then_some(attachment.clone()))
+        .collect::<Vec<_>>();
+    // Registration's existing atomic source checks remain authoritative for the staged subset.
+    // 既有注册的原子来源检查继续对暂存子集具有权威性。
+    let mut registered = if staged.is_empty() {
+        Vec::new()
+    } else {
+        register_project_attachments_v1(controller, registry, project_id, &staged)
+            .map_err(|error| error.to_string())?
+    }
+    .into_iter();
+    existing_ids
+        .iter()
+        .map(|existing| match existing {
+            Some(resource_id) => Ok(*resource_id),
+            None => registered.next().ok_or_else(|| {
+                String::from("Staged registration did not return every ordered resource.")
+            }),
+        })
+        .collect()
+}
+
+/// Registers ordered `attachments` and transfers their exact optional draft `origins` into prompt-owned parameters.
+/// 注册有序`attachments`，并将其精确可选草稿`origins`转入提示词所有参数。
+/// Private receipts are appended before a new prompt is published; `accepted_input` instead restores an exact retry's original admission proof.
+/// 新提示词发布前追加私有回执；`accepted_input`则恢复精确重试的原准入证明。
+pub(crate) fn register_project_prompt_attachments_v1(
+    controller: &ControllerRuntimeHandle,
+    registry: &ProjectResourceCatalogRegistry,
+    project_id: &str,
+    attachments: &[ConversationAttachment],
+    origins: &[PromptAttachmentOrigin],
+    accepted_input: Option<&ClientInputSubmission>,
+) -> Result<
+    (
+        Vec<ResourceId>,
+        Option<vulcan_session_core::v1::UserPromptParameters>,
+    ),
+    String,
+> {
+    use vulcan_session_core::v1::{UserPromptParameters, UserPromptResourcePreparation};
+    if origins.len() != attachments.len() {
+        return Err(String::from(
+            "Prompt media origin count differs from its exact attachment order.",
+        ));
+    }
+    // An exact retry carries initial admission proof, never a new draft preparation.
+    // 精确重试携带初始准入证明，绝不是新草稿准备。
+    if let Some(accepted) = accepted_input {
+        if origins
+            .iter()
+            .any(|origin| matches!(origin, PromptAttachmentOrigin::Staged(Some(_))))
+        {
+            return Err(String::from(
+                "Accepted input retry must not replace its original proof with current draft preparation.",
+            ));
+        }
+        if let Some(parameters) = &accepted.parameters {
+            parameters
+                .validate(&accepted.resource_ids)
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    for (attachment, origin) in attachments.iter().zip(origins) {
+        match origin {
+            PromptAttachmentOrigin::Staged(Some(origin)) => {
+                origin.validate_attachment(attachment)?
+            }
+            PromptAttachmentOrigin::Project {
+                resource_id,
+                preparation,
+            } => {
+                // Validate known source proof before any staged resource or receipt can be published.
+                // 发布任何暂存资源或回执之前，校验已知来源证明。
+                UserPromptParameters::for_resource_preparations(
+                    &[*resource_id],
+                    vec![preparation.as_ref().clone()],
+                )
+                .map_err(|error| error.to_string())?;
+            }
+            PromptAttachmentOrigin::Staged(None) => {}
+        }
+    }
+    // Existing project occurrences preserve their exact IDs; only staged entries cross byte registration.
+    // 既有项目出现保留精确ID；只有暂存条目跨越字节注册。
+    let existing_ids = origins
+        .iter()
+        .map(|origin| match origin {
+            PromptAttachmentOrigin::Project { resource_id, .. } => Some(*resource_id),
+            PromptAttachmentOrigin::Staged(_) => None,
+        })
+        .collect::<Vec<_>>();
+    // One registry owner validates the entire mixed source sequence before assembling prompt parameters.
+    // 同一注册表所有者在组装提示词参数之前校验整个混合来源序列。
+    let resource_ids = register_project_attachment_occurrences_v1(
+        controller,
+        registry,
+        project_id,
+        attachments,
+        &existing_ids,
+    )?;
+    if let Some(accepted) = accepted_input {
+        if resource_ids != accepted.resource_ids {
+            return Err(String::from(
+                "Client input retry resource order differs from its originally accepted input.",
+            ));
+        }
+        // Reset only the returned retry envelope; the original frozen event remains immutable.
+        // 只重置返回的重试封装；原冻结事件保持不可变。
+        let parameters = accepted.parameters.clone().map(|mut parameters| {
+            parameters.media_delivery = vulcan_session_core::v1::UserPromptMediaDelivery::Pending;
+            parameters
+        });
+        return Ok((resource_ids, parameters));
+    }
+    // Private receipts stay in the existing exact project partition.
+    // 私有回执留在既有精确项目分区。
+    let project = project_resource_directory_v1(
+        &controller.data_root,
+        SESSION_V1_STORAGE_PARTITION,
+        project_id,
+    )
+    .map_err(|error| error.to_string())?;
+    // Each occurrence keeps its own source classification and chronological position.
+    // 每次出现保留自己的来源分类及时间顺序位置。
+    let mut preparations = Vec::with_capacity(resource_ids.len());
+    for ((resource_id, origin), attachment) in resource_ids.iter().zip(origins).zip(attachments) {
+        match origin {
+            PromptAttachmentOrigin::Staged(Some(origin)) => {
+                if let vulcan_agent_runtime::attachment_asset_index::AttachmentDraftMediaDelivery::Upload { receipt: Some(receipt), .. } = &origin.delivery {
+                    registry.record_provider_upload_receipt(&project, *resource_id, &origin.source_sha256, origin.source_byte_len, receipt.clone()).map_err(|error| error.to_string())?;
+                }
+                if matches!(&origin.delivery, vulcan_agent_runtime::attachment_asset_index::AttachmentDraftMediaDelivery::Upload { receipt: None, .. }) {
+                    // The actual prompt owner records the destination before lease promotion; late completion keeps this exact intent.
+                    // 实际提示词所有者在租约提升前登记目标；晚到完成保留本精确意图。
+                    vulcan_agent_runtime::attachment_asset_index::register_attachment_draft_upload_handoff(
+                        attachment, origin, &project, *resource_id, registry,
+                    )?;
+                }
+                preparations.push(UserPromptResourcePreparation::Prepared(
+                    origin.prompt_delivery(*resource_id)?,
+                ));
+            }
+            PromptAttachmentOrigin::Staged(None) => {
+                preparations.push(UserPromptResourcePreparation::Pending)
+            }
+            PromptAttachmentOrigin::Project { preparation, .. } => {
+                preparations.push(preparation.as_ref().clone())
+            }
+        }
+    }
+    Ok((
+        resource_ids.clone(),
+        UserPromptParameters::for_resource_preparations(&resource_ids, preparations)
+            .map_err(|error| error.to_string())?,
+    ))
+}
+
 /// Creates, fully publishes, and only then registers one root-input V1 session.
 /// 创建并完整发布一个带根输入的 V1 会话，随后才把它注册到内存。
 pub(crate) async fn create_and_register_root_session_v1(
@@ -1193,6 +1442,8 @@ mod tests {
 
     use super::*;
 
+    mod draft_handoff;
+
     /// Real isolated controller fixture used by lifecycle integration tests.
     /// 生命周期集成测试使用的真实隔离控制器夹具。
     struct LifecycleControllerFixture {
@@ -1555,6 +1806,437 @@ mod tests {
             preview_local_path: None,
             mime_type: "application/octet-stream".to_string(),
         }
+    }
+
+    /// Persists per-occurrence draft proof through real project registration and exact root-session reload.
+    /// 通过真实项目注册及精确根会话重载，持久保存逐出现草稿证明。
+    #[tokio::test]
+    async fn project_prompt_handoff_preserves_original_order_receipts_and_durable_owner() {
+        use vulcan_agent_runtime::attachment_asset_index::{
+            AttachmentDraftMediaDelivery, AttachmentDraftMediaOrigin,
+        };
+        use vulcan_session_core::v1::{UserPromptMediaRoute, UserPromptResourceDeliveryKind};
+        use vulcan_workspace_store::workspace_store::{
+            ProjectResourceUploadReceipt, ProviderBinding,
+        };
+
+        // The isolated real controller owns resource files, session metadata and event segments.
+        // 隔离真实控制器持有资源文件、会话元数据及事件分片。
+        let fixture = LifecycleControllerFixture::start().await;
+        // Two occurrences intentionally reuse identical source bytes but carry different original modes/models.
+        // 两次出现故意复用相同源字节，但携带不同原方式及模型。
+        let path = fixture.controller.data_root.join("prompt-original.bin");
+        std::fs::write(&path, b"original").expect("write isolated source");
+        // Source identity is captured before any project registration.
+        // 来源身份在任何项目注册之前捕获。
+        let attachment = attachment_fixture(&path, "asset-original", "original.bin", b"original");
+        // The first chronological occurrence selected inline on A.
+        // 第一次时序出现选择A内联。
+        let original_a = AttachmentDraftMediaOrigin::new(
+            &attachment,
+            UserPromptMediaRoute {
+                provider_id: "provider".into(),
+                service_entry_id: "entry".into(),
+                connection_id: "connection".into(),
+                model_id: "model-A".into(),
+                protocol_profile_id: "openai-responses.v1".into(),
+            },
+            AttachmentDraftMediaDelivery::Inline,
+        )
+        .expect("inline original");
+        // The later occurrence owns one private, immutable upload receipt selected on B.
+        // 后续出现持有在B选择的一份私有不可变上传回执。
+        let binding = ProviderBinding {
+            provider: "provider".into(),
+            connection_id: Some("connection".into()),
+            media_id: "file-original-private".into(),
+            upload_receipt: Some(ProjectResourceUploadReceipt {
+                draft_intent_id: None,
+                version: 1,
+                service_entry_id: "entry".into(),
+                upload_channel_id: "files".into(),
+                upload_contract_fingerprint: format!("sha256:{}", "a".repeat(64)),
+                resource_kind: vulcan_ai_contract::ResourceKind::File,
+                mime_type: attachment.mime_type.clone(),
+                source_kind: vulcan_ai_contract::ResourceSourceKind::ProviderFileId,
+                session_scope_id: None,
+                created_at_unix_millis: 1,
+                expires_at_unix_millis: u64::MAX,
+            }),
+        };
+        // Only model identity differs; shared provider and connection must not merge the occurrences.
+        // 只有模型身份不同；共享供应商及连接不能合并两次出现。
+        let mut route_b = original_a.original_route.clone();
+        route_b.model_id = "model-B".into();
+        // The full B receipt is validated before its opaque identity can enter any prompt.
+        // 完整B回执在其不透明身份可进入任何提示词前校验。
+        let original_b = AttachmentDraftMediaOrigin::new(
+            &attachment,
+            route_b,
+            AttachmentDraftMediaDelivery::Upload {
+                upload_channel_id: "files".into(),
+                upload_contract_fingerprint: format!("sha256:{}", "a".repeat(64)),
+                receipt: Some(binding.clone()),
+            },
+        )
+        .expect("uploaded original");
+        // A malformed later item must not publish an earlier valid receipt or even create the resource partition.
+        // 错误后项不能发布前项有效回执，甚至不能创建资源分区。
+        let mut invalid = original_b.clone();
+        invalid.original_route.connection_id = "different-connection".into();
+        // One serialized catalog owner is shared across failed admission and subsequent valid registration.
+        // 失败准入及后续有效注册共享一个串行目录所有者。
+        let resource_registry = ProjectResourceCatalogRegistry::default();
+        assert!(
+            register_project_prompt_attachments_v1(
+                &fixture.controller,
+                &resource_registry,
+                "prompt-rejected",
+                &[attachment.clone(), attachment.clone()],
+                &[
+                    PromptAttachmentOrigin::Staged(Some(Box::new(original_b.clone()))),
+                    PromptAttachmentOrigin::Staged(Some(Box::new(invalid)))
+                ],
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            !project_resource_directory_v1(
+                &fixture.controller.data_root,
+                SESSION_V1_STORAGE_PARTITION,
+                "prompt-rejected"
+            )
+            .expect("project path")
+            .exists()
+        );
+        // Accepted registration preserves the original occurrence order even when ResourceId is deduplicated.
+        // 即使ResourceId去重，已接纳注册也保留原出现顺序。
+        let (resource_ids, parameters) = register_project_prompt_attachments_v1(
+            &fixture.controller,
+            &resource_registry,
+            "prompt-provenance",
+            &[attachment.clone(), attachment.clone()],
+            &[
+                PromptAttachmentOrigin::Staged(Some(Box::new(original_a))),
+                PromptAttachmentOrigin::Staged(Some(Box::new(original_b))),
+            ],
+            None,
+        )
+        .expect("register prompt proofs");
+        assert_eq!(resource_ids[0], resource_ids[1]);
+        // The submission receives prompt-owned proof, not a mutable file-global latest-model value.
+        // 提交接收提示词所有证明，而非可变文件全局最近模型值。
+        let parameters = parameters.expect("media parameters");
+        assert_eq!(
+            parameters.prepared_resources[0]
+                .as_ref()
+                .expect("first proof")
+                .original_route
+                .model_id,
+            "model-A"
+        );
+        assert_eq!(
+            parameters.prepared_resources[1]
+                .as_ref()
+                .expect("second proof")
+                .original_route
+                .model_id,
+            "model-B"
+        );
+        assert!(matches!(
+            parameters.prepared_resources[1]
+                .as_ref()
+                .expect("second proof")
+                .delivery,
+            UserPromptResourceDeliveryKind::Uploaded { .. }
+        ));
+        assert!(
+            !serde_json::to_string(&parameters)
+                .expect("serialize public proof")
+                .contains("file-original-private")
+        );
+        // The existing project catalog retains the exact private receipt once, independently of occurrence count.
+        // 既有项目目录仅保存一次精确私有回执，独立于出现次数。
+        let project_dir = project_resource_directory_v1(
+            &fixture.controller.data_root,
+            SESSION_V1_STORAGE_PARTITION,
+            "prompt-provenance",
+        )
+        .expect("project path");
+        assert_eq!(
+            load_project_resource_catalog(&project_dir)
+                .expect("catalog")
+                .entries[0]
+                .provider_bindings,
+            vec![binding]
+        );
+        // Materialize a real V1 root using the same production input path as immediate submission.
+        // 使用与即时提交相同的生产输入路径物化真实V1根会话。
+        let session_id = SessionId::new_v4();
+        // The new registry publishes the unique original session owner.
+        // 新注册表发布唯一原会话所有者。
+        let registry = SessionRuntimeRegistry::default();
+        create_and_register_root_session_v1(
+            &fixture.controller,
+            &registry,
+            CreateRootSessionV1Request {
+                session_id,
+                project_id: "prompt-provenance".into(),
+                title: "Original proof".into(),
+                root_submission: ClientInputSubmission::new(
+                    ClientActionId::try_new("original-proof").expect("client id"),
+                    "ordered prompt",
+                    resource_ids.clone(),
+                )
+                .with_parameters(parameters.clone())
+                .expect("input parameters"),
+                now_ms: 1_787_788_800_000,
+            },
+        )
+        .await
+        .expect("durable root publication");
+        // A separate registry forces a real storage reload rather than reusing the in-memory owner.
+        // 独立注册表强制真实存储重载，而非复用内存所有者。
+        let reload_registry = SessionRuntimeRegistry::default();
+        // Inspect the reloaded user event; no API event is needed to own preparation facts.
+        // 检查重载用户事件；准备事实不需要API事件作为所有者。
+        let reloaded = get_or_load_session_v1(&fixture.controller, &reload_registry, session_id)
+            .await
+            .expect("reload prompt");
+        assert!(
+            matches!(reloaded.read(|document| document.events()[0].event.clone()).expect("read prompt"), EventBody::UserInput(input) if input.text == "ordered prompt" && input.resource_ids == resource_ids && input.parameters == Some(parameters))
+        );
+        // Freeze actual prompt parameters durably before simulating an acknowledgement-lost retry.
+        // 模拟确认丢失重试之前，可靠冻结真实提示词参数。
+        reloaded
+            .mutate_durable(
+                crate::session_runtime_registry_v1::SessionMutationAdmission::MetadataOnly,
+                crate::session_runtime_registry_v1::SessionFlushReason::MetadataChanged,
+                |document| {
+                    // All initial occurrences were prepared; the first request may still use a different model.
+                    // 所有初始出现均已准备；首次请求仍可使用另一个模型。
+                    let resources = document
+                        .client_input_for_action(&ClientActionId::try_new("original-proof")?)?
+                        .expect("accepted source")
+                        .parameters
+                        .expect("parameters")
+                        .prepared_resources
+                        .into_iter()
+                        .map(|resource| resource.expect("original occurrence"))
+                        .collect::<Vec<_>>();
+                    // This is the actual first projection route, not a replacement for either original attachment model.
+                    // 这是真实首次投影路线，而非替换任一原附件模型。
+                    let mut route = resources[0].original_route.clone();
+                    route.model_id = "model-C".into();
+                    document.freeze_user_prompt_media(
+                        vec![vulcan_session_core::v1::UserPromptMediaBinding {
+                            prompt_seq: document.events()[0].seq(),
+                            origin: vulcan_session_core::v1::UserPromptMediaOrigin {
+                                route,
+                                resources,
+                            },
+                        }],
+                        1_787_788_800_001,
+                    )
+                },
+            )
+            .expect("durably freeze prompt parameters");
+        // An acknowledged input can be retried after the draft has gone; no active asset lease or new receipt is needed.
+        // 已接纳输入可以在草稿消失后重试；不需要活动资产租约或新回执。
+        let accepted = reloaded
+            .read(|document| {
+                document.client_input_for_action(
+                    &ClientActionId::try_new("original-proof").expect("action id"),
+                )
+            })
+            .expect("read accepted owner")
+            .expect("valid source")
+            .expect("accepted input");
+        // Reuse the original source order and initial proof through the production registration boundary.
+        // 通过生产注册边界复用原来源顺序和初始证明。
+        let (retry_resources, retry_parameters) = register_project_prompt_attachments_v1(
+            &fixture.controller,
+            &resource_registry,
+            "prompt-provenance",
+            &[attachment.clone(), attachment.clone()],
+            &[
+                PromptAttachmentOrigin::Staged(None),
+                PromptAttachmentOrigin::Staged(None),
+            ],
+            Some(&accepted),
+        )
+        .expect("exact retry without draft lease");
+        assert_eq!(retry_resources, accepted.resource_ids);
+        assert_eq!(
+            retry_parameters
+                .as_ref()
+                .expect("retry proof")
+                .prepared_resources,
+            accepted
+                .parameters
+                .as_ref()
+                .expect("original proof")
+                .prepared_resources
+        );
+        assert!(matches!(
+            retry_parameters
+                .as_ref()
+                .expect("retry proof")
+                .media_delivery,
+            vulcan_session_core::v1::UserPromptMediaDelivery::Pending
+        ));
+        assert!(matches!(
+            accepted
+                .parameters
+                .as_ref()
+                .expect("original proof")
+                .media_delivery,
+            vulcan_session_core::v1::UserPromptMediaDelivery::Frozen { .. }
+        ));
+        assert!(
+            !reloaded
+                .submit_root_input(
+                    ClientInputSubmission {
+                        client_action_id: accepted.client_action_id.clone(),
+                        text: accepted.text.clone(),
+                        resource_ids: retry_resources,
+                        parameters: retry_parameters
+                    },
+                    1_787_788_800_002
+                )
+                .expect("idempotent prompt retry")
+                .changed
+        );
+        // Content deduplication cannot hide a changed occurrence count on a retry.
+        // 内容去重不能掩盖重试时出现次数变化。
+        assert!(
+            register_project_prompt_attachments_v1(
+                &fixture.controller,
+                &resource_registry,
+                "prompt-provenance",
+                &[attachment],
+                &[PromptAttachmentOrigin::Staged(None)],
+                Some(&accepted)
+            )
+            .is_err()
+        );
+        // A project reference keeps its logical identity even when the entity is unavailable; admission must not reread it as a staged file.
+        // 即使实体不可用，项目引用仍保留逻辑身份；准入不能把它当作暂存文件重新读取。
+        let locator = reloaded.storage_locator().expect("exact locator");
+        // Reconstruct canonical metadata without source-byte I/O.
+        // 不执行来源字节I/O，重建规范元数据。
+        let project_attachment = crate::attachments::composer_attachment_summary_to_core(
+            crate::conversation_resources_v1::composer_attachment_from_project_resource_v1(
+                &locator,
+                resource_ids[0].value(),
+            )
+            .expect("project metadata"),
+        )
+        .expect("canonical metadata");
+        // The fixture alone owns this physical path; its catalog row deliberately remains intact.
+        // 只有本夹具持有此物理路径；其目录行有意保持完整。
+        std::fs::remove_file(&project_attachment.local_path)
+            .expect("remove isolated project entity");
+        assert!(
+            crate::conversation_resources_v1::composer_attachment_from_project_resource_v1(
+                &locator,
+                resource_ids[0].value()
+            )
+            .is_ok()
+        );
+        // Add one genuinely new source between the two original occurrences.
+        // 在两次原出现之间添加一个真正新来源。
+        let new_path = fixture.controller.data_root.join("new-mixed-source.bin");
+        std::fs::write(&new_path, b"new source").expect("write isolated new source");
+        // Only this new staged source may allocate a new ResourceId.
+        // 只有本新暂存来源可分配新ResourceId。
+        let new_attachment =
+            attachment_fixture(&new_path, "asset-new-source", "new.bin", b"new source");
+        // Resolve original source positions, not the new draft order or latest receipt.
+        // 解析原来源位置，而非新草稿顺序或最新回执。
+        let original_second = reloaded
+            .read(|document| {
+                document.user_prompt_resource_preparation(
+                    &vulcan_session_core::v1::UserPromptResourceSource {
+                        client_action_id: accepted.client_action_id.clone(),
+                        resource_position: 1,
+                    },
+                    resource_ids[0],
+                )
+            })
+            .expect("read source")
+            .expect("source proof");
+        // The other equal ResourceId still has its independent first-position model.
+        // 另一个相等ResourceId仍具有独立首位置模型。
+        let original_first = reloaded
+            .read(|document| {
+                document.user_prompt_resource_preparation(
+                    &vulcan_session_core::v1::UserPromptResourceSource {
+                        client_action_id: accepted.client_action_id.clone(),
+                        resource_position: 0,
+                    },
+                    resource_ids[0],
+                )
+            })
+            .expect("read source")
+            .expect("source proof");
+        // The production mixed registration preserves original IDs and only reads the new staged entity.
+        // 生产混合注册保留原ID，只读取新暂存实体。
+        let (mixed_ids, mixed_parameters) = register_project_prompt_attachments_v1(
+            &fixture.controller,
+            &resource_registry,
+            "prompt-provenance",
+            &[
+                project_attachment.clone(),
+                new_attachment,
+                project_attachment,
+            ],
+            &[
+                PromptAttachmentOrigin::Project {
+                    resource_id: resource_ids[0],
+                    preparation: Box::new(original_second),
+                },
+                PromptAttachmentOrigin::Staged(None),
+                PromptAttachmentOrigin::Project {
+                    resource_id: resource_ids[0],
+                    preparation: Box::new(original_first),
+                },
+            ],
+            None,
+        )
+        .expect("mixed project and staged registration");
+        assert_eq!(mixed_ids[0], resource_ids[0]);
+        assert_eq!(mixed_ids[2], resource_ids[0]);
+        assert_ne!(mixed_ids[1], resource_ids[0]);
+        // New occurrence order is B, unprepared, A even though first/last refer to the same resource bytes.
+        // 即使首尾引用相同资源字节，新出现顺序仍为B、未准备、A。
+        let mixed = mixed_parameters.expect("mixed parameters");
+        assert_eq!(
+            mixed.prepared_resources[0]
+                .as_ref()
+                .expect("second source")
+                .original_route
+                .model_id,
+            "model-B"
+        );
+        assert!(mixed.prepared_resources[1].is_none());
+        assert_eq!(
+            mixed.prepared_resources[2]
+                .as_ref()
+                .expect("first source")
+                .original_route
+                .model_id,
+            "model-A"
+        );
+        assert_eq!(
+            load_project_resource_catalog(&project_dir)
+                .expect("catalog")
+                .entries
+                .len(),
+            2
+        );
+        fixture.shutdown().await;
     }
 
     /// Attachment registration preserves order and exact logical-id reuse.

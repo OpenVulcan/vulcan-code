@@ -105,6 +105,20 @@ describe("composerAttachmentUploadTransferIds", () => {
         phase: "local_ready",
         blocksSubmission: false,
       },
+      {
+        ...PLANNED_ATTACHMENT,
+        attachmentId: "project-resource:7:0",
+        transferId: "draft-media:restored-project",
+        phase: "direct_ready",
+        blocksSubmission: false,
+      },
+      {
+        ...PLANNED_ATTACHMENT,
+        attachmentId: "project-resource:7:1",
+        transferId: "draft-media:deferred-project",
+        phase: "local_ready",
+        blocksSubmission: false,
+      },
     ])).toEqual(["draft-media:transfer-a"]);
   });
 });
@@ -131,6 +145,21 @@ describe("composerAttachmentCancelledState", () => {
 // Verifies draft ownership release cannot overtake cancellation of the active provider transfer.
 // 验证草稿所有权释放不能超越活跃供应商传输的取消。
 describe("queueComposerDraftLeaseAfterCancellation", () => {
+  // Cancellation failure remains observable after the prior mutation settles, without releasing the lease.
+  // 前序变更结束后取消失败仍可观察，不会允许释放租约。
+  it("preserves a rejected cancellation after waiting for the older lease", async () => {
+    // releaseCurrent controls the preceding exact-set mutation.
+    // releaseCurrent 控制前序精确集合变更。
+    let releaseCurrent!: () => void;
+    const current = new Promise<void>((resolve) => { releaseCurrent = resolve; });
+    const tail = queueComposerDraftLeaseAfterCancellation(current, Promise.reject(new Error("cancel failed")));
+    let settled = false;
+    const observed = tail.catch((error: unknown) => { settled = true; return error; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    releaseCurrent();
+    expect(await observed).toEqual(new Error("cancel failed"));
+  });
   // Keeps the queue pending until both the prior lease mutation and cancellation have settled.
   // 在旧租约变更与取消都结束前保持队列未完成。
   it("orders resource release after cancellation", async () => {

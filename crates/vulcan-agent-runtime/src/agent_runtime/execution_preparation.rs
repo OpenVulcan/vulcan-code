@@ -286,6 +286,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         &request.provider_extension_target_sets_override,
         &request.provider_tool_media_understanding_modes_override,
         suppress_external_web_search,
+        request.media_resource_runtime.clone(),
     )?;
     after_precheck_trace(
         "after_precheck_25a8_provider_tool_candidates_ready",

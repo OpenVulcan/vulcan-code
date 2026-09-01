@@ -34,6 +34,16 @@ export interface ComposerAttachmentSummary {
   // Optional project-scoped ResourceId owned by one materialized V1 session.
   // 由一个已物化 V1 会话拥有的可选项目级 ResourceId。
   projectResourceId?: number | null;
+  // Exact accepted-input occurrence for project-only resources; nested keys follow the canonical V1 source contract.
+  // 纯项目资源的精确已接纳输入出现；嵌套键遵循规范V1来源契约。
+  promptSource?: {
+    // Immutable original client action within the owning session.
+    // 所属会话内不可变的原客户端动作。
+    client_action_id: string;
+    // Zero-based original resource position, preserving duplicate ResourceIds.
+    // 原资源零基位置，保留重复ResourceId。
+    resource_position: number;
+  } | null;
   // Project-relative resource path safe for model and host-tool use.
   // 可安全供模型与宿主工具使用的项目相对资源路径。
   resourcePath?: string | null;
@@ -92,6 +102,9 @@ export interface ComposerAttachmentPreparationSummary {
   // Exact transfer identity used by progress and cancellation.
   // 供进度与取消使用的精确传输标识。
   transferId: string;
+  // Original physical progress identity for a later observing view; absent for a new start or local projection.
+  // 后续观察视图的原实体进度身份；新启动或本地投影时可省略。
+  physicalTransferId?: string | null;
   // Frozen direct-delivery decision.
   // 冻结的直接传输决策。
   deliveryPlan: ComposerAttachmentDeliveryPlan;
@@ -133,6 +146,17 @@ export interface PendingPromptSummary {
   // Unix-millis creation timestamp text.
   // Unix 毫秒格式创建时间文本。
   createdAt: string;
+}
+
+// PendingPromptEditOutcome separates a durable queue-to-draft commit from a later local projection warning.
+// PendingPromptEditOutcome 将持久队列到草稿提交与后续本地投影警告分离。
+export interface PendingPromptEditOutcome {
+  // Entry is the exact prompt now owned by the durable draft.
+  // entry 是当前由持久草稿持有的精确提示词。
+  entry: PendingPromptSummary;
+  // Projection warning reports a post-commit refresh issue without revoking entry.
+  // projectionWarning 报告提交后刷新问题，但不撤销 entry。
+  projectionWarning?: string | null;
 }
 
 // ToolCallSummary describes one tool call block.
