@@ -143,6 +143,9 @@ pub enum UsageDerivation {
     /// Derives standard total input from disjoint uncached, cache-read, and cache-write dimensions.
     /// 根据互斥的非缓存、缓存读取与缓存写入维度推导标准输入总量。
     InputFromDisjointDimensions,
+    /// Derives total usage by adding disjoint input components and complete output.
+    /// 通过相加互斥输入分项与完整输出推导用量总额。
+    TotalFromInputComponentsAndOutput,
 }
 
 /// Freezes the usage extraction contract selected by one resolved route.
@@ -913,6 +916,64 @@ fn derive_usage_copy(value: UsageValue) -> UsageValue {
     }
 }
 
+/// Derives a configured total from disjoint input components and complete output.
+/// 根据互斥输入分项与完整输出推导显式配置的总额。
+///
+/// # Parameters / 参数
+/// `uncached_input`, `cache_read`, and `cache_write` are provider-approved disjoint input
+/// dimensions; `output` is the complete output count. Missing optional cache dimensions are zero
+/// only because the selected profile explicitly opted into this derivation.
+/// `uncached_input`、`cache_read` 与 `cache_write` 是供应商确认互斥的输入维度；`output` 是完整
+/// 输出计数。只有已选 Profile 显式启用该派生时，缺失的可选缓存维度才按零处理。
+///
+/// # Returns / 返回值
+/// Returns a derived total when required input and output values are known and addition does not
+/// overflow; otherwise returns unknown.
+/// 当必需的输入与输出已知且加法不溢出时返回派生总额，否则返回未知。
+fn derive_total_from_input_components_and_output(
+    uncached_input: UsageValue,
+    cache_read: UsageValue,
+    cache_write: UsageValue,
+    output: UsageValue,
+) -> UsageValue {
+    // uncachedInput is the required non-cached input contribution.
+    // uncachedInput 是必需的非缓存输入贡献量。
+    let UsageValue::Known {
+        value: uncached_input,
+        ..
+    } = uncached_input
+    else {
+        return UsageValue::Unknown;
+    };
+    // output is the required complete output contribution.
+    // output 是必需的完整输出贡献量。
+    let UsageValue::Known { value: output, .. } = output else {
+        return UsageValue::Unknown;
+    };
+    // cacheRead is optional for providers that omit zero-valued cache dimensions.
+    // cacheRead 对会省略零值缓存维度的供应商是可选贡献量。
+    let cache_read = match cache_read {
+        UsageValue::Known { value, .. } => value,
+        UsageValue::Unknown => 0,
+    };
+    // cacheWrite is optional and remains disjoint from uncached input by profile contract.
+    // cacheWrite 是可选贡献量，并由 Profile 契约保证与非缓存输入互斥。
+    let cache_write = match cache_write {
+        UsageValue::Known { value, .. } => value,
+        UsageValue::Unknown => 0,
+    };
+
+    uncached_input
+        .checked_add(cache_read)
+        .and_then(|value| value.checked_add(cache_write))
+        .and_then(|value| value.checked_add(output))
+        .map(|value| UsageValue::Known {
+            value,
+            source: UsageValueSource::Derived,
+        })
+        .unwrap_or(UsageValue::Unknown)
+}
+
 /// Carries one normalized usage update together with exact source paths.
 /// 承载一条归一化用量更新及其精确来源路径。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1049,6 +1110,29 @@ impl UsageObservation {
                             UsageField::InputTokens,
                             String::from(
                                 "derived:uncached_input_tokens+cache_read_tokens+cache_write_tokens",
+                            ),
+                        );
+                    }
+                }
+                UsageDerivation::TotalFromInputComponentsAndOutput => {
+                    if !matches!(self.usage.total_tokens, UsageValue::Unknown) {
+                        continue;
+                    }
+                    // total is derived only for a profile that explicitly declares disjoint input
+                    // components and complete output semantics.
+                    // total 仅在 Profile 显式声明输入分项互斥且输出完整时进行派生。
+                    let total = derive_total_from_input_components_and_output(
+                        self.usage.uncached_input_tokens,
+                        self.usage.cache_read_tokens,
+                        self.usage.cache_write_tokens,
+                        self.usage.output_tokens,
+                    );
+                    if !matches!(total, UsageValue::Unknown) {
+                        self.usage.total_tokens = total;
+                        self.source_paths.insert(
+                            UsageField::TotalTokens,
+                            String::from(
+                                "derived:uncached_input_tokens+cache_read_tokens+cache_write_tokens+output_tokens",
                             ),
                         );
                     }
@@ -1607,6 +1691,159 @@ mod tests {
         assert_eq!(
             observation.source_paths[&UsageField::InputTokens],
             "/usage/input"
+        );
+    }
+
+    /// Verifies configured total addition remains opt-in and handles omitted zero cache dimensions.
+    /// 验证配置式总额加法保持显式启用，并能处理被省略的零值缓存维度。
+    #[test]
+    fn configured_total_addition_is_opt_in_and_handles_omitted_cache_dimensions() {
+        // configuredProfile models a provider whose input components are disjoint and whose cache
+        // dimensions may be omitted when they are zero.
+        // configuredProfile 模拟输入分项互斥且零值缓存维度可能被省略的供应商。
+        let configured_profile = UsageExtractionProfile {
+            profile_id: String::from("test.configured-total.final.v1"),
+            revision: 1,
+            record_kind: UsageRecordKind::SseEvent,
+            update_kind: UsageUpdateKind::Final,
+            event_type_pointer: Some(String::from("/type")),
+            event_type_value: Some(String::from("message_delta")),
+            required_pointer: Some(String::from("/usage")),
+            bindings: vec![
+                token_binding(UsageField::UncachedInputTokens, "/usage/input_tokens"),
+                token_binding(
+                    UsageField::CacheReadTokens,
+                    "/usage/cache_read_input_tokens",
+                ),
+                token_binding(
+                    UsageField::CacheWriteTokens,
+                    "/usage/cache_creation_input_tokens",
+                ),
+                token_binding(UsageField::OutputTokens, "/usage/output_tokens"),
+                token_binding(UsageField::TotalTokens, "/usage/total_tokens"),
+            ],
+            derivations: vec![UsageDerivation::TotalFromInputComponentsAndOutput],
+        };
+        // uncachedResponse matches a provider response that omits both zero-valued cache fields.
+        // uncachedResponse 匹配同时省略两个零值缓存字段的供应商响应。
+        let uncached_response = json!({
+            "type": "message_delta",
+            "usage": {
+                "input_tokens": 29_401,
+                "output_tokens": 645
+            }
+        });
+        // configuredObservation must derive the exact input-plus-output total.
+        // configuredObservation 必须推导出精确的输入加输出总额。
+        let configured_observation = configured_profile
+            .extract(UsageRecordKind::SseEvent, &uncached_response)
+            .expect("configured usage should parse")
+            .expect("configured usage record should match");
+        assert_eq!(
+            configured_observation.usage.total_tokens,
+            UsageValue::Known {
+                value: 30_046,
+                source: UsageValueSource::Derived,
+            }
+        );
+        assert_eq!(
+            configured_observation.source_paths[&UsageField::TotalTokens],
+            "derived:uncached_input_tokens+cache_read_tokens+cache_write_tokens+output_tokens"
+        );
+
+        // unconfiguredProfile proves the same provider fields do not trigger global derivation.
+        // unconfiguredProfile 证明相同供应商字段不会触发全局派生。
+        let mut unconfigured_profile = configured_profile.clone();
+        unconfigured_profile.derivations.clear();
+        let unconfigured_observation = unconfigured_profile
+            .extract(UsageRecordKind::SseEvent, &uncached_response)
+            .expect("unconfigured usage should parse")
+            .expect("unconfigured usage record should match");
+        assert_eq!(
+            unconfigured_observation.usage.total_tokens,
+            UsageValue::Unknown
+        );
+
+        // reportedObservation proves a provider-reported total remains authoritative.
+        // reportedObservation 证明供应商直接报告的总额保持权威。
+        let reported_observation = configured_profile
+            .extract(
+                UsageRecordKind::SseEvent,
+                &json!({
+                    "type": "message_delta",
+                    "usage": {
+                        "input_tokens": 29_401,
+                        "output_tokens": 645,
+                        "total_tokens": 30_100
+                    }
+                }),
+            )
+            .expect("reported total usage should parse")
+            .expect("reported total usage record should match");
+        assert_eq!(
+            reported_observation.usage.total_tokens,
+            UsageValue::Known {
+                value: 30_100,
+                source: UsageValueSource::Reported,
+            }
+        );
+        assert_eq!(
+            reported_observation.source_paths[&UsageField::TotalTokens],
+            "/usage/total_tokens"
+        );
+    }
+
+    /// Verifies configured total addition includes every reported disjoint cache contribution.
+    /// 验证配置式总额加法包含每个已报告的互斥缓存贡献量。
+    #[test]
+    fn configured_total_addition_includes_reported_cache_components() {
+        // profile matches the final MiniMax-compatible Anthropic usage shape.
+        // profile 匹配 MiniMax 兼容 Anthropic 的最终用量形状。
+        let profile = UsageExtractionProfile {
+            profile_id: String::from("test.configured-cached-total.final.v1"),
+            revision: 1,
+            record_kind: UsageRecordKind::SseEvent,
+            update_kind: UsageUpdateKind::Final,
+            event_type_pointer: Some(String::from("/type")),
+            event_type_value: Some(String::from("message_delta")),
+            required_pointer: Some(String::from("/usage")),
+            bindings: vec![
+                token_binding(UsageField::UncachedInputTokens, "/usage/input_tokens"),
+                token_binding(
+                    UsageField::CacheReadTokens,
+                    "/usage/cache_read_input_tokens",
+                ),
+                token_binding(
+                    UsageField::CacheWriteTokens,
+                    "/usage/cache_creation_input_tokens",
+                ),
+                token_binding(UsageField::OutputTokens, "/usage/output_tokens"),
+            ],
+            derivations: vec![UsageDerivation::TotalFromInputComponentsAndOutput],
+        };
+        // observation carries the real disjoint MiniMax cache accounting shape.
+        // observation 承载真实的 MiniMax 互斥缓存计量形状。
+        let observation = profile
+            .extract(
+                UsageRecordKind::SseEvent,
+                &json!({
+                    "type": "message_delta",
+                    "usage": {
+                        "input_tokens": 407,
+                        "cache_read_input_tokens": 19_707,
+                        "cache_creation_input_tokens": 0,
+                        "output_tokens": 60
+                    }
+                }),
+            )
+            .expect("cached usage should parse")
+            .expect("cached usage record should match");
+        assert_eq!(
+            observation.usage.total_tokens,
+            UsageValue::Known {
+                value: 20_174,
+                source: UsageValueSource::Derived,
+            }
         );
     }
 

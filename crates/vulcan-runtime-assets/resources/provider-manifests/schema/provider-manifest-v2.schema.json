@@ -1943,7 +1943,8 @@
               "uncached_input_from_input",
               "uncached_input_from_input_minus_cache_read",
               "cache_write_from_durations",
-              "input_from_disjoint_dimensions"
+              "input_from_disjoint_dimensions",
+              "total_from_input_components_and_output"
             ]
           }
         }

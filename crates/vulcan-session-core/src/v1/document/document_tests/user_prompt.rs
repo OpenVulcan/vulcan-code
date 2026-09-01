@@ -1229,7 +1229,16 @@ fn user_prompt_media_api_commit_is_atomic_and_bound_to_exact_request() -> Result
                 request,
                 projection,
                 request_budget_evidence: test_provider_request_budget_evidence(),
-                locked_baseline: LockedBaselineProjection::empty(),
+                locked_baseline: LockedBaselineProjection::project(vec![
+                    LockedBaselineSegmentInput {
+                        kind: LockedSourceKind::AgentsMd,
+                        node_id: String::from("agents-project"),
+                        target: LockedPromptTarget::Developer,
+                        source_label: Some(String::from("AGENTS.md")),
+                        source_id: None,
+                        content: String::from("stable current-generation rules"),
+                    },
+                ])?,
                 continuation_action_id: None,
                 now_ms: T0 + 1,
             },
@@ -1260,6 +1269,37 @@ fn user_prompt_media_api_commit_is_atomic_and_bound_to_exact_request() -> Result
                     .expect("API JSON");
             assert!(!api_json.contains("media_delivery"));
             assert!(!api_json.contains("reference_fingerprint"));
+            // The media transaction must retain only the caller-supplied prompt baseline in the runtime lock.
+            // 媒体事务必须让运行时锁只保留调用方提供的提示词基线。
+            assert_eq!(document.runtime_lock.locked_sources.len(), 1);
+            assert_eq!(
+                document.runtime_lock.locked_sources[0].content,
+                "stable current-generation rules"
+            );
+            // Completing and starting a second physical request proves prompt-media parameters never alter the locked runtime baseline.
+            // 完成并启动第二次物理请求，证明提示词媒体参数绝不会改变锁定运行时基线。
+            let repeated_request = ApiRequestSnapshot {
+                connection_id: Some(String::from("connection-1")),
+                profile: Some(String::from("openai-responses.v1")),
+                ..ApiRequestSnapshot::new("openai", "gpt-5")
+            };
+            document.complete_api_group(
+                receipt.api_call_id,
+                ApiCompletion {
+                    request: repeated_request.clone(),
+                    usage: usage(1, 1),
+                    status: ApiCallStatus::Completed,
+                    end_reason: Some(ApiEndReason::CompletedSuccessfully),
+                    error: None,
+                    continuation_eligibility: ContinuationEligibility::Forbidden,
+                    timing: ApiTimings::default(),
+                    provider_source: None,
+                    completed_at_ms: T0 + 2,
+                },
+            )?;
+            let second_api =
+                document.start_api(ApiPurposeKind::MainGeneration, repeated_request, T0 + 3)?;
+            assert_ne!(second_api, receipt.api_call_id);
         }
     }
     Ok(())

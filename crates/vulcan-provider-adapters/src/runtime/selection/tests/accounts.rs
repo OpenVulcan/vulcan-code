@@ -17,10 +17,10 @@ use vulcan_ai_protocols::{
     ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
 };
 
-/// Verifies execution resolves persisted reasoning overrides instead of a stale mutable catalog copy.
-/// 验证执行解析使用持久化思考覆盖，而不是旧的可变目录副本。
+/// Verifies execution ignores persisted system-provider reasoning contract overrides.
+/// 验证执行忽略持久化的系统供应商思考契约覆盖。
 #[test]
-fn selection_uses_persisted_reasoning_override_when_runtime_catalog_is_stale() {
+fn selection_ignores_persisted_system_reasoning_contract_overrides() {
     let (runtime, mut configuration) = two_account_runtime();
     configuration.model_capability_overrides.insert(
         PersistedAiConfiguration::provider_model_key("openrouter", "openai/gpt-5.6-sol"),
@@ -61,7 +61,7 @@ fn selection_uses_persisted_reasoning_override_when_runtime_catalog_is_stale() {
         .expect("stale catalog should install");
     runtime
         .reapply_model_catalog_overlays(&configuration)
-        .expect("reasoning override generation should publish");
+        .expect("system capability generation should publish");
 
     let selection = runtime
         .resolve_connection_model_selection(
@@ -70,7 +70,7 @@ fn selection_uses_persisted_reasoning_override_when_runtime_catalog_is_stale() {
             "openrouter",
             "openai/gpt-5.6-sol",
         )
-        .expect("selection should use the persisted capability override");
+        .expect("selection should use the system-provider catalog contract");
     assert_eq!(
         selection.model.capabilities.reasoning,
         CapabilitySupport::Native
@@ -81,25 +81,12 @@ fn selection_uses_persisted_reasoning_override_when_runtime_catalog_is_stale() {
     );
     assert_eq!(
         selection.model.capabilities.reasoning_efforts,
-        vec![
-            vulcan_ai_contract::ReasoningEffort::None,
-            vulcan_ai_contract::ReasoningEffort::Medium,
-        ]
+        crate::CUSTOM_PROVIDER_OPENAI_REASONING_EFFORTS
     );
-    let projection = selection
-        .route
-        .custom_model_projection
-        .as_ref()
-        .expect("persisted request projection should reach the execution route");
-    let medium = projection
-        .reasoning
-        .get(&vulcan_ai_contract::ReasoningEffort::Medium)
-        .expect("medium reasoning projection should remain available");
-    assert_eq!(
-        medium.set.get("thinking.type"),
-        Some(&serde_json::Value::String(String::from("enabled")))
+    assert!(
+        selection.route.custom_model_projection.is_none(),
+        "system-provider request projection overrides must not reach execution"
     );
-    assert_eq!(medium.delete, vec![String::from("reasoning_effort")]);
 }
 
 /// Verifies provider default selection is used until a model-specific account is remembered.

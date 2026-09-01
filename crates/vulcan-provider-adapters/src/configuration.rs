@@ -150,6 +150,64 @@ impl ModelCapabilityOverrides {
         }
         Ok(())
     }
+
+    /// Validates one override against the editable surface owned by its exact provider kind.
+    /// 根据精确供应商类型所拥有的可编辑范围校验一层覆盖。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` identifies either one system provider or one user-owned custom provider.
+    /// `provider_id` 标识一个系统供应商或用户自有自定义供应商。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success only when system providers contain limit/window fields and custom providers satisfy the full direct contract.
+    /// 仅当系统供应商只包含限制/窗口字段，或自定义供应商满足完整直接契约时成功。
+    pub fn validate_for_provider(&self, provider_id: &str) -> Result<(), String> {
+        self.validate()?;
+        if provider_id.starts_with("custom:") || !self.has_provider_contract_overrides() {
+            return Ok(());
+        }
+        Err(String::from(
+            "System provider capability overrides are limited to context, output, and context-window policy settings.",
+        ))
+    }
+
+    /// Reports whether this layer attempts to replace immutable provider-declared capabilities.
+    /// 报告此层是否尝试替换不可变的供应商声明能力。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` for media input, structured output, reasoning, or request-projection fields.
+    /// 当存在媒体输入、结构化输出、思考或请求投影字段时返回 `true`。
+    fn has_provider_contract_overrides(&self) -> bool {
+        self.input_resources.is_some()
+            || self.structured_output.is_some()
+            || self.output_resources.is_some()
+            || self.reasoning.is_some()
+            || self.reasoning_control.is_some()
+            || self.reasoning_efforts.is_some()
+            || self.request_projection.is_some()
+    }
+
+    /// Removes fields that system providers cannot own and reports whether the record changed.
+    /// 移除系统供应商不能持有的字段，并报告记录是否发生变化。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when at least one immutable provider-contract field was removed.
+    /// 当至少移除一个不可变供应商契约字段时返回 `true`。
+    fn remove_system_provider_contract_overrides(&mut self) -> bool {
+        let changed = self.has_provider_contract_overrides();
+        self.input_resources = None;
+        self.structured_output = None;
+        self.output_resources = None;
+        self.reasoning = None;
+        self.reasoning_control = None;
+        self.reasoning_efforts = None;
+        self.request_projection = None;
+        changed
+    }
 }
 
 /// Applies only the fields explicitly owned by one sparse capability layer.
@@ -162,12 +220,16 @@ impl ModelCapabilityOverrides {
 fn apply_capability_overrides(
     overrides: &ModelCapabilityOverrides,
     capabilities: &mut ModelCapabilities,
+    allow_provider_contract_overrides: bool,
 ) {
     if let Some(context_limit) = overrides.context_limit {
         capabilities.context_limit = Some(context_limit);
     }
     if let Some(output_limit) = overrides.output_limit {
         capabilities.output_limit = Some(output_limit);
+    }
+    if !allow_provider_contract_overrides {
+        return;
     }
     if let Some(input_resources) = overrides.input_resources.as_ref() {
         capabilities.input_resources = input_resources.clone();
@@ -1428,15 +1490,21 @@ impl PersistedAiConfiguration {
                 .retain(|_, defaults| *defaults != CustomProviderModelDefaults::default());
             changed = true;
         }
-        for overrides in self.model_capability_overrides.values_mut() {
-            if overrides.output_resources.take().is_some() {
-                changed = true;
-            }
+        for (key, overrides) in &mut self.model_capability_overrides {
+            let system_provider = Self::provider_model_key_parts(key)
+                .is_some_and(|(provider_id, _)| !provider_id.starts_with("custom:"));
+            changed |= if system_provider {
+                overrides.remove_system_provider_contract_overrides()
+            } else {
+                overrides.output_resources.take().is_some()
+            };
         }
-        for overrides in self.provider_capability_overrides.values_mut() {
-            if overrides.output_resources.take().is_some() {
-                changed = true;
-            }
+        for (provider_id, overrides) in &mut self.provider_capability_overrides {
+            changed |= if provider_id.starts_with("custom:") {
+                overrides.output_resources.take().is_some()
+            } else {
+                overrides.remove_system_provider_contract_overrides()
+            };
         }
         // legacy_limits merges protocol-specific limits into their exact provider-model scope.
         // legacy_limits 将协议专属限制合并到其精确供应商模型作用域。
@@ -2382,6 +2450,11 @@ impl PersistedAiConfiguration {
         {
             capabilities.output_limit = Some(output_limit);
         }
+        // System-provider capabilities are immutable Manifest facts; only direct limits remain user-editable.
+        // 系统供应商能力是不可变 Manifest 事实；用户只能编辑直接限制。
+        if !provider_id.starts_with("custom:") {
+            return;
+        }
         if !evidence.input_modalities_declared
             && capabilities.input_resources.is_empty()
             && let Some(input_resources) = overrides.input_resources.as_ref()
@@ -2424,7 +2497,7 @@ impl PersistedAiConfiguration {
         let Some(overrides) = self.model_capability_overrides(provider_id, model_id) else {
             return;
         };
-        apply_capability_overrides(overrides, capabilities);
+        apply_capability_overrides(overrides, capabilities, provider_id.starts_with("custom:"));
     }
 
     /// Removes non-route settings owned by one model after reference validation succeeds.
@@ -4314,9 +4387,9 @@ mod tests {
     /// Verifies capability differences replace only declared fields on the effective model copy.
     /// 验证能力差异仅替换有效模型副本上明确声明的字段。
     #[test]
-    fn capability_overrides_leave_immutable_source_fields_untouched() {
+    fn custom_capability_overrides_leave_immutable_source_fields_untouched() {
         let mut configuration = PersistedAiConfiguration::default();
-        let key = PersistedAiConfiguration::provider_model_key("provider", "model");
+        let key = PersistedAiConfiguration::provider_model_key("custom:provider", "model");
         configuration.model_capability_overrides.insert(
             key,
             ModelCapabilityOverrides {
@@ -4336,7 +4409,7 @@ mod tests {
             ..ModelCapabilities::default()
         };
 
-        configuration.apply_model_capability_overrides("provider", "model", &mut effective);
+        configuration.apply_model_capability_overrides("custom:provider", "model", &mut effective);
 
         assert_eq!(effective.context_limit, Some(32_000));
         assert_eq!(effective.input_resources, vec![ResourceKind::Image]);
@@ -4348,13 +4421,69 @@ mod tests {
 
         configuration
             .model_capability_overrides
-            .get_mut(PersistedAiConfiguration::provider_model_key("provider", "model").as_str())
+            .get_mut(
+                PersistedAiConfiguration::provider_model_key("custom:provider", "model").as_str(),
+            )
             .expect("model capability overrides must remain available")
             .structured_output = Some(StructuredOutputCapability::Unsupported);
-        configuration.apply_model_capability_overrides("provider", "model", &mut effective);
+        configuration.apply_model_capability_overrides("custom:provider", "model", &mut effective);
         assert_eq!(
             effective.structured_output,
             StructuredOutputCapability::Unsupported
+        );
+    }
+
+    /// Verifies system providers accept only limit/window overrides and ignore stale capability fields.
+    /// 验证系统供应商只接受限制/窗口覆盖，并忽略陈旧能力字段。
+    #[test]
+    fn system_provider_capability_contract_is_not_user_overridable() {
+        let mut configuration = PersistedAiConfiguration::default();
+        let key = PersistedAiConfiguration::provider_model_key("minimax", "MiniMax-M2.7");
+        let stale = ModelCapabilityOverrides {
+            context_limit: Some(128_000),
+            input_resources: Some(vec![ResourceKind::Image]),
+            structured_output: Some(StructuredOutputCapability::JsonSchema),
+            reasoning: Some(CapabilitySupport::Unsupported),
+            reasoning_control: Some(ReasoningControlMode::FixedOff),
+            reasoning_efforts: Some(vec![ReasoningEffort::None]),
+            request_projection: Some(CustomModelRequestProjection::default()),
+            ..ModelCapabilityOverrides::default()
+        };
+        assert!(stale.validate_for_provider("minimax").is_err());
+        configuration
+            .model_capability_overrides
+            .insert(key.clone(), stale);
+        let mut effective = ModelCapabilities {
+            context_limit: Some(204_800),
+            input_resources: Vec::new(),
+            structured_output: StructuredOutputCapability::JsonObject,
+            reasoning: CapabilitySupport::Native,
+            reasoning_control: ReasoningControlMode::ProviderAdaptive,
+            reasoning_efforts: vec![ReasoningEffort::Adaptive],
+            ..ModelCapabilities::default()
+        };
+
+        configuration.apply_model_capability_overrides("minimax", "MiniMax-M2.7", &mut effective);
+
+        assert_eq!(effective.context_limit, Some(128_000));
+        assert!(effective.input_resources.is_empty());
+        assert_eq!(
+            effective.structured_output,
+            StructuredOutputCapability::JsonObject
+        );
+        assert_eq!(effective.reasoning, CapabilitySupport::Native);
+        assert_eq!(
+            effective.reasoning_control,
+            ReasoningControlMode::ProviderAdaptive
+        );
+        assert_eq!(effective.reasoning_efforts, [ReasoningEffort::Adaptive]);
+        assert!(configuration.normalize_direct_provider_model_settings());
+        assert_eq!(
+            configuration.model_capability_overrides.get(&key),
+            Some(&ModelCapabilityOverrides {
+                context_limit: Some(128_000),
+                ..ModelCapabilityOverrides::default()
+            })
         );
     }
 
@@ -4911,7 +5040,7 @@ mod tests {
     /// 验证 Schema 2 会把旧版自定义模型已解析能力迁移为显式差异。
     #[test]
     fn schema_two_migrates_legacy_custom_model_capabilities() {
-        let provider_id = "custom-provider";
+        let provider_id = "custom:provider";
         let model_id = "private-model";
         let mut historical = PersistedAiConfiguration {
             schema_version: 2,
@@ -4982,7 +5111,7 @@ mod tests {
     /// 验证早期迁移生成的 Schema 5 文件会被规范化，且不会覆盖更新的显式差异。
     #[test]
     fn schema_five_migration_repairs_duplicated_basic_capabilities() {
-        let provider_id = "custom-provider";
+        let provider_id = "custom:provider";
         let model_id = "private-model";
         let provider_model_key =
             PersistedAiConfiguration::provider_model_key(provider_id, model_id);
@@ -5050,7 +5179,7 @@ mod tests {
     /// 验证 Schema 3 的完整自定义模型能力会迁移为显式用户差异。
     #[test]
     fn schema_three_migration_preserves_custom_model_capability_differences() {
-        let provider_id = "custom-provider";
+        let provider_id = "custom:provider";
         let model_id = "private-model";
         let model = CustomModelDefinition {
             id: String::from(model_id),

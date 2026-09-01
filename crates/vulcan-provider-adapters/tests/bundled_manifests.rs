@@ -292,6 +292,50 @@ fn bundled_manifest_model_defaults_are_self_contained() {
     }
 }
 
+/// Verifies MiniMax M2.x and M3 expose only their exact provider-owned reasoning contracts.
+/// 验证 MiniMax M2.x 与 M3 只公开其精确供应商自有思考契约。
+#[test]
+fn minimax_manifest_reasoning_contracts_are_exact() {
+    // path identifies the single authoritative MiniMax bundled manifest.
+    // path 标识唯一权威的 MiniMax 内置清单。
+    let path = bundled_manifests_directory().join("minimax.json");
+    let text = std::fs::read_to_string(&path).expect("read MiniMax bundled manifest");
+    let compiled =
+        vulcan_provider_adapters::compile_manifest_text(&text, ManifestOwnership::System)
+            .expect("MiniMax bundled manifest must compile");
+    // m2 owns one provider-adaptive level and cannot be disabled.
+    // m2 只持有一个供应商自适应档位且不能关闭。
+    let m2 = compiled
+        .rule_for_model("global", None, "MiniMax-M2.7-highspeed")
+        .and_then(|rule| rule.capabilities.as_ref())
+        .expect("MiniMax M2.x capabilities must exist");
+    assert_eq!(
+        m2.reasoning_control,
+        vulcan_ai_contract::ReasoningControlMode::ProviderAdaptive
+    );
+    assert_eq!(
+        m2.reasoning_efforts,
+        [vulcan_ai_contract::ReasoningEffort::Adaptive]
+    );
+    // m3 owns exactly the off/adaptive toggle and no OpenAI strength levels.
+    // m3 精确持有关闭/自动开关，不包含 OpenAI 强度档位。
+    let m3 = compiled
+        .rule_for_model("global", None, "MiniMax-M3")
+        .and_then(|rule| rule.capabilities.as_ref())
+        .expect("MiniMax M3 capabilities must exist");
+    assert_eq!(
+        m3.reasoning_control,
+        vulcan_ai_contract::ReasoningControlMode::Toggle
+    );
+    assert_eq!(
+        m3.reasoning_efforts,
+        [
+            vulcan_ai_contract::ReasoningEffort::None,
+            vulcan_ai_contract::ReasoningEffort::Adaptive,
+        ]
+    );
+}
+
 /// Verifies DeepSeek exposes only the two current official identities with exact protocol scopes.
 /// 验证 DeepSeek 仅公开当前两款官方模型身份及其精确协议作用域。
 #[test]

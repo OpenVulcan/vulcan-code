@@ -5,6 +5,8 @@ import {
   directProviderModelSettingsEqual,
   OPENAI_DIRECT_REASONING_EFFORTS,
   projectOpenAiReasoningEfforts,
+  systemProviderCapabilitySettingsDraft,
+  systemProviderEditableOverrides,
 } from "@/components/features/settings/direct-provider-model-settings"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -172,18 +174,23 @@ const INPUT_RESOURCE_KINDS: PublicAiResourceKind[] = ["image", "audio", "video",
 // REASONING_EFFORT_LABEL_KEYS 将每个可编辑档位映射到本地化标签。
 const REASONING_EFFORT_LABEL_KEYS = {
   none: "settings.customModels.effortNone",
+  adaptive: "settings.customModels.effortAdaptive",
   minimal: "settings.customModels.effortMinimal",
   low: "settings.customModels.effortLow",
   medium: "settings.customModels.effortMedium",
   high: "settings.customModels.effortHigh",
   xhigh: "settings.customModels.effortExtraHigh",
   max: "settings.customModels.effortMax",
+  ultra: "settings.customModels.effortUltra",
 } as const
 
 // PublicAiModelCapabilityDialog displays effective values and saves only explicitly touched fields.
 // PublicAiModelCapabilityDialog 显示有效值，并且只保存用户明确触碰过的字段。
 export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps) {
   const { t } = useI18n()
+  // isCustomProvider is the exact ownership boundary for editable capability declarations.
+  // isCustomProvider 是可编辑能力声明的精确所有权边界。
+  const isCustomProvider = props.providerId?.startsWith("custom:") ?? false
   // initializedModelKey prevents snapshot refreshes from overwriting an open editor draft.
   // initializedModelKey 防止快照刷新覆盖已打开编辑器中的草稿。
   const initializedModelKey = React.useRef<string | null>(null)
@@ -202,6 +209,12 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
   // reasoningEnabled is the simple user-defined model reasoning policy.
   // reasoningEnabled 是简化的自定义模型思考策略。
   const [reasoningEnabled, setReasoningEnabled] = React.useState(true)
+  // reasoningSupport preserves the exact immutable support fact for system providers.
+  // reasoningSupport 为系统供应商保留精确且不可变的支持事实。
+  const [reasoningSupport, setReasoningSupport] = React.useState<NonNullable<PublicAiModelCapabilityOverrides["reasoning"]>>("native")
+  // reasoningControl preserves the exact system contract while custom providers remain directly editable.
+  // reasoningControl 保留精确系统契约，同时让自定义供应商保持可直接编辑。
+  const [reasoningControl, setReasoningControl] = React.useState("effort_selection")
   // reasoningEfforts is the complete OpenAI-compatible model level set.
   // reasoningEfforts 是完整的 OpenAI 兼容模型档位集合。
   const [reasoningEfforts, setReasoningEfforts] = React.useState<string[]>([])
@@ -233,12 +246,18 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
     output_limit: outputLimit,
     input_resources: inputResources,
     structured_output: structuredOutput,
-    reasoning: reasoningEnabled ? "native" : "unsupported",
-    reasoning_control: reasoningEnabled ? "effort_selection" : "fixed_off",
-    reasoning_efforts: reasoningEnabled ? reasoningEfforts : ["none"],
+    reasoning: isCustomProvider
+      ? (reasoningEnabled ? "native" : "unsupported")
+      : reasoningSupport,
+    reasoning_control: isCustomProvider
+      ? (reasoningEnabled ? reasoningControl : "fixed_off")
+      : reasoningControl,
+    reasoning_efforts: isCustomProvider
+      ? (reasoningEnabled ? reasoningEfforts : ["none"])
+      : reasoningEfforts,
     context_window_policy: contextWindowPolicy,
-    request_projection: requestProjection,
-  }), [contextLimit, contextWindowPolicy, inputResources, outputLimit, reasoningEfforts, reasoningEnabled, requestProjection, structuredOutput])
+    ...(isCustomProvider ? { request_projection: requestProjection } : {}),
+  }), [contextLimit, contextWindowPolicy, inputResources, isCustomProvider, outputLimit, reasoningControl, reasoningEfforts, reasoningEnabled, reasoningSupport, requestProjection, structuredOutput])
   // dirty is true only when the visible model layer differs semantically from its authoritative baseline.
   // dirty 仅在可见模型层与权威基线存在语义差异时为真。
   const dirty = !directProviderModelSettingsEqual(currentSettings, baselineSettings)
@@ -253,8 +272,9 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
   // settingsToPersist preserves inheritance by sending a sparse patch for either scope.
   // settingsToPersist 为两个作用域都发送稀疏补丁，从而保留未修改字段的继承关系。
   const settingsToPersist = React.useMemo<PublicAiModelCapabilityOverrides>(() => {
-    return buildCapabilityOverridePatch(currentSettings, props.overrides, touchedFields)
-  }, [currentSettings, props.overrides, touchedFields])
+    const patch = buildCapabilityOverridePatch(currentSettings, props.overrides, touchedFields)
+    return isCustomProvider ? patch : systemProviderEditableOverrides(patch)
+  }, [currentSettings, isCustomProvider, props.overrides, touchedFields])
 
   // resetDraft projects one complete model layer into the simplified direct controls.
   // resetDraft 将一层完整模型设置投影到简化直接控件。
@@ -268,13 +288,19 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
     const nextReasoningEnabled = settings.reasoning !== "unsupported"
       && settings.reasoning_control !== "fixed_off"
     setReasoningEnabled(nextReasoningEnabled)
-    setReasoningEfforts(projectOpenAiReasoningEfforts(settings.reasoning_efforts ?? []))
+    setReasoningSupport(isCustomProvider
+      ? (nextReasoningEnabled ? "native" : "unsupported")
+      : (settings.reasoning ?? "unknown"))
+    setReasoningControl(settings.reasoning_control ?? (isCustomProvider ? "effort_selection" : "unknown"))
+    setReasoningEfforts(isCustomProvider
+      ? projectOpenAiReasoningEfforts(settings.reasoning_efforts ?? [])
+      : [...(settings.reasoning_efforts ?? [])])
     setContextWindowPolicy(settings.context_window_policy ?? undefined)
     setRequestProjection(normalizeRequestProjection(settings.request_projection))
     setTouchedFields(new Set())
     setEdited(false)
     setError(null)
-  }, [])
+  }, [isCustomProvider])
 
   React.useEffect(() => {
     if (!props.open) {
@@ -295,14 +321,13 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
     }
     // nextSettings resolves explicit values first and then the effective backend model.
     // nextSettings 先解析显式值，再回退到后端有效模型。
-    const nextSettings = modelCapabilitySettingsDraft(
-      props.model,
-      props.overrides,
-    )
+    const nextSettings = isCustomProvider
+      ? customProviderCapabilitySettingsDraft(props.model, props.overrides)
+      : systemProviderCapabilitySettingsDraft(props.model, props.overrides)
     resetDraft(nextSettings)
     setBaselineSettings(nextSettings)
     initializedModelKey.current = modelKey
-  }, [dirty, edited, props.model, props.open, props.overrides, props.providerId, props.scope, resetDraft])
+  }, [dirty, edited, isCustomProvider, props.model, props.open, props.overrides, props.providerId, props.scope, resetDraft])
 
   // persist saves the complete visible model layer or removes it to restore provider inheritance.
   // persist 保存完整可见模型层，或移除该层以恢复供应商继承。
@@ -318,7 +343,7 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
       setError(t("settings.customModels.defaultsOutputInvalid"))
       return
     }
-    if (!restore && reasoningEnabled && !reasoningEfforts.some((effort) => effort !== "none")) {
+    if (!restore && isCustomProvider && reasoningEnabled && !reasoningEfforts.some((effort) => effort !== "none")) {
       setError(t("settings.customModels.defaultsReasoningInvalid"))
       return
     }
@@ -342,7 +367,7 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
     } finally {
       setSaving(false)
     }
-  }, [contextLimit, outputLimit, props, reasoningEfforts, reasoningEnabled, settingsToPersist, t])
+  }, [contextLimit, isCustomProvider, outputLimit, props, reasoningEfforts, reasoningEnabled, settingsToPersist, t])
 
   // restore removes a persisted model layer or discards an unsaved local draft.
   // restore 移除已持久化模型层，或丢弃未保存的本地草稿。
@@ -398,35 +423,34 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
           onChange={(value) => { markField("context_window_policy"); setContextWindowPolicy(value) }}
           value={contextWindowPolicy}
         />
-        <InputResourceEditor onChange={(value) => { markField("input_resources"); setInputResources(value) }} value={inputResources} />
-        <fieldset className="space-y-2 rounded-lg border p-4">
-          <legend className="px-1 text-sm font-medium">结构化输出</legend>
-          <Select
-            onValueChange={(value) => {
-              markField("structured_output")
-              setStructuredOutput(value as PublicAiStructuredOutputCapability)
-            }}
-            value={structuredOutput}
-          >
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="json_object">JSON Object</SelectItem>
-              <SelectItem value="json_schema">JSON Schema</SelectItem>
-              <SelectItem value="unsupported">不支持</SelectItem>
-            </SelectContent>
-          </Select>
-          <p className="text-xs text-muted-foreground">未明确声明时默认使用 JSON Object。</p>
-        </fieldset>
-        {props.providerId?.startsWith("custom:") ? (
-          <fieldset className="rounded-lg border p-4">
-            <legend className="px-1 text-sm font-medium">{t("settings.customModels.output")}</legend>
-            <p className="text-sm font-medium">{t("settings.customModels.fixedTextOutput")}</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t("settings.customModels.fixedTextOutputDescription")}
-            </p>
-          </fieldset>
-        ) : null}
-        <div className="grid gap-4">
+        {isCustomProvider ? (
+          <>
+            <InputResourceEditor onChange={(value) => { markField("input_resources"); setInputResources(value) }} value={inputResources} />
+            <fieldset className="space-y-2 rounded-lg border p-4">
+              <legend className="px-1 text-sm font-medium">结构化输出</legend>
+              <Select
+                onValueChange={(value) => {
+                  markField("structured_output")
+                  setStructuredOutput(value as PublicAiStructuredOutputCapability)
+                }}
+                value={structuredOutput}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="json_object">JSON Object</SelectItem>
+                  <SelectItem value="json_schema">JSON Schema</SelectItem>
+                  <SelectItem value="unsupported">不支持</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">未明确声明时默认使用 JSON Object。</p>
+            </fieldset>
+            <fieldset className="rounded-lg border p-4">
+              <legend className="px-1 text-sm font-medium">{t("settings.customModels.output")}</legend>
+              <p className="text-sm font-medium">{t("settings.customModels.fixedTextOutput")}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {t("settings.customModels.fixedTextOutputDescription")}
+              </p>
+            </fieldset>
             <fieldset className="space-y-3 rounded-lg border p-4">
               <legend className="px-1 text-sm font-medium">{t("settings.customModels.reasoning")}</legend>
               <label className="flex items-center justify-between gap-3 text-sm">
@@ -438,6 +462,8 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
                     markField("reasoning_control")
                     markField("reasoning_efforts")
                     setReasoningEnabled(enabled)
+                    setReasoningSupport(enabled ? "native" : "unsupported")
+                    setReasoningControl(enabled ? "effort_selection" : "fixed_off")
                     if (enabled && !reasoningEfforts.some((effort) => effort !== "none")) {
                       setReasoningEfforts([...OPENAI_DIRECT_REASONING_EFFORTS])
                     }
@@ -466,12 +492,13 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
                 ))}
               </div>
             </fieldset>
-        </div>
-        <ReasoningProjectionEditor
-          efforts={reasoningEfforts.length > 0 ? reasoningEfforts : ["none"]}
-          onChange={(projection) => { markField("request_projection"); setRequestProjection(projection) }}
-          projection={requestProjection}
-        />
+            <ReasoningProjectionEditor
+              efforts={reasoningEfforts.length > 0 ? reasoningEfforts : ["none"]}
+              onChange={(projection) => { markField("request_projection"); setRequestProjection(projection) }}
+              projection={requestProjection}
+            />
+          </>
+        ) : null}
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
         <DialogFooter className="sm:justify-between">
           <Button disabled={saving || (!props.overrides && !dirty && !edited)} onClick={restore} type="button" variant="ghost">
@@ -534,9 +561,9 @@ export function buildCapabilityOverridePatch(
   return patch
 }
 
-// modelCapabilitySettingsDraft resolves one complete direct layer from explicit or effective values.
-// modelCapabilitySettingsDraft 从显式值或有效值解析一层完整直接设置。
-function modelCapabilitySettingsDraft(
+// customProviderCapabilitySettingsDraft resolves one complete editable custom-provider layer.
+// customProviderCapabilitySettingsDraft 解析一层完整可编辑自定义供应商设置。
+function customProviderCapabilitySettingsDraft(
   model: PublicAiModel,
   overrides: PublicAiModelCapabilityOverrides | undefined,
 ): PublicAiModelCapabilityOverrides {

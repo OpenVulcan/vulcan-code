@@ -84,10 +84,10 @@ fn native_only_conversation_declaration_defaults_to_enabled_reasoning() {
     );
 }
 
-/// Verifies an explicit model-level disablement outranks the host default reasoning policy.
-/// 验证显式模型级关闭配置优先于宿主默认思考策略。
+/// Verifies a system model cannot replace the catalog reasoning contract with a disabled override.
+/// 验证系统模型不能用关闭覆盖替换目录中的思考契约。
 #[test]
-fn explicit_model_reasoning_disablement_outranks_host_default() {
+fn system_model_reasoning_disablement_override_is_ignored() {
     let mut configuration = PersistedAiConfiguration::default();
     configuration.model_capability_overrides.insert(
         PersistedAiConfiguration::provider_model_key("apikeyfun", "gpt-5.6-luna"),
@@ -106,24 +106,24 @@ fn explicit_model_reasoning_disablement_outranks_host_default() {
     .expect("compatible source catalog should parse");
 
     apply_model_catalog_overlays(&configuration, "apikeyfun", &mut catalog)
-        .expect("explicit disablement should resolve");
+        .expect("system capability override should be ignored");
 
     let model = catalog.models.first().expect("model should remain visible");
-    assert_eq!(model.capabilities.reasoning, CapabilitySupport::Unsupported);
+    assert_eq!(model.capabilities.reasoning, CapabilitySupport::Native);
     assert_eq!(
         model.capabilities.reasoning_control,
-        ReasoningControlMode::FixedOff
+        ReasoningControlMode::EffortSelection
     );
     assert_eq!(
         model.capabilities.reasoning_efforts,
-        vec![vulcan_ai_contract::ReasoningEffort::None]
+        crate::CUSTOM_PROVIDER_OPENAI_REASONING_EFFORTS
     );
 }
 
-/// Verifies an explicit model-level enablement reaches the effective catalog even when discovery says off.
-/// 验证显式模型级开启配置会抵达有效目录，即使发现结果声明模型关闭思考。
+/// Verifies a system model cannot replace a disabled catalog contract with an enabled override.
+/// 验证系统模型不能用开启覆盖替换目录中的关闭契约。
 #[test]
-fn explicit_model_reasoning_enablement_outranks_disabled_discovery() {
+fn system_model_reasoning_enablement_override_is_ignored() {
     let model_id = "gpt-5.6-luna";
     let mut configuration = PersistedAiConfiguration::default();
     configuration.model_capability_overrides.insert(
@@ -151,17 +151,17 @@ fn explicit_model_reasoning_enablement_outranks_disabled_discovery() {
     source_capabilities.reasoning_efforts = vec![vulcan_ai_contract::ReasoningEffort::None];
 
     apply_model_catalog_overlays(&configuration, "apikeyfun", &mut catalog)
-        .expect("explicit enablement should resolve");
+        .expect("system capability override should be ignored");
 
     let model = catalog.models.first().expect("model should remain visible");
-    assert_eq!(model.capabilities.reasoning, CapabilitySupport::Native);
+    assert_eq!(model.capabilities.reasoning, CapabilitySupport::Unsupported);
     assert_eq!(
         model.capabilities.reasoning_control,
-        ReasoningControlMode::EffortSelection
+        ReasoningControlMode::FixedOff
     );
     assert_eq!(
         model.capabilities.reasoning_efforts,
-        crate::CUSTOM_PROVIDER_OPENAI_REASONING_EFFORTS
+        vec![vulcan_ai_contract::ReasoningEffort::None]
     );
 }
 
@@ -535,10 +535,10 @@ fn discovered_custom_model_applies_only_manual_advanced_declarations() {
     );
 }
 
-/// Verifies provider capability defaults are inherited before a stronger model override.
-/// 验证供应商能力默认值先被继承，再由更高优先级的模型覆盖取代。
+/// Verifies system-provider runtime settings change limits without replacing capability facts.
+/// 验证系统供应商运行时设置只修改限制，不替换能力事实。
 #[test]
-fn provider_capability_defaults_are_overridden_by_model_capabilities() {
+fn system_provider_runtime_overrides_only_editable_limits() {
     let provider_id = "system-provider";
     let model_id = "chat-model";
     let mut configuration = PersistedAiConfiguration::default();
@@ -579,7 +579,7 @@ fn provider_capability_defaults_are_overridden_by_model_capabilities() {
     assert_eq!(model.capabilities.output_limit, Some(2_000));
     assert_eq!(
         model.capabilities.reasoning_efforts,
-        vec![vulcan_ai_contract::ReasoningEffort::Low]
+        crate::CUSTOM_PROVIDER_OPENAI_REASONING_EFFORTS
     );
     let source_model = catalog
         .models

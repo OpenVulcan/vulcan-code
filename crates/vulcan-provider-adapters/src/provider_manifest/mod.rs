@@ -165,7 +165,7 @@ pub const MAX_FIXED_HEADERS: usize = 16;
 
 /// Manifest engine contract version currently understood by this host.
 /// 当前宿主理解的 Manifest 引擎契约版本。
-pub const CURRENT_MANIFEST_ENGINE: u32 = 1;
+pub const CURRENT_MANIFEST_ENGINE: u32 = 2;
 
 /// Manifest schema revision identifier fixed by this crate.
 /// 当前 crate 固定的 Manifest Schema 修订标识。

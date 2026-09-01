@@ -85,6 +85,69 @@ fn exact_provider_routes_install_specialized_usage_profiles() {
             }))
     );
 
+    // minimaxRoute proves additive totals and thinking tokens are enabled only by the exact
+    // MiniMax Anthropic route declaration.
+    // minimaxRoute 证明总额加法与思考 Token 只由精确的 MiniMax Anthropic 路由声明启用。
+    let minimax_route = bundled_manifest_route(
+        "minimax",
+        "global",
+        vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID,
+    );
+    assert_eq!(
+        minimax_route.protocol_route.usage_extraction_profiles.len(),
+        3
+    );
+    // minimaxFinalProfile is the authoritative final streaming usage profile.
+    // minimaxFinalProfile 是权威的最终流式用量 Profile。
+    let minimax_final_profile = minimax_route
+        .protocol_route
+        .usage_extraction_profiles
+        .iter()
+        .find(|profile| profile.profile_id == "minimax.anthropic.message-delta.usage.v1")
+        .expect("MiniMax final Anthropic usage profile must be installed");
+    assert!(
+        minimax_final_profile
+            .derivations
+            .contains(&vulcan_llm_core::UsageDerivation::TotalFromInputComponentsAndOutput)
+    );
+    assert!(minimax_final_profile.bindings.iter().any(|binding| {
+        binding.field == vulcan_llm_core::UsageField::ReasoningTokens
+            && binding.pointers == [String::from("/usage/output_tokens_details/thinking_tokens")]
+    }));
+    // minimaxObservation executes the manifest-installed profile against the captured response
+    // shape that previously persisted a missing total.
+    // minimaxObservation 使用曾经把总额持久化为缺失值的已捕获响应形状执行 Manifest Profile。
+    let minimax_observation = minimax_final_profile
+        .extract(
+            vulcan_llm_core::UsageRecordKind::SseEvent,
+            &serde_json::json!({
+                "type": "message_delta",
+                "usage": {
+                    "input_tokens": 29_401,
+                    "output_tokens": 645,
+                    "output_tokens_details": {
+                        "thinking_tokens": 19
+                    }
+                }
+            }),
+        )
+        .expect("MiniMax captured usage should parse")
+        .expect("MiniMax final usage event should match");
+    assert_eq!(
+        minimax_observation.usage.total_tokens,
+        vulcan_ai_contract::UsageValue::Known {
+            value: 30_046,
+            source: vulcan_ai_contract::UsageValueSource::Derived,
+        }
+    );
+    assert_eq!(
+        minimax_observation.usage.reasoning_tokens,
+        vulcan_ai_contract::UsageValue::Known {
+            value: 19,
+            source: vulcan_ai_contract::UsageValueSource::Reported,
+        }
+    );
+
     // openrouter_route proves the manifest binds the usage profile to the exact Chat route.
     // openrouter_route 证明清单把用量 Profile 绑定到精确 Chat 路由。
     let openrouter_route =

@@ -174,6 +174,25 @@ fn minimax_openai_chat_projects_adaptive_thinking() {
     assert!(encoded.body.get("reasoning_effort").is_none());
 }
 
+/// Verifies MiniMax M2.x sends its sole adaptive equivalent through the exact Anthropic profile.
+/// 验证 MiniMax M2.x 通过精确 Anthropic Profile 发送唯一等价 adaptive。
+#[test]
+fn minimax_m2_anthropic_projects_only_adaptive_thinking() {
+    let client = ProviderExecutionClient::new(
+        reqwest::Client::new(),
+        Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+    );
+    let mut request = minimal_request();
+    request.model_id = String::from("MiniMax-M2.7-highspeed");
+    request.reasoning_effort = Some(ReasoningEffort::Adaptive);
+
+    let encoded = client
+        .encode_request(&minimax_route(ANTHROPIC_MESSAGES_PROFILE_ID), &request)
+        .expect("MiniMax M2.x adaptive request should encode");
+
+    assert_eq!(encoded.body["thinking"]["type"], "adaptive");
+}
+
 /// Verifies MiniMax Anthropic projects the documented disabled thinking shape.
 /// 验证 MiniMax Anthropic 投影文档化的关闭思考结构。
 #[test]

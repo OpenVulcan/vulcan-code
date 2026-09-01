@@ -1,0 +1,92 @@
+{
+  "schema_version": "provider-manifest-profile-fixture.v1",
+  "fixture_id": "profile-minimax-anthropic-total-usage",
+  "base_manifest": "minimax.json",
+  "fixture_kind": "usage",
+  "declaration": {
+    "profile_id": "fixture.minimax.anthropic.message-delta.usage.v1",
+    "description": "Executable MiniMax Anthropic additive total usage fixture",
+    "payload": {
+      "profile_id": "fixture.minimax.anthropic.message-delta.usage.v1",
+      "revision": 1,
+      "record_kind": "sse_event",
+      "update_kind": "final",
+      "event_type_pointer": "/type",
+      "event_type_value": "message_delta",
+      "required_pointer": "/usage",
+      "bindings": [
+        {
+          "field": "uncached_input_tokens",
+          "pointers": [
+            "/usage/input_tokens"
+          ],
+          "encoding": "unsigned_integer"
+        },
+        {
+          "field": "cache_read_tokens",
+          "pointers": [
+            "/usage/cache_read_input_tokens"
+          ],
+          "encoding": "unsigned_integer"
+        },
+        {
+          "field": "cache_write_tokens",
+          "pointers": [
+            "/usage/cache_creation_input_tokens"
+          ],
+          "encoding": "unsigned_integer"
+        },
+        {
+          "field": "output_tokens",
+          "pointers": [
+            "/usage/output_tokens"
+          ],
+          "encoding": "unsigned_integer"
+        },
+        {
+          "field": "reasoning_tokens",
+          "pointers": [
+            "/usage/output_tokens_details/thinking_tokens"
+          ],
+          "encoding": "unsigned_integer"
+        },
+        {
+          "field": "total_tokens",
+          "pointers": [
+            "/usage/total_tokens"
+          ],
+          "encoding": "unsigned_integer"
+        }
+      ],
+      "derivations": [
+        "input_from_disjoint_dimensions",
+        "total_from_input_components_and_output"
+      ]
+    }
+  },
+  "profile_id": "fixture.minimax.anthropic.message-delta.usage.v1",
+  "input": {
+    "type": "message_delta",
+    "delta": {
+      "stop_reason": "end_turn"
+    },
+    "usage": {
+      "input_tokens": 29401,
+      "output_tokens": 645,
+      "output_tokens_details": {
+        "thinking_tokens": 19
+      }
+    }
+  },
+  "record_kind": "sse_event",
+  "expectations": {
+    "/usage/uncached_input_tokens/value": 29401,
+    "/usage/output_tokens/value": 645,
+    "/usage/reasoning_tokens/value": 19,
+    "/usage/total_tokens/value": 30046,
+    "/usage/total_tokens/source": "derived",
+    "/usage/update_kind": "final",
+    "/source_paths/reasoning_tokens": "/usage/output_tokens_details/thinking_tokens",
+    "/source_paths/total_tokens": "derived:uncached_input_tokens+cache_read_tokens+cache_write_tokens+output_tokens"
+  }
+}

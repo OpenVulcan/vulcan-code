@@ -5487,6 +5487,21 @@ mod tests {
         handle
             .submit_root_input(test_client_input("edit-root", "before edit"), 2)
             .expect("publish durable root input");
+        assert!(
+            crate::session_request_config_v1::set_pending_reasoning_request_v1(
+                handle.as_ref(),
+                vulcan_provider_config::config::ReasoningEffortLevel::Adaptive,
+                crate::session_request_config_v1::SessionRequestFallback {
+                    provider: Some(String::from("minimax")),
+                    connection_id: Some(String::from("minimax-account")),
+                    model: Some(String::from("MiniMax-M2.7-highspeed")),
+                    thinking_level: None,
+                    temperature: None,
+                },
+                3,
+            )
+            .expect("stage the exact next-generation reasoning selection")
+        );
         let target_seq = handle
             .read(|document| {
                 document
@@ -5508,7 +5523,7 @@ mod tests {
                 EditGenerationInput {
                     target_seq,
                     replacement: RootInputReplacement::new("after edit", Vec::new()),
-                    now_ms: 3,
+                    now_ms: 4,
                 },
             )
             .expect("publish edited generation");
@@ -5531,6 +5546,18 @@ mod tests {
                     panic!("target seq must remain a root user input");
                 };
                 assert_eq!(input.text, "after edit");
+                let pending = document
+                    .metadata
+                    .config
+                    .pending_request
+                    .as_ref()
+                    .expect("edited generation must retain its next-request selection");
+                assert_eq!(pending.provider.as_deref(), Some("minimax"));
+                assert_eq!(
+                    pending.model.as_deref(),
+                    Some("MiniMax-M2.7-highspeed")
+                );
+                assert_eq!(pending.thinking_level.as_deref(), Some("adaptive"));
             })
             .expect("inspect replaced resident generation");
         let durable = load_session_v1_full(&locator).expect("strict reload edited generation");
@@ -5538,6 +5565,16 @@ mod tests {
         assert_eq!(
             durable.document.memory_revision(),
             receipt.document_revision
+        );
+        assert_eq!(
+            durable
+                .document
+                .metadata
+                .config
+                .pending_request
+                .as_ref()
+                .and_then(|pending| pending.thinking_level.as_deref()),
+            Some("adaptive")
         );
         let events = sink.events();
         let delta = match events.as_slice() {
@@ -5560,7 +5597,7 @@ mod tests {
                 EditGenerationInput {
                     target_seq,
                     replacement: RootInputReplacement::new("stale retry", Vec::new()),
-                    now_ms: 4,
+                    now_ms: 5,
                 },
             )
             .expect_err("stale generation must be rejected");

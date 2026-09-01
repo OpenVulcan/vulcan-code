@@ -1237,7 +1237,7 @@ impl PublicAiRuntime {
         overrides: Option<&crate::ModelCapabilityOverrides>,
     ) -> Result<(), String> {
         if let Some(overrides) = overrides {
-            overrides.validate()?;
+            overrides.validate_for_provider(provider_id)?;
         }
         let mut candidate_configuration = configuration.clone();
         // Provider-level capability settings must remain editable when every account hides the model.
@@ -1378,7 +1378,7 @@ impl PublicAiRuntime {
         overrides: Option<&crate::ModelCapabilityOverrides>,
     ) -> Result<(), String> {
         if let Some(overrides) = overrides {
-            overrides.validate()?;
+            overrides.validate_for_provider(provider_id)?;
         }
         let mut candidate_configuration = configuration.clone();
         candidate_configuration

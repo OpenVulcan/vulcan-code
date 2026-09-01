@@ -201,9 +201,6 @@ const MEDIUM_HIGH_XHIGH: &[ReasoningEffort] = &[
 /// Effort aliases shared by fixed rules.
 /// 固定规则共享的思考档位别名。
 const MINIMAL_HIGH: &[ReasoningEffort] = &[ReasoningEffort::Minimal, ReasoningEffort::High];
-/// An empty effort set means provider-controlled reasoning without a user-selectable strength.
-/// 空档位集合表示由供应商控制思考且用户不可选择强度。
-const PROVIDER_DEFAULT_ONLY: &[ReasoningEffort] = &[];
 /// Exact overrides precede broader Anthropic family defaults.
 /// Anthropic 精确覆盖位于更宽泛模型族默认值之前。
 pub(crate) const ANTHROPIC_REASONING_RULES: &[ModelReasoningRule] = &[
@@ -286,8 +283,8 @@ pub(crate) const GOOGLE_REASONING_RULES: &[ModelReasoningRule] = &[
     },
 ];
 
-/// MiniMax M3 exposes an on/off adaptive-thinking switch while M2.x reasoning remains fixed on.
-/// MiniMax M3 暴露自适应思考开关，而 M2.x 思考保持固定开启。
+/// MiniMax M3 exposes an on/off adaptive-thinking switch while M2.x exposes one provider-adaptive mode.
+/// MiniMax M3 暴露自适应思考开关，而 M2.x 只暴露一个供应商自适应模式。
 pub(crate) const MINIMAX_REASONING_RULES: &[ModelReasoningRule] = &[
     ModelReasoningRule {
         matcher: ModelRuleMatcher::Prefix("MiniMax-M3"),
@@ -295,7 +292,7 @@ pub(crate) const MINIMAX_REASONING_RULES: &[ModelReasoningRule] = &[
     },
     ModelReasoningRule {
         matcher: ModelRuleMatcher::Prefix("MiniMax-M2"),
-        efforts: PROVIDER_DEFAULT_ONLY,
+        efforts: &[ReasoningEffort::Adaptive],
     },
 ];
 
@@ -355,11 +352,11 @@ mod tests {
     /// Verifies MiniMax reasoning remains enabled without exposing unsupported effort values.
     /// 验证 MiniMax 保持启用思考且不暴露不受支持的强度值。
     #[test]
-    fn minimax_reasoning_is_provider_default_only() {
+    fn minimax_m2_reasoning_is_provider_adaptive_only() {
         let capabilities =
             fixed_reasoning_capabilities(FixedReasoningProvider::MiniMax, "MiniMax-M2.7");
         assert_eq!(capabilities.support, CapabilitySupport::Native);
-        assert!(capabilities.efforts.is_empty());
+        assert_eq!(capabilities.efforts, [ReasoningEffort::Adaptive]);
     }
 
     /// Verifies MiniMax M3 exposes only the documented disabled/adaptive semantic switch.

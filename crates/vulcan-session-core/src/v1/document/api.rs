@@ -683,7 +683,14 @@ impl SessionDocument {
         }
         let requested_active = active_request_from_snapshot(&request);
         let active_is_empty = self.metadata.config.active_request == ActiveRequestConfig::default();
-        if !active_is_empty {
+        // A rewritten history generation owns a fresh request boundary even though it retains the
+        // previous generation's active selection for display and fallback. Its first physical API
+        // must establish the exact current request together with the refreshed prompt baseline.
+        // 重写历史代际拥有新的请求边界，即使它为显示和回退保留了上一代际的活动选择。它的首次
+        // 物理 API 必须与刷新的提示词基线一起建立当前精确请求。
+        let request_rebase_allowed = self.runtime_lock.initialization_state
+            == RuntimeInitializationState::BaselineRefreshPending;
+        if !active_is_empty && !request_rebase_allowed {
             validate_request_against_active_config(
                 &self.metadata.config.active_request,
                 &requested_active,
@@ -724,7 +731,7 @@ impl SessionDocument {
             }
         };
         let mut staged_metadata = self.metadata.clone();
-        if active_is_empty {
+        if active_is_empty || request_rebase_allowed {
             staged_metadata.config.active_request = requested_active;
         }
 

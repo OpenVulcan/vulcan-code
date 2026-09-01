@@ -21,23 +21,20 @@ pub(super) fn resolve_request_projection(
     provider_id: &str,
     model_id: &str,
 ) -> Result<Option<crate::CustomModelRequestProjection>, String> {
+    // System-provider request projection is immutable Manifest data and cannot be supplied by user configuration.
+    // 系统供应商请求投影属于不可变 Manifest 数据，不能由用户配置提供。
+    if !provider_id.starts_with("custom:") {
+        return Ok(None);
+    }
     let mut merged = crate::CustomModelRequestProjection::default();
     let mut found = false;
 
-    // Custom-provider defaults and generic provider overrides are alternative provider layers.
-    // 自定义供应商默认与通用供应商覆盖是两种互斥的供应商层来源。
-    if provider_id.starts_with("custom:") {
-        if let Some(projection) = configuration
-            .custom_provider_model_defaults
-            .get(provider_id)
-            .and_then(|defaults| defaults.request_projection.as_ref())
-        {
-            merged.merge_overlay(projection)?;
-            found = true;
-        }
-    } else if let Some(projection) = configuration
-        .provider_capability_overrides(provider_id)
-        .and_then(|overrides| overrides.request_projection.as_ref())
+    // Custom-provider defaults are the only provider-wide user projection layer.
+    // 自定义供应商默认值是唯一的供应商级用户投影层。
+    if let Some(projection) = configuration
+        .custom_provider_model_defaults
+        .get(provider_id)
+        .and_then(|defaults| defaults.request_projection.as_ref())
     {
         merged.merge_overlay(projection)?;
         found = true;

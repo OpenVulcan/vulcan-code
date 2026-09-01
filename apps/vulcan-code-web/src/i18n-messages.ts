@@ -5121,7 +5121,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customModels.controlProviderAdaptive": "供应商自适应",
     "settings.customModels.reasoningEfforts": "可选思考档位",
     "settings.customModels.effortNone": "关闭（none）",
-    "settings.customModels.effortAdaptive": "自适应（adaptive）",
+    "settings.customModels.effortAdaptive": "自动（adaptive）",
     "settings.customModels.effortMinimal": "最小（minimal）",
     "settings.customModels.effortLow": "低（low）",
     "settings.customModels.effortMedium": "中（medium）",

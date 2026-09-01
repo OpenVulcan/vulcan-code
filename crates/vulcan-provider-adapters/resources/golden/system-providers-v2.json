@@ -3802,6 +3802,197 @@
                 ]
               }
             ],
+            "usage_extraction_profiles": [
+              {
+                "profile_id": "minimax.anthropic.body.usage.v1",
+                "revision": 1,
+                "record_kind": "json_body",
+                "update_kind": "final",
+                "required_pointer": "/usage",
+                "bindings": [
+                  {
+                    "field": "uncached_input_tokens",
+                    "pointers": [
+                      "/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/usage/cache_read_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_write_tokens",
+                    "pointers": [
+                      "/usage/cache_creation_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/usage/output_tokens_details/thinking_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/id"
+                    ],
+                    "encoding": "string"
+                  }
+                ],
+                "derivations": [
+                  "input_from_disjoint_dimensions",
+                  "total_from_input_components_and_output"
+                ]
+              },
+              {
+                "profile_id": "minimax.anthropic.message-start.usage.v1",
+                "revision": 1,
+                "record_kind": "sse_event",
+                "update_kind": "snapshot",
+                "event_type_pointer": "/type",
+                "event_type_value": "message_start",
+                "required_pointer": "/message/usage",
+                "bindings": [
+                  {
+                    "field": "uncached_input_tokens",
+                    "pointers": [
+                      "/message/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/message/usage/cache_read_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_write_tokens",
+                    "pointers": [
+                      "/message/usage/cache_creation_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/message/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/message/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/message/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/message/id"
+                    ],
+                    "encoding": "string"
+                  }
+                ],
+                "derivations": [
+                  "input_from_disjoint_dimensions"
+                ]
+              },
+              {
+                "profile_id": "minimax.anthropic.message-delta.usage.v1",
+                "revision": 1,
+                "record_kind": "sse_event",
+                "update_kind": "final",
+                "event_type_pointer": "/type",
+                "event_type_value": "message_delta",
+                "required_pointer": "/usage",
+                "bindings": [
+                  {
+                    "field": "uncached_input_tokens",
+                    "pointers": [
+                      "/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/usage/cache_read_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_write_tokens",
+                    "pointers": [
+                      "/usage/cache_creation_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/usage/output_tokens_details/thinking_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  }
+                ],
+                "derivations": [
+                  "input_from_disjoint_dimensions",
+                  "total_from_input_components_and_output"
+                ]
+              }
+            ],
             "request_projection_profiles": [
               {
                 "profile_id": "minimax.anthropic.thinking.v1",
@@ -3852,6 +4043,197 @@
                 "reference_policy": "local_only",
                 "upload_channel_refs": [
                   "global.video-file"
+                ]
+              }
+            ],
+            "usage_extraction_profiles": [
+              {
+                "profile_id": "minimax.anthropic.body.usage.v1",
+                "revision": 1,
+                "record_kind": "json_body",
+                "update_kind": "final",
+                "required_pointer": "/usage",
+                "bindings": [
+                  {
+                    "field": "uncached_input_tokens",
+                    "pointers": [
+                      "/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/usage/cache_read_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_write_tokens",
+                    "pointers": [
+                      "/usage/cache_creation_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/usage/output_tokens_details/thinking_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/id"
+                    ],
+                    "encoding": "string"
+                  }
+                ],
+                "derivations": [
+                  "input_from_disjoint_dimensions",
+                  "total_from_input_components_and_output"
+                ]
+              },
+              {
+                "profile_id": "minimax.anthropic.message-start.usage.v1",
+                "revision": 1,
+                "record_kind": "sse_event",
+                "update_kind": "snapshot",
+                "event_type_pointer": "/type",
+                "event_type_value": "message_start",
+                "required_pointer": "/message/usage",
+                "bindings": [
+                  {
+                    "field": "uncached_input_tokens",
+                    "pointers": [
+                      "/message/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/message/usage/cache_read_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_write_tokens",
+                    "pointers": [
+                      "/message/usage/cache_creation_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/message/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/message/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/message/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/message/id"
+                    ],
+                    "encoding": "string"
+                  }
+                ],
+                "derivations": [
+                  "input_from_disjoint_dimensions"
+                ]
+              },
+              {
+                "profile_id": "minimax.anthropic.message-delta.usage.v1",
+                "revision": 1,
+                "record_kind": "sse_event",
+                "update_kind": "final",
+                "event_type_pointer": "/type",
+                "event_type_value": "message_delta",
+                "required_pointer": "/usage",
+                "bindings": [
+                  {
+                    "field": "uncached_input_tokens",
+                    "pointers": [
+                      "/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/usage/cache_read_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_write_tokens",
+                    "pointers": [
+                      "/usage/cache_creation_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/usage/output_tokens_details/thinking_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  }
+                ],
+                "derivations": [
+                  "input_from_disjoint_dimensions",
+                  "total_from_input_components_and_output"
                 ]
               }
             ],
@@ -4017,6 +4399,197 @@
                 ]
               }
             ],
+            "usage_extraction_profiles": [
+              {
+                "profile_id": "minimax.anthropic.body.usage.v1",
+                "revision": 1,
+                "record_kind": "json_body",
+                "update_kind": "final",
+                "required_pointer": "/usage",
+                "bindings": [
+                  {
+                    "field": "uncached_input_tokens",
+                    "pointers": [
+                      "/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/usage/cache_read_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_write_tokens",
+                    "pointers": [
+                      "/usage/cache_creation_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/usage/output_tokens_details/thinking_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/id"
+                    ],
+                    "encoding": "string"
+                  }
+                ],
+                "derivations": [
+                  "input_from_disjoint_dimensions",
+                  "total_from_input_components_and_output"
+                ]
+              },
+              {
+                "profile_id": "minimax.anthropic.message-start.usage.v1",
+                "revision": 1,
+                "record_kind": "sse_event",
+                "update_kind": "snapshot",
+                "event_type_pointer": "/type",
+                "event_type_value": "message_start",
+                "required_pointer": "/message/usage",
+                "bindings": [
+                  {
+                    "field": "uncached_input_tokens",
+                    "pointers": [
+                      "/message/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/message/usage/cache_read_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_write_tokens",
+                    "pointers": [
+                      "/message/usage/cache_creation_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/message/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/message/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/message/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/message/id"
+                    ],
+                    "encoding": "string"
+                  }
+                ],
+                "derivations": [
+                  "input_from_disjoint_dimensions"
+                ]
+              },
+              {
+                "profile_id": "minimax.anthropic.message-delta.usage.v1",
+                "revision": 1,
+                "record_kind": "sse_event",
+                "update_kind": "final",
+                "event_type_pointer": "/type",
+                "event_type_value": "message_delta",
+                "required_pointer": "/usage",
+                "bindings": [
+                  {
+                    "field": "uncached_input_tokens",
+                    "pointers": [
+                      "/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/usage/cache_read_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_write_tokens",
+                    "pointers": [
+                      "/usage/cache_creation_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/usage/output_tokens_details/thinking_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  }
+                ],
+                "derivations": [
+                  "input_from_disjoint_dimensions",
+                  "total_from_input_components_and_output"
+                ]
+              }
+            ],
             "request_projection_profiles": [
               {
                 "profile_id": "minimax.anthropic.thinking.v1",
@@ -4067,6 +4640,197 @@
                 "reference_policy": "local_only",
                 "upload_channel_refs": [
                   "cn.video-file"
+                ]
+              }
+            ],
+            "usage_extraction_profiles": [
+              {
+                "profile_id": "minimax.anthropic.body.usage.v1",
+                "revision": 1,
+                "record_kind": "json_body",
+                "update_kind": "final",
+                "required_pointer": "/usage",
+                "bindings": [
+                  {
+                    "field": "uncached_input_tokens",
+                    "pointers": [
+                      "/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/usage/cache_read_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_write_tokens",
+                    "pointers": [
+                      "/usage/cache_creation_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/usage/output_tokens_details/thinking_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/id"
+                    ],
+                    "encoding": "string"
+                  }
+                ],
+                "derivations": [
+                  "input_from_disjoint_dimensions",
+                  "total_from_input_components_and_output"
+                ]
+              },
+              {
+                "profile_id": "minimax.anthropic.message-start.usage.v1",
+                "revision": 1,
+                "record_kind": "sse_event",
+                "update_kind": "snapshot",
+                "event_type_pointer": "/type",
+                "event_type_value": "message_start",
+                "required_pointer": "/message/usage",
+                "bindings": [
+                  {
+                    "field": "uncached_input_tokens",
+                    "pointers": [
+                      "/message/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/message/usage/cache_read_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_write_tokens",
+                    "pointers": [
+                      "/message/usage/cache_creation_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/message/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/message/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "response_model",
+                    "pointers": [
+                      "/message/model"
+                    ],
+                    "encoding": "string"
+                  },
+                  {
+                    "field": "response_id",
+                    "pointers": [
+                      "/message/id"
+                    ],
+                    "encoding": "string"
+                  }
+                ],
+                "derivations": [
+                  "input_from_disjoint_dimensions"
+                ]
+              },
+              {
+                "profile_id": "minimax.anthropic.message-delta.usage.v1",
+                "revision": 1,
+                "record_kind": "sse_event",
+                "update_kind": "final",
+                "event_type_pointer": "/type",
+                "event_type_value": "message_delta",
+                "required_pointer": "/usage",
+                "bindings": [
+                  {
+                    "field": "uncached_input_tokens",
+                    "pointers": [
+                      "/usage/input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_read_tokens",
+                    "pointers": [
+                      "/usage/cache_read_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "cache_write_tokens",
+                    "pointers": [
+                      "/usage/cache_creation_input_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "output_tokens",
+                    "pointers": [
+                      "/usage/output_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "reasoning_tokens",
+                    "pointers": [
+                      "/usage/output_tokens_details/thinking_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  },
+                  {
+                    "field": "total_tokens",
+                    "pointers": [
+                      "/usage/total_tokens"
+                    ],
+                    "encoding": "unsigned_integer"
+                  }
+                ],
+                "derivations": [
+                  "input_from_disjoint_dimensions",
+                  "total_from_input_components_and_output"
                 ]
               }
             ],

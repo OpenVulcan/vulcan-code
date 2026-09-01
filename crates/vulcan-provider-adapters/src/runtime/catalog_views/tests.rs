@@ -18,7 +18,7 @@ use vulcan_ai_protocols::{
 /// Verifies rebuilding user overlays never mutates the immutable synchronized catalog snapshot.
 /// 验证重建用户覆盖绝不会修改不可变的已同步目录快照。
 #[test]
-fn model_overlay_rebuild_preserves_source_catalog() {
+fn system_model_overlay_rebuild_preserves_immutable_source_capabilities() {
     let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
     let mut configuration = PersistedAiConfiguration::default();
     configuration
@@ -72,7 +72,7 @@ fn model_overlay_rebuild_preserves_source_catalog() {
     assert_eq!(effective_model.capabilities.context_limit, Some(4_096));
     assert_eq!(
         effective_model.capabilities.input_resources,
-        vec![vulcan_ai_contract::ResourceKind::Image]
+        Vec::<vulcan_ai_contract::ResourceKind>::new()
     );
 }
 

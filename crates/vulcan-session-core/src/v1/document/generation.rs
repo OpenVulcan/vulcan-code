@@ -149,7 +149,7 @@ impl SessionDocument {
             user_input.resource_ids = input.replacement.ordered_resource_ids;
         })?;
 
-        let metadata = self.build_generation_metadata(
+        let mut metadata = self.build_generation_metadata(
             self.metadata.session_id.clone(),
             self.metadata.fork_origin.clone(),
             self.metadata.project_tag.clone(),
@@ -159,6 +159,13 @@ impl SessionDocument {
             Some(input.target_seq),
             effective_now_ms,
         )?;
+        // A historical edit starts a new request generation at a safe root boundary. Preserve the
+        // exact pending user selection so the serialized Provider permit can promote it before the
+        // first physical request; clearing it would mix the previous active request with current
+        // model-capability normalization.
+        // 历史编辑会在安全根边界启动新的请求代际。保留精确的待生效用户选择，让串行 Provider
+        // 许可在首次物理请求前完成提升；若清除它，就会把旧活动请求与当前模型能力规范化结果混用。
+        metadata.config.pending_request = self.metadata.config.pending_request.clone();
         self.finish_generation_build(metadata, retained, input.target_seq, effective_now_ms)
     }
 
@@ -495,8 +502,14 @@ fn checked_generation_counter(field: &'static str, value: u64) -> Result<u64, Do
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v1::document::ClientInputSubmission;
+    use crate::v1::config::{ActiveRequestConfig, PendingRequestConfig};
+    use crate::v1::document::{ApiCompletion, ClientInputSubmission};
+    use crate::v1::event::{
+        ApiCallStatus, ApiEndReason, ApiPurposeKind, ApiRequestSnapshot, ApiTimings,
+        AssistantSemanticStatus, ContinuationEligibility,
+    };
     use crate::v1::ids::ClientActionId;
+    use crate::v1::stats::UsageSnapshot;
 
     /// Fixed semantic time used by generation tests.
     /// generation 测试使用的固定语义时间。
@@ -572,6 +585,21 @@ mod tests {
             source_target_seq: Seq::try_new(1).unwrap(),
         };
         source.metadata.fork_origin = Some(fork_origin.clone());
+        source.metadata.config.active_request = ActiveRequestConfig {
+            provider: Some(String::from("minimax")),
+            connection_id: Some(String::from("minimax-account")),
+            model: Some(String::from("MiniMax-M2.7-highspeed")),
+            thinking_level: None,
+            temperature: None,
+        };
+        source.metadata.config.pending_request = Some(PendingRequestConfig {
+            provider: Some(String::from("minimax")),
+            connection_id: Some(String::from("minimax-account")),
+            model: Some(String::from("MiniMax-M2.7-highspeed")),
+            thinking_level: Some(String::from("adaptive")),
+            temperature: None,
+            set_at_ms: T0 + 6,
+        });
         let before = source.clone();
         let target_seq = source
             .events()
@@ -595,7 +623,24 @@ mod tests {
         assert_eq!(output.history_target_seq, target_seq);
         assert!(!output.metadata.mode.plan.enabled);
         assert_eq!(output.metadata.input_state, InputState::default());
-        assert!(output.metadata.config.pending_request.is_none());
+        assert_eq!(
+            output
+                .metadata
+                .config
+                .pending_request
+                .as_ref()
+                .and_then(|request| request.thinking_level.as_deref()),
+            Some("adaptive")
+        );
+        assert_eq!(
+            output
+                .metadata
+                .config
+                .active_request
+                .thinking_level
+                .as_deref(),
+            None
+        );
         assert_eq!(output.metadata.open_turn_start_seq, Some(target_seq));
         assert_eq!(
             output.runtime_lock.initialization_state,
@@ -623,6 +668,152 @@ mod tests {
             output.metadata.id_frontier.next_seq,
             output.events.len() as u64 + 1
         );
+        // The first serialized Provider permit owns promotion for the edited root generation.
+        // 首个串行 Provider 许可持有编辑根代际的提升操作。
+        let mut dispatch_document = SessionDocument::from_parts(
+            output.metadata.clone(),
+            output.runtime_lock.clone(),
+            output.compactions.clone(),
+            Vec::new(),
+            output.events.clone(),
+        )
+        .expect("edited generation should reconstruct for first dispatch");
+        let edited_turn_id = dispatch_document
+            .active_turn()
+            .expect("edited root should own an open Turn")
+            .turn_id;
+        dispatch_document
+            .promote_pending_request(Some(edited_turn_id), T0 + 11)
+            .expect("edited generation should promote its pending request");
+        assert!(dispatch_document.metadata.config.pending_request.is_none());
+        assert_eq!(
+            dispatch_document
+                .metadata
+                .config
+                .active_request
+                .thinking_level
+                .as_deref(),
+            Some("adaptive")
+        );
+
+        // A rewritten generation without a pending record still establishes its first exact request
+        // instead of comparing current model normalization against the previous generation.
+        // 不含待生效记录的重写代际仍会建立首次精确请求，而不是把当前模型规范化结果与上一代际比较。
+        let mut no_pending_metadata = output.metadata.clone();
+        no_pending_metadata.config.pending_request = None;
+        let mut rebased_document = SessionDocument::from_parts(
+            no_pending_metadata,
+            output.runtime_lock.clone(),
+            output.compactions.clone(),
+            Vec::new(),
+            output.events.clone(),
+        )
+        .expect("edited generation without pending selection should reconstruct");
+        let mut adaptive_request =
+            crate::v1::event::ApiRequestSnapshot::new("minimax", "MiniMax-M2.7-highspeed");
+        adaptive_request.connection_id = Some(String::from("minimax-account"));
+        adaptive_request.thinking_level = Some(String::from("adaptive"));
+        rebased_document
+            .start_api(
+                crate::v1::event::ApiPurposeKind::MainGeneration,
+                adaptive_request,
+                T0 + 11,
+            )
+            .expect("first edited-generation request should rebase active selection");
+        assert_eq!(
+            rebased_document
+                .metadata
+                .config
+                .active_request
+                .thinking_level
+                .as_deref(),
+            Some("adaptive")
+        );
+    }
+
+    /// Edited generation duration starts at the replacement revision rather than original history time.
+    /// 编辑 generation 的耗时从替换修订时间开始，而不是原始历史时间。
+    #[test]
+    fn edited_generation_duration_starts_at_replacement_revision() {
+        let source = durable_edit_source();
+        let target_seq = source
+            .events()
+            .iter()
+            .find_map(|event| match &event.event {
+                EventBody::UserInput(input) if input.text == "second" => Some(event.seq),
+                _ => None,
+            })
+            .expect("second root input must exist");
+        let replacement_at_ms = T0 + 10;
+        let output = source
+            .build_edited_generation(EditGenerationInput {
+                target_seq,
+                replacement: RootInputReplacement::new("replacement", Vec::new()),
+                now_ms: replacement_at_ms,
+            })
+            .expect("edited generation must build");
+        let retained_root = &output.events[target_seq.value() as usize - 1];
+        assert_eq!(retained_root.created_at_ms, T0 + 4);
+        assert_eq!(retained_root.updated_at_ms, replacement_at_ms);
+
+        let mut edited = SessionDocument::from_parts(
+            output.metadata,
+            output.runtime_lock,
+            output.compactions,
+            Vec::new(),
+            output.events,
+        )
+        .expect("edited generation must reconstruct");
+        let turn_id = edited
+            .active_turn()
+            .expect("edited root must own an open Turn")
+            .turn_id;
+        let request = ApiRequestSnapshot::new("openai", "gpt-5");
+        let api_call_id = edited
+            .start_api(
+                ApiPurposeKind::MainGeneration,
+                request.clone(),
+                replacement_at_ms + 1,
+            )
+            .expect("edited generation API must start");
+        edited
+            .append_assistant_text(
+                api_call_id,
+                "answer",
+                AssistantSemanticStatus::Completed,
+                replacement_at_ms + 2,
+            )
+            .expect("edited generation answer must append");
+        edited
+            .complete_api_group(
+                api_call_id,
+                ApiCompletion {
+                    request,
+                    usage: UsageSnapshot::default(),
+                    status: ApiCallStatus::Completed,
+                    end_reason: Some(ApiEndReason::CompletedSuccessfully),
+                    error: None,
+                    continuation_eligibility: ContinuationEligibility::Forbidden,
+                    timing: ApiTimings::default(),
+                    provider_source: None,
+                    completed_at_ms: replacement_at_ms + 3,
+                },
+            )
+            .expect("edited generation API must complete");
+        edited
+            .complete_turn_and_select_successor(turn_id, replacement_at_ms + 5)
+            .expect("edited generation Turn must complete");
+
+        let duration_ms = edited
+            .events()
+            .iter()
+            .rev()
+            .find_map(|event| match &event.event {
+                EventBody::TurnStats(stats) => stats.duration_ms,
+                _ => None,
+            })
+            .expect("edited generation must persist Turn duration");
+        assert_eq!(duration_ms, 5);
     }
 
     /// Fork generation preserves copied fact identities while assigning exact child metadata.

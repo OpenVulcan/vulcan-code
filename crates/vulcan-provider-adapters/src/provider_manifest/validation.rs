@@ -41,6 +41,9 @@ const MAX_UPLOAD_CACHE_DURATION_MS: u64 = 24 * 60 * 60 * 1_000;
 /// Hard maximum requirement identifiers accepted by each engine-contract dimension.
 /// 每个引擎契约维度允许声明的依赖标识硬上限。
 const MAX_ENGINE_CONTRACT_REQUIREMENTS: usize = 64;
+/// Minimum manifest engine required by configured additive total usage derivation.
+/// 配置式用量总额加法派生所需的最低 Manifest 引擎版本。
+const ADDITIVE_TOTAL_USAGE_DERIVATION_MIN_ENGINE: u32 = 2;
 /// Sensitive response headers that may never be reclassified as provider request identifiers.
 /// 绝不能被重新归类为供应商请求标识的敏感响应头。
 const FORBIDDEN_PROVIDER_REQUEST_ID_RESPONSE_HEADERS: &[&str] = &[
@@ -344,6 +347,24 @@ fn validate_engine_contract(
                 super::CURRENT_MANIFEST_ENGINE
             ),
         ));
+    }
+    for (profile_index, declaration) in manifest.usage_profiles.iter().enumerate() {
+        let Some(payload) = declaration.payload.as_ref() else {
+            continue;
+        };
+        if payload
+            .derivations
+            .contains(&vulcan_llm_core::UsageDerivation::TotalFromInputComponentsAndOutput)
+            && contract.minimum_manifest_engine < ADDITIVE_TOTAL_USAGE_DERIVATION_MIN_ENGINE
+        {
+            errors.push(ManifestValidationError::new(
+                "engine_contract_missing_usage_derivation_version",
+                format!("$.usage_profiles[{profile_index}].payload.derivations"),
+                format!(
+                    "usage derivation `total_from_input_components_and_output` requires manifest engine {ADDITIVE_TOTAL_USAGE_DERIVATION_MIN_ENGINE} or newer"
+                ),
+            ));
+        }
     }
     let missing = |required: &[String], registered: &BTreeSet<String>| {
         required
@@ -7409,6 +7430,50 @@ mod tests {
             .expect_err("newer manifest engine must fail closed");
         assert!(errors.iter().any(|error| {
             error.code == "unsupported_engine_contract" && error.message.contains("upgrade")
+        }));
+    }
+
+    /// Verifies additive total derivation cannot be advertised under an older engine contract.
+    /// 验证总额加法派生不能在旧版引擎契约下发布。
+    #[test]
+    fn additive_total_usage_derivation_requires_engine_two() {
+        // manifest intentionally declares the new derivation while retaining engine one.
+        // manifest 故意在保留引擎一的同时声明新增派生。
+        let mut manifest = minimal_manifest();
+        manifest.usage_profiles = vec![crate::provider_manifest::schema::UsageProfileDeclaration {
+            profile_id: String::from("test.additive-total.v1"),
+            description: String::from("test additive total"),
+            payload: Some(vulcan_llm_core::UsageExtractionProfile {
+                profile_id: String::from("test.additive-total.v1"),
+                revision: 1,
+                record_kind: vulcan_llm_core::UsageRecordKind::JsonBody,
+                update_kind: vulcan_ai_contract::UsageUpdateKind::Final,
+                event_type_pointer: None,
+                event_type_value: None,
+                required_pointer: Some(String::from("/usage")),
+                bindings: vec![
+                    vulcan_llm_core::UsageFieldBinding {
+                        field: vulcan_llm_core::UsageField::UncachedInputTokens,
+                        pointers: vec![String::from("/usage/input_tokens")],
+                        encoding: vulcan_llm_core::UsageValueEncoding::UnsignedInteger,
+                    },
+                    vulcan_llm_core::UsageFieldBinding {
+                        field: vulcan_llm_core::UsageField::OutputTokens,
+                        pointers: vec![String::from("/usage/output_tokens")],
+                        encoding: vulcan_llm_core::UsageValueEncoding::UnsignedInteger,
+                    },
+                ],
+                derivations: vec![
+                    vulcan_llm_core::UsageDerivation::TotalFromInputComponentsAndOutput,
+                ],
+            }),
+        }];
+
+        let errors = validate_manifest(&manifest, ManifestOwnership::System, &registry())
+            .expect_err("additive total usage derivation must require engine two");
+        assert!(errors.iter().any(|error| {
+            error.code == "engine_contract_missing_usage_derivation_version"
+                && error.path == "$.usage_profiles[0].payload.derivations"
         }));
     }
 

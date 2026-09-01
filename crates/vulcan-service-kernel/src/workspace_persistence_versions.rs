@@ -170,10 +170,10 @@ pub(crate) fn reasoning_selection(
         return Some(ReasoningSelectionSummary {
             options: vec![ReasoningSelectionOptionSummary {
                 value: reasoning_effort_wire_value(level).to_string(),
-                label: String::from(if effort == vulcan_ai_contract::ReasoningEffort::None {
-                    "关闭"
-                } else {
-                    "开启"
+                label: String::from(match effort {
+                    vulcan_ai_contract::ReasoningEffort::None => "关闭",
+                    vulcan_ai_contract::ReasoningEffort::Adaptive => "自动",
+                    _ => "开启",
                 }),
             }],
             selected_effort: reasoning_effort_wire_value(level).to_string(),
@@ -726,6 +726,27 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["none", "adaptive"]
         );
+        assert_eq!(selection.selected_effort, "adaptive");
+    }
+
+    /// Verifies MiniMax M2.x exposes one automatic adaptive value and no disabled selection.
+    /// 验证 MiniMax M2.x 只暴露一个自动 adaptive 值且不存在关闭选项。
+    #[test]
+    fn reasoning_selector_exposes_minimax_m2_as_automatic_only() {
+        let capabilities = vulcan_ai_contract::ModelCapabilities {
+            reasoning: vulcan_ai_contract::CapabilitySupport::Native,
+            reasoning_control: vulcan_ai_contract::ReasoningControlMode::ProviderAdaptive,
+            reasoning_efforts: vec![vulcan_ai_contract::ReasoningEffort::Adaptive],
+            ..vulcan_ai_contract::ModelCapabilities::default()
+        };
+
+        let selection =
+            reasoning_selection(&ProviderConfigurationFile::default(), Some(&capabilities))
+                .expect("MiniMax M2.x automatic reasoning should remain visible");
+
+        assert_eq!(selection.options.len(), 1);
+        assert_eq!(selection.options[0].value, "adaptive");
+        assert_eq!(selection.options[0].label, "自动");
         assert_eq!(selection.selected_effort, "adaptive");
     }
 

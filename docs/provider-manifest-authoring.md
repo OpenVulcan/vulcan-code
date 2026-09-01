@@ -362,8 +362,10 @@ LLM 运行时只冻结连接、秘密引用、模型、协议和路由，不把�
 省略继续遵循 presence 继承；全部层均未声明时，运行时基线为 `json_object`。只有官方或真实请求证据
 明确证明精确模型路由不支持稳定 JSON 时才写 `unsupported`，不得把远端目录省略字段解释成不支持。
 `json_schema` 表示请求可以携带精确 Schema，`json_object` 表示只能约束为 JSON 对象；两者都会在宿主
-再次执行固定 Schema 校验。该能力可被用户模型能力覆盖，因此 Manifest 只声明系统事实，不负责用户
-是否允许该模型进入多模态理解候选列表。
+再次执行固定 Schema 校验。系统供应商的输入资源、结构化输出、思考支持、思考控制、思考档位与请求
+投影都是 Manifest 冻结事实，设置页只能只读展示，不得由用户覆盖；只有自定义供应商允许声明这些能力。
+系统供应商仍允许用户覆盖上下文上限、输出上限和上下文窗口策略，这些运行策略不得反向改写 Manifest
+能力事实。是否允许模型进入多模态理解候选列表仍由独立的用途开关决定。
 
 模型规则中的 `usage_profile_refs`、`request_profile_refs`、`response_profile_refs` 与
 `operation_refs` 同样遵循上述 presence 语义。显式空 `usage_profile_refs` 清除供应商专属统计特例
@@ -442,6 +444,13 @@ Wire JSON；内部封装不是标准 Responses 请求。媒体载荷保存在请
 3. 声明精确字段路径和单位，不写候选字段 fallback；
 4. fixture 同时断言规范化统计与 provenance；
 5. 若供应商不同模型返回不同字段，分别用 Exact 规则引用不同 Profile。
+
+`usage_profiles[].payload.derivations` 可选声明
+`total_from_input_components_and_output`。该派生只在供应商证据证明
+`uncached_input_tokens`、`cache_read_tokens`、`cache_write_tokens` 与 `output_tokens` 互不重叠时使用，
+计算式为四项相加；其中缓存读取和缓存写入字段缺失按零处理，非缓存输入或输出缺失、以及加法溢出
+仍保持 Unknown。供应商直接报告的 `total_tokens` 始终优先，派生不能覆盖。未声明该项的路由不得
+自动相加，避免把“字段缺失”误判成可推导总额。
 
 Usage Profile 必须按真实承载面声明 `record_kind`：
 

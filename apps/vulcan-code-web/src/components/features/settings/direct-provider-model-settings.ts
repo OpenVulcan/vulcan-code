@@ -1,6 +1,7 @@
 import type { CustomProviderModelRow } from "@/components/features/settings/custom-provider-models-state"
 import type {
   PublicAiCustomProviderModelDefaults,
+  PublicAiModel,
   PublicAiModelCapabilityOverrides,
 } from "@/types"
 
@@ -39,6 +40,47 @@ export function projectOpenAiReasoningEfforts(efforts: readonly string[]): strin
   // selected 仅包含直接编辑器能够无损往返的值。
   const selected = OPENAI_DIRECT_REASONING_EFFORTS.filter((effort) => efforts.includes(effort))
   return selected.length > 0 ? selected : [...OPENAI_DIRECT_REASONING_EFFORTS]
+}
+
+// systemProviderCapabilitySettingsDraft keeps immutable system-provider facts separate from editable limits.
+// systemProviderCapabilitySettingsDraft 将不可变系统供应商事实与可编辑限制分开。
+export function systemProviderCapabilitySettingsDraft(
+  model: PublicAiModel,
+  overrides: PublicAiModelCapabilityOverrides | undefined,
+): PublicAiModelCapabilityOverrides {
+  // capabilities is the Manifest-resolved immutable model contract.
+  // capabilities 是由 Manifest 解析出的不可变模型契约。
+  const capabilities = model.capabilities
+  return {
+    context_limit: overrides?.context_limit ?? capabilities.context_limit ?? 200_000,
+    output_limit: overrides?.output_limit ?? capabilities.output_limit ?? 32_768,
+    input_resources: [...(capabilities.input_resources ?? [])],
+    structured_output: capabilities.structured_output ?? "json_object",
+    reasoning: capabilities.reasoning,
+    reasoning_control: capabilities.reasoning_control,
+    reasoning_efforts: [...(capabilities.reasoning_efforts ?? [])],
+    context_window_policy: overrides?.context_window_policy ?? undefined,
+  }
+}
+
+// systemProviderEditableOverrides removes fields that only custom providers may own.
+// systemProviderEditableOverrides 移除仅允许自定义供应商持有的字段。
+export function systemProviderEditableOverrides(
+  overrides: PublicAiModelCapabilityOverrides,
+): PublicAiModelCapabilityOverrides {
+  // editable contains only the three system-provider settings authorized by the backend contract.
+  // editable 只包含后端契约授权的三类系统供应商设置。
+  const editable: PublicAiModelCapabilityOverrides = {}
+  if (overrides.context_limit !== undefined) {
+    editable.context_limit = overrides.context_limit
+  }
+  if (overrides.output_limit !== undefined) {
+    editable.output_limit = overrides.output_limit
+  }
+  if (overrides.context_window_policy !== undefined) {
+    editable.context_window_policy = overrides.context_window_policy
+  }
+  return editable
 }
 
 // directCustomModelSettingsDraft resolves one complete editable model layer from explicit or effective values.

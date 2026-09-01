@@ -643,10 +643,12 @@ impl SessionDocument {
                 actual: turn_start_event.turn_id.map_or(0, TurnId::value),
             });
         }
-        // Logical Turn duration is derived from the authoritative first event so continuation,
-        // process restart, and multiple physical APIs never reset the elapsed interval.
-        // 逻辑回合耗时从权威首事件推导，使继续、进程重启和多个物理 API 永不重置耗时区间。
-        let duration_ms = now_ms.saturating_sub(turn_start_event.created_at_ms).max(0);
+        // Logical Turn duration is derived from the current revision of the authoritative first
+        // event. Historical edits retain `created_at_ms` for chronology but advance
+        // `updated_at_ms` to start a new generation, while ordinary turns keep both timestamps equal.
+        // 逻辑回合耗时从权威首事件的当前修订时间推导。历史编辑保留 `created_at_ms`
+        // 用于时序展示，同时推进 `updated_at_ms` 以开启新 generation；普通回合的两个时间相等。
+        let duration_ms = now_ms.saturating_sub(turn_start_event.updated_at_ms).max(0);
 
         let queued_successor = self.metadata.input_state.queued_inputs.first().cloned();
         if let Some(queued) = queued_successor.as_ref() {

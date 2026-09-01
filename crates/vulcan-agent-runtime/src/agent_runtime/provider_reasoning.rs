@@ -482,3 +482,28 @@ mod tests {
         );
     }
 }
+
+/// Verifies a provider-adaptive model cannot resolve either an absent or stale disabled preference to off.
+/// 验证供应商自适应模型不会把缺省或陈旧关闭偏好解析为 off。
+#[test]
+fn provider_adaptive_contract_always_resolves_to_adaptive() {
+    let capabilities = ModelCapabilities {
+        reasoning: vulcan_ai_contract::CapabilitySupport::Native,
+        reasoning_control: vulcan_ai_contract::ReasoningControlMode::ProviderAdaptive,
+        reasoning_efforts: vec![ReasoningEffort::Adaptive],
+        ..ModelCapabilities::default()
+    };
+
+    assert_eq!(
+        resolve_effective_reasoning_effort(&capabilities, None),
+        ReasoningEffortLevel::Adaptive
+    );
+    assert_eq!(
+        resolve_effective_reasoning_effort(&capabilities, Some(ReasoningEffortLevel::None)),
+        ReasoningEffortLevel::Adaptive
+    );
+    assert_eq!(
+        resolve_effective_wire_reasoning_effort(&capabilities, Some(ReasoningEffortLevel::Off),),
+        Some(ReasoningEffort::Adaptive)
+    );
+}
