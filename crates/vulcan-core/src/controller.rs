@@ -102,12 +102,13 @@ pub const INTERJECTED_PROMPT_ADMISSION_ID_KEY: &str = "prompt_admission_id";
 ///
 /// # Returns
 /// 返回值
-/// `true` for a non-empty user message, agent message, or tool result at the canonical tail.
-/// 当规范尾部为非空用户消息、智能体消息或工具结果时返回 `true`。
+/// `true` for a user message with text or attachments, a non-empty agent message, or a non-empty tool result at the canonical tail.
+/// 当规范尾部为含文本或附件的用户消息、非空智能体消息或非空工具结果时返回 `true`。
 pub fn conversation_snapshot_has_seeded_provider_input(snapshot: &ConversationSnapshot) -> bool {
     matches!(
         snapshot.messages.last().map(|message| &message.payload),
-        Some(ConversationPayload::UserText { text, .. }) if !text.trim().is_empty()
+        Some(ConversationPayload::UserText { text, attachments })
+            if !text.trim().is_empty() || !attachments.is_empty()
     ) || matches!(
         snapshot.messages.last().map(|message| &message.payload),
         Some(ConversationPayload::AgentMessage { payload, .. }) if !payload.trim().is_empty()

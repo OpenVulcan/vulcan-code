@@ -32,8 +32,8 @@ pub(super) struct PreparedV1UserMedia {
     pub bindings: Vec<UserPromptMediaBinding>,
 }
 
-/// One exact prompt's content and host-only controller attachment metadata.
-/// 一个精确提示词的内容及仅宿主可见的控制器附件元数据。
+/// One exact prompt's physical content and request-local attachment delivery facts.
+/// 一个精确提示词的物理内容及请求局部附件投递事实。
 pub(super) struct PreparedV1PromptMedia {
     /// Exact text and native-resource sequence sent to the target encoder.
     /// 发送至目标编码器的精确文本及原生资源序列。
@@ -1372,7 +1372,10 @@ fn uploaded_origin(
 
 /// Maps canonical `kind` and optional `mime` to the existing controller attachment category without preview relabeling.
 /// 将规范`kind`及可选`mime`映射至既有控制器附件类型，不进行预览改标。
-fn attachment_kind(kind: ResourceKind, mime: Option<&str>) -> ConversationAttachmentKind {
+pub(super) fn attachment_kind(
+    kind: ResourceKind,
+    mime: Option<&str>,
+) -> ConversationAttachmentKind {
     match kind {
         ResourceKind::Image => ConversationAttachmentKind::Image,
         ResourceKind::Audio => ConversationAttachmentKind::Audio,

@@ -5,8 +5,8 @@ use super::*;
 use crate::provider::{VulcanProviderDeltaSink, VulcanStreamingProviderAdapter};
 use crate::tool::{AllowAllToolPolicy, ExactToolSetPolicy};
 use crate::types::{
-    ConversationPayload, ConversationToolCall, ProviderContinuation, ProviderPromptLayers,
-    ProviderRequestSnapshot, ProviderRequestToolSchema, ProviderTurnDelta,
+    ConversationAttachmentKind, ConversationPayload, ConversationToolCall, ProviderContinuation,
+    ProviderPromptLayers, ProviderRequestSnapshot, ProviderRequestToolSchema, ProviderTurnDelta,
 };
 use async_trait::async_trait;
 use std::collections::{BTreeMap, VecDeque};
@@ -453,6 +453,38 @@ fn build_test_config(max_turns: usize) -> ControllerConfig {
         additional_params: Some(json!({"reasoning_effort":"medium"})),
         context_injection: None,
     }
+}
+
+/// Verifies an attachment-only user occurrence is valid Provider-visible input for a seeded turn.
+/// 验证仅附件用户出现是播种回合的有效 Provider 可见输入。
+#[test]
+fn attachment_only_user_input_is_valid_seed() {
+    // snapshot models the canonical V1 attachment-only prompt after logical resource projection.
+    // snapshot 模拟逻辑资源投影后的规范 V1 仅附件提示词。
+    let snapshot = ConversationSnapshot {
+        messages: vec![ConversationMessage {
+            id: String::from("attachment-only-user"),
+            payload: ConversationPayload::UserText {
+                text: String::new(),
+                attachments: vec![ConversationAttachment {
+                    kind: ConversationAttachmentKind::Image,
+                    file_name: String::from("reference.png"),
+                    local_path: String::new(),
+                    resource_path: Some(String::from("resources/abcd")),
+                    source_path: None,
+                    asset_id: Some(String::from("project-resource-1")),
+                    byte_len: Some(4),
+                    source_sha256: Some(String::from("abcd")),
+                    delivery_mode: None,
+                    preview_local_path: None,
+                    mime_type: String::from("image/png"),
+                }],
+            },
+        }],
+        ..ConversationSnapshot::default()
+    };
+
+    assert!(conversation_snapshot_has_seeded_provider_input(&snapshot));
 }
 
 /// Verifies inter-agent injections stay provider-visible but transcript-hidden.

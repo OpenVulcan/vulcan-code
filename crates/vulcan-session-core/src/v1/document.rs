@@ -63,7 +63,8 @@ mod user_prompt;
 
 pub use api::{
     ApiCompletion, ApiGroupCompletionReceipt, ApiTransportObservedReceipt,
-    ContinuationDispatchResolution, PrepareAndStartApiInput, PreparedApiStart,
+    ContinuationDispatchResolution, ContinuationTerminalProjection, PrepareAndStartApiInput,
+    PreparedApiStart,
 };
 pub use compaction::CompactionCommitInput;
 pub use input::{

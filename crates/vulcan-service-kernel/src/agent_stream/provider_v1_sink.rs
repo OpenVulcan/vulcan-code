@@ -13,6 +13,7 @@ use vulcan_agent_runtime::agent_runtime::events::{
     PreparedPhysicalApi, ProviderRequestPreparationCandidate, RuntimeEvent,
     ToolExecutionRecoveryBoundary,
 };
+use vulcan_agent_runtime::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
 use vulcan_agent_runtime::agent_runtime::provider_v1_bridge::{
     ProviderV1ApiTerminalFacts, ProviderV1ExternalResourceError, ProviderV1GeneratedResourceError,
     ProviderV1RequestFacts, ProviderV1TransportObservedFacts,
@@ -26,11 +27,20 @@ use vulcan_ai_contract::{
     ToolCall as AiToolCall, ToolResult as AiToolResult,
 };
 use vulcan_change_set::{PersistentChangeSetError, persistent_change_set_from_host_result};
+use vulcan_context::protocol::validate_session_conversation_message_identities;
+use vulcan_context::{
+    SessionConversationMessage, SessionConversationPayload, SessionConversationState,
+    SessionConversationToolCall, SessionProviderContinuationState,
+};
 use vulcan_core::types::{
-    ConversationAttachment, ConversationAttachmentKind, ConversationMessage, ConversationPayload,
-    ConversationSnapshot, ConversationToolCall, ProviderContinuation, ProviderPromptLayers,
+    ConversationAttachment, ConversationAttachmentKind, ProviderPromptLayers,
     ProviderRequestSnapshot as CoreProviderRequestSnapshot, ToolInvocationRequest,
     ToolInvocationResult,
+};
+#[cfg(test)]
+use vulcan_core::types::{
+    ConversationAttachmentDeliveryMode, ConversationMessage, ConversationPayload,
+    ConversationSnapshot, ProviderContinuation,
 };
 use vulcan_session_core::v1::context::{
     LockedBaselineProjection, LockedPromptTarget, LockedSource,
@@ -52,7 +62,8 @@ use vulcan_session_core::v1::ids::{ApiCallId, RequestStreamId, ResourceId, Seq, 
 use vulcan_session_core::v1::projection::{ProjectedItem, ProjectedSystemRole};
 use vulcan_workbench_model::SessionId;
 use vulcan_workspace_store::workspace_store::{
-    ProjectResourceCatalogError, ProjectResourceCatalogRegistry, load_project_resource_catalog,
+    ProjectResourceCatalog, ProjectResourceCatalogError, ProjectResourceCatalogRegistry,
+    load_project_resource_catalog,
 };
 #[cfg(test)]
 use vulcan_workspace_store::workspace_store::{
@@ -68,6 +79,272 @@ use crate::state::SharedServiceBridgeState;
 
 mod media;
 pub(crate) use media::frozen_prompt_media_projection;
+
+/// Projects one ordered resource list into canonical controller attachments without transport state.
+/// 将一组有序资源投影为不含传输状态的规范控制器附件。
+///
+/// # Parameters
+/// 参数
+/// `catalog` owns immutable project resource metadata.
+/// `catalog` 持有不可变项目资源元数据。
+/// `resource_ids` preserves the occurrence order recorded on the V1 user input.
+/// `resource_ids` 保留 V1 用户输入记录的资源出现顺序。
+///
+/// # Returns
+/// 返回值
+/// Returns canonical attachments in occurrence order, or an explicit missing-catalog-identity error.
+/// 按出现顺序返回规范附件；目录身份缺失时返回明确错误。
+fn provider_history_attachments_from_resource_ids(
+    catalog: &ProjectResourceCatalog,
+    resource_ids: &[ResourceId],
+) -> Result<Vec<ConversationAttachment>, String> {
+    resource_ids
+        .iter()
+        .map(|resource_id| {
+            // entry is the unique immutable catalog identity referenced by this V1 occurrence.
+            // entry 是本次 V1 出现所引用的唯一不可变目录身份。
+            let entry = catalog
+                .entries
+                .iter()
+                .find(|entry| entry.resource_id == *resource_id)
+                .ok_or_else(|| {
+                    format!(
+                        "V1 Provider history references missing project resource `{}`.",
+                        resource_id.value()
+                    )
+                })?;
+            // mime is authoritative for the stable controller modality and never inferred from a filename.
+            // mime 是稳定控制器模态的权威来源，绝不从文件名推断。
+            let mime = entry
+                .mime
+                .clone()
+                .unwrap_or_else(|| String::from("application/octet-stream"));
+            // kind reuses the physical preparation mapper so PDF and generic-file semantics cannot drift.
+            // kind 复用物理准备映射器，使 PDF 与通用文件语义不会漂移。
+            let kind = media::attachment_kind(resource_kind_from_mime(&mime), Some(&mime));
+            // asset_id preserves logical V1 identity without exposing one host path or Provider upload reference.
+            // asset_id 保留逻辑 V1 身份，同时不暴露宿主路径或 Provider 上传引用。
+            let asset_id = format!("project-resource-{}", resource_id.value());
+            Ok(ConversationAttachment {
+                kind,
+                file_name: entry.original_name.clone(),
+                local_path: String::new(),
+                resource_path: Some(entry.entity_relative_path.clone()),
+                source_path: None,
+                asset_id: Some(asset_id),
+                byte_len: Some(entry.size),
+                source_sha256: Some(entry.sha256.clone()),
+                delivery_mode: None,
+                preview_local_path: None,
+                mime_type: mime,
+            })
+        })
+        .collect()
+}
+
+/// Projects the complete ordered V1 Provider history into one canonical controller state.
+/// 将完整有序的 V1 Provider 历史投影为一份规范控制器状态。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` is the durable V1 projection frontier shared with physical request preparation.
+/// `snapshot` 是与物理请求准备共享的可靠 V1 投影前沿。
+/// `resolve_attachments` resolves each user-input occurrence without reading or uploading media bytes.
+/// `resolve_attachments` 在不读取或上传媒体字节的情况下解析每次用户输入的附件。
+///
+/// # Returns
+/// 返回值
+/// Returns the complete lossless controller window, or the first explicit projection error.
+/// 返回完整无损的控制器窗口；投影失败时返回首个明确错误。
+fn project_provider_controller_state<F>(
+    snapshot: &SessionProviderProjectionSnapshot,
+    mut resolve_attachments: F,
+) -> Result<SessionConversationState, String>
+where
+    F: FnMut(usize, &[ResourceId]) -> Result<Vec<ConversationAttachment>, String>,
+{
+    // messages preserves the exact V1 Provider-visible ordering and deterministic position identities.
+    // messages 保留精确 V1 Provider 可见顺序及确定性位置身份。
+    let mut messages = Vec::with_capacity(snapshot.items.len());
+    // continuation is rebuilt only from the latest durable assistant provider source.
+    // continuation 仅从最近一次可靠助手 Provider 来源重建。
+    let mut continuation = SessionProviderContinuationState::default();
+    for (index, item) in snapshot.items.iter().enumerate() {
+        // message_id uses the same stable position identity as physical request reconstruction.
+        // message_id 使用与物理请求重建相同的稳定位置身份。
+        let message_id = format!("v1-provider-message-{}", index + 1);
+        // payload omits system/developer layers because those remain request prompt layers, not controller messages.
+        // payload 会跳过 system/developer 层，因为它们属于请求提示词层而非控制器消息。
+        let payload = match item {
+            ProjectedItem::SystemText {
+                role: ProjectedSystemRole::HiddenUserShell,
+                text,
+                ..
+            } => Some(SessionConversationPayload::UserText {
+                text: text.clone(),
+                attachments: Vec::new(),
+            }),
+            ProjectedItem::SystemText { .. } => None,
+            ProjectedItem::UserInput { text, resource_ids } => {
+                // attachments retain logical ResourceId identity while excluding every request-local delivery decision.
+                // attachments 保留逻辑 ResourceId 身份，同时排除全部请求局部投递决策。
+                let attachments = resolve_attachments(index, resource_ids)?;
+                Some(SessionConversationPayload::UserText {
+                    text: text.clone(),
+                    attachments,
+                })
+            }
+            ProjectedItem::AssistantText {
+                text,
+                reasoning,
+                tool_calls,
+                provider_source,
+            } => {
+                // controller_tool_calls preserves the Provider-ordered structured invocation list.
+                // controller_tool_calls 保留 Provider 有序的结构化调用列表。
+                let mut controller_tool_calls = Vec::with_capacity(tool_calls.len());
+                for tool_call in tool_calls {
+                    // call_id selects the provider-native identity when present and the stable local identity otherwise.
+                    // call_id 在存在时选择 Provider 原生身份，否则选择稳定本地身份。
+                    let call_id = provider_wire_tool_call_id(
+                        tool_call.tool_call_id,
+                        tool_call.provider_tool_call_id.as_deref(),
+                    );
+                    // arguments is the lossless JSON representation of the validated V1 tool payload.
+                    // arguments 是已校验 V1 工具载荷的无损 JSON 表示。
+                    let arguments = serde_json::to_value(&tool_call.input)
+                        .map_err(|error| format!("Serialize V1 tool input failed: {error}"))?;
+                    controller_tool_calls.push(SessionConversationToolCall {
+                        id: format!("v1-tool-item-{}", tool_call.tool_call_id.value()),
+                        tool_call_id: Some(call_id),
+                        tool_name: tool_call.tool_name.clone(),
+                        arguments,
+                        argument_parse_error: None,
+                    });
+                }
+                // provider_message_state retains only the typed replay envelope declared by the durable source.
+                // provider_message_state 仅保留可靠来源声明的强类型重放信封。
+                let provider_message_state = provider_source
+                    .as_ref()
+                    .and_then(|source| source.replay.as_ref())
+                    .map(serde_json::to_value)
+                    .transpose()
+                    .map_err(|error| {
+                        format!("Serialize V1 provider replay state failed: {error}")
+                    })?;
+                if let Some(source) = provider_source {
+                    continuation.provider_id = Some(source.provider.clone());
+                    continuation.protocol_profile_id = source.profile.clone();
+                    continuation.model_id = Some(source.model.clone());
+                    continuation.last_provider_message_id = source
+                        .message_id
+                        .clone()
+                        .or_else(|| source.response_id.clone());
+                    continuation.last_local_message_id = Some(message_id.clone());
+                    continuation.context_rewrite_fingerprint =
+                        Some(source.fingerprint_sha256.clone());
+                }
+                Some(SessionConversationPayload::Assistant {
+                    text: text.clone(),
+                    reasoning: reasoning.clone().unwrap_or_default(),
+                    provider_message_id: provider_source.as_ref().and_then(|source| {
+                        source
+                            .message_id
+                            .clone()
+                            .or_else(|| source.response_id.clone())
+                    }),
+                    provider_message_state,
+                    usage: None,
+                    tool_calls: controller_tool_calls,
+                })
+            }
+            ProjectedItem::ToolResult {
+                tool_call_id,
+                provider_tool_call_id,
+                status,
+                output,
+                ..
+            } => {
+                // output is serialized once into the canonical tool-result text expected by the controller bridge.
+                // output 仅序列化一次，成为控制器桥接所需的规范工具结果文本。
+                let output = serde_json::to_value(output)
+                    .map_err(|error| format!("Serialize V1 tool result failed: {error}"))?;
+                Some(SessionConversationPayload::ToolResult {
+                    tool_call_id: Some(provider_wire_tool_call_id(
+                        *tool_call_id,
+                        provider_tool_call_id.as_deref(),
+                    )),
+                    is_error: *status != ToolCallStatus::Completed,
+                    text: serde_json::to_string(&output)
+                        .map_err(|error| format!("Encode V1 tool result failed: {error}"))?,
+                })
+            }
+            ProjectedItem::SubagentReturnText { text } => {
+                Some(SessionConversationPayload::UserText {
+                    text: text.clone(),
+                    attachments: Vec::new(),
+                })
+            }
+        };
+        if let Some(payload) = payload {
+            messages.push(SessionConversationMessage {
+                id: message_id,
+                payload,
+            });
+        }
+    }
+    // state is validated once through the canonical session protocol before either caller can observe it.
+    // state 在任一调用方可观察前通过规范会话协议完成一次校验。
+    let state = SessionConversationState {
+        messages,
+        records: Vec::new(),
+        continuation,
+    };
+    validate_session_conversation_message_identities(&state.messages)
+        .map_err(|error| format!("Validate V1 controller projection failed: {error}"))?;
+    Ok(state)
+}
+
+/// Rebuilds the complete canonical controller state from the durable V1 projection and resource catalog.
+/// 从可靠 V1 投影与资源目录重建完整规范控制器状态。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` is the serialized V1 frontier captured for one Continue launch.
+/// `snapshot` 是为一次 Continue 启动捕获的串行化 V1 前沿。
+///
+/// # Returns
+/// 返回值
+/// Returns the complete controller state without transport decisions, or an explicit catalog/projection error.
+/// 返回不含传输决策的完整控制器状态；失败时返回明确目录或投影错误。
+pub(crate) fn provider_projection_controller_state(
+    snapshot: &SessionProviderProjectionSnapshot,
+) -> Result<SessionConversationState, String> {
+    // has_resources prevents an unrelated empty-history projection from requiring project catalog I/O.
+    // has_resources 避免无资源历史投影无关地要求项目资源目录 I/O。
+    let has_resources = snapshot.items.iter().any(
+        |item| matches!(item, ProjectedItem::UserInput { resource_ids, .. } if !resource_ids.is_empty()),
+    );
+    // catalog is loaded once only when the V1 projection declares logical resources.
+    // catalog 仅在 V1 投影声明逻辑资源时加载一次。
+    let catalog = has_resources
+        .then(|| load_project_resource_catalog(&snapshot.project_directory))
+        .transpose()
+        .map_err(|error| format!("Load V1 Provider history resource catalog failed: {error}"))?;
+    project_provider_controller_state(snapshot, |_, resource_ids| {
+        if resource_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // catalog must exist because has_resources was derived from this exact immutable snapshot.
+        // catalog 必然存在，因为 has_resources 来自同一份不可变快照。
+        let catalog = catalog.as_ref().ok_or_else(|| {
+            String::from(
+                "V1 Provider history resource catalog was not loaded for declared resources.",
+            )
+        })?;
+        provider_history_attachments_from_resource_ids(catalog, resource_ids)
+    })
+}
 
 /// Acquires the optional V1 sink once for the complete lifetime of one stream task.
 /// 为一个流任务的完整生命周期一次性获取可选 V1 sink。
@@ -602,11 +879,20 @@ fn rebuild_provider_transport_candidate(
 {
     validate_provider_transport_candidate(facts, &candidate)?;
     validate_prompt_media_preparation_frontier(&snapshot)?;
+    // controller_state is the shared logical V1 projection and therefore cannot contain physical delivery choices.
+    // controller_state 是共享逻辑 V1 投影，因此不能包含物理投递选择。
+    let controller_state = provider_projection_controller_state(&snapshot)
+        .map_err(provider_projection_runtime_error)?;
+    // controller_snapshot is the lossless Core representation used by request capture and later checkpoints.
+    // controller_snapshot 是请求捕获与后续检查点使用的无损 Core 表示。
+    let controller_snapshot = build_core_conversation_snapshot(&controller_state)
+        .map_err(provider_projection_runtime_error)?;
+    // continuation comes from the same logical projection as controller history.
+    // continuation 来自与控制器历史相同的逻辑投影。
+    let continuation = controller_snapshot.continuation.clone();
     let mut request_messages = Vec::new();
-    let mut controller_messages = Vec::new();
     let mut system_prompt_parts = Vec::new();
     let mut latest_user_prompt = String::new();
-    let mut continuation = ProviderContinuation::default();
 
     append_dynamic_prompt_messages(
         &candidate.dynamic_prompt_layers,
@@ -623,35 +909,33 @@ fn rebuild_provider_transport_candidate(
     }
 
     for (index, item) in snapshot.items.iter().enumerate() {
-        let message_id = format!("v1-provider-message-{}", index + 1);
         match item {
             ProjectedItem::SystemText { role, text, .. } => {
                 let message_role = projected_system_message_role(*role);
                 if matches!(message_role, MessageRole::System | MessageRole::Developer) {
                     system_prompt_parts.push(text.clone());
-                } else {
-                    controller_messages.push(ConversationMessage {
-                        id: message_id,
-                        payload: ConversationPayload::UserText {
-                            text: text.clone(),
-                            attachments: Vec::new(),
-                        },
-                    });
                 }
                 request_messages.push(text_ai_message(message_role, text.clone()));
             }
             ProjectedItem::UserInput { text, resource_ids } => {
                 // Resource-bearing prompts must use the exact prevalidated result, never an unconditional Base64 fallback.
                 // 带资源提示词必须使用精确预校验结果，绝不使用无条件Base64回退。
-                let (content, attachments) = if resource_ids.is_empty() {
-                    (vec![ContentItem::Text { text: text.clone() }], Vec::new())
+                let content = if resource_ids.is_empty() {
+                    vec![ContentItem::Text { text: text.clone() }]
                 } else {
                     let prepared = prepared_media.prompts.remove(&index).ok_or_else(|| {
                         provider_projection_runtime_error(
                             "V1 user resources have no exact prepared prompt result",
                         )
                     })?;
-                    (prepared.content, prepared.attachments)
+                    if prepared.attachments.len() != resource_ids.len() {
+                        return Err(provider_projection_runtime_error(format!(
+                            "V1 prepared attachment count `{}` does not match declared resource count `{}` at prompt index `{index}`.",
+                            prepared.attachments.len(),
+                            resource_ids.len()
+                        )));
+                    }
+                    prepared.content
                 };
                 latest_user_prompt = text.clone();
                 request_messages.push(AiMessage {
@@ -659,19 +943,12 @@ fn rebuild_provider_transport_candidate(
                     content,
                     provider_context_items: Vec::new(),
                 });
-                controller_messages.push(ConversationMessage {
-                    id: message_id,
-                    payload: ConversationPayload::UserText {
-                        text: text.clone(),
-                        attachments,
-                    },
-                });
             }
             ProjectedItem::AssistantText {
                 text,
                 reasoning,
                 tool_calls,
-                provider_source,
+                ..
             } => {
                 let mut content = Vec::new();
                 if let Some(reasoning) = reasoning.as_ref().filter(|value| !value.is_empty()) {
@@ -683,7 +960,6 @@ fn rebuild_provider_transport_candidate(
                 if !text.is_empty() {
                     content.push(ContentItem::Text { text: text.clone() });
                 }
-                let mut controller_tool_calls = Vec::with_capacity(tool_calls.len());
                 for tool_call in tool_calls {
                     let call_id = provider_wire_tool_call_id(
                         tool_call.tool_call_id,
@@ -699,53 +975,12 @@ fn rebuild_provider_transport_candidate(
                             signature: None,
                         },
                     });
-                    controller_tool_calls.push(ConversationToolCall {
-                        id: format!("v1-tool-item-{}", tool_call.tool_call_id.value()),
-                        tool_call_id: Some(call_id),
-                        tool_name: tool_call.tool_name.clone(),
-                        arguments,
-                        argument_parse_error: None,
-                    });
                 }
                 request_messages.push(AiMessage {
                     role: MessageRole::Assistant,
                     content,
                     provider_context_items: Vec::new(),
                 });
-                let provider_message_state = provider_source
-                    .as_ref()
-                    .and_then(|source| source.replay.as_ref())
-                    .map(serde_json::to_value)
-                    .transpose()
-                    .map_err(provider_projection_runtime_error)?;
-                controller_messages.push(ConversationMessage {
-                    id: message_id.clone(),
-                    payload: ConversationPayload::Assistant {
-                        text: text.clone(),
-                        reasoning: reasoning.clone().unwrap_or_default(),
-                        provider_message_id: provider_source.as_ref().and_then(|source| {
-                            source
-                                .message_id
-                                .clone()
-                                .or_else(|| source.response_id.clone())
-                        }),
-                        provider_message_state,
-                        usage: None,
-                        tool_calls: controller_tool_calls,
-                    },
-                });
-                if let Some(source) = provider_source {
-                    continuation.provider_id = Some(source.provider.clone());
-                    continuation.protocol_profile_id = source.profile.clone();
-                    continuation.model_id = Some(source.model.clone());
-                    continuation.last_provider_message_id = source
-                        .message_id
-                        .clone()
-                        .or_else(|| source.response_id.clone());
-                    continuation.last_local_message_id = Some(message_id);
-                    continuation.context_rewrite_fingerprint =
-                        Some(source.fingerprint_sha256.clone());
-                }
             }
             ProjectedItem::ToolResult {
                 tool_call_id,
@@ -769,26 +1004,10 @@ fn rebuild_provider_transport_candidate(
                     }],
                     provider_context_items: Vec::new(),
                 });
-                controller_messages.push(ConversationMessage {
-                    id: message_id,
-                    payload: ConversationPayload::ToolResult {
-                        tool_call_id: Some(call_id),
-                        is_error: *status != ToolCallStatus::Completed,
-                        text: serde_json::to_string(&output)
-                            .map_err(provider_projection_runtime_error)?,
-                    },
-                });
             }
             ProjectedItem::SubagentReturnText { text } => {
                 latest_user_prompt = text.clone();
                 request_messages.push(text_ai_message(MessageRole::User, text.clone()));
-                controller_messages.push(ConversationMessage {
-                    id: message_id,
-                    payload: ConversationPayload::UserText {
-                        text: text.clone(),
-                        attachments: Vec::new(),
-                    },
-                });
             }
         }
     }
@@ -797,11 +1016,7 @@ fn rebuild_provider_transport_candidate(
     candidate.exact_request.messages = request_messages;
     candidate.exact_request.resources.clear();
     candidate.exact_request.continuation = None;
-    candidate.controller_snapshot = ConversationSnapshot {
-        messages: controller_messages.clone(),
-        records: Vec::new(),
-        continuation: continuation.clone(),
-    };
+    candidate.controller_snapshot = controller_snapshot.clone();
     candidate.request_snapshot = CoreProviderRequestSnapshot {
         provider_id: facts.request.provider.clone(),
         model_id: facts.request.model.clone(),
@@ -809,7 +1024,7 @@ fn rebuild_provider_transport_candidate(
         prompt_layers: candidate.dynamic_prompt_layers.clone(),
         prompt: latest_user_prompt,
         prompt_in_history: true,
-        history: controller_messages,
+        history: controller_snapshot.messages,
         temperature: facts.request.temperature,
         max_turns: candidate.request_snapshot.max_turns,
         tool_schemas: candidate.request_snapshot.tool_schemas.clone(),
@@ -1881,7 +2096,9 @@ mod tests {
     use vulcan_session_core::v1::projection::provider_visible_fingerprint;
     use vulcan_session_core::v1::stats::UsageSnapshot;
     use vulcan_workbench_model::SessionId;
-    use vulcan_workspace_store::workspace_store::{SessionV1FlushResult, SessionV1StoreError};
+    use vulcan_workspace_store::workspace_store::{
+        ProjectResourceRegistration, SessionV1FlushResult, SessionV1StoreError,
+    };
 
     use crate::session_runtime_registry_v1::{
         SessionFlushReason, SessionMutationAdmission, SessionMutationChange,
@@ -1996,6 +2213,168 @@ mod tests {
             },
             prepared_at_ms: 3,
         }
+    }
+
+    /// A terminal interrupted V1 tool result remains the canonical tail of the complete controller state.
+    /// 终态中断的 V1 工具结果会保留为完整控制器状态的规范尾部。
+    #[test]
+    fn interrupted_tool_result_projects_in_complete_controller_state()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // snapshot contains one durable failed tool result exactly as observed by Continue.
+        // snapshot 包含 Continue 所观察到的一条可靠失败工具结果。
+        let snapshot = SessionProviderProjectionSnapshot {
+            preparing_user_prompt_media_seqs: Vec::new(),
+            segment_generation: 3,
+            document_revision: 19,
+            retained_from_seq: Seq::try_new(1)?,
+            through_seq: Seq::try_new(12)?,
+            items: vec![ProjectedItem::ToolResult {
+                tool_call_id: ToolCallId::try_new(4)?,
+                provider_tool_call_id: Some(String::from("provider-video-call")),
+                tool_name: String::from("video_generate"),
+                status: ToolCallStatus::Interrupted,
+                output: ToolPayload::try_new(json!({
+                    "error": {
+                        "kind": "interrupted",
+                        "message": "Tool execution was interrupted before completion."
+                    },
+                    "ok": false
+                }))?,
+            }],
+            sourced_items: Vec::new(),
+            project_directory: PathBuf::new(),
+            provider_usage_budget_anchor: None,
+        };
+
+        // state must represent the whole V1 window even when that window currently has one item.
+        // state 必须表示完整 V1 窗口，即使该窗口当前只有一项。
+        let state = provider_projection_controller_state(&snapshot)?;
+        assert_eq!(state.messages.len(), 1);
+        assert_eq!(state.messages[0].id, "v1-provider-message-1");
+        let SessionConversationPayload::ToolResult {
+            tool_call_id,
+            is_error,
+            text,
+        } = &state.messages[0].payload
+        else {
+            panic!("interrupted V1 tool result must remain a controller ToolResult");
+        };
+        assert_eq!(tool_call_id.as_deref(), Some("provider-video-call"));
+        assert!(*is_error);
+        assert!(text.contains("Tool execution was interrupted before completion."));
+        Ok(())
+    }
+
+    /// The shared logical projector preserves complete V1 order and accepts an attachment-only tail without transport state.
+    /// 共享逻辑投影器保留完整 V1 顺序，并接纳不含传输状态的仅附件尾部。
+    #[test]
+    fn complete_v1_history_projects_attachment_only_tail_without_transport_state()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // project owns one real immutable V1 resource catalog used by the production projector.
+        // project 持有生产投影器使用的一份真实不可变 V1 资源目录。
+        let project = tempfile::tempdir()?;
+        // registry publishes the exact video resource through the workspace-store contract.
+        // registry 通过 workspace-store 契约发布精确视频资源。
+        let registry = ProjectResourceCatalogRegistry::default();
+        // resource_ids are the exact logical identities carried by the final attachment-only user occurrence.
+        // resource_ids 是最终仅附件用户出现所携带的精确逻辑身份。
+        let resource_ids = registry.resolve_or_register_project_resources(
+            project.path(),
+            &[ProjectResourceRegistration {
+                original_name: String::from("clip.mp4"),
+                mime: Some(String::from("video/mp4")),
+                content: vec![1, 2, 3, 4],
+                provider_bindings: Vec::new(),
+            }],
+        )?;
+        // resource_id selects the single resource published by this isolated catalog.
+        // resource_id 选择该隔离目录发布的唯一资源。
+        let resource_id = resource_ids[0];
+        // tool_call_id pairs the projected assistant invocation with its interrupted result.
+        // tool_call_id 将投影助手调用与其中断结果精确配对。
+        let tool_call_id = ToolCallId::try_new(4)?;
+        // snapshot spans prior user, assistant and tool-result history before the final attachment-only input.
+        // snapshot 在最终仅附件输入前覆盖先前用户、助手与工具结果历史。
+        let snapshot = SessionProviderProjectionSnapshot {
+            preparing_user_prompt_media_seqs: Vec::new(),
+            segment_generation: 7,
+            document_revision: 31,
+            retained_from_seq: Seq::try_new(1)?,
+            through_seq: Seq::try_new(20)?,
+            items: vec![
+                ProjectedItem::UserInput {
+                    text: String::from("root prompt"),
+                    resource_ids: Vec::new(),
+                },
+                ProjectedItem::AssistantText {
+                    text: String::from("calling tool"),
+                    reasoning: None,
+                    tool_calls: vec![vulcan_session_core::v1::projection::ProjectedToolCall {
+                        tool_call_id,
+                        provider_tool_call_id: Some(String::from("provider-tool-4")),
+                        tool_name: String::from("video_generate"),
+                        input: ToolPayload::try_new(json!({"prompt": "lake"}))?,
+                    }],
+                    provider_source: None,
+                },
+                ProjectedItem::ToolResult {
+                    tool_call_id,
+                    provider_tool_call_id: Some(String::from("provider-tool-4")),
+                    tool_name: String::from("video_generate"),
+                    status: ToolCallStatus::Interrupted,
+                    output: ToolPayload::try_new(json!({"ok": false}))?,
+                },
+                ProjectedItem::UserInput {
+                    text: String::new(),
+                    resource_ids: vec![resource_id],
+                },
+            ],
+            sourced_items: Vec::new(),
+            project_directory: project.path().to_path_buf(),
+            provider_usage_budget_anchor: None,
+        };
+        // state resolves only the declared resource occurrence and never adds a delivery decision.
+        // state 仅解析已声明的资源出现，绝不添加投递决策。
+        let state = provider_projection_controller_state(&snapshot)?;
+
+        assert_eq!(state.messages.len(), 4);
+        assert_eq!(state.messages[0].id, "v1-provider-message-1");
+        assert_eq!(state.messages[1].id, "v1-provider-message-2");
+        assert_eq!(state.messages[2].id, "v1-provider-message-3");
+        assert_eq!(state.messages[3].id, "v1-provider-message-4");
+        let SessionConversationPayload::UserText { text, attachments } = &state.messages[3].payload
+        else {
+            panic!("attachment-only V1 tail must remain a controller UserText");
+        };
+        assert!(text.is_empty());
+        assert_eq!(attachments.len(), 1);
+        // resource_path stays project-relative while asset_id carries the stable logical ResourceId.
+        // resource_path 保持项目相对路径，asset_id 携带稳定逻辑 ResourceId。
+        let resource_path = attachments[0]
+            .resource_path
+            .as_deref()
+            .expect("canonical V1 attachment must retain a project-relative path");
+        // expected_asset_id is the stable non-secret identity retained beside the relative path.
+        // expected_asset_id 是与相对路径并存保留的稳定非秘密身份。
+        let expected_asset_id = format!("project-resource-{}", resource_id.value());
+        assert!(!std::path::Path::new(resource_path).is_absolute());
+        assert_eq!(
+            attachments[0].asset_id.as_deref(),
+            Some(expected_asset_id.as_str())
+        );
+        assert!(attachments[0].local_path.is_empty());
+        assert_eq!(attachments[0].kind, ConversationAttachmentKind::Video);
+        assert_eq!(attachments[0].byte_len, Some(4));
+        assert_eq!(attachments[0].delivery_mode, None);
+        // core_snapshot proves the complete state passes the shared bridge and seeded-input contract.
+        // core_snapshot 证明完整状态通过共享桥接及播种输入契约。
+        let core_snapshot = build_core_conversation_snapshot(&state)?;
+        assert!(
+            vulcan_core::controller::conversation_snapshot_has_seeded_provider_input(
+                &core_snapshot
+            )
+        );
+        Ok(())
     }
 
     /// Verifies exact pending prompt eligibility is checked before resource access, including missing or ranged identities.
@@ -2163,6 +2542,28 @@ mod tests {
             },
             locked_baseline: LockedBaselineProjection::empty(),
         };
+        // project owns the immutable resource identity shared by physical reconstruction and logical projection.
+        // project 持有物理重建与逻辑投影共享的不可变资源身份。
+        let project = tempfile::tempdir().expect("create isolated resource project");
+        // registry publishes one exact resource through the production workspace-store contract.
+        // registry 通过生产 workspace-store 契约发布一项精确资源。
+        let registry = ProjectResourceCatalogRegistry::default();
+        // resource_ids preserve the exact occurrence identity consumed by both reconstruction stages.
+        // resource_ids 保留两个重建阶段共同消费的精确出现身份。
+        let resource_ids = registry
+            .resolve_or_register_project_resources(
+                project.path(),
+                &[ProjectResourceRegistration {
+                    original_name: String::from("reference.png"),
+                    mime: Some(String::from("image/png")),
+                    content: vec![1, 2, 3, 4],
+                    provider_bindings: Vec::new(),
+                }],
+            )
+            .expect("publish isolated project resource");
+        // resource_id selects the one published resource occurrence.
+        // resource_id 选择唯一已发布资源出现。
+        let resource_id = resource_ids[0];
         let snapshot = SessionProviderProjectionSnapshot {
             preparing_user_prompt_media_seqs: Vec::new(),
             segment_generation: 4,
@@ -2171,20 +2572,42 @@ mod tests {
             through_seq: Seq::try_new(3).expect("valid through seq"),
             items: vec![ProjectedItem::UserInput {
                 text: String::from("durable-v1-message"),
-                resource_ids: Vec::new(),
+                resource_ids: vec![resource_id],
             }],
             sourced_items: Vec::new(),
-            project_directory: std::env::temp_dir().join("vulcan-v1-request-rebuild-missing"),
+            project_directory: project.path().to_path_buf(),
             provider_usage_budget_anchor: None,
         };
+        // prepared_media carries one request-local delivery decision that must not enter controller history.
+        // prepared_media 携带一个不得进入控制器历史的请求局部投递决策。
+        let prepared_media = media::PreparedV1UserMedia {
+            prompts: BTreeMap::from([(
+                0,
+                media::PreparedV1PromptMedia {
+                    content: vec![ContentItem::Text {
+                        text: String::from("durable-v1-message"),
+                    }],
+                    attachments: vec![ConversationAttachment {
+                        kind: ConversationAttachmentKind::Image,
+                        file_name: String::from("reference.png"),
+                        local_path: String::from("D:/project/reference.png"),
+                        resource_path: Some(String::from("project-resource://1")),
+                        source_path: None,
+                        asset_id: None,
+                        byte_len: Some(4),
+                        source_sha256: Some(String::from("abcd")),
+                        delivery_mode: Some(ConversationAttachmentDeliveryMode::UploadReference),
+                        preview_local_path: None,
+                        mime_type: String::from("image/png"),
+                    }],
+                },
+            )]),
+            bindings: Vec::new(),
+        };
 
-        let rebuilt = rebuild_provider_transport_candidate(
-            snapshot,
-            &facts,
-            candidate,
-            media::PreparedV1UserMedia::default(),
-        )
-        .expect("rebuild the exact V1 request");
+        let rebuilt =
+            rebuild_provider_transport_candidate(snapshot, &facts, candidate, prepared_media)
+                .expect("rebuild the exact V1 request");
         let serialized = serde_json::to_string(&rebuilt.transport.exact_request.messages)
             .expect("serialize rebuilt request messages");
         assert!(serialized.contains("durable-v1-message"));
@@ -2205,6 +2628,20 @@ mod tests {
         assert_eq!(
             rebuilt.transport.request_snapshot.prompt,
             "durable-v1-message"
+        );
+        let ConversationPayload::UserText { attachments, .. } =
+            &rebuilt.transport.controller_snapshot.messages[0].payload
+        else {
+            panic!("rebuilt V1 controller history must preserve the user resource occurrence");
+        };
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].delivery_mode, None);
+        assert!(attachments[0].local_path.is_empty());
+        assert!(
+            attachments[0]
+                .resource_path
+                .as_deref()
+                .is_some_and(|path| !std::path::Path::new(path).is_absolute())
         );
         assert!(
             rebuilt.transport.context_budget.is_some(),

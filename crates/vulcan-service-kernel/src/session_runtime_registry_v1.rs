@@ -17,13 +17,13 @@ use vulcan_session_core::v1::config::QueuedInputIdentity;
 use vulcan_session_core::v1::context::LockedBaselineProjection;
 use vulcan_session_core::v1::document::{
     ApiTransportObservedReceipt, ClientInputSubmission, CompactionCommitInput,
-    ContinuationDispatchResolution, ContinuationRequest, ContinueTurnReceipt, DraftMutationReceipt,
-    EditGenerationInput, EnqueueInputReceipt, FlushCandidate, ForkGenerationInput,
-    GenerationBuildOutput, IdempotentMutation, MemoryRevisionReceipt, PrepareAndStartApiInput,
-    PreparedApiStart, PreparedToolBatchReceipt, QueuedInputDraftReceipt, QueuedInputOrderReceipt,
-    QueuedInputPendingTurnReceipt, QueuedInputRemovalReceipt, SessionDocument, SubagentReturnInput,
-    SubagentReturnReceipt, ToolCompletion, ToolCompletionReceipt, ToolPreparation,
-    TurnCompletionTransition,
+    ContinuationDispatchResolution, ContinuationRequest, ContinuationTerminalProjection,
+    ContinueTurnReceipt, DraftMutationReceipt, EditGenerationInput, EnqueueInputReceipt,
+    FlushCandidate, ForkGenerationInput, GenerationBuildOutput, IdempotentMutation,
+    MemoryRevisionReceipt, PrepareAndStartApiInput, PreparedApiStart, PreparedToolBatchReceipt,
+    QueuedInputDraftReceipt, QueuedInputOrderReceipt, QueuedInputPendingTurnReceipt,
+    QueuedInputRemovalReceipt, SessionDocument, SubagentReturnInput, SubagentReturnReceipt,
+    ToolCompletion, ToolCompletionReceipt, ToolPreparation, TurnCompletionTransition,
 };
 use vulcan_session_core::v1::errors::DomainError;
 use vulcan_session_core::v1::event::{
@@ -530,6 +530,16 @@ pub(crate) enum SessionRuntimeError {
         /// Continue 动作的浏览器幂等身份。
         client_action_id: ClientActionId,
     },
+    /// A Continue-owned Turn terminated before any physical API was prepared.
+    /// Continue 所属回合在任何物理 API 准备前已经终止。
+    ContinuationTerminatedBeforeApi {
+        /// Browser idempotency identity of the Continue action.
+        /// Continue 动作的浏览器幂等身份。
+        client_action_id: ClientActionId,
+        /// Durable UI projection associated with the terminal Turn boundary.
+        /// 与终态回合边界关联的可靠 UI 投影。
+        projection: ContinuationTerminalProjection,
+    },
     /// A Continue API terminated before transport observation became durable.
     /// Continue API 在传输观察可靠落盘前已经终止。
     ContinuationTerminatedBeforeTransport {
@@ -539,6 +549,9 @@ pub(crate) enum SessionRuntimeError {
         /// Physical API identity that terminated before dispatch observation.
         /// 在分派观察前终止的物理 API 身份。
         api_call_id: ApiCallId,
+        /// Durable UI projection associated with the terminal API fact.
+        /// 与 API 终态事实关联的可靠 UI 投影。
+        projection: ContinuationTerminalProjection,
     },
     /// A candidate carrying this Continue action failed physical persistence.
     /// 携带该 Continue 动作的候选发生物理持久化失败。
@@ -703,9 +716,17 @@ impl fmt::Display for SessionRuntimeError {
                 "V1 Continue action {} did not reach a durable transport observation before its deadline",
                 client_action_id.as_str()
             ),
+            Self::ContinuationTerminatedBeforeApi {
+                client_action_id, ..
+            } => write!(
+                formatter,
+                "V1 Continue action {} terminated before a physical API was prepared",
+                client_action_id.as_str()
+            ),
             Self::ContinuationTerminatedBeforeTransport {
                 client_action_id,
                 api_call_id,
+                ..
             } => write!(
                 formatter,
                 "V1 Continue action {} terminated API {} before durable transport observation",
@@ -1662,6 +1683,19 @@ impl SessionHandle {
         self.capture_provider_projection_snapshot_with_publisher_locked()
     }
 
+    /// Captures the complete durable Provider history used by a Continue-owned controller run.
+    /// 捕获 Continue 所属控制器执行使用的完整可靠 Provider 历史。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the same serialized V1 projection frontier used by physical request preparation.
+    /// 返回与物理请求准备使用的相同串行化 V1 投影前沿。
+    pub(crate) fn capture_controller_projection_snapshot(
+        &self,
+    ) -> Result<SessionProviderProjectionSnapshot, SessionRuntimeError> {
+        self.capture_context_compaction_planning_snapshot()
+    }
+
     /// Captures the exact durable V1 Provider projection while publication is serialized.
     /// 在发布已串行化时捕获精确可靠的 V1 Provider 投影。
     fn capture_provider_projection_snapshot_with_publisher_locked(
@@ -1817,13 +1851,21 @@ impl SessionHandle {
                 Some(ContinuationDispatchResolution::TransportObserved(receipt)) => {
                     return Ok(receipt);
                 }
+                Some(ContinuationDispatchResolution::TerminalBeforeApi { projection, .. }) => {
+                    return Err(SessionRuntimeError::ContinuationTerminatedBeforeApi {
+                        client_action_id: action_id.clone(),
+                        projection,
+                    });
+                }
                 Some(ContinuationDispatchResolution::TerminalBeforeTransport {
                     api_call_id,
+                    projection,
                     ..
                 }) => {
                     return Err(SessionRuntimeError::ContinuationTerminatedBeforeTransport {
                         client_action_id: action_id.clone(),
                         api_call_id,
+                        projection,
                     });
                 }
                 Some(ContinuationDispatchResolution::AwaitingTransport { .. }) | None => {}
@@ -1862,13 +1904,21 @@ impl SessionHandle {
                 Some(ContinuationDispatchResolution::TransportObserved(receipt)) => {
                     return Ok(receipt);
                 }
+                Some(ContinuationDispatchResolution::TerminalBeforeApi { projection, .. }) => {
+                    return Err(SessionRuntimeError::ContinuationTerminatedBeforeApi {
+                        client_action_id: action_id.clone(),
+                        projection,
+                    });
+                }
                 Some(ContinuationDispatchResolution::TerminalBeforeTransport {
                     api_call_id,
+                    projection,
                     ..
                 }) => {
                     return Err(SessionRuntimeError::ContinuationTerminatedBeforeTransport {
                         client_action_id: action_id.clone(),
                         api_call_id,
+                        projection,
                     });
                 }
                 Some(ContinuationDispatchResolution::AwaitingTransport { .. }) | None => {
@@ -1975,11 +2025,20 @@ impl SessionHandle {
         self.ensure_not_quarantined()?;
         match self.durable_continuation_dispatch_resolution(action_id)? {
             Some(ContinuationDispatchResolution::TransportObserved(receipt)) => Ok(Some(receipt)),
+            Some(ContinuationDispatchResolution::TerminalBeforeApi { projection, .. }) => {
+                Err(SessionRuntimeError::ContinuationTerminatedBeforeApi {
+                    client_action_id: action_id.clone(),
+                    projection,
+                })
+            }
             Some(ContinuationDispatchResolution::TerminalBeforeTransport {
-                api_call_id, ..
+                api_call_id,
+                projection,
+                ..
             }) => Err(SessionRuntimeError::ContinuationTerminatedBeforeTransport {
                 client_action_id: action_id.clone(),
                 api_call_id,
+                projection,
             }),
             Some(ContinuationDispatchResolution::AwaitingTransport { .. }) | None => Ok(None),
         }
@@ -2024,11 +2083,20 @@ impl SessionHandle {
         self.ensure_no_continuation_dispatch_persistence_failure(action_id)?;
         match self.durable_continuation_dispatch_resolution(action_id)? {
             Some(ContinuationDispatchResolution::TransportObserved(receipt)) => Ok(Some(receipt)),
+            Some(ContinuationDispatchResolution::TerminalBeforeApi { projection, .. }) => {
+                Err(SessionRuntimeError::ContinuationTerminatedBeforeApi {
+                    client_action_id: action_id.clone(),
+                    projection,
+                })
+            }
             Some(ContinuationDispatchResolution::TerminalBeforeTransport {
-                api_call_id, ..
+                api_call_id,
+                projection,
+                ..
             }) => Err(SessionRuntimeError::ContinuationTerminatedBeforeTransport {
                 client_action_id: action_id.clone(),
                 api_call_id,
+                projection,
             }),
             Some(ContinuationDispatchResolution::AwaitingTransport { .. }) | None => Ok(None),
         }
@@ -4559,6 +4627,7 @@ mod tests {
             SessionRuntimeError::ContinuationTerminatedBeforeTransport {
                 client_action_id,
                 api_call_id,
+                projection: ContinuationTerminalProjection::InlineNotice { .. },
             } if client_action_id == action_id && api_call_id == continued_api_call_id
         ));
 
@@ -4568,6 +4637,70 @@ mod tests {
         )
         .await
         .expect("terminal waiter must release the per-session Continue gate");
+    }
+
+    /// A durable pre-API Turn terminal wakes the Continue waiter without waiting for its deadline.
+    /// 可靠的 API 前回合终态会唤醒 Continue 等待器，而不会等待截止时间。
+    #[tokio::test]
+    async fn terminal_before_api_wakes_continue_waiter_immediately() {
+        // handle owns the real durable V1 document observed by both mutation and waiter paths.
+        // handle 持有修改与等待路径共同观察的真实可靠 V1 文档。
+        let (_recording, handle) = recording_handle();
+        // action_id identifies the admitted Continue attempt that will fail before API preparation.
+        // action_id 标识将在 API 准备前失败的已准入 Continue 尝试。
+        let action_id = admit_test_continue_action(&handle, "continue-pre-api-terminal").await;
+        // waiter_handle transfers the same registered document owner into the asynchronous waiter.
+        // waiter_handle 将同一已注册文档所有者传入异步等待器。
+        let waiter_handle = Arc::clone(&handle);
+        // waiter_action_id transfers the exact browser identity without borrowing the test stack.
+        // waiter_action_id 传递精确浏览器身份且不借用测试栈。
+        let waiter_action_id = action_id.clone();
+        // waiter starts before the terminal mutation so notification timing is exercised rather than replay only.
+        // waiter 在终态修改前启动，从而验证通知时序而不只是重放。
+        let waiter = tokio::spawn(async move {
+            waiter_handle
+                .wait_for_continuation_transport_observed(
+                    &waiter_action_id,
+                    Duration::from_secs(30),
+                )
+                .await
+        });
+
+        Arc::clone(&handle)
+            .mutate_durable_if_changed_async(
+                SessionMutationAdmission::ExistingTurn,
+                SessionFlushReason::DisplayBoundary,
+                |document| {
+                    Ok(
+                        if document.fail_turn_without_active_api(
+                            "stream_finished_without_v1_api_terminal",
+                            Some("controller seed was unavailable"),
+                            7,
+                        )? {
+                            SessionMutationChange::Changed(())
+                        } else {
+                            SessionMutationChange::Unchanged(())
+                        },
+                    )
+                },
+            )
+            .await
+            .expect("persist Continue pre-API terminal");
+
+        // waiter_error must arrive from the durable terminal notification well before the configured deadline.
+        // waiter_error 必须由可靠终态通知在配置截止时间前及时返回。
+        let waiter_error = tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("durable pre-API terminal must wake the Continue waiter")
+            .expect("Continue waiter task must join")
+            .expect_err("pre-API terminal must not report transport observation");
+        assert!(matches!(
+            waiter_error,
+            SessionRuntimeError::ContinuationTerminatedBeforeApi {
+                client_action_id,
+                projection: ContinuationTerminalProjection::InlineNotice { .. },
+            } if client_action_id == action_id
+        ));
     }
 
     /// An in-memory-only terminal stays invisible until its exact candidate becomes durable.
@@ -4645,6 +4778,7 @@ mod tests {
             SessionRuntimeError::ContinuationTerminatedBeforeTransport {
                 client_action_id,
                 api_call_id,
+                projection: ContinuationTerminalProjection::InlineNotice { .. },
             } if client_action_id == action_id && api_call_id == continued_api_call_id
         ));
     }
@@ -4765,6 +4899,7 @@ mod tests {
             SessionRuntimeError::ContinuationTerminatedBeforeTransport {
                 client_action_id,
                 api_call_id,
+                projection: ContinuationTerminalProjection::InlineNotice { .. },
             } if client_action_id == action_id && api_call_id == continued_api_call_id
         ));
         assert!(recording.flush_count() >= 6);

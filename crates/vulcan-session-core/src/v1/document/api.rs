@@ -149,10 +149,45 @@ pub struct ApiTransportObservedReceipt {
     pub continuation_action_id: Option<ClientActionId>,
 }
 
+/// Durable UI projection state associated with one terminal Continue dispatch.
+/// 与一次 Continue 分派终态关联的可靠 UI 投影状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContinuationTerminalProjection {
+    /// A user-visible terminal notice is durably recorded at the exact sequence.
+    /// 用户可见的终态提示已经可靠记录在精确序号上。
+    InlineNotice {
+        /// Seq of the durable DisplayNote event.
+        /// 可靠 DisplayNote 事件的 seq。
+        notice_seq: Seq,
+    },
+    /// The terminal is expected and requires no error notice.
+    /// 该终态属于预期结果，不需要错误提示。
+    NoNoticeRequired,
+    /// A failed terminal has no durable user-visible notice.
+    /// 失败终态缺少可靠的用户可见提示。
+    MissingNotice,
+}
+
 /// Durable dispatch state reconstructed for one Continue action.
 /// 为一次 Continue 动作重建的持久化分派状态。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContinuationDispatchResolution {
+    /// The Continue-owned Turn terminated before any physical API was prepared.
+    /// Continue 所属回合在任何物理 API 准备前已经终止。
+    TerminalBeforeApi {
+        /// Seq of the durable Continue request control fact.
+        /// 可靠 Continue 请求控制事实的 seq。
+        requested_seq: Seq,
+        /// Seq of the durable Turn resume control fact.
+        /// 可靠回合恢复控制事实的 seq。
+        resumed_seq: Seq,
+        /// Seq of the terminal Turn boundary.
+        /// 终态回合边界的 seq。
+        terminal_seq: Seq,
+        /// Durable UI projection associated with this terminal boundary.
+        /// 与该终态回合边界关联的可靠 UI 投影。
+        projection: ContinuationTerminalProjection,
+    },
     /// One physical API is prepared but transport has not been observed or terminated.
     /// 一个物理 API 已准备，但尚未观察到传输，也尚未终止。
     AwaitingTransport {
@@ -178,6 +213,9 @@ pub enum ContinuationDispatchResolution {
         /// Seq of the terminal ApiStats event.
         /// 终态 ApiStats 事件的 seq。
         terminal_seq: Seq,
+        /// Durable UI projection associated with this API terminal.
+        /// 与该 API 终态关联的可靠 UI 投影。
+        projection: ContinuationTerminalProjection,
     },
 }
 
@@ -604,11 +642,15 @@ fn api_failure_notice(
             NoticeSeverity::Error,
             "retry_exhausted",
         )),
+        ApiEndReason::Unknown => Some((
+            DisplayNoticeKind::SystemError,
+            NoticeSeverity::Error,
+            "system_error",
+        )),
         ApiEndReason::CompletedSuccessfully
         | ApiEndReason::UserInterrupted
         | ApiEndReason::ProcessInterrupted
-        | ApiEndReason::Cancelled
-        | ApiEndReason::Unknown => None,
+        | ApiEndReason::Cancelled => None,
     }
 }
 
@@ -1016,6 +1058,35 @@ impl SessionDocument {
         action_id: &ClientActionId,
         through_seq: Seq,
     ) -> Result<Option<ContinuationDispatchResolution>, DomainError> {
+        // continuationTurn binds the browser action to one exact logical Turn before any API exists.
+        // continuationTurn 在任何 API 存在前把浏览器动作绑定到一个精确逻辑回合。
+        let mut continuation_turn = None;
+        for event in self
+            .events
+            .iter()
+            .take_while(|event| event.seq <= through_seq)
+        {
+            let EventBody::ExecutionControl(control) = &event.event else {
+                continue;
+            };
+            if control.control_kind != ExecutionControlKind::TurnContinueRequested
+                || control.client_action_id.as_ref() != Some(action_id)
+            {
+                continue;
+            }
+            // turn_id is the exact logical owner recorded on the Continue request control fact.
+            // turn_id 是 Continue 请求控制事实记录的精确逻辑所有者。
+            let turn_id = event
+                .turn_id
+                .ok_or(DomainError::InvalidContinuationHistory {
+                    field: "continue_request_turn_id",
+                })?;
+            if continuation_turn.replace((turn_id, event.seq)).is_some() {
+                return Err(DomainError::InvalidContinuationHistory {
+                    field: "duplicate_continue_request",
+                });
+            }
+        }
         let mut prepared = None;
         for event in self
             .events
@@ -1041,7 +1112,80 @@ impl SessionDocument {
             }
         }
         let Some(prepared) = prepared else {
-            return Ok(None);
+            let Some((continuation_turn_id, requested_seq)) = continuation_turn else {
+                return Ok(None);
+            };
+            // resumedSeq proves preparation actually began; a request-only action may still be awaiting admission.
+            // resumedSeq 证明准备工作确已开始；只有请求事实的动作仍可能正在等待准入。
+            let mut resumed_seq = None;
+            for event in self
+                .events
+                .iter()
+                .take_while(|event| event.seq <= through_seq)
+            {
+                let EventBody::ExecutionControl(control) = &event.event else {
+                    continue;
+                };
+                if control.control_kind != ExecutionControlKind::TurnResumed
+                    || control.client_action_id.as_ref() != Some(action_id)
+                    || event.turn_id != Some(continuation_turn_id)
+                {
+                    continue;
+                }
+                if resumed_seq.replace(event.seq).is_some() {
+                    return Err(DomainError::InvalidContinuationHistory {
+                        field: "duplicate_continue_resume",
+                    });
+                }
+            }
+            let Some(resumed_seq) = resumed_seq else {
+                return Ok(None);
+            };
+            // terminalSeq is action-scoped by the same Turn identity and cannot be confused with a later user Turn.
+            // terminalSeq 通过同一回合身份限定到该动作，不会与后续用户回合混淆。
+            let terminal_seq = self
+                .events
+                .iter()
+                .take_while(|event| event.seq <= through_seq)
+                .find(|event| {
+                    event.seq > resumed_seq
+                        && event.turn_id == Some(continuation_turn_id)
+                        && matches!(event.event, EventBody::TurnBoundary(_))
+                })
+                .map(|event| event.seq);
+            return Ok(terminal_seq.map(|terminal_seq| {
+                // noticeSeq proves that the pre-API failure already has a durable inline error.
+                // noticeSeq 证明 API 前失败已经拥有可靠的行内错误。
+                let notice_seq = self
+                    .events
+                    .iter()
+                    .take_while(|event| event.seq < terminal_seq)
+                    .last()
+                    .filter(|event| {
+                        event.seq > resumed_seq
+                            && event.turn_id == Some(continuation_turn_id)
+                            && matches!(
+                                &event.event,
+                                EventBody::DisplayNote(note)
+                                    if note.notice_kind == DisplayNoticeKind::SystemError
+                                        && note.severity == NoticeSeverity::Error
+                                        && note.api_call_id.is_none()
+                            )
+                    })
+                    .map(|event| event.seq);
+                // A pre-API boundary without a system error is an expected stop/completion, not a missing failure projection.
+                // 不含系统错误的 API 前边界属于预期停止或完成，而不是缺失失败投影。
+                let projection = notice_seq.map_or(
+                    ContinuationTerminalProjection::NoNoticeRequired,
+                    |notice_seq| ContinuationTerminalProjection::InlineNotice { notice_seq },
+                );
+                ContinuationDispatchResolution::TerminalBeforeApi {
+                    requested_seq,
+                    resumed_seq,
+                    terminal_seq,
+                    projection,
+                }
+            }));
         };
         let mut observed_seq = None;
         for event in self
@@ -1074,7 +1218,7 @@ impl SessionDocument {
                 observed,
             )));
         }
-        let mut terminal_seq = None;
+        let mut terminal = None;
         for event in self
             .events
             .iter()
@@ -1086,18 +1230,45 @@ impl SessionDocument {
             if stats.api_call_id != prepared.api_call_id {
                 continue;
             }
-            if terminal_seq.replace(event.seq).is_some() {
+            if terminal.replace((event.seq, stats.status)).is_some() {
                 return Err(DomainError::InvalidContinuationHistory {
                     field: "duplicate_continue_api_terminal",
                 });
             }
         }
-        Ok(Some(match terminal_seq {
-            Some(terminal_seq) => ContinuationDispatchResolution::TerminalBeforeTransport {
-                api_call_id: prepared.api_call_id,
-                started_seq: prepared.started_seq,
-                terminal_seq,
-            },
+        Ok(Some(match terminal {
+            Some((terminal_seq, terminal_status)) => {
+                // noticeSeq is the exact event immediately following ApiStats in the atomic terminal transaction.
+                // noticeSeq 是原子终态事务中紧随 ApiStats 的精确事件。
+                let notice_seq = self
+                    .events
+                    .iter()
+                    .take_while(|event| event.seq <= through_seq)
+                    .find(|event| event.seq > terminal_seq)
+                    .filter(|event| {
+                        matches!(
+                            &event.event,
+                            EventBody::DisplayNote(note)
+                                if note.api_call_id == Some(prepared.api_call_id)
+                        )
+                    })
+                    .map(|event| event.seq);
+                // Failed terminals require a durable inline notice; expected terminal states remain silent.
+                // 失败终态必须拥有可靠行内提示；预期终态保持静默。
+                let projection = match notice_seq {
+                    Some(notice_seq) => ContinuationTerminalProjection::InlineNotice { notice_seq },
+                    None if terminal_status == ApiCallStatus::Failed => {
+                        ContinuationTerminalProjection::MissingNotice
+                    }
+                    None => ContinuationTerminalProjection::NoNoticeRequired,
+                };
+                ContinuationDispatchResolution::TerminalBeforeTransport {
+                    api_call_id: prepared.api_call_id,
+                    started_seq: prepared.started_seq,
+                    terminal_seq,
+                    projection,
+                }
+            }
             None => ContinuationDispatchResolution::AwaitingTransport {
                 api_call_id: prepared.api_call_id,
                 started_seq: prepared.started_seq,

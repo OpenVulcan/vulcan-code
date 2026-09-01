@@ -768,6 +768,63 @@ fn api_failures_preserve_turn_and_emit_stable_notices() -> Result<(), DomainErro
     Ok(())
 }
 
+/// An unclassified failed API emits one durable SystemError notice without changing continuation policy.
+/// 未分类 API 失败会产生一条可靠 SystemError 提示，并且不会改变继续策略。
+#[test]
+fn unclassified_api_failure_emits_system_error_notice() -> Result<(), DomainError> {
+    // doc owns one isolated failed API whose policy remains forbidden.
+    // doc 持有一个继续策略保持禁止的隔离失败 API。
+    let mut doc = new_document();
+    doc.submit_root_input_fixture("unknown failure", Vec::new(), T0)?;
+    // api is the exact physical call closed by the unclassified terminal.
+    // api 是由未分类终态闭合的精确物理调用。
+    let api = doc.start_api(
+        ApiPurposeKind::MainGeneration,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        T0 + 1,
+    )?;
+    doc.complete_api_group(
+        api,
+        ApiCompletion {
+            request: ApiRequestSnapshot::new("openai", "gpt-5"),
+            usage: UsageSnapshot::default(),
+            status: ApiCallStatus::Failed,
+            end_reason: Some(ApiEndReason::Unknown),
+            error: Some(terminal_error(ApiEndReason::Unknown)),
+            continuation_eligibility: continuation_eligibility_for_test(ApiEndReason::Unknown),
+            timing: ApiTimings::default(),
+            provider_source: None,
+            completed_at_ms: T0 + 2,
+        },
+    )?;
+
+    assert!(matches!(
+        doc.events().last(),
+        Some(ConversationEvent {
+            event: EventBody::DisplayNote(DisplayNoteEvent {
+                notice_kind: DisplayNoticeKind::SystemError,
+                severity: NoticeSeverity::Error,
+                reason_code,
+                api_call_id: Some(actual_api_call_id),
+                ..
+            }),
+            ..
+        }) if reason_code == "system_error" && *actual_api_call_id == api
+    ));
+    // continue_error proves that adding the UI notice did not weaken the forbidden continuation policy.
+    // continue_error 证明添加 UI 提示没有削弱禁止继续的策略。
+    let continue_error = doc
+        .continue_turn_fixture(T0 + 3)
+        .expect_err("unclassified failure must remain non-continuable");
+    assert!(matches!(
+        continue_error,
+        DomainError::ContinuationNotEligible {
+            reason: "terminal_policy_forbidden"
+        }
+    ));
+    Ok(())
+}
+
 /// A projection proof is invalid after any same-seq document revision change.
 /// 任意不增长 seq 的文档修订变化后，旧投影证明都必须失效。
 #[test]
@@ -1108,6 +1165,187 @@ fn continue_dispatch_resolution_reports_terminal_before_transport() -> Result<()
             api_call_id: prepared.api_call_id,
             started_seq: prepared.started_seq,
             terminal_seq,
+            projection: ContinuationTerminalProjection::NoNoticeRequired,
+        })
+    );
+    Ok(())
+}
+
+/// A failed Continue terminal requires its correlated DisplayNote before RPC acknowledgement is safe.
+/// 失败的 Continue 终态只有在关联 DisplayNote 已存在后才能安全返回 RPC 确认。
+#[test]
+fn continue_failed_terminal_requires_durable_inline_notice() -> Result<(), DomainError> {
+    // doc owns the exact Continue API and its ordered ApiStats-plus-DisplayNote transaction.
+    // doc 持有精确 Continue API 及其有序 ApiStats 与 DisplayNote 事务。
+    let mut doc = new_document();
+    doc.submit_root_input_fixture("continue failed terminal", Vec::new(), T0)?;
+    // first_api creates the interrupted predecessor required by the Continue contract.
+    // first_api 创建 Continue 契约所需的中断前序 API。
+    let first_api = doc.start_api(
+        ApiPurposeKind::MainGeneration,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        T0 + 1,
+    )?;
+    complete_user_interrupted(&mut doc, first_api, T0 + 2)?;
+    // action_id is the exact browser identity bound to the failing Continue API.
+    // action_id 是绑定失败 Continue API 的精确浏览器身份。
+    let action_id = ClientActionId::try_new("continue-failed-inline-notice")?;
+    doc.continue_open_turn(
+        ContinuationRequest::new(action_id.clone(), "", Vec::new()),
+        T0 + 3,
+    )?;
+    // projection freezes the complete durable prefix used to prepare the physical Continue request.
+    // projection 冻结用于准备物理 Continue 请求的完整可靠前缀。
+    let projection = ProviderProjectionProof {
+        segment_generation: doc.segment_generation(),
+        document_revision: doc.memory_revision(),
+        retained_from_seq: Seq::try_new(1)?,
+        through_seq: doc.events().last().expect("continue resumed").seq,
+        fingerprint_sha256: "c".repeat(64),
+    };
+    // baseline is the exact locked system-source projection inherited by the Continue request.
+    // baseline 是 Continue 请求继承的精确锁定系统来源投影。
+    let baseline =
+        LockedBaselineProjection::from_locked_sources(doc.runtime_lock.locked_sources.clone())?;
+    // prepared identifies the immutable ApiStarted fact for this exact browser action.
+    // prepared 标识该精确浏览器动作的不可变 ApiStarted 事实。
+    let prepared = doc
+        .prepare_and_start_api(PrepareAndStartApiInput {
+            purpose: ApiPurposeKind::Continue,
+            request: ApiRequestSnapshot::new("openai", "gpt-5"),
+            request_budget_evidence: test_provider_request_budget_evidence(),
+            projection,
+            locked_baseline: baseline,
+            continuation_action_id: Some(action_id.clone()),
+            now_ms: T0 + 4,
+        })?
+        .into_value();
+    // completion atomically appends the failed ApiStats and its user-visible network notice.
+    // completion 原子追加失败 ApiStats 及其用户可见网络提示。
+    let completion = doc.complete_api_group(
+        prepared.api_call_id,
+        ApiCompletion {
+            request: ApiRequestSnapshot::new("openai", "gpt-5"),
+            usage: UsageSnapshot::default(),
+            status: ApiCallStatus::Failed,
+            end_reason: Some(ApiEndReason::NetworkError),
+            error: Some(terminal_error(ApiEndReason::NetworkError)),
+            continuation_eligibility: ContinuationEligibility::Allowed,
+            timing: ApiTimings::default(),
+            provider_source: None,
+            completed_at_ms: T0 + 5,
+        },
+    )?;
+    // notice_seq is the exact DisplayNote correlated to the failed physical API.
+    // notice_seq 是与失败物理 API 关联的精确 DisplayNote 序号。
+    let notice_seq = doc
+        .events()
+        .iter()
+        .find(|event| {
+            matches!(
+                &event.event,
+                EventBody::DisplayNote(note)
+                    if note.api_call_id == Some(prepared.api_call_id)
+            )
+        })
+        .map(|event| event.seq)
+        .expect("failed Continue API must persist an inline notice");
+
+    assert_eq!(
+        doc.continuation_dispatch_resolution_through(&action_id, completion.stats_seq)?,
+        Some(ContinuationDispatchResolution::TerminalBeforeTransport {
+            api_call_id: prepared.api_call_id,
+            started_seq: prepared.started_seq,
+            terminal_seq: completion.stats_seq,
+            projection: ContinuationTerminalProjection::MissingNotice,
+        }),
+        "ApiStats alone cannot prove that the user-visible terminal error is durable"
+    );
+    assert_eq!(
+        doc.continuation_dispatch_resolution(&action_id)?,
+        Some(ContinuationDispatchResolution::TerminalBeforeTransport {
+            api_call_id: prepared.api_call_id,
+            started_seq: prepared.started_seq,
+            terminal_seq: completion.stats_seq,
+            projection: ContinuationTerminalProjection::InlineNotice { notice_seq },
+        })
+    );
+    Ok(())
+}
+
+/// A Continue Turn that fails before ApiStarted settles from its own durable Turn boundary.
+/// 在 ApiStarted 前失败的 Continue 回合根据自身可靠回合边界完成结算。
+#[test]
+fn continue_dispatch_resolution_reports_terminal_before_api() -> Result<(), DomainError> {
+    // doc owns the exact durable event sequence exercised by this resolution test.
+    // doc 持有本次结算测试执行的精确可靠事件序列。
+    let mut doc = new_document();
+    doc.submit_root_input_fixture("continue pre-api terminal", Vec::new(), T0)?;
+    // first_api creates the interrupted predecessor whose open Turn can be continued.
+    // first_api 创建可继续其开放回合的中断前序 API。
+    let first_api = doc.start_api(
+        ApiPurposeKind::MainGeneration,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        T0 + 1,
+    )?;
+    complete_user_interrupted(&mut doc, first_api, T0 + 2)?;
+    // action_id is the browser idempotency identity bound to this exact Continue attempt.
+    // action_id 是绑定本次精确 Continue 尝试的浏览器幂等身份。
+    let action_id = ClientActionId::try_new("continue-terminal-before-api")?;
+    doc.continue_open_turn(
+        ContinuationRequest::new(action_id.clone(), "", Vec::new()),
+        T0 + 3,
+    )?;
+    // resumed_seq is the durable frontier before the terminal boundary exists.
+    // resumed_seq 是终态边界出现前的可靠前沿。
+    let resumed_seq = doc.events().last().expect("continue resumed").seq;
+
+    assert_eq!(
+        doc.continuation_dispatch_resolution_through(&action_id, resumed_seq)?,
+        None,
+        "a resumed Continue remains pending until its Turn has a durable terminal boundary"
+    );
+    assert!(doc.fail_turn_without_active_api(
+        "stream_finished_without_v1_api_terminal",
+        Some("controller seed was unavailable"),
+        T0 + 4,
+    )?);
+    // terminal_seq selects the exact Turn boundary produced by the pre-API failure.
+    // terminal_seq 选择 API 前失败产生的精确回合边界。
+    let terminal_seq = doc
+        .events()
+        .iter()
+        .find(|event| event.seq > resumed_seq && matches!(&event.event, EventBody::TurnBoundary(_)))
+        .map(|event| event.seq)
+        .expect("pre-api failure must persist a terminal Turn boundary");
+    // notice_seq selects the atomic system-error note written before the Turn boundary.
+    // notice_seq 选择在回合边界前原子写入的系统错误提示。
+    let notice_seq = doc
+        .events()
+        .iter()
+        .find(|event| {
+            event.seq > resumed_seq
+                && matches!(
+                    &event.event,
+                    EventBody::DisplayNote(DisplayNoteEvent {
+                        notice_kind: DisplayNoticeKind::SystemError,
+                        ..
+                    })
+                )
+        })
+        .map(|event| event.seq)
+        .expect("pre-api failure must persist an inline system-error notice");
+    // requested_seq is the immediately preceding Continue request fact in this validated pair.
+    // requested_seq 是该已校验配对中紧邻在前的 Continue 请求事实。
+    let requested_seq = Seq::try_new(resumed_seq.value() - 1)?;
+
+    assert_eq!(
+        doc.continuation_dispatch_resolution(&action_id)?,
+        Some(ContinuationDispatchResolution::TerminalBeforeApi {
+            requested_seq,
+            resumed_seq,
+            terminal_seq,
+            projection: ContinuationTerminalProjection::InlineNotice { notice_seq },
         })
     );
     Ok(())

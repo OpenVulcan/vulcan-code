@@ -175,6 +175,42 @@ pub(crate) fn webui_shared_prompt_precheck_plan(
     ))
 }
 
+/// Replaces a Continue request's retained process state with the complete durable V1 controller history.
+/// 使用完整可靠的 V1 控制器历史替换 Continue 请求保留的进程状态。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the registered V1 handle and `session_id` selects its exact session.
+/// `state` 持有已注册 V1 句柄，`session_id` 选择其精确会话。
+/// `request` is the request-local execution candidate whose legacy conversation state is non-authoritative.
+/// `request` 是请求局部执行候选，其旧会话状态不具备权威性。
+///
+/// # Returns
+/// 返回值
+/// Success after the complete authoritative V1 window replaces the candidate, or an explicit projection error.
+/// 完整权威 V1 窗口替换候选后返回成功；投影无效时返回明确错误。
+fn synchronize_continue_controller_state_from_v1(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    request: &mut ExecutionPreparationRequest,
+) -> Result<(), String> {
+    // handle is the sole registered owner of this session's durable V1 document.
+    // handle 是该会话可靠 V1 文档的唯一已注册所有者。
+    let handle =
+        crate::session_goal_lifecycle::registered_session_v1_handle_from_state(state, session_id)?;
+    // snapshot freezes the same complete Provider projection frontier used by physical preparation.
+    // snapshot 冻结与物理准备相同的完整 Provider 投影前沿。
+    let snapshot = handle
+        .capture_controller_projection_snapshot()
+        .map_err(|error| error.to_string())?;
+    // projected_state is the sole request-local controller authority for this V1 Continue launch.
+    // projected_state 是本次 V1 Continue 启动唯一的请求局部控制器权威。
+    let projected_state =
+        crate::agent_stream::provider_v1_sink::provider_projection_controller_state(&snapshot)?;
+    request.conversation_state = projected_state;
+    Ok(())
+}
+
 /// Continues a WebUI prompt turn after the shared precheck outcome is known.
 /// 在共享 precheck 结果确定后继续 WebUI 提示词回合。
 ///
@@ -444,6 +480,11 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         }
     }
     let mut request = continuation.request;
+    if request.continuation_action_id.is_some() {
+        // Continue never mixes retained legacy state with V1 history; V1 owns the complete controller window.
+        // Continue 绝不混合保留的旧状态与 V1 历史；完整控制器窗口由 V1 持有。
+        synchronize_continue_controller_state_from_v1(state, session_id, &mut request)?;
+    }
     // Live VMM readiness is captured at turn admission so model-visible memory tools cannot outlive
     // a stopped or failed transport. Child tasks inherit the same immutable request fact.
     // 在回合准入时捕获 VMM 实时就绪状态，避免模型可见记忆工具在传输停止或失败后继续暴露；子任务继承同一不可变请求事实。

@@ -18,7 +18,9 @@ use vulcan_session_core::v1::config::{
     KnowledgeLibrarySelectionMode as KnowledgeLibrarySelectionModeV1,
     KnowledgeRetrievalMode as KnowledgeRetrievalModeV1, VmmSessionPolicyConfig,
 };
-use vulcan_session_core::v1::document::SessionSelectionBundleInput;
+use vulcan_session_core::v1::document::{
+    ContinuationTerminalProjection, SessionSelectionBundleInput,
+};
 use vulcan_session_core::v1::{ClientActionId, ClientInputSubmission, ContinuationRequest};
 #[cfg(test)]
 use vulcan_workbench_model::SessionState;
@@ -31,7 +33,9 @@ use vulcan_workspace_store::workspace_store::{WorkspaceSnapshot, locate_session_
 use crate::conversation_resources_v1::{
     composer_attachment_from_project_resource_v1, validate_project_resource_attachment_reference,
 };
-use crate::session_runtime_registry_v1::{ContinuationDispatchGuard, SessionHandle};
+use crate::session_runtime_registry_v1::{
+    ContinuationDispatchGuard, SessionHandle, SessionRuntimeError,
+};
 use crate::session_v1_lifecycle::{
     CreateRootSessionV1Request, PromptAttachmentOrigin, create_and_register_root_session_v1,
     get_or_load_session_v1, register_project_prompt_attachments_v1,
@@ -1664,6 +1668,86 @@ struct ContinuationUserSubmission {
     attachments: Option<Vec<ComposerAttachmentSummary>>,
 }
 
+/// Returns whether one settled Continue terminal may be acknowledged without an RPC error.
+/// 判断一个已结算 Continue 终态是否可以在不返回 RPC 错误的情况下确认。
+///
+/// # Parameters
+/// 参数
+/// `error` is the exact V1 dispatch settlement returned after admission.
+/// `error` 是准入后返回的精确 V1 分派结算结果。
+///
+/// # Returns
+/// 返回值
+/// `true` only for a durable inline notice or an expected terminal that requires no notice.
+/// 仅当已存在可靠行内提示，或该预期终态无需提示时返回 `true`。
+fn continuation_terminal_allows_rpc_ack(error: &SessionRuntimeError) -> bool {
+    // projection is carried by the exact durable terminal resolution; transport state alone is insufficient.
+    // projection 由精确可靠终态结算携带；仅有传输状态不足以作出判断。
+    let projection = match error {
+        SessionRuntimeError::ContinuationTerminatedBeforeApi { projection, .. }
+        | SessionRuntimeError::ContinuationTerminatedBeforeTransport { projection, .. } => {
+            projection
+        }
+        _ => return false,
+    };
+    !matches!(projection, ContinuationTerminalProjection::MissingNotice)
+}
+
+#[cfg(test)]
+mod continuation_terminal_projection_tests {
+    use super::*;
+    use vulcan_session_core::v1::{ApiCallId, Seq};
+
+    /// A failed terminal without a durable inline notice remains an RPC error.
+    /// 缺少可靠行内提示的失败终态仍然作为 RPC 错误返回。
+    #[test]
+    fn missing_terminal_notice_does_not_allow_rpc_ack() {
+        // error models a historical failed API terminal whose inline DisplayNote never became durable.
+        // error 模拟行内 DisplayNote 从未可靠落盘的历史 API 失败终态。
+        let error = SessionRuntimeError::ContinuationTerminatedBeforeTransport {
+            client_action_id: ClientActionId::try_new("continue-missing-notice")
+                .expect("valid action id"),
+            api_call_id: ApiCallId::try_new(1).expect("valid API id"),
+            projection: ContinuationTerminalProjection::MissingNotice,
+        };
+
+        assert!(!continuation_terminal_allows_rpc_ack(&error));
+    }
+
+    /// A durable inline terminal notice suppresses the duplicate RPC error.
+    /// 可靠的行内终态提示会抑制重复 RPC 错误。
+    #[test]
+    fn inline_terminal_notice_allows_rpc_ack() {
+        // error carries the exact durable DisplayNote sequence owned by the pre-API terminal.
+        // error 携带 API 前终态所拥有的精确可靠 DisplayNote 序号。
+        let error = SessionRuntimeError::ContinuationTerminatedBeforeApi {
+            client_action_id: ClientActionId::try_new("continue-inline-notice")
+                .expect("valid action id"),
+            projection: ContinuationTerminalProjection::InlineNotice {
+                notice_seq: Seq::try_new(3).expect("valid notice seq"),
+            },
+        };
+
+        assert!(continuation_terminal_allows_rpc_ack(&error));
+    }
+
+    /// An expected silent terminal remains an acknowledgement without inventing an error notice.
+    /// 预期静默终态继续返回确认，并且不会虚构错误提示。
+    #[test]
+    fn expected_silent_terminal_allows_rpc_ack() {
+        // error models an expected cancellation or interruption that requires no error notice.
+        // error 模拟无需错误提示的预期取消或中断。
+        let error = SessionRuntimeError::ContinuationTerminatedBeforeTransport {
+            client_action_id: ClientActionId::try_new("continue-silent-terminal")
+                .expect("valid action id"),
+            api_call_id: ApiCallId::try_new(2).expect("valid API id"),
+            projection: ContinuationTerminalProjection::NoNoticeRequired,
+        };
+
+        assert!(continuation_terminal_allows_rpc_ack(&error));
+    }
+}
+
 /// Claims one frozen continuation and starts the exact retained execution without user input.
 /// 领取一份冻结 Continue，并在不追加用户输入的情况下启动精确保留执行。
 pub(super) async fn service_continue_conversation(
@@ -1740,12 +1824,17 @@ async fn service_continue_conversation_with_submission(
     let handle =
         crate::session_goal_lifecycle::session_v1_handle_from_state(&state, session_id).await?;
     let dispatch_guard = handle.acquire_continuation_dispatch().await;
-    if handle
-        .reconcile_continuation_dispatch_for_action(&continuation_action_id)
-        .map_err(|error| error.to_string())?
-        .is_some()
-    {
-        return continuation_replay_ack_from_state(&state, session_id, client_continuation_id);
+    match handle.reconcile_continuation_dispatch_for_action(&continuation_action_id) {
+        Ok(Some(_)) => {
+            return continuation_replay_ack_from_state(&state, session_id, client_continuation_id);
+        }
+        Ok(None) => {}
+        Err(error) if continuation_terminal_allows_rpc_ack(&error) => {
+            // The accepted terminal either owns a durable inline notice or explicitly requires no error notice.
+            // 已接纳终态要么拥有可靠行内提示，要么明确无需错误提示。
+            return continuation_replay_ack_from_state(&state, session_id, client_continuation_id);
+        }
+        Err(error) => return Err(error.to_string()),
     }
     let (
         prompt,
@@ -1785,13 +1874,16 @@ async fn service_continue_conversation_with_submission(
         Some(dispatch_guard),
     )
     .await?;
-    handle
+    if let Err(error) = handle
         .wait_for_continuation_transport_observed(
             &continuation_action_id,
             std::time::Duration::from_secs(120),
         )
         .await
-        .map_err(|error| error.to_string())?;
+        && !continuation_terminal_allows_rpc_ack(&error)
+    {
+        return Err(error.to_string());
+    }
     Ok(acknowledgement)
 }
 
