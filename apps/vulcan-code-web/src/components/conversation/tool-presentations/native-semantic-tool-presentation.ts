@@ -16,6 +16,11 @@ import {
   fixedToolName,
   normalizeToolName,
 } from "./presentation-value-readers";
+import {
+  modelExtensionToolMarkdown,
+  modelExtensionToolTitleKey,
+  modelExtensionToolValueMarkdown,
+} from "./model-extension-tool-presentation";
 
 // NativeSemanticToolConfig fixes one native tool to its business card family and localized title.
 // NativeSemanticToolConfig 将单个原生工具固定到业务卡片族与本地化标题。
@@ -88,16 +93,25 @@ export function resolveGenericToolMarkdownPresentation(
   blocks: ToolExecutionConversationBlock[],
   displayState: ToolPresentationDisplayState,
   detailRef?: ConversationDetailRef,
+  options: ToolPresentationResolveOptions = {},
 ): GenericToolMarkdownPresentation {
   // toolName preserves the unknown raw identity shown only on the generic fallback card.
   // toolName 保留仅在通用兜底卡上展示的未知原始身份。
   const toolName = fixedToolName(blocks) ?? blocks.find((block) => block.title.trim())?.title ?? "unknown";
+  // titleKey exists only for one exact AI model-extension tool contract.
+  // titleKey 仅对一个精确 AI 模型扩展工具契约存在。
+  const titleKey = modelExtensionToolTitleKey(toolName) ?? undefined;
+  // inputValue comes from the active request preview or the persisted invocation arguments.
+  // inputValue 来自活动请求预览或持久化调用参数。
+  const inputValue = options.requestPreview ?? visibleToolArguments(blocks);
   return {
     detailRef,
     id: semanticToolPresentationId(blocks, `generic:${toolName}`),
     kind: "generic_tool_markdown",
-    markdown: visibleToolMarkdown(blocks),
+    markdown: modelExtensionToolMarkdown(toolName, visibleToolMarkdown(blocks)),
+    inputMarkdown: titleKey ? modelExtensionToolValueMarkdown(toolName, inputValue) : undefined,
     state: displayState,
+    titleKey,
     toolName,
   };
 }

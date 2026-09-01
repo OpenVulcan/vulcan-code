@@ -112,5 +112,5 @@ export function resolveToolPresentation(
     ?? resolveMarkdownToolPresentation(blocks, displayState, detailRef)
     ?? resolveCommandExecutionPresentation(blocks, displayState, detailRef, options)
     ?? resolveNativeSemanticToolPresentation(blocks, displayState, detailRef, options)
-    ?? resolveGenericToolMarkdownPresentation(blocks, displayState, detailRef);
+    ?? resolveGenericToolMarkdownPresentation(blocks, displayState, detailRef, options);
 }

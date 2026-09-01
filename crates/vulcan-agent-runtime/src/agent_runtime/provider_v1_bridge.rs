@@ -778,8 +778,8 @@ pub enum ProviderV1LifecycleFacts {
 /// 用于派生单个执行流内每次物理请求事实的冻结强类型模板。
 #[derive(Debug, Clone)]
 pub(crate) struct ProviderV1RequestTemplate {
-    /// Base purpose for the first physical request, or no V1 projection for non-session work.
-    /// 首次物理请求的基础用途；非会话工作则不产生 V1 投影。
+    /// Default purpose for physical requests, or no V1 projection for non-session work.
+    /// 物理请求的默认用途；非会话工作则不产生 V1 投影。
     pub(crate) base_purpose: Option<ApiPurposeKind>,
     /// Durable client action bound to a V1 Continue execution.
     /// 绑定到 V1 Continue 执行的可靠客户端动作。
@@ -816,9 +816,7 @@ impl ProviderV1RequestTemplate {
     ) -> Self {
         // basePurpose is selected only from typed purpose and subagent ownership.
         // basePurpose 仅根据强类型用途与子代理归属选择。
-        let base_purpose = if preparation.continuation_action_id.is_some() {
-            Some(ApiPurposeKind::Continue)
-        } else if preparation.subagent_prompt_context.is_some() {
+        let base_purpose = if preparation.subagent_prompt_context.is_some() {
             Some(ApiPurposeKind::Subagent)
         } else {
             match preparation.prompt_purpose {
@@ -847,9 +845,11 @@ impl ProviderV1RequestTemplate {
     ///
     /// # Parameters
     /// 参数
-    /// `provider_call_id`, `snapshot`, `retry_count`, and `prepared_at_ms` are typed facts owned
-    /// by the Provider request state machine.
-    /// `provider_call_id`、`snapshot`、`retry_count` 与 `prepared_at_ms` 均为 Provider 请求状态机拥有的强类型事实。
+    /// `provider_call_id`, `snapshot`, `retry_count`, `bind_continuation`, and `prepared_at_ms` are
+    /// typed facts owned by the Provider request state machine. `bind_continuation` is true only
+    /// for the first physical request accepted after one manual Continue action.
+    /// `provider_call_id`、`snapshot`、`retry_count`、`bind_continuation` 与 `prepared_at_ms` 均为
+    /// Provider 请求状态机拥有的强类型事实。`bind_continuation` 仅在一次手动继续后接纳的首个物理请求为真。
     ///
     /// # Returns
     /// 返回值
@@ -860,11 +860,17 @@ impl ProviderV1RequestTemplate {
         provider_call_id: String,
         snapshot: &CoreProviderRequestSnapshot,
         retry_count: u32,
+        bind_continuation: bool,
         prepared_at_ms: i64,
     ) -> Option<ProviderV1RequestFacts> {
+        // continuationActionId binds only the first physical request owned by one manual Continue.
+        // continuationActionId 仅绑定一次手动 Continue 所有的首个物理请求。
+        let continuation_action_id = bind_continuation
+            .then(|| self.continuation_action_id.clone())
+            .flatten();
         // purpose changes to RetryGeneration only for a real transport retry, never by string heuristics.
         // purpose 仅在真实传输重试时切换为 RetryGeneration，绝不使用字符串启发式判断。
-        let purpose = if self.continuation_action_id.is_some() {
+        let purpose = if continuation_action_id.is_some() {
             ApiPurposeKind::Continue
         } else if retry_count > 0 {
             ApiPurposeKind::RetryGeneration
@@ -874,7 +880,7 @@ impl ProviderV1RequestTemplate {
         Some(ProviderV1RequestFacts {
             provider_call_id,
             purpose,
-            continuation_action_id: self.continuation_action_id.clone(),
+            continuation_action_id,
             request: ApiRequestSnapshot {
                 provider: snapshot.provider_id.clone(),
                 profile: Some(self.profile.clone()),
@@ -1437,11 +1443,52 @@ mod tests {
         };
         let facts = context
             .v1_request_template
-            .request_facts(String::from("call-2"), &snapshot, 1, 10)
+            .request_facts(String::from("call-2"), &snapshot, 1, false, 10)
             .expect("conversation requests should produce V1 facts");
         assert_eq!(facts.purpose, ApiPurposeKind::RetryGeneration);
         assert_eq!(facts.request.provider, "mock-provider");
         assert_eq!(facts.request.temperature, Some(0.25));
+    }
+
+    /// Manual Continue binds its action only to the resumed run's first physical request.
+    /// 手动 Continue 仅将其动作绑定到恢复运行的首个物理请求。
+    #[test]
+    fn continue_action_is_not_reused_after_the_first_physical_request() {
+        let snapshot = CoreProviderRequestSnapshot {
+            provider_id: String::from("mock-provider"),
+            model_id: String::from("mock-model"),
+            system_prompt: String::new(),
+            prompt_layers: Default::default(),
+            prompt: String::new(),
+            prompt_in_history: false,
+            history: Vec::new(),
+            temperature: None,
+            max_turns: 1,
+            tool_schemas: Vec::new(),
+            additional_params: None,
+            request_headers: None,
+            continuation: Default::default(),
+        };
+        let action_id = ClientActionId::try_new("continue-action").expect("action id is valid");
+        let template = ProviderV1RequestTemplate {
+            base_purpose: Some(ApiPurposeKind::MainGeneration),
+            continuation_action_id: Some(action_id.clone()),
+            profile: String::from("openai-responses.v1"),
+            connection_id: String::from("connection-1"),
+            thinking_level: None,
+        };
+
+        let first = template
+            .request_facts(String::from("call-1"), &snapshot, 0, true, 10)
+            .expect("first continued request should produce facts");
+        assert_eq!(first.purpose, ApiPurposeKind::Continue);
+        assert_eq!(first.continuation_action_id, Some(action_id));
+
+        let after_tool = template
+            .request_facts(String::from("call-2"), &snapshot, 0, false, 20)
+            .expect("tool-followup request should produce facts");
+        assert_eq!(after_tool.purpose, ApiPurposeKind::MainGeneration);
+        assert!(after_tool.continuation_action_id.is_none());
     }
 
     /// Structured payment failures map to balance facts without reading telemetry JSON.

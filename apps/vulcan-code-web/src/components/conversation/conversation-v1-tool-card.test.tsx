@@ -1,3 +1,6 @@
+// @vitest-environment jsdom
+// 使用 jsdom 验证 V1 工具卡 Markdown 代码块渲染。
+
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -102,6 +105,62 @@ function deletedFileItem(): ToolCallDisplayItem {
 }
 
 describe("ConversationV1ToolCard", () => {
+  it("localizes model-extension cards and renders bounded JSON payload sections", () => {
+    const item = cardItem({
+      toolName: "video_generate",
+      input: { prompt: "A blue flame", duration_seconds: 6 },
+      output: { task_id: "video-task-1", status: "submitted" },
+    });
+    const collapsedMarkup = renderToStaticMarkup(
+      <I18nProvider initialLocale="en-US">
+        <ConversationV1ToolCard item={item} />
+      </I18nProvider>,
+    );
+    const expandedMarkup = renderToStaticMarkup(
+      <I18nProvider initialLocale="en-US">
+        <ConversationV1ToolCard
+          defaultExpanded
+          item={item}
+        />
+      </I18nProvider>,
+    );
+
+    expect(collapsedMarkup).toContain("Video generation");
+    expect(collapsedMarkup).not.toContain("video_generate");
+    expect(collapsedMarkup).not.toContain("Input");
+    expect(collapsedMarkup).not.toContain("Output");
+    expect(collapsedMarkup.match(/aria-expanded="false"/g)).toHaveLength(1);
+    expect(collapsedMarkup).not.toContain("A blue flame");
+    expect(collapsedMarkup).not.toContain("video-task-1");
+    expect(expandedMarkup).toContain('data-model-extension-payload="input"><button aria-expanded="false"');
+    expect(expandedMarkup).not.toContain('data-conversation-measured-collapse-id="model-extension:v1-tool:40:input"');
+    expect(expandedMarkup).toContain('data-conversation-measured-collapse-id="model-extension:v1-tool:40:output"');
+    expect(expandedMarkup).toContain("model-extension-payload-body");
+    expect(expandedMarkup).toContain("markdown-code-block");
+    expect(expandedMarkup).toContain("<span>json</span>");
+    expect(expandedMarkup).not.toContain("A blue flame");
+    expect(expandedMarkup).toContain("video-task-1");
+  });
+
+  it("shows an independently expandable input card while a model extension is running", () => {
+    const markup = renderToStaticMarkup(
+      <I18nProvider initialLocale="en-US">
+        <ConversationV1ToolCard
+          defaultExpanded
+          item={cardItem({
+            toolName: "video_generate",
+            input: { prompt: "A pending sunrise" },
+            status: "running",
+          })}
+        />
+      </I18nProvider>,
+    );
+
+    expect(markup).toContain('data-model-extension-payload="input"');
+    expect(markup).not.toContain('data-model-extension-payload="output"');
+    expect(markup).not.toContain("A pending sunrise");
+  });
+
   it("renders no placeholder icon node for directory listing", () => {
     const markup = renderToStaticMarkup(
       <ConversationV1ToolCard

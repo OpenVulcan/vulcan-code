@@ -1,3 +1,6 @@
+// @vitest-environment jsdom
+// 使用 jsdom 验证工具卡 Markdown 代码块渲染。
+
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -117,6 +120,18 @@ const GENERIC_PRESENTATION: GenericToolMarkdownPresentation = {
   toolName: "custom_tool",
 };
 
+// MODEL_EXTENSION_PRESENTATION represents one recognized extension result before Markdown formatting.
+// MODEL_EXTENSION_PRESENTATION 表示 Markdown 格式化前的一份已识别扩展结果。
+const MODEL_EXTENSION_PRESENTATION: GenericToolMarkdownPresentation = {
+  id: "speech-synthesize-tool",
+  inputMarkdown: "```json\n{\n  \"text\": \"Hello from Vulcan\"\n}\n```",
+  kind: "generic_tool_markdown",
+  markdown: '{"resources":[{"file_name":"audio-1.mp3","byte_len":58740}]}',
+  state: "completed",
+  titleKey: "settings.providerTools.speechSynthesize",
+  toolName: "speech_synthesize",
+};
+
 // MULTI_FILE_CHANGE represents one authoritative completed ChangeSet with two actual files.
 // MULTI_FILE_CHANGE 表示一份包含两个实际文件的权威已完成 ChangeSet。
 const MULTI_FILE_CHANGE: FileChangePresentation = {
@@ -221,6 +236,58 @@ describe("ToolPresentationCard file access icons", () => {
         expect(markup).not.toContain("lucide-braces");
       }
     }
+  });
+
+  // Recognized extension cards localize their title and reuse the bounded JSON Markdown body.
+  // 已识别扩展卡片会本地化标题并复用受限高 JSON Markdown 正文。
+  it("renders model-extension results with a localized title and JSON code block", () => {
+    const markup = renderToStaticMarkup(
+      <I18nProvider initialLocale="zh-CN">
+        <ToolPresentationCard
+          detailLoadEnabled={false}
+          expanded
+          expandedToolPresentationIds={new Set([MODEL_EXTENSION_PRESENTATION.id])}
+          presentation={MODEL_EXTENSION_PRESENTATION}
+          requestProgress={null}
+          onExpandedChange={() => undefined}
+          onLoadToolDetail={async () => null}
+        />
+      </I18nProvider>,
+    );
+
+    expect(markup).toContain("语音合成");
+    expect(markup).not.toContain("speech_synthesize");
+    expect(markup).toContain('data-model-extension-payload="input"');
+    expect(markup).toContain('data-model-extension-payload="output"');
+    expect(markup).toContain("model-extension-payload-body");
+    expect(markup).toContain("markdown-code-block");
+    expect(markup).toContain("<span>json</span>");
+    expect(markup).not.toContain("Hello from Vulcan");
+    expect(markup).toContain("audio-1.mp3");
+    expect(markup).toContain('data-model-extension-payload="input"><button aria-expanded="false"');
+    expect(markup).toContain('data-model-extension-payload="output"><button aria-expanded="true"');
+  });
+
+  // Running extension cards keep the finalized input expandable before any result exists.
+  // 执行中的扩展卡在返回尚不存在时仍允许展开已完成的输入。
+  it("keeps extension input expandable while the result is still pending", () => {
+    const markup = renderToStaticMarkup(
+      <I18nProvider initialLocale="zh-CN">
+        <ToolPresentationCard
+          detailLoadEnabled={false}
+          expanded
+          expandedToolPresentationIds={new Set()}
+          presentation={{ ...MODEL_EXTENSION_PRESENTATION, markdown: "", state: "running" }}
+          requestProgress={{ receiving: true, statusLabel: "正在构造工具请求" }}
+          onExpandedChange={() => undefined}
+          onLoadToolDetail={async () => null}
+        />
+      </I18nProvider>,
+    );
+
+    expect(markup).toContain('data-model-extension-payload="input"');
+    expect(markup).not.toContain('data-model-extension-payload="output"');
+    expect(markup).not.toContain("Hello from Vulcan");
   });
 
   // Raw invocation belongs only to expanded non-native content.

@@ -713,7 +713,9 @@ V1首次上传现在先持久声明`UploadPending`，保存精确原路线及上
 快照；热更新只影响新任务。`generic_json_async_lifecycle` 必须显式声明 start/poll/cancel 方法、
 路径、task/status/error/output JSON Pointer、终态集合、`poll_interval_ms`、`max_backoff_ms` 与
 `timeout_ms`。连续瞬时观测失败使用指数退避，但绝不超过冻结的 `max_backoff_ms`；成功观测后计数
-归零，任务总生命周期仍受 `timeout_ms` 封闭约束。
+归零，任务总生命周期仍受 `timeout_ms` 封闭约束。瞬时观测只适用于供应商尚未终结任务时的凭据、
+传输或状态读取失败；一旦状态命中 `success_statuses`，成功约束、跟随标识、跟随请求、二进制获取、
+响应投影、输出解码或资源安全校验失败都必须立即形成明确终态错误，不能继续显示为任务仍在执行。
 
 固定 `tool_targets` 与 `tool_target_templates` 使用同一套激活前验证：系统端点只允许无凭据、无
 query/fragment 的 HTTPS URL，endpoint path 必须保持同源；输入 JSON Schema、输出资源 decoder、

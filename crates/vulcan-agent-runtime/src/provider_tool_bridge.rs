@@ -103,6 +103,26 @@ impl ProviderTaskCancellationOnDrop {
     fn disarm(&mut self) {
         self.armed = false;
     }
+
+    /// Completes one normally returned invocation without treating its error as owner cancellation.
+    /// 完成一次正常返回的调用，不把其错误视为所有者取消。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `result` is the terminal value returned by the exact provider-tool invocation.
+    /// `result` 是精确供应商工具调用返回的终态值。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the original success or failure after disarming owner-wide cancellation.
+    /// 在解除所有者级取消后原样返回成功或失败。
+    fn complete<ResultType, ErrorType>(
+        &mut self,
+        result: Result<ResultType, ErrorType>,
+    ) -> Result<ResultType, ErrorType> {
+        self.disarm();
+        result
+    }
 }
 
 impl Drop for ProviderTaskCancellationOnDrop {
@@ -530,7 +550,7 @@ fn build_model_extension_executor_candidate(
                         workspace_root: workspace_root.as_deref(),
                         session_id: &context.session_id,
                     };
-                let result = runtime
+                let execution_result = runtime
                     .execute_provider_tool_target_with_media_sources(
                         &configuration,
                         capability,
@@ -543,16 +563,19 @@ fn build_model_extension_executor_candidate(
                             source_resolver: Some(&source_resolver),
                         },
                     )
-                    .await?;
+                    .await;
+                // A normally returned provider error belongs only to this tool. Disarm before
+                // propagating it so the drop guard cannot cancel asynchronous sibling tools.
+                // 正常返回的 Provider 错误只属于当前工具。传播错误前先解除守卫，避免析构守卫取消
+                // 异步兄弟工具。
+                let result = cancellation_guard.complete(execution_result)?;
                 // rendered uses one canonical media result shape for understanding capabilities.
                 // rendered 为理解能力使用统一规范媒体结果形态。
-                let rendered = if media_understanding_tool_id(capability).is_some() {
+                if media_understanding_tool_id(capability).is_some() {
                     render_media_understanding_provider_result(capability, result)
                 } else {
                     render_provider_tool_result(workspace_root.as_deref(), result).await
-                };
-                cancellation_guard.disarm();
-                rendered
+                }
             })
         }),
     }
@@ -738,8 +761,6 @@ fn render_model_extension_parameters(
             })?;
         models.push(json!({
             "model": model,
-            "provider_id": target.target.provider_id,
-            "model_id": target.target.upstream_target_id,
             "display_name": target.target.display_name,
             "description": profile.summary,
             "characteristics": profile.characteristics,
@@ -765,7 +786,7 @@ fn render_model_extension_parameters(
         "capability": capability_name,
         "models": models,
         "instruction": if catalog.contains_key(&capability) {
-            "Choose one returned model and pass args matching its exact args_schema. In declared media-source fields, a canonical project-resource://ID or owned attachment://ID retains the current conversation's original file metadata and is resolved by the host before provider dispatch. Do not infer alternate source fields."
+            "Copy one returned `model` field verbatim into the executor call; it is the only valid callable model identifier. Pass `args` matching that model's exact `args_schema`. In declared media-source fields, a canonical project-resource://ID or owned attachment://ID retains the current conversation's original file metadata and is resolved by the host before provider dispatch. Do not infer alternate model or source fields."
         } else {
             "No native model is currently enabled for this extension capability."
         }
@@ -1469,14 +1490,16 @@ async fn download_provider_resource_to_temp(
 #[cfg(test)]
 mod tests {
     use super::{
-        MODEL_EXTENSION_CAPABILITIES, apply_session_provider_tool_selections,
-        build_selected_model_extension_catalog, download_provider_resource_to_temp,
-        model_extension_executor_schema, model_extension_parameters_schema,
-        model_extension_tool_id, render_provider_resource_result, render_provider_tool_result,
-        validate_enabled_media_understanding_backends,
+        MODEL_EXTENSION_CAPABILITIES, ProviderTaskCancellationOnDrop,
+        apply_session_provider_tool_selections, build_selected_model_extension_catalog,
+        download_provider_resource_to_temp, model_extension_executor_schema,
+        model_extension_parameters_schema, model_extension_tool_id,
+        render_model_extension_parameters, render_provider_resource_result,
+        render_provider_tool_result, validate_enabled_media_understanding_backends,
     };
     use serde_json::json;
     use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::Arc;
     use vulcan_ai_contract::ReasoningEffort;
     use vulcan_provider_adapters::{
         AvailableProviderToolTarget, ManifestSourceLayer, ProviderToolCapabilityKind,
@@ -1484,6 +1507,7 @@ mod tests {
         ProviderToolExecutionResult, ProviderToolGeneratedResource, ProviderToolNormalizedOutput,
         ProviderToolRerankOutput, ProviderToolRerankResult, ProviderToolResourceDownloadPolicy,
         ProviderToolResourceEncoding, ProviderToolTarget, ProviderToolTargetSelection,
+        PublicAiRuntime,
     };
 
     /// Builds one minimal model-extension target for bridge catalog tests.
@@ -1504,7 +1528,11 @@ mod tests {
         target_id: &str,
         connection_id: &str,
         source_layer: ManifestSourceLayer,
+        capability: ProviderToolCapabilityKind,
     ) -> AvailableProviderToolTarget {
+        let tool_id = model_extension_tool_id(capability);
+        let capability_value =
+            serde_json::to_value(capability).expect("test provider capability should serialize");
         // target is decoded through the same public wire shape used by compiled manifests.
         // target 通过与已编译 Manifest 相同的公共 Wire 结构解码。
         let target: ProviderToolTarget = serde_json::from_value(json!({
@@ -1515,16 +1543,16 @@ mod tests {
             "upstream_target_id": model_id,
             "display_name": model_id,
             "contract": {
-                "tool_id": "image_generate",
-                "description": "Generate one test image.",
-                "capability": "image_generate",
+                "tool_id": tool_id,
+                "description": "Execute one test model extension.",
+                "capability": capability_value,
                 "input_schema": {
                     "type": "object",
                     "properties": {"prompt": {"type": "string"}},
                     "required": ["prompt"],
                     "additionalProperties": false
                 },
-                "extension_profile": {"summary": "Reviewed native image model."},
+                "extension_profile": {"summary": "Reviewed native extension model."},
                 "output": {
                     "kind": "text",
                     "source_path": "/text",
@@ -1605,6 +1633,7 @@ mod tests {
             "native-image",
             "native-account",
             ManifestSourceLayer::Bundled,
+            ProviderToolCapabilityKind::ImageGenerate,
         );
         // customTarget must remain excluded even when a forged persisted selection references it.
         // customTarget 即使被伪造持久化选择引用也必须保持排除。
@@ -1614,6 +1643,7 @@ mod tests {
             "custom-image",
             "custom-account",
             ManifestSourceLayer::Custom,
+            ProviderToolCapabilityKind::ImageGenerate,
         );
         // configuration owns one native, one custom, and one stale selection.
         // configuration 持有一条原生、一条自定义与一条过期选择。
@@ -1647,6 +1677,71 @@ mod tests {
             .expect("native image capability should remain");
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].target.provider_id, "native");
+    }
+
+    /// Speech and video discovery expose only their canonical callable model identifiers.
+    /// 语音与视频参数发现仅暴露各自的规范可调用模型标识。
+    #[test]
+    fn speech_and_video_parameters_expose_only_canonical_callable_models() {
+        let cases = [
+            (
+                ProviderToolCapabilityKind::SpeechSynthesize,
+                "speech_synthesize",
+                "speech-2.8-hd",
+                "cn.speech-2.8-hd",
+            ),
+            (
+                ProviderToolCapabilityKind::VideoGenerate,
+                "video_generate",
+                "MiniMax-Hailuo-2.3",
+                "cn.MiniMax-Hailuo-2.3",
+            ),
+        ];
+
+        for (capability, capability_name, model_id, target_id) in cases {
+            let target = available_extension_target(
+                "minimax",
+                model_id,
+                target_id,
+                "minimax-account",
+                ManifestSourceLayer::Bundled,
+                capability,
+            );
+            let catalog = BTreeMap::from([(capability, vec![target])]);
+            let result = render_model_extension_parameters(
+                &catalog,
+                json!({ "capability": capability_name }),
+            )
+            .expect("selected MiniMax extension parameters should render");
+            let model = &result.model_output["models"][0];
+
+            assert_eq!(model["model"], format!("minimax/{model_id}"));
+            assert!(model.get("provider_id").is_none());
+            assert!(model.get("model_id").is_none());
+            assert!(
+                result.model_output["instruction"]
+                    .as_str()
+                    .expect("instruction must be text")
+                    .contains("only valid callable model identifier")
+            );
+        }
+    }
+
+    /// A normally returned provider failure cannot arm owner-wide sibling cancellation.
+    /// 正常返回的 Provider 失败不能触发所有者级兄弟工具取消。
+    #[test]
+    fn normal_provider_failure_disarms_owner_cancellation_guard() {
+        let runtime = Arc::new(PublicAiRuntime::unavailable().expect("test runtime should build"));
+        let mut guard = ProviderTaskCancellationOnDrop::new(
+            runtime,
+            Some(String::from("parallel-tool-session")),
+        );
+
+        let result: Result<(), String> =
+            guard.complete(Err(String::from("one tool failed normally")));
+
+        assert_eq!(result, Err(String::from("one tool failed normally")));
+        assert!(!guard.armed);
     }
 
     /// Verifies Agent Runtime production input materialization has no provider-named branch.

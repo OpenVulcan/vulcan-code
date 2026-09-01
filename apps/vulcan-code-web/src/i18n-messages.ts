@@ -1176,6 +1176,9 @@ export type TranslationKey =
   | "toolPresentation.output.loading"
   | "toolPresentation.output.waiting"
   | "toolPresentation.output.empty"
+  | "toolPresentation.payload.input"
+  | "toolPresentation.payload.output"
+  | "toolPresentation.modelExtension.parameters"
   | "toolPresentation.raw.open"
   | "toolPresentation.raw.title"
   | "toolPresentation.raw.legacyPartial"
@@ -4086,6 +4089,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.output.loading": "正在加载输出...",
     "toolPresentation.output.waiting": "等待工具返回输出...",
     "toolPresentation.output.empty": "无输出",
+    "toolPresentation.payload.input": "输入",
+    "toolPresentation.payload.output": "输出",
+    "toolPresentation.modelExtension.parameters": "获取模型扩展参数",
     "toolPresentation.raw.open": "显示原始工具调用输出",
     "toolPresentation.raw.title": "{tool} 原始调用",
     "toolPresentation.raw.legacyPartial": "当前仅有可见的部分调用信息。",
@@ -7010,6 +7016,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.output.loading": "Loading output...",
     "toolPresentation.output.waiting": "Waiting for tool output...",
     "toolPresentation.output.empty": "No output",
+    "toolPresentation.payload.input": "Input",
+    "toolPresentation.payload.output": "Output",
+    "toolPresentation.modelExtension.parameters": "Get model extension parameters",
     "toolPresentation.raw.open": "Show raw tool invocation output",
     "toolPresentation.raw.title": "Raw {tool} invocation",
     "toolPresentation.raw.legacyPartial": "Only the visible partial invocation is available.",

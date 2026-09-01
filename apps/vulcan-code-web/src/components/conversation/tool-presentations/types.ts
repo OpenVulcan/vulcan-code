@@ -806,12 +806,18 @@ export interface GenericToolMarkdownPresentation {
   // Raw tool name shown only because this tool is unknown.
   // 仅因工具未知而显示的原始工具名称。
   toolName: string;
+  // Optional localized title for one exact recognized inline tool contract.
+  // 精确识别的内联工具契约使用的可选本地化标题。
+  titleKey?: TranslationKey;
   // Current authoritative tool state.
   // 当前权威工具状态。
   state: ToolPresentationDisplayState;
   // Inline Markdown result or request summary.
   // 内联 Markdown 结果或请求摘要。
   markdown: string;
+  // Optional exact request payload for a recognized AI model-extension tool.
+  // 已识别 AI 模型扩展工具的可选精确请求载荷。
+  inputMarkdown?: string;
   // Optional hidden detail reference used after execution starts.
   // 实际执行开始后使用的可选隐藏详情引用。
   detailRef?: ConversationDetailRef;

@@ -1,4 +1,5 @@
 import type { ToolCallDisplayItem, ToolCallEvent } from "@/service/conversation-event-display-projection";
+import type { TranslationKey } from "@/i18n";
 import type {
   ExternalResourceRef,
   PersistentChangeSet,
@@ -8,6 +9,7 @@ import type {
   ToolJsonValue,
   ToolPayload,
 } from "@/service/conversation-event-window-store";
+import { modelExtensionToolTitleKey } from "./model-extension-tool-presentation";
 
 /** Stable visual state copied from the authoritative tool-call event.
  * 从权威工具调用事件复制的稳定视觉状态。 */
@@ -27,6 +29,9 @@ export interface V1ToolPresentationBase {
   toolName: string;
   state: V1ToolPresentationState;
   title: string;
+  // Optional localized title used by one exact recognized tool contract.
+  // 精确识别的工具契约使用的可选本地化标题。
+  titleKey?: TranslationKey;
   icon: V1ToolPresentationIcon;
   externalRefs: readonly ExternalResourceRef[];
 }
@@ -243,6 +248,20 @@ export function resolveV1ToolPresentation(item: ToolCallDisplayItem): V1ToolPres
       family: nativeConfig.family,
       inputMarkdown: payloadMarkdown(toolCall.input, null),
       outputMarkdown: payloadMarkdown(toolCall.output, "markdown"),
+    };
+  }
+  // modelExtensionTitleKey exists only for the closed AI model-extension tool set.
+  // modelExtensionTitleKey 仅对封闭的 AI 模型扩展工具集合存在。
+  const modelExtensionTitleKey = modelExtensionToolTitleKey(toolCall.tool_name);
+  if (modelExtensionTitleKey) {
+    return {
+      ...base,
+      kind: "generic",
+      title: toolCall.tool_name,
+      titleKey: modelExtensionTitleKey,
+      icon: "tool",
+      inputMarkdown: payloadMarkdown(toolCall.input, null),
+      outputMarkdown: payloadMarkdown(toolCall.output, null),
     };
   }
   return {

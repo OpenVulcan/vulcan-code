@@ -202,6 +202,27 @@
   width: 100%;
 }
 
+/* Model-extension headers remain stable while input and output own separate expansion controls. */
+/* 模型扩展标题保持稳定，输入与返回分别持有独立展开控件。 */
+.model-extension-tool-header {
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+}
+
+.model-extension-tool-payloads {
+  display: grid;
+  gap: 4px;
+}
+
+.model-extension-payload-summary {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.model-extension-payload-body {
+  max-height: 280px;
+  overflow: auto;
+  padding-left: 22px;
+}
+
 .tool-presentation-card.provider-search-tool {
   min-width: 0;
   max-width: 100%;

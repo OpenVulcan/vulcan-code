@@ -13,6 +13,7 @@ import {
 
 import { ConversationMeasuredCollapse, useConversationMeasuredExpansion } from "@/components/conversation/conversation-measured-collapse";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
+import { ModelExtensionToolPayloadCards } from "@/components/conversation/conversation-model-extension-tool-payloads";
 import { ToolPresentationCard } from "@/components/conversation/conversation-tool-presentation-card";
 import { ConversationV1GeneratedResourceList } from "@/components/conversation/conversation-v1-resource-list";
 import { resolveV1SubagentOrchestrationPresentation } from "@/components/conversation/tool-presentations/v1-subagent-orchestration-presentation";
@@ -20,11 +21,13 @@ import type {
   V1ChangeSetFilePresentation,
   V1ChangeSetRow,
   V1FileChangePresentation,
+  V1GenericToolPresentation,
   V1ToolPresentation,
   V1ToolPresentationIcon,
   V1ToolPresentationState,
 } from "@/components/conversation/tool-presentations/v1-tool-presentation";
 import { resolveV1ToolPresentation } from "@/components/conversation/tool-presentations/v1-tool-presentation";
+import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ExternalResourceRef } from "@/service/conversation-event-window-store";
 import type { ToolCallDisplayItem } from "@/service/conversation-event-display-projection";
@@ -115,6 +118,20 @@ export function ConversationV1ToolCard(props: ConversationV1ToolCardProps) {
     );
   }
 
+  if (presentation.kind === "generic" && presentation.titleKey) {
+    return (
+      <ConversationV1ModelExtensionToolCard
+        availableExternalRefKeys={props.availableExternalRefKeys}
+        expanded={expanded}
+        item={props.item}
+        presentation={presentation}
+        resourceCatalog={props.resourceCatalog}
+        onExpandedChange={setExpanded}
+        onOpenExternalRef={props.onOpenExternalRef}
+      />
+    );
+  }
+
   return (
     <article
       className={cn(
@@ -140,7 +157,11 @@ export function ConversationV1ToolCard(props: ConversationV1ToolCardProps) {
       >
         <ToolPresentationIcon icon={presentation.icon} />
         <ToolPresentationState state={presentation.state} />
-        <span className="v1-tool-card-title">{presentation.title}</span>
+        <span className="v1-tool-card-title">
+          {presentation.titleKey
+            ? <LocalizedToolPresentationText titleKey={presentation.titleKey} />
+            : presentation.title}
+        </span>
         <span className="v1-tool-card-target">{summary.target}</span>
         {summary.format ? <span className="file-change-text-format">{summary.format}</span> : null}
         {presentation.kind === "file_change" ? (
@@ -165,6 +186,93 @@ export function ConversationV1ToolCard(props: ConversationV1ToolCardProps) {
             onOpen={props.onOpenExternalRef}
           />
         </div>
+      </ConversationMeasuredCollapse>
+    </article>
+  );
+}
+
+// ConversationV1ModelExtensionToolCard renders one event-native extension call as independent payload cards.
+// ConversationV1ModelExtensionToolCard 将一个事件原生扩展调用渲染成独立载荷卡片。
+// Parameters: props carries the pure presentation, generated resources and external navigation bindings.
+// 参数：props 携带纯展示模型、生成资源及外部导航绑定。
+// Returns: one stable extension header with separately folded input and output cards.
+// 返回值：一个稳定扩展标题，以及分别折叠的输入卡与返回卡。
+function ConversationV1ModelExtensionToolCard(props: {
+  // External references whose live navigation targets currently exist.
+  // 当前存在实时导航目标的外部引用。
+  availableExternalRefKeys?: ReadonlySet<string>;
+  // Whether the main extension tool card is expanded.
+  // 扩展工具主卡是否展开。
+  expanded: boolean;
+  // Authoritative V1 event item.
+  // 权威 V1 事件条目。
+  item: ToolCallDisplayItem;
+  // Pure model-extension presentation.
+  // 纯模型扩展展示。
+  presentation: V1GenericToolPresentation;
+  // Optional generated-resource catalog.
+  // 可选生成资源目录。
+  resourceCatalog?: ConversationSessionResourceCatalogV1 | null;
+  // Opens one retained external reference.
+  // 打开一个保留的外部引用。
+  onOpenExternalRef?: (reference: ExternalResourceRef) => void;
+  // Updates the main extension tool card expansion state.
+  // 更新扩展工具主卡展开状态。
+  onExpandedChange: (expanded: boolean, options?: { manual?: boolean }) => void;
+}) {
+  // generatedResources is the exact resource list retained by the tool-call event.
+  // generatedResources 是工具调用事件保留的精确资源列表。
+  const generatedResources = props.item.tool_call.generated_resources ?? [];
+  // hasOutputSupplement keeps resource and navigation controls inside the return card only when present.
+  // hasOutputSupplement 仅在资源或导航控件存在时把它们放入返回卡。
+  const hasOutputSupplement = generatedResources.length > 0 || props.presentation.externalRefs.length > 0;
+  // outputSupplement is owned by the return payload and stays folded with it.
+  // outputSupplement 归返回载荷所有，并随其一起折叠。
+  const outputSupplement = hasOutputSupplement ? (
+    <>
+      <ConversationV1GeneratedResourceList
+        catalog={props.resourceCatalog ?? null}
+        resources={generatedResources}
+      />
+      <ToolExternalNavigation
+        references={props.presentation.externalRefs}
+        availableReferenceKeys={props.availableExternalRefKeys}
+        onOpen={props.onOpenExternalRef}
+      />
+    </>
+  ) : undefined;
+  return (
+    <article
+      className={cn("tool-presentation-card", "v1-tool-card", "model-extension-tool", props.expanded && "expanded")}
+      data-api-call-id={props.presentation.apiCallId}
+      data-seq={props.presentation.seq}
+      data-tool-kind={props.presentation.kind}
+      data-tool-state={props.presentation.state}
+    >
+      <button
+        aria-expanded={props.expanded}
+        className="tool-presentation-summary model-extension-tool-header"
+        onClick={() => props.onExpandedChange(!props.expanded)}
+        type="button"
+      >
+        <ToolPresentationIcon icon={props.presentation.icon} />
+        <ToolPresentationState state={props.presentation.state} />
+        <span className="v1-tool-card-title">
+          {props.presentation.titleKey
+            ? <LocalizedToolPresentationText titleKey={props.presentation.titleKey} />
+            : props.presentation.title}
+        </span>
+        <ChevronDown className="tool-presentation-toggle" size={14} aria-hidden="true" />
+      </button>
+      <ConversationMeasuredCollapse collapseId={props.presentation.id} expanded={props.expanded}>
+        <ModelExtensionToolPayloadCards
+          defaultInputExpanded={false}
+          defaultOutputExpanded
+          inputMarkdown={props.presentation.inputMarkdown}
+          outputMarkdown={props.presentation.outputMarkdown}
+          outputSupplement={outputSupplement}
+          presentationId={props.presentation.id}
+        />
       </ConversationMeasuredCollapse>
     </article>
   );
@@ -280,7 +388,10 @@ function presentationSummary(presentation: V1ToolPresentation): V1ToolCardSummar
   if (presentation.kind === "shell") {
     return { target: presentation.command, format: null };
   }
-  return { target: presentation.toolName, format: null };
+  return {
+    target: presentation.titleKey ? "" : presentation.toolName,
+    format: null,
+  };
 }
 
 /** Renders the discriminated detail body selected by the pure resolver.
@@ -308,17 +419,45 @@ function ToolPresentationBody(props: { presentation: V1ToolPresentation }) {
     case "generic":
       return (
         <div className="v1-tool-card-json-sections">
-          <ToolPayloadSection title="输入" markdown={presentation.inputMarkdown} />
-          <ToolPayloadSection title="输出" markdown={presentation.outputMarkdown} />
+          <ToolPayloadSection
+            title={presentation.titleKey ? undefined : "输入"}
+            titleKey={presentation.titleKey ? "toolPresentation.payload.input" : undefined}
+            markdown={presentation.inputMarkdown}
+          />
+          <ToolPayloadSection
+            title={presentation.titleKey ? undefined : "输出"}
+            titleKey={presentation.titleKey ? "toolPresentation.payload.output" : undefined}
+            markdown={presentation.outputMarkdown}
+          />
         </div>
       );
   }
 }
 
+/** Props for one localized tool-presentation text fragment.
+ * 一段本地化工具展示文本的属性。 */
+interface LocalizedToolPresentationTextProps {
+  // Exact translation key selected by the presentation contract.
+  // 展示契约选择的精确翻译键。
+  titleKey: TranslationKey;
+}
+
+/** Renders a translation only for cards that explicitly declare a localized contract.
+ * 仅为显式声明本地化契约的卡片渲染翻译。 */
+function LocalizedToolPresentationText(props: LocalizedToolPresentationTextProps) {
+  // t resolves the one exact user-facing label selected by the presentation.
+  // t 解析展示模型选择的唯一精确用户文案。
+  const { t } = useI18n();
+  return <>{t(props.titleKey)}</>;
+}
+
 /** Props for one Markdown-backed event payload section.
  * 一段 Markdown 事件载荷区域的属性。 */
 interface ToolPayloadSectionProps {
-  title: string;
+  title?: string;
+  // Optional localized section title for recognized contracts.
+  // 已识别契约使用的可选本地化区域标题。
+  titleKey?: TranslationKey;
   markdown: string;
 }
 
@@ -330,7 +469,11 @@ function ToolPayloadSection(props: ToolPayloadSectionProps) {
   }
   return (
     <section className="v1-tool-card-section">
-      <div className="v1-tool-card-section-title">{props.title}</div>
+      <div className="v1-tool-card-section-title">
+        {props.titleKey
+          ? <LocalizedToolPresentationText titleKey={props.titleKey} />
+          : props.title}
+      </div>
       <MarkdownBody markdown={props.markdown} />
     </section>
   );

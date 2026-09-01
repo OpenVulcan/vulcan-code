@@ -182,6 +182,118 @@ fn tool_payload_rejects_non_object_containers() {
     assert!(ToolPayload::try_new(serde_json::json!({"ok": true})).is_ok());
 }
 
+/// A failed tool preserves validated host diagnostics for Provider replay and durable reload.
+/// 失败工具为 Provider 重放与可靠重载保留已校验的宿主诊断。
+#[test]
+fn failed_tool_preserves_structured_host_output_across_reload() -> Result<(), DomainError> {
+    let mut doc = new_document();
+    doc.submit_root_input_fixture("run extension", Vec::new(), T0)?;
+    let api = doc.start_api(
+        ApiPurposeKind::MainGeneration,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        T0,
+    )?;
+    let tool = doc.start_tool(
+        api,
+        "speech_synthesize",
+        ToolPayload::try_new(serde_json::json!({"model": "minimax/speech-2.8-hd"}))?,
+        None,
+        T0 + 1,
+    )?;
+    let diagnostic = ToolPayload::try_new(serde_json::json!({
+        "tool_call_id": "provider-tool-1",
+        "tool_name": "speech_synthesize",
+        "model_output": "The selected voice_id is invalid.",
+        "host_result": {
+            "kind": "tool_error",
+            "payload": {
+                "status": "failed",
+                "error": "The selected voice_id is invalid."
+            }
+        },
+        "is_error": true
+    }))?;
+    doc.finish_tool(
+        api,
+        tool,
+        tool_completion(Some(diagnostic.clone()), ToolCallStatus::Failed, T0 + 2),
+    )?;
+
+    let restored = SessionDocument::from_parts(
+        doc.metadata.clone(),
+        initialized_runtime_lock(),
+        Vec::new(),
+        Vec::new(),
+        doc.events().to_vec(),
+    )?;
+    let output = restored
+        .events()
+        .iter()
+        .find_map(|event| match &event.event {
+            EventBody::ToolCall(tool_event) if tool_event.tool_call_id == tool => {
+                tool_event.output.clone()
+            }
+            _ => None,
+        })
+        .expect("failed tool must retain one structured output");
+
+    assert_eq!(output, diagnostic);
+    let projected = crate::v1::projection::project_provider_items(restored.events(), None, &[])?;
+    assert!(projected.iter().any(|item| matches!(
+        item,
+        crate::v1::projection::ProjectedItem::ToolResult { output: projected_output, .. }
+            if projected_output == &diagnostic
+    )));
+    Ok(())
+}
+
+/// A failed tool without host diagnostics still receives the canonical generic error envelope.
+/// 没有宿主诊断的失败工具仍会获得规范通用错误信封。
+#[test]
+fn failed_tool_without_host_output_uses_generic_terminal_error() -> Result<(), DomainError> {
+    let mut doc = new_document();
+    doc.submit_root_input_fixture("run extension", Vec::new(), T0)?;
+    let api = doc.start_api(
+        ApiPurposeKind::MainGeneration,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        T0,
+    )?;
+    let tool = doc.start_tool(
+        api,
+        "video_generate",
+        ToolPayload::try_new(serde_json::json!({"model": "minimax/MiniMax-Hailuo-2.3"}))?,
+        None,
+        T0 + 1,
+    )?;
+    doc.finish_tool(
+        api,
+        tool,
+        tool_completion(None, ToolCallStatus::Failed, T0 + 2),
+    )?;
+    let output = doc
+        .events()
+        .iter()
+        .find_map(|event| match &event.event {
+            EventBody::ToolCall(tool_event) if tool_event.tool_call_id == tool => {
+                tool_event.output.clone()
+            }
+            _ => None,
+        })
+        .expect("failed tool must receive one synthetic output");
+
+    assert_eq!(
+        serde_json::to_value(output).expect("generic tool failure should serialize"),
+        serde_json::json!({
+            "error": {
+                "kind": "failed",
+                "message": "Tool execution failed."
+            },
+            "ok": false
+        })
+    );
+    Ok(())
+}
+
 /// Batch preparation preserves Provider order, while an exact repeated start is idempotent.
 /// 批量准备保留 Provider 原始顺序，而精确重复启动是幂等操作。
 #[test]

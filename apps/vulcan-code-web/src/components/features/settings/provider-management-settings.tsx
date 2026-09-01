@@ -790,14 +790,18 @@ function SystemProviderTable(props: {
                           )}
                           title={t("settings.providerSummary.serviceEntriesTitle")}
                         />
-                        <ProviderSummaryTooltip
-                          items={protocolNames}
-                          label={t("settings.providerSummary.protocols").replace(
-                            "{count}",
-                            String(protocolNames.length),
-                          )}
-                          title={t("settings.providerSummary.protocolsTitle")}
-                        />
+                        {/* Protocol summary exists only when the provider declares at least one route. */}
+                        {/* 协议摘要仅在供应商至少声明一条路由时显示。 */}
+                        {protocolNames.length > 0 ? (
+                          <ProviderSummaryTooltip
+                            items={protocolNames}
+                            label={t("settings.providerSummary.protocols").replace(
+                              "{count}",
+                              String(protocolNames.length),
+                            )}
+                            title={t("settings.providerSummary.protocolsTitle")}
+                          />
+                        ) : null}
                       </div>
                     </TableCell>
                     <TableCell className="py-3 text-right align-top">

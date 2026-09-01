@@ -928,6 +928,7 @@ impl ProviderRequestTelemetryTracker {
             request_id.clone(),
             snapshot,
             self.retry_count,
+            self.next_attempt_index == context.initial_attempt_index,
             started_at.timestamp_ms,
         );
         let active_request = ActiveProviderRequestTelemetry {
@@ -995,6 +996,7 @@ impl ProviderRequestTelemetryTracker {
             request_id.clone(),
             snapshot,
             self.retry_count,
+            self.next_attempt_index == context.initial_attempt_index,
             started_at.timestamp_ms,
         );
         let pending_request = ActiveProviderRequestTelemetry {
@@ -1061,6 +1063,7 @@ impl ProviderRequestTelemetryTracker {
             pending_request.request_id.clone(),
             snapshot,
             pending_request.retry_count,
+            pending_request.attempt_index == context.initial_attempt_index,
             pending_request.started_at_ms,
         );
         let mut active_request = self
@@ -2484,6 +2487,61 @@ mod tests {
             0
         );
         assert!(tracker.confirm_prepared_request(&exact, None).is_err());
+    }
+
+    /// Continued telemetry consumes the action binding after the initial physical request.
+    /// Continue 遥测在首个物理请求后消耗动作绑定。
+    #[test]
+    fn continued_telemetry_does_not_rebind_tool_followup_request() {
+        let mut tracker = test_tracker();
+        let continuation_action_id =
+            vulcan_session_core::v1::ClientActionId::try_new("continue-action")
+                .expect("continuation action id is valid");
+        tracker
+            .context
+            .as_mut()
+            .expect("test context must be installed")
+            .v1_request_template
+            .continuation_action_id = Some(continuation_action_id);
+        let snapshot = test_request_snapshot();
+
+        tracker
+            .prepare_request(&snapshot, None)
+            .expect("initial continued request should prepare");
+        let initial_facts = tracker
+            .pending_request
+            .as_ref()
+            .and_then(|request| request.v1_request_facts.as_ref())
+            .expect("initial request must retain V1 facts");
+        assert_eq!(
+            initial_facts.purpose,
+            vulcan_session_core::v1::event::ApiPurposeKind::Continue
+        );
+        assert!(initial_facts.continuation_action_id.is_some());
+        tracker
+            .confirm_prepared_request(&snapshot, None)
+            .expect("initial continued request should confirm");
+        tracker
+            .complete_success(
+                None,
+                crate::agent_runtime::provider_v1_bridge::test_provider_v1_source_input(),
+                1,
+            )
+            .expect("initial continued request should complete");
+
+        tracker
+            .prepare_request(&snapshot, None)
+            .expect("tool-followup request should prepare");
+        let followup_facts = tracker
+            .pending_request
+            .as_ref()
+            .and_then(|request| request.v1_request_facts.as_ref())
+            .expect("followup request must retain V1 facts");
+        assert_eq!(
+            followup_facts.purpose,
+            vulcan_session_core::v1::event::ApiPurposeKind::MainGeneration
+        );
+        assert!(followup_facts.continuation_action_id.is_none());
     }
 
     /// Verifies a rejected preparation publishes nothing and does not consume a physical attempt.

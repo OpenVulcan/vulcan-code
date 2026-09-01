@@ -24,6 +24,7 @@ import type {
 import { ChangeSetDiffPreview } from "@/components/conversation/conversation-change-set-diff-preview";
 import { dispatchConversationManualViewportInteraction } from "@/components/conversation/conversation-layout-events";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
+import { ModelExtensionToolPayloadCards } from "@/components/conversation/conversation-model-extension-tool-payloads";
 import { ConversationMeasuredCollapse } from "@/components/conversation/conversation-measured-collapse";
 import { FileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import { TerminalOutputView } from "@/components/conversation/conversation-terminal-output";
@@ -64,6 +65,7 @@ import {
   type ToolPresentation,
   type ToolPresentationDisplayState,
 } from "@/components/conversation/conversation-tool-presentations";
+import { modelExtensionToolMarkdown } from "@/components/conversation/tool-presentations/model-extension-tool-presentation";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 
@@ -262,6 +264,18 @@ export function ToolPresentationCard(props: {
     );
   }
   if (props.presentation.kind === "generic_tool_markdown") {
+    if (props.presentation.titleKey) {
+      return (
+        <ModelExtensionToolPresentationCard
+          expanded={props.expanded}
+          expandedFooter={props.expandedFooter}
+          presentation={props.presentation}
+          requestProgress={props.requestProgress}
+          onExpandedChange={props.onExpandedChange}
+          onLoadToolDetail={props.detailLoadEnabled ? props.onLoadToolDetail : undefined}
+        />
+      );
+    }
     return (
       <GenericToolMarkdownPresentationCard
         expanded={expanded}
@@ -274,6 +288,103 @@ export function ToolPresentationCard(props: {
     );
   }
   return null;
+}
+
+// ModelExtensionToolPresentationCard renders one extension call with independent input and output cards.
+// ModelExtensionToolPresentationCard 使用相互独立的输入卡与返回卡渲染一次扩展调用。
+// Parameters: props carries the localized extension model, active state and optional result footer.
+// 参数：props 携带本地化扩展模型、活动状态及可选返回页脚。
+// Returns: a stable tool header followed by the available independently folded payload cards.
+// 返回值：稳定工具标题，以及当前可用且可独立折叠的载荷卡片。
+function ModelExtensionToolPresentationCard(props: {
+  // Whether the main extension tool card is expanded.
+  // 扩展工具主卡是否展开。
+  expanded: boolean;
+  // Optional result-owned raw invocation action.
+  // 可选的返回侧原始调用操作。
+  expandedFooter?: React.ReactNode;
+  // Recognized extension presentation with a localized title.
+  // 具有本地化标题的已识别扩展展示。
+  presentation: GenericToolMarkdownPresentation;
+  // Optional request-formation state shown without disabling input expansion.
+  // 可选的请求构造状态，且不会禁用输入展开。
+  requestProgress: ToolRequestCardProgress | null;
+  // Optional terminal result loader used to retain complete output.
+  // 用于保留完整返回的可选终态结果加载器。
+  onLoadToolDetail?: ToolDetailLoader;
+  // Updates the main extension tool card expansion state.
+  // 更新扩展工具主卡展开状态。
+  onExpandedChange: (presentationId: string, expanded: boolean) => void;
+}) {
+  // t resolves the extension title and active execution label.
+  // t 解析扩展标题与活动执行标签。
+  const { t } = useI18n();
+  // titleKey is guaranteed by the exact dispatch branch and remains explicitly checked here.
+  // titleKey 由精确分派分支保证，并在此继续显式检查。
+  const titleKey = props.presentation.titleKey;
+  // hydratedBody preserves the complete terminal result when the visible transcript was truncated.
+  // hydratedBody 在可见转录被截断时保留完整终态返回。
+  const hydratedBody = useTerminalToolCardBody(
+    props.presentation.detailRef,
+    props.onLoadToolDetail,
+  );
+  if (!titleKey) {
+    return null;
+  }
+  // status remains visible while the request is forming or the provider tool is executing.
+  // status 在请求构造或供应商工具执行期间保持可见。
+  const status = activeToolStatusLabel(
+    props.requestProgress,
+    props.presentation.state,
+    t("toolPresentation.execution.running"),
+  );
+  // outputMarkdown formats the exact visible result independently from the request payload.
+  // outputMarkdown 独立于请求载荷格式化精确可见返回。
+  const outputMarkdown = modelExtensionToolMarkdown(
+    props.presentation.toolName,
+    hydratedBody ?? props.presentation.markdown,
+  );
+  // handleToggle updates only the main card and keeps payload expansion memories independent.
+  // handleToggle 仅更新主卡，并保持载荷展开记忆相互独立。
+  const handleToggle = React.useCallback(() => {
+    dispatchConversationManualViewportInteraction();
+    props.onExpandedChange(props.presentation.id, !props.expanded);
+  }, [props]);
+  return (
+    <div
+      className={cn("tool-presentation-card", "model-extension-tool", props.expanded && "expanded")}
+      data-tool-state={props.presentation.state}
+    >
+      <button
+        aria-expanded={props.expanded}
+        className="tool-presentation-summary model-extension-tool-header"
+        onClick={handleToggle}
+        type="button"
+      >
+        <Code2 className="markdown-tool-icon" size={15} />
+        <span className={cn("tool-presentation-state", status && "shimmer")}>{status}</span>
+        <span className="tool-presentation-command">
+          <span className="tool-presentation-command-text">{t(titleKey)}</span>
+        </span>
+        {props.expanded
+          ? <ChevronDown className="tool-presentation-toggle" size={15} />
+          : <ChevronRight className="tool-presentation-toggle" size={15} />}
+      </button>
+      <ConversationMeasuredCollapse
+        collapseId={`model-extension-tool:${props.presentation.id}`}
+        expanded={props.expanded}
+      >
+        <ModelExtensionToolPayloadCards
+          defaultInputExpanded={false}
+          defaultOutputExpanded
+          inputMarkdown={props.presentation.inputMarkdown ?? ""}
+          outputMarkdown={outputMarkdown}
+          outputSupplement={props.expandedFooter}
+          presentationId={props.presentation.id}
+        />
+      </ConversationMeasuredCollapse>
+    </div>
+  );
 }
 
 // NativeSemanticToolPresentationCard renders known native tools without exposing raw tool ids.
@@ -417,7 +528,10 @@ function GenericToolMarkdownPresentationCard(props: {
   );
   // markdown uses terminal detail when available and otherwise keeps the visible result.
   // markdown 在终态详情可用时使用详情，否则保留可见结果。
-  const markdown = hydratedBody ?? props.presentation.markdown;
+  const markdown = modelExtensionToolMarkdown(
+    props.presentation.toolName,
+    hydratedBody ?? props.presentation.markdown,
+  );
   // canExpand keeps every unknown tool payload inside a bounded folded card even without a legacy raw-detail RPC.
   // canExpand 即使没有旧 raw-detail RPC，也会把每个未知工具载荷放入有界折叠卡片。
   const canExpand = Boolean(markdown || props.expandedFooter);
@@ -442,7 +556,9 @@ function GenericToolMarkdownPresentationCard(props: {
         <Code2 className="markdown-tool-icon" size={15} />
         {status ? <span className="tool-presentation-state shimmer">{status}</span> : null}
         <span className="tool-presentation-command">
-          <span className="tool-presentation-command-text">{props.presentation.toolName}</span>
+          <span className="tool-presentation-command-text">
+            {props.presentation.titleKey ? t(props.presentation.titleKey) : props.presentation.toolName}
+          </span>
         </span>
         {canExpand ? (
           props.expanded

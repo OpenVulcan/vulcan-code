@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "minimax",
-  "revision": 16,
-  "published_at": "2026-09-01T00:00:00Z",
+  "revision": 19,
+  "published_at": "2026-09-01T09:27:25Z",
   "engine_contract": {
     "minimum_manifest_engine": 2,
     "required_protocol_profiles": [
@@ -1873,7 +1873,8 @@
             "type": "boolean"
           },
           "voice_id": {
-            "description": "Built-in or account-owned MiniMax voice identifier.",
+            "description": "Built-in or account-owned MiniMax voice identifier. Verified Chinese system voice examples: female-shaonv and male-qn-qingse.",
+            "examples": ["female-shaonv", "male-qn-qingse"],
             "minLength": 1,
             "type": "string"
           },
@@ -2086,7 +2087,8 @@
             "type": "boolean"
           },
           "voice_id": {
-            "description": "Built-in or account-owned MiniMax voice identifier.",
+            "description": "Built-in or account-owned MiniMax voice identifier. Verified Chinese system voice examples: female-shaonv and male-qn-qingse.",
+            "examples": ["female-shaonv", "male-qn-qingse"],
             "minLength": 1,
             "type": "string"
           },
@@ -2299,7 +2301,8 @@
             "type": "boolean"
           },
           "voice_id": {
-            "description": "Built-in or account-owned MiniMax voice identifier.",
+            "description": "Built-in or account-owned MiniMax voice identifier. Verified Chinese system voice examples: female-shaonv and male-qn-qingse.",
+            "examples": ["female-shaonv", "male-qn-qingse"],
             "minLength": 1,
             "type": "string"
           },
@@ -2512,7 +2515,8 @@
             "type": "boolean"
           },
           "voice_id": {
-            "description": "Built-in or account-owned MiniMax voice identifier.",
+            "description": "Built-in or account-owned MiniMax voice identifier. Verified Chinese system voice examples: female-shaonv and male-qn-qingse.",
+            "examples": ["female-shaonv", "male-qn-qingse"],
             "minLength": 1,
             "type": "string"
           },
@@ -3305,7 +3309,7 @@
           {
             "source_path": "/file/download_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -3395,7 +3399,7 @@
           {
             "source_path": "/file/download_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -3476,7 +3480,7 @@
           {
             "source_path": "/file/download_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -4051,7 +4055,8 @@
             "type": "boolean"
           },
           "voice_id": {
-            "description": "Built-in or account-owned MiniMax voice identifier.",
+            "description": "Built-in or account-owned MiniMax voice identifier. Verified Chinese system voice examples: female-shaonv and male-qn-qingse.",
+            "examples": ["female-shaonv", "male-qn-qingse"],
             "minLength": 1,
             "type": "string"
           },
@@ -4264,7 +4269,8 @@
             "type": "boolean"
           },
           "voice_id": {
-            "description": "Built-in or account-owned MiniMax voice identifier.",
+            "description": "Built-in or account-owned MiniMax voice identifier. Verified Chinese system voice examples: female-shaonv and male-qn-qingse.",
+            "examples": ["female-shaonv", "male-qn-qingse"],
             "minLength": 1,
             "type": "string"
           },
@@ -4477,7 +4483,8 @@
             "type": "boolean"
           },
           "voice_id": {
-            "description": "Built-in or account-owned MiniMax voice identifier.",
+            "description": "Built-in or account-owned MiniMax voice identifier. Verified Chinese system voice examples: female-shaonv and male-qn-qingse.",
+            "examples": ["female-shaonv", "male-qn-qingse"],
             "minLength": 1,
             "type": "string"
           },
@@ -4690,7 +4697,8 @@
             "type": "boolean"
           },
           "voice_id": {
-            "description": "Built-in or account-owned MiniMax voice identifier.",
+            "description": "Built-in or account-owned MiniMax voice identifier. Verified Chinese system voice examples: female-shaonv and male-qn-qingse.",
+            "examples": ["female-shaonv", "male-qn-qingse"],
             "minLength": 1,
             "type": "string"
           },
@@ -5482,7 +5490,7 @@
           {
             "source_path": "/file/download_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -5562,7 +5570,7 @@
           {
             "source_path": "/file/download_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -5652,7 +5660,7 @@
           {
             "source_path": "/file/download_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -5733,7 +5741,7 @@
           {
             "source_path": "/file/download_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -5998,7 +6006,7 @@
           {
             "source_path": "/file/download_url",
             "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "video",
             "mime_type": "video/mp4",
             "optional": false,
@@ -6029,6 +6037,10 @@
       {
         "url": "builtin:vulcan.reasoning-catalog.2026-08-06",
         "note": "Legacy reasoning effort rules migrated into manifest model rules; evidence follows the legacy reasoning catalog."
+      },
+      {
+        "url": "https://github.com/MiniMax-AI/cli/commit/2576f4656211e6d296bb1fe885da141080b70f23",
+        "note": "MiniMax CLI video generation verifies the V1 task, retrieves file metadata by file_id, and downloads file.download_url; a live CN retrieval returned the exact authorized OSS host recorded by the video output contract."
       }
     ]
   }

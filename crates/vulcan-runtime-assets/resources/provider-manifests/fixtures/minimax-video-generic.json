@@ -43,7 +43,7 @@
         {
           "source_path": "/file/download_url",
           "encoding": "public_http_url",
-          "download_host_suffixes": ["example.com"],
+          "download_host_suffixes": [".aliyuncs.com"],
           "resource_kind": "video",
           "mime_type": "video/mp4",
           "optional": false,
@@ -219,7 +219,7 @@
       "path": "/v1/files/retrieve?file_id=file-1",
       "response_status": 200,
       "response_json_body": {
-        "file": {"download_url": "https://example.com/generated.mp4"},
+        "file": {"download_url": "https://public-cdn-video-data-algeng.oss-cn-wulanchabu.aliyuncs.com/generated.mp4"},
         "base_resp": {"status_code": 0, "status_msg": "success"}
       }
     }

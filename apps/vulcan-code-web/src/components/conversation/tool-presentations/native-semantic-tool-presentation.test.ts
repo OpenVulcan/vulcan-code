@@ -109,6 +109,35 @@ describe("native semantic tool presentation", () => {
     });
   });
 
+  it("projects legacy model-extension output with a localized title and JSON Markdown", () => {
+    const blocks = [{
+      body: "",
+      id: "speech-call",
+      kind: "tool-call",
+      summary: "speech_synthesize",
+      title: "speech_synthesize",
+      toolCallId: "speech-call-1",
+      toolName: "speech_synthesize",
+      rawMetadata: { arguments: { text: "Hello", voice_id: "female-shaonv" } },
+    }, {
+      body: '{"resources":[{"file_name":"audio-1.mp3"}]}',
+      id: "speech-result",
+      kind: "tool-result",
+      summary: "",
+      title: "",
+      toolCallId: "speech-call-1",
+      toolName: "speech_synthesize",
+    }] as ToolExecutionConversationBlock[];
+
+    expect(resolveGenericToolMarkdownPresentation(blocks, "completed")).toMatchObject({
+      kind: "generic_tool_markdown",
+      inputMarkdown: "```json\n{\n  \"text\": \"Hello\",\n  \"voice_id\": \"female-shaonv\"\n}\n```",
+      markdown: "```json\n{\n  \"resources\": [\n    {\n      \"file_name\": \"audio-1.mp3\"\n    }\n  ]\n}\n```",
+      titleKey: "settings.providerTools.speechSynthesize",
+      toolName: "speech_synthesize",
+    });
+  });
+
   it("keeps known file and ask identities on their semantic cards before arguments arrive", () => {
     const fileBlocks = [{
       body: "",

@@ -261,6 +261,21 @@ describe("V1 event-native tool presentation", () => {
     expect(unknown).toMatchObject({ kind: "generic", title: "create_goal_extra" });
   });
 
+  it("projects model-extension tools with localized titles and JSON payload blocks", () => {
+    const presentation = resolveV1ToolPresentation(toolItem({
+      toolName: "get_model_extension_parameters",
+      input: { capability: "video_generate" },
+      output: { target_id: "MiniMax-Hailuo-2.3", duration_seconds: 6 },
+    }));
+
+    expect(presentation).toMatchObject({
+      kind: "generic",
+      titleKey: "toolPresentation.modelExtension.parameters",
+      inputMarkdown: "```json\n{\n  \"capability\": \"video_generate\"\n}\n```",
+      outputMarkdown: "```json\n{\n  \"target_id\": \"MiniMax-Hailuo-2.3\",\n  \"duration_seconds\": 6\n}\n```",
+    });
+  });
+
   it("renders exact CodeKit Markdown tools from their own event payload", () => {
     const presentation = resolveV1ToolPresentation(toolItem({
       toolName: "vulcan_codekit_rg",

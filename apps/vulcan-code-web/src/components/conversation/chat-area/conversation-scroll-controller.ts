@@ -96,6 +96,17 @@ export interface ConversationObservedScrollMovement {
 // ConversationResizeCorrectionMode 选择聚合内容尺寸变化唯一允许的响应。
 export type ConversationResizeCorrectionMode = "transaction" | "tail" | "none";
 
+// ConversationResizeOwnershipDecision describes whether resized geometry restores tail ownership.
+// ConversationResizeOwnershipDecision 描述尺寸变化后的几何状态是否恢复尾部所有权。
+export interface ConversationResizeOwnershipDecision {
+  // Whether the current resize newly adopts tail ownership.
+  // 当前尺寸变化是否新接管尾部所有权。
+  adoptedTail: boolean;
+  // Scroll correction allowed after the ownership decision.
+  // 所有权决策后允许执行的滚动校正。
+  correctionMode: ConversationResizeCorrectionMode;
+}
+
 // conversationResizeCorrectionMode prevents ordinary reader-owned reflow from restoring every frame.
 // conversationResizeCorrectionMode 防止普通阅读者持有的重排在每帧执行恢复。
 // Parameters: followTail reports tail ownership and transactionActive reports an exact manual layout transaction.
@@ -110,6 +121,29 @@ export function conversationResizeCorrectionMode(
     return "transaction";
   }
   return followTail ? "tail" : "none";
+}
+
+// conversationResizeOwnershipDecision makes physical bottom geometry authoritative after content resize.
+// conversationResizeOwnershipDecision 在内容尺寸变化后让实际底部几何状态具有权威性。
+// Parameters: followTail is current ownership, transactionActive marks a fold anchor, and viewportAtBottom is native geometry.
+// 参数：followTail 是当前所有权，transactionActive 标记折叠锚点，viewportAtBottom 是原生几何状态。
+// Returns: whether tail ownership is newly adopted and which correction mode remains valid.
+// 返回值：是否新接管尾部所有权，以及仍有效的校正模式。
+export function conversationResizeOwnershipDecision(
+  followTail: boolean,
+  transactionActive: boolean,
+  viewportAtBottom: boolean,
+): ConversationResizeOwnershipDecision {
+  if (!followTail && viewportAtBottom) {
+    return {
+      adoptedTail: true,
+      correctionMode: "tail",
+    };
+  }
+  return {
+    adoptedTail: false,
+    correctionMode: conversationResizeCorrectionMode(followTail, transactionActive),
+  };
 }
 
 // reconcileConversationNativeScrollClamp acknowledges a position clipped by a shrinking native scroll range.
@@ -557,6 +591,9 @@ export function useConversationScrollController(
     if (!options.active || !options.surfaceId || !element || typeof ResizeObserver === "undefined") {
       return;
     }
+    // surfaceId freezes the non-null business owner used by asynchronous resize callbacks.
+    // surfaceId 冻结异步尺寸回调使用的非空业务所有者。
+    const surfaceId = options.surfaceId;
     // content is the single transcript content root; individual Turn observers are deliberately absent.
     // content 是唯一转录内容根；刻意不设置逐 Turn 观察器。
     const content = element.querySelector<HTMLElement>(".conversation-scroll-content");
@@ -571,13 +608,24 @@ export function useConversationScrollController(
       const transaction = layoutTransactionRef.current;
       const transactionActive = Boolean(
         transaction
-        && transaction.surfaceId === options.surfaceId
+        && transaction.surfaceId === surfaceId
         && transaction.userRevision === userRevisionRef.current
       );
-      const correctionMode = conversationResizeCorrectionMode(
+      // ownershipDecision lets a browser-clamped bottom cancel a stale reader-owned fold transaction.
+      // ownershipDecision 允许浏览器裁剪到的新底部取消过期的阅读者折叠事务。
+      const ownershipDecision = conversationResizeOwnershipDecision(
         followTailRef.current,
         transactionActive,
+        conversationViewportAllowsTailFollow(element),
       );
+      if (ownershipDecision.adoptedTail) {
+        layoutTransactionRef.current = null;
+        publishFollowTail(true);
+        writeCurrentSnapshot(element, surfaceId);
+      }
+      // correctionMode is resolved only after bottom geometry has had a chance to restore ownership.
+      // correctionMode 仅在底部几何状态获得恢复所有权机会后解析。
+      const correctionMode = ownershipDecision.correctionMode;
       if (correctionMode === "transaction" && transaction) {
         scheduleSnapshotRestore(
           transaction.surfaceId,
@@ -592,7 +640,15 @@ export function useConversationScrollController(
     });
     observer.observe(content);
     return () => observer.disconnect();
-  }, [options.active, options.scrollRef, options.surfaceId, scheduleSnapshotRestore, scheduleStoredRestore]);
+  }, [
+    options.active,
+    options.scrollRef,
+    options.surfaceId,
+    publishFollowTail,
+    scheduleSnapshotRestore,
+    scheduleStoredRestore,
+    writeCurrentSnapshot,
+  ]);
 
   React.useEffect(() => {
     // element owns the native smooth-scroll lifecycle for this exact transcript.

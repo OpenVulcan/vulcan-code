@@ -1583,15 +1583,17 @@ async fn poll_generic_json_async_task(
         .iter()
         .any(|value| value == status)
     {
-        if let Some(requirements) = lifecycle.poll_success_requirements.as_ref() {
-            validate_generic_json_response_requirements(
+        if let Some(requirements) = lifecycle.poll_success_requirements.as_ref()
+            && let Err(error) = validate_generic_json_response_requirements(
                 &response,
                 requirements,
                 "Provider task successful poll",
-            )?;
+            )
+        {
+            return Ok(failed_provider_async_task_completed_result(error));
         }
         if let Some(follow_up) = lifecycle.success_batch_follow_up.as_ref() {
-            let output = execute_generic_json_async_batch_follow_up(
+            let output = match execute_generic_json_async_batch_follow_up(
                 context.http,
                 context.entry,
                 context.target,
@@ -1599,7 +1601,13 @@ async fn poll_generic_json_async_task(
                 recovery,
                 follow_up,
             )
-            .await?;
+            .await
+            {
+                Ok(output) => output,
+                Err(error) => {
+                    return Ok(failed_provider_async_task_completed_result(error));
+                }
+            };
             return Ok(ProviderAsyncTaskPoll::Completed(
                 ProviderToolExecutionResult {
                     upstream_response_id: Some(provider_task_id.to_string()),
@@ -1615,21 +1623,24 @@ async fn poll_generic_json_async_task(
                             "Provider task success follow-up response pointer is missing.",
                         )
                     })?;
-                    response
+                    match response
                         .pointer(pointer)
                         .and_then(Value::as_str)
                         .filter(|value| !value.trim().is_empty())
-                        .ok_or_else(|| {
-                            format!(
+                    {
+                        Some(identifier) => identifier,
+                        None => {
+                            return Ok(failed_provider_async_task_completed_result(format!(
                                 "Provider task successful response is missing non-empty follow-up identifier at `{pointer}`."
-                            )
-                        })?
+                            )));
+                        }
+                    }
                 }
                 crate::provider_manifest::GenericJsonAsyncFollowUpIdentifierSource::ProviderTaskId => {
                     provider_task_id
                 }
             };
-            let url = generic_json_async_url(
+            let url = match generic_json_async_url(
                 context.entry,
                 context.target,
                 follow_up.endpoint_path.as_str(),
@@ -1637,11 +1648,16 @@ async fn poll_generic_json_async_task(
                 follow_up.identifier_in_path,
                 follow_up.identifier_path_suffix.as_deref(),
                 identifier,
-            )?;
+            ) {
+                Ok(url) => url,
+                Err(error) => {
+                    return Ok(failed_provider_async_task_completed_result(error));
+                }
+            };
             if follow_up.response_body
                 == crate::provider_manifest::GenericJsonAsyncFollowUpResponseBody::BinaryResource
             {
-                let result = execute_generic_json_async_binary_follow_up(
+                let result = match execute_generic_json_async_binary_follow_up(
                     context.http,
                     context.target,
                     context.secret,
@@ -1649,10 +1665,16 @@ async fn poll_generic_json_async_task(
                     url,
                     provider_task_id,
                 )
-                .await?;
+                .await
+                {
+                    Ok(result) => result,
+                    Err(error) => {
+                        return Ok(failed_provider_async_task_completed_result(error));
+                    }
+                };
                 return Ok(ProviderAsyncTaskPoll::Completed(result));
             }
-            let text = execute_generic_json_async_request(
+            let text = match execute_generic_json_async_request(
                 context.http,
                 context.target,
                 context.secret,
@@ -1660,12 +1682,23 @@ async fn poll_generic_json_async_task(
                 url,
                 "Provider task success follow-up",
             )
-            .await?;
-            let response = decode_and_project_generic_json_value(
+            .await
+            {
+                Ok(text) => text,
+                Err(error) => {
+                    return Ok(failed_provider_async_task_completed_result(error));
+                }
+            };
+            let response = match decode_and_project_generic_json_value(
                 context.response_profiles,
                 text.as_str(),
                 "Provider task success follow-up",
-            )?;
+            ) {
+                Ok(response) => response,
+                Err(error) => {
+                    return Ok(failed_provider_async_task_completed_result(error));
+                }
+            };
             if response.get("error").is_some() {
                 return Ok(ProviderAsyncTaskPoll::Failed(
                     format_structured_provider_error(
@@ -1679,15 +1712,11 @@ async fn poll_generic_json_async_task(
         } else {
             response
         };
-        let projected = serde_json::to_string(&response).map_err(|error| {
-            format!("Provider task poll projected response could not be serialized: {error}")
-        })?;
-        let mut result =
-            decode_generic_json_sync_output(&context.target.contract.output, projected.as_str())?;
-        if result.upstream_response_id.is_none() {
-            result.upstream_response_id = Some(provider_task_id.to_string());
-        }
-        return Ok(ProviderAsyncTaskPoll::Completed(result));
+        return Ok(decode_completed_generic_json_async_result(
+            &context.target.contract.output,
+            &response,
+            provider_task_id,
+        ));
     }
     if lifecycle
         .failure_statuses
@@ -1708,6 +1737,65 @@ async fn poll_generic_json_async_task(
     Ok(ProviderAsyncTaskPoll::Failed(format!(
         "Provider task returned unknown status `{status}`."
     )))
+}
+
+/// Converts one provider-confirmed success document into a terminal normalized result.
+/// 将一份供应商已确认成功的文档转换为终态规范化结果。
+///
+/// # Parameters
+/// 参数
+/// `contract` is the frozen output contract, `response` is the successful terminal document, and
+/// `provider_task_id` is the correlated upstream task identity.
+/// `contract` 是冻结输出契约，`response` 是成功终态文档，`provider_task_id` 是关联的上游任务身份。
+///
+/// # Returns
+/// 返回值
+/// A completed result, or an explicit terminal failure when the successful provider result cannot
+/// satisfy the frozen host contract.
+/// 返回完成结果；当供应商成功结果无法满足冻结宿主契约时，返回明确终态失败。
+fn decode_completed_generic_json_async_result(
+    contract: &crate::ProviderToolOutputContract,
+    response: &Value,
+    provider_task_id: &str,
+) -> ProviderAsyncTaskPoll {
+    // projected preserves the exact successful follow-up document for the shared output decoder.
+    // projected 为共享输出解码器保留精确的成功跟随文档。
+    let projected = match serde_json::to_string(response) {
+        Ok(projected) => projected,
+        Err(error) => {
+            return failed_provider_async_task_completed_result(format!(
+                "Provider task successful response could not be serialized: {error}"
+            ));
+        }
+    };
+    // result is terminal because the provider has already confirmed that generation completed.
+    // result 属于终态，因为供应商已经确认生成完成。
+    let mut result = match decode_generic_json_sync_output(contract, projected.as_str()) {
+        Ok(result) => result,
+        Err(error) => return failed_provider_async_task_completed_result(error),
+    };
+    if result.upstream_response_id.is_none() {
+        result.upstream_response_id = Some(provider_task_id.to_string());
+    }
+    ProviderAsyncTaskPoll::Completed(result)
+}
+
+/// Builds one explicit host failure after the provider has already confirmed task success.
+/// 在供应商已经确认任务成功后构建一项明确宿主失败。
+///
+/// # Parameters
+/// 参数
+/// `error` is the exact bounded result-contract or decoding diagnostic.
+/// `error` 是精确且有界的结果契约或解码诊断。
+///
+/// # Returns
+/// 返回值
+/// A terminal task failure that cannot be mistaken for a transient provider observation error.
+/// 返回不会被误认为瞬时供应商观察错误的任务终态失败。
+fn failed_provider_async_task_completed_result(error: String) -> ProviderAsyncTaskPoll {
+    ProviderAsyncTaskPoll::Failed(format!(
+        "Provider task completed, but its result could not be accepted: {error}"
+    ))
 }
 
 /// Fetches one bounded public JSON document per terminal item in submitted identity order.
@@ -3832,6 +3920,41 @@ mod tests {
             .manifest(provider_id)
             .map(|manifest| manifest.tool_targets.clone())
             .unwrap_or_default()
+    }
+
+    /// Verifies a provider-confirmed MiniMax success cannot keep polling after deterministic result rejection.
+    /// 验证供应商已确认成功后，MiniMax 确定性结果拒绝不能继续轮询。
+    #[test]
+    fn minimax_completed_result_contract_failure_is_terminal() {
+        // target retains the production MiniMax video output contract and its frozen URL authority.
+        // target 保留生产 MiniMax 视频输出契约及其冻结 URL 权限。
+        let target = bundled_manifest_tool_targets("minimax")
+            .into_iter()
+            .find(|target| target.target_id == "cn.MiniMax-Hailuo-2.3")
+            .expect("bundled MiniMax Hailuo 2.3 target");
+        // response represents a successful file-retrieve document with an unauthorized resource host.
+        // response 表示包含未授权资源主机的成功文件查询文档。
+        let response = serde_json::json!({
+            "file": {
+                "download_url": "https://untrusted.invalid/generated.mp4"
+            }
+        });
+
+        match decode_completed_generic_json_async_result(
+            &target.contract.output,
+            &response,
+            "video-task-completed",
+        ) {
+            ProviderAsyncTaskPoll::Failed(error) => {
+                assert!(
+                    error.starts_with(
+                        "Provider task completed, but its result could not be accepted:"
+                    )
+                );
+                assert!(error.contains("outside the declared scheme"));
+            }
+            other => panic!("completed invalid result must be terminal, got {other:?}"),
+        }
     }
 
     /// Verifies APIKEY.FUN video completion resolves the authenticated binary content route.

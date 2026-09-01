@@ -186,7 +186,12 @@ fn canonical_terminal_tool_output(
             tool_call_id: tool_call_id.value(),
             status: tool_status_name(status),
         }),
-        ToolCallStatus::Failed => Ok(ToolPayload::terminal_failure(ToolTerminalErrorKind::Failed)),
+        // A validated host failure is the only diagnostic the next Provider request can use;
+        // synthesize the generic envelope only when the host supplied no structured result.
+        // 已校验的宿主失败是下一次 Provider 请求唯一可用的诊断；仅在宿主没有提供结构化结果时
+        // 才合成通用错误信封。
+        ToolCallStatus::Failed => Ok(host_output
+            .unwrap_or_else(|| ToolPayload::terminal_failure(ToolTerminalErrorKind::Failed))),
         ToolCallStatus::Cancelled => Ok(ToolPayload::terminal_failure(
             ToolTerminalErrorKind::Cancelled,
         )),

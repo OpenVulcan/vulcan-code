@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyConversationObservedScrollMovement,
   conversationResizeCorrectionMode,
+  conversationResizeOwnershipDecision,
   reconcileConversationNativeScrollClamp,
 } from "./conversation-scroll-controller";
 
@@ -72,5 +73,27 @@ describe("conversation scroll ownership ledger", () => {
     expect(conversationResizeCorrectionMode(true, false)).toBe("tail");
     expect(conversationResizeCorrectionMode(false, true)).toBe("transaction");
     expect(conversationResizeCorrectionMode(true, true)).toBe("transaction");
+  });
+
+  it("restores tail ownership when collapse makes the native viewport reach the bottom", () => {
+    expect(conversationResizeOwnershipDecision(false, true, true)).toEqual({
+      adoptedTail: true,
+      correctionMode: "tail",
+    });
+    expect(conversationResizeOwnershipDecision(false, false, true)).toEqual({
+      adoptedTail: true,
+      correctionMode: "tail",
+    });
+  });
+
+  it("preserves reader ownership while resized content still extends below the viewport", () => {
+    expect(conversationResizeOwnershipDecision(false, true, false)).toEqual({
+      adoptedTail: false,
+      correctionMode: "transaction",
+    });
+    expect(conversationResizeOwnershipDecision(false, false, false)).toEqual({
+      adoptedTail: false,
+      correctionMode: "none",
+    });
   });
 });
