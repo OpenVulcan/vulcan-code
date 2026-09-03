@@ -21,6 +21,7 @@ members = [
     "crates/vulcan-workbench-model",
     "crates/vulcan-workspace-store",
     "crates/vulcan-context",
+    "crates/vulcan-context-engine",
     "crates/vulcan-context-injection",
     "crates/vulcan-hooks",
     "crates/vulcan-vmm",
@@ -78,6 +79,7 @@ vulcan-service-runtime = { path = "crates/vulcan-service-runtime" }
 vulcan-provider-config = { path = "crates/vulcan-provider-config" }
 vulcan-provider-manifest-cli = { path = "crates/vulcan-provider-manifest-cli" }
 vulcan-context = { path = "crates/vulcan-context" }
+vulcan-context-engine = { path = "crates/vulcan-context-engine" }
 vulcan-context-injection = { path = "crates/vulcan-context-injection" }
 vulcan-hooks = { path = "crates/vulcan-hooks" }
 vulcan-vmm = { path = "crates/vulcan-vmm" }

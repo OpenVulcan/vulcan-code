@@ -6770,6 +6770,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "vulcan-context-engine"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "vulcan-ai-contract",
+ "workspace-hack",
+]
+
+[[package]]
 name = "vulcan-context-injection"
 version = "0.1.0"
 dependencies = [
