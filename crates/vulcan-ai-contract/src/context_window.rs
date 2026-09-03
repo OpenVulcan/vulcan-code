@@ -97,9 +97,10 @@ mod tests {
                 node.as_str().parse::<ContextCompactionWindowNodeId>(),
                 Ok(node)
             );
+            let expected = format!("\"{}\"", node.as_str());
             assert_eq!(
-                serde_json::to_string(&node).unwrap(),
-                format!("\"{}\"", node.as_str())
+                serde_json::to_string(&node).ok().as_deref(),
+                Some(expected.as_str())
             );
         }
         assert!(

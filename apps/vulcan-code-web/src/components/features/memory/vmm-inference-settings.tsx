@@ -16,16 +16,6 @@ import { PublicAiInternalOverridesDialog } from "@/components/features/settings/
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuTrigger,
@@ -55,12 +45,6 @@ import type {
 // VmmInferenceSettingsProps 向首次配置流程暴露必需基础能力就绪状态。
 interface VmmInferenceSettingsProps {
   onRequiredRouteReady?: (ready: boolean) => void
-  // Restarts the single managed VMM after a persisted rerank route change.
-  // 在持久化重排路由变更后重启唯一的托管 VMM。
-  onRestartVmm?: () => Promise<boolean>
-  // Blocks inference-route mutations while the exclusive memory maintenance owner holds the data space.
-  // 在记忆维护独占所有者持有数据空间时阻止推理路由变更。
-  maintenanceActive?: boolean
 }
 
 // VMM_REQUIRED_LLM_PURPOSES lists the foundational LLM routes required before VMM can be initialized.
@@ -87,7 +71,7 @@ export function vmmRequiredInferenceReady(
   }
   const candidates = snapshot.internalInferenceCandidates.filter((candidate) => (
     candidate.enabled
-    && candidate.route.usage_scope === "external_service"
+    && candidate.route.usage_scope === "internal_background"
   ))
   const diagnostics = snapshot.inferenceRouteDiagnostics.filter((diagnostic) => (
     diagnostic.consumerProfileId === "vmm"
@@ -124,9 +108,7 @@ export function vmmRequiredInferenceReady(
 // VmmInferenceSettings owns VMM inference route loading, mutation, and validation.
 // VmmInferenceSettings 管理 VMM 推理路由的加载、变更与验证。
 export function VmmInferenceSettings({
-  maintenanceActive = false,
   onRequiredRouteReady,
-  onRestartVmm,
 }: VmmInferenceSettingsProps = {}) {
   const { t } = useI18n()
   const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null)
@@ -137,13 +119,6 @@ export function VmmInferenceSettings({
   const [testSummaries, setTestSummaries] =
     React.useState<Partial<Record<PublicAiOperation, string>>>({})
   const [pendingMutationKey, setPendingMutationKey] = React.useState<string | null>(null)
-  // rerankRestartConfirmationOpen keeps route writes blocked while the restart decision is visible.
-  // rerankRestartConfirmationOpen 在显示重启决策时阻止路由写入。
-  const [rerankRestartConfirmationOpen, setRerankRestartConfirmationOpen] =
-    React.useState(false)
-  // rerankRestartConfirmationResolver completes the deferred route change exactly once.
-  // rerankRestartConfirmationResolver 只完成一次延迟的路由变更。
-  const rerankRestartConfirmationResolver = React.useRef<((confirmed: boolean) => void) | null>(null)
   const mutationInFlightRef = React.useRef(false)
 
   React.useEffect(() => {
@@ -170,9 +145,6 @@ export function VmmInferenceSettings({
   const runSnapshotMutation = React.useCallback((
     key: string,
     mutation: () => Promise<PublicAiSettingsSnapshot>,
-    // afterSuccess performs the controlled runtime action after the snapshot write succeeds.
-    // afterSuccess 在快照写入成功后执行受控运行时动作。
-    afterSuccess?: () => Promise<void>,
   ): Promise<boolean> => {
     if (mutationInFlightRef.current) {
       return Promise.resolve(false)
@@ -183,9 +155,6 @@ export function VmmInferenceSettings({
       .then(async (next) => {
         setSnapshot(next)
         setError(null)
-        if (afterSuccess) {
-          await afterSuccess()
-        }
         return true
       })
       .catch((reason) => {
@@ -199,11 +168,11 @@ export function VmmInferenceSettings({
   }, [])
 
   const profile = snapshot?.inferenceProfiles.vmm
-  // VMM's issued access grant is fixed to external_service, so other scopes are not selectable.
-  // VMM 签发的访问授权固定为 external_service，因此其他用途范围不可选择。
+  // Native VMM executes as host-owned background work, so other scopes are not selectable.
+  // 原生 VMM 作为宿主持有的后台工作执行，因此其他用途范围不可选择。
   const candidates = snapshot?.internalInferenceCandidates.filter((candidate) => (
     candidate.enabled
-    && candidate.route.usage_scope === "external_service"
+    && candidate.route.usage_scope === "internal_background"
   )) ?? []
   // llmCandidates retain only exact contracts that can run with reasoning disabled.
   // llmCandidates 仅保留能够关闭思考执行的精确契约。
@@ -217,12 +186,9 @@ export function VmmInferenceSettings({
   // requiredRoutesReady gates first initialization on embedding plus all PreCheck/PostAction LLM routes.
   // requiredRoutesReady 使用向量路由和全部 PreCheck/PostAction LLM 路由共同门控首次初始化。
   const requiredRoutesReady = vmmRequiredInferenceReady(snapshot)
-  // routesDisabled prevents settings writes while a route mutation, connection test, or data rebuild owns the workflow.
-  // routesDisabled 在路由变更、连接测试或数据重建占用流程时阻止设置写入。
-  const routesDisabled = maintenanceActive
-    || pendingMutationKey !== null
-    || testingOperation !== null
-    || rerankRestartConfirmationOpen
+  // routesDisabled prevents settings writes while a route mutation or connection test owns the workflow.
+  // routesDisabled 在路由变更或连接测试占用流程时阻止设置写入。
+  const routesDisabled = pendingMutationKey !== null || testingOperation !== null
 
   React.useEffect(() => {
     onRequiredRouteReady?.(requiredRoutesReady)
@@ -310,19 +276,6 @@ export function VmmInferenceSettings({
   ) => {
     const key = `${operation}/${purposeId ?? "default"}`
     setTestSummaries((current) => ({ ...current, [operation]: undefined }))
-    // restartAfterSave keeps rerank persistence and the required managed-runtime restart in one guarded sequence.
-    // restartAfterSave 将重排持久化与所需的托管运行时重启放在同一条受保护序列中。
-    const restartAfterSave = operation === "rerank_documents" && onRestartVmm
-      ? async () => {
-          try {
-            if (!await onRestartVmm()) {
-              setError(t("settings.inference.rerankRestartFailed"))
-            }
-          } catch (reason) {
-            setError(errorMessage(reason))
-          }
-        }
-      : undefined
     return runSnapshotMutation(
       key,
       () => savePublicAiInferenceRoute({
@@ -331,35 +284,8 @@ export function VmmInferenceSettings({
         operation,
         route,
       }),
-      restartAfterSave,
     )
-  }, [onRestartVmm, runSnapshotMutation, t])
-
-  // confirmRerankChange delays the route mutation until the user accepts the required VMM restart.
-  // confirmRerankChange 在用户确认需要重启 VMM 前延迟路由变更。
-  const confirmRerankChange = React.useCallback(() => {
-    if (!onRestartVmm) {
-      return Promise.resolve(true)
-    }
-    return new Promise<boolean>((resolve) => {
-      rerankRestartConfirmationResolver.current = resolve
-      setRerankRestartConfirmationOpen(true)
-    })
-  }, [onRestartVmm])
-
-  // resolveRerankChangeConfirmation closes the dialog and resolves the pending route request exactly once.
-  // resolveRerankChangeConfirmation 关闭对话框并且只解析一次等待中的路由请求。
-  const resolveRerankChangeConfirmation = React.useCallback((confirmed: boolean) => {
-    setRerankRestartConfirmationOpen(false)
-    const resolve = rerankRestartConfirmationResolver.current
-    rerankRestartConfirmationResolver.current = null
-    resolve?.(confirmed)
-  }, [])
-
-  React.useEffect(() => () => {
-    rerankRestartConfirmationResolver.current?.(false)
-    rerankRestartConfirmationResolver.current = null
-  }, [])
+  }, [runSnapshotMutation])
 
   return (
     <section className="rounded-xl border bg-card p-3">
@@ -375,11 +301,6 @@ export function VmmInferenceSettings({
         <span>{t("settings.inference.vmmReasoningNotice")}</span>
       </div>
       {error ? <p className="settings-muted-line settings-error-text mb-2">{error}</p> : null}
-      {maintenanceActive ? (
-        <p className="mb-2 text-xs text-muted-foreground">
-          {t("settings.inference.maintenanceLocked")}
-        </p>
-      ) : null}
       {!snapshot ? (
         <p className="settings-muted-line">{t("settings.models.loadingCatalog")}</p>
       ) : (
@@ -425,7 +346,6 @@ export function VmmInferenceSettings({
               disabled={routesDisabled}
               label={t("settings.inference.rerank")}
               onConfigure={setEditingCandidate}
-              onBeforeChange={confirmRerankChange}
               onChange={(route) => saveRoute("rerank_documents", undefined, route)}
               onTest={() => void testRoute("rerank_documents")}
               route={profile?.rerank}
@@ -452,36 +372,6 @@ export function VmmInferenceSettings({
             }}
             open={editingCandidate !== null}
           />
-          <AlertDialog
-            onOpenChange={(open) => {
-              if (!open) {
-                resolveRerankChangeConfirmation(false)
-              }
-            }}
-            open={rerankRestartConfirmationOpen}
-          >
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>{t("settings.inference.rerankRestartTitle")}</AlertDialogTitle>
-                <AlertDialogDescription>
-                  {t("settings.inference.rerankRestartDescription")}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel onClick={() => resolveRerankChangeConfirmation(false)}>
-                  {t("settings.inference.rerankRestartCancel")}
-                </AlertDialogCancel>
-                <AlertDialogAction
-                  onClick={(event) => {
-                    event.preventDefault()
-                    resolveRerankChangeConfirmation(true)
-                  }}
-                >
-                  {t("settings.inference.rerankRestartConfirm")}
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
         </>
       )}
     </section>

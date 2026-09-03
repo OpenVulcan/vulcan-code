@@ -42,7 +42,7 @@ define route-command
 endef
 endif
 
-.PHONY: help sync vite start stop status build build-release release run run-release br br-release licenses deps deps-all deps-host deps-vldb deps-rtk deps-tools deps-lua deps-cbm deps-vmm init-system deps-rust-tools host vldb rtk tools lua cbm vmm rust-tools all
+.PHONY: help sync vite start stop status build build-release release run run-release br br-release licenses deps deps-all deps-host deps-vldb deps-rtk deps-tools deps-lua deps-cbm init-system deps-rust-tools host vldb rtk tools lua cbm rust-tools all
 
 # VITE_ACTION captures the required lifecycle action from `make vite start`, `stop`, or `status`.
 # VITE_ACTION 从 `make vite start`、`stop` 或 `status` 中捕获必需的生命周期操作。
@@ -72,7 +72,7 @@ help:
 	@echo "  make br            # build and run Tauri/WebUI debug; Vite is managed separately"
 	@echo "  make br-release    # build and run Tauri/WebUI release"
 	@echo "  make licenses      # generate Rust third-party notices"
-	@echo "  make deps          # install host + Lua + Codebase Memory + VMM dependencies"
+	@echo "  make deps          # install host + Lua + Codebase Memory dependencies"
 	@echo "  make init-system   # bootstrap Rust tools and all repository dependencies"
 	@echo "  make deps-host     # install host dependencies"
 	@echo "  make deps-vldb     # install vldb-controller host dependency"
@@ -81,7 +81,6 @@ help:
 	@echo "  make deps-rust-tools # install cargo-hakari and cargo-nextest"
 	@echo "  make deps-lua      # install Lua dependencies"
 	@echo "  make deps-cbm      # install the pinned native Codebase Memory runtime"
-	@echo "  make deps-vmm      # build and install the managed VMM runtime dependency"
 
 # sync routes the explicit runtime-resource synchronization command.
 # sync 路由显式运行时资源同步命令。
@@ -217,11 +216,6 @@ deps-lua:
 deps-cbm:
 	$(call route-command,deps cbm)
 
-# deps-vmm routes managed VMM runtime dependency preparation.
-# deps-vmm 路由托管 VMM 运行时依赖准备步骤。
-deps-vmm:
-	$(call route-command,deps vmm)
-
 # all is a deps companion no-op when used as `make deps all`.
 # all 在 `make deps all` 形式中作为 deps 的伴随空目标。
 all:
@@ -295,11 +289,3 @@ else
 	$(call route-command,deps cbm)
 endif
 
-# vmm is a deps companion no-op when used as `make deps vmm`.
-# vmm 在 `make deps vmm` 形式中作为 deps 的伴随空目标。
-vmm:
-ifneq ($(filter deps,$(MAKECMDGOALS)),)
-	@:
-else
-	$(call route-command,deps vmm)
-endif

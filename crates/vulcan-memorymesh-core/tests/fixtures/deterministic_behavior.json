@@ -1,0 +1,75 @@
+{
+  "schema_version": 3,
+  "evidence_scope": "source-derived-unit-cases-not-adapter-conformance",
+  "source_repository": "VulcanMemoryMesh",
+  "source_commit": "82f05fa5e3c7657e770fefd84e220fba5654ce07",
+  "normalization_cases": [
+    {
+      "source_test": "TestMemoryUseCaseSearchNormalizesGroupedQueryWhitespace: exact query and echo",
+      "input": "喜欢的\n水果",
+      "expected": "喜欢的 水果"
+    },
+    {
+      "source_test": "source-derived boundary: internal/platform/textutil/text.go NormalizeWhitespace; not an upstream test extraction",
+      "input": "  Ｒｕｓｔ\t memory\u0007\u00a0value  ",
+      "expected": "Ｒｕｓｔ memory\u0007\u00a0value"
+    }
+  ],
+  "weibull_case": {
+    "query": "当前实现方案",
+    "source_test": "internal/app/usecase/memory_query_test.go TestMemoryUseCaseSearchAppliesWeibullDecay",
+    "adaptation": "Translate relative ages to a fixed cutoff; Project maps to Environment, P2/P1 to 20/50. Use the actual Core Weibull kernel and vector-only public Search. Auxiliary Core-required UpdatedAt equals LastReinforcedAt; Version=1 and vectors=[0.1,0.2,0.3] do not contribute to the score. This is a fixture Host, not a real database adapter.",
+    "now_ms": 20000000000,
+    "policy": {
+      "math_profile": 2,
+      "enabled": true, "shape": 1.35, "scale_hours": 2160.0,
+      "min_multiplier": 0.4, "reinforce_weight": 0.18,
+      "cross_session_boost": 0.12, "refresh_weight_factor": 0.08,
+      "level_scales": [0.8, 1.0, 1.5, 2.4],
+      "priority_scales": [1.35, 1.15, 1.0],
+      "scope_scales": [0.9, 1.1, 1.25]
+    },
+    "memories": [
+      {"id": "201", "source_turn_id": "41", "summary": "旧实现方案", "details": "这是很早以前确认过的一条弱强化记忆", "base_score": 0.96, "priority": 20, "memory_level": "Phase", "created_days_ago": 180, "reinforced_days_ago": 120, "reinforcement_count": 0, "cross_session_adopted_count": 0},
+      {"id": "202", "source_turn_id": "42", "summary": "新实现方案", "details": "这是最近多次被跨会话采纳的一条稳定记忆", "base_score": 0.91, "priority": 50, "memory_level": "Stable", "created_days_ago": 20, "reinforced_days_ago": 2, "reinforcement_count": 4, "cross_session_adopted_count": 3}
+    ],
+    "expected_order": ["202", "201"]
+  },
+  "pii_cases": [
+    {
+      "source_test": "Core packaged PII rule regression: email; not the upstream custom-rule test",
+      "input": "邮箱 test@example.com",
+      "forbidden_substrings": ["test@example.com"],
+      "minimum_redactions": 1
+    },
+    {
+      "source_test": "Core packaged PII rule regression: mobile; not the upstream custom-rule test",
+      "input": "手机号 13800138000",
+      "forbidden_substrings": ["13800138000"],
+      "minimum_redactions": 1
+    }
+  ],
+  "noise_cases": [
+    {
+      "source_test": "Core packaged Noise regex regression: meta_question; does not test live-model semantic classification",
+      "role": "user",
+      "input": "你还记得我之前说过的内容吗",
+      "expected_is_noise": true,
+      "expected_category": "meta_question"
+    },
+    {
+      "source_test": "Core packaged Noise regex regression: denial_response; not the upstream custom-rule fixture",
+      "role": "assistant",
+      "input": "我不记得这件事。",
+      "expected_is_noise": true,
+      "expected_category": "denial_response"
+    },
+    {
+      "source_test": "Core packaged Noise regex regression: ordinary content passes",
+      "role": "user",
+      "input": "我喜欢使用 Rust 编写系统服务",
+      "expected_is_noise": false,
+      "expected_category": null
+    }
+  ]
+}

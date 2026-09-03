@@ -172,12 +172,8 @@ mod git;
 mod git_diff_services;
 mod git_watcher;
 mod host_tools_settings;
-pub mod inference_access;
-mod inference_service;
 mod internal_ai;
 mod knowledge_base_services;
-mod managed_memory_mesh_maintenance;
-mod managed_memory_mesh_runtime;
 mod mcp_settings;
 mod media_upload;
 mod native_vmm;
@@ -429,7 +425,6 @@ pub fn create_service_bridge_state(
         pending_prompt_process_mirrors: BTreeMap::new(),
         agent_runtime: None,
         codebase_memory_controller: Default::default(),
-        managed_memory_mesh_runtime: None,
         native_vmm_maintenance: None,
         vmm_controller_registry: Default::default(),
         service_runtime: None,
@@ -477,13 +472,7 @@ pub fn service_prepare_for_app_shutdown(
     // Runtime handles and the provider sync service are cloned under one state observation,
     // then stopped outside the service lock.
     // 运行时句柄与供应商同步服务在同一次状态观察中完成克隆，随后在服务锁外停止。
-    let (
-        task_runtime,
-        mcp_runtime,
-        managed_memory_mesh_runtime,
-        provider_manifest_sync,
-        session_v1_handles,
-    ) = {
+    let (task_runtime, mcp_runtime, provider_manifest_sync, session_v1_handles) = {
         // guard provides the single authoritative shutdown snapshot of runtime handles.
         // guard 提供运行时句柄的单次权威关闭快照。
         let guard = state
@@ -493,14 +482,12 @@ pub fn service_prepare_for_app_shutdown(
             Some(agent_runtime) => (
                 Some(Arc::clone(&agent_runtime.task_runtime)),
                 Some(agent_runtime.extension_generation.mcp_runtime()),
-                guard.managed_memory_mesh_runtime.as_ref().map(Arc::clone),
                 guard.provider_manifest_sync.clone(),
                 Arc::clone(&guard.session_runtime_registry),
             ),
             None => (
                 None,
                 None,
-                guard.managed_memory_mesh_runtime.as_ref().map(Arc::clone),
                 guard.provider_manifest_sync.clone(),
                 Arc::clone(&guard.session_runtime_registry),
             ),
@@ -531,18 +518,6 @@ pub fn service_prepare_for_app_shutdown(
                 }
                 Ok(Vec::new())
             }
-        },
-        || {
-            if let Some(managed_memory_mesh_runtime) = managed_memory_mesh_runtime {
-                managed_memory_mesh_runtime
-                    .lock()
-                    .map_err(|_| {
-                        String::from("The managed VMM runtime is locked during shutdown.")
-                    })?
-                    .stop()?;
-                crate::vmm_hooks::clear_managed_vmm_transport_overlay();
-            }
-            Ok(())
         },
         || {
             if let Some(mcp_runtime) = mcp_runtime {
@@ -582,34 +557,31 @@ pub fn service_resume_after_failed_app_shutdown(
     Ok(())
 }
 
-/// Runs the strict task, managed-memory, and MCP shutdown sequence.
-/// 按严格顺序执行任务、托管记忆与 MCP 关闭。
+/// Runs the strict task and MCP shutdown sequence.
+/// 按严格顺序执行任务与 MCP 关闭。
 ///
 /// # Parameters
 /// 参数
 /// `stop_tasks` cancels active agent work and therefore drains in-flight VMM hooks;
-/// `stop_managed_memory` closes the owned VMM child; `stop_mcp` releases MCP last.
+/// `stop_mcp` releases MCP after task shutdown completes.
 /// `stop_tasks` 取消活动智能体工作并因此排空运行中的 VMM Hook；
-/// `stop_managed_memory` 关闭持有的 VMM 子进程；`stop_mcp` 最后释放 MCP。
+/// `stop_mcp` 在任务关闭完成后释放 MCP。
 ///
 /// # Returns
 /// 返回值
 /// The exact task identifiers stopped by the first phase, or the first shutdown failure.
 /// 返回第一阶段停止的精确任务标识，或首个关闭失败。
-fn ordered_runtime_shutdown<StopTasks, StopManagedMemory, StopMcp>(
+fn ordered_runtime_shutdown<StopTasks, StopMcp>(
     stop_tasks: StopTasks,
-    stop_managed_memory: StopManagedMemory,
     stop_mcp: StopMcp,
 ) -> Result<Vec<Uuid>, String>
 where
     StopTasks: FnOnce() -> Result<Vec<Uuid>, String>,
-    StopManagedMemory: FnOnce() -> Result<(), String>,
     StopMcp: FnOnce() -> Result<(), String>,
 {
-    // Active work must stop first so no request can enter VMM while its child is closing.
-    // 活动工作必须先停止，避免 VMM 子进程关闭时仍有请求进入。
+    // Active work must stop first so no request can enter VMM while MCP teardown begins.
+    // 活动工作必须先停止，避免 MCP 开始释放时仍有请求进入 VMM。
     let stopped_task_ids = stop_tasks()?;
-    stop_managed_memory()?;
     stop_mcp()?;
     Ok(stopped_task_ids)
 }

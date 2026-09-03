@@ -420,8 +420,8 @@ pub struct MemorySearchGroup {
     pub hits: Vec<SearchHit>,
 }
 
-/// Requests batch memory and turn details without per-record FFI traffic.
-/// 请求批量记忆与轮次详情，不产生逐记录 FFI 流量。
+/// Requests batch memory and turn details without per-record host-effect round trips.
+/// 请求批量记忆与轮次详情，不产生逐记录宿主效应往返。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryDetailsBatchCommand {
     /// Identifies the resolved subject.

@@ -27,21 +27,87 @@ import type {
   VmmProjectScopeSummary,
 } from "@/types"
 
+import type { MemoryActionRunOptions } from "./use-memory-area-controller"
+
 // VmmNativeProjectPageProps defines native project catalog data and guarded maintenance actions.
 // VmmNativeProjectPageProps 定义原生项目目录数据与受保护维护动作。
 interface VmmNativeProjectPageProps {
   busy: boolean
   notice: string
   projects: VmmProjectScopeSummary[]
-  onRunAction: (action: string, payload?: Record<string, unknown>) => Promise<VmmMemoryActionResult | null>
+  onRunAction: (
+    action: string,
+    payload?: Record<string, unknown>,
+    options?: MemoryActionRunOptions,
+  ) => Promise<VmmMemoryActionResult | null>
 }
 
 // NativeProjectPreview is the only destructive preview currently awaiting confirmation.
 // NativeProjectPreview 是当前唯一等待确认的破坏性预检。
-type NativeProjectPreview =
-  | { kind: "migration"; value: VmmNativeMigrationPreview }
-  | { kind: "clear"; value: VmmNativeClearPreview }
-  | { kind: "delete"; value: VmmNativeProjectDeletePreview }
+export type NativeProjectPreview =
+  | { commandId: string; kind: "migration"; value: VmmNativeMigrationPreview }
+  | { commandId: string; kind: "clear"; value: VmmNativeClearPreview }
+  | { commandId: string; kind: "delete"; value: VmmNativeProjectDeletePreview }
+
+// NativeProjectConfirmationRequest binds one preview to its durable mutation command identity.
+// NativeProjectConfirmationRequest 将一次预检绑定到其持久变更命令身份。
+export interface NativeProjectConfirmationRequest {
+  // Backend action selected by the preview kind.
+  // 由预检类型选择的后端动作。
+  action: string
+  // Stable UUID reused until this preview is either committed or cancelled.
+  // 在本次预检提交或取消前持续复用的稳定 UUID。
+  commandId: string
+  // Exact payload frozen by the accepted preview.
+  // 由已接受预检冻结的准确载荷。
+  payload: Record<string, unknown>
+}
+
+// nativeProjectConfirmationRequest builds the exact retry-safe mutation request for one preview.
+// nativeProjectConfirmationRequest 为一次预检构造准确且可安全重试的变更请求。
+//
+// Parameters: preview is the accepted destructive preview and its stable confirmation UUID.
+// 参数：preview 是已接受的破坏性预检及其稳定确认 UUID。
+//
+// Returns: the backend action, exact payload, and unchanged command identity.
+// 返回：后端动作、准确载荷与保持不变的命令身份。
+export function nativeProjectConfirmationRequest(
+  preview: NativeProjectPreview,
+): NativeProjectConfirmationRequest {
+  if (preview.kind === "migration") {
+    return {
+      action: "native_project_migrate",
+      commandId: preview.commandId,
+      payload: {
+        sourceProjectId: preview.value.sourceProjectId,
+        targetProjectId: preview.value.targetProjectId,
+        expectedStorageVersion: preview.value.storageVersion,
+        expectedPreviewFingerprint: preview.value.previewFingerprint,
+        acceptSessionRenames: preview.value.sessionRenames.length > 0,
+      },
+    }
+  }
+  if (preview.kind === "clear") {
+    return {
+      action: "native_project_clear",
+      commandId: preview.commandId,
+      payload: {
+        vmmProjectId: preview.value.projectId,
+        expectedStorageVersion: preview.value.storageVersion,
+      },
+    }
+  }
+  return {
+    action: "native_project_delete",
+    commandId: preview.commandId,
+    payload: {
+      vmmProjectId: preview.value.project.projectId,
+      expectedStorageVersion: preview.value.storageVersion,
+      confirmDetachBindings: preview.value.project.ownerVulcanProjectIds.length > 0
+        || preview.value.project.linkedVulcanProjectIds.length > 0,
+    },
+  }
+}
 
 // VmmNativeProjectPage renders native one-level projects, stable bindings, and guarded maintenance.
 // VmmNativeProjectPage 渲染原生一级项目、稳定绑定与受保护维护。
@@ -83,15 +149,25 @@ function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNative
 
   // runAction serializes page-owned operations and consumes every structured response kind.
   // runAction 串行化页面持有的操作并消费每种结构化响应类型。
-  const runAction = React.useCallback(async (action: string, payload?: Record<string, unknown>) => {
+  const runAction = React.useCallback(async (
+    action: string,
+    payload?: Record<string, unknown>,
+    options?: MemoryActionRunOptions,
+  ) => {
     if (effectiveBusy) return null
     setLocalBusy(true)
     try {
-      const result = await onRunAction(action, payload)
+      const result = await onRunAction(action, payload, options)
       if (result?.data.kind === "native_project_catalog") acceptCatalog(result.data.value)
-      if (result?.data.kind === "native_migration_preview") setPreview({ kind: "migration", value: result.data.value })
-      if (result?.data.kind === "native_clear_preview") setPreview({ kind: "clear", value: result.data.value })
-      if (result?.data.kind === "native_project_delete_preview") setPreview({ kind: "delete", value: result.data.value })
+      if (result?.data.kind === "native_migration_preview") {
+        setPreview({ commandId: crypto.randomUUID(), kind: "migration", value: result.data.value })
+      }
+      if (result?.data.kind === "native_clear_preview") {
+        setPreview({ commandId: crypto.randomUUID(), kind: "clear", value: result.data.value })
+      }
+      if (result?.data.kind === "native_project_delete_preview") {
+        setPreview({ commandId: crypto.randomUUID(), kind: "delete", value: result.data.value })
+      }
       return result
     } finally {
       setLocalBusy(false)
@@ -152,26 +228,14 @@ function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNative
   // executePreview 提交准确的预检版本，绝不静默重新计算破坏范围。
   const executePreview = React.useCallback(async () => {
     if (!preview) return
-    let result: VmmMemoryActionResult | null = null
-    if (preview.kind === "migration") {
-      result = await runAction("native_project_migrate", {
-        sourceProjectId: preview.value.sourceProjectId,
-        targetProjectId: preview.value.targetProjectId,
-        expectedStorageVersion: preview.value.storageVersion,
-        acceptSessionRenames: preview.value.sessionRenames.length > 0,
-      })
-    } else if (preview.kind === "clear") {
-      result = await runAction("native_project_clear", {
-        vmmProjectId: preview.value.projectId,
-        expectedStorageVersion: preview.value.storageVersion,
-      })
-    } else {
-      result = await runAction("native_project_delete", {
-        vmmProjectId: preview.value.project.projectId,
-        expectedStorageVersion: preview.value.storageVersion,
-        confirmDetachBindings: preview.value.project.ownerVulcanProjectIds.length > 0,
-      })
-    }
+    // confirmation remains unchanged when a lost response leaves this preview visible for retry.
+    // confirmation 在响应丢失导致本预检继续可见并重试时保持不变。
+    const confirmation = nativeProjectConfirmationRequest(preview)
+    const result = await runAction(
+      confirmation.action,
+      confirmation.payload,
+      { commandId: confirmation.commandId },
+    )
     if (!result) return
     setPreview(null)
     await runAction("native_project_catalog")
@@ -293,6 +357,7 @@ function NativePreviewCard({ busy, onCancel, onConfirm, preview }: {
   const { t } = useI18n()
   const content = preview.kind === "migration" ? preview.value.source : preview.kind === "clear" ? preview.value.removed : preview.value.content
   const owners = preview.kind === "delete" ? preview.value.project.ownerVulcanProjectIds : []
+  const links = preview.kind === "delete" ? preview.value.project.linkedVulcanProjectIds : []
   const conflicts = preview.kind === "migration" ? preview.value.sessionRenames.length : 0
   const titleKey: TranslationKey = preview.kind === "migration"
     ? "vmm.nativeProjects.preview.migration"
@@ -304,9 +369,48 @@ function NativePreviewCard({ busy, onCancel, onConfirm, preview }: {
       {conflicts > 0 || preview.kind === "delete" ? <CircleAlert aria-hidden="true" /> : <DatabaseZap aria-hidden="true" />}
       <AlertTitle>{t(titleKey)}</AlertTitle>
       <AlertDescription className="space-y-3">
-        <p>{t("vmm.nativeProjects.previewCounts").replace("{sessions}", String(content.sessions)).replace("{memories}", String(content.memories)).replace("{profiles}", String(content.profileNodes)).replace("{vectors}", String(content.vectorRows))}</p>
+        {preview.kind === "migration" ? (
+          <p>
+            {t("vmm.nativeProjects.previewMigrationCounts")
+              .replace("{sourceSessions}", String(preview.value.source.sessions))
+              .replace("{sourceMemories}", String(preview.value.source.memories))
+              .replace("{sourceProfiles}", String(preview.value.source.profileNodes))
+              .replace("{sourceVectors}", String(preview.value.source.vectorRows))
+              .replace("{targetSessions}", String(preview.value.targetBefore.sessions))
+              .replace("{targetMemories}", String(preview.value.targetBefore.memories))
+              .replace("{targetProfiles}", String(preview.value.targetBefore.profileNodes))
+              .replace("{targetVectors}", String(preview.value.targetBefore.vectorRows))
+              .replace("{afterSessions}", String(preview.value.targetAfter.sessions))
+              .replace("{afterMemories}", String(preview.value.targetAfter.memories))
+              .replace("{afterProfiles}", String(preview.value.targetAfter.profileNodes))
+              .replace("{afterVectors}", String(preview.value.targetAfter.vectorRows))}
+          </p>
+        ) : (
+          <p>{t("vmm.nativeProjects.previewCounts").replace("{sessions}", String(content.sessions)).replace("{memories}", String(content.memories)).replace("{profiles}", String(content.profileNodes)).replace("{vectors}", String(content.vectorRows))}</p>
+        )}
         {preview.kind === "migration" ? <p>{t("vmm.nativeProjects.previewConflicts").replace("{count}", String(conflicts))}</p> : null}
+        {preview.kind === "migration" ? (
+          <details className="rounded-md border bg-background/60 p-2">
+            <summary className="cursor-pointer text-sm font-medium">
+              {t("vmm.nativeProjects.previewRecords").replace("{count}", String(preview.value.records.length))}
+            </summary>
+            <div className="mt-2 max-h-72 space-y-2 overflow-auto">
+              {preview.value.records.map((record) => (
+                <div className="rounded border px-2 py-1.5 text-xs" key={`${record.recordKind}:${record.recordId}`}>
+                  <p className="font-medium">
+                    {t(`vmm.nativeProjects.recordKind.${record.recordKind}` as TranslationKey)} · {record.recordId}
+                  </p>
+                  {record.sessionSourceId && record.sessionSourceId !== record.recordId ? (
+                    <p className="text-muted-foreground">{t("vmm.nativeProjects.recordSession").replace("{session}", record.sessionSourceId)}</p>
+                  ) : null}
+                  {record.summary ? <p className="mt-1 whitespace-pre-wrap text-muted-foreground">{record.summary}</p> : null}
+                </div>
+              ))}
+            </div>
+          </details>
+        ) : null}
         {owners.length > 0 ? <p>{t("vmm.nativeProjects.previewOwners").replace("{projects}", owners.join(", "))}</p> : null}
+        {links.length > 0 ? <p>{t("vmm.nativeProjects.previewLinks").replace("{projects}", links.join(", "))}</p> : null}
         <div className="flex flex-wrap gap-2">
           <Button disabled={busy} onClick={onConfirm} type="button" variant={preview.kind === "delete" ? "destructive" : "default"}>
             {conflicts > 0 ? <CircleAlert className="size-4" aria-hidden="true" /> : null}

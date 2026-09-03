@@ -2,14 +2,16 @@
 //! 宿主持有的原生 VMM 项目内容维护。
 
 use super::driver::NativeVmmCoreRuntime;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use vulcan_memorymesh_core::{
     MutationOutcome, ScopeId, SessionSourceId, StorageSnapshot, context_evidence_domain_id,
 };
 use vulcan_workspace_store::vmm_data_plane::{
-    NativeVmmProject, NativeVmmProjectBindingAccess, NativeVmmProjectUsage, VmmDataPlaneHandle,
+    NativeVmmProject, NativeVmmProjectAccess, NativeVmmProjectBindingAccess, NativeVmmProjectUsage,
+    VmmDataPlaneHandle,
 };
 
 /// Carries one native VMM project together with all current consumers.
@@ -38,7 +40,7 @@ pub(crate) struct NativeVmmProjectCatalog {
 
 /// Carries the exact impact of deleting one native VMM project.
 /// 携带删除一个原生 VMM 项目的准确影响。
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct NativeVmmProjectDeletePreview {
     /// Storage version that must still match when deletion is confirmed.
     /// 确认删除时必须仍然匹配的存储版本。
@@ -56,7 +58,7 @@ pub(crate) struct NativeVmmProjectDeletePreview {
 
 /// Summarizes content attributable to one native VMM project scope.
 /// 汇总可归属于一个原生 VMM 项目作用域的内容。
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct NativeVmmProjectContentCounts {
     /// Number of distinct host sessions owned by the project.
     /// 项目拥有的不同宿主会话数量。
@@ -83,7 +85,7 @@ pub(crate) struct NativeVmmProjectContentCounts {
 
 /// Describes one deterministic session rename required by a migration conflict.
 /// 描述迁移冲突所需的一次确定性会话改名。
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct NativeVmmSessionRename {
     /// Original source session identity.
     /// 原始来源会话身份。
@@ -91,6 +93,24 @@ pub(crate) struct NativeVmmSessionRename {
     /// Collision-free target session identity.
     /// 无冲突的目标会话身份。
     pub to: String,
+}
+
+/// Describes one user-visible primary record included by a migration preview.
+/// 描述迁移预检包含的一条用户可见主记录。
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct NativeVmmMigrationRecordSummary {
+    /// Stable record class: session, turn, memory, or project_profile.
+    /// 稳定记录类别：会话、回合、记忆或项目画像。
+    pub record_kind: String,
+    /// Stable Core identity, or the host session identity for a session row.
+    /// 稳定 Core 身份；会话行则使用宿主会话身份。
+    pub record_id: String,
+    /// Originating host session when the record belongs to one.
+    /// 当记录属于某个宿主会话时携带其来源会话。
+    pub session_source_id: Option<String>,
+    /// Compact non-secret description available for human review.
+    /// 供人工核对的紧凑非敏感描述。
+    pub summary: Option<String>,
 }
 
 /// Carries a side-effect-free native project migration preview.
@@ -118,6 +138,12 @@ pub(crate) struct NativeVmmMigrationPreview {
     /// Session collisions and their mandatory automatic renames.
     /// 会话冲突及其必须执行的自动改名。
     pub session_renames: Vec<NativeVmmSessionRename>,
+    /// User-visible primary records that will change project ownership.
+    /// 将改变项目归属的用户可见主记录。
+    pub records: Vec<NativeVmmMigrationRecordSummary>,
+    /// SHA-256 identity of the exact displayed migration preview.
+    /// 用户所见准确迁移预检的 SHA-256 身份。
+    pub preview_fingerprint: String,
 }
 
 /// Carries a completed native project migration result.
@@ -172,19 +198,48 @@ pub(crate) struct NativeVmmMaintenance {
     /// Host project catalog used to reject nonexistent maintenance targets.
     /// 用于拒绝不存在维护目标的宿主项目目录。
     data_plane: VmmDataPlaneHandle,
+    /// Exclusive side of the barrier shared with every native project operation.
+    /// 与全部原生项目操作共享的屏障独占侧。
+    operation_gate: Arc<RwLock<()>>,
     /// Serializes project catalog and content mutations across UI and project creation paths.
     /// 在界面操作与项目创建路径之间串行化项目目录及内容变更。
     project_mutation_gate: Arc<Mutex<()>>,
 }
 
 impl NativeVmmMaintenance {
+    /// Returns the latest native Host AI validation status without triggering inference work.
+    /// 返回最近一次原生宿主 AI 校验状态，且不触发推理工作。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The shared runtime's latest completed or initial unchecked status.
+    /// 返回共享运行时最近完成的状态或初始未校验状态。
+    pub(crate) fn host_ai_status(&self) -> super::NativeVmmHostAiStatus {
+        self.runtime.host_ai_status()
+    }
+
+    /// Validates the native runtime's required host AI routes before global enablement.
+    /// 在全局启用前校验原生运行时所需的宿主 AI 路由。
+    ///
+    /// # Errors
+    /// Returns the exact Host AI registration or embedding compatibility failure.
+    /// Host AI 注册或向量兼容性失败时返回准确错误。
+    pub(crate) async fn validate_host_ai(&self) -> Result<(), String> {
+        self.runtime.validate_host_ai().await
+    }
+
     /// Creates one maintenance facade over the exact runtime and project catalog.
     /// 基于精确运行时与项目目录创建一个维护门面。
     #[must_use]
-    pub(crate) fn new(runtime: Arc<NativeVmmCoreRuntime>, data_plane: VmmDataPlaneHandle) -> Self {
+    pub(crate) fn new(
+        runtime: Arc<NativeVmmCoreRuntime>,
+        data_plane: VmmDataPlaneHandle,
+        operation_gate: Arc<RwLock<()>>,
+    ) -> Self {
         Self {
             runtime,
             data_plane,
+            operation_gate,
             project_mutation_gate: Arc::new(Mutex::new(())),
         }
     }
@@ -192,6 +247,9 @@ impl NativeVmmMaintenance {
     /// Loads every native VMM project, its consumers, and every VulcanCode binding.
     /// 加载全部原生 VMM 项目、使用方以及每条 VulcanCode 绑定。
     pub(crate) async fn project_catalog(&self) -> Result<NativeVmmProjectCatalog, String> {
+        // The catalog guard keeps the multi-query projection on one project-association boundary.
+        // 目录守卫使多次查询投影保持在同一个项目关联边界上。
+        let _guard = self.project_mutation_gate.lock().await;
         let projects = self.data_plane.list_projects().await?;
         let mut catalog_projects = Vec::with_capacity(projects.len());
         for project in projects {
@@ -212,6 +270,9 @@ impl NativeVmmMaintenance {
         vmm_project_id: u64,
     ) -> Result<NativeVmmProject, String> {
         let _guard = self.project_mutation_gate.lock().await;
+        // Owner rebinding cannot cross an in-flight operation that already resolved its write scope.
+        // 所有者重绑不能跨越已经解析写入作用域的进行中操作。
+        let _operation_guard = self.operation_gate.write().await;
         let project = self
             .data_plane
             .project_by_id(vmm_project_id)
@@ -223,6 +284,58 @@ impl NativeVmmMaintenance {
         Ok(project)
     }
 
+    /// Applies a fixed owner only when a newly registered VulcanCode project has no native binding.
+    /// 仅当新登记的 VulcanCode 项目尚无原生绑定时应用固定所有者。
+    ///
+    /// # Parameters
+    /// `vulcan_project_id` is the stable VulcanCode project tag being registered.
+    /// `vulcan_project_id` 是正在登记的稳定 VulcanCode 项目标签。
+    /// `vmm_project_id` is the globally configured fallback owner project.
+    /// `vmm_project_id` 是全局配置的兜底所有者项目。
+    ///
+    /// # Returns
+    /// Returns the pre-existing owner when present, otherwise the newly assigned fixed owner.
+    /// 已存在所有者时返回原所有者，否则返回新分配的固定所有者。
+    pub(crate) async fn bind_existing_project_if_unbound(
+        &self,
+        vulcan_project_id: &str,
+        vmm_project_id: u64,
+    ) -> Result<NativeVmmProject, String> {
+        let _guard = self.project_mutation_gate.lock().await;
+        // Registration must not overwrite an owner selected before a project directory was re-added.
+        // 登记过程不得覆盖项目目录重新添加前已经选择的所有者。
+        let _operation_guard = self.operation_gate.write().await;
+        if let Some(project) = self.bound_project(vulcan_project_id).await? {
+            return Ok(project);
+        }
+        let project = self
+            .data_plane
+            .project_by_id(vmm_project_id)
+            .await?
+            .ok_or_else(|| format!("原生 VMM 项目 {vmm_project_id} 不存在"))?;
+        self.data_plane
+            .bind_vulcan_project(vulcan_project_id, vmm_project_id)
+            .await?;
+        Ok(project)
+    }
+
+    /// Atomically replaces one project's unique write owner and recall-only project set.
+    /// 原子替换一个项目的唯一写入所有者与仅召回项目集合。
+    pub(crate) async fn set_project_access(
+        &self,
+        vulcan_project_id: &str,
+        owner_project_id: u64,
+        linked_project_ids: &[u64],
+    ) -> Result<NativeVmmProjectAccess, String> {
+        let _guard = self.project_mutation_gate.lock().await;
+        // One write guard keeps functional requests outside the complete association transaction.
+        // 单个写守卫使功能请求无法进入完整关联事务的中间状态。
+        let _operation_guard = self.operation_gate.write().await;
+        self.data_plane
+            .set_project_access(vulcan_project_id, owner_project_id, linked_project_ids)
+            .await
+    }
+
     /// Creates or reuses the project tag and binds it as the unique write owner.
     /// 创建或复用项目标签，并将其绑定为唯一写入所有者。
     pub(crate) async fn create_and_bind_project(
@@ -231,6 +344,9 @@ impl NativeVmmMaintenance {
         project_name: &str,
     ) -> Result<NativeVmmProject, String> {
         let _guard = self.project_mutation_gate.lock().await;
+        // Creation and binding publish one new owner only after active native operations drain.
+        // 创建与绑定仅在活动原生操作排空后发布新的所有者。
+        let _operation_guard = self.operation_gate.write().await;
         let project = self
             .data_plane
             .ensure_project(project_name, vulcan_project_id)
@@ -241,10 +357,82 @@ impl NativeVmmMaintenance {
         Ok(project)
     }
 
+    /// Creates the per-project default only when a newly registered project has no native binding.
+    /// 仅当新登记项目尚无原生绑定时创建按项目默认记忆项目。
+    ///
+    /// # Parameters
+    /// `vulcan_project_id` is the stable VulcanCode project tag used by the binding.
+    /// `vulcan_project_id` 是绑定使用的稳定 VulcanCode 项目标签。
+    /// `project_name` is the initial display name for a newly created native project.
+    /// `project_name` 是新建原生项目使用的初始显示名称。
+    ///
+    /// # Returns
+    /// Returns the pre-existing owner when present, otherwise the newly created and assigned owner.
+    /// 已存在所有者时返回原所有者，否则返回新建并分配的所有者。
+    pub(crate) async fn create_and_bind_project_if_unbound(
+        &self,
+        vulcan_project_id: &str,
+        project_name: &str,
+    ) -> Result<NativeVmmProject, String> {
+        let _guard = self.project_mutation_gate.lock().await;
+        // The check and default assignment share the mutation guard so manual rebinding cannot be lost.
+        // 检查与默认分配共用变更守卫，因此不会丢失并发发生的手动重绑。
+        let _operation_guard = self.operation_gate.write().await;
+        if let Some(project) = self.bound_project(vulcan_project_id).await? {
+            return Ok(project);
+        }
+        let project = self
+            .data_plane
+            .ensure_project(project_name, vulcan_project_id)
+            .await?;
+        self.data_plane
+            .bind_vulcan_project(vulcan_project_id, project.id)
+            .await?;
+        Ok(project)
+    }
+
+    /// Resolves an existing owner while the caller holds the project-mutation guard.
+    /// 在调用方持有项目变更守卫时解析现有所有者。
+    ///
+    /// # Parameters
+    /// `vulcan_project_id` is the stable VulcanCode project tag to inspect.
+    /// `vulcan_project_id` 是要检查的稳定 VulcanCode 项目标签。
+    ///
+    /// # Returns
+    /// Returns `None` when unbound, or the exact owner project; dangling bindings are explicit errors.
+    /// 未绑定时返回 `None`，否则返回准确所有者项目；悬空绑定会显式报错。
+    async fn bound_project(
+        &self,
+        vulcan_project_id: &str,
+    ) -> Result<Option<NativeVmmProject>, String> {
+        let Some(binding) = self
+            .data_plane
+            .list_project_bindings()
+            .await?
+            .into_iter()
+            .find(|binding| binding.vulcan_project_id == vulcan_project_id)
+        else {
+            return Ok(None);
+        };
+        self.data_plane
+            .project_by_id(binding.owner_project_id)
+            .await?
+            .map(Some)
+            .ok_or_else(|| {
+                format!(
+                    "VulcanCode 项目 {vulcan_project_id} 的原生 VMM 绑定指向不存在的项目 {}",
+                    binding.owner_project_id
+                )
+            })
+    }
+
     /// Removes one VulcanCode project's owner binding and all recall-only links.
     /// 删除一个 VulcanCode 项目的所有者绑定及全部仅召回连带关系。
     pub(crate) async fn unbind_project(&self, vulcan_project_id: &str) -> Result<(), String> {
         let _guard = self.project_mutation_gate.lock().await;
+        // Unbinding waits until no active operation can still rely on the previous owner.
+        // 解绑会等待，直到没有活动操作仍依赖此前所有者。
+        let _operation_guard = self.operation_gate.write().await;
         self.data_plane
             .unbind_vulcan_project(vulcan_project_id)
             .await
@@ -258,6 +446,9 @@ impl NativeVmmMaintenance {
         linked_project_ids: &[u64],
     ) -> Result<(), String> {
         let _guard = self.project_mutation_gate.lock().await;
+        // Linked recall replacement waits until existing retrievals release their frozen scope set.
+        // 连带召回替换会等待现有检索释放其冻结作用域集合。
+        let _operation_guard = self.operation_gate.write().await;
         self.data_plane
             .replace_query_links(vulcan_project_id, linked_project_ids)
             .await?;
@@ -289,6 +480,7 @@ impl NativeVmmMaintenance {
         if project.protected {
             return Err(String::from("default VMM 项目不允许删除"));
         }
+        self.ensure_no_pending_analysis_jobs(project_id).await?;
         let snapshot = self.runtime.storage_snapshot()?;
         Ok(NativeVmmProjectDeletePreview {
             storage_version: snapshot.storage_version,
@@ -300,28 +492,74 @@ impl NativeVmmMaintenance {
 
     /// Deletes one project after validating the preview version and detaches every consumer.
     /// 校验预检版本后删除一个项目，并解除全部使用方。
+    ///
+    /// `operation_id` is the stable command UUID used by the recovery journal.
+    /// `operation_id` 是恢复账本使用的稳定命令 UUID。
     pub(crate) async fn delete_project(
         &self,
+        operation_id: &str,
         project_id: u64,
         expected_storage_version: u64,
+        confirm_detach_bindings: bool,
     ) -> Result<NativeVmmProjectDeletePreview, String> {
         let _guard = self.project_mutation_gate.lock().await;
+        // The write guard drains in-flight readers and prevents new project operations until the
+        // project row, bindings, Core snapshot, and vector state reach one maintenance boundary.
+        // 写入守卫排空进行中的读取方，并阻止新的项目操作，直到项目记录、绑定、Core 快照与向量状态到达同一维护边界。
+        let _operation_guard = self.operation_gate.write().await;
+        self.ensure_no_pending_analysis_jobs(project_id).await?;
+        // mutation_kind binds replay to the complete confirmed delete payload, including the
+        // preview version and the explicit association-detachment acknowledgement.
+        // mutation_kind 将重放绑定到完整确认删除载荷，包括预检版本与明确的关联解除确认。
+        let mutation_kind = format!(
+            "project_delete:{project_id}:{expected_storage_version}:{confirm_detach_bindings}"
+        );
+        if let Some(preview) = self
+            .runtime
+            .replay_storage_snapshot_transform::<NativeVmmProjectDeletePreview>(
+                operation_id,
+                &mutation_kind,
+            )
+            .await?
+        {
+            self.data_plane
+                .delete_project_with_bindings(project_id)
+                .await?;
+            return Ok(preview);
+        }
         let preview = self.preview_project_delete(project_id).await?;
+        if (!preview.usage.owner_vulcan_project_ids.is_empty()
+            || !preview.usage.linked_vulcan_project_ids.is_empty())
+            && !confirm_detach_bindings
+        {
+            return Err(String::from(
+                "该原生 VMM 项目仍有 VulcanCode 归属或连带查询关联，请确认解除关联后再删除。",
+            ));
+        }
         if preview.storage_version != expected_storage_version {
             return Err(format!(
                 "原生 VMM 存储版本已变化：预期 {expected_storage_version}，实际 {}，请重新预检",
                 preview.storage_version
             ));
         }
-        self.runtime
-            .transform_storage_snapshot(expected_storage_version, |snapshot| {
-                clear_project(snapshot, project_id)
-            })
+        // deleted_preview is journaled so a retry can still disable former owners after catalog deletion.
+        // deleted_preview 会写入账本，使重试在项目目录已删除后仍可禁用原有归属项目。
+        let deleted_preview = self
+            .runtime
+            .transform_storage_snapshot(
+                operation_id,
+                &mutation_kind,
+                expected_storage_version,
+                |snapshot| {
+                    clear_project(snapshot, project_id)?;
+                    Ok(preview.clone())
+                },
+            )
             .await?;
         self.data_plane
             .delete_project_with_bindings(project_id)
             .await?;
-        Ok(preview)
+        Ok(deleted_preview)
     }
 
     /// Previews a content move without changing Core, SQLite, or LanceDB state.
@@ -333,6 +571,8 @@ impl NativeVmmMaintenance {
     ) -> Result<NativeVmmMigrationPreview, String> {
         self.ensure_distinct_projects(source_project_id, target_project_id)
             .await?;
+        self.ensure_no_pending_analysis_jobs(source_project_id)
+            .await?;
         preview_migration(
             &self.runtime.storage_snapshot()?,
             source_project_id,
@@ -342,29 +582,55 @@ impl NativeVmmMaintenance {
 
     /// Moves source content into the target after validating the exact preview version.
     /// 校验精确预检版本后将来源内容迁入目标项目。
+    ///
+    /// `operation_id` is the stable command UUID used for idempotent replay.
+    /// `operation_id` 是用于幂等重放的稳定命令 UUID。
     pub(crate) async fn execute_migration(
         &self,
+        operation_id: &str,
         source_project_id: u64,
         target_project_id: u64,
         expected_storage_version: u64,
+        expected_preview_fingerprint: &str,
         accept_session_renames: bool,
     ) -> Result<NativeVmmMigrationResult, String> {
         let _guard = self.project_mutation_gate.lock().await;
+        // The write guard freezes all native operations while the source queue and content move are checked.
+        // 写入守卫在检查来源队列及迁移内容期间冻结全部原生操作。
+        let _operation_guard = self.operation_gate.write().await;
+        self.ensure_no_pending_analysis_jobs(source_project_id)
+            .await?;
         self.ensure_distinct_projects(source_project_id, target_project_id)
             .await?;
+        // mutation_kind rejects command-id reuse with a different preview or risk acknowledgement.
+        // mutation_kind 拒绝使用同一命令 ID 提交不同预检或风险确认状态。
+        let mutation_kind = format!(
+            "project_migration:{source_project_id}:{target_project_id}:{expected_storage_version}:{expected_preview_fingerprint}:{accept_session_renames}"
+        );
         let output = self
             .runtime
-            .transform_storage_snapshot(expected_storage_version, |snapshot| {
-                let preview = preview_migration(snapshot, source_project_id, target_project_id)?;
-                if !preview.session_renames.is_empty() && !accept_session_renames {
-                    return Err(format!(
-                        "迁移发现 {} 个会话冲突，请确认自动改名后重试",
-                        preview.session_renames.len()
-                    ));
-                }
-                apply_migration(snapshot, &preview)?;
-                Ok((preview.source, preview.session_renames))
-            })
+            .transform_storage_snapshot(
+                operation_id,
+                &mutation_kind,
+                expected_storage_version,
+                |snapshot| {
+                    let preview =
+                        preview_migration(snapshot, source_project_id, target_project_id)?;
+                    if preview.preview_fingerprint != expected_preview_fingerprint {
+                        return Err(String::from(
+                            "原生 VMM 迁移预检指纹已变化，请重新预检后确认",
+                        ));
+                    }
+                    if !preview.session_renames.is_empty() && !accept_session_renames {
+                        return Err(format!(
+                            "迁移发现 {} 个会话冲突，请确认自动改名后重试",
+                            preview.session_renames.len()
+                        ));
+                    }
+                    apply_migration(snapshot, &preview)?;
+                    Ok((preview.source, preview.session_renames))
+                },
+            )
             .await?;
         Ok(NativeVmmMigrationResult {
             storage_version: expected_storage_version.saturating_add(1),
@@ -380,6 +646,7 @@ impl NativeVmmMaintenance {
         project_id: u64,
     ) -> Result<NativeVmmClearPreview, String> {
         self.ensure_project(project_id).await?;
+        self.ensure_no_pending_analysis_jobs(project_id).await?;
         let snapshot = self.runtime.storage_snapshot()?;
         Ok(NativeVmmClearPreview {
             storage_version: snapshot.storage_version,
@@ -390,18 +657,32 @@ impl NativeVmmMaintenance {
 
     /// Clears all project-level Core records after validating the exact preview version.
     /// 校验精确预检版本后清空全部项目级 Core 记录。
+    ///
+    /// `operation_id` is the stable command UUID used by the recovery journal.
+    /// `operation_id` 是恢复账本使用的稳定命令 UUID。
     pub(crate) async fn execute_clear(
         &self,
+        operation_id: &str,
         project_id: u64,
         expected_storage_version: u64,
     ) -> Result<NativeVmmClearResult, String> {
         let _guard = self.project_mutation_gate.lock().await;
+        // The write guard prevents a queued or foreground operation from restoring content during clear.
+        // 写入守卫防止队列或前台操作在清空期间重新写入内容。
+        let _operation_guard = self.operation_gate.write().await;
+        self.ensure_no_pending_analysis_jobs(project_id).await?;
         self.ensure_project(project_id).await?;
+        // mutation_kind binds a retry to the exact clear preview version.
+        // mutation_kind 将重试绑定到准确的清空预检版本。
+        let mutation_kind = format!("project_clear:{project_id}:{expected_storage_version}");
         let removed = self
             .runtime
-            .transform_storage_snapshot(expected_storage_version, |snapshot| {
-                clear_project(snapshot, project_id)
-            })
+            .transform_storage_snapshot(
+                operation_id,
+                &mutation_kind,
+                expected_storage_version,
+                |snapshot| clear_project(snapshot, project_id),
+            )
             .await?;
         Ok(NativeVmmClearResult {
             storage_version: expected_storage_version.saturating_add(1),
@@ -414,6 +695,40 @@ impl NativeVmmMaintenance {
     async fn ensure_project(&self, project_id: u64) -> Result<(), String> {
         if self.data_plane.project_by_id(project_id).await?.is_none() {
             return Err(format!("原生 VMM 项目 {project_id} 不存在"));
+        }
+        Ok(())
+    }
+
+    /// Rejects maintenance while a durable PostAction job can still write to one project.
+    /// 当耐久 PostAction 作业仍可能写入某项目时拒绝维护。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `project_id` identifies the project whose Core content would be moved or removed.
+    /// `project_id` 标识其 Core 内容将被迁移或删除的项目。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success only when no intake or ready analysis job targets the project scope.
+    /// 仅当没有登记中或就绪分析作业指向该项目作用域时返回成功。
+    ///
+    /// # Errors
+    /// 错误
+    /// Returns an integrity error or an actionable pending-job count.
+    /// 返回完整性错误或可操作的待处理作业数量。
+    async fn ensure_no_pending_analysis_jobs(&self, project_id: u64) -> Result<(), String> {
+        let scope = project_scope(project_id)?;
+        let jobs = self.data_plane.list_active_pending_analysis_jobs().await?;
+        let mut pending_count = 0_u64;
+        for job in jobs {
+            if super::client::pending_analysis_job_targets_scope(&job, &scope)? {
+                pending_count = pending_count.saturating_add(1);
+            }
+        }
+        if pending_count > 0 {
+            return Err(format!(
+                "原生 VMM 项目 {project_id} 仍有 {pending_count} 条后台记忆分析作业，请等待作业完成后重新预检并执行维护"
+            ));
         }
         Ok(())
     }
@@ -458,6 +773,17 @@ fn preview_migration(
         &session_renames,
     )?;
     let target_after = project_content_counts(&projected, &target_scope);
+    let records = migration_record_summaries(snapshot, &source_scope);
+    let preview_fingerprint = migration_preview_fingerprint(
+        snapshot.storage_version,
+        source_project_id,
+        target_project_id,
+        &source,
+        &target_before,
+        &target_after,
+        &session_renames,
+        &records,
+    )?;
     Ok(NativeVmmMigrationPreview {
         storage_version: snapshot.storage_version,
         source_project_id,
@@ -466,7 +792,120 @@ fn preview_migration(
         target_before,
         target_after,
         session_renames,
+        records,
+        preview_fingerprint,
     })
+}
+
+/// Collects deterministic user-visible source records for migration confirmation.
+/// 为迁移确认收集确定性的用户可见来源记录。
+fn migration_record_summaries(
+    snapshot: &StorageSnapshot,
+    source_scope: &ScopeId,
+) -> Vec<NativeVmmMigrationRecordSummary> {
+    let mut records = project_sessions(snapshot, source_scope)
+        .into_iter()
+        .map(|session_id| NativeVmmMigrationRecordSummary {
+            record_kind: String::from("session"),
+            record_id: session_id.clone(),
+            session_source_id: Some(session_id),
+            summary: None,
+        })
+        .collect::<Vec<_>>();
+
+    let mut turns = snapshot
+        .dataset
+        .turns
+        .iter()
+        .filter(|turn| &turn.scope_id == source_scope)
+        .map(|turn| NativeVmmMigrationRecordSummary {
+            record_kind: String::from("turn"),
+            record_id: turn.id.as_str().to_owned(),
+            session_source_id: Some(turn.session_source_id.as_str().to_owned()),
+            summary: turn
+                .analysis_details
+                .as_deref()
+                .map(compact_migration_preview_text),
+        })
+        .collect::<Vec<_>>();
+    turns.sort_by(|left, right| left.record_id.cmp(&right.record_id));
+    records.extend(turns);
+
+    let mut memories = snapshot
+        .dataset
+        .memories
+        .iter()
+        .filter(|memory| &memory.scope_id == source_scope)
+        .map(|memory| NativeVmmMigrationRecordSummary {
+            record_kind: String::from("memory"),
+            record_id: memory.id.as_str().to_owned(),
+            session_source_id: memory
+                .origin_session_source_id
+                .as_ref()
+                .map(|session| session.as_str().to_owned()),
+            summary: Some(compact_migration_preview_text(&memory.summary)),
+        })
+        .collect::<Vec<_>>();
+    memories.sort_by(|left, right| left.record_id.cmp(&right.record_id));
+    records.extend(memories);
+
+    let mut profiles = snapshot
+        .dataset
+        .profile_nodes
+        .iter()
+        .filter(|profile| &profile.scope_id == source_scope)
+        .map(|profile| NativeVmmMigrationRecordSummary {
+            record_kind: String::from("project_profile"),
+            record_id: profile.id.as_str().to_owned(),
+            session_source_id: None,
+            summary: Some(compact_migration_preview_text(&profile.content)),
+        })
+        .collect::<Vec<_>>();
+    profiles.sort_by(|left, right| left.record_id.cmp(&right.record_id));
+    records.extend(profiles);
+    records
+}
+
+/// Produces a bounded Unicode-safe description for one migration preview row.
+/// 为一条迁移预检记录生成有界且 Unicode 安全的描述。
+fn compact_migration_preview_text(value: &str) -> String {
+    const MAX_PREVIEW_CHARS: usize = 160;
+    let mut characters = value.trim().chars();
+    let compact = characters
+        .by_ref()
+        .take(MAX_PREVIEW_CHARS)
+        .collect::<String>();
+    if characters.next().is_some() {
+        format!("{compact}…")
+    } else {
+        compact
+    }
+}
+
+/// Computes the confirmation token for the exact migration preview shown to the user.
+/// 计算用户所见准确迁移预检的确认令牌。
+fn migration_preview_fingerprint(
+    storage_version: u64,
+    source_project_id: u64,
+    target_project_id: u64,
+    source: &NativeVmmProjectContentCounts,
+    target_before: &NativeVmmProjectContentCounts,
+    target_after: &NativeVmmProjectContentCounts,
+    session_renames: &[NativeVmmSessionRename],
+    records: &[NativeVmmMigrationRecordSummary],
+) -> Result<String, String> {
+    let payload = serde_json::to_vec(&(
+        storage_version,
+        source_project_id,
+        target_project_id,
+        source,
+        target_before,
+        target_after,
+        session_renames,
+        records,
+    ))
+    .map_err(|error| format!("序列化原生 VMM 迁移预检指纹载荷失败：{error}"))?;
+    Ok(format!("sha256:{}", hex::encode(Sha256::digest(payload))))
 }
 
 /// Applies a freshly recomputed migration plan to one staged snapshot.
@@ -693,10 +1132,10 @@ fn project_sessions(snapshot: &StorageSnapshot, scope: &ScopeId) -> BTreeSet<Str
         }
     }
     for memory in &snapshot.dataset.memories {
-        if &memory.scope_id == scope {
-            if let Some(session) = &memory.origin_session_source_id {
-                sessions.insert(session.as_str().to_owned());
-            }
+        if &memory.scope_id == scope
+            && let Some(session) = &memory.origin_session_source_id
+        {
+            sessions.insert(session.as_str().to_owned());
         }
     }
     for boundary in &snapshot.dataset.chat_compact_boundaries {
@@ -867,6 +1306,13 @@ mod tests {
         assert_eq!(preview.source.turns, 1);
         assert_eq!(preview.target_before.turns, 1);
         assert_eq!(preview.target_after.turns, 2);
+        assert_eq!(preview.records.len(), 2);
+        assert_eq!(preview.records[0].record_kind, "session");
+        assert_eq!(preview.records[0].record_id, "session-a");
+        assert_eq!(preview.records[1].record_kind, "turn");
+        assert_eq!(preview.records[1].record_id, "source-turn");
+        assert!(preview.preview_fingerprint.starts_with("sha256:"));
+        assert_eq!(preview.preview_fingerprint.len(), 71);
         assert_eq!(
             preview.session_renames,
             vec![NativeVmmSessionRename {
@@ -877,6 +1323,14 @@ mod tests {
         assert_eq!(
             snapshot.dataset.turns[0].scope_id,
             project_scope(2).unwrap()
+        );
+
+        let mut changed = snapshot.clone();
+        changed.dataset.turns[0].analysis_details = Some(String::from("changed detail"));
+        let changed_preview = preview_migration(&changed, 2, 3).expect("changed preview");
+        assert_ne!(
+            preview.preview_fingerprint,
+            changed_preview.preview_fingerprint
         );
     }
 

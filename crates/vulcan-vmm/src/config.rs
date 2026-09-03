@@ -186,260 +186,6 @@ fn feature_value_enabled(value: Option<&str>) -> bool {
     )
 }
 
-/// Returns the audited PostAction analysis timeout used when a pre-v2 persisted configuration omits the field.
-/// 返回 v2 之前的持久化配置缺少该字段时使用的、经过审计的 PostAction 分析超时。
-///
-/// # Returns
-/// 返回值
-/// The managed-runtime PostAction analysis timeout in Go duration syntax.
-/// 使用 Go duration 语法表示的托管运行时 PostAction 分析超时。
-fn default_postaction_analysis_timeout() -> String {
-    String::from("180s")
-}
-
-/// Returns the audited durable failure threshold used when a pre-v2 persisted configuration omits the field.
-/// 返回 v2 之前的持久化配置缺少该字段时使用的、经过审计的持久化失败阈值。
-///
-/// # Returns
-/// 返回值
-/// The consecutive PostAction failure count that moves one turn into Pass.
-/// 将单条 turn 迁移到 Pass 所需的 PostAction 连续失败次数。
-const fn default_postaction_failure_pass_threshold() -> u32 {
-    5
-}
-
-/// Returns the audited per-host inference connection limit used when a pre-v2 persisted configuration omits the field.
-/// 返回 v2 之前的持久化配置缺少该字段时使用的、经过审计的单主机推理连接上限。
-///
-/// # Returns
-/// 返回值
-/// The maximum number of concurrent outbound inference connections per upstream host.
-/// 每个上游主机允许的最大并发推理出站连接数。
-const fn default_inference_max_connections_per_host() -> u32 {
-    8
-}
-
-/// Stores the host-authoritative VMM behavior used to generate every managed manifest.
-/// 保存由宿主权威管理、用于生成每份托管清单的 VMM 行为配置。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct VmmManagedRuntimeSettings {
-    /// PII rule language.
-    /// PII 规则语言。
-    pub pii_default_language: String,
-    /// Whether noise filtering is enabled.
-    /// 是否启用噪声过滤。
-    pub noise_enabled: bool,
-    /// Noise-rule language.
-    /// 噪声规则语言。
-    pub noise_default_language: String,
-    /// Whether semantic noise filtering is enabled.
-    /// 是否启用语义噪声过滤。
-    pub noise_semantic_enabled: bool,
-    /// Semantic noise rejection threshold.
-    /// 语义噪声拒绝阈值。
-    pub noise_semantic_threshold: f64,
-    /// Prompt bundle language.
-    /// 提示词包语言。
-    pub prompt_language: String,
-    /// PreCheck intent timeout.
-    /// PreCheck 意图解析超时。
-    pub precheck_intent_timeout: String,
-    /// PreCheck recall count.
-    /// PreCheck 召回数量。
-    pub precheck_top_k: u32,
-    /// PreCheck search scope.
-    /// PreCheck 搜索范围。
-    pub precheck_search_scope: String,
-    /// PreCheck similarity threshold.
-    /// PreCheck 相似度阈值。
-    pub precheck_similarity_threshold: f64,
-    /// PostAction input compatibility mode.
-    /// PostAction 输入兼容模式。
-    pub postaction_input_mode: String,
-    /// PostAction turn threshold.
-    /// PostAction 轮次阈值。
-    pub postaction_turn_threshold: u32,
-    /// PostAction token threshold.
-    /// PostAction Token 阈值。
-    pub postaction_token_threshold: u32,
-    /// PostAction idle timeout.
-    /// PostAction 空闲超时。
-    pub postaction_idle_timeout: String,
-    /// PostAction history turn count.
-    /// PostAction 历史轮数。
-    pub postaction_history_turns: u32,
-    /// PostAction maximum input tokens.
-    /// PostAction 最大输入 Token。
-    pub postaction_max_input_tokens: u32,
-    /// PostAction background analysis deadline.
-    /// PostAction 后台分析截止时间。
-    #[serde(default = "default_postaction_analysis_timeout")]
-    pub postaction_analysis_timeout: String,
-    /// Consecutive PostAction failures before one turn enters Pass.
-    /// 单条 turn 进入 Pass 前允许的 PostAction 连续失败次数。
-    #[serde(default = "default_postaction_failure_pass_threshold")]
-    pub postaction_failure_pass_threshold: u32,
-    /// PostAction queue worker count.
-    /// PostAction 队列工作数。
-    pub postaction_max_queue_workers: u32,
-    /// Maximum outbound inference connections per upstream host.
-    /// 每个上游主机允许的最大推理出站连接数。
-    #[serde(default = "default_inference_max_connections_per_host")]
-    pub inference_max_connections_per_host: u32,
-    /// Maximum recall keyword count.
-    /// 最大召回关键词数量。
-    pub pipeline_max_search_keywords: u32,
-    /// Minimum recall similarity.
-    /// 最小召回相似度。
-    pub pipeline_min_similarity_score: f64,
-    /// Minimum replacement similarity.
-    /// 最小替换相似度。
-    pub pipeline_replace_min_similarity_score: f64,
-    /// Hard deduplication threshold.
-    /// 硬去重阈值。
-    pub pipeline_hard_dedupe_threshold: f64,
-    /// Hard deduplication candidate count.
-    /// 硬去重候选数量。
-    pub pipeline_hard_dedupe_pool_top_k: u32,
-    /// Whether hybrid retrieval is enabled.
-    /// 是否启用混合检索。
-    pub pipeline_hybrid_enabled: bool,
-    /// Lexical recall count.
-    /// 词法召回数量。
-    pub pipeline_lexical_top_k: u32,
-    /// Reciprocal-rank-fusion constant.
-    /// 倒数排名融合常量。
-    pub pipeline_rrf_k: u32,
-    /// Whether diversity filtering is enabled.
-    /// 是否启用多样性过滤。
-    pub pipeline_mmr_enabled: bool,
-    /// Diversity balance.
-    /// 多样性平衡系数。
-    pub pipeline_mmr_lambda: f64,
-    /// Whether Weibull decay is enabled.
-    /// 是否启用 Weibull 衰减。
-    pub pipeline_weibull_enabled: bool,
-    /// Weibull shape.
-    /// Weibull 形状参数。
-    pub pipeline_weibull_shape: f64,
-    /// Weibull scale in hours.
-    /// Weibull 小时尺度。
-    pub pipeline_weibull_scale_hours: f64,
-    /// Minimum decay multiplier.
-    /// 最小衰减倍率。
-    pub pipeline_weibull_min_multiplier: f64,
-    /// Reinforcement weight.
-    /// 强化权重。
-    pub pipeline_weibull_reinforce_weight: f64,
-    /// Cross-session boost.
-    /// 跨会话增强系数。
-    pub pipeline_weibull_cross_session_boost: f64,
-    /// Whether retention scanning is enabled.
-    /// 是否启用保留扫描。
-    pub retention_enabled: bool,
-    /// Retention scan interval.
-    /// 保留扫描间隔。
-    pub retention_scan_interval: String,
-    /// Extra hot-window turns.
-    /// 热窗口额外轮数。
-    pub retention_turn_keep_extra_turns: u32,
-    /// Idle time before session recycling.
-    /// 会话回收前空闲时间。
-    pub retention_session_idle_after: String,
-    /// Trash retention duration.
-    /// 回收站保留时长。
-    pub retention_trash_duration: String,
-    /// Protected priority floor.
-    /// 受保护优先级下限。
-    pub retention_priority_floor: String,
-    /// Protected memory-level floor.
-    /// 受保护记忆级别下限。
-    pub retention_memory_level_floor: String,
-    /// Whether protected shared memories are skipped.
-    /// 是否跳过受保护共享记忆。
-    pub retention_skip_protected_shared: bool,
-}
-
-impl Default for VmmManagedRuntimeSettings {
-    /// Returns the audited managed-runtime defaults mirrored from VMM.
-    /// 返回与 VMM 对齐并经过审计的托管运行时默认值。
-    fn default() -> Self {
-        Self {
-            pii_default_language: String::from("zh-CN"),
-            noise_enabled: true,
-            noise_default_language: String::from("zh-CN"),
-            noise_semantic_enabled: true,
-            noise_semantic_threshold: 0.88,
-            prompt_language: String::from("default_en"),
-            precheck_intent_timeout: String::from("5s"),
-            precheck_top_k: 5,
-            precheck_search_scope: String::from("space"),
-            precheck_similarity_threshold: 0.0,
-            postaction_input_mode: String::from("compat"),
-            postaction_turn_threshold: 2,
-            postaction_token_threshold: 12_000,
-            postaction_idle_timeout: String::from("15m"),
-            postaction_history_turns: 3,
-            postaction_max_input_tokens: 6_000,
-            postaction_analysis_timeout: default_postaction_analysis_timeout(),
-            postaction_failure_pass_threshold: default_postaction_failure_pass_threshold(),
-            postaction_max_queue_workers: 4,
-            inference_max_connections_per_host: default_inference_max_connections_per_host(),
-            pipeline_max_search_keywords: 5,
-            pipeline_min_similarity_score: 0.75,
-            pipeline_replace_min_similarity_score: 0.80,
-            pipeline_hard_dedupe_threshold: 0.99,
-            pipeline_hard_dedupe_pool_top_k: 16,
-            pipeline_hybrid_enabled: true,
-            pipeline_lexical_top_k: 8,
-            pipeline_rrf_k: 60,
-            pipeline_mmr_enabled: true,
-            pipeline_mmr_lambda: 0.75,
-            pipeline_weibull_enabled: true,
-            pipeline_weibull_shape: 1.35,
-            pipeline_weibull_scale_hours: 2160.0,
-            pipeline_weibull_min_multiplier: 0.4,
-            pipeline_weibull_reinforce_weight: 0.18,
-            pipeline_weibull_cross_session_boost: 0.12,
-            retention_enabled: true,
-            retention_scan_interval: String::from("30m"),
-            retention_turn_keep_extra_turns: 5,
-            retention_session_idle_after: String::from("360h"),
-            retention_trash_duration: String::from("720h"),
-            retention_priority_floor: String::from("P1"),
-            retention_memory_level_floor: String::from("stable"),
-            retention_skip_protected_shared: true,
-        }
-    }
-}
-
-// Managed runtime floating-point settings are persisted through JSON, which rejects non-finite
-// values, and the service save path additionally validates them before persistence.
-// 托管运行时浮点设置通过会拒绝非有限值的 JSON 持久化，服务保存链路还会在持久化前再次校验。
-impl Eq for VmmManagedRuntimeSettings {}
-
-/// Stores managed local-runtime installation and behavior state.
-/// 保存托管本地运行时的安装与行为状态。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VmmInstallReservation {
-    /// Whether the future installer should manage a local VMM binary.
-    /// 后续安装器是否应管理本地 VMM 二进制。
-    #[serde(default)]
-    pub managed_install_enabled: bool,
-    /// Optional managed binary path reserved for future releases.
-    /// 为后续发行版预留的可选托管二进制路径。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub managed_binary_path: Option<String>,
-    /// Optional auto-start policy reserved for future releases.
-    /// 为后续发行版预留的可选自动启动策略。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auto_start_policy: Option<String>,
-    /// Complete host-authoritative managed VMM behavior.
-    /// 完整的宿主权威托管 VMM 行为配置。
-    #[serde(default)]
-    pub runtime_settings: VmmManagedRuntimeSettings,
-}
-
 /// Selects the process-local native core or the externally hosted gRPC backend.
 /// 选择进程内原生 Core 或外置 gRPC 后端。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -461,19 +207,6 @@ impl VmmBackendMode {
         match self {
             Self::Native => "native",
             Self::ExternalGrpc => "external_grpc",
-        }
-    }
-}
-
-impl Default for VmmInstallReservation {
-    /// Returns disabled managed installation with audited behavior defaults.
-    /// 返回禁用的托管安装与经过审计的行为默认值。
-    fn default() -> Self {
-        Self {
-            managed_install_enabled: false,
-            managed_binary_path: None,
-            auto_start_policy: None,
-            runtime_settings: VmmManagedRuntimeSettings::default(),
         }
     }
 }
@@ -598,10 +331,6 @@ pub struct VmmConfigLayer {
     /// 可选注入说明覆盖。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub injection_description: Option<String>,
-    /// Reserved future install-management state.
-    /// 预留的未来安装管理状态。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub install: Option<VmmInstallReservation>,
 }
 
 impl VmmConfigLayer {
@@ -725,9 +454,6 @@ pub struct VmmEffectiveConfig {
     /// Final injection description.
     /// 最终注入说明。
     pub injection_description: String,
-    /// Reserved future install-management state.
-    /// 预留的未来安装管理状态。
-    pub install: VmmInstallReservation,
 }
 
 impl Default for VmmEffectiveConfig {
@@ -765,7 +491,6 @@ impl Default for VmmEffectiveConfig {
             ai_tools_enabled: true,
             injection_tag: DEFAULT_VMM_INJECTION_TAG.to_string(),
             injection_description: DEFAULT_VMM_INJECTION_DESCRIPTION.to_string(),
-            install: VmmInstallReservation::default(),
         }
     }
 }
@@ -786,17 +511,19 @@ impl VmmEffectiveConfig {
         if let Some(session) = session {
             apply_layer(&mut config, session, VmmEffectiveConfigSource::Session);
         }
-        // A pre-existing non-empty gRPC target is the only unambiguous legacy signal for the
-        // external backend when the new explicit selector is absent. A newly enabled empty
-        // configuration therefore keeps the native default selected.
-        // 当新的显式选择器缺失时，已有非空 gRPC 目标是唯一明确的旧配置外置信号；新启用但没有目标的配置保留原生默认值。
-        if global.backend_mode.is_none()
-            && project.is_none_or(|layer| layer.backend_mode.is_none())
-            && session.is_none_or(|layer| layer.backend_mode.is_none())
-            && non_empty(&global.grpc_target).is_some()
-        {
-            config.backend_mode = VmmBackendMode::ExternalGrpc;
-        }
+        // Backend selection is application-global. Project and session layers may control memory
+        // behavior, but they cannot switch the process-wide native/external implementation.
+        // 后端选择属于应用全局配置；项目层与会话层可以控制记忆行为，但不能切换进程级原生/外置实现。
+        config.backend_mode = global.backend_mode.unwrap_or_else(|| {
+            // A pre-existing non-empty global gRPC target is the only unambiguous legacy signal
+            // when the explicit selector is absent. An empty configuration keeps Native.
+            // 显式选择器缺失时，既有非空全局 gRPC 目标是唯一明确的旧配置外置信号；空配置继续使用 Native。
+            if non_empty(&global.grpc_target).is_some() {
+                VmmBackendMode::ExternalGrpc
+            } else {
+                VmmBackendMode::Native
+            }
+        });
         config.grpc_target = config.grpc_target.trim().to_string();
         config.visible_memory_injection = false;
         config.session_compact_recall = true;
@@ -975,9 +702,6 @@ fn apply_layer(
     if let Some(injection_description) = non_empty(&layer.injection_description) {
         config.injection_description = injection_description.to_string();
     }
-    if let Some(install) = layer.install.clone() {
-        config.install = install;
-    }
 }
 
 /// Returns a trimmed non-empty option string.
@@ -1149,6 +873,28 @@ mod tests {
         assert_eq!(external.project_id, None);
     }
 
+    /// Verifies project and session layers cannot change the global backend implementation.
+    /// 验证项目层与会话层不能改变全局后端实现。
+    #[test]
+    fn backend_mode_is_global_only() {
+        let global = VmmConfigLayer {
+            backend_mode: Some(VmmBackendMode::ExternalGrpc),
+            ..VmmConfigLayer::default()
+        };
+        let project = VmmConfigLayer {
+            backend_mode: Some(VmmBackendMode::Native),
+            ..VmmConfigLayer::default()
+        };
+        let session = VmmConfigLayer {
+            backend_mode: Some(VmmBackendMode::Native),
+            ..VmmConfigLayer::default()
+        };
+
+        let resolved = VmmEffectiveConfig::resolve(&global, Some(&project), Some(&session));
+
+        assert_eq!(resolved.backend_mode, VmmBackendMode::ExternalGrpc);
+    }
+
     /// Verifies project-binding behavior is global-only and has stable public defaults.
     /// 验证项目绑定行为仅由全局层控制，并具有稳定的公开默认值。
     #[test]
@@ -1278,38 +1024,5 @@ mod tests {
         assert!(!feature_value_enabled(Some(" FALSE ")));
         assert!(!feature_value_enabled(Some("off")));
         assert!(!feature_value_enabled(Some("no")));
-    }
-
-    /// Verifies pre-v2 persisted settings receive defaults only for the three fields introduced by managed contract v2.
-    /// 验证 v2 之前的持久化设置只会为托管契约 v2 新增的三个字段补充默认值。
-    #[test]
-    fn pre_v2_managed_runtime_settings_default_only_v2_fields() {
-        // persistedSettings mirrors an otherwise complete pre-v2 document before the new reliability fields existed.
-        // persistedSettings 模拟新增可靠性字段之前、其余内容完整的 v2 前文档。
-        let mut persisted_settings = serde_json::to_value(VmmManagedRuntimeSettings::default())
-            .expect("serialize managed runtime settings");
-        let persisted_object = persisted_settings
-            .as_object_mut()
-            .expect("managed runtime settings must serialize as an object");
-        persisted_object.remove("postaction_analysis_timeout");
-        persisted_object.remove("postaction_failure_pass_threshold");
-        persisted_object.remove("inference_max_connections_per_host");
-
-        // restoredSettings proves the compatibility path uses the exact audited defaults.
-        // restoredSettings 证明兼容路径使用精确的审计默认值。
-        let restored_settings: VmmManagedRuntimeSettings =
-            serde_json::from_value(persisted_settings.clone())
-                .expect("deserialize pre-v2 managed runtime settings");
-        assert_eq!(restored_settings.postaction_analysis_timeout, "180s");
-        assert_eq!(restored_settings.postaction_failure_pass_threshold, 5);
-        assert_eq!(restored_settings.inference_max_connections_per_host, 8);
-
-        // Removing a legacy required field must still fail closed instead of broad-defaulting damaged documents.
-        // 删除旧有必填字段后仍必须失败关闭，不能对损坏文档进行宽泛默认填充。
-        persisted_settings
-            .as_object_mut()
-            .expect("managed runtime settings must remain an object")
-            .remove("prompt_language");
-        assert!(serde_json::from_value::<VmmManagedRuntimeSettings>(persisted_settings).is_err());
     }
 }

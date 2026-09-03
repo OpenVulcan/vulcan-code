@@ -1,6 +1,8 @@
 //! Backend-only proxy for the isolated VMM management HTTP API.
 //! VMM 独立管理 HTTP API 的仅后端代理。
 
+use std::time::Duration;
+
 use reqwest::{Method, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -11,6 +13,74 @@ use crate::SharedServiceBridgeState;
 /// Maximum accepted management response size for one non-streaming bridge request.
 /// 单次非流式桥接请求允许接收的最大管理响应大小。
 const MAX_MANAGEMENT_RESPONSE_BYTES: usize = 1024 * 1024;
+
+/// Secret-bearing external management target copied only for one backend request.
+/// 仅为一次后端请求复制的含密外置管理目标。
+struct ExternalVmmManagementTarget {
+    /// Absolute external management API origin.
+    /// 外置管理 API 的绝对源地址。
+    base_url: String,
+    /// External management Bearer token.
+    /// 外置管理 Bearer Token。
+    access_token: String,
+    /// Bounded request timeout selected by the external configuration.
+    /// 由外置配置选择的有界请求超时。
+    timeout: Duration,
+}
+
+/// Resolves and validates one external-only management target from authoritative configuration.
+/// 从权威配置解析并校验一个仅外置模式使用的管理目标。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the currently published global VMM configuration.
+/// `state` 持有当前已发布的全局 VMM 配置。
+///
+/// # Returns
+/// 返回值
+/// A validated secret-bearing target, or `None` when external management is unavailable.
+/// 返回经过校验的含密目标；外置管理不可用时返回 `None`。
+fn external_management_target_from_state(
+    state: &SharedServiceBridgeState,
+) -> Option<ExternalVmmManagementTarget> {
+    let configuration = crate::provider_configuration_from_state(state).ok()?;
+    let layer = &configuration.vmm;
+    if layer.enabled != Some(true)
+        || layer.backend_mode != Some(vulcan_vmm::VmmBackendMode::ExternalGrpc)
+    {
+        return None;
+    }
+    let base_url = layer
+        .management_base_url
+        .as_deref()?
+        .trim()
+        .trim_end_matches('/')
+        .to_string();
+    let access_token = layer.management_bearer_token.as_deref()?.trim().to_string();
+    if base_url.is_empty() || access_token.is_empty() {
+        return None;
+    }
+    let parsed = Url::parse(&base_url).ok()?;
+    let loopback = parsed
+        .host_str()
+        .is_some_and(|host| matches!(host, "127.0.0.1" | "localhost" | "::1"));
+    if parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || (parsed.scheme() != "https" && !(parsed.scheme() == "http" && loopback))
+        || layer
+            .management_timeout_ms
+            .is_some_and(|value| !(1_000..=120_000).contains(&value))
+    {
+        return None;
+    }
+    Some(ExternalVmmManagementTarget {
+        base_url,
+        access_token,
+        timeout: Duration::from_millis(layer.management_timeout_ms.unwrap_or(30_000)),
+    })
+}
 
 /// Query payload accepted by bounded management list and detail actions.
 /// 有界管理列表与详情动作接受的查询载荷。
@@ -176,8 +246,8 @@ pub(super) async fn service_run_vmm_management_http_action(
     state: SharedServiceBridgeState,
     request: VmmMemoryActionRequest,
 ) -> Result<VmmMemoryActionResult, String> {
-    let target = crate::managed_memory_mesh_runtime::management_target_from_state(&state)
-        .ok_or_else(|| String::from("托管 VMM 管理服务尚未就绪。"))?;
+    let target = external_management_target_from_state(&state)
+        .ok_or_else(|| String::from("外置 VMM 管理服务尚未就绪。"))?;
     let client = reqwest::Client::builder()
         .timeout(target.timeout)
         .redirect(reqwest::redirect::Policy::none())
@@ -231,7 +301,7 @@ pub(super) async fn service_run_vmm_management_http_action(
 async fn reject_active_local_session_targets(
     state: &SharedServiceBridgeState,
     client: &reqwest::Client,
-    target: &crate::managed_memory_mesh_runtime::ManagedMemoryMeshManagementTarget,
+    target: &ExternalVmmManagementTarget,
     action: &str,
     body: Option<&Value>,
 ) -> Result<(), String> {
@@ -288,7 +358,7 @@ async fn reject_active_local_session_targets(
 /// 为仅后端可见的活跃会话保护读取一条有界管理详情。
 async fn load_management_detail(
     client: &reqwest::Client,
-    target: &crate::managed_memory_mesh_runtime::ManagedMemoryMeshManagementTarget,
+    target: &ExternalVmmManagementTarget,
     resource: &str,
     id: &str,
 ) -> Result<Value, String> {

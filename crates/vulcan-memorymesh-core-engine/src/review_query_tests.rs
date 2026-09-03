@@ -2,6 +2,7 @@
 //! 本文件属于引擎恢复测试层，不依赖外层校验和检验查询来源和映射损坏。
 
 use super::*;
+use vulcan_memorymesh_core_contracts::OperationId;
 
 /// Retains a real policy and one internally consistent query wait for targeted corruption tests.
 /// 为定向损坏测试保留真实策略及一个内部一致的查询等待。

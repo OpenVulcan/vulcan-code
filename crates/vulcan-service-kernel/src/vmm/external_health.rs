@@ -1,4 +1,4 @@
-//! Process-local health state for externally managed VMM endpoints.
+//! Process-local health state for external VMM endpoints.
 //! 外部托管 VMM 端点的进程内健康状态。
 
 use std::sync::{Mutex, OnceLock};
@@ -135,6 +135,10 @@ pub(super) fn clear_external_vmm_health_probe() {
 /// `grpc_target` 是当前生效的外部 VMM 端点。
 /// `scope_configured` reports whether the effective identity and project scope are complete.
 /// `scope_configured` 表示最终身份与项目作用域配置是否完整。
+/// `precheck_enabled` reports whether recall injection is enabled for the effective scope.
+/// `precheck_enabled` 表示最终作用域是否启用了召回注入。
+/// `postaction_enabled` reports whether memory writeback is enabled for the effective scope.
+/// `postaction_enabled` 表示最终作用域是否启用了记忆回写。
 /// `runtime` is the runtime summary being projected to the workbench.
 /// `runtime` 是正在投影到工作台的运行摘要。
 ///
@@ -145,6 +149,8 @@ pub(super) fn clear_external_vmm_health_probe() {
 pub(super) fn apply_external_vmm_health_probe(
     grpc_target: &str,
     scope_configured: bool,
+    precheck_enabled: bool,
+    postaction_enabled: bool,
     runtime: &mut VmmRuntimeSummary,
 ) {
     let target = normalize_external_vmm_grpc_target(grpc_target);
@@ -156,7 +162,11 @@ pub(super) fn apply_external_vmm_health_probe(
     };
     runtime.process_ready = probe.error.is_none();
     runtime.scope_ready = runtime.process_ready && scope_configured;
-    runtime.managed_last_error = probe.error.clone();
+    runtime.precheck_ready = runtime.scope_ready && precheck_enabled;
+    runtime.postaction_ready = runtime.scope_ready && postaction_enabled;
+    runtime.profile_instruction_ready = runtime.scope_ready;
+    runtime.rerank_ready = runtime.scope_ready;
+    runtime.backend_error = probe.error.clone();
 }
 
 #[cfg(test)]
@@ -175,17 +185,34 @@ mod tests {
         assert!(!external_vmm_service_ready("127.0.0.1:17635", true));
 
         let mut matching_runtime = VmmRuntimeSummary::default();
-        apply_external_vmm_health_probe("127.0.0.1:17625", true, &mut matching_runtime);
+        apply_external_vmm_health_probe("127.0.0.1:17625", true, true, true, &mut matching_runtime);
         assert!(matching_runtime.process_ready);
         assert!(matching_runtime.scope_ready);
+        assert!(matching_runtime.precheck_ready);
+        assert!(matching_runtime.postaction_ready);
+        assert!(matching_runtime.profile_instruction_ready);
+        assert!(matching_runtime.rerank_ready);
 
         let mut incomplete_scope_runtime = VmmRuntimeSummary::default();
-        apply_external_vmm_health_probe("127.0.0.1:17625", false, &mut incomplete_scope_runtime);
+        apply_external_vmm_health_probe(
+            "127.0.0.1:17625",
+            false,
+            true,
+            true,
+            &mut incomplete_scope_runtime,
+        );
         assert!(incomplete_scope_runtime.process_ready);
         assert!(!incomplete_scope_runtime.scope_ready);
+        assert!(!incomplete_scope_runtime.precheck_ready);
 
         let mut different_runtime = VmmRuntimeSummary::default();
-        apply_external_vmm_health_probe("127.0.0.1:17635", true, &mut different_runtime);
+        apply_external_vmm_health_probe(
+            "127.0.0.1:17635",
+            true,
+            true,
+            true,
+            &mut different_runtime,
+        );
         assert!(!different_runtime.process_ready);
         assert!(!different_runtime.scope_ready);
 
@@ -193,13 +220,10 @@ mod tests {
         assert!(!external_vmm_service_ready("127.0.0.1:17625", true));
 
         let mut runtime = VmmRuntimeSummary::default();
-        apply_external_vmm_health_probe("127.0.0.1:17625", true, &mut runtime);
+        apply_external_vmm_health_probe("127.0.0.1:17625", true, true, true, &mut runtime);
         assert!(!runtime.process_ready);
         assert!(!runtime.scope_ready);
-        assert_eq!(
-            runtime.managed_last_error.as_deref(),
-            Some("connection refused")
-        );
+        assert_eq!(runtime.backend_error.as_deref(), Some("connection refused"));
         clear_external_vmm_health_probe();
     }
 }

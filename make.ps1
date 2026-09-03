@@ -75,10 +75,6 @@ $LuaDepsScriptPath = Join-Path $ScriptDir "scripts\install_lua_deps.ps1"
 # CodebaseMemoryDepsScriptPath 用于指向固定版本的原生 CBM 运行时安装器。
 $CodebaseMemoryDepsScriptPath = Join-Path $ScriptDir "scripts\install_codebase_memory_runtime.ps1"
 
-# VmmDepsScriptPath points at the explicit managed VMM dependency preparation script.
-# VmmDepsScriptPath 用于指向显式准备托管 VMM 依赖的脚本。
-$VmmDepsScriptPath = Join-Path $ScriptDir "scripts\package_vmm_runtime.ps1"
-
 # RustDevToolsScriptPath points at the Rust workspace maintenance-tool installer.
 # RustDevToolsScriptPath 用于指向 Rust 工作区维护工具安装器。
 $RustDevToolsScriptPath = Join-Path $ScriptDir "scripts\install_rust_dev_tools.ps1"
@@ -210,7 +206,7 @@ function Invoke-TauriBuildAndRun {
 # DependencyKind 用于选择要初始化的依赖域。
 function Invoke-DependencyInstall {
     param(
-        [ValidateSet("rust-tools", "host", "vldb", "rtk", "tools", "lua", "cbm", "vmm")]
+        [ValidateSet("rust-tools", "host", "vldb", "rtk", "tools", "lua", "cbm")]
         [string]$DependencyKind
     )
 
@@ -222,7 +218,6 @@ function Invoke-DependencyInstall {
         "tools" { $BundledToolsDepsScriptPath }
         "lua"  { $LuaDepsScriptPath }
         "cbm"  { $CodebaseMemoryDepsScriptPath }
-        "vmm"  { $VmmDepsScriptPath }
         default { throw "Unsupported dependency kind: $DependencyKind" }
     }
 
@@ -265,7 +260,6 @@ function Invoke-SystemInitialization {
     Invoke-DependencyInstall -DependencyKind "tools"
     Invoke-DependencyInstall -DependencyKind "lua"
     Invoke-DependencyInstall -DependencyKind "cbm"
-    Invoke-DependencyInstall -DependencyKind "vmm"
 
     Write-Host "==> System initialization completed."
 }
@@ -313,7 +307,7 @@ function Show-Usage {
     Write-Host "  ./make check-deps  # verify Rust dependency policy without changing manifests or the lockfile"
     Write-Host "  ./make run         # run Tauri/WebUI debug build; Vite is managed separately"
     Write-Host "  ./make run release # run Tauri/WebUI release build"
-    Write-Host "  ./make deps        # install host + LuaSkills + Codebase Memory + VMM runtime dependencies"
+    Write-Host "  ./make deps        # install host + LuaSkills + Codebase Memory dependencies"
     Write-Host "  ./make deps rust-tools # install cargo-hakari, cargo-nextest, and cargo-deny"
     Write-Host "  ./make init-system # bootstrap Rust tools and all repository dependencies"
     Write-Host "  ./make deps host   # install host native dependencies only"
@@ -322,7 +316,6 @@ function Show-Usage {
     Write-Host "  ./make deps tools  # install the latest bundled sg and rg tools"
     Write-Host "  ./make deps lua    # install official LuaSkills runtime dependencies only"
     Write-Host "  ./make deps cbm    # install the pinned native Codebase Memory runtime only"
-    Write-Host "  ./make deps vmm    # build and install the managed VMM runtime dependency only"
 }
 
 # NormalizedMode stores the canonical top-level command token used by the dispatcher below.
@@ -420,14 +413,12 @@ switch ($NormalizedMode) {
                 Invoke-DependencyInstall -DependencyKind "tools"
                 Invoke-DependencyInstall -DependencyKind "lua"
                 Invoke-DependencyInstall -DependencyKind "cbm"
-                Invoke-DependencyInstall -DependencyKind "vmm"
             }
             "all" {
                 Invoke-DependencyInstall -DependencyKind "host"
                 Invoke-DependencyInstall -DependencyKind "tools"
                 Invoke-DependencyInstall -DependencyKind "lua"
                 Invoke-DependencyInstall -DependencyKind "cbm"
-                Invoke-DependencyInstall -DependencyKind "vmm"
             }
             "host" {
                 Invoke-DependencyInstall -DependencyKind "host"
@@ -449,9 +440,6 @@ switch ($NormalizedMode) {
             }
             "cbm" {
                 Invoke-DependencyInstall -DependencyKind "cbm"
-            }
-            "vmm" {
-                Invoke-DependencyInstall -DependencyKind "vmm"
             }
             default {
                 Write-Error "Unsupported deps command: '$CommandVariant'"

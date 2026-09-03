@@ -31,9 +31,6 @@ pub enum VmmDeploymentMode {
     /// Vulcan Code owns the Rust-native VMM Core in-process.
     /// VulcanCode 在进程内负责 Rust 原生 VMM Core。
     Native,
-    /// Vulcan Code owns the local VMM process.
-    /// Vulcan Code 托管本地 VMM 进程。
-    Managed,
     /// Vulcan Code connects to an external VMM service.
     /// Vulcan Code 连接外部 VMM 服务。
     External,
@@ -62,35 +59,20 @@ pub enum VmmSetupState {
     Blocked,
 }
 
-/// Describes the VMM process lifecycle independently from setup and health.
-/// 独立于配置与健康状态描述 VMM 进程生命周期。
+/// Describes the selected VMM backend lifecycle independently from setup and health.
+/// 独立于配置与健康状态描述所选 VMM 后端生命周期。
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum VmmLifecycleState {
-    /// No VMM process is running.
-    /// 当前没有 VMM 进程运行。
+    /// The selected VMM backend is stopped or disabled.
+    /// 所选 VMM 后端已停止或禁用。
     #[default]
     Stopped,
-    /// A VMM process is starting.
-    /// VMM 进程正在启动。
-    Starting,
-    /// A VMM process is running.
-    /// VMM 进程正在运行。
+    /// The selected VMM backend is running.
+    /// 所选 VMM 后端正在运行。
     Running,
-    /// A VMM process is stopping.
-    /// VMM 进程正在停止。
-    Stopping,
-    /// A VMM process is restarting.
-    /// VMM 进程正在重启。
-    Restarting,
-    /// A managed VMM process exited unexpectedly.
-    /// 托管 VMM 进程意外退出。
-    Crashed,
-    /// The host is waiting before a managed restart.
-    /// 宿主正在等待下一次托管重启。
-    WaitingRetry,
-    /// The most recent VMM start attempt failed.
-    /// 最近一次 VMM 启动尝试失败。
+    /// The selected VMM backend is unavailable because its latest validation failed.
+    /// 所选 VMM 后端因最近一次校验失败而不可用。
     Failed,
 }
 
@@ -192,136 +174,6 @@ pub struct VmmCapabilitySummary {
     /// 用于配置该能力的可选目标。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub configure_target: Option<String>,
-}
-
-/// Describes the managed VMM data-space safety state.
-/// 描述托管 VMM 数据空间的安全状态。
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum VmmDataSpaceState {
-    /// Data-space state is not applicable or not yet known.
-    /// 数据空间状态不适用或尚未确定。
-    #[default]
-    Unknown,
-    /// The managed data directory contains no durable data.
-    /// 托管数据目录不包含长期数据。
-    Empty,
-    /// The managed data directory has a valid identity marker.
-    /// 托管数据目录具有有效身份标记。
-    Initialized,
-    /// Historical data exists without a trusted vector identity.
-    /// 存在没有可信向量身份的历史数据。
-    UnmarkedHistory,
-    /// The configured vector space differs from the stored identity.
-    /// 配置的向量空间与已存储身份不同。
-    FingerprintChanged,
-    /// The vector identity marker is malformed.
-    /// 向量身份标记格式损坏。
-    MarkerCorrupt,
-    /// The vector identity marker uses an unsupported version.
-    /// 向量身份标记使用了不受支持的版本。
-    MarkerVersionUnsupported,
-    /// A formal data schema migration is required.
-    /// 需要执行正式数据架构迁移。
-    SchemaMigrationRequired,
-    /// A vector rebuild is currently running.
-    /// 当前正在重建向量。
-    RebuildRunning,
-    /// The data space is ready for the configured vector contract.
-    /// 数据空间已适配当前向量契约。
-    Ready,
-}
-
-/// Summarizes data-space state without exposing internal marker files.
-/// 在不暴露内部标记文件的前提下汇总数据空间状态。
-#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct VmmDataSpaceSummary {
-    /// Structured data-space state.
-    /// 结构化数据空间状态。
-    pub state: VmmDataSpaceState,
-    /// Translation key for the state title.
-    /// 状态标题翻译键。
-    pub title_key: String,
-    /// Translation key for the state description.
-    /// 状态说明翻译键。
-    pub description_key: String,
-    /// Optional primary maintenance action.
-    /// 可选的主要维护操作。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub action_kind: Option<String>,
-}
-
-/// Stable phase of one host-owned VMM data maintenance operation.
-/// 一次宿主持有 VMM 数据维护操作的稳定阶段。
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum VmmMaintenancePhase {
-    /// No maintenance operation has been started.
-    /// 尚未启动维护操作。
-    #[default]
-    Idle,
-    /// Historical data is being copied into a separate backup.
-    /// 正在把历史数据复制到独立备份。
-    BackingUp,
-    /// The official VMM tool is rebuilding the vector index.
-    /// VMM 正式工具正在重建向量索引。
-    Rebuilding,
-    /// A cancellation request is being delivered.
-    /// 正在传递取消请求。
-    Cancelling,
-    /// Backup and rebuild completed successfully.
-    /// 备份与重建已经成功完成。
-    Completed,
-    /// Maintenance stopped after a controlled cancellation.
-    /// 维护已在受控取消后停止。
-    Cancelled,
-    /// Maintenance failed and retained its completed backup when available.
-    /// 维护失败，并在可用时保留已完成备份。
-    Failed,
-}
-
-/// Product-facing status of one host-owned VMM maintenance operation.
-/// 一次宿主持有 VMM 维护操作的产品状态。
-#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct VmmMaintenanceSummary {
-    /// Stable maintenance phase.
-    /// 稳定维护阶段。
-    pub phase: VmmMaintenancePhase,
-    /// Approximate completed percentage across backup and rebuild stages.
-    /// 备份与重建阶段的近似完成百分比。
-    pub progress_percent: u8,
-    /// User-facing current activity or terminal outcome.
-    /// 面向用户的当前活动或终态结果。
-    pub message: String,
-    /// Whether the current operation can still be cancelled safely.
-    /// 当前操作是否仍可安全取消。
-    pub can_cancel: bool,
-    /// Whether a complete backup was created before rebuild began.
-    /// 重建开始前是否已创建完整备份。
-    pub backup_created: bool,
-    /// Optional current rebuild sub-stage reported by the official maintenance process.
-    /// 正式维护进程报告的可选当前重建子阶段。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub progress_stage: Option<String>,
-    /// Optional number of records completed in the current rebuild sub-stage.
-    /// 当前重建子阶段已完成的可选记录数。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub processed_items: Option<u64>,
-    /// Optional total number of records in the current rebuild sub-stage.
-    /// 当前重建子阶段的可选记录总数。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total_items: Option<u64>,
-    /// Optional maintenance start time in Unix milliseconds.
-    /// 可选维护开始时间，单位为 Unix 毫秒。
-    pub started_at_unix_ms: Option<u64>,
-    /// Optional latest update time in Unix milliseconds.
-    /// 可选最近更新时间，单位为 Unix 毫秒。
-    pub updated_at_unix_ms: Option<u64>,
-    /// Controlled technical detail shown only in advanced diagnostics.
-    /// 仅在高级诊断中展示的受控技术详情。
-    pub technical_detail: Option<String>,
 }
 
 /// User-facing summary of one durable VMM user.
@@ -452,12 +304,6 @@ pub struct VmmMemorySnapshot {
     /// Independently projected memory capabilities.
     /// 独立投影的记忆能力。
     pub capabilities: Vec<VmmCapabilitySummary>,
-    /// Managed data-space safety state.
-    /// 托管数据空间安全状态。
-    pub data_space_state: VmmDataSpaceSummary,
-    /// Host-owned backup and rebuild status.
-    /// 宿主持有的备份与重建状态。
-    pub maintenance: VmmMaintenanceSummary,
     /// Cached VMM user and project directory.
     /// 缓存的 VMM 用户与项目目录。
     pub management_catalog: VmmManagementCatalogSummary,
@@ -521,6 +367,10 @@ pub struct VmmProjectBindingNotice {
     /// 可用时绑定的原生 VMM 项目标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_vmm_project_id: Option<u64>,
+    /// Bound external VMM project id when available.
+    /// 可用时绑定的外置 VMM 项目标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_vmm_project_id: Option<u64>,
     /// Explicit success or failure message suitable for a toast.
     /// 适合通知提示的明确成功或失败消息。
     pub message: String,
@@ -583,198 +433,6 @@ pub struct VmmEffectiveSummary {
     pub injection_description: String,
 }
 
-/// Editable host-authoritative managed VMM behavior draft.
-/// 可编辑的宿主权威托管 VMM 行为草稿。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct VmmManagedRuntimeSettingsDraft {
-    /// PII rule language.
-    /// PII 规则语言。
-    pub pii_default_language: String,
-    /// Whether noise filtering is enabled.
-    /// 是否启用噪声过滤。
-    pub noise_enabled: bool,
-    /// Noise-rule language.
-    /// 噪声规则语言。
-    pub noise_default_language: String,
-    /// Whether semantic noise filtering is enabled.
-    /// 是否启用语义噪声过滤。
-    pub noise_semantic_enabled: bool,
-    /// Semantic noise threshold text.
-    /// 语义噪声阈值文本。
-    pub noise_semantic_threshold: String,
-    /// Prompt bundle language.
-    /// 提示词包语言。
-    pub prompt_language: String,
-    /// PreCheck intent timeout.
-    /// PreCheck 意图解析超时。
-    pub precheck_intent_timeout: String,
-    /// PreCheck recall count text.
-    /// PreCheck 召回数量文本。
-    pub precheck_top_k: String,
-    /// PreCheck search scope.
-    /// PreCheck 搜索范围。
-    pub precheck_search_scope: String,
-    /// PreCheck similarity threshold text.
-    /// PreCheck 相似度阈值文本。
-    pub precheck_similarity_threshold: String,
-    /// PostAction input mode.
-    /// PostAction 输入模式。
-    pub postaction_input_mode: String,
-    /// PostAction turn threshold text.
-    /// PostAction 轮次阈值文本。
-    pub postaction_turn_threshold: String,
-    /// PostAction token threshold text.
-    /// PostAction Token 阈值文本。
-    pub postaction_token_threshold: String,
-    /// PostAction idle timeout.
-    /// PostAction 空闲超时。
-    pub postaction_idle_timeout: String,
-    /// PostAction history turn count text.
-    /// PostAction 历史轮数文本。
-    pub postaction_history_turns: String,
-    /// PostAction maximum input tokens text.
-    /// PostAction 最大输入 Token 文本。
-    pub postaction_max_input_tokens: String,
-    /// PostAction background analysis deadline.
-    /// PostAction 后台分析截止时间。
-    pub postaction_analysis_timeout: String,
-    /// Consecutive failure count that moves one PostAction turn into Pass.
-    /// 将单条 PostAction turn 转入 Pass 的连续失败次数阈值。
-    pub postaction_failure_pass_threshold: String,
-    /// PostAction queue worker count text.
-    /// PostAction 队列工作数文本。
-    pub postaction_max_queue_workers: String,
-    /// Maximum inference HTTP connections per upstream host.
-    /// 每个上游主机允许的最大推理 HTTP 连接数。
-    pub inference_max_connections_per_host: String,
-    /// Maximum recall keyword count text.
-    /// 最大召回关键词数量文本。
-    pub pipeline_max_search_keywords: String,
-    /// Minimum recall similarity text.
-    /// 最小召回相似度文本。
-    pub pipeline_min_similarity_score: String,
-    /// Minimum replacement similarity text.
-    /// 最小替换相似度文本。
-    pub pipeline_replace_min_similarity_score: String,
-    /// Hard deduplication threshold text.
-    /// 硬去重阈值文本。
-    pub pipeline_hard_dedupe_threshold: String,
-    /// Hard deduplication pool size text.
-    /// 硬去重候选数量文本。
-    pub pipeline_hard_dedupe_pool_top_k: String,
-    /// Whether hybrid retrieval is enabled.
-    /// 是否启用混合检索。
-    pub pipeline_hybrid_enabled: bool,
-    /// Lexical recall count text.
-    /// 词法召回数量文本。
-    pub pipeline_lexical_top_k: String,
-    /// Reciprocal-rank-fusion constant text.
-    /// 倒数排名融合常量文本。
-    pub pipeline_rrf_k: String,
-    /// Whether diversity filtering is enabled.
-    /// 是否启用多样性过滤。
-    pub pipeline_mmr_enabled: bool,
-    /// Diversity balance text.
-    /// 多样性平衡系数文本。
-    pub pipeline_mmr_lambda: String,
-    /// Whether Weibull decay is enabled.
-    /// 是否启用 Weibull 衰减。
-    pub pipeline_weibull_enabled: bool,
-    /// Weibull shape text.
-    /// Weibull 形状参数文本。
-    pub pipeline_weibull_shape: String,
-    /// Weibull scale text.
-    /// Weibull 尺度文本。
-    pub pipeline_weibull_scale_hours: String,
-    /// Minimum decay multiplier text.
-    /// 最小衰减倍率文本。
-    pub pipeline_weibull_min_multiplier: String,
-    /// Reinforcement weight text.
-    /// 强化权重文本。
-    pub pipeline_weibull_reinforce_weight: String,
-    /// Cross-session boost text.
-    /// 跨会话增强系数文本。
-    pub pipeline_weibull_cross_session_boost: String,
-    /// Whether retention scanning is enabled.
-    /// 是否启用保留扫描。
-    pub retention_enabled: bool,
-    /// Retention scan interval.
-    /// 保留扫描间隔。
-    pub retention_scan_interval: String,
-    /// Extra hot-window turns text.
-    /// 热窗口额外轮数文本。
-    pub retention_turn_keep_extra_turns: String,
-    /// Session idle recycle duration.
-    /// 会话空闲回收时长。
-    pub retention_session_idle_after: String,
-    /// Trash retention duration.
-    /// 回收站保留时长。
-    pub retention_trash_duration: String,
-    /// Protected priority floor.
-    /// 受保护优先级下限。
-    pub retention_priority_floor: String,
-    /// Protected memory-level floor.
-    /// 受保护记忆级别下限。
-    pub retention_memory_level_floor: String,
-    /// Whether protected shared memories are skipped.
-    /// 是否跳过受保护共享记忆。
-    pub retention_skip_protected_shared: bool,
-}
-
-impl Default for VmmManagedRuntimeSettingsDraft {
-    /// Returns the editable projection of VMM's audited managed-runtime defaults.
-    /// 返回 VMM 已审计托管运行时默认值的可编辑投影。
-    fn default() -> Self {
-        Self {
-            pii_default_language: String::from("zh-CN"),
-            noise_enabled: true,
-            noise_default_language: String::from("zh-CN"),
-            noise_semantic_enabled: true,
-            noise_semantic_threshold: String::from("0.88"),
-            prompt_language: String::from("default_en"),
-            precheck_intent_timeout: String::from("5s"),
-            precheck_top_k: String::from("5"),
-            precheck_search_scope: String::from("space"),
-            precheck_similarity_threshold: String::from("0"),
-            postaction_input_mode: String::from("compat"),
-            postaction_turn_threshold: String::from("2"),
-            postaction_token_threshold: String::from("12000"),
-            postaction_idle_timeout: String::from("15m"),
-            postaction_history_turns: String::from("3"),
-            postaction_max_input_tokens: String::from("6000"),
-            postaction_analysis_timeout: String::from("180s"),
-            postaction_failure_pass_threshold: String::from("5"),
-            postaction_max_queue_workers: String::from("4"),
-            inference_max_connections_per_host: String::from("8"),
-            pipeline_max_search_keywords: String::from("5"),
-            pipeline_min_similarity_score: String::from("0.75"),
-            pipeline_replace_min_similarity_score: String::from("0.8"),
-            pipeline_hard_dedupe_threshold: String::from("0.99"),
-            pipeline_hard_dedupe_pool_top_k: String::from("16"),
-            pipeline_hybrid_enabled: true,
-            pipeline_lexical_top_k: String::from("8"),
-            pipeline_rrf_k: String::from("60"),
-            pipeline_mmr_enabled: true,
-            pipeline_mmr_lambda: String::from("0.75"),
-            pipeline_weibull_enabled: true,
-            pipeline_weibull_shape: String::from("1.35"),
-            pipeline_weibull_scale_hours: String::from("2160"),
-            pipeline_weibull_min_multiplier: String::from("0.4"),
-            pipeline_weibull_reinforce_weight: String::from("0.18"),
-            pipeline_weibull_cross_session_boost: String::from("0.12"),
-            retention_enabled: true,
-            retention_scan_interval: String::from("30m"),
-            retention_turn_keep_extra_turns: String::from("5"),
-            retention_session_idle_after: String::from("360h"),
-            retention_trash_duration: String::from("720h"),
-            retention_priority_floor: String::from("P1"),
-            retention_memory_level_floor: String::from("stable"),
-            retention_skip_protected_shared: true,
-        }
-    }
-}
-
 /// Editable VMM configuration draft summary.
 /// 可编辑 VMM 配置草稿摘要。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
@@ -816,18 +474,6 @@ pub struct VmmConfigDraftSummary {
     /// Editable external management timeout text.
     /// 可编辑外部管理超时文本。
     pub management_timeout_ms: String,
-    /// Whether Vulcan Code owns a local VMM child process.
-    /// Vulcan Code 是否持有本地 VMM 子进程。
-    pub managed_install_enabled: bool,
-    /// Optional explicit managed VMM executable path.
-    /// 可选的显式托管 VMM 可执行文件路径。
-    pub managed_binary_path: String,
-    /// Managed child auto-start policy.
-    /// 托管子进程自动启动策略。
-    pub auto_start_policy: String,
-    /// Host-authoritative managed VMM behavior.
-    /// 宿主权威托管 VMM 行为配置。
-    pub managed_runtime_settings: VmmManagedRuntimeSettingsDraft,
     /// Editable user id text.
     /// 可编辑用户标识文本。
     pub user_id: String,
@@ -911,35 +557,16 @@ pub struct VmmProjectScopeSummary {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VmmRuntimeSummary {
-    /// Structured managed data-space safety state.
-    /// 结构化托管数据空间安全状态。
-    pub data_space_state: VmmDataSpaceState,
     /// Whether the active VMM process or externally probed endpoint is ready.
     /// 当前 VMM 进程或已显式探测的外部端点是否已就绪。
     pub process_ready: bool,
-    /// Host-managed child lifecycle phase.
-    /// 宿主管理子进程生命周期阶段。
-    pub managed_phase: String,
-    /// Actual managed gRPC target without authorization data.
-    /// 不含鉴权数据的实际托管 gRPC 目标。
+    /// Active backend state, either `native`, `external`, or `disabled`.
+    /// 当前后端状态，取值为 `native`、`external` 或 `disabled`。
+    pub backend_state: String,
+    /// Latest controlled backend error.
+    /// 最近一次受控后端错误。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub managed_grpc_target: Option<String>,
-    /// Shared Controller endpoint used by the managed child.
-    /// 托管子进程使用的共享 Controller 端点。
-    pub managed_controller_endpoint: String,
-    /// Isolated Controller space used by VMM.
-    /// VMM 使用的隔离 Controller Space。
-    pub managed_controller_space: String,
-    /// Stable managed VMM data root.
-    /// 稳定托管 VMM 数据根。
-    pub managed_data_root: String,
-    /// Stable managed VMM log path.
-    /// 稳定托管 VMM 日志路径。
-    pub managed_log_path: String,
-    /// Latest controlled managed-runtime error.
-    /// 最近一次受控托管运行时错误。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub managed_last_error: Option<String>,
+    pub backend_error: Option<String>,
     /// Whether the configured numeric user/project scope was reconciled.
     /// 配置的数字用户/项目作用域是否已完成对账。
     pub scope_ready: bool,
@@ -1151,6 +778,25 @@ pub struct VmmNativeSessionRename {
     pub to: String,
 }
 
+/// User-visible primary record included by a native migration preview.
+/// 原生迁移预检包含的一条用户可见主记录。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeMigrationRecordSummary {
+    /// Stable record class: session, turn, memory, or project_profile.
+    /// 稳定记录类别：会话、回合、记忆或项目画像。
+    pub record_kind: String,
+    /// Stable Core identity, or the host session identity for a session row.
+    /// 稳定 Core 身份；会话行则使用宿主会话身份。
+    pub record_id: String,
+    /// Originating host session when the record belongs to one.
+    /// 当记录属于某个宿主会话时携带其来源会话。
+    pub session_source_id: Option<String>,
+    /// Compact non-secret description available for human review.
+    /// 供人工核对的紧凑非敏感描述。
+    pub summary: Option<String>,
+}
+
 /// Side-effect-free preview returned before a native project migration.
 /// 原生项目迁移前返回的无副作用预检。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -1177,6 +823,12 @@ pub struct VmmNativeMigrationPreview {
     /// Conflicting sessions and their deterministic new identities.
     /// 冲突会话及其确定性新身份。
     pub session_renames: Vec<VmmNativeSessionRename>,
+    /// User-visible primary records whose project ownership will change.
+    /// 将改变项目归属的用户可见主记录。
+    pub records: Vec<VmmNativeMigrationRecordSummary>,
+    /// SHA-256 identity of the exact displayed preview required by confirmation.
+    /// 确认操作必须携带的用户所见准确预检 SHA-256 身份。
+    pub preview_fingerprint: String,
 }
 
 /// Result returned after a native project migration commits.
@@ -1232,9 +884,6 @@ pub enum VmmMemoryActionResponse {
     /// No typed payload is available for one diagnostic-only action.
     /// 诊断专用动作没有可用的强类型载荷。
     Empty,
-    /// Managed-runtime control details are diagnostic-only.
-    /// 托管运行时控制详情仅用于诊断。
-    ManagedRuntime(serde_json::Value),
     /// Context-injection suppression details are diagnostic-only.
     /// 上下文注入抑制详情仅用于诊断。
     ContextInjection(serde_json::Value),
@@ -1319,9 +968,6 @@ pub enum VmmMemoryActionResponse {
     /// Committed native project clear result.
     /// 已提交的原生项目清空结果。
     NativeClear(VmmNativeClearResult),
-    /// Managed backup and vector-rebuild status.
-    /// 托管备份与向量重建状态。
-    Maintenance(VmmMaintenanceSummary),
     /// Structured response returned by the isolated VMM management HTTP API.
     /// 独立 VMM 管理 HTTP API 返回的结构化响应。
     Management(serde_json::Value),

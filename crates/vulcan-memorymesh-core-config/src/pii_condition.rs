@@ -492,7 +492,7 @@ fn is_luhn(text: &str) -> bool {
 /// Validates the standard Base64 alphabet, quartet length, and terminal padding accepted by Go.
 /// 验证 Go 接受的标准 Base64 字母表、四元组长度及末尾填充。
 fn is_base64(text: &str) -> bool {
-    if text.is_empty() || text.len() % 4 != 0 {
+    if text.is_empty() || !text.len().is_multiple_of(4) {
         return false;
     }
     let unpadded = text.trim_end_matches('=');

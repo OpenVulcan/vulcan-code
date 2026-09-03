@@ -13,6 +13,14 @@ import type {
 
 import type { VmmScope } from "./vmm-memory-sections";
 
+// MemoryActionRunOptions carries request identity that must remain stable across user retries.
+// MemoryActionRunOptions 携带在用户重试期间必须保持稳定的请求身份。
+export interface MemoryActionRunOptions {
+  // Stable UUID for one logical action; omission allocates a fresh command identity.
+  // 单个逻辑动作的稳定 UUID；省略时分配新的命令身份。
+  commandId?: string;
+}
+
 // MemoryActionProps groups service-backed actions used by the VMM memory page.
 // MemoryActionProps 分组 VMM 记忆页面使用的服务端动作。
 export interface MemoryActionProps {
@@ -62,7 +70,11 @@ export interface MemoryAreaController {
   scope: VmmScope;
   // Runs one action through the exclusive operation channel.
   // 通过独占操作通道执行单个动作。
-  runAction: (action: string, payload?: Record<string, unknown>) => Promise<VmmMemoryActionResult | null>;
+  runAction: (
+    action: string,
+    payload?: Record<string, unknown>,
+    options?: MemoryActionRunOptions,
+  ) => Promise<VmmMemoryActionResult | null>;
   // Saves the current or explicitly requested configuration scope.
   // 保存当前或明确请求的配置作用域。
   saveDraft: (targetScope?: VmmScope) => Promise<boolean>;
@@ -454,7 +466,11 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
 
   // runAction executes one management request against the scope captured by the exclusive operation.
   // runAction 针对独占操作捕获的作用域执行一个管理请求。
-  const runAction = React.useCallback(async (action: string, payload: Record<string, unknown> = {}) => {
+  const runAction = React.useCallback(async (
+    action: string,
+    payload: Record<string, unknown> = {},
+    options: MemoryActionRunOptions = {},
+  ) => {
     // operation prevents double clicks and cross-action result overwrites.
     // operation 防止双击与跨动作结果覆盖。
     const operation = beginOperation(action);
@@ -471,9 +487,12 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
     try {
       // nextResult is the only response allowed to replace the visible action result.
       // nextResult 是唯一允许替换可见动作结果的响应。
+      // commandId preserves a caller-owned destructive confirmation identity across retries.
+      // commandId 在重试期间保留由调用方持有的破坏性确认身份。
+      const commandId = options.commandId ?? crypto.randomUUID();
       const nextResult = await actionsRef.current.onRunVmmAction({
         action,
-        commandId: crypto.randomUUID(),
+        commandId,
         scope: requestScope,
         projectId: requestProjectId,
         payload,

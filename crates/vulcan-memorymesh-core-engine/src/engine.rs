@@ -41,18 +41,17 @@ use vulcan_memorymesh_core_contracts::{
     MemorySearchGroup, MemorySourceKind, MemoryStability, MemoryState, MemoryWriteBatchCommand,
     MemoryWriteBatchItem, MemoryWriteBatchResult, MemoryWriteCommand, MemoryWriteResult, Mutation,
     MutationBatch, MutationIdentity, MutationOutcome, NoiseAudit, NoiseDecisionSource,
-    NoisePrototype, NoisePrototypeCacheIdentity, OperationId, PhysicalCandidate,
-    PlannedColdTurnJobRef, PlannedMemoryRef, PlannedSessionRef, PlannedTrashBatchRef,
-    PlannedVectorGcRef, PostActionAcceptedResult, PostActionAnalysisResult,
-    PostActionAnalyzePendingTurnCommand, PostActionDirectWrite, PostActionIntakeCommand,
-    PostActionReferenceTurn, PreCheckCommand, PreCheckResult, PreCheckReviewCandidate,
-    ProfileBundle, ProfileCandidate, ProfileInstructionCommand, ProfileInstructionResult,
-    ProfileLevel, ProfileNode, ProfileNodeId, ProfileNodeState, ProfileQueryCommand,
-    ProfileSectionBundle, ProfileSourceId, ProfileSourceKind, ProfileViewSection, RecallMode,
-    ReinforcementResult, RerankEffect, RetentionCommand, RetentionPlanSet, RetentionReasonCode,
-    RetiredProfileNode, Role, ScopeAccess, ScopeId, SearchHit, SectionRole, SessionRecallBoundary,
-    StorageQuery, StorageQueryResult, StructuredOutputContractId, SubjectId, TimelineItem, Turn,
-    TurnId, TurnStatus, VectorSpaceId,
+    NoisePrototype, NoisePrototypeCacheIdentity, PhysicalCandidate, PlannedColdTurnJobRef,
+    PlannedMemoryRef, PlannedSessionRef, PlannedTrashBatchRef, PlannedVectorGcRef,
+    PostActionAcceptedResult, PostActionAnalysisResult, PostActionAnalyzePendingTurnCommand,
+    PostActionDirectWrite, PostActionIntakeCommand, PostActionReferenceTurn, PreCheckCommand,
+    PreCheckResult, PreCheckReviewCandidate, ProfileBundle, ProfileCandidate,
+    ProfileInstructionCommand, ProfileInstructionResult, ProfileLevel, ProfileNode, ProfileNodeId,
+    ProfileNodeState, ProfileQueryCommand, ProfileSectionBundle, ProfileSourceId,
+    ProfileSourceKind, ProfileViewSection, RecallMode, ReinforcementResult, RerankEffect,
+    RetentionCommand, RetentionPlanSet, RetentionReasonCode, RetiredProfileNode, Role, ScopeAccess,
+    ScopeId, SearchHit, SectionRole, SessionRecallBoundary, StorageQuery, StorageQueryResult,
+    StructuredOutputContractId, SubjectId, TimelineItem, Turn, TurnId, TurnStatus, VectorSpaceId,
 };
 
 /// Defines the authoritative VMM recent direct-write soft-idempotency window.
@@ -903,38 +902,8 @@ fn derive_batch_identity(
     identity: &MutationIdentity,
     role: &str,
 ) -> Result<MutationIdentity, CoreError> {
-    Ok(MutationIdentity {
-        operation_id: OperationId::new(mutation_sub_identity(
-            "op",
-            identity.operation_id.as_str(),
-            role,
-        ))
-        .map_err(|error| command_error(ErrorCode::Internal, error.to_string()))?,
-        idempotency_key: IdempotencyKey::new(mutation_sub_identity(
-            "key",
-            identity.idempotency_key.as_str(),
-            role,
-        ))
-        .map_err(|error| command_error(ErrorCode::Internal, error.to_string()))?,
-        request_fingerprint: identity.request_fingerprint.clone(),
-        source_kind: identity.source_kind,
-        request_source_id: identity.request_source_id.clone(),
-        observed_at_ns: identity.observed_at_ns,
-    })
-}
-
-/// Hashes length-prefixed namespace, root, and role without restricting valid caller IDs.
-/// 对长度前缀的命名域、根身份和角色求摘要，不压缩公共调用方身份的合法长度范围。
-fn mutation_sub_identity(namespace: &str, root: &str, role: &str) -> String {
-    use sha2::Digest;
-
-    let mut digest = sha2::Sha256::new();
-    digest.update(b"vmm-sub-operation-v1");
-    for field in [namespace, root, role] {
-        digest.update((field.len() as u64).to_le_bytes());
-        digest.update(field.as_bytes());
-    }
-    format!("vmm-{namespace}-v1:{:x}", digest.finalize())
+    vulcan_memorymesh_core_contracts::derive_mutation_identity(identity, role)
+        .map_err(|error| command_error(ErrorCode::Internal, error.to_string()))
 }
 
 impl CommandEngine {
@@ -1983,13 +1952,13 @@ fn validate_commit_receipt_against_pending_mutation(
             } => Some((slot, EntityKind::ProfileNode)),
             _ => None,
         };
-        if let Some((slot, kind)) = created {
-            if expected_bindings.insert(slot.clone(), kind).is_some() {
-                return Err(command_error(
-                    ErrorCode::Internal,
-                    "pending mutation batch creates one entity slot more than once",
-                ));
-            }
+        if let Some((slot, kind)) = created
+            && expected_bindings.insert(slot.clone(), kind).is_some()
+        {
+            return Err(command_error(
+                ErrorCode::Internal,
+                "pending mutation batch creates one entity slot more than once",
+            ));
         }
     }
     validate_expected_bindings(receipt, &expected_bindings)?;
@@ -2742,19 +2711,19 @@ fn preserve_invalid_mutation_outcome(
 /// Applies the transition result to the record lifecycle.
 /// 将转换结果应用到记录生命周期。
 fn finalize_transition(record: &mut CommandRecord, transition: &Result<CommandStep, CoreError>) {
-    if let Err(error) = transition {
-        if record.status == CommandStatus::Waiting {
-            record.status = CommandStatus::Failed;
-            record.pending_effect_id = None;
-            record.pending_effect = None;
-            record.pending_mutation_idempotency_key = None;
-            record.last_error = Some(
-                error
-                    .clone()
-                    .with_command(record.handle.command_id.clone())
-                    .with_snapshot(record.handle.config_snapshot_id.clone()),
-            );
-        }
+    if let Err(error) = transition
+        && record.status == CommandStatus::Waiting
+    {
+        record.status = CommandStatus::Failed;
+        record.pending_effect_id = None;
+        record.pending_effect = None;
+        record.pending_mutation_idempotency_key = None;
+        record.last_error = Some(
+            error
+                .clone()
+                .with_command(record.handle.command_id.clone())
+                .with_snapshot(record.handle.config_snapshot_id.clone()),
+        );
     }
 }
 
@@ -10395,12 +10364,12 @@ fn checkpoint_state(record: &CommandRecord) -> vulcan_memorymesh_core_contracts:
             effect_kind: flow_state_name(&record.state).to_owned(),
         };
     }
-    if record.status == CommandStatus::ResultUncertain {
-        if let Some(key) = &record.pending_mutation_idempotency_key {
-            return vulcan_memorymesh_core_contracts::CheckpointState::AwaitingReconciliation {
-                idempotency_key: key.clone(),
-            };
-        }
+    if record.status == CommandStatus::ResultUncertain
+        && let Some(key) = &record.pending_mutation_idempotency_key
+    {
+        return vulcan_memorymesh_core_contracts::CheckpointState::AwaitingReconciliation {
+            idempotency_key: key.clone(),
+        };
     }
     vulcan_memorymesh_core_contracts::CheckpointState::Ready
 }
@@ -11656,6 +11625,7 @@ mod lifecycle_time_tests {
 #[cfg(test)]
 mod mutation_identity_tests {
     use super::*;
+    use vulcan_memorymesh_core_contracts::OperationId;
 
     /// Keeps maximum-length and Unicode caller identities stable and stage-isolated.
     /// 保持最大长度及 Unicode 调用方身份可派生、稳定且按阶段隔离。
@@ -11681,10 +11651,6 @@ mod mutation_identity_tests {
             assert!(validate_derived_mutation_identity(&identity, &batch, "write-batch").is_ok());
             assert!(validate_derived_mutation_identity(&identity, &batch, "derive").is_err());
         }
-        assert_ne!(
-            mutation_sub_identity("op", "a#b", "c"),
-            mutation_sub_identity("op", "a", "b#c")
-        );
         Ok(())
     }
 }

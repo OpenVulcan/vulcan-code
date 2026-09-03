@@ -530,7 +530,10 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         workspace: &workspace_snapshot,
         pending_prompt_process_mirrors: &guard.pending_prompt_process_mirrors,
         vmm_session_states: &vmm_session_states,
-        managed_vmm_runtime: None,
+        native_vmm_host_ai_status: guard
+            .native_vmm_maintenance
+            .as_ref()
+            .map(crate::native_vmm::NativeVmmMaintenance::host_ai_status),
         subagent_navigation,
         pending_questions,
         logs,

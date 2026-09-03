@@ -78,9 +78,6 @@ pub struct VmmHookConfigSnapshot {
     /// Latest compaction identifiers keyed by session id string.
     /// 按会话标识字符串索引的最近压缩标识。
     pub last_compaction_ids: BTreeMap<String, Option<String>>,
-    /// Process-local transport override applied to at most the three layers read by one invocation.
-    /// 单次调用最多应用到三个已读取配置层的进程内传输覆盖。
-    pub runtime_transport_override: Option<VmmConfigLayer>,
 }
 
 /// Shared runtime handle used by built-in VMM hook handlers.
@@ -93,28 +90,6 @@ pub struct VmmHookRuntimeHandle {
     /// Process-local native VMM client installed by the VulcanCode service host.
     /// 由 VulcanCode 服务宿主安装的进程内原生 VMM 客户端。
     native_client: Arc<RwLock<Option<Arc<dyn VmmClient>>>>,
-}
-
-/// Applies the five fields owned by the process-local managed transport contract.
-/// 应用由进程内托管传输契约拥有的五个字段。
-///
-/// # Parameters
-/// 参数
-/// `layer` is one invocation layer receiving the ephemeral override.
-/// `layer` 是接收临时覆盖的单个调用配置层。
-/// `runtime_override` contains only host-owned enablement, transport, and hook readiness fields.
-/// `runtime_override` 仅包含宿主持有的启用、传输与 hook 就绪字段。
-///
-/// # Returns
-/// 返回值
-/// This in-place operation returns no value.
-/// 该原地操作不返回值。
-fn apply_runtime_transport_override(layer: &mut VmmConfigLayer, runtime_override: &VmmConfigLayer) {
-    layer.enabled = runtime_override.enabled;
-    layer.grpc_target = runtime_override.grpc_target.clone();
-    layer.grpc_api_key = runtime_override.grpc_api_key.clone();
-    layer.precheck_enabled = runtime_override.precheck_enabled;
-    layer.memory_writeback_enabled = runtime_override.memory_writeback_enabled;
 }
 
 impl VmmHookRuntimeHandle {
@@ -241,28 +216,20 @@ impl VmmHookRuntimeHandle {
         Ok(())
     }
 
-    /// Replaces the global layer and process-local transport override without touching session maps.
-    /// 替换全局配置层与进程内传输覆盖，且不触碰会话映射。
+    /// Replaces the global layer without touching project or session maps.
+    /// 替换全局配置层，且不触碰项目或会话映射。
     ///
     /// # Parameters
     /// 参数
     /// `global` is the complete authoritative global VMM layer.
     /// `global` 是完整的权威全局 VMM 配置层。
-    /// `runtime_transport_override` is the ephemeral host-owned transport layer, when active.
-    /// `runtime_transport_override` 是宿主持有且仅在运行期存在的临时传输层。
-    ///
     /// # Returns
     /// 返回值
     /// Returns success after one constant-scope update, or a state-lock diagnostic.
     /// 单次常量范围更新完成后返回成功，失败时返回状态锁诊断。
-    pub fn replace_global_projection(
-        &self,
-        global: &VmmConfigLayer,
-        runtime_transport_override: Option<&VmmConfigLayer>,
-    ) -> Result<(), String> {
+    pub fn replace_global_projection(&self, global: &VmmConfigLayer) -> Result<(), String> {
         let mut state = self.write_state("replace the global VMM projection")?;
         state.global = global.clone();
-        state.runtime_transport_override = runtime_transport_override.cloned();
         Ok(())
     }
 
@@ -472,24 +439,10 @@ impl VmmHookRuntimeHandle {
         let session = session_id
             .as_deref()
             .and_then(|session_id| snapshot.sessions.get(session_id));
-        // Invocation layers are the only bounded copies needed to apply the host-owned transport override.
-        // 调用配置层是应用宿主持有传输覆盖时唯一需要的有界副本。
-        let mut global = snapshot.global.clone();
-        let mut project = project.cloned();
-        let mut session = session.cloned();
-        if let Some(runtime_override) = snapshot.runtime_transport_override.as_ref() {
-            apply_runtime_transport_override(&mut global, runtime_override);
-            if let Some(project) = project.as_mut() {
-                apply_runtime_transport_override(project, runtime_override);
-            }
-            if let Some(session) = session.as_mut() {
-                apply_runtime_transport_override(session, runtime_override);
-            }
-        }
         Ok(VmmEffectiveConfig::resolve(
-            &global,
-            project.as_ref(),
-            session.as_ref(),
+            &snapshot.global,
+            project,
+            session,
         ))
     }
 

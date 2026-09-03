@@ -6,6 +6,7 @@ use crate::{
     ScoreContractRef, StructuredOutputContractId, TurnId,
 };
 use serde::{Deserialize, Deserializer, Serialize};
+use sha2::{Digest, Sha256};
 
 /// Identifies one command-local slot that references a not-yet-committed entity.
 /// 标识一个引用尚未提交实体的命令局部槽位。
@@ -146,6 +147,58 @@ impl MutationIdentity {
         }
         Ok(())
     }
+}
+
+/// Derives one role-isolated mutation identity from a durable host root identity.
+/// 从一个耐久宿主根身份派生按角色隔离的变更身份。
+///
+/// # Parameters
+/// 参数
+/// `identity` is the exact host root identity and `role` is the stable Core mutation role.
+/// `identity` 是准确宿主根身份，`role` 是稳定 Core 变更角色。
+///
+/// # Returns
+/// 返回值
+/// A deterministic sub-operation identity that preserves request and source semantics.
+/// 返回保留请求与来源语义的确定性子操作身份。
+///
+/// # Errors
+/// Returns an identifier error if a derived operation or idempotency identity is invalid.
+/// 派生操作或幂等身份无效时返回标识错误。
+pub fn derive_mutation_identity(
+    identity: &MutationIdentity,
+    role: &str,
+) -> Result<MutationIdentity, CoreError> {
+    Ok(MutationIdentity {
+        operation_id: OperationId::new(mutation_sub_identity(
+            "op",
+            identity.operation_id.as_str(),
+            role,
+        ))
+        .map_err(|error| identity_error(ErrorCode::Internal, error.to_string()))?,
+        idempotency_key: IdempotencyKey::new(mutation_sub_identity(
+            "key",
+            identity.idempotency_key.as_str(),
+            role,
+        ))
+        .map_err(|error| identity_error(ErrorCode::Internal, error.to_string()))?,
+        request_fingerprint: identity.request_fingerprint.clone(),
+        source_kind: identity.source_kind,
+        request_source_id: identity.request_source_id.clone(),
+        observed_at_ns: identity.observed_at_ns,
+    })
+}
+
+/// Hashes length-prefixed namespace, root, and role into one stable Core sub-identity.
+/// 将带长度前缀的命名域、根身份与角色哈希为一个稳定 Core 子身份。
+fn mutation_sub_identity(namespace: &str, root: &str, role: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"vmm-sub-operation-v1");
+    for field in [namespace, root, role] {
+        digest.update((field.len() as u64).to_le_bytes());
+        digest.update(field.as_bytes());
+    }
+    format!("vmm-{namespace}-v1:{:x}", digest.finalize())
 }
 
 /// References one entity as an exact existing record or a command-local new slot.
@@ -293,7 +346,8 @@ fn identity_error(code: ErrorCode, diagnostic: impl Into<String>) -> CoreError {
 
 #[cfg(test)]
 mod tests {
-    use super::EntitySlotId;
+    use super::{EntitySlotId, MutationIdentity, MutationSourceKind, derive_mutation_identity};
+    use crate::{IdempotencyKey, OperationId};
     use serde::Deserialize;
     use serde::de::value::{Error as ValueError, StringDeserializer};
 
@@ -310,5 +364,32 @@ mod tests {
             "slot\0invalid".to_owned(),
         ));
         assert!(nul.is_err());
+    }
+
+    /// Verifies derived identities are deterministic and isolated by mutation role.
+    /// 验证派生身份具有确定性并按变更角色隔离。
+    #[test]
+    fn mutation_identity_derivation_is_deterministic_and_role_isolated() {
+        let root = MutationIdentity {
+            operation_id: OperationId::new("root-operation").expect("valid operation"),
+            idempotency_key: IdempotencyKey::new("root-key").expect("valid key"),
+            request_fingerprint: format!("fp256:{}", "0".repeat(64)),
+            source_kind: MutationSourceKind::HostRpc,
+            request_source_id: String::from("test"),
+            observed_at_ns: 42,
+        };
+        let first = derive_mutation_identity(&root, "intake").expect("derived identity");
+        let repeated = derive_mutation_identity(&root, "intake").expect("repeated identity");
+        let other = derive_mutation_identity(&root, "analysis").expect("other identity");
+
+        assert_eq!(first, repeated);
+        assert_ne!(first.operation_id, other.operation_id);
+        assert_ne!(first.idempotency_key, other.idempotency_key);
+        assert_eq!(first.request_fingerprint, root.request_fingerprint);
+        assert_eq!(first.source_kind, root.source_kind);
+        assert_ne!(
+            super::mutation_sub_identity("op", "a#b", "c"),
+            super::mutation_sub_identity("op", "a", "b#c")
+        );
     }
 }

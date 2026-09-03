@@ -7,9 +7,9 @@ use serde_json::{Value, json};
 use vulcan_agent_runtime::provider_config::ProviderConfigurationFile;
 use vulcan_context_injection::InjectionKind;
 use vulcan_service_api::{
-    VmmCapabilitySummary, VmmConfigDraftSummary, VmmConfigSaveRequest, VmmDataSpaceSummary,
-    VmmDeploymentMode, VmmDisplayIdentitySummary, VmmEffectiveSummary, VmmExperienceStateSummary,
-    VmmHealthState, VmmLifecycleState, VmmManagementCatalogSummary, VmmManagementSectionSummary,
+    VmmCapabilitySummary, VmmConfigDraftSummary, VmmConfigSaveRequest, VmmDeploymentMode,
+    VmmDisplayIdentitySummary, VmmEffectiveSummary, VmmExperienceStateSummary, VmmHealthState,
+    VmmLifecycleState, VmmManagementCatalogSummary, VmmManagementSectionSummary,
     VmmMemoryActionRequest, VmmMemoryActionResult, VmmMemorySnapshot, VmmPrerequisiteSummary,
     VmmProjectScopeSummary, VmmRecentActivitySummary, VmmRuntimeSummary, VmmSetupState,
     VmmStaticProfileDateGroupSummary, VmmStaticProfileNodeSummary, VmmStaticProfileSectionSummary,
@@ -23,8 +23,7 @@ use crate::{
     session_summary_project_id,
     vmm_hooks::{
         cached_project_vmm_layer, refresh_exact_vmm_hook_project_projection,
-        refresh_guard_vmm_hook_snapshot, refresh_service_vmm_hook_snapshot,
-        update_cached_project_vmm_layer,
+        refresh_guard_vmm_hook_snapshot, update_cached_project_vmm_layer,
     },
     vmm_project_scope_path, vmm_request_project_scope,
 };
@@ -56,8 +55,8 @@ pub(super) use static_profile::*;
 ///
 /// # Returns
 /// 返回值
-/// The explicit disabled, managed, or external deployment mode.
-/// 返回明确的禁用、托管或外部部署模式。
+/// The explicit disabled, native, or external deployment mode.
+/// 返回明确的禁用、原生或外部部署模式。
 pub(crate) fn current_vmm_deployment_mode(
     global_layer: &vulcan_vmm::VmmConfigLayer,
 ) -> VmmDeploymentMode {

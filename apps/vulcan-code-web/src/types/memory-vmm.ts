@@ -26,17 +26,9 @@ export type VmmSetupState =
   | "incomplete"
   | "blocked";
 
-// VmmLifecycleState identifies the VMM process lifecycle.
-// VmmLifecycleState 标识 VMM 进程生命周期。
-export type VmmLifecycleState =
-  | "stopped"
-  | "starting"
-  | "running"
-  | "stopping"
-  | "restarting"
-  | "crashed"
-  | "waiting_retry"
-  | "failed";
+// VmmLifecycleState identifies the selected VMM backend lifecycle.
+// VmmLifecycleState 标识所选 VMM 后端生命周期。
+export type VmmLifecycleState = "stopped" | "running" | "failed";
 
 // VmmHealthState identifies the currently available memory experience.
 // VmmHealthState 标识当前可用的记忆体验。
@@ -115,69 +107,6 @@ export interface VmmCapabilitySummary {
   configureTarget?: string | null;
 }
 
-// VmmDataSpaceState identifies the managed VMM data-space safety state.
-// VmmDataSpaceState 标识托管 VMM 数据空间的安全状态。
-export type VmmDataSpaceState =
-  | "unknown"
-  | "empty"
-  | "initialized"
-  | "unmarked_history"
-  | "fingerprint_changed"
-  | "marker_corrupt"
-  | "marker_version_unsupported"
-  | "schema_migration_required"
-  | "rebuild_running"
-  | "ready";
-
-// VmmDataSpaceSummary describes data safety without exposing marker files.
-// VmmDataSpaceSummary 在不暴露标记文件的前提下描述数据安全状态。
-export interface VmmDataSpaceSummary {
-  // Structured data-space state.
-  // 结构化数据空间状态。
-  state: VmmDataSpaceState;
-  // Translation key for the state title.
-  // 状态标题翻译键。
-  titleKey: string;
-  // Translation key for the state description.
-  // 状态说明翻译键。
-  descriptionKey: string;
-  // Optional primary maintenance action.
-  // 可选的主要维护操作。
-  actionKind?: string | null;
-}
-
-// VmmMaintenancePhase identifies one host-owned backup and rebuild stage.
-// VmmMaintenancePhase 标识宿主持有的备份与重建阶段。
-export type VmmMaintenancePhase =
-  | "idle"
-  | "backing_up"
-  | "rebuilding"
-  | "cancelling"
-  | "completed"
-  | "cancelled"
-  | "failed";
-
-// VmmMaintenanceSummary describes one durable maintenance operation without exposing paths.
-// VmmMaintenanceSummary 描述一次不暴露路径的长期维护操作。
-export interface VmmMaintenanceSummary {
-  phase: VmmMaintenancePhase;
-  progressPercent: number;
-  message: string;
-  canCancel: boolean;
-  backupCreated: boolean;
-  // Current machine-reported rebuild sub-stage, when available.
-  // 当前可用时由机器报告的重建子阶段。
-  progressStage?: string | null;
-  // Number of records completed in the current rebuild sub-stage.
-  // 当前重建子阶段已完成的记录数。
-  processedItems?: number | null;
-  // Total records in the current rebuild sub-stage.
-  // 当前重建子阶段的记录总数。
-  totalItems?: number | null;
-  startedAtUnixMs?: number | null;
-  updatedAtUnixMs?: number | null;
-  technicalDetail?: string | null;
-}
 
 // VmmUserDisplaySummary describes one durable VMM user without exposing a numeric id.
 // VmmUserDisplaySummary 描述单个长期 VMM 用户且不暴露数字标识。
@@ -288,12 +217,6 @@ export interface VmmMemorySnapshot {
   // Independently projected memory capabilities.
   // 独立投影的记忆能力。
   capabilities: VmmCapabilitySummary[];
-  // Managed data-space safety state.
-  // 托管数据空间安全状态。
-  dataSpaceState: VmmDataSpaceSummary;
-  // Current host-owned backup and rebuild operation.
-  // 当前由宿主持有的备份与重建操作。
-  maintenance: VmmMaintenanceSummary;
   // Cached VMM user and project directory.
   // 缓存的 VMM 用户与项目目录。
   managementCatalog: VmmManagementCatalogSummary;
@@ -342,6 +265,7 @@ export interface VmmProjectBindingNotice {
   status: "bound" | "failed";
   vmmProjectName?: string | null;
   nativeVmmProjectId?: number | null;
+  externalVmmProjectId?: number | null;
   message: string;
 }
 
@@ -370,54 +294,6 @@ export interface VmmEffectiveSummary {
   injectionDescription: string;
 }
 
-// VmmManagedRuntimeSettingsDraft describes editable behavior written into managed VMM manifests.
-// VmmManagedRuntimeSettingsDraft 描述写入托管 VMM 清单的可编辑行为。
-export interface VmmManagedRuntimeSettingsDraft {
-  piiDefaultLanguage: string;
-  noiseEnabled: boolean;
-  noiseDefaultLanguage: string;
-  noiseSemanticEnabled: boolean;
-  noiseSemanticThreshold: string;
-  promptLanguage: string;
-  precheckIntentTimeout: string;
-  precheckTopK: string;
-  precheckSearchScope: string;
-  precheckSimilarityThreshold: string;
-  postactionInputMode: string;
-  postactionTurnThreshold: string;
-  postactionTokenThreshold: string;
-  postactionIdleTimeout: string;
-  postactionHistoryTurns: string;
-  postactionMaxInputTokens: string;
-  postactionAnalysisTimeout: string;
-  postactionFailurePassThreshold: string;
-  postactionMaxQueueWorkers: string;
-  inferenceMaxConnectionsPerHost: string;
-  pipelineMaxSearchKeywords: string;
-  pipelineMinSimilarityScore: string;
-  pipelineReplaceMinSimilarityScore: string;
-  pipelineHardDedupeThreshold: string;
-  pipelineHardDedupePoolTopK: string;
-  pipelineHybridEnabled: boolean;
-  pipelineLexicalTopK: string;
-  pipelineRrfK: string;
-  pipelineMmrEnabled: boolean;
-  pipelineMmrLambda: string;
-  pipelineWeibullEnabled: boolean;
-  pipelineWeibullShape: string;
-  pipelineWeibullScaleHours: string;
-  pipelineWeibullMinMultiplier: string;
-  pipelineWeibullReinforceWeight: string;
-  pipelineWeibullCrossSessionBoost: string;
-  retentionEnabled: boolean;
-  retentionScanInterval: string;
-  retentionTurnKeepExtraTurns: string;
-  retentionSessionIdleAfter: string;
-  retentionTrashDuration: string;
-  retentionPriorityFloor: string;
-  retentionMemoryLevelFloor: string;
-  retentionSkipProtectedShared: boolean;
-}
 
 // VmmConfigDraftSummary describes editable VMM config fields.
 // VmmConfigDraftSummary 描述可编辑 VMM 配置字段。
@@ -444,18 +320,6 @@ export interface VmmConfigDraftSummary {
   managementBaseUrl: string;
   managementBearerToken: string;
   managementTimeoutMs: string;
-  // Whether Vulcan Code owns the local VMM process.
-  // Vulcan Code 是否持有本地 VMM 进程。
-  managedInstallEnabled: boolean;
-  // Optional managed VMM executable path.
-  // 可选托管 VMM 可执行文件路径。
-  managedBinaryPath: string;
-  // Managed child auto-start policy.
-  // 托管子进程自动启动策略。
-  autoStartPolicy: string;
-  // Host-authoritative managed runtime behavior.
-  // 宿主权威托管运行时行为。
-  managedRuntimeSettings: VmmManagedRuntimeSettingsDraft;
   userId: string;
   projectId: string;
   receiveTimeoutMs: string;
@@ -497,17 +361,13 @@ export interface VmmProjectScopeSummary {
 // VmmRuntimeSummary describes selected-session VMM runtime side effects.
 // VmmRuntimeSummary 描述当前选中会话的 VMM 运行态副作用。
 export interface VmmRuntimeSummary {
-  // Structured managed data-space safety state.
-  // 结构化托管数据空间安全状态。
-  dataSpaceState: VmmDataSpaceState;
   processReady: boolean;
-  managedPhase: string;
-  managedGrpcTarget?: string | null;
-  managedControllerEndpoint: string;
-  managedControllerSpace: string;
-  managedDataRoot: string;
-  managedLogPath: string;
-  managedLastError?: string | null;
+  // Active native or external backend state.
+  // 当前原生或外置后端状态。
+  backendState: string;
+  // Latest controlled backend error.
+  // 最近一次受控后端错误。
+  backendError?: string | null;
   scopeReady: boolean;
   scopeError?: string | null;
   precheckReady: boolean;
@@ -602,6 +462,15 @@ export interface VmmNativeSessionRename {
   to: string;
 }
 
+// VmmNativeMigrationRecordSummary describes one primary record shown before migration.
+// VmmNativeMigrationRecordSummary 描述迁移前展示的一条主记录。
+export interface VmmNativeMigrationRecordSummary {
+  recordKind: "session" | "turn" | "memory" | "project_profile";
+  recordId: string;
+  sessionSourceId: string | null;
+  summary: string | null;
+}
+
 // VmmNativeMigrationPreview is the side-effect-free native migration impact report.
 // VmmNativeMigrationPreview 是无副作用的原生迁移影响报告。
 export interface VmmNativeMigrationPreview {
@@ -612,6 +481,8 @@ export interface VmmNativeMigrationPreview {
   targetBefore: VmmNativeProjectContentCounts;
   targetAfter: VmmNativeProjectContentCounts;
   sessionRenames: VmmNativeSessionRename[];
+  records: VmmNativeMigrationRecordSummary[];
+  previewFingerprint: string;
 }
 
 // VmmNativeMigrationResult is the committed native migration result.
@@ -797,7 +668,6 @@ export interface VmmGetTurnDetailsActionValue {
 // VmmMemoryActionResponse 是产品页面消费的带标签响应联合。
 export type VmmMemoryActionResponse =
   | { kind: "empty" }
-  | { kind: "managed_runtime"; value: Record<string, unknown> }
   | { kind: "context_injection"; value: Record<string, unknown> }
   | { kind: "healthz"; value: { status: string } }
   | {
@@ -834,7 +704,6 @@ export type VmmMemoryActionResponse =
   | { kind: "native_migration"; value: VmmNativeMigrationResult }
   | { kind: "native_clear_preview"; value: VmmNativeClearPreview }
   | { kind: "native_clear"; value: VmmNativeClearResult }
-  | { kind: "maintenance"; value: VmmMaintenanceSummary }
   | { kind: "management"; value: unknown };
 
 // VmmMemoryActionResult describes one VMM action response.

@@ -1,6 +1,13 @@
 //! Host-registered internal AI capability contracts.
 //! 宿主注册的内部 AI 能力契约。
 
+// HostAiError intentionally retains stable correlation fields; its large optional payloads are boxed.
+// HostAiError 有意保留稳定关联字段；其中较大的可选载荷已经盒装。
+#![allow(
+    clippy::result_large_err,
+    reason = "HostAiError preserves the frozen host-boundary diagnostic contract"
+)]
+
 use async_trait::async_trait;
 use futures_core::Stream;
 use std::{fmt, future::Future, pin::Pin, sync::Arc};
@@ -379,14 +386,14 @@ pub struct HostAiError {
     /// 可选的归一化重试延迟及其来源。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_after: Option<RetryAfterHint>,
-    /// Resolved route when one was available.
-    /// 已解析路由可用时的路由快照。
+    /// Boxed resolved route when one was available, keeping host errors inexpensive to return.
+    /// 已解析路由可用时的盒装快照，使宿主错误保持较低返回成本。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub route: Option<ExecutionRouteSnapshot>,
-    /// Normalized provider error retained for diagnostics.
-    /// 为诊断保留的归一化供应商错误。
+    pub route: Option<Box<ExecutionRouteSnapshot>>,
+    /// Boxed normalized provider error retained for diagnostics without inflating every host result.
+    /// 盒装保存的归一化供应商错误，用于诊断且避免放大每个宿主结果。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider_error: Option<AiExecutionError>,
+    pub provider_error: Option<Box<AiExecutionError>>,
 }
 
 impl HostAiError {
@@ -524,7 +531,7 @@ impl HostAiError {
             dispatch_outcome: error.dispatch_outcome,
             retry_after: error.retry_after.clone(),
             route: None,
-            provider_error: Some(error),
+            provider_error: Some(Box::new(error)),
         }
     }
 

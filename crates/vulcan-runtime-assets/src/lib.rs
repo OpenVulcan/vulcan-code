@@ -39,10 +39,6 @@ pub const RELEASE_VLDB_CONTROLLER_PORT: u16 = 19_801;
 /// Debug VLDB 控制器端口。
 pub const DEBUG_VLDB_CONTROLLER_PORT: u16 = 19_802;
 
-/// Port offset reserved for the managed VMM child next to the browser service.
-/// 为浏览器服务旁边的托管 VMM 子进程预留的端口偏移量。
-pub const MANAGED_VMM_PORT_OFFSET: u16 = 10;
-
 /// Returns the default browser-facing service start port for the current Cargo profile.
 /// 返回当前 Cargo 构建配置对应的浏览器侧服务起始端口。
 pub const fn default_webui_service_http_port() -> u16 {
@@ -653,7 +649,6 @@ mod tests {
             RELEASE_WEBUI_SERVICE_HTTP_PORT
         );
         assert_ne!(DEBUG_VLDB_CONTROLLER_PORT, RELEASE_VLDB_CONTROLLER_PORT);
-        assert_eq!(MANAGED_VMM_PORT_OFFSET, 10);
     }
 
     /// Verifies plugin roots stay below the profile-specific user Code namespace.

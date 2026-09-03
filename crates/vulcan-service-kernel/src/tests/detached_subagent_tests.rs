@@ -145,7 +145,6 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
         pending_prompt_process_mirrors: BTreeMap::new(),
         agent_runtime: None,
         codebase_memory_controller: Default::default(),
-        managed_memory_mesh_runtime: None,
         native_vmm_maintenance: None,
         service_runtime: None,
         webui_service_discovery: None,
@@ -348,18 +347,18 @@ fn regular_execution_report_hook_lock_failure_preserves_workspace_state() {
     assert!(!workspace.session_runtime_state.contains_key(&session_id));
 }
 
-/// Verifies stale VMM ownership is ignored while the managed service is not fully ready.
-/// 验证托管服务未完全就绪时会忽略陈旧的 VMM 所有权。
+/// Verifies stale VMM ownership is ignored while no VMM hook is active.
+/// 验证没有活动 VMM Hook 时会忽略陈旧的 VMM 所有权。
 #[test]
-fn regular_execution_report_ignores_stale_vmm_owner_while_service_stopped() {
+fn regular_execution_report_ignores_stale_vmm_owner_without_active_hook() {
     // session_id identifies the regular session whose exact terminal ownership is under test.
     // session_id 标识正在测试精确终态所有权的普通会话。
     let session_id = SessionId::new_v4();
     // controller_root keeps this test's isolated VMM files alive through every assertion.
     // controller_root 在全部断言期间保持本测试隔离 VMM 文件有效。
     let controller_root = TestControllerRuntimeRoot::new(session_id);
-    // service_state keeps the managed VMM runtime stopped while retaining one stale controller lease.
-    // service_state 保持托管 VMM 运行时未启动，同时保留一条陈旧控制器租约。
+    // service_state keeps the VMM hook unavailable while retaining one stale controller lease.
+    // service_state 保持 VMM Hook 不可用，同时保留一条陈旧控制器租约。
     let service_state = test_service_state_with_parent_session(session_id);
     let handle = crate::session_runtime_registry_v1::SessionHandle::new(
         session_id,

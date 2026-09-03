@@ -3,7 +3,7 @@
 
 use super::*;
 use vulcan_memorymesh_core_config::{ConfigBundle, ConfigRegistry, MemoryPolicy};
-use vulcan_memorymesh_core_contracts::{CandidateReadMode, PhysicalCandidateScore};
+use vulcan_memorymesh_core_contracts::{CandidateReadMode, OperationId, PhysicalCandidateScore};
 
 /// Builds an exact empty observation wait bound to a two-dimensional frozen policy.
 /// 构造绑定二维冻结策略的精确空观察等待；返回流水线、快照与匹配效果，失败传播。

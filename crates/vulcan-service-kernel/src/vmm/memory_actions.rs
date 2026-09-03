@@ -9,10 +9,10 @@ use crate::{
 };
 use vulcan_service_api::{
     ProjectSettingsDomain, ServiceEventEmitter, VmmMemoryActionResponse, VmmNativeClearPreview,
-    VmmNativeClearResult, VmmNativeMigrationPreview, VmmNativeMigrationResult,
-    VmmNativeProjectBindingSummary, VmmNativeProjectCatalogSummary, VmmNativeProjectContentCounts,
-    VmmNativeProjectDeletePreview, VmmNativeProjectSummary, VmmNativeSessionRename,
-    VmmProjectDisplaySummary, VmmUserDisplaySummary,
+    VmmNativeClearResult, VmmNativeMigrationPreview, VmmNativeMigrationRecordSummary,
+    VmmNativeMigrationResult, VmmNativeProjectBindingSummary, VmmNativeProjectCatalogSummary,
+    VmmNativeProjectContentCounts, VmmNativeProjectDeletePreview, VmmNativeProjectSummary,
+    VmmNativeSessionRename, VmmProjectDisplaySummary, VmmUserDisplaySummary,
 };
 
 /// Runs one VMM memory management action and returns its structured result.
@@ -45,6 +45,7 @@ pub(crate) async fn service_run_vmm_memory_action(
         "native_project_catalog"
             | "native_project_create_and_bind"
             | "native_project_bind_existing"
+            | "native_project_set_access"
             | "native_project_unbind"
             | "native_project_replace_query_links"
             | "native_project_rename"
@@ -57,33 +58,9 @@ pub(crate) async fn service_run_vmm_memory_action(
     ) {
         return service_run_native_vmm_maintenance_action(state, request).await;
     }
-    if matches!(
-        request.action.trim(),
-        "managed_runtime_start"
-            | "managed_runtime_stop"
-            | "managed_runtime_restart"
-            | "managed_runtime_open_log"
-    ) {
-        return service_control_managed_vmm_runtime(app, state, request).await;
-    }
-    if matches!(
-        request.action.trim(),
-        "managed_maintenance_start" | "managed_maintenance_status" | "managed_maintenance_cancel"
-    ) {
-        return service_control_managed_vmm_maintenance(app, state, request).await;
-    }
     if request.action.trim().starts_with("management_") {
         return super::management_http::service_run_vmm_management_http_action(state, request)
             .await;
-    }
-    if request.action.trim() == "apply_profile_instruction"
-        && let Some(snapshot) = crate::managed_memory_mesh_runtime::snapshot_from_state(&state)
-        && !snapshot.capabilities.profile_instruction_ready
-    {
-        return Err(snapshot
-            .capabilities
-            .profile_instruction_error
-            .unwrap_or_else(|| String::from("托管 VMM 手工画像指令能力不可用。")));
     }
     let (layer, management_user_ref, management_project_ref) =
         vmm_action_context(&state, &request)?;
@@ -144,7 +121,7 @@ async fn service_run_native_vmm_maintenance_action(
     state: SharedServiceBridgeState,
     request: VmmMemoryActionRequest,
 ) -> Result<VmmMemoryActionResult, String> {
-    let (layer, _, _) = vmm_action_context(&state, &request)?;
+    let layer = provider_configuration_from_state(&state)?.vmm;
     let effective = vulcan_vmm::VmmEffectiveConfig::resolve(&layer, None, None);
     if effective.backend_mode != vulcan_vmm::VmmBackendMode::Native
         && request.action.trim() != "native_project_catalog"
@@ -209,6 +186,27 @@ async fn service_run_native_vmm_maintenance_action(
                 format!(
                     "VulcanCode 项目 `{vulcan_project_id}` 已绑定到原生 VMM 项目 `{}`。",
                     project.name
+                ),
+                "native_project_catalog",
+                request_preview,
+                &catalog,
+                VmmMemoryActionResponse::NativeProjectCatalog(catalog.clone()),
+            )
+        }
+        "native_project_set_access" => {
+            let vulcan_project_id = required_native_text(&request.payload, "vulcanProjectId")?;
+            let owner_project_id = required_native_project_id(&request.payload, "ownerProjectId")?;
+            let linked_project_ids = vmm_payload_u64_list(&request.payload, "linkedProjectIds")?;
+            let access = maintenance
+                .set_project_access(&vulcan_project_id, owner_project_id, &linked_project_ids)
+                .await?;
+            let catalog = native_project_catalog(maintenance.project_catalog().await?);
+            native_action_result(
+                action,
+                format!(
+                    "VulcanCode 项目 `{vulcan_project_id}` 已绑定到原生 VMM 项目 `{}`，并配置 {} 个连带查询项目。",
+                    access.owner.name,
+                    access.linked.len()
                 ),
                 "native_project_catalog",
                 request_preview,
@@ -288,16 +286,13 @@ async fn service_run_native_vmm_maintenance_action(
             let project_id = required_native_project_id(&request.payload, "vmmProjectId")?;
             let expected_storage_version =
                 required_native_storage_version(&request.payload, "expectedStorageVersion")?;
-            let preview = maintenance.preview_project_delete(project_id).await?;
-            if !preview.usage.owner_vulcan_project_ids.is_empty()
-                && !vmm_payload_bool(&request.payload, "confirmDetachBindings")
-            {
-                return Err(String::from(
-                    "该原生 VMM 项目仍有 VulcanCode 项目绑定，请确认解除绑定后再删除。",
-                ));
-            }
             let deleted = maintenance
-                .delete_project(project_id, expected_storage_version)
+                .delete_project(
+                    &request.command_id,
+                    project_id,
+                    expected_storage_version,
+                    vmm_payload_bool(&request.payload, "confirmDetachBindings"),
+                )
                 .await?;
             let disable_failures = disable_deleted_native_project_owners(
                 &state,
@@ -362,9 +357,11 @@ async fn service_run_native_vmm_maintenance_action(
             let result = native_migration_result(
                 maintenance
                     .execute_migration(
+                        &request.command_id,
                         source_project_id,
                         target_project_id,
                         expected_storage_version,
+                        &required_native_text(&request.payload, "expectedPreviewFingerprint")?,
                         vmm_payload_bool(&request.payload, "acceptSessionRenames"),
                     )
                     .await?,
@@ -408,7 +405,7 @@ async fn service_run_native_vmm_maintenance_action(
                 required_native_storage_version(&request.payload, "expectedStorageVersion")?;
             let result = native_clear_result(
                 maintenance
-                    .execute_clear(project_id, expected_storage_version)
+                    .execute_clear(&request.command_id, project_id, expected_storage_version)
                     .await?,
             );
             native_action_result(
@@ -627,6 +624,25 @@ fn native_migration_preview(
             .into_iter()
             .map(native_session_rename)
             .collect(),
+        records: preview
+            .records
+            .into_iter()
+            .map(native_migration_record_summary)
+            .collect(),
+        preview_fingerprint: preview.preview_fingerprint,
+    }
+}
+
+/// Maps one internal migration record summary into the stable service API.
+/// 将一条内部迁移记录摘要映射为稳定服务 API。
+fn native_migration_record_summary(
+    record: crate::native_vmm::NativeVmmMigrationRecordSummary,
+) -> VmmNativeMigrationRecordSummary {
+    VmmNativeMigrationRecordSummary {
+        record_kind: record.record_kind,
+        record_id: record.record_id,
+        session_source_id: record.session_source_id,
+        summary: record.summary,
     }
 }
 
@@ -688,155 +704,6 @@ async fn refresh_vmm_health_workbench(app: &ServiceEventEmitter, state: &SharedS
             eprintln!("[webui-service] failed to refresh VMM health workbench: {error}");
         }
     }
-}
-
-/// Executes one host-owned backup and official vector-rebuild command.
-/// 执行一项宿主持有的备份与正式向量重建命令。
-///
-/// # Parameters
-/// 参数
-/// `app` broadcasts refreshed product state, `state` owns runtime dependencies, and `request`
-/// selects start, status, or cancellation.
-/// `app` 广播刷新的产品状态，`state` 持有运行依赖，`request` 选择启动、查询或取消。
-///
-/// # Returns
-/// 返回值
-/// The latest typed maintenance status after the requested transition.
-/// 返回请求状态转换后的最近强类型维护状态。
-async fn service_control_managed_vmm_maintenance(
-    app: ServiceEventEmitter,
-    state: SharedServiceBridgeState,
-    request: VmmMemoryActionRequest,
-) -> Result<VmmMemoryActionResult, String> {
-    let action = request.action.trim().to_string();
-    let maintenance = crate::managed_memory_mesh_maintenance::runtime();
-    let summary = match action.as_str() {
-        "managed_maintenance_status" => maintenance.snapshot(),
-        "managed_maintenance_cancel" => maintenance.cancel()?,
-        "managed_maintenance_start" => {
-            let lifecycle = crate::managed_memory_mesh_runtime::snapshot_from_state(&state)
-                .ok_or_else(|| String::from("请先完成托管记忆配置检查，再处理历史数据。"))?;
-            if !matches!(
-                lifecycle.data_space_state,
-                vulcan_service_api::VmmDataSpaceState::UnmarkedHistory
-                    | vulcan_service_api::VmmDataSpaceState::FingerprintChanged
-                    | vulcan_service_api::VmmDataSpaceState::MarkerCorrupt
-                    | vulcan_service_api::VmmDataSpaceState::MarkerVersionUnsupported
-                    | vulcan_service_api::VmmDataSpaceState::SchemaMigrationRequired
-            ) {
-                return Err(String::from("当前记忆数据状态不需要执行备份与向量重建。"));
-            }
-            let provider_configuration = provider_configuration_from_state(&state)?;
-            let ai_configuration =
-                vulcan_provider_config::config::load_public_ai_connections_file()
-                    .map_err(|error| format!("重新加载 VMM 内部推理配置失败：{error}"))?
-                    .configuration;
-            let vmm_config = provider_configuration.vmm.clone();
-            let install = vmm_config
-                .install
-                .as_ref()
-                .ok_or_else(|| String::from("尚未启用 Vulcan Code 托管 VMM。"))?;
-            if !install.managed_install_enabled {
-                return Err(String::from("尚未启用 Vulcan Code 托管 VMM。"));
-            }
-            let binary_path = install
-                .managed_binary_path
-                .as_deref()
-                .map(std::path::PathBuf::from)
-                .or_else(crate::service_bootstrap::default_managed_vmm_binary_path)
-                .ok_or_else(|| String::from("无法解析托管 VMM 可执行文件路径。"))?;
-            let (catalogs, optional_inference_routes, controller_endpoint) = {
-                let guard = state
-                    .lock()
-                    .map_err(|error| format!("读取 VMM 维护依赖失败：{error}"))?;
-                let runtime = guard
-                    .agent_runtime
-                    .as_ref()
-                    .ok_or_else(|| String::from("公共 AI Runtime 尚未发布。"))?;
-                // Rebuild must use the same verified inference prerequisites as first initialization.
-                // 重建必须使用与首次初始化相同的已验证推理前置条件。
-                crate::configured_inference::validate_vmm_required_inference_routes(
-                    &runtime.public_ai_runtime,
-                    &ai_configuration,
-                )?;
-                let optional_inference_routes =
-                    crate::configured_inference::inspect_vmm_optional_inference_routes(
-                        &runtime.public_ai_runtime,
-                        &ai_configuration,
-                    );
-                let catalogs = runtime.public_ai_runtime.catalog_snapshot()?;
-                let controller_endpoint = guard
-                    .controller_runtime
-                    .as_ref()
-                    .map(|controller| controller.endpoint.clone())
-                    .ok_or_else(|| String::from("共享 Controller 尚未发布。"))?;
-                (catalogs, optional_inference_routes, controller_endpoint)
-            };
-            let capabilities =
-                crate::managed_memory_mesh_runtime::configured_vmm_capability_preflight(
-                    &ai_configuration,
-                    &catalogs,
-                    &optional_inference_routes,
-                )?;
-            let preparation = crate::managed_memory_mesh_runtime::prepare_managed_vmm_maintenance(
-                &binary_path,
-                controller_endpoint.as_str(),
-                &vmm_config,
-                &capabilities,
-            )?;
-            // preparation completes every fallible preflight before the existing runtime owner is disturbed.
-            // preparation 在干扰现有运行时所有者之前完成全部可能失败的预检。
-            let existing = state
-                .lock()
-                .map_err(|error| format!("锁定 VMM 运行状态失败：{error}"))?
-                .managed_memory_mesh_runtime
-                .take();
-            if let Some(existing) = existing
-                && let Err(error) = existing
-                    .lock()
-                    .map_err(|lock_error| format!("锁定 VMM 子进程失败：{lock_error}"))?
-                    .stop()
-            {
-                crate::managed_memory_mesh_runtime::cleanup_managed_vmm_maintenance_manifest(
-                    &preparation.manifest_path,
-                );
-                return Err(error);
-            }
-            crate::vmm_hooks::clear_managed_vmm_transport_overlay();
-            if let Err(error) = refresh_service_vmm_hook_snapshot(&state) {
-                crate::managed_memory_mesh_runtime::cleanup_managed_vmm_maintenance_manifest(
-                    &preparation.manifest_path,
-                );
-                return Err(error);
-            }
-            match maintenance.start(preparation.clone()) {
-                Ok(summary) => summary,
-                Err(error) => {
-                    crate::managed_memory_mesh_runtime::cleanup_managed_vmm_maintenance_manifest(
-                        &preparation.manifest_path,
-                    );
-                    return Err(error);
-                }
-            }
-        }
-        _ => return Err(format!("不支持的 VMM 维护动作：{action}")),
-    };
-    if summary.phase == vulcan_service_api::VmmMaintenancePhase::Completed {
-        crate::managed_memory_mesh_runtime::publish_maintenance_data_space_ready();
-    }
-    let workbench = refresh_workbench_snapshot(state).await?;
-    emit_workbench_event(&app, &workbench);
-    let response = serde_json::to_value(&summary)
-        .map_err(|error| format!("序列化 VMM 维护状态失败：{error}"))?;
-    Ok(VmmMemoryActionResult {
-        action,
-        summary: summary.message.clone(),
-        kind: String::from("maintenance"),
-        request: serde_json::to_value(&request)
-            .map_err(|error| format!("序列化 VMM 维护请求失败：{error}"))?,
-        response,
-        data: VmmMemoryActionResponse::Maintenance(summary),
-    })
 }
 
 /// Projects a successful users/projects outcome into the in-memory user-facing catalog.
@@ -909,130 +776,6 @@ pub(super) fn vmm_project_display_summary(
             && project.space_name == "default"
             && project.project_name == "default",
     }
-}
-
-/// Executes one explicit host-owned managed VMM lifecycle command.
-/// 执行一项显式宿主持有的托管 VMM 生命周期命令。
-///
-/// # Parameters
-/// 参数
-/// `app` broadcasts the refreshed workbench, `state` owns the child, and `request` selects the command.
-/// `app` 广播刷新后的工作台，`state` 持有子进程，`request` 选择具体命令。
-///
-/// # Returns
-/// 返回值
-/// A structured lifecycle result after the command and state projection complete.
-/// 命令与状态投影完成后返回结构化生命周期结果。
-async fn service_control_managed_vmm_runtime(
-    app: ServiceEventEmitter,
-    state: SharedServiceBridgeState,
-    request: VmmMemoryActionRequest,
-) -> Result<VmmMemoryActionResult, String> {
-    let action = request.action.trim().to_string();
-    if action == "managed_runtime_open_log" {
-        let snapshot = crate::managed_memory_mesh_runtime::snapshot_from_state(&state)
-            .ok_or_else(|| String::from("当前没有可查看的托管 VMM 运行时状态。"))?;
-        let log_path = snapshot.log_path.to_string_lossy().into_owned();
-        if log_path.trim().is_empty() {
-            return Err(String::from("当前托管 VMM 状态未提供日志路径。"));
-        }
-        crate::service_bridge_io::shell_host_from_state(&state)?.open_path(log_path.as_str())?;
-        let request_preview = serde_json::to_value(&request)
-            .map_err(|error| format!("序列化 VMM 日志请求失败：{error}"))?;
-        let response = serde_json::json!({ "logPath": log_path });
-        return Ok(VmmMemoryActionResult {
-            action,
-            summary: String::from("已打开托管 VMM 运行日志。"),
-            kind: String::from("managed_runtime"),
-            request: request_preview,
-            response: response.clone(),
-            data: VmmMemoryActionResponse::ManagedRuntime(response),
-        });
-    }
-    if action == "managed_runtime_stop" {
-        let existing = state
-            .lock()
-            .map_err(|error| format!("锁定 VMM 运行状态失败：{error}"))?
-            .managed_memory_mesh_runtime
-            .take();
-        if let Some(existing) = existing {
-            existing
-                .lock()
-                .map_err(|error| format!("锁定 VMM 子进程失败：{error}"))?
-                .stop()?;
-        } else {
-            return Err(String::from("当前没有由 Vulcan Code 持有的 VMM 子进程。"));
-        }
-        crate::vmm_hooks::clear_managed_vmm_transport_overlay();
-        refresh_service_vmm_hook_snapshot(&state)?;
-    }
-
-    let mut logs = Vec::new();
-    if action == "managed_runtime_start" || action == "managed_runtime_restart" {
-        if action == "managed_runtime_start"
-            && crate::managed_memory_mesh_runtime::snapshot_from_state(&state)
-                .is_some_and(|snapshot| snapshot.phase == "ready")
-        {
-            return Err(String::from("托管 VMM 已经处于就绪状态。"));
-        }
-        let provider_configuration = provider_configuration_from_state(&state)?;
-        let ai_configuration = vulcan_provider_config::config::load_public_ai_connections_file()
-            .map_err(|error| format!("重新加载 VMM 内部推理配置失败：{error}"))?
-            .configuration;
-        let mut vmm_config = provider_configuration.vmm.clone();
-        let install = vmm_config
-            .install
-            .as_mut()
-            .ok_or_else(|| String::from("尚未启用 Vulcan Code 托管 VMM。"))?;
-        if !install.managed_install_enabled {
-            return Err(String::from("尚未启用 Vulcan Code 托管 VMM。"));
-        }
-        install.auto_start_policy = Some(String::from("on_start"));
-        crate::service_bootstrap::reconcile_managed_memory_mesh_runtime(
-            &state,
-            &ai_configuration,
-            &vmm_config,
-            &mut logs,
-        )
-        .await;
-        let snapshot = crate::managed_memory_mesh_runtime::snapshot_from_state(&state)
-            .ok_or_else(|| String::from("托管 VMM 未发布运行状态。"))?;
-        if snapshot.phase != "ready" {
-            // failed_workbench persists the failed lifecycle projection before the command returns.
-            // failed_workbench 在命令返回前持久投影失败的生命周期状态。
-            let failed_workbench = refresh_workbench_snapshot(state.clone()).await?;
-            emit_workbench_event(&app, &failed_workbench);
-            return Err(snapshot
-                .last_error
-                .unwrap_or_else(|| format!("托管 VMM 启动后状态为 {}。", snapshot.phase)));
-        }
-    }
-
-    let workbench = refresh_workbench_snapshot(state).await?;
-    emit_workbench_event(&app, &workbench);
-    let snapshot = &workbench.vmm_memory.runtime;
-    let request_preview = serde_json::to_value(&request)
-        .map_err(|error| format!("序列化 VMM 控制请求失败：{error}"))?;
-    let response = serde_json::json!({
-        "phase": snapshot.managed_phase,
-        "grpcTarget": snapshot.managed_grpc_target,
-        "controllerEndpoint": snapshot.managed_controller_endpoint,
-        "controllerSpace": snapshot.managed_controller_space,
-        "dataRoot": snapshot.managed_data_root,
-        "logs": logs,
-    });
-    Ok(VmmMemoryActionResult {
-        action: action.clone(),
-        summary: match action.as_str() {
-            "managed_runtime_stop" => String::from("托管 VMM 已停止。"),
-            "managed_runtime_restart" => String::from("托管 VMM 已重启并通过鉴权健康检查。"),
-            _ => String::from("托管 VMM 已启动并通过鉴权健康检查。"),
-        },
-        kind: String::from("managed_runtime"),
-        request: request_preview,
-        response: response.clone(),
-        data: VmmMemoryActionResponse::ManagedRuntime(response),
-    })
 }
 
 /// Suppresses one context-injection item for the exact requested session and broadcasts its projection.
@@ -1306,7 +1049,9 @@ pub(crate) async fn service_save_vmm_memory_config(
     // changed_project_id retains the exact project identity before the request is consumed.
     // changed_project_id 在请求被消费前保留准确的项目身份。
     let changed_project_id = project_scope.then(|| request.project_id.clone()).flatten();
-    save_vmm_memory_config(&state, request).await?;
+    // binding_failure is returned only after the global configuration is durably enabled.
+    // binding_failure 仅在全局配置已经持久启用后返回。
+    let binding_failure = save_vmm_memory_config(&state, request).await?;
     // workbench is the exact snapshot returned to the initiating client and broadcast to peers.
     // workbench 是返回给发起客户端并广播给其他端的准确快照。
     let workbench = refresh_workbench_snapshot(state.clone()).await?;
@@ -1324,6 +1069,9 @@ pub(crate) async fn service_save_vmm_memory_config(
         project_settings_target,
         ProjectSettingsDomain::Vmm,
     )?;
+    if let Some(binding_failure) = binding_failure {
+        return Err(binding_failure);
+    }
     Ok(workbench)
 }
 
@@ -1348,6 +1096,60 @@ pub(crate) fn service_load_project_vmm_config(
     load_project_vmm_config(&state, &project_id)
 }
 
+/// Carries one request-scoped external connection used before setup is confirmed.
+/// 携带一份在配置确认前使用的请求级外置连接。
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VmmExternalActionConnection {
+    /// Exact external gRPC endpoint.
+    /// 准确的外置 gRPC 地址。
+    grpc_target: String,
+    /// Optional external gRPC API key.
+    /// 可选的外置 gRPC API 密钥。
+    #[serde(default)]
+    grpc_api_key: String,
+}
+
+/// Parses an explicit request-scoped external connection without touching persisted configuration.
+/// 解析一份明确的请求级外置连接，且不修改持久化配置。
+///
+/// # Parameters
+/// 参数
+/// `request` is the exact VMM action carrying an optional `connection` object.
+/// `request` 是携带可选 `connection` 对象的准确 VMM 动作。
+///
+/// # Returns
+/// 返回值
+/// A standalone enabled external layer when supplied, otherwise no override.
+/// 提供连接时返回独立且已启用的外置配置层，否则返回空值。
+///
+/// # Errors
+/// Returns an error for project-scoped use, unknown fields, or an empty endpoint.
+/// 在项目作用域使用、包含未知字段或地址为空时返回错误。
+pub(super) fn vmm_external_action_layer_override(
+    request: &VmmMemoryActionRequest,
+) -> Result<Option<vulcan_vmm::VmmConfigLayer>, String> {
+    let Some(connection) = request.payload.get("connection") else {
+        return Ok(None);
+    };
+    if !request.scope.trim().eq_ignore_ascii_case("global") {
+        return Err(String::from("临时外置 VMM 连接只允许用于全局配置向导。"));
+    }
+    let connection: VmmExternalActionConnection = serde_json::from_value(connection.clone())
+        .map_err(|error| format!("解析临时外置 VMM 连接失败：{error}"))?;
+    let grpc_target = connection.grpc_target.trim();
+    if grpc_target.is_empty() {
+        return Err(String::from("临时外置 VMM gRPC 地址不能为空。"));
+    }
+    Ok(Some(vulcan_vmm::VmmConfigLayer {
+        backend_mode: Some(vulcan_vmm::VmmBackendMode::ExternalGrpc),
+        enabled: Some(true),
+        grpc_target: Some(grpc_target.to_owned()),
+        grpc_api_key: (!connection.grpc_api_key.is_empty()).then_some(connection.grpc_api_key),
+        ..vulcan_vmm::VmmConfigLayer::default()
+    }))
+}
+
 /// Builds the VMM action context for one WebUI management request.
 /// 为单个 WebUI 管理请求构建 VMM 动作上下文。
 ///
@@ -1366,6 +1168,13 @@ pub(crate) fn vmm_action_context(
     state: &SharedServiceBridgeState,
     request: &VmmMemoryActionRequest,
 ) -> Result<(vulcan_vmm::VmmConfigLayer, String, String), String> {
+    if let Some(layer) = vmm_external_action_layer_override(request)? {
+        validate_transient_external_action(request.action.trim())?;
+        let management_user_ref = vmm_payload_text(&request.payload, "userRef").unwrap_or_default();
+        let management_project_ref =
+            vmm_payload_text(&request.payload, "projectRef").unwrap_or_default();
+        return Ok((layer, management_user_ref, management_project_ref));
+    }
     let (provider_configuration, workspace_snapshot) = {
         let guard = state
             .lock()
@@ -1381,6 +1190,9 @@ pub(crate) fn vmm_action_context(
             .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
         (provider_configuration, workspace_snapshot)
     };
+    let global_effective =
+        vulcan_vmm::VmmEffectiveConfig::resolve(&provider_configuration.vmm, None, None);
+    ensure_external_action_backend(global_effective.backend_mode)?;
     let scope = request.scope.trim().to_ascii_lowercase();
     if scope == "project" {
         let project = vmm_request_project_scope(&workspace_snapshot, request.project_id.as_deref())
@@ -1410,6 +1222,49 @@ pub(crate) fn vmm_action_context(
         .or_else(|| layer.project_id.map(|value| value.to_string()))
         .unwrap_or_default();
     Ok((layer, management_user_ref, management_project_ref))
+}
+
+/// Restricts request-scoped external connections to non-destructive setup operations.
+/// 将请求级外置连接限制为非破坏性的配置操作。
+///
+/// # Parameters
+/// `action` is the exact VMM workbench action requested before global activation.
+/// `action` 是全局激活前请求的准确 VMM 工作台动作。
+///
+/// # Returns
+/// Returns success for setup probes and identity creation only; every other action is rejected.
+/// 对配置探测与身份创建返回成功；拒绝其他所有动作。
+pub(super) fn validate_transient_external_action(action: &str) -> Result<(), String> {
+    if matches!(
+        action,
+        "healthz" | "load_users_projects" | "resolve_user" | "ensure_project"
+    ) {
+        return Ok(());
+    }
+    Err(format!(
+        "请求级外置 VMM 连接不允许执行动作 `{action}`；请先完成外置后端配置。"
+    ))
+}
+
+/// Ensures persisted external actions cannot cross the active global backend boundary.
+/// 确保持久化外置动作不能跨越当前全局后端边界。
+///
+/// # Parameters
+/// `backend_mode` is the globally resolved VMM backend selection.
+/// `backend_mode` 是全局解析后的 VMM 后端选择。
+///
+/// # Returns
+/// Returns success only while the external gRPC backend is globally selected.
+/// 仅在全局选择外置 gRPC 后端时返回成功。
+pub(super) fn ensure_external_action_backend(
+    backend_mode: vulcan_vmm::VmmBackendMode,
+) -> Result<(), String> {
+    if backend_mode == vulcan_vmm::VmmBackendMode::ExternalGrpc {
+        return Ok(());
+    }
+    Err(String::from(
+        "外置 VMM 动作仅在全局选择外置 gRPC 后端后可用。",
+    ))
 }
 
 /// Converts an effective VMM configuration into a standalone action layer.
@@ -1448,7 +1303,6 @@ pub(crate) fn vmm_action_layer_from_effective(
         ai_tools_enabled: Some(effective.ai_tools_enabled),
         injection_tag: Some(effective.injection_tag.clone()),
         injection_description: Some(effective.injection_description.clone()),
-        install: Some(effective.install.clone()),
     }
 }
 

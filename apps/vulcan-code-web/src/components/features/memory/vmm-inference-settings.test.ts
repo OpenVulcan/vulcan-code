@@ -11,8 +11,8 @@ import {
   vmmRequiredInferenceReady,
 } from "./vmm-inference-settings"
 
-// testRoute builds one exact external-service route for a required VMM operation.
-// testRoute 为必需的 VMM 操作构建一条精确外部服务路由。
+// testRoute builds one exact internal-background route for a required native VMM operation.
+// testRoute 为必需的原生 VMM 操作构建一条精确内部后台路由。
 function testRoute(
   operation: PublicAiInferenceRoute["operation"],
   suffix: string,
@@ -26,7 +26,7 @@ function testRoute(
       ? { kind: "protocol", protocol_profile_id: "openai-chat" }
       : { kind: "action", action_binding_id: "embedding-action" },
     operation,
-    usage_scope: "external_service",
+    usage_scope: "internal_background",
   }
 }
 
@@ -41,7 +41,7 @@ function testCandidate(route: PublicAiInferenceRoute): PublicAiInternalInference
     route,
     catalogGeneration: 1,
     enabled: true,
-    usageScopes: ["external_service"],
+    usageScopes: ["internal_background"],
     capabilities: {
       reasoning_control: "toggle",
       reasoning_efforts: ["none"],

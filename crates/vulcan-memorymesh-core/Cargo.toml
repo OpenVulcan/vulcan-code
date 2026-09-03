@@ -12,5 +12,10 @@ vulcan-memorymesh-core-contracts.workspace = true
 vulcan-memorymesh-core-engine.workspace = true
 vulcan-memorymesh-core-storage.workspace = true
 
+[dev-dependencies]
+bincode.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
 [lints]
 workspace = true

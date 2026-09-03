@@ -226,8 +226,8 @@ sha256 = "0e4df56a192ccd50a18f4e8c578f14a75ed0240eba8d7440e09667840de8c18a"
 
 [[files]]
 path = "prompts/default_cn/postaction_l1_main.md"
-length = 9209
-sha256 = "3623e0ae444abfd1d9178f289b992d20af9f93bc5c5e03cffbfb23b3a523ba73"
+length = 9241
+sha256 = "960db1a3ee853601177625b44900a65dd7683860ca3f86a1a8d9486524b7c3e8"
 
 [[files]]
 path = "prompts/default_cn/postaction_l2_main.md"
@@ -251,8 +251,8 @@ sha256 = "002abdf72660a1ba032571b941728fb826e3681dfdefe529d3e6d107a5726d3b"
 
 [[files]]
 path = "prompts/default_en/postaction_l1_main.md"
-length = 10204
-sha256 = "cd3f71e995f705b6bb1c7f475a4320795359231acbbd45f090e8eda65eeb9383"
+length = 10238
+sha256 = "6e07c6a348a21dfa8d5adeb498d52ef5a8789fc211c699bf6552edee3a40a60d"
 
 [[files]]
 path = "prompts/default_en/postaction_l2_main.md"

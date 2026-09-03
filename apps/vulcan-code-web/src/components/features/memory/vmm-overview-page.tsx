@@ -55,20 +55,6 @@ function VmmOverviewPage({
   const { locale, t } = useI18n()
   const state = snapshot.experienceState
   const configured = state.deployment !== "disabled"
-  const dataSpaceBlocked = [
-    "unmarked_history",
-    "fingerprint_changed",
-    "marker_corrupt",
-    "marker_version_unsupported",
-    "schema_migration_required",
-  ].includes(snapshot.dataSpaceState.state)
-  // dataSpaceNoticeDismissed hides only the current-page warning while preserving the blocked state.
-  // dataSpaceNoticeDismissed 只隐藏当前页面警告，不改变底层阻塞状态。
-  const [dataSpaceNoticeDismissed, setDataSpaceNoticeDismissed] = React.useState(false)
-
-  React.useEffect(() => {
-    setDataSpaceNoticeDismissed(false)
-  }, [snapshot.dataSpaceState.state])
 
   if (!configured) {
     return (
@@ -172,34 +158,13 @@ function VmmOverviewPage({
         <VmmPrerequisiteCard prerequisites={snapshot.prerequisites} />
       ) : null}
 
-      {dataSpaceBlocked && !dataSpaceNoticeDismissed ? (
-        <Alert variant="destructive">
-          <CircleAlert aria-hidden="true" />
-          <AlertTitle>
-            {t(snapshot.dataSpaceState.titleKey as TranslationKey)}
-          </AlertTitle>
-          <AlertDescription className="space-y-3">
-            <p>{t(snapshot.dataSpaceState.descriptionKey as TranslationKey)}</p>
-            <div className="flex flex-wrap gap-2">
-              <Button onClick={onOpenAdvanced} size="sm" type="button">
-                {t("memory.dataSpace.repair")}
-              </Button>
-              <Button
-                onClick={() => setDataSpaceNoticeDismissed(true)}
-                size="sm"
-                type="button"
-                variant="outline"
-              >
-                {t("memory.dataSpace.handleLater")}
-              </Button>
-            </div>
-          </AlertDescription>
-        </Alert>
-      ) : null}
-
       <VmmCapabilityCard capabilities={snapshot.capabilities} />
 
       <div className="flex flex-wrap gap-2">
+        <Button disabled={busy} onClick={onOpenSetup} type="button">
+          <Settings2 className="size-4" aria-hidden="true" />
+          {t("vmm.experience.reconfigure")}
+        </Button>
         <Button
           disabled={busy}
           onClick={() => void onControl("healthz")}
@@ -361,9 +326,6 @@ function vmmSetupKey(value: VmmSetupState): TranslationKey {
 // vmmLifecycleKey maps a lifecycle enum to one stable translation key.
 // vmmLifecycleKey 将生命周期枚举映射为稳定翻译键。
 function vmmLifecycleKey(value: VmmLifecycleState): TranslationKey {
-  if (value === "waiting_retry") {
-    return "vmm.experience.lifecycle.waitingRetry"
-  }
   return `vmm.experience.lifecycle.${value}` as TranslationKey
 }
 

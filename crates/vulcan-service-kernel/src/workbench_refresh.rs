@@ -86,10 +86,9 @@ pub(crate) struct WorkbenchRuntimeProjection<'a> {
     /// Read-only state snapshots from currently open Core VMM session controllers.
     /// 当前已打开 Core VMM 会话控制器提供的只读状态快照。
     pub(crate) vmm_session_states: &'a BTreeMap<SessionId, vulcan_vmm::VmmSessionMemoryState>,
-    /// Optional process-local managed VMM lifecycle snapshot.
-    /// 可选的进程内托管 VMM 生命周期快照。
-    pub(crate) managed_vmm_runtime:
-        Option<crate::managed_memory_mesh_runtime::ManagedMemoryMeshSnapshot>,
+    /// Latest native VMM Host AI validation status captured without provider work.
+    /// 不触发 Provider 工作而捕获的最近原生 VMM 宿主 AI 校验状态。
+    pub(crate) native_vmm_host_ai_status: Option<crate::native_vmm::NativeVmmHostAiStatus>,
     /// Optional subagent navigation snapshot for the active surface.
     /// 当前界面的可选子代理导航快照。
     pub(crate) subagent_navigation: Option<SubagentNavigationSnapshot>,
@@ -156,6 +155,7 @@ async fn refresh_workbench_snapshot_with_selected_session(
         live_context_budgets,
         agent_runtime_for_status,
         session_runtime_registry,
+        native_vmm_host_ai_status,
         captured_workbench_generation,
     ) = {
         let guard = state
@@ -192,6 +192,10 @@ async fn refresh_workbench_snapshot_with_selected_session(
             live_context_budgets,
             guard.agent_runtime.clone(),
             Arc::clone(&guard.session_runtime_registry),
+            guard
+                .native_vmm_maintenance
+                .as_ref()
+                .map(crate::native_vmm::NativeVmmMaintenance::host_ai_status),
             captured_workbench_generation,
         )
     };
@@ -325,7 +329,6 @@ async fn refresh_workbench_snapshot_with_selected_session(
         vmm_snapshot_started_at,
         format!("sessions={}", vmm_session_states.len()),
     );
-    let managed_vmm_runtime = crate::managed_memory_mesh_runtime::snapshot_from_state(&state);
     let session_provider_usage_summaries = session_provider_usage_summaries_from_v1_registry(
         session_runtime_registry.as_ref(),
         refreshed_snapshot.sessions.iter().map(|session| session.id),
@@ -354,7 +357,7 @@ async fn refresh_workbench_snapshot_with_selected_session(
         workspace: &refreshed_snapshot,
         pending_prompt_process_mirrors: &pending_prompt_process_mirrors,
         vmm_session_states: &vmm_session_states,
-        managed_vmm_runtime,
+        native_vmm_host_ai_status,
         subagent_navigation,
         pending_questions: pending_question_snapshots_from_agent_runtime(
             agent_runtime_for_status.as_ref(),
@@ -397,13 +400,13 @@ async fn refresh_workbench_snapshot_with_selected_session(
             selected_session_id_after_refresh(&refreshed_snapshot, target_session_id);
         // A concurrent navigation owns the final selected session; never apply another session's model to it.
         // 并发导航拥有最终选中会话；绝不向它应用另一会话的模型。
-        if refreshed_snapshot.selected_session == selected_session_id {
-            if let Some(projection) = model_projection.as_ref() {
-                projection.apply(
-                    session_runtime_registry.as_ref(),
-                    &mut refreshed_snapshot.session_runtime_state,
-                )?;
-            }
+        if refreshed_snapshot.selected_session == selected_session_id
+            && let Some(projection) = model_projection.as_ref()
+        {
+            projection.apply(
+                session_runtime_registry.as_ref(),
+                &mut refreshed_snapshot.session_runtime_state,
+            )?;
         }
         reconcile_workbench_conversation_lifecycle_projection(
             &mut workbench,
@@ -1055,7 +1058,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         workspace,
         pending_prompt_process_mirrors,
         vmm_session_states,
-        managed_vmm_runtime,
+        native_vmm_host_ai_status,
         subagent_navigation,
         pending_questions,
         logs,
@@ -1396,7 +1399,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
             workspace,
             provider_configuration,
             selected_runtime_state,
-            managed_vmm_runtime.as_ref(),
+            native_vmm_host_ai_status.as_ref(),
         ),
         command_sessions: projected_command_sessions,
         logs: logs

@@ -37,6 +37,11 @@ members = [
     "crates/vulcan-luaskills-prompt",
     "crates/vulcan-luaskills-config",
     "crates/vulcan-ai-contract",
+    "crates/vulcan-memorymesh-core-contracts",
+    "crates/vulcan-memorymesh-core-config",
+    "crates/vulcan-memorymesh-core-storage",
+    "crates/vulcan-memorymesh-core-engine",
+    "crates/vulcan-memorymesh-core",
     "crates/vulcan-llm-core",
     "crates/vulcan-provider-adapters",
     "crates/vulcan-hello",
@@ -91,13 +96,21 @@ vulcan-tools-luaskills-call = { path = "crates/vulcan-tools-luaskills-call" }
 vulcan-luaskills-prompt = { path = "crates/vulcan-luaskills-prompt" }
 vulcan-luaskills-config = { path = "crates/vulcan-luaskills-config" }
 vulcan-ai-contract = { path = "crates/vulcan-ai-contract" }
+vulcan-memorymesh-core-contracts = { path = "crates/vulcan-memorymesh-core-contracts" }
+vulcan-memorymesh-core-config = { path = "crates/vulcan-memorymesh-core-config" }
+vulcan-memorymesh-core-storage = { path = "crates/vulcan-memorymesh-core-storage" }
+vulcan-memorymesh-core-engine = { path = "crates/vulcan-memorymesh-core-engine" }
+vulcan-memorymesh-core = { path = "crates/vulcan-memorymesh-core" }
 vulcan-llm-core = { path = "crates/vulcan-llm-core" }
 vulcan-provider-adapters = { path = "crates/vulcan-provider-adapters" }
 async-stream = "0.3.6"
 async-trait = "0.1.92"
 axum = "0.8.9"
 base64 = "0.23.1"
+bincode = { version = "2.0.1", features = ["serde"] }
 chardetng = "1.0.0"
+chrono = { version = "0.4.42", default-features = false, features = ["std"] }
+chrono-tz = "=0.10.4"
 dirs = "6.0.0"
 ed25519-dalek = "3"
 encoding_rs = "0.8.35"
@@ -128,6 +141,7 @@ pulldown-cmark = "0.13.4"
 rcgen = "0.14"
 reqwest = { version = "0.13.4", default-features = false, features = ["form", "json", "rustls"] }
 regex = "1.13.1"
+regex-syntax = "0.8.8"
 rmcp = { version = "3.1", default-features = false }
 rustls = { version = "0.23.43", default-features = false, features = ["ring"] }
 semver = "1"
@@ -143,6 +157,7 @@ tauri-build = "=2.6.3"
 tauri-plugin-notification = "=2.3.3"
 tempfile = "3.27.0"
 time = "0.3.55"
+thiserror = "2.0.16"
 tokio = { version = "1.53.1", features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"] }
 tokio-rustls = "0.26"
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }

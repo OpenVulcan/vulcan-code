@@ -1,6 +1,13 @@
 //! Runtime-free mock implementation of the native HostAiPort.
 //! 原生 HostAiPort 的无运行时 mock 实现。
 
+// The public mock intentionally mirrors the frozen diagnostic-rich HostAiError signatures.
+// 公共 mock 有意镜像已冻结且富含诊断信息的 HostAiError 签名。
+#![allow(
+    clippy::result_large_err,
+    reason = "the mock must preserve the frozen HostAiError boundary contract"
+)]
+
 use futures_core::Stream;
 use std::{
     collections::{BTreeMap, VecDeque},

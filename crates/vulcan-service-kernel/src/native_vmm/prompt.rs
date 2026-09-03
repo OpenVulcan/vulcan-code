@@ -122,7 +122,7 @@ pub(super) fn render_llm_input(input: &LlmInput) -> Result<String, CoreError> {
                     "created_datetime": format_timestamp(target_turn.created_at_ns),
                     "raw_turn": target_turn,
                 },
-                "recent_grpc_memory_writes": direct_writes,
+                "recent_direct_memory_writes": direct_writes,
             })
         }
         LlmInput::PostActionReview {

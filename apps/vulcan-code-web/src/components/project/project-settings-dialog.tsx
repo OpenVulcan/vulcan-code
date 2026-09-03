@@ -478,9 +478,10 @@ export function ProjectSettingsDialog(props: {
 
   // saveVmmDraft persists the current VMM draft through the host.
   // saveVmmDraft 通过宿主持久化当前 VMM 草稿。
-  const saveVmmDraft = async () => {
-    if (!vmmDraft || vmmSaveInFlightRef.current) {
-      return;
+  const saveVmmDraft = async (exactDraft?: VmmConfigDraftSummary): Promise<boolean> => {
+    const draftToSave = exactDraft ?? vmmDraft;
+    if (!draftToSave || vmmSaveInFlightRef.current) {
+      return false;
     }
     vmmSaveInFlightRef.current = true;
     // actionOwner and saveSequence bind every completion path to this exact visible draft.
@@ -492,24 +493,27 @@ export function ProjectSettingsDialog(props: {
     try {
       setVmmSaveInFlight(true);
       setVmmBusy("saving");
-      await props.onSaveVmmDraft(project.id, vmmDraft);
+      await props.onSaveVmmDraft(project.id, draftToSave);
       if (
         projectActionOwnerRef.current !== actionOwner
         || vmmSaveSequenceRef.current !== saveSequence
       ) {
-        return;
+        return false;
       }
       if (vmmEditSequenceRef.current === savedEditSequence) {
+        setVmmDraft(draftToSave);
         setVmmDirty(false);
       }
+      return true;
     } catch (error) {
       if (
         projectActionOwnerRef.current !== actionOwner
         || vmmSaveSequenceRef.current !== saveSequence
       ) {
-        return;
+        return false;
       }
       toast.error(error instanceof Error ? error.message : String(error));
+      return false;
     } finally {
       if (
         projectActionOwnerRef.current === actionOwner
@@ -820,7 +824,7 @@ export function ProjectSettingsDialog(props: {
 
             {activeSection === "vmm" ? (
               <ProjectVmmSection
-                onSaveDraft={() => void saveVmmDraft()}
+                onSaveDraft={saveVmmDraft}
                 onUpdateDraft={updateVmmDraft}
                 projectId={project.id}
                 vmmBusy={vmmBusy}

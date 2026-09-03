@@ -24,8 +24,8 @@ interface VmmAdvancedPageProps {
   onTestManagement: () => Promise<boolean>
 }
 
-// VmmAdvancedPage renders mutually exclusive backend settings without legacy managed-runtime controls.
-// VmmAdvancedPage 渲染互斥后端设置且不包含旧托管运行时控制。
+// VmmAdvancedPage renders mutually exclusive backend settings without removed sidecar controls.
+// VmmAdvancedPage 渲染互斥后端设置且不包含已移除的 Sidecar 控制。
 function VmmAdvancedPage({ busy, draft, snapshot, notice, onChange, onSave, onTestManagement }: VmmAdvancedPageProps) {
   const { t } = useI18n()
   const native = draft.backendMode === "native"

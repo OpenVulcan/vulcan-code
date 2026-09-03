@@ -1,7 +1,6 @@
 import type {
   ComposerSlashCommandSummary,
   StartupSnapshot,
-  VmmManagedRuntimeSettingsDraft,
   WorkbenchSnapshot,
 } from "@/types";
 
@@ -64,57 +63,6 @@ const browserFallbackSlashCommands: ComposerSlashCommandSummary[] = [
     descriptionEn: "Open the prompt skills panel",
   },
 ];
-
-// browserFallbackManagedRuntimeSettings creates one independent managed VMM behavior draft.
-// browserFallbackManagedRuntimeSettings 创建一份相互独立的托管 VMM 行为草稿。
-function browserFallbackManagedRuntimeSettings(): VmmManagedRuntimeSettingsDraft {
-  return {
-    piiDefaultLanguage: "zh-CN",
-    noiseEnabled: true,
-    noiseDefaultLanguage: "zh-CN",
-    noiseSemanticEnabled: true,
-    noiseSemanticThreshold: "0.88",
-    promptLanguage: "default_en",
-    precheckIntentTimeout: "5s",
-    precheckTopK: "5",
-    precheckSearchScope: "space",
-    precheckSimilarityThreshold: "0",
-    postactionInputMode: "compat",
-    postactionTurnThreshold: "2",
-    postactionTokenThreshold: "12000",
-    postactionIdleTimeout: "15m",
-    postactionHistoryTurns: "3",
-    postactionMaxInputTokens: "6000",
-    postactionAnalysisTimeout: "180s",
-    postactionFailurePassThreshold: "5",
-    postactionMaxQueueWorkers: "4",
-    inferenceMaxConnectionsPerHost: "8",
-    pipelineMaxSearchKeywords: "5",
-    pipelineMinSimilarityScore: "0.75",
-    pipelineReplaceMinSimilarityScore: "0.8",
-    pipelineHardDedupeThreshold: "0.99",
-    pipelineHardDedupePoolTopK: "16",
-    pipelineHybridEnabled: true,
-    pipelineLexicalTopK: "8",
-    pipelineRrfK: "60",
-    pipelineMmrEnabled: true,
-    pipelineMmrLambda: "0.75",
-    pipelineWeibullEnabled: true,
-    pipelineWeibullShape: "1.35",
-    pipelineWeibullScaleHours: "2160",
-    pipelineWeibullMinMultiplier: "0.4",
-    pipelineWeibullReinforceWeight: "0.18",
-    pipelineWeibullCrossSessionBoost: "0.12",
-    retentionEnabled: true,
-    retentionScanInterval: "30m",
-    retentionTurnKeepExtraTurns: "5",
-    retentionSessionIdleAfter: "360h",
-    retentionTrashDuration: "720h",
-    retentionPriorityFloor: "P1",
-    retentionMemoryLevelFloor: "stable",
-    retentionSkipProtectedShared: true,
-  };
-}
 
 // BrowserFallbackWorkbench is used when the WebUI runs outside Tauri during frontend development.
 // BrowserFallbackWorkbench 用于 WebUI 在 Tauri 外部进行前端开发时展示。
@@ -474,21 +422,6 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
       { id: "profile_instruction", available: false, enabled: false, state: "unavailable", configureTarget: "inference" },
       { id: "rerank", available: false, enabled: false, state: "unavailable", configureTarget: "inference" },
     ],
-    dataSpaceState: {
-      state: "unknown",
-      titleKey: "memory.vmm.dataSpace.unknown.title",
-      descriptionKey: "memory.vmm.dataSpace.unknown.description",
-    },
-    maintenance: {
-      phase: "idle",
-      progressPercent: 0,
-      message: "",
-      canCancel: false,
-      backupCreated: false,
-      startedAtUnixMs: null,
-      updatedAtUnixMs: null,
-      technicalDetail: null,
-    },
     managementCatalog: {
       loading: false,
       users: [],
@@ -536,10 +469,6 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
       managementBaseUrl: "",
       managementBearerToken: "",
       managementTimeoutMs: "30000",
-      managedInstallEnabled: false,
-      managedBinaryPath: "",
-      autoStartPolicy: "on_start",
-      managedRuntimeSettings: browserFallbackManagedRuntimeSettings(),
       userId: "",
       projectId: "",
       receiveTimeoutMs: "30000",
@@ -572,10 +501,6 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
       managementBaseUrl: "",
       managementBearerToken: "",
       managementTimeoutMs: "30000",
-      managedInstallEnabled: false,
-      managedBinaryPath: "",
-      autoStartPolicy: "on_start",
-      managedRuntimeSettings: browserFallbackManagedRuntimeSettings(),
       userId: "",
       projectId: "",
       receiveTimeoutMs: "30000",
@@ -601,15 +526,9 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     selectedProjectId: "vulcan-workmem",
     selectedConversationId: "preview-session",
     runtime: {
-      dataSpaceState: "unknown",
       processReady: false,
-      managedPhase: "external",
-      managedGrpcTarget: null,
-      managedControllerEndpoint: "",
-      managedControllerSpace: "",
-      managedDataRoot: "",
-      managedLogPath: "",
-      managedLastError: null,
+      backendState: "external",
+      backendError: null,
       scopeReady: false,
       scopeError: null,
       precheckReady: false,
@@ -708,3 +627,4 @@ export function updateBrowserFallbackWorkbench(mutator: (snapshot: WorkbenchSnap
   browserFallbackWorkbenchState.plugins = [...luaSkillPlugins, ...vulcanPlugins];
   return browserFallbackSnapshot();
 }
+

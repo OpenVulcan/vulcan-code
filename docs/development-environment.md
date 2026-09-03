@@ -12,7 +12,7 @@
 
 通过 `make build`、`make br` 或 `make run` 使用 Debug 模式时，构建与运行脚本会自动把 `output/config/controller.json` 的 Controller endpoint 更新为 `http://127.0.0.1:19802`。通过 `make release`、`make build release`、`make br release` 或 `make run release` 使用 Release 模式时，对应 endpoint 自动更新为 `http://127.0.0.1:19801`。更新过程只修改 `endpoint`，保留同一配置中的进程模式、超时、租约与其他设置。
 
-Vite 仅在 Debug/Tauri 开发期间使用 `17601`，不参与 VLDB 端口选择。VulcanCode WebUI 服务使用 Release `17891–17920`、Debug `17921–17950`；Managed VMM 使用实际 WebUI 服务端口加 `10`。Release 不配置 Vite 端口。Windows 使用 PowerShell 构建与运行脚本，Linux x86_64、Linux ARM64 与 macOS 使用对应 Unix-like 脚本执行相同的 profile 配置规则。
+Vite 仅在 Debug/Tauri 开发期间使用 `17601`，不参与 VLDB 端口选择。VulcanCode WebUI 服务使用 Release `17891–17920`、Debug `17921–17950`；Release 不配置 Vite 端口。内置 VMM 直接运行在 VulcanCode 进程内，不占用独立服务端口；外置 VMM 的端口完全来自用户配置。Windows 使用 PowerShell 构建与运行脚本，Linux x86_64、Linux ARM64 与 macOS 使用对应 Unix-like 脚本执行相同的 profile 配置规则。
 
 ## 新环境初始化
 
@@ -26,7 +26,7 @@ make init-system
 
 1. 以 Cargo 并发度 2 安装缺失的 `cargo-hakari`、`cargo-nextest`、`cargo-deny` 与 `cargo-about`，并将低于仓库最低要求的工具更新到兼容版本。
 2. 安装宿主依赖与内建工具。
-3. 安装 LuaSkills、Codebase Memory 和托管 VMM 运行时依赖。
+3. 安装 LuaSkills 和 Codebase Memory 运行时依赖；原生 VMM 不需要独立运行时安装。
 
 已满足版本要求的工具会被保留，不会重复安装。
 

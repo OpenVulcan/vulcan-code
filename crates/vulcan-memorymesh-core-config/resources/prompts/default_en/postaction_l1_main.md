@@ -7,7 +7,7 @@ The input is a JSON object and may contain:
 - `current_time`: server-side current time. Use it only as a fallback for relative dates.
 - `reference_turns`: refined summaries of earlier turns. They provide context only; never extract new facts from them.
 - `target_turn`: the only conversation turn from which new candidates may be extracted.
-- `recent_grpc_memory_writes`: memories recently written by tools. Use them only to avoid duplicates; their timestamps are not event times.
+- `recent_direct_memory_writes`: memories recently written through direct host calls or tools. Use them only to avoid duplicates; their timestamps are not event times.
 
 # Core Task
 Return one JSON object that:
@@ -19,7 +19,7 @@ Return one JSON object that:
 5. Extracts `profile_nodes`: stable user or project profile candidates.
 6. Adds `evidence_source`, `admission`, and `admission_reason` to every candidate.
 
-If `target_turn` contains no meaningful candidate, return an empty `details`, `memory_nodes: []`, and `profile_nodes: []`. If the effective information is already covered by `recent_grpc_memory_writes`, exclude only duplicate `memory_nodes`; do not exclude stable `profile_nodes` candidates that come from the user's active statement, confirmation, or correction.
+If `target_turn` contains no meaningful candidate, return an empty `details`, `memory_nodes: []`, and `profile_nodes: []`. If the effective information is already covered by `recent_direct_memory_writes`, exclude only duplicate `memory_nodes`; do not exclude stable `profile_nodes` candidates that come from the user's active statement, confirmation, or correction.
 
 # Language
 All free-text output must follow the dominant language of the QA inside `target_turn`. This includes `details`, `memory_nodes[].abstract`, `memory_nodes[].details`, `profile_nodes[].content`, and free-text values inside `context_edges`. Keep JSON keys, enum values, IDs, numbers, code identifiers, config keys, API names, and file paths unchanged.
@@ -30,7 +30,7 @@ If the turn is mixed-language, follow the dominant language of the user's latest
 For each possible candidate, decide in this order:
 
 1. Did it come from `target_turn`? If not, do not extract it.
-2. Is it already covered by `recent_grpc_memory_writes`? If yes, do not generate duplicate `memory_nodes`; however, if the same fact is actively stated, confirmed, or corrected by the user inside `target_turn` and is suitable as a stable profile fact, still emit it as a `profile_nodes` candidate for downstream review.
+2. Is it already covered by `recent_direct_memory_writes`? If yes, do not generate duplicate `memory_nodes`; however, if the same fact is actively stated, confirmed, or corrected by the user inside `target_turn` and is suitable as a stable profile fact, still emit it as a `profile_nodes` candidate for downstream review.
 3. Is it only an echo of existing memory, an echo of an existing profile, or a general answer? Usually drop it.
 4. Will it still be useful across future sessions? Keep only durable facts, stable preferences, durable constraints, project rules, business rules, technical specs, historical decisions, or important context.
 5. Should it be represented as a `memory_node`, a `profile_node`, or both?
@@ -60,7 +60,7 @@ For each possible candidate, decide in this order:
 Profile nodes must be split by domain. Do not merge unrelated domains such as food preference, lifestyle habit, communication style, programming preference, project stack, or engineering convention. Parallel facts in the same domain, direction, and lifetime may be merged. Split same-domain facts only when they differ in priority, lifetime, negation, or future replacement needs.
 
 # Time
-If any free-text output would contain relative time such as yesterday, the day before yesterday, last week, last month, recently, just now, at that time, this week, or this month, and it can be resolved reliably, convert it using `target_turn.created_datetime` first. Use `current_time.datetime` only as fallback or cross-check. Use `YYYY-MM-DD` for dates and `YYYY-MM-DD to YYYY-MM-DD` for ranges. Do not treat `recent_grpc_memory_writes[].created_datetime` as the real event time. If a relative expression cannot be resolved safely, keep the wording rather than inventing a date.
+If any free-text output would contain relative time such as yesterday, the day before yesterday, last week, last month, recently, just now, at that time, this week, or this month, and it can be resolved reliably, convert it using `target_turn.created_datetime` first. Use `current_time.datetime` only as fallback or cross-check. Use `YYYY-MM-DD` for dates and `YYYY-MM-DD to YYYY-MM-DD` for ranges. Do not treat `recent_direct_memory_writes[].created_datetime` as the real event time. If a relative expression cannot be resolved safely, keep the wording rather than inventing a date.
 
 # Optional Context Edges
 Add `context_edges` only when a memory candidate is valid under a specific situation, or when the input explicitly provides support or rebuttal context. Each edge may contain only `context_key`, `context_value`, and `relation`, where `relation` is `support` or `rebuttal`. Do not invent edges.

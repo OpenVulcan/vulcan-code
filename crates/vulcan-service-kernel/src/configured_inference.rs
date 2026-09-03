@@ -71,27 +71,6 @@ pub(crate) const VMM_CONSUMER_PROFILE_ID: &str = "vmm";
 /// 标识原生用量账本中的可计费供应商/模型验证请求。
 const PROVIDER_MODEL_VALIDATION_CONSUMER_ID: &str = "vulcan-code-provider-validation";
 
-/// Foundational VMM LLM purposes required before memory can be enabled.
-/// 启用记忆前必须就绪的 VMM 基础 LLM 用途。
-pub(crate) const VMM_REQUIRED_LLM_PURPOSES: [&str; 4] = [
-    "precheck_l1",
-    "precheck_l2",
-    "postaction_l1",
-    "postaction_l2",
-];
-
-/// Captures controlled availability errors for optional VMM inference routes.
-/// 记录 VMM 可选推理路由的受控可用性错误。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct VmmOptionalInferenceRouteValidation {
-    /// Profile-instruction route error, or `None` when the exact route is executable.
-    /// 画像指令路由错误；精确路由可执行时为 `None`。
-    pub(crate) profile_instruction_error: Option<String>,
-    /// Rerank route error, or `None` when the exact route is executable.
-    /// 重排路由错误；精确路由可执行时为 `None`。
-    pub(crate) rerank_error: Option<String>,
-}
-
 /// Retains terminal LLM status briefly for polling and reconnect diagnostics.
 /// 短暂保留 LLM 终态，供轮询与重连诊断使用。
 const LLM_TERMINAL_RETENTION: Duration = Duration::from_secs(15 * 60);
@@ -150,6 +129,9 @@ pub struct ConfiguredInferenceError {
     /// Optional normalized provider error.
     /// 可选归一化供应商错误。
     pub provider_error: Option<Box<AiExecutionError>>,
+    /// Exact non-secret route when provider selection completed before the failure.
+    /// 失败前已完成 Provider 选择时的准确非敏感路由。
+    pub route: Option<Box<ExecutionRouteSnapshot>>,
 }
 
 impl ConfiguredInferenceError {
@@ -188,6 +170,7 @@ impl ConfiguredInferenceError {
             category,
             message: message.into(),
             provider_error: None,
+            route: None,
         }
     }
 
@@ -209,6 +192,7 @@ impl ConfiguredInferenceError {
             category: ConfiguredInferenceErrorCategory::Execution,
             message,
             provider_error: Some(failure.error),
+            route: None,
         }
     }
 
@@ -229,7 +213,25 @@ impl ConfiguredInferenceError {
             category: ConfiguredInferenceErrorCategory::Execution,
             message: error.message.clone(),
             provider_error: Some(Box::new(error)),
+            route: None,
         }
+    }
+
+    /// Attaches the exact resolved route to a failure that occurred after selection.
+    /// 为发生在选择完成后的失败附加准确解析路由。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `route` is the non-secret immutable route used by the physical dispatch.
+    /// `route` 是本次物理分派使用的非敏感不可变路由。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The same failure enriched with route diagnostics.
+    /// 返回补充了路由诊断的同一失败。
+    fn with_route(mut self, route: ExecutionRouteSnapshot) -> Self {
+        self.route = Some(Box::new(route));
+        self
     }
 }
 
@@ -2238,6 +2240,7 @@ impl ConfiguredInferenceService {
             .resolve_internal_inference_selection(&configuration, route)
             .map_err(configuration_error)?;
         let request = embedding_request_with_internal_defaults(&configuration, &selection, request);
+        let route_snapshot = configured_route_snapshot(&selection, route);
         // telemetry_execution_id separates the provider request identity from the UUID-owned usage lifecycle.
         // telemetry_execution_id 将供应商请求身份与由 UUID 持有的用量生命周期分离。
         let telemetry_execution_id = Uuid::new_v4().to_string();
@@ -2268,14 +2271,21 @@ impl ConfiguredInferenceService {
                     .execute_internal_embedding(&selection, &request, caller.usage_scope)
             })
             .await;
-        match result {
-            Ok(response) => {
+        // result keeps malformed successful responses on the same terminal telemetry path as provider failures.
+        // result 让格式错误的成功响应与 Provider 失败进入同一终态遥测路径。
+        let result = result
+            .and_then(|response| {
                 response.validate_for_request(&request).map_err(|message| {
                     ConfiguredInferenceError::new(
                         ConfiguredInferenceErrorCategory::Execution,
                         message,
                     )
                 })?;
+                Ok(response)
+            })
+            .map_err(|error| error.with_route(route_snapshot));
+        match result {
+            Ok(response) => {
                 let first_response_at_unix_ms = current_unix_millis();
                 let facts = InternalInferenceTelemetryFacts::succeeded(
                     caller,
@@ -2412,6 +2422,7 @@ impl ConfiguredInferenceService {
             .resolve_internal_inference_selection(&configuration, route)
             .map_err(configuration_error)?;
         let request = rerank_request_with_internal_defaults(&configuration, &selection, request);
+        let route_snapshot = configured_route_snapshot(&selection, route);
         // telemetry_execution_id separates the provider request identity from the UUID-owned usage lifecycle.
         // telemetry_execution_id 将供应商请求身份与由 UUID 持有的用量生命周期分离。
         let telemetry_execution_id = Uuid::new_v4().to_string();
@@ -2438,6 +2449,19 @@ impl ConfiguredInferenceService {
                     .execute_internal_rerank(&selection, &request, caller.usage_scope)
             })
             .await;
+        // result rejects provider output that loses candidate identity or declared rank semantics.
+        // result 拒绝丢失候选身份或违反声明排序语义的供应商输出。
+        let result = result
+            .and_then(|response| {
+                response.validate_for_request(&request).map_err(|message| {
+                    ConfiguredInferenceError::new(
+                        ConfiguredInferenceErrorCategory::Execution,
+                        message,
+                    )
+                })?;
+                Ok(response)
+            })
+            .map_err(|error| error.with_route(route_snapshot));
         match result {
             Ok(response) => {
                 let first_response_at_unix_ms = current_unix_millis();
@@ -3401,14 +3425,16 @@ impl ConfiguredInferenceService {
                 }
             }
         };
-        let terminal = terminal.and_then(|termination_reason| {
-            finalize_restricted_structured_output(
-                &request.structured_output,
-                output_text.as_str(),
-                &mut structured_output,
-            )?;
-            Ok(termination_reason)
-        });
+        let terminal = terminal
+            .and_then(|termination_reason| {
+                finalize_restricted_structured_output(
+                    &request.structured_output,
+                    output_text.as_str(),
+                    &mut structured_output,
+                )?;
+                Ok(termination_reason)
+            })
+            .map_err(|error| error.with_route(route.clone()));
         let duration_ms = duration_millis(started_at.elapsed());
         let attempt_duration_ms =
             current_unix_millis().saturating_sub(active_attempt_facts.started_at_unix_ms);
@@ -3831,173 +3857,6 @@ fn configured_operation_route<'a>(
         ));
     }
     Ok(route)
-}
-
-/// Validates every exact inference route required before VMM can be enabled.
-/// 校验启用 VMM 前必需的每一条精确推理路由。
-///
-/// # Parameters
-/// 参数
-/// `runtime` resolves current credential, catalog, protocol, and internal-enable facts.
-/// `runtime` 解析当前凭据、目录、协议和内部启用事实。
-/// `configuration` owns the persisted VMM inference profile.
-/// `configuration` 持有持久化的 VMM 推理配置档。
-///
-/// # Returns
-/// 返回值
-/// Success only when embedding and all foundational LLM routes are executable with reasoning off.
-/// 仅当向量路由与全部基础 LLM 路由均可执行且能够关闭思考时返回成功。
-pub(crate) fn validate_vmm_required_inference_routes(
-    runtime: &PublicAiRuntime,
-    configuration: &PersistedAiConfiguration,
-) -> Result<(), String> {
-    let embedding = configured_operation_route(
-        configuration,
-        VMM_CONSUMER_PROFILE_ID,
-        AiOperation::EmbeddingCreate,
-        None,
-    )
-    .map_err(|error| error.message)?;
-    if embedding.usage_scope != InferenceUsageScope::ExternalService {
-        return Err(String::from(
-            "VMM 向量路由必须使用 external_service 用途范围。",
-        ));
-    }
-    runtime
-        .resolve_internal_inference_selection(configuration, embedding)
-        .map_err(|error| format!("VMM 向量路由不可用：{error}"))?;
-
-    for purpose_id in VMM_REQUIRED_LLM_PURPOSES {
-        let route = configured_operation_route(
-            configuration,
-            VMM_CONSUMER_PROFILE_ID,
-            AiOperation::ConversationRespond,
-            Some(purpose_id),
-        )
-        .map_err(|error| error.message)?;
-        if route.usage_scope != InferenceUsageScope::ExternalService {
-            return Err(format!(
-                "VMM 基础 LLM 用途 `{purpose_id}` 必须使用 external_service 用途范围。"
-            ));
-        }
-        let selection = runtime
-            .resolve_internal_inference_selection(configuration, route)
-            .map_err(|error| format!("VMM 基础 LLM 用途 `{purpose_id}` 不可用：{error}"))?;
-        if !model_supports_disabled_reasoning(&selection.model.capabilities) {
-            return Err(format!(
-                "VMM 基础 LLM 用途 `{purpose_id}` 的模型不支持关闭思考。"
-            ));
-        }
-        runtime
-            .validate_disabled_reasoning_route_projection(&selection)
-            .map_err(|error| {
-                format!(
-                    "VMM 基础 LLM 用途 `{purpose_id}` 的当前模型与协议无法证明关闭思考：{error}"
-                )
-            })?;
-    }
-    Ok(())
-}
-
-/// Inspects optional VMM routes without turning their absence into a startup blocker.
-/// 检查 VMM 可选路由，但不把缺失可选路由升级为启动阻塞。
-///
-/// # Parameters
-/// 参数
-/// `runtime` resolves exact connection, model, operation, and binding facts.
-/// `runtime` 解析精确账号连接、模型、操作与绑定事实。
-/// `configuration` owns the persisted VMM inference profile.
-/// `configuration` 持有持久化的 VMM 推理配置档。
-///
-/// # Returns
-/// 返回值
-/// Controlled per-capability errors suitable for truthful readiness projection.
-/// 返回适合真实可用性投影的逐能力受控错误。
-pub(crate) fn inspect_vmm_optional_inference_routes(
-    runtime: &PublicAiRuntime,
-    configuration: &PersistedAiConfiguration,
-) -> VmmOptionalInferenceRouteValidation {
-    VmmOptionalInferenceRouteValidation {
-        profile_instruction_error: validate_vmm_optional_profile_instruction_route(
-            runtime,
-            configuration,
-        )
-        .err(),
-        rerank_error: validate_vmm_optional_rerank_route(runtime, configuration).err(),
-    }
-}
-
-/// Validates the optional VMM profile-instruction route against its exact runtime contract.
-/// 根据精确运行时契约校验可选的 VMM 画像指令路由。
-///
-/// # Parameters
-/// 参数
-/// `runtime` and `configuration` resolve one immutable route selection.
-/// `runtime` 与 `configuration` 解析一项不可变路由选择。
-///
-/// # Returns
-/// Success only when the route is executable as an external service with reasoning disabled.
-/// 仅当路由可作为关闭思考的外部服务执行时返回成功。
-fn validate_vmm_optional_profile_instruction_route(
-    runtime: &PublicAiRuntime,
-    configuration: &PersistedAiConfiguration,
-) -> Result<(), String> {
-    let purpose_id = "profile_instruction";
-    let route = configured_operation_route(
-        configuration,
-        VMM_CONSUMER_PROFILE_ID,
-        AiOperation::ConversationRespond,
-        Some(purpose_id),
-    )
-    .map_err(|error| format!("VMM 手工画像指令不可用：{}", error.message))?;
-    if route.usage_scope != InferenceUsageScope::ExternalService {
-        return Err(String::from(
-            "VMM 手工画像指令路由必须使用 external_service 用途范围。",
-        ));
-    }
-    let selection = runtime
-        .resolve_internal_inference_selection(configuration, route)
-        .map_err(|error| format!("VMM 手工画像指令不可用：{error}"))?;
-    if !model_supports_disabled_reasoning(&selection.model.capabilities) {
-        return Err(String::from("VMM 手工画像指令模型不支持关闭思考。"));
-    }
-    runtime
-        .validate_disabled_reasoning_route_projection(&selection)
-        .map_err(|error| format!("VMM 手工画像指令的当前模型与协议无法证明关闭思考：{error}"))?;
-    Ok(())
-}
-
-/// Validates the optional VMM rerank route against its exact runtime contract.
-/// 根据精确运行时契约校验可选的 VMM 重排路由。
-///
-/// # Parameters
-/// 参数
-/// `runtime` and `configuration` resolve one immutable route selection.
-/// `runtime` 与 `configuration` 解析一项不可变路由选择。
-///
-/// # Returns
-/// Success only when the route exposes an authorized external-service rerank action.
-/// 仅当路由暴露已授权的外部服务重排动作时返回成功。
-fn validate_vmm_optional_rerank_route(
-    runtime: &PublicAiRuntime,
-    configuration: &PersistedAiConfiguration,
-) -> Result<(), String> {
-    let route = configured_operation_route(
-        configuration,
-        VMM_CONSUMER_PROFILE_ID,
-        AiOperation::RerankDocuments,
-        None,
-    )
-    .map_err(|error| format!("VMM 重排路由不可用：{}", error.message))?;
-    if route.usage_scope != InferenceUsageScope::ExternalService {
-        return Err(String::from(
-            "VMM 重排路由必须使用 external_service 用途范围。",
-        ));
-    }
-    runtime
-        .resolve_internal_inference_selection(configuration, route)
-        .map_err(|error| format!("VMM 重排路由不可用：{error}"))?;
-    Ok(())
 }
 
 /// Validates that one configured route serves the caller's actual usage scope.
@@ -6512,62 +6371,6 @@ mod tests {
         assert!(!model_supports_disabled_reasoning(&unknown));
     }
 
-    /// Verifies optional VMM capability status resolves exact routes instead of trusting field presence.
-    /// 验证 VMM 可选能力状态会解析精确路由，而不是只相信字段存在。
-    #[test]
-    fn vmm_optional_route_validation_rejects_unresolvable_configured_routes() {
-        let runtime = PublicAiRuntime::unavailable().expect("test public AI runtime");
-        let profile_instruction = InferenceRouteConfiguration {
-            provider_id: String::from("minimax"),
-            service_entry_id: String::from("china"),
-            connection_id: String::from("missing-connection"),
-            model_id: String::from("MiniMax-M3"),
-            binding: InferenceRouteBinding::Protocol {
-                protocol_profile_id: String::from("anthropic-messages"),
-            },
-            operation: AiOperation::ConversationRespond,
-            usage_scope: InferenceUsageScope::ExternalService,
-        };
-        let rerank = InferenceRouteConfiguration {
-            provider_id: String::from("openrouter"),
-            service_entry_id: String::from("public-api"),
-            connection_id: String::from("missing-connection"),
-            model_id: String::from("cohere/rerank-v4.0-fast"),
-            binding: InferenceRouteBinding::Action {
-                action_binding_id: String::from("openrouter.rerank.v1"),
-            },
-            operation: AiOperation::RerankDocuments,
-            usage_scope: InferenceUsageScope::ExternalService,
-        };
-        let mut configuration = PersistedAiConfiguration::default();
-        configuration.inference_profiles.insert(
-            String::from(VMM_CONSUMER_PROFILE_ID),
-            InferenceProfile {
-                llm_routes: BTreeMap::from([(
-                    String::from("profile_instruction"),
-                    profile_instruction,
-                )]),
-                embedding: None,
-                rerank: Some(rerank),
-            },
-        );
-
-        let validation = inspect_vmm_optional_inference_routes(&runtime, &configuration);
-
-        assert!(
-            validation
-                .profile_instruction_error
-                .as_deref()
-                .is_some_and(|error| error.contains("missing-connection"))
-        );
-        assert!(
-            validation
-                .rerank_error
-                .as_deref()
-                .is_some_and(|error| error.contains("missing-connection"))
-        );
-    }
-
     #[test]
     fn caller_authorization_requires_exact_profile_and_scope_identity() {
         let caller = test_caller();
@@ -6666,7 +6469,7 @@ mod tests {
         let facts = InternalInferenceTelemetryFacts {
             request_id: String::from("request-vmm-1"),
             execution_id: String::from("2f322d48-09c6-4b9e-b9a5-342b62a22b92"),
-            caller_id: String::from("vmm-local"),
+            caller_id: String::from("vulcan-code-native-vmm"),
             consumer_profile_id: String::from("vmm"),
             usage_scope: InferenceUsageScope::InternalBackground,
             owner_kind: "vmm",

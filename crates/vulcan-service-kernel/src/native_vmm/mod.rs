@@ -8,9 +8,9 @@ mod maintenance;
 mod prompt;
 
 pub(crate) use client::NativeVmmClient;
-pub(crate) use driver::NativeVmmCoreRuntime;
+pub(crate) use driver::{NativeVmmCoreRuntime, NativeVmmHostAiStatus};
 pub(crate) use maintenance::{
     NativeVmmClearPreview, NativeVmmClearResult, NativeVmmMaintenance, NativeVmmMigrationPreview,
-    NativeVmmMigrationResult, NativeVmmProjectCatalog, NativeVmmProjectContentCounts,
-    NativeVmmProjectDeletePreview, NativeVmmSessionRename,
+    NativeVmmMigrationRecordSummary, NativeVmmMigrationResult, NativeVmmProjectCatalog,
+    NativeVmmProjectContentCounts, NativeVmmProjectDeletePreview, NativeVmmSessionRename,
 };

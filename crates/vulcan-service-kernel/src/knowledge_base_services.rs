@@ -753,20 +753,15 @@ fn knowledge_display_batch_output_schema() -> Value {
 /// Creates the bounded host caller used by detached knowledge curation.
 /// 创建资料库分离式整理任务使用的有界宿主调用身份。
 fn knowledge_curation_caller(consumer_profile_id: &str) -> Result<InferenceCallerContext, String> {
-    let now_unix_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| format!("读取资料库整理调用时间失败：{error}"))
-        .and_then(|duration| {
-            u64::try_from(duration.as_millis())
-                .map_err(|_| String::from("资料库整理调用时间超出支持范围"))
-        })?;
     Ok(InferenceCallerContext {
         caller_id: String::from("vulcan-code-knowledge-curation"),
         allowed_consumer_profile_ids: BTreeSet::from([consumer_profile_id.to_string()]),
         permissions: BTreeSet::from([InferencePermission::Status, InferencePermission::Llm]),
         usage_scope: InferenceUsageScope::InternalBackground,
         interactive_session_id: None,
-        deadline_unix_ms: Some(now_unix_ms.saturating_add(600_000)),
+        // The registration is long-lived; the per-execution duration budget starts at each dispatch.
+        // 注册是长生命周期的；每次执行的时长预算从各自分发时刻开始计算。
+        deadline_unix_ms: None,
         budget: InferenceCallerBudget {
             max_concurrent_executions: 1,
             max_input_units_per_request: Some(65_536),
@@ -781,20 +776,15 @@ fn knowledge_curation_caller(consumer_profile_id: &str) -> Result<InferenceCalle
 /// Creates the bounded host caller used by library-owned embedding batches.
 /// 创建资料库专属向量批次使用的受限宿主调用身份。
 fn knowledge_embedding_caller(consumer_profile_id: &str) -> Result<InferenceCallerContext, String> {
-    let now_unix_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| format!("读取资料库向量调用时间失败：{error}"))
-        .and_then(|duration| {
-            u64::try_from(duration.as_millis())
-                .map_err(|_| String::from("资料库向量调用时间超出支持范围"))
-        })?;
     Ok(InferenceCallerContext {
         caller_id: String::from("vulcan-code-knowledge-embedding"),
         allowed_consumer_profile_ids: BTreeSet::from([consumer_profile_id.to_string()]),
         permissions: BTreeSet::from([InferencePermission::Status, InferencePermission::Embedding]),
         usage_scope: InferenceUsageScope::InternalBackground,
         interactive_session_id: None,
-        deadline_unix_ms: Some(now_unix_ms.saturating_add(600_000)),
+        // One handle spans many batches, so an absolute registration deadline would expire mid-index.
+        // 一个句柄会跨越多个批次，因此注册级绝对截止时间会在索引中途过期。
+        deadline_unix_ms: None,
         budget: InferenceCallerBudget {
             max_concurrent_executions: 1,
             max_input_units_per_request: Some(65_536),

@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest"
 
 import type { VmmMemorySnapshot } from "@/types"
 
-import { shouldRequestVmmManagementCatalog } from "./MemoryArea"
+import {
+  externalSetupActionConnection,
+  materializeExternalFixedBindingPlan,
+  shouldRequestVmmManagementCatalog,
+  shouldRouteAdvancedSaveToSetup,
+} from "./MemoryArea"
 
 // emptyCatalog returns one unloaded management directory for first-run gate tests.
 // emptyCatalog 返回一份尚未加载的管理目录，用于首次运行门控测试。
@@ -15,7 +20,7 @@ function emptyCatalog(): VmmMemorySnapshot["managementCatalog"] {
 }
 
 describe("VMM management catalog readiness gate", () => {
-  it("does not contact VMM before the managed process is ready", () => {
+  it("does not contact VMM before the selected backend is ready", () => {
     expect(shouldRequestVmmManagementCatalog({
       activeSection: "overview",
       operationBusy: false,
@@ -76,5 +81,81 @@ describe("VMM management catalog readiness gate", () => {
         }],
       },
     })).toBe(false)
+  })
+})
+
+describe("VMM external setup connection projection", () => {
+  it("keeps pre-confirmation probes request-scoped and excludes management credentials", () => {
+    expect(externalSetupActionConnection({
+      mode: "external",
+      externalEndpoint: " 127.0.0.1:50051 ",
+      externalApiKey: "grpc-secret",
+      externalManagementBaseUrl: "https://management.example.test",
+      externalManagementToken: "management-secret",
+    })).toEqual({
+      connection: {
+        grpcTarget: "127.0.0.1:50051",
+        grpcApiKey: "grpc-secret",
+      },
+    })
+  })
+})
+
+describe("VMM external fixed binding plan", () => {
+  it("materializes only default rows and preserves explicit per-project choices", () => {
+    expect(materializeExternalFixedBindingPlan([
+      {
+        vulcanProjectId: "project-default",
+        action: "bind_existing",
+        projectName: null,
+        targetProjectId: null,
+      },
+      {
+        vulcanProjectId: "project-existing",
+        action: "bind_existing",
+        projectName: null,
+        targetProjectId: 42,
+      },
+      {
+        vulcanProjectId: "project-create",
+        action: "create_and_bind",
+        projectName: "custom-project",
+        targetProjectId: null,
+      },
+    ], 7)).toEqual([
+      {
+        vulcanProjectId: "project-default",
+        action: "bind_existing",
+        projectName: null,
+        targetProjectId: 7,
+      },
+      {
+        vulcanProjectId: "project-existing",
+        action: "bind_existing",
+        projectName: null,
+        targetProjectId: 42,
+      },
+      {
+        vulcanProjectId: "project-create",
+        action: "create_and_bind",
+        projectName: "custom-project",
+        targetProjectId: null,
+      },
+    ])
+  })
+
+  it("rejects an invalid materialized fixed project identity", () => {
+    expect(() => materializeExternalFixedBindingPlan([], 0)).toThrow(
+      "requires a positive project id",
+    )
+  })
+})
+
+describe("VMM advanced backend switch gate", () => {
+  it("routes only backend changes through full setup reconciliation", () => {
+    expect(shouldRouteAdvancedSaveToSetup("native", "native")).toBe(false)
+    expect(shouldRouteAdvancedSaveToSetup("external_grpc", "external_grpc")).toBe(false)
+    expect(shouldRouteAdvancedSaveToSetup("native", "external_grpc")).toBe(true)
+    expect(shouldRouteAdvancedSaveToSetup("external_grpc", "native")).toBe(true)
   })
 })

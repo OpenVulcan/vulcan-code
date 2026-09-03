@@ -1,11 +1,19 @@
 //! Host adapter that exposes configured inference through the native AI Port.
 //! 通过原生 AI Port 暴露已配置推理能力的宿主适配器。
 
+// This boundary returns the frozen diagnostic-rich HostAiError contract directly.
+// 该边界直接返回已冻结且富含诊断信息的 HostAiError 契约。
+#![allow(
+    clippy::result_large_err,
+    reason = "the adapter must preserve the frozen HostAiError boundary contract"
+)]
+
 use async_trait::async_trait;
 use futures_util::stream;
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::{Arc, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::broadcast;
 use vulcan_ai_contract::{
@@ -138,15 +146,37 @@ impl ConfiguredInferenceHostAiPort {
         Ok(())
     }
 
-    /// Builds a caller context whose deadline is bounded by the operation context.
-    /// 构造一个 deadline 不超过操作上下文的调用方上下文。
+    /// Builds a caller context whose deadline is bounded by operation and per-call duration limits.
+    /// 构造一个截止时间同时受操作上下文与单次时长限制的调用方上下文。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `handle` supplies host-owned caller limits and `context` supplies an optional absolute deadline.
+    /// `handle` 提供宿主持有的调用方限制，`context` 提供可选绝对截止时间。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A caller clone whose effective deadline applies to exactly this physical dispatch.
+    /// 返回一份有效截止时间仅应用于本次物理分发的调用方副本。
+    ///
+    /// # Errors
+    /// Returns a host clock error before provider dispatch.
+    /// 在 Provider 分发前返回宿主时钟错误。
     fn caller_for_context(
         handle: &HostAiCapabilityHandle,
         context: &HostAiCallContext,
-    ) -> InferenceCallerContext {
+    ) -> Result<InferenceCallerContext, HostAiError> {
         let mut caller = handle.caller.clone();
-        caller.deadline_unix_ms = context.effective_deadline(caller.deadline_unix_ms);
-        caller
+        let explicit_deadline = context.effective_deadline(caller.deadline_unix_ms);
+        let duration_deadline = caller
+            .budget
+            .max_execution_duration_ms
+            .map(|duration_ms| {
+                current_host_unix_millis().map(|now| now.saturating_add(duration_ms))
+            })
+            .transpose()?;
+        caller.deadline_unix_ms = earliest_deadline(explicit_deadline, duration_deadline);
+        Ok(caller)
     }
 
     /// Validates one operation context, caller permission, and registered capability.
@@ -203,10 +233,16 @@ impl ConfiguredInferenceHostAiPort {
         request_id: Option<&str>,
         handle: Option<&HostAiExecutionHandle>,
     ) -> HostAiError {
-        let mut mapped = match error.provider_error {
+        let ConfiguredInferenceError {
+            category,
+            message,
+            provider_error,
+            route,
+        } = error;
+        let mut mapped = match provider_error {
             Some(provider_error) => HostAiError::from_execution_error(*provider_error),
             None => HostAiError::new(
-                match error.category {
+                match category {
                     ConfiguredInferenceErrorCategory::Contract => HostAiErrorCode::Contract,
                     ConfiguredInferenceErrorCategory::Authorization => {
                         HostAiErrorCode::PermissionDenied
@@ -218,9 +254,10 @@ impl ConfiguredInferenceHostAiPort {
                     ConfiguredInferenceErrorCategory::Execution => HostAiErrorCode::Provider,
                     ConfiguredInferenceErrorCategory::Cancelled => HostAiErrorCode::Cancelled,
                 },
-                error.message,
+                message,
             ),
         };
+        mapped.route = route;
         if let Some(context) = context {
             mapped = mapped.with_request_context(context, request_id);
         } else if let Some(request_id) = request_id {
@@ -272,13 +309,10 @@ impl ConfiguredInferenceHostAiPort {
         response: RerankResponse,
         context: &HostAiCallContext,
     ) -> Result<RerankResponse, HostAiError> {
-        if response.request_id != request.request_id {
-            return Err(HostAiError::new(
-                HostAiErrorCode::InvalidRequest,
-                "Rerank response request_id does not match the originating request.",
-            )
-            .with_request_context(context, Some(request.request_id.as_str())));
-        }
+        response.validate_for_request(request).map_err(|message| {
+            HostAiError::new(HostAiErrorCode::InvalidRequest, message)
+                .with_request_context(context, Some(request.request_id.as_str()))
+        })?;
         Ok(response)
     }
 
@@ -292,6 +326,55 @@ impl ConfiguredInferenceHostAiPort {
                 | AiStreamEvent::ResponseCancelled
         )
     }
+}
+
+/// Selects the earlier of two optional absolute deadlines.
+/// 选择两个可选绝对截止时间中更早的一个。
+///
+/// # Parameters
+/// 参数
+/// `left` and `right` are trusted Unix millisecond deadlines.
+/// `left` 与 `right` 是可信 Unix 毫秒截止时间。
+///
+/// # Returns
+/// 返回值
+/// The earliest present deadline, or no value when both inputs are absent.
+/// 返回存在的最早截止时间；两个输入均为空时返回空值。
+#[must_use]
+const fn earliest_deadline(left: Option<u64>, right: Option<u64>) -> Option<u64> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(if left < right { left } else { right }),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    }
+}
+
+/// Reads current Unix milliseconds for one physical Host AI dispatch.
+/// 读取一次物理宿主 AI 分发使用的当前 Unix 毫秒时间。
+///
+/// # Returns
+/// 返回值
+/// The exact current Unix millisecond within the public deadline range.
+/// 返回位于公共截止时间范围内的准确当前 Unix 毫秒值。
+///
+/// # Errors
+/// Returns a host-internal error when the clock predates Unix epoch or overflows `u64`.
+/// 宿主时钟早于 Unix 纪元或超出 `u64` 时返回宿主内部错误。
+fn current_host_unix_millis() -> Result<u64, HostAiError> {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| {
+            HostAiError::new(
+                HostAiErrorCode::Internal,
+                format!("Host AI clock precedes Unix epoch: {error}"),
+            )
+        })?;
+    u64::try_from(duration.as_millis()).map_err(|error| {
+        HostAiError::new(
+            HostAiErrorCode::Internal,
+            format!("Host AI Unix millisecond time overflow: {error}"),
+        )
+    })
 }
 
 #[async_trait]
@@ -454,7 +537,8 @@ impl HostAiPort for ConfiguredInferenceHostAiPort {
         if context.cancellation.is_cancelled() {
             return Err(Self::cancelled(&context, request_id.as_str()));
         }
-        let caller = Self::caller_for_context(handle, &context);
+        let caller = Self::caller_for_context(handle, &context)
+            .map_err(|error| error.with_request_context(&context, Some(request_id.as_str())))?;
         let service = Arc::clone(&self.service);
         let service_request = request.request.clone();
         let cancellation = Arc::clone(&context.cancellation);
@@ -498,7 +582,9 @@ impl HostAiPort for ConfiguredInferenceHostAiPort {
         if context.cancellation.is_cancelled() {
             return Err(Self::cancelled(&context, request.request_id.as_str()));
         }
-        let caller = Self::caller_for_context(handle, &context);
+        let caller = Self::caller_for_context(handle, &context).map_err(|error| {
+            error.with_request_context(&context, Some(request.request_id.as_str()))
+        })?;
         let service = Arc::clone(&self.service);
         let cancellation = Arc::clone(&context.cancellation);
         let operation = service.rerank_documents(&caller, request.clone());
@@ -541,19 +627,27 @@ impl HostAiPort for ConfiguredInferenceHostAiPort {
         if context.cancellation.is_cancelled() {
             return Err(Self::cancelled(&context, request.request_id.as_str()));
         }
-        let caller = Self::caller_for_context(handle, &context);
-        let execution_id = self
-            .service
-            .start_response_execution(caller, request.clone())
-            .await
-            .map_err(|error| {
+        let caller = Self::caller_for_context(handle, &context).map_err(|error| {
+            error.with_request_context(&context, Some(request.request_id.as_str()))
+        })?;
+        let service = Arc::clone(&self.service);
+        let cancellation = Arc::clone(&context.cancellation);
+        let start = service.start_response_execution(caller, request.clone());
+        tokio::pin!(start);
+        let execution_id = tokio::select! {
+            biased;
+            result = &mut start => result.map_err(|error| {
                 Self::map_error(
                     error,
                     Some(&context),
                     Some(request.request_id.as_str()),
                     None,
                 )
-            })?;
+            })?,
+            _ = cancellation.cancelled() => {
+                return Err(Self::cancelled(&context, request.request_id.as_str()));
+            }
+        };
         HostAiExecutionHandle::new(
             &context,
             execution_id,
@@ -618,9 +712,7 @@ impl HostAiPort for ConfiguredInferenceHostAiPort {
                         (replay, if terminal { None } else { receiver }, handle),
                     ));
                 }
-                let Some(mut receiver) = receiver.take() else {
-                    return None;
-                };
+                let mut receiver = receiver.take()?;
                 if handle.cancellation().is_cancelled() {
                     let _ = service
                         .cancel_execution(handle.caller_id.as_str(), handle.execution_id.as_str());
@@ -731,5 +823,54 @@ impl HostAiPort for ConfiguredInferenceHostAiPort {
             .map_err(|error| {
                 Self::map_error(error, None, Some(handle.request_id.as_str()), Some(handle))
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConfiguredInferenceHostAiPort, earliest_deadline};
+    use crate::configured_inference::{ConfiguredInferenceError, ConfiguredInferenceErrorCategory};
+    use vulcan_ai_contract::{ExecutionRouteSnapshot, InferenceUsageScope};
+
+    /// Verifies explicit and duration-derived deadlines always choose the earliest boundary.
+    /// 验证显式截止时间与时长派生截止时间始终选择更早边界。
+    #[test]
+    fn host_ai_deadline_uses_earliest_boundary() {
+        assert_eq!(earliest_deadline(None, None), None);
+        assert_eq!(earliest_deadline(Some(20), None), Some(20));
+        assert_eq!(earliest_deadline(None, Some(30)), Some(30));
+        assert_eq!(earliest_deadline(Some(20), Some(30)), Some(20));
+        assert_eq!(earliest_deadline(Some(40), Some(30)), Some(30));
+    }
+
+    /// Verifies configured-inference route diagnostics survive the Host AI boundary mapping.
+    /// 验证已配置推理的路由诊断能够穿过 Host AI 边界映射。
+    #[test]
+    fn mapped_error_preserves_resolved_route() {
+        let route = ExecutionRouteSnapshot {
+            provider_id: String::from("provider"),
+            service_entry_id: String::from("service"),
+            connection_id: String::from("connection"),
+            model_id: String::from("model"),
+            protocol_binding_id: Some(String::from("openai.responses.v1")),
+            action_binding_id: None,
+            secondary_route_id: None,
+            secondary_provider_name: None,
+            secondary_endpoint_name: None,
+            capability_revision: String::from("capability"),
+            catalog_revision: String::from("catalog"),
+            route_revision: String::from("sha256:route"),
+            usage_scope: InferenceUsageScope::InternalBackground,
+        };
+        let error = ConfiguredInferenceError {
+            category: ConfiguredInferenceErrorCategory::Execution,
+            message: String::from("provider failed"),
+            provider_error: None,
+            route: Some(Box::new(route.clone())),
+        };
+
+        let mapped = ConfiguredInferenceHostAiPort::map_error(error, None, None, None);
+
+        assert_eq!(mapped.route.as_deref(), Some(&route));
     }
 }

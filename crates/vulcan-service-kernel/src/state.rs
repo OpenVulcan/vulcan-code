@@ -283,10 +283,6 @@ pub struct ServiceBridgeState {
     /// 宿主管理 Codebase Memory Sidecar 的长生命周期控制器。
     pub(crate) codebase_memory_controller:
         crate::codebase_memory_controller::CodebaseMemoryController,
-    /// Host-owned managed VulcanMemoryMesh child runtime.
-    /// 宿主持有的 VulcanMemoryMesh 托管子运行时。
-    pub(crate) managed_memory_mesh_runtime:
-        Option<Arc<Mutex<crate::managed_memory_mesh_runtime::ManagedMemoryMeshRuntime>>>,
     /// Host-owned native VMM project maintenance facade.
     /// 宿主持有的原生 VMM 项目维护门面。
     pub(crate) native_vmm_maintenance: Option<crate::native_vmm::NativeVmmMaintenance>,

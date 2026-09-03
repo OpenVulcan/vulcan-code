@@ -4,6 +4,82 @@
 use super::*;
 use crate::{mutate_project_configuration, mutate_provider_configuration};
 
+/// A validated enable-time binding plan that is safe to execute after global configuration persistence.
+/// 一份已经通过校验、可在全局配置持久化后安全执行的启用期绑定计划。
+enum PreparedProjectBindingPlan {
+    /// No project binding work is required for the selected configuration.
+    /// 所选配置不需要执行项目绑定工作。
+    None,
+    /// Native bindings resolved against the current local catalog.
+    /// 已根据当前本地目录解析的原生绑定。
+    Native {
+        /// Native maintenance service that owns durable project identities and bindings.
+        /// 持有持久项目身份与绑定关系的原生维护服务。
+        maintenance: crate::native_vmm::NativeVmmMaintenance,
+        /// Validated per-project operations in submitted order.
+        /// 按提交顺序保存的已校验逐项目操作。
+        entries: Vec<PreparedNativeProjectBinding>,
+    },
+    /// External gRPC bindings resolved against the current remote catalog.
+    /// 已根据当前远端目录解析的外置 gRPC 绑定。
+    External {
+        /// Standalone external layer used by management requests during execution.
+        /// 执行期间管理请求使用的独立外置配置层。
+        layer: vulcan_vmm::VmmConfigLayer,
+        /// Validated per-project operations in stable project order.
+        /// 按稳定项目顺序保存的已校验逐项目操作。
+        entries: Vec<PreparedExternalProjectBinding>,
+    },
+}
+
+/// One validated native binding operation.
+/// 单个已经通过校验的原生绑定操作。
+struct PreparedNativeProjectBinding {
+    /// Stable VulcanCode project tag receiving the binding.
+    /// 接收绑定的稳定 VulcanCode 项目标签。
+    vulcan_project_id: String,
+    /// Exact native operation selected by the user.
+    /// 用户选择的准确原生操作。
+    action: PreparedNativeProjectBindingAction,
+}
+
+/// Exact action for one validated native binding operation.
+/// 单个已校验原生绑定操作的准确动作。
+enum PreparedNativeProjectBindingAction {
+    /// Bind to one existing native VMM project identity.
+    /// 绑定到一个已有原生 VMM 项目身份。
+    BindExisting(u64),
+    /// Create one native VMM project with the supplied display name and bind it.
+    /// 使用给定显示名称创建一个原生 VMM 项目并绑定。
+    CreateAndBind(String),
+}
+
+/// One validated external binding operation.
+/// 单个已经通过校验的外置绑定操作。
+struct PreparedExternalProjectBinding {
+    /// Stable VulcanCode project tag receiving the binding.
+    /// 接收绑定的稳定 VulcanCode 项目标签。
+    vulcan_project_id: String,
+    /// Exact project configuration path that persists the remote project identity.
+    /// 持久化远端项目身份的准确项目配置路径。
+    project_config_path: String,
+    /// Exact external operation selected by the user.
+    /// 用户选择的准确外置操作。
+    action: PreparedExternalProjectBindingAction,
+}
+
+/// Exact action for one validated external binding operation.
+/// 单个已校验外置绑定操作的准确动作。
+#[derive(Debug, PartialEq, Eq)]
+enum PreparedExternalProjectBindingAction {
+    /// Bind to one existing remote VMM project identity.
+    /// 绑定到一个已有远端 VMM 项目身份。
+    BindExisting(u64),
+    /// Ensure one canonical remote project path and bind its returned identity.
+    /// 确保一个规范远端项目路径存在并绑定其返回身份。
+    CreateAndBind(String),
+}
+
 /// Saves one VMM memory configuration draft.
 /// 保存单个 VMM 记忆配置草稿。
 ///
@@ -16,15 +92,12 @@ use crate::{mutate_project_configuration, mutate_provider_configuration};
 ///
 /// # Returns
 /// 返回值
-/// `Ok(())` after the configuration file and hook snapshot have been updated.
-/// 配置文件与 hook 快照更新完成后返回 `Ok(())`。
+/// `Ok(None)` after a complete save, or `Ok(Some(message))` when global enablement succeeded but individual bindings failed.
+/// 完整保存后返回 `Ok(None)`；全局启用成功但个别绑定失败时返回 `Ok(Some(message))`。
 pub(crate) async fn save_vmm_memory_config(
     state: &SharedServiceBridgeState,
     mut request: VmmConfigSaveRequest,
-) -> Result<(), String> {
-    if request.draft.enabled {
-        validate_vmm_required_inference(state)?;
-    }
+) -> Result<Option<String>, String> {
     let scope = request.scope.trim().to_ascii_lowercase();
     if scope == "project" {
         if !request.binding_plan.is_empty() {
@@ -51,7 +124,8 @@ pub(crate) async fn save_vmm_memory_config(
                 )
             },
         )
-        .await;
+        .await
+        .map(|()| None);
     }
     if scope != "global" {
         return Err(format!("不支持的 VMM 配置作用域：{scope}"));
@@ -72,10 +146,33 @@ pub(crate) async fn save_vmm_memory_config(
             .unwrap_or_default();
     }
     let next_layer = vmm_config_layer_from_draft(&request.draft, true)?;
-    apply_project_binding_plan(state, &next_layer, &request.binding_plan).await?;
+    let current_effective =
+        vulcan_vmm::VmmEffectiveConfig::resolve(&current_configuration.vmm, None, None);
+    let next_effective = vulcan_vmm::VmmEffectiveConfig::resolve(&next_layer, None, None);
+    if next_effective.enabled && next_effective.backend_mode == vulcan_vmm::VmmBackendMode::Native {
+        let maintenance = state
+            .lock()
+            .map_err(|error| format!("锁定原生 VMM 推理预检状态失败：{error}"))?
+            .native_vmm_maintenance
+            .clone()
+            .ok_or_else(|| String::from("原生 VMM 运行时尚未就绪。"))?;
+        maintenance.validate_host_ai().await?;
+    }
+    // Binding reconciliation is mandatory only when a backend becomes active or the caller
+    // explicitly submits a retry plan. Ordinary edits on the same active backend must remain
+    // possible after an earlier per-project binding failure.
+    // 仅在后端开始生效或调用方明确提交重试计划时强制绑定对账；同一活动后端的普通编辑在此前个别绑定失败后仍必须可保存。
+    let prepared_binding_plan = if should_prepare_project_binding_plan(
+        &current_effective,
+        &next_effective,
+        !request.binding_plan.is_empty(),
+    ) {
+        prepare_project_binding_plan(state, &next_layer, &request.binding_plan).await?
+    } else {
+        PreparedProjectBindingPlan::None
+    };
     // A saved global transport may point at a different endpoint, so no previous probe remains authoritative.
     // 保存后的全局传输可能指向其他端点，因此此前的探测结果不再具备权威性。
-    clear_external_vmm_health_probe();
     mutate_provider_configuration(
         state,
         "保存 VMM 全局配置失败",
@@ -86,55 +183,52 @@ pub(crate) async fn save_vmm_memory_config(
         refresh_guard_vmm_hook_snapshot,
     )
     .await??;
-    let provider_configuration = provider_configuration_from_state(state)?;
-    let ai_configuration = vulcan_provider_config::config::load_public_ai_connections_file()
-        .map_err(|error| format!("重新加载 VMM 内部推理配置失败：{error}"))?
-        .configuration;
-    let mut runtime_logs = Vec::new();
-    crate::service_bootstrap::reconcile_managed_memory_mesh_runtime(
-        state,
-        &ai_configuration,
-        &provider_configuration.vmm,
-        &mut runtime_logs,
-    )
-    .await;
-    for message in runtime_logs {
-        eprintln!("{message}");
-    }
-    Ok(())
+    clear_external_vmm_health_probe();
+    Ok(execute_prepared_project_binding_plan(state, prepared_binding_plan).await)
 }
 
-/// Validates and applies every explicit unbound-project decision before native VMM is enabled.
-/// 在启用原生 VMM 前校验并应用每项明确的未绑定项目决定。
-async fn apply_project_binding_plan(
+/// Decides whether one global save must validate and reconcile every unbound project.
+/// 判断一次全局保存是否必须校验并对账全部未绑定项目。
+fn should_prepare_project_binding_plan(
+    current: &vulcan_vmm::VmmEffectiveConfig,
+    next: &vulcan_vmm::VmmEffectiveConfig,
+    has_explicit_plan: bool,
+) -> bool {
+    has_explicit_plan
+        || (next.enabled && (!current.enabled || current.backend_mode != next.backend_mode))
+}
+
+/// Validates every explicit unbound-project decision without mutating project bindings.
+/// 在不修改项目绑定的前提下校验每项明确的未绑定项目决定。
+async fn prepare_project_binding_plan(
     state: &SharedServiceBridgeState,
     next_layer: &vulcan_vmm::VmmConfigLayer,
     plan: &[vulcan_service_api::VmmProjectBindingPlanEntry],
-) -> Result<(), String> {
+) -> Result<PreparedProjectBindingPlan, String> {
     let effective = vulcan_vmm::VmmEffectiveConfig::resolve(next_layer, None, None);
     if !effective.enabled {
         if !plan.is_empty() {
             return Err(String::from("VMM 禁用时不允许提交项目绑定计划。"));
         }
-        return Ok(());
+        return Ok(PreparedProjectBindingPlan::None);
     }
     match effective.backend_mode {
         vulcan_vmm::VmmBackendMode::Native => {
-            apply_native_project_binding_plan(state, &effective, plan).await
+            prepare_native_project_binding_plan(state, &effective, plan).await
         }
         vulcan_vmm::VmmBackendMode::ExternalGrpc => {
-            apply_external_project_binding_plan(state, next_layer, &effective, plan).await
+            prepare_external_project_binding_plan(state, next_layer, &effective, plan).await
         }
     }
 }
 
-/// Validates and applies enable-time bindings for the native backend.
-/// 校验并应用原生后端启用时的项目绑定。
-async fn apply_native_project_binding_plan(
+/// Validates and prepares enable-time bindings for the native backend.
+/// 校验并准备原生后端启用时的项目绑定。
+async fn prepare_native_project_binding_plan(
     state: &SharedServiceBridgeState,
     effective: &vulcan_vmm::VmmEffectiveConfig,
     plan: &[vulcan_service_api::VmmProjectBindingPlanEntry],
-) -> Result<(), String> {
+) -> Result<PreparedProjectBindingPlan, String> {
     let (maintenance, workspace) = {
         let guard = state
             .lock()
@@ -196,8 +290,11 @@ async fn apply_native_project_binding_plan(
             expected_ids.join(", ")
         ));
     }
+    // prepared_entries captures only exact validated actions, so execution never reparses user input.
+    // prepared_entries 只保存准确且已校验的动作，因此执行阶段不会重新解析用户输入。
+    let mut prepared_entries = Vec::with_capacity(plan.len());
     for entry in plan {
-        match entry.action.trim() {
+        let action = match entry.action.trim() {
             "bind_existing" => {
                 let project_id = entry
                     .target_project_id
@@ -218,6 +315,7 @@ async fn apply_native_project_binding_plan(
                         entry.vulcan_project_id, project_id
                     ));
                 }
+                PreparedNativeProjectBindingAction::BindExisting(project_id)
             }
             "create_and_bind" => {
                 let name = entry
@@ -234,6 +332,7 @@ async fn apply_native_project_binding_plan(
                         entry.vulcan_project_id
                     ));
                 }
+                PreparedNativeProjectBindingAction::CreateAndBind(name.to_string())
             }
             action => {
                 return Err(format!(
@@ -241,43 +340,26 @@ async fn apply_native_project_binding_plan(
                     entry.vulcan_project_id
                 ));
             }
-        }
+        };
+        prepared_entries.push(PreparedNativeProjectBinding {
+            vulcan_project_id: entry.vulcan_project_id.clone(),
+            action,
+        });
     }
-    for entry in plan {
-        match entry.action.trim() {
-            "bind_existing" => {
-                let project_id = entry
-                    .target_project_id
-                    .ok_or_else(|| String::from("已校验的原生 VMM 绑定目标意外缺失"))?;
-                maintenance
-                    .bind_existing_project(&entry.vulcan_project_id, project_id)
-                    .await?;
-            }
-            "create_and_bind" => {
-                let name = entry
-                    .project_name
-                    .as_deref()
-                    .ok_or_else(|| String::from("已校验的原生 VMM 项目名称意外缺失"))?;
-                maintenance
-                    .create_and_bind_project(&entry.vulcan_project_id, name)
-                    .await?;
-            }
-            action => {
-                return Err(format!("已校验的原生 VMM 绑定动作意外变化为 `{action}`。"));
-            }
-        }
-    }
-    Ok(())
+    Ok(PreparedProjectBindingPlan::Native {
+        maintenance,
+        entries: prepared_entries,
+    })
 }
 
-/// Validates and applies enable-time bindings for the external gRPC backend.
-/// 校验并应用外置 gRPC 后端启用时的项目绑定。
-async fn apply_external_project_binding_plan(
+/// Validates and prepares enable-time bindings for the external gRPC backend.
+/// 校验并准备外置 gRPC 后端启用时的项目绑定。
+async fn prepare_external_project_binding_plan(
     state: &SharedServiceBridgeState,
     next_layer: &vulcan_vmm::VmmConfigLayer,
     effective: &vulcan_vmm::VmmEffectiveConfig,
     plan: &[vulcan_service_api::VmmProjectBindingPlanEntry],
-) -> Result<(), String> {
+) -> Result<PreparedProjectBindingPlan, String> {
     if effective.user_id.filter(|user_id| *user_id > 0).is_none() {
         return Err(String::from("启用外置 VMM 前必须选择有效用户。"));
     }
@@ -289,11 +371,6 @@ async fn apply_external_project_binding_plan(
         .ok_or_else(|| String::from("工作区项目列表尚未就绪。"))?;
     let remote_projects = load_external_vmm_projects(next_layer.clone()).await?;
     if effective.external_project_binding_mode == vulcan_vmm::VmmNativeProjectBindingMode::Fixed {
-        if !plan.is_empty() {
-            return Err(String::from(
-                "外置固定项目策略通过全局项目 ID 继承，不接受逐项目绑定计划。",
-            ));
-        }
         let project_id = effective
             .project_id
             .filter(|project_id| *project_id > 0)
@@ -304,7 +381,6 @@ async fn apply_external_project_binding_plan(
         {
             return Err(format!("外置 VMM 固定项目 {project_id} 不存在。"));
         }
-        return Ok(());
     }
     let unbound_projects = workspace
         .task_projects
@@ -313,66 +389,162 @@ async fn apply_external_project_binding_plan(
         .map(|project| (project.id.clone(), project.path.clone()))
         .collect::<std::collections::BTreeMap<_, _>>();
     let decisions = validate_binding_plan_coverage(&unbound_projects, plan, "外置 VMM")?;
+    // prepared_entries owns exact paths and actions so later failures are isolated per project.
+    // prepared_entries 持有准确路径与动作，使后续失败可以按项目隔离。
+    let mut prepared_entries = Vec::with_capacity(decisions.len());
     for entry in decisions.values() {
-        match entry.action.trim() {
-            "bind_existing" => {
-                let project_id = entry
-                    .target_project_id
-                    .filter(|project_id| *project_id > 0)
-                    .ok_or_else(|| {
-                        format!(
-                            "项目 `{}` 缺少待绑定的已有外置 VMM 项目。",
-                            entry.vulcan_project_id
-                        )
-                    })?;
-                if !remote_projects
-                    .iter()
-                    .any(|project| project.project_id == project_id)
-                {
-                    return Err(format!(
-                        "项目 `{}` 选择的外置 VMM 项目 {} 不存在。",
-                        entry.vulcan_project_id, project_id
-                    ));
-                }
-            }
-            "create_and_bind" => {
-                validate_external_project_leaf(entry)?;
-            }
-            action => {
-                return Err(format!(
-                    "项目 `{}` 使用了不支持的外置 VMM 绑定动作 `{action}`。",
-                    entry.vulcan_project_id
-                ));
-            }
-        }
-    }
-    for entry in decisions.values() {
+        // The global fixed project is the default for unedited rows, not a restriction on an
+        // explicit per-project choice made in the enablement dialog.
+        // 全局固定项目只是未编辑行的默认值，不限制用户在启用对话框中作出的逐项目明确选择。
+        let action = prepare_external_project_binding_action(effective, &remote_projects, entry)?;
         let project_config_path = unbound_projects
             .get(&entry.vulcan_project_id)
             .ok_or_else(|| String::from("已校验的外置 VMM 项目路径意外缺失"))?;
-        let remote_project_id = match entry.action.trim() {
-            "bind_existing" => entry
-                .target_project_id
-                .ok_or_else(|| String::from("已校验的外置 VMM 绑定目标意外缺失"))?,
-            "create_and_bind" => {
-                let project_name = entry
-                    .project_name
-                    .as_deref()
-                    .ok_or_else(|| String::from("已校验的外置 VMM 项目名称意外缺失"))?;
-                ensure_external_vmm_project(
-                    next_layer.clone(),
-                    format!("{}/{}", effective.external_project_prefix, project_name),
-                )
-                .await?
-                .project_id
-            }
-            action => {
-                return Err(format!("已校验的外置 VMM 绑定动作意外变化为 `{action}`。"));
-            }
-        };
-        persist_external_project_id(state, project_config_path, remote_project_id).await?;
+        prepared_entries.push(PreparedExternalProjectBinding {
+            vulcan_project_id: entry.vulcan_project_id.clone(),
+            project_config_path: project_config_path.clone(),
+            action,
+        });
     }
-    Ok(())
+    Ok(PreparedProjectBindingPlan::External {
+        layer: next_layer.clone(),
+        entries: prepared_entries,
+    })
+}
+
+/// Resolves one explicit external row decision without treating the global default as a lock.
+/// 解析一条明确的外置逐行决定，且不把全局默认值当作强制锁定。
+///
+/// # Parameters
+/// 参数
+/// `effective` supplies the automatic-create Team/Space prefix.
+/// `effective` 提供自动创建所用的 Team/Space 前缀。
+/// `remote_projects` is the authoritative remote catalog used to validate stable IDs.
+/// `remote_projects` 是校验稳定 ID 使用的权威远端目录。
+/// `entry` is the exact user-confirmed row decision.
+/// `entry` 是用户确认的准确逐行决定。
+///
+/// # Returns
+/// 返回值
+/// Returns a prepared bind-existing or create-and-bind action, or an explicit validation error.
+/// 返回已准备的绑定已有或创建并绑定动作；校验失败时返回明确错误。
+fn prepare_external_project_binding_action(
+    effective: &vulcan_vmm::VmmEffectiveConfig,
+    remote_projects: &[vulcan_vmm::ProjectEntry],
+    entry: &vulcan_service_api::VmmProjectBindingPlanEntry,
+) -> Result<PreparedExternalProjectBindingAction, String> {
+    match entry.action.trim() {
+        "bind_existing" => {
+            let project_id = entry
+                .target_project_id
+                .filter(|project_id| *project_id > 0)
+                .ok_or_else(|| {
+                    format!(
+                        "项目 `{}` 缺少待绑定的已有外置 VMM 项目。",
+                        entry.vulcan_project_id
+                    )
+                })?;
+            if !remote_projects
+                .iter()
+                .any(|project| project.project_id == project_id)
+            {
+                return Err(format!(
+                    "项目 `{}` 选择的外置 VMM 项目 {} 不存在。",
+                    entry.vulcan_project_id, project_id
+                ));
+            }
+            Ok(PreparedExternalProjectBindingAction::BindExisting(
+                project_id,
+            ))
+        }
+        "create_and_bind" => {
+            validate_external_project_leaf(entry)?;
+            let project_name = entry
+                .project_name
+                .as_deref()
+                .ok_or_else(|| String::from("已校验的外置 VMM 项目名称意外缺失"))?;
+            Ok(PreparedExternalProjectBindingAction::CreateAndBind(
+                format!("{}/{}", effective.external_project_prefix, project_name),
+            ))
+        }
+        action => Err(format!(
+            "项目 `{}` 使用了不支持的外置 VMM 绑定动作 `{action}`。",
+            entry.vulcan_project_id
+        )),
+    }
+}
+
+/// Executes a validated binding plan and returns one aggregated user-facing failure message.
+/// 执行已校验的绑定计划，并返回一条汇总后的用户可见失败消息。
+async fn execute_prepared_project_binding_plan(
+    state: &SharedServiceBridgeState,
+    prepared: PreparedProjectBindingPlan,
+) -> Option<String> {
+    // failures retains every project failure so one unavailable target cannot block unrelated bindings.
+    // failures 保留每个项目失败，使一个不可用目标不会阻断其他绑定。
+    let mut failures = Vec::new();
+    match prepared {
+        PreparedProjectBindingPlan::None => return None,
+        PreparedProjectBindingPlan::Native {
+            maintenance,
+            entries,
+        } => {
+            for entry in entries {
+                let result = match entry.action {
+                    PreparedNativeProjectBindingAction::BindExisting(project_id) => maintenance
+                        .bind_existing_project_if_unbound(&entry.vulcan_project_id, project_id)
+                        .await
+                        .map(|_| ()),
+                    PreparedNativeProjectBindingAction::CreateAndBind(project_name) => maintenance
+                        .create_and_bind_project_if_unbound(&entry.vulcan_project_id, &project_name)
+                        .await
+                        .map(|_| ()),
+                };
+                if let Err(error) = result {
+                    failures.push(format!("项目 `{}`：{error}", entry.vulcan_project_id));
+                }
+            }
+        }
+        PreparedProjectBindingPlan::External { layer, entries } => {
+            for entry in entries {
+                let remote_project_id = match entry.action {
+                    PreparedExternalProjectBindingAction::BindExisting(project_id) => {
+                        Ok(project_id)
+                    }
+                    PreparedExternalProjectBindingAction::CreateAndBind(project_path) => {
+                        ensure_external_vmm_project(layer.clone(), project_path)
+                            .await
+                            .map(|project| project.project_id)
+                    }
+                };
+                let result = match remote_project_id {
+                    Ok(project_id) => persist_external_project_id_if_unbound(
+                        state,
+                        &entry.project_config_path,
+                        project_id,
+                    )
+                    .await
+                    .map(|_| ()),
+                    Err(error) => Err(error),
+                };
+                if let Err(error) = result {
+                    failures.push(format!("项目 `{}`：{error}", entry.vulcan_project_id));
+                }
+            }
+        }
+    }
+    format_project_binding_failures(&failures)
+}
+
+/// Formats per-project binding failures after global enablement has already succeeded.
+/// 在全局启用已经成功后格式化逐项目绑定失败。
+fn format_project_binding_failures(failures: &[String]) -> Option<String> {
+    (!failures.is_empty()).then(|| {
+        format!(
+            "VMM 已启用，但以下项目绑定失败；其他项目的成功绑定已保留，可在项目设置中重新绑定：{}",
+            failures.join("；")
+        )
+    })
 }
 
 /// Validates that one binding plan exactly covers the supplied unbound project ids.
@@ -484,74 +656,62 @@ async fn ensure_external_vmm_project(
     }
 }
 
-/// Persists one external project id in the exact VulcanCode project layer.
-/// 将一个外置项目标识持久化到准确的 VulcanCode 项目层。
-async fn persist_external_project_id(
+/// Persists an automatic external binding only when the project has no stable remote identity.
+/// 仅当项目没有稳定远端身份时持久化自动外置绑定。
+///
+/// # Parameters
+/// `state` owns the project-layer cache and exact hook projection.
+/// `state` 持有项目层缓存与准确 hook 投影。
+/// `project_path` is the authoritative VulcanCode workspace path.
+/// `project_path` 是权威 VulcanCode 工作区路径。
+/// `remote_project_id` is the default remote project selected or created by automatic setup.
+/// `remote_project_id` 是自动配置选择或创建的默认远端项目。
+///
+/// # Returns
+/// Returns the effective durable project id; a concurrent explicit binding always wins.
+/// 返回最终耐久项目 ID；并发完成的显式绑定始终优先。
+pub(super) async fn persist_external_project_id_if_unbound(
     state: &SharedServiceBridgeState,
     project_path: &str,
     remote_project_id: u64,
-) -> Result<(), String> {
-    let project_path = project_path.to_owned();
+) -> Result<u64, String> {
+    if remote_project_id == 0 {
+        return Err(String::from("外置 VMM 项目 ID 必须是正整数。"));
+    }
+    let project_config_path = project_path.to_string();
     mutate_project_configuration(
-        &PathBuf::from(&project_path),
-        "保存外置 VMM 项目 ID 绑定失败",
+        &PathBuf::from(&project_config_path),
+        "保存外置 VMM 自动项目 ID 绑定失败",
         |project_configuration| {
-            project_configuration.vmm.project_id = Some(remote_project_id);
+            if project_configuration
+                .vmm
+                .project_id
+                .filter(|project_id| *project_id > 0)
+                .is_none()
+            {
+                project_configuration.vmm.project_id = Some(remote_project_id);
+            }
             Ok(())
         },
         |project_configuration| {
-            update_cached_project_vmm_layer(&project_path, project_configuration.vmm.clone());
+            let project_id = project_configuration
+                .vmm
+                .project_id
+                .filter(|project_id| *project_id > 0)
+                .ok_or_else(|| String::from("外置 VMM 自动绑定提交后缺少有效项目 ID。"))?;
+            update_cached_project_vmm_layer(
+                &project_config_path,
+                project_configuration.vmm.clone(),
+            );
             refresh_exact_vmm_hook_project_projection(
                 state,
-                &project_path,
+                &project_config_path,
                 &project_configuration.vmm,
-            )
+            )?;
+            Ok(project_id)
         },
     )
     .await
-}
-
-/// Validates the exact embedding and foundational LLM routes before any VMM layer is enabled.
-/// 在启用任何 VMM 配置层前校验精确向量路由与基础 LLM 路由。
-///
-/// # Parameters
-/// 参数
-/// `state` is the shared service state that owns the current process-local model catalogs.
-/// `state` 是持有当前进程内模型目录的共享服务状态。
-///
-/// # Returns
-/// 返回值
-/// `Ok(())` when VMM inference prerequisites are complete; otherwise an actionable error.
-/// VMM 推理前置条件完整时返回 `Ok(())`，否则返回可操作错误。
-fn validate_vmm_required_inference(state: &SharedServiceBridgeState) -> Result<(), String> {
-    let ai_configuration = vulcan_provider_config::config::load_public_ai_connections_file()
-        .map_err(|error| format!("加载 VMM 内部推理配置失败：{error}"))?
-        .configuration;
-    {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("读取 VMM 推理依赖失败：{error}"))?;
-        let runtime = guard
-            .agent_runtime
-            .as_ref()
-            .ok_or_else(|| String::from("公共 AI Runtime 尚未发布。"))?;
-        crate::configured_inference::validate_vmm_required_inference_routes(
-            &runtime.public_ai_runtime,
-            &ai_configuration,
-        )?;
-        let optional_inference_routes =
-            crate::configured_inference::inspect_vmm_optional_inference_routes(
-                &runtime.public_ai_runtime,
-                &ai_configuration,
-            );
-        let catalogs = runtime.public_ai_runtime.catalog_snapshot()?;
-        crate::managed_memory_mesh_runtime::configured_vmm_capability_preflight(
-            &ai_configuration,
-            &catalogs,
-            &optional_inference_routes,
-        )?;
-    }
-    Ok(())
 }
 
 /// Loads one persisted project VMM layer and resolves its effective editable fallback.
@@ -594,23 +754,6 @@ pub(crate) fn vmm_config_layer_from_draft(
     draft: &VmmConfigDraftSummary,
     include_transport: bool,
 ) -> Result<vulcan_vmm::VmmConfigLayer, String> {
-    let managed_runtime_settings = include_transport
-        .then(|| vmm_managed_runtime_settings_from_draft(&draft.managed_runtime_settings))
-        .transpose()?;
-    if let (Some(settings), Some(receive_timeout_ms)) = (
-        managed_runtime_settings.as_ref(),
-        include_transport
-            .then(|| vmm_parse_optional_u64(&draft.receive_timeout_ms, "VMM 请求超时"))
-            .transpose()?
-            .flatten(),
-    ) {
-        let (_, intent_timeout_nanos) =
-            vmm_positive_go_duration_value(&settings.precheck_intent_timeout, "PreCheck 意图超时")?;
-        let request_timeout_nanos = receive_timeout_ms as f64 * 1_000_000.0;
-        if request_timeout_nanos <= intent_timeout_nanos {
-            return Err(String::from("VMM 请求超时必须严格大于 PreCheck 意图超时。"));
-        }
-    }
     let layer = vulcan_vmm::VmmConfigLayer {
         backend_mode: include_transport
             .then(|| vmm_backend_mode_from_draft(&draft.backend_mode))
@@ -702,18 +845,6 @@ pub(crate) fn vmm_config_layer_from_draft(
         ai_tools_enabled: Some(draft.ai_tools_enabled),
         injection_tag: vmm_non_empty_text(&draft.injection_tag),
         injection_description: vmm_non_empty_text(&draft.injection_description),
-        install: if include_transport {
-            Some(vulcan_vmm::VmmInstallReservation {
-                managed_install_enabled: draft.managed_install_enabled,
-                managed_binary_path: vmm_non_empty_text(&draft.managed_binary_path),
-                auto_start_policy: Some(draft.auto_start_policy.trim().to_string())
-                    .filter(|value| !value.is_empty()),
-                runtime_settings: managed_runtime_settings
-                    .ok_or_else(|| String::from("保存托管 VMM 配置时缺少运行时行为设置。"))?,
-            })
-        } else {
-            None
-        },
     };
     validate_external_management_layer(&layer)?;
     Ok(layer)
@@ -799,386 +930,6 @@ fn validate_external_management_layer(layer: &vulcan_vmm::VmmConfigLayer) -> Res
         ));
     }
     Ok(())
-}
-
-/// Converts and validates the complete host-authoritative managed VMM behavior draft.
-/// 转换并校验完整的宿主权威托管 VMM 行为草稿。
-///
-/// # Parameters
-/// 参数
-/// `draft` is the editable settings received from the WebUI.
-/// `draft` 是从 WebUI 收到的可编辑设置。
-///
-/// # Returns
-/// 返回值
-/// Returns one strongly typed settings object only when every value follows the exact VMM contract.
-/// 仅当每个值都符合准确的 VMM 契约时返回强类型设置对象。
-fn vmm_managed_runtime_settings_from_draft(
-    draft: &vulcan_service_api::VmmManagedRuntimeSettingsDraft,
-) -> Result<vulcan_vmm::VmmManagedRuntimeSettings, String> {
-    let precheck_search_scope = vmm_required_choice(
-        &draft.precheck_search_scope,
-        "PreCheck 检索范围",
-        &["team", "space", "project"],
-    )?;
-    let postaction_input_mode = vmm_required_choice(
-        &draft.postaction_input_mode,
-        "PostAction 输入模式",
-        &["strict", "compat"],
-    )?;
-    let retention_priority_floor = vmm_required_choice_case_insensitive(
-        &draft.retention_priority_floor,
-        "保留策略优先级下限",
-        &["P0", "P1", "P2"],
-    )?;
-    let retention_memory_level_floor = vmm_required_choice(
-        &draft.retention_memory_level_floor,
-        "保留策略记忆级别下限",
-        &["session", "phase", "stable", "persistent"],
-    )?;
-    let precheck_intent_timeout =
-        vmm_positive_go_duration(&draft.precheck_intent_timeout, "PreCheck 意图超时")?;
-    let postaction_idle_timeout =
-        vmm_positive_go_duration(&draft.postaction_idle_timeout, "PostAction 空闲超时")?;
-    let (postaction_analysis_timeout, postaction_analysis_timeout_nanos) =
-        vmm_positive_go_duration_value(
-            &draft.postaction_analysis_timeout,
-            "PostAction 后台分析超时",
-        )?;
-    const TWO_MINUTES_NANOS: f64 = 2.0 * 60.0 * 1_000_000_000.0;
-    if postaction_analysis_timeout_nanos < TWO_MINUTES_NANOS {
-        return Err(String::from("PostAction 后台分析超时必须大于或等于 2m。"));
-    }
-    let retention_scan_interval =
-        vmm_positive_go_duration(&draft.retention_scan_interval, "保留扫描间隔")?;
-    let (retention_session_idle_after, retention_session_idle_nanos) =
-        vmm_positive_go_duration_value(&draft.retention_session_idle_after, "会话空闲回收时长")?;
-    let retention_trash_duration =
-        vmm_positive_go_duration(&draft.retention_trash_duration, "回收站保留时长")?;
-    const THREE_HUNDRED_SIXTY_HOURS_NANOS: f64 = 360.0 * 60.0 * 60.0 * 1_000_000_000.0;
-    if retention_session_idle_nanos < THREE_HUNDRED_SIXTY_HOURS_NANOS {
-        return Err(String::from("会话空闲回收时长必须大于或等于 360h。"));
-    }
-
-    Ok(vulcan_vmm::VmmManagedRuntimeSettings {
-        pii_default_language: vmm_required_text(&draft.pii_default_language, "PII 规则语言")?,
-        noise_enabled: draft.noise_enabled,
-        noise_default_language: vmm_required_text(&draft.noise_default_language, "噪声规则语言")?,
-        noise_semantic_enabled: draft.noise_semantic_enabled,
-        noise_semantic_threshold: vmm_required_f64_inclusive(
-            &draft.noise_semantic_threshold,
-            "噪声语义阈值",
-            0.0,
-            1.0,
-        )?,
-        prompt_language: vmm_required_text(&draft.prompt_language, "提示词包语言")?,
-        precheck_intent_timeout,
-        precheck_top_k: vmm_required_u32(&draft.precheck_top_k, "PreCheck 召回数量", 1, u32::MAX)?,
-        precheck_search_scope,
-        precheck_similarity_threshold: vmm_required_f64_inclusive(
-            &draft.precheck_similarity_threshold,
-            "PreCheck 相似度阈值",
-            0.0,
-            1.0,
-        )?,
-        postaction_input_mode,
-        postaction_turn_threshold: vmm_required_u32(
-            &draft.postaction_turn_threshold,
-            "PostAction 轮次阈值",
-            1,
-            u32::MAX,
-        )?,
-        postaction_token_threshold: vmm_required_u32(
-            &draft.postaction_token_threshold,
-            "PostAction Token 阈值",
-            1,
-            u32::MAX,
-        )?,
-        postaction_idle_timeout,
-        postaction_history_turns: vmm_required_u32(
-            &draft.postaction_history_turns,
-            "PostAction 历史轮数",
-            1,
-            u32::MAX,
-        )?,
-        postaction_max_input_tokens: vmm_required_u32(
-            &draft.postaction_max_input_tokens,
-            "PostAction 最大输入 Token",
-            1,
-            u32::MAX,
-        )?,
-        postaction_analysis_timeout,
-        postaction_failure_pass_threshold: vmm_required_u32(
-            &draft.postaction_failure_pass_threshold,
-            "PostAction 连续失败 Pass 阈值",
-            1,
-            u32::MAX,
-        )?,
-        postaction_max_queue_workers: vmm_required_u32(
-            &draft.postaction_max_queue_workers,
-            "PostAction 队列工作数",
-            1,
-            64,
-        )?,
-        inference_max_connections_per_host: vmm_required_u32(
-            &draft.inference_max_connections_per_host,
-            "推理主机最大连接数",
-            1,
-            64,
-        )?,
-        pipeline_max_search_keywords: vmm_required_u32(
-            &draft.pipeline_max_search_keywords,
-            "最大召回关键词数量",
-            1,
-            10,
-        )?,
-        pipeline_min_similarity_score: vmm_required_f64_inclusive(
-            &draft.pipeline_min_similarity_score,
-            "最小召回相似度",
-            0.0,
-            1.0,
-        )?,
-        pipeline_replace_min_similarity_score: vmm_required_f64_inclusive(
-            &draft.pipeline_replace_min_similarity_score,
-            "最小替换相似度",
-            0.0,
-            1.0,
-        )?,
-        pipeline_hard_dedupe_threshold: vmm_required_f64_inclusive(
-            &draft.pipeline_hard_dedupe_threshold,
-            "硬去重阈值",
-            0.0,
-            1.0,
-        )?,
-        pipeline_hard_dedupe_pool_top_k: vmm_required_u32(
-            &draft.pipeline_hard_dedupe_pool_top_k,
-            "硬去重候选数量",
-            1,
-            u32::MAX,
-        )?,
-        pipeline_hybrid_enabled: draft.pipeline_hybrid_enabled,
-        pipeline_lexical_top_k: vmm_required_u32(
-            &draft.pipeline_lexical_top_k,
-            "词法召回数量",
-            1,
-            u32::MAX,
-        )?,
-        pipeline_rrf_k: vmm_required_u32(&draft.pipeline_rrf_k, "倒数排名融合常量", 1, u32::MAX)?,
-        pipeline_mmr_enabled: draft.pipeline_mmr_enabled,
-        pipeline_mmr_lambda: vmm_required_f64_exclusive_inclusive(
-            &draft.pipeline_mmr_lambda,
-            "多样性平衡系数",
-            0.0,
-            1.0,
-        )?,
-        pipeline_weibull_enabled: draft.pipeline_weibull_enabled,
-        pipeline_weibull_shape: vmm_required_positive_f64(
-            &draft.pipeline_weibull_shape,
-            "Weibull 形状参数",
-        )?,
-        pipeline_weibull_scale_hours: vmm_required_positive_f64(
-            &draft.pipeline_weibull_scale_hours,
-            "Weibull 小时尺度",
-        )?,
-        pipeline_weibull_min_multiplier: vmm_required_f64_inclusive(
-            &draft.pipeline_weibull_min_multiplier,
-            "最小衰减倍率",
-            0.0,
-            1.0,
-        )?,
-        pipeline_weibull_reinforce_weight: vmm_required_nonnegative_f64(
-            &draft.pipeline_weibull_reinforce_weight,
-            "强化权重",
-        )?,
-        pipeline_weibull_cross_session_boost: vmm_required_nonnegative_f64(
-            &draft.pipeline_weibull_cross_session_boost,
-            "跨会话增强系数",
-        )?,
-        retention_enabled: draft.retention_enabled,
-        retention_scan_interval,
-        retention_turn_keep_extra_turns: vmm_required_u32(
-            &draft.retention_turn_keep_extra_turns,
-            "热窗口额外轮数",
-            0,
-            u32::MAX,
-        )?,
-        retention_session_idle_after,
-        retention_trash_duration,
-        retention_priority_floor,
-        retention_memory_level_floor,
-        retention_skip_protected_shared: draft.retention_skip_protected_shared,
-    })
-}
-
-/// Returns one required trimmed text value.
-/// 返回一个必填且已去除首尾空白的文本值。
-fn vmm_required_text(value: &str, label: &str) -> Result<String, String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return Err(format!("{label}不能为空。"));
-    }
-    Ok(value.to_string())
-}
-
-/// Parses one required unsigned integer inside an inclusive range.
-/// 解析一个处于闭区间内的必填无符号整数。
-fn vmm_required_u32(value: &str, label: &str, min: u32, max: u32) -> Result<u32, String> {
-    let parsed = value
-        .trim()
-        .parse::<u32>()
-        .map_err(|error| format!("{label}必须是有效整数：{error}"))?;
-    if parsed < min || parsed > max {
-        return Err(format!("{label}必须位于 {min} 到 {max} 之间。"));
-    }
-    Ok(parsed)
-}
-
-/// Parses one required finite floating-point number.
-/// 解析一个必填的有限浮点数。
-fn vmm_required_f64(value: &str, label: &str) -> Result<f64, String> {
-    let parsed = value
-        .trim()
-        .parse::<f64>()
-        .map_err(|error| format!("{label}必须是有效数字：{error}"))?;
-    if !parsed.is_finite() {
-        return Err(format!("{label}必须是有限数字。"));
-    }
-    Ok(parsed)
-}
-
-/// Parses one required finite floating-point number inside an inclusive range.
-/// 解析一个处于闭区间内的必填有限浮点数。
-fn vmm_required_f64_inclusive(value: &str, label: &str, min: f64, max: f64) -> Result<f64, String> {
-    let parsed = vmm_required_f64(value, label)?;
-    if parsed < min || parsed > max {
-        return Err(format!("{label}必须位于 {min} 到 {max} 之间。"));
-    }
-    Ok(parsed)
-}
-
-/// Parses one required finite floating-point number inside a left-open, right-closed range.
-/// 解析一个处于左开右闭区间内的必填有限浮点数。
-fn vmm_required_f64_exclusive_inclusive(
-    value: &str,
-    label: &str,
-    min: f64,
-    max: f64,
-) -> Result<f64, String> {
-    let parsed = vmm_required_f64(value, label)?;
-    if parsed <= min || parsed > max {
-        return Err(format!("{label}必须大于 {min} 且小于或等于 {max}。"));
-    }
-    Ok(parsed)
-}
-
-/// Parses one required positive finite floating-point number.
-/// 解析一个必填的正有限浮点数。
-fn vmm_required_positive_f64(value: &str, label: &str) -> Result<f64, String> {
-    let parsed = vmm_required_f64(value, label)?;
-    if parsed <= 0.0 {
-        return Err(format!("{label}必须大于 0。"));
-    }
-    Ok(parsed)
-}
-
-/// Parses one required nonnegative finite floating-point number.
-/// 解析一个必填的非负有限浮点数。
-fn vmm_required_nonnegative_f64(value: &str, label: &str) -> Result<f64, String> {
-    let parsed = vmm_required_f64(value, label)?;
-    if parsed < 0.0 {
-        return Err(format!("{label}必须大于或等于 0。"));
-    }
-    Ok(parsed)
-}
-
-/// Validates one case-sensitive enum token.
-/// 校验一个区分大小写的枚举 token。
-fn vmm_required_choice(value: &str, label: &str, supported: &[&str]) -> Result<String, String> {
-    let value = value.trim();
-    if supported.contains(&value) {
-        return Ok(value.to_string());
-    }
-    Err(format!("{label}仅支持：{}。", supported.join("、")))
-}
-
-/// Validates one case-insensitive enum token and returns its canonical spelling.
-/// 校验一个不区分大小写的枚举 token，并返回其规范拼写。
-fn vmm_required_choice_case_insensitive(
-    value: &str,
-    label: &str,
-    supported: &[&str],
-) -> Result<String, String> {
-    let value = value.trim();
-    supported
-        .iter()
-        .find(|candidate| candidate.eq_ignore_ascii_case(value))
-        .map(|candidate| (*candidate).to_string())
-        .ok_or_else(|| format!("{label}仅支持：{}。", supported.join("、")))
-}
-
-/// Validates one positive Go duration string and returns its normalized text.
-/// 校验一个正的 Go 时长字符串并返回规范文本。
-fn vmm_positive_go_duration(value: &str, label: &str) -> Result<String, String> {
-    vmm_positive_go_duration_value(value, label).map(|(value, _)| value)
-}
-
-/// Validates one positive Go duration string and returns text plus nanoseconds.
-/// 校验一个正的 Go 时长字符串并返回文本与纳秒数。
-fn vmm_positive_go_duration_value(value: &str, label: &str) -> Result<(String, f64), String> {
-    let value = vmm_required_text(value, label)?;
-    let bytes = value.as_bytes();
-    let mut index = 0usize;
-    let mut total_nanos = 0.0f64;
-    while index < bytes.len() {
-        let number_start = index;
-        let mut decimal_seen = false;
-        while index < bytes.len() {
-            match bytes[index] {
-                b'0'..=b'9' => index += 1,
-                b'.' if !decimal_seen => {
-                    decimal_seen = true;
-                    index += 1;
-                }
-                _ => break,
-            }
-        }
-        if number_start == index || bytes[number_start..index] == *b"." {
-            return Err(format!(
-                "{label}必须使用 Go 时长格式，例如 5s、15m 或 360h。"
-            ));
-        }
-        let amount = value[number_start..index]
-            .parse::<f64>()
-            .map_err(|error| format!("{label}包含无效数字：{error}"))?;
-        let remaining = &value[index..];
-        let (unit, multiplier) = if remaining.starts_with("ms") {
-            ("ms", 1_000_000.0)
-        } else if remaining.starts_with("us") {
-            ("us", 1_000.0)
-        } else if remaining.starts_with("µs") {
-            ("µs", 1_000.0)
-        } else if remaining.starts_with("μs") {
-            ("μs", 1_000.0)
-        } else if remaining.starts_with("ns") {
-            ("ns", 1.0)
-        } else if remaining.starts_with('h') {
-            ("h", 3_600_000_000_000.0)
-        } else if remaining.starts_with('m') {
-            ("m", 60_000_000_000.0)
-        } else if remaining.starts_with('s') {
-            ("s", 1_000_000_000.0)
-        } else {
-            return Err(format!(
-                "{label}必须使用 Go 时长单位 ns、us、µs、μs、ms、s、m 或 h。"
-            ));
-        };
-        index += unit.len();
-        total_nanos += amount * multiplier;
-    }
-    if !total_nanos.is_finite() || total_nanos <= 0.0 {
-        return Err(format!("{label}必须大于 0。"));
-    }
-    Ok((value, total_nanos))
 }
 
 /// Converts one WebUI policy mode into an optional persisted layer override.
@@ -1375,4 +1126,139 @@ pub(crate) fn vmm_parse_optional_usize(value: &str, label: &str) -> Result<Optio
         .parse::<usize>()
         .map(Some)
         .map_err(|_| format!("{label} 必须是非负整数。"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds one exact binding-plan entry for validation tests.
+    /// 为校验测试构造一个准确的绑定计划条目。
+    fn binding_entry(vulcan_project_id: &str) -> vulcan_service_api::VmmProjectBindingPlanEntry {
+        vulcan_service_api::VmmProjectBindingPlanEntry {
+            vulcan_project_id: vulcan_project_id.to_string(),
+            action: String::from("bind_existing"),
+            project_name: None,
+            target_project_id: Some(1),
+        }
+    }
+
+    /// Exact coverage validation rejects duplicate project decisions before persistence.
+    /// 准确覆盖校验会在持久化前拒绝重复项目决定。
+    #[test]
+    fn binding_plan_coverage_rejects_duplicate_decisions() {
+        // unbound_projects is the authoritative set that must be covered exactly once.
+        // unbound_projects 是必须且只能覆盖一次的权威未绑定集合。
+        let unbound_projects = std::collections::BTreeMap::from([(
+            String::from("project-a"),
+            String::from("D:/project-a"),
+        )]);
+        // plan deliberately repeats the same stable VulcanCode project tag.
+        // plan 有意重复同一个稳定 VulcanCode 项目标签。
+        let plan = vec![binding_entry("project-a"), binding_entry("project-a")];
+
+        let error = validate_binding_plan_coverage(&unbound_projects, &plan, "测试 VMM")
+            .expect_err("duplicate decisions must fail validation");
+
+        assert!(error.contains("重复包含项目 `project-a`"));
+    }
+
+    /// Failure aggregation keeps all project errors and explains that enablement succeeded.
+    /// 失败汇总会保留全部项目错误，并说明启用状态已经成功。
+    #[test]
+    fn project_binding_failure_message_preserves_every_failure() {
+        // failures models independent per-project failures after global configuration persistence.
+        // failures 模拟全局配置持久化后的独立逐项目失败。
+        let failures = vec![
+            String::from("项目 `project-a`：远端不可用"),
+            String::from("项目 `project-b`：写入失败"),
+        ];
+
+        let message = format_project_binding_failures(&failures)
+            .expect("non-empty failures must produce one message");
+
+        assert!(message.starts_with("VMM 已启用"));
+        assert!(message.contains("项目 `project-a`：远端不可用"));
+        assert!(message.contains("项目 `project-b`：写入失败"));
+        assert!(message.contains("可在项目设置中重新绑定"));
+        assert_eq!(format_project_binding_failures(&[]), None);
+    }
+
+    /// Binding plans are mandatory for activation and backend switches but not ordinary repairs.
+    /// 绑定计划在启用和后端切换时必需，但同一活动后端的普通修正不应被阻断。
+    #[test]
+    fn binding_plan_requirement_distinguishes_activation_from_ordinary_save() {
+        let disabled_native = vulcan_vmm::VmmEffectiveConfig {
+            enabled: false,
+            backend_mode: vulcan_vmm::VmmBackendMode::Native,
+            ..vulcan_vmm::VmmEffectiveConfig::default()
+        };
+        let enabled_native = vulcan_vmm::VmmEffectiveConfig {
+            enabled: true,
+            backend_mode: vulcan_vmm::VmmBackendMode::Native,
+            ..vulcan_vmm::VmmEffectiveConfig::default()
+        };
+        let enabled_external = vulcan_vmm::VmmEffectiveConfig {
+            enabled: true,
+            backend_mode: vulcan_vmm::VmmBackendMode::ExternalGrpc,
+            ..vulcan_vmm::VmmEffectiveConfig::default()
+        };
+
+        assert!(should_prepare_project_binding_plan(
+            &disabled_native,
+            &enabled_native,
+            false
+        ));
+        assert!(should_prepare_project_binding_plan(
+            &enabled_native,
+            &enabled_external,
+            false
+        ));
+        assert!(should_prepare_project_binding_plan(
+            &enabled_native,
+            &enabled_native,
+            true
+        ));
+        assert!(!should_prepare_project_binding_plan(
+            &enabled_native,
+            &enabled_native,
+            false
+        ));
+    }
+
+    /// External fixed mode remains a default and accepts an explicit alternate existing project.
+    /// 外置固定模式仍然只是默认值，并接受明确选择的其他已有项目。
+    #[test]
+    fn external_fixed_mode_preserves_explicit_row_override() {
+        let effective = vulcan_vmm::VmmEffectiveConfig {
+            external_project_binding_mode: vulcan_vmm::VmmNativeProjectBindingMode::Fixed,
+            project_id: Some(7),
+            external_project_prefix: String::from("vulcan/space"),
+            ..vulcan_vmm::VmmEffectiveConfig::default()
+        };
+        let remote_projects = vec![
+            vulcan_vmm::ProjectEntry {
+                project_id: 7,
+                ..vulcan_vmm::ProjectEntry::default()
+            },
+            vulcan_vmm::ProjectEntry {
+                project_id: 42,
+                ..vulcan_vmm::ProjectEntry::default()
+            },
+        ];
+        let entry = vulcan_service_api::VmmProjectBindingPlanEntry {
+            vulcan_project_id: String::from("project-a"),
+            action: String::from("bind_existing"),
+            project_name: None,
+            target_project_id: Some(42),
+        };
+
+        let action = prepare_external_project_binding_action(&effective, &remote_projects, &entry)
+            .expect("an explicit alternate project must remain valid in fixed-default mode");
+
+        assert_eq!(
+            action,
+            PreparedExternalProjectBindingAction::BindExisting(42)
+        );
+    }
 }

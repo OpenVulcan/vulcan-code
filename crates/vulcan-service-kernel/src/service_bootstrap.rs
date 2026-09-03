@@ -3,9 +3,8 @@
 
 use std::{
     collections::BTreeMap,
-    path::PathBuf,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use time::OffsetDateTime;
@@ -946,58 +945,76 @@ fn run_service_bootstrap(
         Arc::new(crate::internal_ai::ConfiguredInferenceHostAiPort::new(
             Arc::clone(&configured_inference_service),
         ));
-    // nativeVmmDataPlane creates the host-owned SQLite/LanceDB split and protected fallback project.
-    // nativeVmmDataPlane 创建宿主持有的 SQLite/LanceDB 分离存储及受保护兜底项目。
-    let native_vmm_data_plane = runtime
-        .block_on(
-            vulcan_workspace_store::vmm_data_plane::bootstrap_vmm_data_plane(&controller_runtime),
-        )
-        .map_err(|error| {
-            ServiceBootstrapError::new(
-                "workspace",
-                "Workspace",
-                format!("原生 VMM 数据平面初始化失败：{error}"),
-            )
-        })?;
-    let native_vmm_runtime = Arc::new(
-        runtime
-            .block_on(crate::native_vmm::NativeVmmCoreRuntime::bootstrap(
+    let global_vmm_effective =
+        vulcan_vmm::VmmEffectiveConfig::resolve(&provider_configuration.vmm, None, None);
+    // nativeVmmBootstrap initializes one independent local backend without making ExternalGrpc
+    // depend on local SQLite, LanceDB, Core recovery, or worker availability.
+    // nativeVmmBootstrap 初始化独立本地后端，不让 ExternalGrpc 依赖本地 SQLite、LanceDB、Core 恢复或工作器可用性。
+    let native_vmm_bootstrap = runtime.block_on(async {
+        // nativeVmmDataPlane creates the host-owned SQLite/LanceDB split and protected fallback project.
+        // nativeVmmDataPlane 创建宿主持有的 SQLite/LanceDB 分离存储及受保护兜底项目。
+        let native_vmm_data_plane =
+            vulcan_workspace_store::vmm_data_plane::bootstrap_vmm_data_plane(&controller_runtime)
+                .await
+                .map_err(|error| format!("原生 VMM 数据平面初始化失败：{error}"))?;
+        let native_vmm_runtime = Arc::new(
+            crate::native_vmm::NativeVmmCoreRuntime::bootstrap(
                 Arc::clone(&internal_ai_port),
                 native_vmm_data_plane.clone(),
-            ))
-            .map_err(|error| {
-                ServiceBootstrapError::new(
-                    "workspace",
-                    "Workspace",
-                    format!("原生 VMM Core 初始化失败：{error}"),
-                )
-            })?,
-    );
-    let native_vmm_maintenance = crate::native_vmm::NativeVmmMaintenance::new(
-        Arc::clone(&native_vmm_runtime),
-        native_vmm_data_plane.clone(),
-    );
-    let native_vmm_client: Arc<dyn vulcan_vmm::VmmClient> =
-        Arc::new(crate::native_vmm::NativeVmmClient::new(
+            )
+            .await
+            .map_err(|error| format!("原生 VMM Core 初始化失败：{error}"))?,
+        );
+        // nativeVmmOperationGate separates concurrent functional reads/writes from exclusive project maintenance.
+        // nativeVmmOperationGate 将并发功能读写与独占项目维护隔离。
+        let native_vmm_operation_gate = Arc::new(tokio::sync::RwLock::new(()));
+        let native_vmm_maintenance = crate::native_vmm::NativeVmmMaintenance::new(
+            Arc::clone(&native_vmm_runtime),
+            native_vmm_data_plane.clone(),
+            Arc::clone(&native_vmm_operation_gate),
+        );
+        if native_vmm_bootstrap_is_required(&global_vmm_effective)
+            && let Err(error) = native_vmm_maintenance.validate_host_ai().await
+        {
+            eprintln!("[webui-service] native VMM Host AI validation failed: {error}");
+        }
+        let native_vmm_client = Arc::new(crate::native_vmm::NativeVmmClient::new(
             Arc::clone(&native_vmm_runtime),
             native_vmm_data_plane,
+            native_vmm_operation_gate,
         ));
-    vmm_hook_runtime
-        .install_native_client(Arc::clone(&native_vmm_client))
-        .map_err(|error| {
-            ServiceBootstrapError::new(
-                "workspace",
-                "Workspace",
-                format!("原生 VMM Hook 客户端安装失败：{error}"),
-            )
-        })?;
-    vulcan_vmm::install_process_native_vmm_client(native_vmm_client).map_err(|error| {
-        ServiceBootstrapError::new(
-            "workspace",
-            "Workspace",
-            format!("原生 VMM 进程客户端安装失败：{error}"),
-        )
-    })?;
+        native_vmm_client
+            .prepare_pending_analysis_worker()
+            .await
+            .map_err(|error| format!("原生 VMM 待分析队列恢复失败：{error}"))?;
+        Ok::<_, String>((native_vmm_maintenance, native_vmm_client))
+    });
+    let native_vmm_maintenance = match native_vmm_bootstrap.and_then(
+        |(native_vmm_maintenance, native_vmm_client)| {
+            let process_native_vmm_client: Arc<dyn vulcan_vmm::VmmClient> =
+                native_vmm_client.clone();
+            vmm_hook_runtime
+                .install_native_client(Arc::clone(&process_native_vmm_client))
+                .map_err(|error| format!("原生 VMM Hook 客户端安装失败：{error}"))?;
+            vulcan_vmm::install_process_native_vmm_client(process_native_vmm_client)
+                .map_err(|error| format!("原生 VMM 进程客户端安装失败：{error}"))?;
+            // The durable worker starts only after every public native client registry accepts it.
+            // 仅在全部公开原生客户端注册表接纳后启动耐久工作器。
+            native_vmm_client.start_pending_analysis_worker(runtime.handle());
+            Ok(native_vmm_maintenance)
+        },
+    ) {
+        Ok(maintenance) => Some(maintenance),
+        Err(error) if !native_vmm_bootstrap_is_required(&global_vmm_effective) => {
+            eprintln!(
+                "[webui-service] optional native VMM bootstrap unavailable while inactive: {error}"
+            );
+            None
+        }
+        Err(error) => {
+            return Err(ServiceBootstrapError::new("workspace", "Workspace", error));
+        }
+    };
     let task_runtime = Arc::new(TaskRuntime::new());
     task_runtime
         .replace_subagent_catalog(subagent_catalog.clone())
@@ -1224,7 +1241,7 @@ fn run_service_bootstrap(
     // initial_projection_started_at measures selected-session locator validation and first workbench projection.
     // initial_projection_started_at 测量选中会话定位校验与首次工作台投影。
     let initial_projection_started_at = start_bootstrap_stage("initial_workbench_projection");
-    let mut emitted_workbench = {
+    let emitted_workbench = {
         // guard retains runtime and workbench state without publishing startup readiness before every fallible validation finishes.
         // guard 保留运行时与工作台状态，但不会在全部可失败校验完成前发布启动就绪。
         let mut guard = state.lock().map_err(|error| {
@@ -1263,7 +1280,9 @@ fn run_service_bootstrap(
             workspace: &workspace_snapshot,
             pending_prompt_process_mirrors: &guard.pending_prompt_process_mirrors,
             vmm_session_states: &vmm_session_states,
-            managed_vmm_runtime: None,
+            native_vmm_host_ai_status: native_vmm_maintenance
+                .as_ref()
+                .map(crate::native_vmm::NativeVmmMaintenance::host_ai_status),
             subagent_navigation,
             pending_questions: pending_question_snapshots_from_agent_runtime(Some(&agent_runtime))
                 .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?,
@@ -1286,7 +1305,7 @@ fn run_service_bootstrap(
         guard.workbench = workbench.clone();
         guard.workspace_snapshot = Some(workspace_snapshot);
         guard.agent_runtime = Some(agent_runtime);
-        guard.native_vmm_maintenance = Some(native_vmm_maintenance);
+        guard.native_vmm_maintenance = native_vmm_maintenance;
         guard.service_runtime = Some(runtime.clone());
         guard.controller_runtime = Some(controller_runtime);
         guard.knowledge_runtime = Some(knowledge_runtime);
@@ -1304,30 +1323,6 @@ fn run_service_bootstrap(
         initial_projection_started_at,
         format!("selected={selected_session_id}"),
     );
-    // Managed VMM starts only after the configured inference service and shared Controller have
-    // both been published into service state. Failure degrades memory without blocking the workbench.
-    // 托管 VMM 仅在配置化推理服务与共享 Controller 都已发布到服务状态后启动。
-    // 启动失败只降级记忆能力，不阻止工作台可用。
-    // managed_vmm_started_at measures only managed memory runtime reconciliation.
-    // managed_vmm_started_at 仅测量托管记忆运行时协调。
-    let managed_vmm_started_at = start_bootstrap_stage("managed_vmm");
-    runtime.block_on(reconcile_managed_memory_mesh_runtime(
-        state,
-        &public_ai_configuration,
-        &provider_configuration.vmm,
-        &mut logs,
-    ));
-    trace_bootstrap_stage("managed_vmm", managed_vmm_started_at, "result=finished");
-    // The managed runtime is a separate lifecycle domain; publish its exact fields even when a
-    // broader workspace refresh is temporarily unable to reopen one historical VMM session.
-    // 托管运行时属于独立生命周期域；即使更广泛的工作区刷新暂时无法重新打开某个历史 VMM 会话，
-    // 也要发布其精确字段。
-    match crate::managed_memory_mesh_runtime::synchronize_workbench_runtime(state) {
-        Ok(workbench) => emitted_workbench = workbench,
-        Err(error) => logs.push(format!(
-            "[webui-service] managed VMM projection degraded: {error}"
-        )),
-    }
     // Managed Codebase Memory enablement survives restart; unavailable packaged assets degrade only that integration.
     // 托管 Codebase Memory 启用意图会跨重启保留；打包资产不可用时仅降级该集成。
     // codebase_memory_started_at measures managed Codebase Memory reconciliation independently.
@@ -1394,459 +1389,38 @@ fn run_service_bootstrap(
     Ok(())
 }
 
-/// Starts the configured host-managed VMM child and installs an in-memory transport overlay.
-/// 启动已配置的宿主管理 VMM 子进程，并安装内存态传输覆盖。
+/// Decides whether native VMM bootstrap failure must stop the complete service startup.
+/// 判断原生 VMM 启动失败是否必须终止完整服务启动。
 ///
 /// # Parameters
-/// 参数
-/// `state` owns published service dependencies, `runtime` executes asynchronous startup,
-/// `ai_configuration` owns the exact VMM embedding route, and `vmm_config` controls local management.
-/// `state` 持有已发布服务依赖，`runtime` 执行异步启动，`ai_configuration` 持有精确 VMM
-/// 向量路由，`vmm_config` 控制本地托管及运行时行为。
+/// `effective` is the authoritative global VMM configuration resolved for this startup.
+/// `effective` 是本次启动解析出的权威全局 VMM 配置。
 ///
 /// # Returns
-/// 返回值
-/// This function records a controlled degraded diagnostic instead of failing global bootstrap.
-/// 本函数记录受控降级诊断，而不让全局引导失败。
-pub(crate) async fn reconcile_managed_memory_mesh_runtime(
-    state: &SharedServiceBridgeState,
-    ai_configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
-    vmm_config: &vulcan_vmm::VmmConfigLayer,
-    logs: &mut Vec<String>,
-) {
-    let Some(install) = vmm_config.install.as_ref() else {
-        if let Err(error) = stop_existing_managed_memory_mesh_runtime(state) {
-            logs.push(format!("[webui-service] managed VMM degraded: {error}"));
-            return;
-        }
-        crate::managed_memory_mesh_runtime::clear_snapshot();
-        return;
-    };
-    if !install.managed_install_enabled || install.auto_start_policy.as_deref() == Some("manual") {
-        if let Err(error) = stop_existing_managed_memory_mesh_runtime(state) {
-            logs.push(format!("[webui-service] managed VMM degraded: {error}"));
-            return;
-        }
-        crate::managed_memory_mesh_runtime::clear_snapshot();
-        return;
+/// Returns `true` only when enabled memory actively selects the native backend.
+/// 仅当记忆已启用且当前选择原生后端时返回 `true`。
+fn native_vmm_bootstrap_is_required(effective: &vulcan_vmm::VmmEffectiveConfig) -> bool {
+    effective.enabled && effective.backend_mode == vulcan_vmm::VmmBackendMode::Native
+}
+
+#[cfg(test)]
+mod native_vmm_bootstrap_tests {
+    use super::native_vmm_bootstrap_is_required;
+
+    /// Verifies only an enabled native selection turns local bootstrap failure into a service failure.
+    /// 验证只有已启用的原生选择才会把本地启动失败升级为服务失败。
+    #[test]
+    fn inactive_or_external_vmm_does_not_require_native_bootstrap() {
+        let mut effective = vulcan_vmm::VmmEffectiveConfig::default();
+        assert!(!native_vmm_bootstrap_is_required(&effective));
+
+        effective.enabled = true;
+        effective.backend_mode = vulcan_vmm::VmmBackendMode::ExternalGrpc;
+        assert!(!native_vmm_bootstrap_is_required(&effective));
+
+        effective.backend_mode = vulcan_vmm::VmmBackendMode::Native;
+        assert!(native_vmm_bootstrap_is_required(&effective));
     }
-    let binary_path = match install
-        .managed_binary_path
-        .as_deref()
-        .map(PathBuf::from)
-        .or_else(default_managed_vmm_binary_path)
-    {
-        Some(path) => path,
-        None => {
-            let error = String::from("无法解析托管 VMM 可执行文件路径");
-            crate::managed_memory_mesh_runtime::publish_failed_snapshot("", error.clone());
-            logs.push(format!("[webui-service] managed VMM degraded: {error}"));
-            return;
-        }
-    };
-    // Validate the complete packaged runtime before replacing a healthy child.
-    // 在替换健康子进程前校验完整的打包运行时。
-    let binary_path =
-        match crate::managed_memory_mesh_runtime::validate_managed_vmm_package(&binary_path) {
-            Ok(path) => path,
-            Err(error) => {
-                crate::managed_memory_mesh_runtime::publish_failed_snapshot("", error.clone());
-                logs.push(format!("[webui-service] managed VMM degraded: {error}"));
-                return;
-            }
-        };
-    let (public_ai_catalogs, optional_inference_routes) = match state.lock() {
-        Ok(guard) => match guard.agent_runtime.as_ref() {
-            Some(runtime) => {
-                // Auto-start must not initialize VMM from stale or incomplete inference routes.
-                // 自动启动不得使用陈旧或不完整的推理路由初始化 VMM。
-                if let Err(error) =
-                    crate::configured_inference::validate_vmm_required_inference_routes(
-                        &runtime.public_ai_runtime,
-                        ai_configuration,
-                    )
-                {
-                    crate::managed_memory_mesh_runtime::publish_failed_snapshot("", error.clone());
-                    logs.push(format!("[webui-service] managed VMM degraded: {error}"));
-                    return;
-                }
-                let optional_inference_routes =
-                    crate::configured_inference::inspect_vmm_optional_inference_routes(
-                        &runtime.public_ai_runtime,
-                        ai_configuration,
-                    );
-                match runtime.public_ai_runtime.catalog_snapshot() {
-                    Ok(catalogs) => (catalogs, optional_inference_routes),
-                    Err(error) => {
-                        crate::managed_memory_mesh_runtime::publish_failed_snapshot(
-                            "",
-                            error.clone(),
-                        );
-                        logs.push(format!("[webui-service] managed VMM degraded: {error}"));
-                        return;
-                    }
-                }
-            }
-            None => {
-                let error = String::from("公共 AI Runtime 尚未发布");
-                crate::managed_memory_mesh_runtime::publish_failed_snapshot("", error.clone());
-                logs.push(format!("[webui-service] managed VMM degraded: {error}"));
-                return;
-            }
-        },
-        Err(error) => {
-            let error = format!("读取公共 AI Runtime 失败：{error}");
-            crate::managed_memory_mesh_runtime::publish_failed_snapshot("", error.clone());
-            logs.push(format!("[webui-service] managed VMM degraded: {error}"));
-            return;
-        }
-    };
-    let capabilities = match crate::managed_memory_mesh_runtime::configured_vmm_capability_preflight(
-        ai_configuration,
-        &public_ai_catalogs,
-        &optional_inference_routes,
-    ) {
-        Ok(capabilities) => capabilities,
-        Err(error) => {
-            crate::managed_memory_mesh_runtime::publish_failed_snapshot("", error.clone());
-            logs.push(format!("[webui-service] managed VMM degraded: {error}"));
-            return;
-        }
-    };
-    let controller_endpoint = match state.lock() {
-        Ok(guard) => match guard.controller_runtime.as_ref() {
-            Some(controller) => controller.endpoint.clone(),
-            None => {
-                let error = String::from("共享 Controller 尚未发布");
-                crate::managed_memory_mesh_runtime::publish_failed_snapshot("", error.clone());
-                logs.push(format!("[webui-service] managed VMM degraded: {error}"));
-                return;
-            }
-        },
-        Err(error) => {
-            let error = format!("读取服务状态失败：{error}");
-            crate::managed_memory_mesh_runtime::publish_failed_snapshot("", error.clone());
-            logs.push(format!("[webui-service] managed VMM degraded: {error}"));
-            return;
-        }
-    };
-    // Exact prerequisite validation completes before replacing a healthy child, so an invalid
-    // edited configuration cannot turn a working memory service into an avoidable outage.
-    // 精确前置校验会在替换健康子进程前完成，避免无效编辑配置把可用记忆服务变成可避免的中断。
-    if let Err(error) = stop_existing_managed_memory_mesh_runtime(state) {
-        crate::managed_memory_mesh_runtime::publish_failed_snapshot(
-            controller_endpoint.as_str(),
-            error.clone(),
-        );
-        logs.push(format!("[webui-service] managed VMM degraded: {error}"));
-        return;
-    }
-    let managed = match crate::managed_memory_mesh_runtime::ManagedMemoryMeshRuntime::start(
-        &binary_path,
-        controller_endpoint.as_str(),
-        vmm_config,
-        &capabilities,
-    )
-    .await
-    {
-        Ok(managed) => managed,
-        Err(error) => {
-            crate::managed_memory_mesh_runtime::publish_failed_snapshot(
-                controller_endpoint.as_str(),
-                error.clone(),
-            );
-            logs.push(format!("[webui-service] managed VMM degraded: {error}"));
-            return;
-        }
-    };
-    let snapshot = managed.snapshot();
-    let managed = Arc::new(Mutex::new(managed));
-    let update_result = publish_managed_memory_mesh_runtime(state, Arc::clone(&managed));
-    match update_result {
-        Ok(()) => {
-            let Some(grpc_target) = snapshot.grpc_target.clone() else {
-                logs.push(String::from(
-                    "[webui-service] managed VMM degraded: 就绪状态缺少 gRPC 地址",
-                ));
-                return;
-            };
-            logs.push(format!(
-                "[webui-service] managed VMM ready: target={} controller={} space={}",
-                grpc_target, snapshot.controller_endpoint, snapshot.controller_space_id
-            ));
-            spawn_managed_memory_mesh_supervisor(
-                Arc::clone(state),
-                managed,
-                ManagedMemoryMeshRestartSpec {
-                    binary_path,
-                    controller_endpoint,
-                    vmm_config: vmm_config.clone(),
-                    capabilities,
-                },
-            );
-        }
-        Err(error) => {
-            crate::vmm_hooks::clear_managed_vmm_transport_overlay();
-            if let Ok(mut managed) = managed.lock() {
-                let _ = managed.stop();
-            }
-            crate::managed_memory_mesh_runtime::publish_failed_snapshot(
-                controller_endpoint.as_str(),
-                error.clone(),
-            );
-            logs.push(format!(
-                "[webui-service] managed VMM degraded while publishing runtime: {error}"
-            ));
-        }
-    }
-}
-
-/// Stops and detaches the currently owned managed VMM child, if one exists.
-/// 停止并解除当前持有的托管 VMM 子进程（如果存在）。
-///
-/// # Parameters
-/// 参数
-/// `state` owns the exact managed runtime generation and process-local transport overlay.
-/// `state` 持有精确托管运行时代次与进程内传输覆盖。
-///
-/// # Returns
-/// 返回值
-/// Success after the child is stopped and the overlay is cleared, or an explicit lock/stop error.
-/// 子进程停止且传输覆盖清除后返回成功，否则返回明确的锁定或停止错误。
-fn stop_existing_managed_memory_mesh_runtime(
-    state: &SharedServiceBridgeState,
-) -> Result<(), String> {
-    let existing = state
-        .lock()
-        .map_err(|error| format!("读取既有托管 VMM 运行时失败：{error}"))?
-        .managed_memory_mesh_runtime
-        .take();
-    if let Some(existing) = existing {
-        existing
-            .lock()
-            .map_err(|error| format!("锁定既有托管 VMM 子进程失败：{error}"))?
-            .stop()?;
-    }
-    crate::vmm_hooks::clear_managed_vmm_transport_overlay();
-    Ok(())
-}
-
-/// Immutable restart inputs that remain valid for one host process generation.
-/// 在一个宿主进程代次内保持有效的不可变重启输入。
-#[derive(Clone)]
-struct ManagedMemoryMeshRestartSpec {
-    /// Exact managed sidecar executable.
-    /// 精确的托管 Sidecar 可执行文件。
-    binary_path: PathBuf,
-    /// Shared Controller endpoint owned by Vulcan Code.
-    /// 由 Vulcan Code 持有的共享 Controller 端点。
-    controller_endpoint: String,
-    /// Exact persisted VMM transport and behavior snapshot for crash restarts.
-    /// 用于崩溃重启的精确持久化 VMM 传输与行为快照。
-    vmm_config: vulcan_vmm::VmmConfigLayer,
-    /// Exact configured inference capability snapshot.
-    /// 精确配置的推理能力快照。
-    capabilities: crate::managed_memory_mesh_runtime::ManagedVmmCapabilityPreflight,
-}
-
-/// Publishes one ready runtime, its in-memory credential overlay, and the refreshed hook snapshot atomically.
-/// 原子发布一个就绪运行时、其内存凭据覆盖以及刷新后的 Hook 快照。
-///
-/// # Parameters
-/// 参数
-/// `state` is the service owner and `managed` is the exact authenticated child runtime.
-/// `state` 是服务所有者，`managed` 是精确的已鉴权子运行时。
-///
-/// # Returns
-/// 返回值
-/// Success after every process-local consumer sees the same runtime generation.
-/// 当所有进程内消费者都看到同一运行时代次后返回成功。
-fn publish_managed_memory_mesh_runtime(
-    state: &SharedServiceBridgeState,
-    managed: Arc<Mutex<crate::managed_memory_mesh_runtime::ManagedMemoryMeshRuntime>>,
-) -> Result<(), String> {
-    let (snapshot, authorization) = {
-        let managed = managed
-            .lock()
-            .map_err(|error| format!("锁定 VMM 托管运行时失败：{error}"))?;
-        (managed.snapshot(), managed.authorization_value())
-    };
-    let grpc_target = snapshot
-        .grpc_target
-        .clone()
-        .ok_or_else(|| String::from("就绪状态缺少 gRPC 地址"))?;
-    let mut guard = state
-        .lock()
-        .map_err(|error| format!("锁定服务状态失败：{error}"))?;
-    let workspace = guard
-        .workspace_snapshot
-        .clone()
-        .ok_or_else(|| String::from("工作区快照尚未发布"))?;
-    let agent_runtime = guard
-        .agent_runtime
-        .as_ref()
-        .ok_or_else(|| String::from("Agent Runtime 尚未发布"))?;
-    crate::vmm_hooks::install_managed_vmm_transport_overlay(
-        grpc_target,
-        authorization,
-        snapshot.capabilities.precheck_ready,
-        snapshot.capabilities.postaction_ready,
-        snapshot.scope_ready,
-    )?;
-    let vmm_snapshot =
-        build_vmm_hook_config_snapshot(&agent_runtime.provider_configuration, &workspace);
-    if let Err(error) = agent_runtime
-        .vmm_hook_runtime
-        .replace_snapshot(vmm_snapshot)
-    {
-        crate::vmm_hooks::clear_managed_vmm_transport_overlay();
-        return Err(error);
-    }
-    guard.managed_memory_mesh_runtime = Some(managed);
-    crate::managed_memory_mesh_runtime::publish_snapshot(snapshot);
-    Ok(())
-}
-
-/// Supervises one managed child and restarts unexpected exits with bounded exponential backoff.
-/// 监督一个托管子进程，并对意外退出执行有上限的指数退避重启。
-///
-/// # Parameters
-/// 参数
-/// `state` owns the current generation, `managed` is the watched child, and `spec` contains trusted restart inputs.
-/// `state` 持有当前代次，`managed` 是被监督子进程，`spec` 包含可信重启输入。
-fn spawn_managed_memory_mesh_supervisor(
-    state: SharedServiceBridgeState,
-    managed: Arc<Mutex<crate::managed_memory_mesh_runtime::ManagedMemoryMeshRuntime>>,
-    spec: ManagedMemoryMeshRestartSpec,
-) {
-    tokio::spawn(async move {
-        let mut watched = managed;
-        let mut retry_delay = Duration::from_secs(5);
-        loop {
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            if !managed_runtime_is_current(&state, &watched) {
-                return;
-            }
-            let crashed = match watched.lock() {
-                Ok(mut runtime) => runtime.refresh_liveness(),
-                Err(error) => {
-                    crate::managed_memory_mesh_runtime::publish_failed_snapshot(
-                        spec.controller_endpoint.as_str(),
-                        format!("锁定 VMM 监督状态失败：{error}"),
-                    );
-                    true
-                }
-            };
-            if !crashed {
-                continue;
-            }
-            crate::vmm_hooks::clear_managed_vmm_transport_overlay();
-            let _ = crate::managed_memory_mesh_runtime::synchronize_workbench_runtime(&state);
-            tokio::time::sleep(retry_delay).await;
-            if !managed_runtime_is_current(&state, &watched) {
-                return;
-            }
-            let replacement =
-                match crate::managed_memory_mesh_runtime::ManagedMemoryMeshRuntime::start(
-                    &spec.binary_path,
-                    spec.controller_endpoint.as_str(),
-                    &spec.vmm_config,
-                    &spec.capabilities,
-                )
-                .await
-                {
-                    Ok(runtime) => runtime,
-                    Err(error) => {
-                        let error = format!(
-                            "VMM 自动重启失败；将在 {} 秒后重试：{error}",
-                            retry_delay.as_secs()
-                        );
-                        if let Ok(mut watched) = watched.lock() {
-                            watched.record_restart_failure(error);
-                        }
-                        let _ = crate::managed_memory_mesh_runtime::synchronize_workbench_runtime(
-                            &state,
-                        );
-                        retry_delay = retry_delay.saturating_mul(2).min(Duration::from_secs(1800));
-                        continue;
-                    }
-                };
-            if !managed_runtime_is_current(&state, &watched) {
-                let mut replacement = replacement;
-                let _ = replacement.stop();
-                return;
-            }
-            let replacement = Arc::new(Mutex::new(replacement));
-            match publish_managed_memory_mesh_runtime(&state, Arc::clone(&replacement)) {
-                Ok(()) => {
-                    watched = replacement;
-                    let _ =
-                        crate::managed_memory_mesh_runtime::synchronize_workbench_runtime(&state);
-                    retry_delay = Duration::from_secs(5);
-                }
-                Err(error) => {
-                    if let Ok(mut replacement) = replacement.lock() {
-                        let _ = replacement.stop();
-                    }
-                    let error = format!(
-                        "发布自动重启的 VMM 运行时失败；将在 {} 秒后重试：{error}",
-                        retry_delay.as_secs()
-                    );
-                    if let Ok(mut watched) = watched.lock() {
-                        watched.record_restart_failure(error);
-                    }
-                    let _ =
-                        crate::managed_memory_mesh_runtime::synchronize_workbench_runtime(&state);
-                    retry_delay = retry_delay.saturating_mul(2).min(Duration::from_secs(1800));
-                }
-            }
-        }
-    });
-}
-
-/// Tests whether one supervised generation is still the service-owned current runtime.
-/// 检查一个受监督代次是否仍是服务持有的当前运行时。
-///
-/// # Parameters
-/// 参数
-/// `state` is the service owner and `candidate` is the exact watched runtime allocation.
-/// `state` 是服务所有者，`candidate` 是被监督运行时的精确分配。
-///
-/// # Returns
-/// 返回值
-/// `true` only when user actions have not replaced or disabled this generation.
-/// 仅当用户操作尚未替换或关闭该代次时返回 `true`。
-fn managed_runtime_is_current(
-    state: &SharedServiceBridgeState,
-    candidate: &Arc<Mutex<crate::managed_memory_mesh_runtime::ManagedMemoryMeshRuntime>>,
-) -> bool {
-    state
-        .lock()
-        .ok()
-        .and_then(|guard| {
-            guard
-                .managed_memory_mesh_runtime
-                .as_ref()
-                .map(|current| Arc::ptr_eq(current, candidate))
-        })
-        .unwrap_or(false)
-}
-
-/// Resolves the packaged VMM sidecar beside the current Vulcan Code executable.
-/// 解析当前 Vulcan Code 可执行文件旁的打包 VMM Sidecar。
-///
-/// # Returns
-/// 返回值
-/// A platform-specific executable candidate, or `None` when the host path is unavailable.
-/// 返回平台专用可执行文件候选；宿主路径不可用时返回 `None`。
-pub(crate) fn default_managed_vmm_binary_path() -> Option<PathBuf> {
-    let executable = std::env::current_exe().ok()?;
-    let directory = executable.parent()?;
-    #[cfg(windows)]
-    let file_name = "vmm-local.exe";
-    #[cfg(not(windows))]
-    let file_name = "vmm-local";
-    Some(directory.join(file_name))
 }
 
 /// Refreshes every configured public AI catalog into process memory during startup.

@@ -41,6 +41,34 @@ pub const VMM_SCHEMA_VERSION: i64 = 1;
 /// 单一持久化原生 Core 存储快照的稳定键。
 pub const VMM_CORE_SNAPSHOT_KEY: &str = "native-core";
 
+/// Prepared mutation state written before any cross-backend maintenance side effect.
+/// 在任何跨后端维护副作用前写入的已准备变更状态。
+pub const VMM_CORE_MUTATION_PREPARED: &str = "prepared";
+
+/// Relationally committed mutation state awaiting stale-vector cleanup.
+/// 关系状态已提交但仍等待陈旧向量清理的变更状态。
+pub const VMM_CORE_MUTATION_COMMITTED: &str = "committed";
+
+/// Fully reconciled mutation state safe to replay as an idempotent result.
+/// 已完全对账、可安全作为幂等结果重放的变更状态。
+pub const VMM_CORE_MUTATION_COMPLETED: &str = "completed";
+
+/// Intake is still running and has not durably produced a pending turn.
+/// 登记仍在执行，尚未耐久地产生待分析回合。
+pub const VMM_PENDING_ANALYSIS_INTAKING: &str = "intaking";
+
+/// A durable pending turn is ready for host-scheduled analysis.
+/// 一个耐久待处理回合已准备好由宿主调度分析。
+pub const VMM_PENDING_ANALYSIS_READY: &str = "ready";
+
+/// The analysis job no longer retains its original conversation payload.
+/// 分析作业已不再保留其原始会话载荷。
+pub const VMM_PENDING_ANALYSIS_COMPLETED: &str = "completed";
+
+/// Maximum Unicode character count accepted for one persisted analysis failure diagnostic.
+/// 单条持久分析失败诊断允许的最大 Unicode 字符数。
+pub const VMM_PENDING_ANALYSIS_ERROR_CHAR_LIMIT: usize = 512;
+
 /// Maximum candidate rows requested from LanceDB before exact Core visibility filtering.
 /// 在 Core 精确可见性过滤前从 LanceDB 请求的最大候选行数。
 pub const VMM_VECTOR_SEARCH_LIMIT: u32 = 10_000;
@@ -71,6 +99,63 @@ pub struct VmmDataPlaneHandle {
     /// Bootstrap-scoped LanceDB binding identifier.
     /// 单次引导作用域内的 LanceDB 绑定标识符。
     pub lancedb_binding_id: String,
+}
+
+/// Durable native Core maintenance mutation used to resume cross-backend commits.
+/// 用于恢复跨后端提交的耐久原生 Core 维护变更。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeVmmCoreMutation {
+    /// Stable user-operation UUID used as the idempotency identity.
+    /// 作为幂等身份使用的稳定用户操作 UUID。
+    pub operation_id: String,
+    /// Exact maintenance operation kind, such as migration or clear.
+    /// 准确的维护操作类型，例如迁移或清空。
+    pub mutation_kind: String,
+    /// Current durable state: prepared, committed, or completed.
+    /// 当前耐久状态：已准备、已提交或已完成。
+    pub state: String,
+    /// Full vector-bearing snapshot before the operation.
+    /// 操作前包含向量的完整快照。
+    pub before_snapshot_json: String,
+    /// Full vector-bearing snapshot after the operation.
+    /// 操作后包含向量的完整快照。
+    pub after_snapshot_json: String,
+    /// Serialized typed operation result returned for transport retries.
+    /// 供传输重试返回的已序列化强类型操作结果。
+    pub result_json: String,
+}
+
+/// Carries one durable host-owned native VMM post-action analysis job.
+/// 携带一条由宿主持有的耐久原生 VMM PostAction 分析作业。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeVmmPendingAnalysisJob {
+    /// Stable root operation identity supplied by the native VMM client.
+    /// 由原生 VMM 客户端提供的稳定根操作身份。
+    pub operation_id: String,
+    /// Fingerprint of the exact caller request excluding host-generated scheduling time.
+    /// 排除宿主生成调度时间的准确调用方请求指纹。
+    pub request_fingerprint: String,
+    /// Serialized job payload retained only until successful completion.
+    /// 仅保留至成功完成的序列化作业载荷。
+    pub payload_json: String,
+    /// Derived Core storage-mutation identity that atomically binds the pending turn.
+    /// 用于原子绑定待处理回合的派生 Core 存储变更身份。
+    pub intake_mutation_operation_id: String,
+    /// Durable Core turn identity once intake commits.
+    /// 登记提交后的耐久 Core 回合身份。
+    pub turn_id: Option<String>,
+    /// Current host scheduling state.
+    /// 当前宿主调度状态。
+    pub state: String,
+    /// Number of failed background analysis attempts.
+    /// 后台分析失败尝试次数。
+    pub attempt_count: u32,
+    /// Earliest Unix millisecond when another attempt may start.
+    /// 可开始下一次尝试的最早 Unix 毫秒时间。
+    pub next_attempt_at_unix_ms: i64,
+    /// Bounded diagnostic text from the latest failed attempt.
+    /// 最近一次失败尝试的有界诊断文本。
+    pub last_error: Option<String>,
 }
 
 /// Identifies one dimension-checked LanceDB table assigned to a logical VMM vector space.
@@ -547,20 +632,19 @@ impl VmmDataPlaneHandle {
     /// `project_id` 是在明确影响预检后选择的稳定原生 VMM 项目标识。
     ///
     /// # Returns
-    /// Returns the exact associations detached by the committed deletion.
-    /// 返回已提交删除所解除的准确关联。
+    /// Returns the exact detached associations, or an empty value when a prior attempt already deleted the project.
+    /// 返回准确解除的关联；若先前尝试已经删除该项目则返回空值。
     ///
     /// # Errors
-    /// Returns when the project is missing, protected, or the controller transaction fails.
-    /// 当项目不存在、受保护或控制器事务失败时返回错误。
+    /// Returns when an existing project is protected or the controller transaction fails.
+    /// 已存在项目受保护或控制器事务失败时返回错误。
     pub async fn delete_project_with_bindings(
         &self,
         project_id: u64,
     ) -> Result<NativeVmmProjectUsage, String> {
-        let project = self
-            .project_by_id(project_id)
-            .await?
-            .ok_or_else(|| format!("原生 VMM 项目 {project_id} 不存在"))?;
+        let Some(project) = self.project_by_id(project_id).await? else {
+            return Ok(NativeVmmProjectUsage::default());
+        };
         if project.protected {
             return Err(String::from("default VMM 项目不允许删除"));
         }
@@ -640,6 +724,51 @@ COMMIT;"#
             vulcan_project_id: vulcan_project_id.to_owned(),
             vmm_project_id,
         })
+    }
+
+    /// Atomically replaces one VulcanCode project's write owner and ordered recall-only links.
+    /// 原子替换一个 VulcanCode 项目的写入所有者与有序仅召回连带项目。
+    ///
+    /// # Errors
+    /// Returns duplicate, owner-link, missing-project, validation, or controller errors.
+    /// 返回重复、所有者链接、项目缺失、校验或控制器错误。
+    pub async fn set_project_access(
+        &self,
+        vulcan_project_id: &str,
+        owner_project_id: u64,
+        linked_project_ids: &[u64],
+    ) -> Result<NativeVmmProjectAccess, String> {
+        let vulcan_project_id =
+            validate_native_project_text(vulcan_project_id, "VulcanCode 项目标识", 512)?;
+        validate_project_access_ids(owner_project_id, linked_project_ids)?;
+        if self.project_by_id(owner_project_id).await?.is_none() {
+            return Err(format!("待绑定的原生 VMM 项目 {owner_project_id} 不存在"));
+        }
+        for project_id in linked_project_ids {
+            if self.project_by_id(*project_id).await?.is_none() {
+                return Err(format!("连带查询的原生 VMM 项目 {project_id} 不存在"));
+            }
+        }
+        let script = build_project_access_assignment_script(
+            vulcan_project_id,
+            owner_project_id,
+            linked_project_ids,
+            current_unix_epoch_millis_i64()?,
+        )?;
+        let result = self
+            .client
+            .execute_sqlite_script_typed(
+                VMM_SPACE_ID,
+                self.sqlite_binding_id.as_str(),
+                script.as_str(),
+                Vec::new(),
+            )
+            .await
+            .map_err(|error| format!("保存原生 VMM 项目访问配置失败：{error}"))?;
+        if !result.success {
+            return Err(format!("保存原生 VMM 项目访问配置失败：{}", result.message));
+        }
+        self.resolve_project_access(vulcan_project_id).await
     }
 
     /// Removes one VulcanCode project binding and its query links.
@@ -905,6 +1034,552 @@ ON CONFLICT(snapshot_key) DO UPDATE SET
             .map_err(|error| format!("保存原生 VMM Core 快照失败：{error}"))?;
         if !result.success {
             return Err(format!("保存原生 VMM Core 快照失败：{}", result.message));
+        }
+        Ok(())
+    }
+
+    /// Inserts or validates one durable native post-action analysis job.
+    /// 插入或校验一条耐久原生 PostAction 分析作业。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `job` carries the exact operation identity, request fingerprint, serialized semantics,
+    /// and derived intake mutation identity.
+    /// `job` 携带准确操作身份、请求指纹、序列化语义与派生登记变更身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The authoritative stored row, including an existing ready or completed state on retry.
+    /// 返回权威持久记录；重试时可能已经处于就绪或完成状态。
+    pub async fn enqueue_pending_analysis_job(
+        &self,
+        job: &NativeVmmPendingAnalysisJob,
+    ) -> Result<NativeVmmPendingAnalysisJob, String> {
+        if job.operation_id.trim().is_empty()
+            || job.request_fingerprint.trim().is_empty()
+            || job.payload_json.trim().is_empty()
+            || job.intake_mutation_operation_id.trim().is_empty()
+            || job.state != VMM_PENDING_ANALYSIS_INTAKING
+            || job.turn_id.is_some()
+            || job.attempt_count != 0
+            || job.next_attempt_at_unix_ms != 0
+            || job.last_error.is_some()
+        {
+            return Err(String::from("原生 VMM 待分析作业初始字段无效"));
+        }
+        let now = current_unix_epoch_millis_i64()?;
+        let result = self
+            .client
+            .execute_sqlite_script_typed(
+                VMM_SPACE_ID,
+                self.sqlite_binding_id.as_str(),
+                r#"INSERT OR IGNORE INTO vmm_pending_analysis_jobs(
+                       operation_id, request_fingerprint, payload_json,
+                       intake_mutation_operation_id, turn_id, state, attempt_count,
+                       next_attempt_at_unix_ms, last_error, created_at_unix_ms, updated_at_unix_ms
+                   ) VALUES (?, ?, ?, ?, NULL, 'intaking', 0, 0, NULL, ?, ?);"#,
+                vec![
+                    sqlite_text(&job.operation_id),
+                    sqlite_text(&job.request_fingerprint),
+                    sqlite_text(&job.payload_json),
+                    sqlite_text(&job.intake_mutation_operation_id),
+                    ControllerSqliteValue::Int64(now),
+                    ControllerSqliteValue::Int64(now),
+                ],
+            )
+            .await
+            .map_err(|error| format!("登记原生 VMM 待分析作业失败：{error}"))?;
+        if !result.success {
+            return Err(format!("登记原生 VMM 待分析作业失败：{}", result.message));
+        }
+        let stored = self
+            .load_pending_analysis_job(&job.operation_id)
+            .await?
+            .ok_or_else(|| String::from("原生 VMM 待分析作业写入后不可见"))?;
+        if stored.request_fingerprint != job.request_fingerprint
+            || stored.intake_mutation_operation_id != job.intake_mutation_operation_id
+        {
+            return Err(format!(
+                "原生 VMM PostAction 操作 `{}` 已绑定到不同请求载荷",
+                job.operation_id
+            ));
+        }
+        Ok(stored)
+    }
+
+    /// Loads one durable native post-action analysis job by root operation identity.
+    /// 按根操作身份加载一条耐久原生 PostAction 分析作业。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `operation_id` is the stable native VMM client operation identity.
+    /// `operation_id` 是稳定的原生 VMM 客户端操作身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The exact stored job when present, otherwise no value.
+    /// 存在时返回准确持久作业，否则返回空值。
+    pub async fn load_pending_analysis_job(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<NativeVmmPendingAnalysisJob>, String> {
+        let result = self
+            .client
+            .query_sqlite_json_typed(
+                VMM_SPACE_ID,
+                self.sqlite_binding_id.as_str(),
+                r#"SELECT operation_id, request_fingerprint, payload_json,
+                          intake_mutation_operation_id, turn_id, state, attempt_count,
+                          next_attempt_at_unix_ms, last_error
+                   FROM vmm_pending_analysis_jobs
+                   WHERE operation_id = ?
+                   LIMIT 1;"#,
+                vec![sqlite_text(operation_id)],
+            )
+            .await
+            .map_err(|error| format!("读取原生 VMM 待分析作业失败：{error}"))?;
+        let rows: Vec<NativeVmmPendingAnalysisJobRow> = serde_json::from_str(&result.json_data)
+            .map_err(|error| format!("解析原生 VMM 待分析作业失败：{error}"))?;
+        match rows.as_slice() {
+            [] => Ok(None),
+            [row] => row.clone().into_job().map(Some),
+            _ => Err(String::from(
+                "原生 VMM PostAction 操作标识返回了多条作业记录",
+            )),
+        }
+    }
+
+    /// Lists due durable analysis jobs in stable scheduling order.
+    /// 按稳定调度顺序列出已到期的耐久分析作业。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `now_unix_ms` is the inclusive retry boundary and `limit` bounds one drain pass.
+    /// `now_unix_ms` 是包含端点的重试边界，`limit` 限制单次排空数量。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Ready jobs whose durable turn identity is present.
+    /// 返回包含耐久回合身份的已就绪作业。
+    pub async fn list_due_pending_analysis_jobs(
+        &self,
+        now_unix_ms: i64,
+        limit: u32,
+    ) -> Result<Vec<NativeVmmPendingAnalysisJob>, String> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let result = self
+            .client
+            .query_sqlite_json_typed(
+                VMM_SPACE_ID,
+                self.sqlite_binding_id.as_str(),
+                r#"SELECT operation_id, request_fingerprint, payload_json,
+                          intake_mutation_operation_id, turn_id, state, attempt_count,
+                          next_attempt_at_unix_ms, last_error
+                   FROM vmm_pending_analysis_jobs
+                   WHERE state = 'ready'
+                     AND turn_id IS NOT NULL
+                     AND next_attempt_at_unix_ms <= ?
+                   ORDER BY next_attempt_at_unix_ms, created_at_unix_ms, operation_id
+                   LIMIT ?;"#,
+                vec![
+                    ControllerSqliteValue::Int64(now_unix_ms),
+                    ControllerSqliteValue::Int64(i64::from(limit)),
+                ],
+            )
+            .await
+            .map_err(|error| format!("列出原生 VMM 待分析作业失败：{error}"))?;
+        let rows: Vec<NativeVmmPendingAnalysisJobRow> = serde_json::from_str(&result.json_data)
+            .map_err(|error| format!("解析原生 VMM 待分析作业列表失败：{error}"))?;
+        rows.into_iter()
+            .map(NativeVmmPendingAnalysisJobRow::into_job)
+            .collect()
+    }
+
+    /// Lists every intake or ready native analysis job that still owns its original payload.
+    /// 列出仍持有原始载荷的全部登记中或就绪原生分析作业。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Active jobs in stable creation order for project-maintenance conflict detection.
+    /// 返回按创建顺序排列、用于项目维护冲突检测的活动作业。
+    ///
+    /// # Errors
+    /// 错误
+    /// Returns an error when SQLite access or typed row decoding fails.
+    /// SQLite 访问或强类型行解码失败时返回错误。
+    pub async fn list_active_pending_analysis_jobs(
+        &self,
+    ) -> Result<Vec<NativeVmmPendingAnalysisJob>, String> {
+        let result = self
+            .client
+            .query_sqlite_json_typed(
+                VMM_SPACE_ID,
+                self.sqlite_binding_id.as_str(),
+                r#"SELECT operation_id, request_fingerprint, payload_json,
+                          intake_mutation_operation_id, turn_id, state, attempt_count,
+                          next_attempt_at_unix_ms, last_error
+                   FROM vmm_pending_analysis_jobs
+                   WHERE state IN ('intaking', 'ready')
+                   ORDER BY created_at_unix_ms, operation_id;"#,
+                Vec::new(),
+            )
+            .await
+            .map_err(|error| format!("列出活动原生 VMM 待分析作业失败：{error}"))?;
+        let rows: Vec<NativeVmmPendingAnalysisJobRow> = serde_json::from_str(&result.json_data)
+            .map_err(|error| format!("解析活动原生 VMM 待分析作业失败：{error}"))?;
+        rows.into_iter()
+            .map(NativeVmmPendingAnalysisJobRow::into_job)
+            .collect()
+    }
+
+    /// Records one bounded failed analysis attempt and schedules its next retry.
+    /// 记录一次有界分析失败并调度下一次重试。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `operation_id` identifies the job, `next_attempt_at_unix_ms` is the retry boundary,
+    /// and `last_error` is already bounded diagnostic text.
+    /// `operation_id` 标识作业，`next_attempt_at_unix_ms` 是重试边界，
+    /// `last_error` 是已限制长度的诊断文本。
+    pub async fn record_pending_analysis_failure(
+        &self,
+        operation_id: &str,
+        next_attempt_at_unix_ms: i64,
+        last_error: &str,
+    ) -> Result<(), String> {
+        if last_error.chars().count() > VMM_PENDING_ANALYSIS_ERROR_CHAR_LIMIT {
+            return Err(String::from("原生 VMM 分析失败诊断超过持久化长度限制"));
+        }
+        let result = self
+            .client
+            .execute_sqlite_script_typed(
+                VMM_SPACE_ID,
+                self.sqlite_binding_id.as_str(),
+                r#"UPDATE vmm_pending_analysis_jobs
+                   SET attempt_count = attempt_count + 1,
+                       next_attempt_at_unix_ms = ?,
+                       last_error = ?,
+                       updated_at_unix_ms = ?
+                   WHERE operation_id = ? AND state = 'ready';"#,
+                vec![
+                    ControllerSqliteValue::Int64(next_attempt_at_unix_ms),
+                    sqlite_text(last_error),
+                    ControllerSqliteValue::Int64(current_unix_epoch_millis_i64()?),
+                    sqlite_text(operation_id),
+                ],
+            )
+            .await
+            .map_err(|error| format!("记录原生 VMM 分析失败失败：{error}"))?;
+        if !result.success {
+            return Err(format!("记录原生 VMM 分析失败失败：{}", result.message));
+        }
+        Ok(())
+    }
+
+    /// Completes one analysis job and erases its original conversation payload.
+    /// 完成一条分析作业并擦除其原始会话载荷。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `operation_id` and `request_fingerprint` jointly guard exact idempotent completion.
+    /// `operation_id` 与 `request_fingerprint` 共同守护准确幂等完成。
+    pub async fn complete_pending_analysis_job(
+        &self,
+        operation_id: &str,
+        request_fingerprint: &str,
+    ) -> Result<(), String> {
+        let result = self
+            .client
+            .execute_sqlite_script_typed(
+                VMM_SPACE_ID,
+                self.sqlite_binding_id.as_str(),
+                r#"UPDATE vmm_pending_analysis_jobs
+                   SET state = 'completed', payload_json = '', last_error = NULL,
+                       updated_at_unix_ms = ?
+                   WHERE operation_id = ? AND request_fingerprint = ?;"#,
+                vec![
+                    ControllerSqliteValue::Int64(current_unix_epoch_millis_i64()?),
+                    sqlite_text(operation_id),
+                    sqlite_text(request_fingerprint),
+                ],
+            )
+            .await
+            .map_err(|error| format!("完成原生 VMM 分析作业失败：{error}"))?;
+        if !result.success {
+            return Err(format!("完成原生 VMM 分析作业失败：{}", result.message));
+        }
+        Ok(())
+    }
+
+    /// Deletes startup leftovers that never durably produced a pending turn.
+    /// 删除启动时遗留且从未耐久产生待处理回合的登记作业。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success after every unbound intake row and payload is erased.
+    /// 全部未绑定登记记录及载荷被擦除后返回成功。
+    pub async fn delete_abandoned_pending_analysis_intakes(&self) -> Result<(), String> {
+        let result = self
+            .client
+            .execute_sqlite_script_typed(
+                VMM_SPACE_ID,
+                self.sqlite_binding_id.as_str(),
+                "DELETE FROM vmm_pending_analysis_jobs WHERE state = 'intaking' AND turn_id IS NULL;",
+                Vec::new(),
+            )
+            .await
+            .map_err(|error| format!("删除原生 VMM 未完成登记作业失败：{error}"))?;
+        if !result.success {
+            return Err(format!(
+                "删除原生 VMM 未完成登记作业失败：{}",
+                result.message
+            ));
+        }
+        Ok(())
+    }
+
+    /// Deletes one exact uncommitted intake job after Core recovery confirms no turn exists.
+    /// 在 Core 恢复确认不存在回合后删除一条准确的未提交登记作业。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `operation_id` and `request_fingerprint` identify the exact uncommitted request.
+    /// `operation_id` 与 `request_fingerprint` 标识准确的未提交请求。
+    pub async fn delete_pending_analysis_intake(
+        &self,
+        operation_id: &str,
+        request_fingerprint: &str,
+    ) -> Result<(), String> {
+        let result = self
+            .client
+            .execute_sqlite_script_typed(
+                VMM_SPACE_ID,
+                self.sqlite_binding_id.as_str(),
+                r#"DELETE FROM vmm_pending_analysis_jobs
+                   WHERE operation_id = ? AND request_fingerprint = ?
+                     AND state = 'intaking' AND turn_id IS NULL;"#,
+                vec![sqlite_text(operation_id), sqlite_text(request_fingerprint)],
+            )
+            .await
+            .map_err(|error| format!("删除原生 VMM 未提交登记作业失败：{error}"))?;
+        if !result.success {
+            return Err(format!(
+                "删除原生 VMM 未提交登记作业失败：{}",
+                result.message
+            ));
+        }
+        Ok(())
+    }
+
+    /// Loads one native Core maintenance mutation by its stable operation identity.
+    /// 按稳定操作身份加载一条原生 Core 维护变更。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `operation_id` is the exact caller UUID used for idempotent replay.
+    /// `operation_id` 是用于幂等重放的准确调用方 UUID。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The durable mutation when present, otherwise no value.
+    /// 存在时返回耐久变更，否则返回空值。
+    pub async fn load_core_mutation(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<NativeVmmCoreMutation>, String> {
+        let result = self
+            .client
+            .query_sqlite_json_typed(
+                VMM_SPACE_ID,
+                self.sqlite_binding_id.as_str(),
+                r#"SELECT operation_id, mutation_kind, state, before_snapshot_json,
+                          after_snapshot_json, result_json
+                   FROM vmm_core_mutations
+                   WHERE operation_id = ?
+                   LIMIT 1;"#,
+                vec![sqlite_text(operation_id)],
+            )
+            .await
+            .map_err(|error| format!("读取原生 VMM 维护变更失败：{error}"))?;
+        let rows: Vec<NativeVmmCoreMutationRow> = serde_json::from_str(&result.json_data)
+            .map_err(|error| format!("解析原生 VMM 维护变更失败：{error}"))?;
+        match rows.as_slice() {
+            [] => Ok(None),
+            [row] => Ok(Some(row.clone().into_mutation())),
+            _ => Err(String::from("原生 VMM 维护操作标识返回了多条记录")),
+        }
+    }
+
+    /// Lists every unfinished native Core maintenance mutation in creation order.
+    /// 按创建顺序列出全部未完成的原生 Core 维护变更。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Durable prepared or committed mutations requiring forward recovery.
+    /// 返回需要向前恢复的已准备或已提交耐久变更。
+    pub async fn list_unfinished_core_mutations(
+        &self,
+    ) -> Result<Vec<NativeVmmCoreMutation>, String> {
+        let result = self
+            .client
+            .query_sqlite_json_typed(
+                VMM_SPACE_ID,
+                self.sqlite_binding_id.as_str(),
+                r#"SELECT operation_id, mutation_kind, state, before_snapshot_json,
+                          after_snapshot_json, result_json
+                   FROM vmm_core_mutations
+                   WHERE state != 'completed'
+                   ORDER BY created_at_unix_ms, operation_id;"#,
+                Vec::new(),
+            )
+            .await
+            .map_err(|error| format!("读取未完成原生 VMM 维护变更失败：{error}"))?;
+        let rows: Vec<NativeVmmCoreMutationRow> = serde_json::from_str(&result.json_data)
+            .map_err(|error| format!("解析未完成原生 VMM 维护变更失败：{error}"))?;
+        Ok(rows
+            .into_iter()
+            .map(NativeVmmCoreMutationRow::into_mutation)
+            .collect())
+    }
+
+    /// Persists a prepared native Core mutation before vectors or relational state can change.
+    /// 在向量或关系状态发生变化前持久化一条已准备的原生 Core 变更。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `mutation` contains the exact before/after snapshots and replay result.
+    /// `mutation` 包含准确的操作前后快照与重放结果。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success only after the preparation row is durable.
+    /// 仅在准备记录已耐久化后返回成功。
+    pub async fn prepare_core_mutation(
+        &self,
+        mutation: &NativeVmmCoreMutation,
+    ) -> Result<(), String> {
+        if mutation.state != VMM_CORE_MUTATION_PREPARED {
+            return Err(String::from("原生 VMM 维护变更必须以 prepared 状态写入"));
+        }
+        let result = self
+            .client
+            .execute_sqlite_script_typed(
+                VMM_SPACE_ID,
+                self.sqlite_binding_id.as_str(),
+                r#"INSERT INTO vmm_core_mutations(
+                       operation_id, mutation_kind, state, before_snapshot_json,
+                       after_snapshot_json, result_json, created_at_unix_ms, updated_at_unix_ms
+                   ) VALUES (?, ?, 'prepared', ?, ?, ?, ?, ?);"#,
+                vec![
+                    sqlite_text(&mutation.operation_id),
+                    sqlite_text(&mutation.mutation_kind),
+                    sqlite_text(&mutation.before_snapshot_json),
+                    sqlite_text(&mutation.after_snapshot_json),
+                    sqlite_text(&mutation.result_json),
+                    ControllerSqliteValue::Int64(current_unix_epoch_millis_i64()?),
+                    ControllerSqliteValue::Int64(current_unix_epoch_millis_i64()?),
+                ],
+            )
+            .await
+            .map_err(|error| format!("准备原生 VMM 维护变更失败：{error}"))?;
+        if !result.success {
+            return Err(format!("准备原生 VMM 维护变更失败：{}", result.message));
+        }
+        Ok(())
+    }
+
+    /// Atomically commits the relational snapshot and advances its mutation journal.
+    /// 原子提交关系快照并推进对应的变更账本。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `operation_id` identifies the exact prepared mutation.
+    /// `operation_id` 标识准确的已准备变更。
+    /// `snapshot_json` is the validated relational-only after snapshot.
+    /// `snapshot_json` 是已校验且仅含关系数据的操作后快照。
+    /// `pending_turn_id` atomically binds a host analysis job when this is an intake mutation.
+    /// `pending_turn_id` 在当前变更属于登记操作时原子绑定宿主分析作业。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success after both SQLite changes commit in one transaction.
+    /// 两项 SQLite 变更在同一事务提交后返回成功。
+    pub async fn commit_core_mutation(
+        &self,
+        operation_id: &str,
+        snapshot_json: &str,
+        pending_turn_id: Option<&str>,
+    ) -> Result<(), String> {
+        let operation_id = sqlite_string_literal(operation_id);
+        let snapshot_json = sqlite_string_literal(snapshot_json);
+        let now = current_unix_epoch_millis_i64()?;
+        let pending_turn_update = pending_turn_id.map_or_else(String::new, |turn_id| {
+            let turn_id = sqlite_string_literal(turn_id);
+            format!(
+                "UPDATE vmm_pending_analysis_jobs SET turn_id = '{turn_id}', state = 'ready', next_attempt_at_unix_ms = 0, last_error = NULL, updated_at_unix_ms = {now} WHERE intake_mutation_operation_id = '{operation_id}' AND state = 'intaking';\n"
+            )
+        });
+        let script = format!(
+            r#"BEGIN IMMEDIATE;
+INSERT INTO vmm_core_snapshots(snapshot_key, snapshot_json, updated_at_unix_ms)
+VALUES ('{snapshot_key}', '{snapshot_json}', {now})
+ON CONFLICT(snapshot_key) DO UPDATE SET
+    snapshot_json = excluded.snapshot_json,
+    updated_at_unix_ms = excluded.updated_at_unix_ms;
+UPDATE vmm_core_mutations
+SET state = '{committed}', updated_at_unix_ms = {now}
+WHERE operation_id = '{operation_id}' AND state = '{prepared}';
+{pending_turn_update}COMMIT;"#,
+            snapshot_key = VMM_CORE_SNAPSHOT_KEY,
+            committed = VMM_CORE_MUTATION_COMMITTED,
+            prepared = VMM_CORE_MUTATION_PREPARED,
+        );
+        let result = self
+            .client
+            .execute_sqlite_script_typed(
+                VMM_SPACE_ID,
+                self.sqlite_binding_id.as_str(),
+                script.as_str(),
+                Vec::new(),
+            )
+            .await
+            .map_err(|error| format!("提交原生 VMM 维护关系状态失败：{error}"))?;
+        if !result.success {
+            return Err(format!("提交原生 VMM 维护关系状态失败：{}", result.message));
+        }
+        Ok(())
+    }
+
+    /// Marks one committed native Core mutation fully reconciled after vector cleanup.
+    /// 在向量清理完成后将一条已提交原生 Core 变更标记为完全对账。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `operation_id` identifies the exact committed mutation.
+    /// `operation_id` 标识准确的已提交变更。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success after the completed marker is durable.
+    /// 完成标记耐久化后返回成功。
+    pub async fn complete_core_mutation(&self, operation_id: &str) -> Result<(), String> {
+        let result = self
+            .client
+            .execute_sqlite_script_typed(
+                VMM_SPACE_ID,
+                self.sqlite_binding_id.as_str(),
+                "UPDATE vmm_core_mutations SET state = 'completed', updated_at_unix_ms = ? WHERE operation_id = ? AND state = 'committed';",
+                vec![
+                    ControllerSqliteValue::Int64(current_unix_epoch_millis_i64()?),
+                    sqlite_text(operation_id),
+                ],
+            )
+            .await
+            .map_err(|error| format!("完成原生 VMM 维护变更对账失败：{error}"))?;
+        if !result.success {
+            return Err(format!("完成原生 VMM 维护变更对账失败：{}", result.message));
         }
         Ok(())
     }
@@ -1253,6 +1928,134 @@ struct SnapshotJsonRow {
     snapshot_json: String,
 }
 
+/// Carries one native post-action analysis job returned by SQLite.
+/// 携带 SQLite 返回的一条原生 PostAction 分析作业。
+#[derive(Clone, Debug, Deserialize)]
+struct NativeVmmPendingAnalysisJobRow {
+    /// Stable root operation identity.
+    /// 稳定根操作身份。
+    operation_id: String,
+    /// Exact caller-request fingerprint.
+    /// 准确调用方请求指纹。
+    request_fingerprint: String,
+    /// Serialized job semantics, erased after completion.
+    /// 作业序列化语义，完成后擦除。
+    payload_json: String,
+    /// Derived intake storage-mutation operation identity.
+    /// 派生登记存储变更操作身份。
+    intake_mutation_operation_id: String,
+    /// Durable pending turn identity after intake commits.
+    /// 登记提交后的耐久待处理回合身份。
+    turn_id: Option<String>,
+    /// Current host scheduling state.
+    /// 当前宿主调度状态。
+    state: String,
+    /// Number of failed analysis attempts.
+    /// 分析失败尝试次数。
+    attempt_count: i64,
+    /// Earliest retry timestamp in Unix milliseconds.
+    /// 最早重试 Unix 毫秒时间戳。
+    next_attempt_at_unix_ms: i64,
+    /// Latest bounded failure diagnostic.
+    /// 最近一次有界失败诊断。
+    last_error: Option<String>,
+}
+
+impl NativeVmmPendingAnalysisJobRow {
+    /// Converts and validates one private SQLite row into the public durable job.
+    /// 将一条私有 SQLite 记录转换并校验为公开耐久作业。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A strongly typed job, or an error for invalid persisted counters or state.
+    /// 返回强类型作业；持久计数或状态无效时返回错误。
+    fn into_job(self) -> Result<NativeVmmPendingAnalysisJob, String> {
+        if !matches!(
+            self.state.as_str(),
+            VMM_PENDING_ANALYSIS_INTAKING
+                | VMM_PENDING_ANALYSIS_READY
+                | VMM_PENDING_ANALYSIS_COMPLETED
+        ) {
+            return Err(format!("原生 VMM 待分析作业状态 `{}` 无效", self.state));
+        }
+        let attempt_count = u32::try_from(self.attempt_count)
+            .map_err(|_| String::from("原生 VMM 待分析作业尝试次数无效"))?;
+        let state_shape_valid = match self.state.as_str() {
+            VMM_PENDING_ANALYSIS_INTAKING => {
+                self.turn_id.is_none() && !self.payload_json.is_empty()
+            }
+            VMM_PENDING_ANALYSIS_READY => self.turn_id.is_some() && !self.payload_json.is_empty(),
+            VMM_PENDING_ANALYSIS_COMPLETED => self.payload_json.is_empty(),
+            _ => false,
+        };
+        if !state_shape_valid || self.next_attempt_at_unix_ms < 0 {
+            return Err(String::from("原生 VMM 待分析作业持久状态形态无效"));
+        }
+        if self
+            .last_error
+            .as_ref()
+            .is_some_and(|error| error.chars().count() > VMM_PENDING_ANALYSIS_ERROR_CHAR_LIMIT)
+        {
+            return Err(String::from("原生 VMM 待分析作业诊断超过长度限制"));
+        }
+        Ok(NativeVmmPendingAnalysisJob {
+            operation_id: self.operation_id,
+            request_fingerprint: self.request_fingerprint,
+            payload_json: self.payload_json,
+            intake_mutation_operation_id: self.intake_mutation_operation_id,
+            turn_id: self.turn_id,
+            state: self.state,
+            attempt_count,
+            next_attempt_at_unix_ms: self.next_attempt_at_unix_ms,
+            last_error: self.last_error,
+        })
+    }
+}
+
+/// Carries one durable native Core maintenance mutation returned by SQLite.
+/// 携带 SQLite 返回的一条耐久原生 Core 维护变更。
+#[derive(Clone, Debug, Deserialize)]
+struct NativeVmmCoreMutationRow {
+    /// Stable user-operation UUID.
+    /// 稳定用户操作 UUID。
+    operation_id: String,
+    /// Exact maintenance operation kind.
+    /// 准确维护操作类型。
+    mutation_kind: String,
+    /// Current durable journal state.
+    /// 当前耐久账本状态。
+    state: String,
+    /// Full vector-bearing before snapshot.
+    /// 包含向量的完整操作前快照。
+    before_snapshot_json: String,
+    /// Full vector-bearing after snapshot.
+    /// 包含向量的完整操作后快照。
+    after_snapshot_json: String,
+    /// Serialized typed replay result.
+    /// 已序列化的强类型重放结果。
+    result_json: String,
+}
+
+impl NativeVmmCoreMutationRow {
+    /// Converts the private SQLite row into the public recovery record.
+    /// 将私有 SQLite 记录转换为公开恢复记录。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A durable native Core mutation with identical field values.
+    /// 返回字段值完全一致的耐久原生 Core 变更。
+    fn into_mutation(self) -> NativeVmmCoreMutation {
+        NativeVmmCoreMutation {
+            operation_id: self.operation_id,
+            mutation_kind: self.mutation_kind,
+            state: self.state,
+            before_snapshot_json: self.before_snapshot_json,
+            after_snapshot_json: self.after_snapshot_json,
+            result_json: self.result_json,
+        }
+    }
+}
+
 /// Carries one SQLite row for a one-level native VMM project.
 /// 携带一条单层原生 VMM 项目的 SQLite 记录。
 #[derive(Debug, Deserialize)]
@@ -1539,6 +2342,44 @@ CREATE TABLE IF NOT EXISTS vmm_core_snapshots (
     updated_at_unix_ms INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS vmm_pending_analysis_jobs (
+    operation_id TEXT PRIMARY KEY CHECK(length(trim(operation_id)) > 0),
+    request_fingerprint TEXT NOT NULL CHECK(length(trim(request_fingerprint)) > 0),
+    payload_json TEXT NOT NULL,
+    intake_mutation_operation_id TEXT NOT NULL UNIQUE
+        CHECK(length(trim(intake_mutation_operation_id)) > 0),
+    turn_id TEXT UNIQUE,
+    state TEXT NOT NULL CHECK(state IN ('intaking', 'ready', 'completed')),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+    next_attempt_at_unix_ms INTEGER NOT NULL DEFAULT 0 CHECK(next_attempt_at_unix_ms >= 0),
+    last_error TEXT CHECK(last_error IS NULL OR length(last_error) <= {analysis_error_char_limit}),
+    created_at_unix_ms INTEGER NOT NULL,
+    updated_at_unix_ms INTEGER NOT NULL,
+    CHECK(
+        (state = 'intaking' AND turn_id IS NULL)
+        OR (state = 'ready' AND turn_id IS NOT NULL AND length(payload_json) > 0)
+        OR (state = 'completed' AND length(payload_json) = 0)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_vmm_pending_analysis_due
+ON vmm_pending_analysis_jobs(state, next_attempt_at_unix_ms, created_at_unix_ms);
+
+CREATE TABLE IF NOT EXISTS vmm_core_mutations (
+    operation_id TEXT PRIMARY KEY CHECK(length(trim(operation_id)) > 0),
+    mutation_kind TEXT NOT NULL CHECK(length(trim(mutation_kind)) > 0),
+    state TEXT NOT NULL CHECK(state IN ('prepared', 'committed', 'completed')),
+    before_snapshot_json TEXT NOT NULL,
+    after_snapshot_json TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    created_at_unix_ms INTEGER NOT NULL,
+    updated_at_unix_ms INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vmm_core_mutations_single_unfinished
+ON vmm_core_mutations((1))
+WHERE state != 'completed';
+
 CREATE TABLE IF NOT EXISTS vmm_vector_spaces (
     vector_space_id TEXT PRIMARY KEY,
     table_name TEXT NOT NULL UNIQUE,
@@ -1550,6 +2391,7 @@ CREATE TABLE IF NOT EXISTS vmm_vector_spaces (
 "#,
         schema_version = VMM_SCHEMA_VERSION,
         default_project_id = DEFAULT_VMM_PROJECT_ID,
+        analysis_error_char_limit = VMM_PENDING_ANALYSIS_ERROR_CHAR_LIMIT,
     )
 }
 
@@ -1654,8 +2496,57 @@ fn sqlite_text(value: impl Into<String>) -> ControllerSqliteValue {
     ControllerSqliteValue::String(value.into())
 }
 
-/// Converts one public native project identity into SQLite's signed integer range.
-/// 将一个公开原生项目身份转换到 SQLite 有符号整数范围。
+/// Validates one complete owner-plus-recall project identity set before persistence.
+/// 在持久化前校验一组完整的归属项目与仅召回项目身份。
+fn validate_project_access_ids(
+    owner_project_id: u64,
+    linked_project_ids: &[u64],
+) -> Result<(), String> {
+    project_id_i64(owner_project_id)?;
+    let unique = linked_project_ids.iter().copied().collect::<BTreeSet<_>>();
+    if unique.len() != linked_project_ids.len() {
+        return Err(String::from("原生 VMM 连带查询项目不得重复"));
+    }
+    if linked_project_ids.contains(&owner_project_id) {
+        return Err(String::from("原生 VMM 连带查询项目不得包含所有者项目"));
+    }
+    for project_id in linked_project_ids {
+        project_id_i64(*project_id)?;
+    }
+    Ok(())
+}
+
+/// Builds one SQLite transaction that publishes owner and recall associations together.
+/// 构建一个同时发布归属与召回关联的 SQLite 事务。
+fn build_project_access_assignment_script(
+    vulcan_project_id: &str,
+    owner_project_id: u64,
+    linked_project_ids: &[u64],
+    now: i64,
+) -> Result<String, String> {
+    validate_project_access_ids(owner_project_id, linked_project_ids)?;
+    let escaped_project_id = sqlite_string_literal(vulcan_project_id);
+    let owner_project_id = project_id_i64(owner_project_id)?;
+    let mut script = format!(
+        "BEGIN IMMEDIATE;\nINSERT INTO vmm_project_bindings(vulcan_project_id, vmm_project_id, created_at_unix_ms, updated_at_unix_ms) VALUES ('{escaped_project_id}', {owner_project_id}, {now}, {now}) ON CONFLICT(vulcan_project_id) DO UPDATE SET vmm_project_id = excluded.vmm_project_id, updated_at_unix_ms = excluded.updated_at_unix_ms;\nDELETE FROM vmm_project_query_links WHERE vulcan_project_id = '{escaped_project_id}';\n"
+    );
+    for (position, project_id) in linked_project_ids.iter().enumerate() {
+        let project_id = project_id_i64(*project_id)?;
+        let position = i64::try_from(position)
+            .map_err(|_| String::from("原生 VMM 连带查询项目数量超出支持范围"))?;
+        script.push_str(
+            format!(
+                "INSERT INTO vmm_project_query_links(vulcan_project_id, linked_vmm_project_id, position, created_at_unix_ms) VALUES ('{escaped_project_id}', {project_id}, {position}, {now});\n"
+            )
+            .as_str(),
+        );
+    }
+    script.push_str("COMMIT;");
+    Ok(script)
+}
+
+/// Converts one public native VMM project id into the exact SQLite integer domain.
+/// 将一个公开的原生 VMM 项目标识转换到准确的 SQLite 整数域。
 fn project_id_i64(project_id: u64) -> Result<i64, String> {
     if project_id == 0 {
         return Err(String::from("原生 VMM 项目标识必须大于零"));
@@ -1810,5 +2701,67 @@ mod tests {
         assert!(schema.contains("vmm_vector_spaces"));
         assert!(!schema.contains("vector_json"));
         assert!(!schema.contains("embedding_json"));
+    }
+
+    /// Verifies the native maintenance journal preserves recovery and idempotency inputs.
+    /// 验证原生维护账本保留恢复与幂等所需输入。
+    #[test]
+    fn schema_creates_single_unfinished_native_maintenance_journal() {
+        let schema = build_vmm_schema_script();
+        assert!(schema.contains("CREATE TABLE IF NOT EXISTS vmm_core_mutations"));
+        assert!(schema.contains("before_snapshot_json TEXT NOT NULL"));
+        assert!(schema.contains("after_snapshot_json TEXT NOT NULL"));
+        assert!(schema.contains("result_json TEXT NOT NULL"));
+        assert!(schema.contains("idx_vmm_core_mutations_single_unfinished"));
+        assert!(schema.contains("WHERE state != 'completed'"));
+    }
+
+    /// Verifies post-action analysis jobs bind turns atomically and erase completed payloads.
+    /// 验证 PostAction 分析作业原子绑定回合并擦除已完成载荷。
+    #[test]
+    fn schema_creates_durable_post_action_analysis_queue() {
+        let schema = build_vmm_schema_script();
+        assert!(schema.contains("CREATE TABLE IF NOT EXISTS vmm_pending_analysis_jobs"));
+        assert!(schema.contains("intake_mutation_operation_id TEXT NOT NULL UNIQUE"));
+        assert!(
+            schema
+                .contains("state TEXT NOT NULL CHECK(state IN ('intaking', 'ready', 'completed'))")
+        );
+        assert!(schema.contains("idx_vmm_pending_analysis_due"));
+    }
+
+    /// Verifies owner and recall links are published by one ordered SQLite transaction.
+    /// 验证归属与召回链接通过一个有序 SQLite 事务共同发布。
+    #[test]
+    fn project_access_assignment_is_one_transaction() {
+        let script = build_project_access_assignment_script("project'a", 2, &[3, 4], 99)
+            .expect("project access assignment should build");
+        assert!(script.starts_with("BEGIN IMMEDIATE;"));
+        assert!(script.ends_with("COMMIT;"));
+        assert!(script.contains("VALUES ('project''a', 2, 99, 99)"));
+        assert!(script.contains("VALUES ('project''a', 3, 0, 99)"));
+        assert!(script.contains("VALUES ('project''a', 4, 1, 99)"));
+        assert!(
+            script
+                .find("vmm_project_bindings")
+                .expect("owner statement")
+                < script
+                    .find("DELETE FROM vmm_project_query_links")
+                    .expect("link reset statement")
+        );
+    }
+
+    /// Verifies complete access assignment rejects duplicate and owner-linked recall targets.
+    /// 验证完整访问配置拒绝重复及包含所有者的召回目标。
+    #[test]
+    fn project_access_assignment_rejects_invalid_link_sets() {
+        assert_eq!(
+            validate_project_access_ids(2, &[3, 3]).expect_err("duplicates must fail"),
+            "原生 VMM 连带查询项目不得重复"
+        );
+        assert_eq!(
+            validate_project_access_ids(2, &[2]).expect_err("owner link must fail"),
+            "原生 VMM 连带查询项目不得包含所有者项目"
+        );
     }
 }

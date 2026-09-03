@@ -1,6 +1,6 @@
 import * as React from "react"
 
-import type { VmmMemorySnapshot } from "@/types"
+import type { VmmConfigDraftSummary, VmmMemorySnapshot } from "@/types"
 
 import {
   useMemoryAreaController,
@@ -62,6 +62,50 @@ export function shouldRequestVmmManagementCatalog(input: {
   )
 }
 
+// externalSetupActionConnection projects only gRPC transport fields into one transient action payload.
+// externalSetupActionConnection 只把 gRPC 传输字段投影到一次临时动作载荷。
+export function externalSetupActionConnection(input: VmmQuickSetupConnectionInput) {
+  return {
+    connection: {
+      grpcTarget: input.externalEndpoint.trim(),
+      grpcApiKey: input.externalApiKey,
+    },
+  }
+}
+
+// materializeExternalFixedBindingPlan replaces only pending default rows with the confirmed remote fixed project ID.
+// materializeExternalFixedBindingPlan 只把待定的默认行替换为已确认的远端固定项目 ID。
+// Parameters: plan contains user-visible row decisions and fixedProjectId is the authoritative remote ID.
+// 参数：plan 包含用户可见的逐行决定，fixedProjectId 是权威远端 ID。
+// Returns: a service-ready plan that preserves explicit create and alternate-existing choices.
+// 返回值：保留明确创建及其他已有项目选择、可直接提交给服务端的计划。
+export function materializeExternalFixedBindingPlan(
+  plan: VmmQuickSetupInput["bindingPlan"],
+  fixedProjectId: number,
+): VmmQuickSetupInput["bindingPlan"] {
+  if (!Number.isInteger(fixedProjectId) || fixedProjectId <= 0) {
+    throw new Error("External VMM fixed project binding requires a positive project id.")
+  }
+  return plan.map((entry) => (
+    entry.action === "bind_existing" && entry.targetProjectId == null
+      ? { ...entry, targetProjectId: fixedProjectId }
+      : entry
+  ))
+}
+
+// shouldRouteAdvancedSaveToSetup protects backend switches with the full project reconciliation flow.
+// shouldRouteAdvancedSaveToSetup 通过完整项目对账流程保护后端切换。
+// Parameters: draftBackend is the edited backend and savedBackend is the currently active backend.
+// 参数：draftBackend 是编辑后的后端，savedBackend 是当前活动后端。
+// Returns: true only when a direct advanced save would bypass required binding decisions.
+// 返回值：仅当直接高级保存会绕过必需绑定决定时返回 true。
+export function shouldRouteAdvancedSaveToSetup(
+  draftBackend: VmmConfigDraftSummary["backendMode"],
+  savedBackend: VmmConfigDraftSummary["backendMode"],
+): boolean {
+  return draftBackend !== savedBackend
+}
+
 // MemoryArea renders the VMM memory management workbench.
 // MemoryArea 渲染 VMM 记忆管理工作台。
 export function MemoryArea(props: {
@@ -103,8 +147,8 @@ export function MemoryArea(props: {
     saveDraft,
     setGlobalDraft,
   } = controller;
-  // setupDialogOpen controls the first-time managed VMM setup workflow.
-  // setupDialogOpen 控制首次托管 VMM 快速配置流程。
+  // setupDialogOpen controls the first-time native or external VMM setup workflow.
+  // setupDialogOpen 控制首次原生或外置 VMM 快速配置流程。
   const [setupDialogOpen, setSetupDialogOpen] = React.useState(false)
   // catalogLoadRequested prevents repeated automatic directory requests during snapshot refreshes.
   // catalogLoadRequested 防止快照刷新期间重复发起自动目录请求。
@@ -154,30 +198,18 @@ export function MemoryArea(props: {
         ? { native: catalogResult.data.value }
         : null
     }
-    // connectionDraft must be persisted before any external management request uses it.
-    // connectionDraft 必须在任何外置管理请求使用前完成持久化。
-    const connectionDraft = {
-      ...globalDraft,
-      backendMode: "external_grpc" as const,
-      enabled: false,
-      grpcTarget: input.externalEndpoint,
-      grpcApiKey: input.externalApiKey,
-      managementBaseUrl: input.externalManagementBaseUrl,
-      managementBearerToken: input.externalManagementToken,
-      managedInstallEnabled: false,
-      autoStartPolicy: "manual",
-    }
-    if (!await applyDraft("global", null, connectionDraft)) return null
-    if (!await runAction("healthz")) return null
-    if (!await runAction("management_capabilities")) return null
-    const catalogResult = await runAction("load_users_projects")
+    // connection remains request-scoped until the user confirms the complete setup.
+    // connection 在用户确认完整配置前只存在于当前请求中。
+    const connection = externalSetupActionConnection(input)
+    if (!await runAction("healthz", connection)) return null
+    const catalogResult = await runAction("load_users_projects", connection)
     return catalogResult?.data.kind === "users_projects"
       ? {
           externalUsers: catalogResult.data.value.users,
           externalProjects: catalogResult.data.value.projects,
         }
       : null
-  }, [applyDraft, globalDraft, runAction])
+  }, [runAction])
 
   // handleQuickSetup resolves external identities when needed and enables the selected backend with explicit bindings.
   // handleQuickSetup 在需要时解析外置身份，并使用显式绑定启用所选后端。
@@ -185,7 +217,11 @@ export function MemoryArea(props: {
     let userId = ""
     let projectId = ""
     if (input.mode === "external") {
+      // connection is sent explicitly so resolving remote identities still precedes persistence.
+      // connection 被明确随请求发送，使远端身份解析仍然发生在持久化之前。
+      const connection = externalSetupActionConnection(input)
       const userResult = await runAction("resolve_user", {
+        ...connection,
         userRef: input.userName,
         confirmCreate: true,
       })
@@ -198,6 +234,7 @@ export function MemoryArea(props: {
           projectId = String(input.externalFixedTargetProjectId ?? "")
         } else {
           const projectResult = await runAction("ensure_project", {
+            ...connection,
             projectPath: `${input.externalProjectPrefix}/${input.externalFixedProjectName}`,
             confirmCreate: true,
           })
@@ -213,24 +250,44 @@ export function MemoryArea(props: {
       backendMode: input.mode === "native" ? "native" as const : "external_grpc" as const,
       nativeProjectBindingMode: input.mode === "native" ? input.bindingMode : globalDraft.nativeProjectBindingMode,
       externalProjectBindingMode: input.mode === "external" ? input.bindingMode : globalDraft.externalProjectBindingMode,
-      nativeFixedProjectId: String(input.nativeFixedProjectId),
-      externalProjectPrefix: input.externalProjectPrefix,
+      nativeFixedProjectId: input.mode === "native" ? String(input.nativeFixedProjectId) : globalDraft.nativeFixedProjectId,
+      externalProjectPrefix: input.mode === "external" ? input.externalProjectPrefix : globalDraft.externalProjectPrefix,
       enabled: true,
-      grpcTarget: input.mode === "external" ? input.externalEndpoint : "",
-      grpcApiKey: input.mode === "external" ? input.externalApiKey : "",
-      managementBaseUrl: input.mode === "external" ? input.externalManagementBaseUrl : "",
-      managementBearerToken: input.mode === "external" ? input.externalManagementToken : "",
-      managedInstallEnabled: false,
-      autoStartPolicy: "manual",
-      userId,
-      projectId,
+      grpcTarget: input.mode === "external" ? input.externalEndpoint : globalDraft.grpcTarget,
+      grpcApiKey: input.mode === "external" ? input.externalApiKey : globalDraft.grpcApiKey,
+      managementBaseUrl: input.mode === "external" ? input.externalManagementBaseUrl : globalDraft.managementBaseUrl,
+      managementBearerToken: input.mode === "external" ? input.externalManagementToken : globalDraft.managementBearerToken,
+      userId: input.mode === "external" ? userId : globalDraft.userId,
+      projectId: input.mode === "external" ? projectId : globalDraft.projectId,
     }
-    if (!await applyDraft("global", null, enabledDraft, input.bindingPlan)) return false
-    await runAction("healthz")
-    if (input.mode === "external") await runAction("load_users_projects")
-    else await runAction("native_project_catalog")
+    // fixedPlan materializes only rows that retained the global fixed default; explicit row edits survive.
+    // fixedPlan 只物化仍采用全局固定默认值的行；逐行明确修改会被保留。
+    const fixedPlan = input.mode === "external" && input.bindingMode === "fixed"
+      ? materializeExternalFixedBindingPlan(input.bindingPlan, Number(projectId))
+      : input.bindingPlan
+    if (!await applyDraft("global", null, enabledDraft, fixedPlan)) return false
+    if (input.mode === "external") {
+      await runAction("healthz")
+      await runAction("load_users_projects")
+    } else {
+      await runAction("native_project_catalog")
+    }
     return true
   }, [applyDraft, globalDraft, runAction])
+
+  // saveAdvancedDraft routes backend switches through setup so every unbound project has a decision.
+  // saveAdvancedDraft 将后端切换转入快速配置，使每个未绑定项目都有明确决定。
+  const saveAdvancedDraft = React.useCallback(async (): Promise<boolean> => {
+    if (shouldRouteAdvancedSaveToSetup(
+      globalDraft.backendMode,
+      props.snapshot.globalDraft.backendMode,
+    )) {
+      setSetupDialogOpen(true)
+      props.onSelectSection("overview")
+      return false
+    }
+    return saveDraft("global")
+  }, [globalDraft.backendMode, props.onSelectSection, props.snapshot.globalDraft.backendMode, saveDraft])
 
   // overviewPage is the safe product fallback for stale navigation and first-time setup.
   // overviewPage 是旧导航与首次配置共用的安全产品回退页。
@@ -267,23 +324,12 @@ export function MemoryArea(props: {
   }
 
   if (activeSection === "inference") {
+    if (globalDraft.backendMode !== "native") return overviewPage
     return (
       <section className="vmm-memory-page">
         <div className="vmm-memory-shell status-only">
           <main className="vmm-memory-main vmm-status-page">
-            <VmmInferenceSettings
-              maintenanceActive={["backing_up", "rebuilding", "cancelling"].includes(
-                props.snapshot.maintenance.phase,
-              )}
-              onRestartVmm={async () => {
-                // Never start VMM while the exclusive backup/rebuild owner still holds the data space.
-                // 在备份/重建独占所有者仍持有数据空间时，绝不启动 VMM。
-                if (["backing_up", "rebuilding", "cancelling"].includes(props.snapshot.maintenance.phase)) {
-                  return false
-                }
-                return Boolean(await runAction("managed_runtime_restart"))
-              }}
-            />
+            <VmmInferenceSettings />
           </main>
         </div>
       </section>
@@ -397,9 +443,9 @@ export function MemoryArea(props: {
               draft={globalDraft}
               notice={notice}
               onChange={(patch) => setGlobalDraft((draft) => ({ ...draft, ...patch }))}
-              onSave={() => saveDraft("global")}
+              onSave={saveAdvancedDraft}
               onTestManagement={async () => {
-                if (!await saveDraft("global")) return false
+                if (!await saveAdvancedDraft()) return false
                 return Boolean(await runAction("management_capabilities"))
               }}
               snapshot={props.snapshot}

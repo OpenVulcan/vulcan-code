@@ -22,8 +22,8 @@ use crate::{
 /// 在单个提示词回合准入前捕获的不可变 VMM 服务就绪事实。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct WebuiVmmRuntimeReadiness {
-    /// Whether configuration succeeded and the managed service process is actually ready.
-    /// 配置是否成功且托管服务进程是否真实就绪。
+    /// Whether the selected native or external backend is actually ready.
+    /// 所选原生或外置后端是否真实就绪。
     pub(crate) service_ready: bool,
     /// Whether the ready process also exposes the complete PreCheck capability.
     /// 已就绪进程是否同时具备完整 PreCheck 能力。
@@ -35,8 +35,8 @@ pub(crate) struct WebuiVmmRuntimeReadiness {
 ///
 /// # Parameters
 /// 参数
-/// `state` owns the current Provider configuration and managed-service lifecycle owner.
-/// `state` 持有当前 Provider 配置与托管服务生命周期所有者。
+/// `state` owns the current Provider configuration and backend readiness owners.
+/// `state` 持有当前 Provider 配置与后端就绪状态所有者。
 ///
 /// # Returns
 /// 返回值
@@ -45,27 +45,22 @@ pub(crate) struct WebuiVmmRuntimeReadiness {
 pub(crate) fn webui_vmm_runtime_readiness(
     state: &SharedServiceBridgeState,
 ) -> Result<WebuiVmmRuntimeReadiness, String> {
-    let global_layer = {
+    let (global_layer, native_host_ai_ready) = {
         let guard = state
             .lock()
             .map_err(|error| format!("读取 VMM 服务就绪状态失败：{error}"))?;
         let Some(agent_runtime) = guard.agent_runtime.as_ref() else {
             return Ok(project_webui_vmm_runtime_readiness(false, false, false));
         };
-        agent_runtime.provider_configuration.vmm.clone()
+        (
+            agent_runtime.provider_configuration.vmm.clone(),
+            guard
+                .native_vmm_maintenance
+                .as_ref()
+                .is_some_and(|maintenance| maintenance.host_ai_status().ready),
+        )
     };
     match crate::vmm::current_vmm_deployment_mode(&global_layer) {
-        VmmDeploymentMode::Managed => {
-            let Some(runtime) = crate::managed_memory_mesh_runtime::snapshot_from_state(state)
-            else {
-                return Ok(project_webui_vmm_runtime_readiness(false, false, false));
-            };
-            Ok(project_webui_vmm_runtime_readiness(
-                runtime.phase == "ready",
-                runtime.scope_ready,
-                runtime.capabilities.precheck_ready,
-            ))
-        }
         VmmDeploymentMode::External => {
             let service_ready = crate::vmm::current_external_vmm_service_ready(&global_layer);
             let effective = vulcan_vmm::VmmEffectiveConfig::resolve(&global_layer, None, None);
@@ -77,7 +72,18 @@ pub(crate) fn webui_vmm_runtime_readiness(
                 precheck_ready,
             ))
         }
-        VmmDeploymentMode::Native => Ok(project_webui_vmm_runtime_readiness(false, false, false)),
+        VmmDeploymentMode::Native => {
+            let effective = vulcan_vmm::VmmEffectiveConfig::resolve(&global_layer, None, None);
+            let service_ready = native_host_ai_ready
+                && effective.diagnose_memory_flow(true) == vulcan_vmm::VmmConfigDiagnostic::Ready;
+            let precheck_ready = service_ready
+                && effective.diagnose_precheck_flow(true) == vulcan_vmm::VmmConfigDiagnostic::Ready;
+            Ok(project_webui_vmm_runtime_readiness(
+                service_ready,
+                service_ready,
+                precheck_ready,
+            ))
+        }
         VmmDeploymentMode::Disabled => Ok(project_webui_vmm_runtime_readiness(false, false, false)),
     }
 }
@@ -91,8 +97,8 @@ pub(crate) fn webui_vmm_runtime_readiness(
 /// `process_ready` 证明当前服务进程或端点处于存活状态。
 /// `scope_ready` proves that required service configuration is complete.
 /// `scope_ready` 证明必需的服务配置已经完整。
-/// `precheck_ready` proves that the current managed generation exposes PreCheck.
-/// `precheck_ready` 证明当前托管代次提供 PreCheck 能力。
+/// `precheck_ready` proves that the selected backend exposes PreCheck.
+/// `precheck_ready` 证明所选后端提供 PreCheck 能力。
 ///
 /// # Returns
 /// 返回值

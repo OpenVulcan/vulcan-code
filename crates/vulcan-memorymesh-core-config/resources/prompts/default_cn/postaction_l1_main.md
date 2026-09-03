@@ -7,7 +7,7 @@
 - `current_time`：服务端当前时间，只在解析相对时间时作为兜底。
 - `reference_turns`：历史回合的精炼摘要。它们只帮助理解语境，不能作为新事实来源。
 - `target_turn`：本次唯一允许提取新信息的对话回合。所有候选都必须来自这里。
-- `recent_grpc_memory_writes`：最近已由工具写入的记忆。它们只用于排除重复，不代表事实发生时间。
+- `recent_direct_memory_writes`：最近已通过宿主直接调用或工具写入的记忆。它们只用于排除重复，不代表事实发生时间。
 
 # Core Task
 输出一个 JSON object，完成以下事项：
@@ -19,7 +19,7 @@
 5. 提取 `profile_nodes`：稳定用户画像或项目画像候选。
 6. 每条候选都要标注 `evidence_source`、`admission`、`admission_reason`。
 
-如果 `target_turn` 没有任何候选，返回空 `details`、空 `memory_nodes`、空 `profile_nodes`。如果有效信息已被 `recent_grpc_memory_writes` 覆盖，只能排除重复的 `memory_nodes`；不得因此排除用户主动陈述、确认或纠正产生的稳定 `profile_nodes` 候选。
+如果 `target_turn` 没有任何候选，返回空 `details`、空 `memory_nodes`、空 `profile_nodes`。如果有效信息已被 `recent_direct_memory_writes` 覆盖，只能排除重复的 `memory_nodes`；不得因此排除用户主动陈述、确认或纠正产生的稳定 `profile_nodes` 候选。
 
 # Language
 自然语言字段必须跟随 `target_turn` 当前问答的主导语言，包括 `details`、`memory_nodes[].abstract`、`memory_nodes[].details`、`profile_nodes[].content`、`context_edges` 中的自由文本值。JSON key、枚举值、ID、数字、代码标识符、配置键名、API 名称和文件路径保持原样。
@@ -30,7 +30,7 @@
 按下面顺序判断每个候选：
 
 1. 是否来自 `target_turn`？不是则不要提取。
-2. 是否已被 `recent_grpc_memory_writes` 覆盖？是则不要重复生成 `memory_nodes`；但如果同一事实来自 `target_turn` 中用户主动陈述、确认或纠正，并且适合作为稳定画像，仍应生成 `profile_nodes` 交给后续评审。
+2. 是否已被 `recent_direct_memory_writes` 覆盖？是则不要重复生成 `memory_nodes`；但如果同一事实来自 `target_turn` 中用户主动陈述、确认或纠正，并且适合作为稳定画像，仍应生成 `profile_nodes` 交给后续评审。
 3. 是否只是助手复述已有记忆、已有画像或通识回答？通常应 `drop`。
 4. 是否在未来跨 session 仍可能有用？只有长期事实、稳定偏好、长期约束、项目规则、业务规则、技术规格、历史决策、重要上下文才适合 `keep`。
 5. 它更适合放入 `memory_nodes` 还是 `profile_nodes`？同一事实可以同时形成记忆候选和画像候选，但画像只保留稳定事实。
@@ -60,7 +60,7 @@
 画像节点必须按领域拆分：饮食偏好、生活习惯、沟通风格、编程语言偏好、项目技术栈、工程约定等不同领域不要合并。同一领域、同一方向、同一生命周期的并列事实可以合并；只有优先级、生命周期、否定关系或后续替代需要独立处理时才拆开。
 
 # Time
-如果输出自然语言字段中会出现“昨天、前天、上周、上个月、最近、刚刚、当时、本周、本月”等相对时间，且可以稳定解析，优先用 `target_turn.created_datetime` 转为绝对日期或日期区间；`current_time.datetime` 只作兜底或校验。日期用 `YYYY-MM-DD`，区间用 `YYYY-MM-DD 至 YYYY-MM-DD`。不要把 `recent_grpc_memory_writes[].created_datetime` 当作事实发生时间。不能稳定解析时保留原表达，不要臆造日期。
+如果输出自然语言字段中会出现“昨天、前天、上周、上个月、最近、刚刚、当时、本周、本月”等相对时间，且可以稳定解析，优先用 `target_turn.created_datetime` 转为绝对日期或日期区间；`current_time.datetime` 只作兜底或校验。日期用 `YYYY-MM-DD`，区间用 `YYYY-MM-DD 至 YYYY-MM-DD`。不要把 `recent_direct_memory_writes[].created_datetime` 当作事实发生时间。不能稳定解析时保留原表达，不要臆造日期。
 
 # Optional Context Edges
 只有当某条 `memory_nodes` 事实明确依赖特定情境，或输入中有明确支持/反驳情境时，才可添加 `context_edges`。每条 edge 只能包含 `context_key`、`context_value`、`relation`，其中 `relation` 为 `support` 或 `rebuttal`。没有明确证据时不要添加。

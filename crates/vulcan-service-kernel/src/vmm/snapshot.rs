@@ -14,6 +14,8 @@ use super::*;
 /// `provider_configuration` 是包含全局 VMM 设置的共享 Provider 配置。
 /// `selected_runtime_state` is the optional runtime state for the selected session.
 /// `selected_runtime_state` 是当前选中会话的可选运行态。
+/// `native_host_ai_status` is the latest side-effect-free native capability validation snapshot.
+/// `native_host_ai_status` 是最近一次无副作用的原生能力校验快照。
 ///
 /// # Returns
 /// 返回值
@@ -23,7 +25,7 @@ pub(crate) fn vmm_memory_snapshot(
     workspace: &vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
     provider_configuration: &ProviderConfigurationFile,
     selected_runtime_state: Option<&SessionRuntimeStateEntry>,
-    managed_runtime: Option<&crate::managed_memory_mesh_runtime::ManagedMemoryMeshSnapshot>,
+    native_host_ai_status: Option<&crate::native_vmm::NativeVmmHostAiStatus>,
 ) -> VmmMemorySnapshot {
     let selected_session = selected_workspace_session(workspace);
     let selected_project = vmm_request_project_scope(
@@ -33,14 +35,8 @@ pub(crate) fn vmm_memory_snapshot(
     let project_layer = selected_project
         .map(|project| cached_project_vmm_layer(&project.path))
         .unwrap_or_default();
-    let mut effective_global_layer = provider_configuration.vmm.clone();
-    if let Some(grpc_target) = crate::vmm_hooks::managed_vmm_public_target() {
-        effective_global_layer.enabled = Some(true);
-        effective_global_layer.grpc_target = Some(grpc_target);
-        effective_global_layer.grpc_api_key = None;
-    }
     let effective = vulcan_vmm::VmmEffectiveConfig::resolve(
-        &effective_global_layer,
+        &provider_configuration.vmm,
         Some(&project_layer),
         selected_runtime_state.map(|state| &state.vmm),
     );
@@ -51,17 +47,22 @@ pub(crate) fn vmm_memory_snapshot(
         Some(&project_layer),
         None,
     );
-    let mut runtime = vmm_runtime_summary(selected_runtime_state, managed_runtime);
+    let mut runtime =
+        vmm_runtime_summary(selected_runtime_state, &effective, native_host_ai_status);
     if vmm_deployment_mode(&provider_configuration.vmm) == VmmDeploymentMode::External {
         let scope_configured =
             effective.diagnose_memory_flow(true) == vulcan_vmm::VmmConfigDiagnostic::Ready;
-        apply_external_vmm_health_probe(&effective.grpc_target, scope_configured, &mut runtime);
+        apply_external_vmm_health_probe(
+            &effective.grpc_target,
+            scope_configured,
+            effective.precheck_enabled,
+            effective.memory_writeback_enabled,
+            &mut runtime,
+        );
     }
     let experience_state = vmm_experience_state(&effective, &provider_configuration.vmm, &runtime);
     let prerequisites = vmm_prerequisites(&effective, &provider_configuration.vmm, &runtime);
     let capabilities = vmm_capabilities(&effective, &runtime);
-    let data_space_state = vmm_data_space_summary(runtime.data_space_state);
-    let maintenance = crate::managed_memory_mesh_maintenance::runtime().snapshot();
     let recent_activity = VmmRecentActivitySummary {
         pending_writebacks: runtime.outbox_count,
         completed_turns: runtime.completed_turns,
@@ -74,8 +75,6 @@ pub(crate) fn vmm_memory_snapshot(
         experience_state,
         prerequisites,
         capabilities,
-        data_space_state,
-        maintenance,
         management_catalog: VmmManagementCatalogSummary::default(),
         recent_activity,
         display_identity,
@@ -109,54 +108,10 @@ pub(crate) fn vmm_memory_snapshot(
         selected_project_id: selected_project.map(|project| project.id.clone()),
         selected_conversation_id: selected_session.map(|session| session.id.to_string()),
         runtime,
-        sections: vmm_management_sections(),
+        sections: vmm_management_sections(effective.backend_mode),
         notice: vmm_memory_notice(&effective, selected_project),
         project_binding_notice: None,
     }
-}
-
-/// Rebuilds every product-facing VMM state dimension after a managed-runtime transition.
-/// 在托管运行时发生状态转换后重建所有面向产品的 VMM 状态维度。
-///
-/// # Parameters
-/// 参数
-/// `retained_snapshot` owns the explicit in-memory management catalog that cannot be rebuilt from workspace files.
-/// `retained_snapshot` 持有无法从工作区文件重建的显式内存管理目录。
-/// `workspace` is the authoritative retained workspace used to resolve the selected session and project.
-/// `workspace` 是用于解析当前会话与项目的权威保留工作区。
-/// `provider_configuration` is the authoritative provider configuration containing the global VMM layer.
-/// `provider_configuration` 是包含全局 VMM 配置层的权威 Provider 配置。
-/// `managed_runtime` is the exact managed child-process lifecycle snapshot.
-/// `managed_runtime` 是准确的托管子进程生命周期快照。
-///
-/// # Returns
-/// 返回值
-/// Returns one internally consistent VMM snapshot while preserving the explicit management catalog.
-/// 返回一份内部一致且保留显式管理目录的 VMM 快照。
-pub(crate) fn refresh_vmm_memory_runtime_projection(
-    retained_snapshot: &VmmMemorySnapshot,
-    workspace: &vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
-    provider_configuration: &ProviderConfigurationFile,
-    managed_runtime: &crate::managed_memory_mesh_runtime::ManagedMemoryMeshSnapshot,
-) -> VmmMemorySnapshot {
-    // The selected session runtime belongs to the retained workspace and must stay aligned with
-    // the project and conversation identities rebuilt by `vmm_memory_snapshot`.
-    // 当前会话运行态归属于保留工作区，必须与 `vmm_memory_snapshot` 重建的项目和会话身份保持一致。
-    let selected_runtime_state = workspace
-        .session_runtime_state
-        .get(&workspace.selected_session);
-    let mut refreshed = vmm_memory_snapshot(
-        workspace,
-        provider_configuration,
-        selected_runtime_state,
-        Some(managed_runtime),
-    );
-    // Management rows are an explicit runtime cache. Rebuilding lifecycle-derived state must
-    // never discard rows that were loaded through the management transport.
-    // 管理记录是显式运行时缓存；重建生命周期派生状态绝不能丢弃通过管理传输加载的记录。
-    refreshed.management_catalog = retained_snapshot.management_catalog.clone();
-    hydrate_vmm_default_identity(&mut refreshed);
-    refreshed
 }
 
 /// Resolves the globally configured VMM identity to human-readable catalog values.
@@ -214,26 +169,11 @@ fn vmm_experience_state(
     let lifecycle = vmm_lifecycle_state(runtime);
     let required_configuration_ready =
         effective.diagnose_memory_flow(true) == vulcan_vmm::VmmConfigDiagnostic::Ready;
-    let data_space_blocked = matches!(
-        runtime.data_space_state,
-        vulcan_service_api::VmmDataSpaceState::UnmarkedHistory
-            | vulcan_service_api::VmmDataSpaceState::FingerprintChanged
-            | vulcan_service_api::VmmDataSpaceState::MarkerCorrupt
-            | vulcan_service_api::VmmDataSpaceState::MarkerVersionUnsupported
-            | vulcan_service_api::VmmDataSpaceState::SchemaMigrationRequired
-    );
     let setup = if deployment == VmmDeploymentMode::Disabled {
         VmmSetupState::NotConfigured
     } else if !required_configuration_ready {
         VmmSetupState::Incomplete
-    } else if data_space_blocked {
-        VmmSetupState::Blocked
-    } else if matches!(
-        lifecycle,
-        VmmLifecycleState::Starting | VmmLifecycleState::Restarting
-    ) {
-        VmmSetupState::Checking
-    } else if matches!(lifecycle, VmmLifecycleState::Failed) {
+    } else if runtime.backend_error.is_some() {
         VmmSetupState::Blocked
     } else {
         VmmSetupState::Ready
@@ -250,18 +190,11 @@ fn vmm_experience_state(
         } else {
             VmmHealthState::Healthy
         }
-    // Both an authenticated managed-health failure and an explicit external connection error make the service unavailable.
-    // 经过鉴权的托管健康失败与明确的外部连接错误都会使服务进入不可用状态。
-    } else if runtime.managed_phase == "unhealthy"
-        || (deployment == VmmDeploymentMode::External && runtime.managed_last_error.is_some())
-    {
+    } else if runtime.backend_error.is_some() {
         VmmHealthState::Unavailable
     } else if deployment == VmmDeploymentMode::External {
         VmmHealthState::Unknown
-    } else if matches!(
-        lifecycle,
-        VmmLifecycleState::Crashed | VmmLifecycleState::Failed
-    ) {
+    } else if matches!(lifecycle, VmmLifecycleState::Failed) {
         VmmHealthState::Unavailable
     } else {
         VmmHealthState::Unknown
@@ -271,76 +204,6 @@ fn vmm_experience_state(
         setup,
         lifecycle,
         health,
-    }
-}
-
-/// Projects the internal data-space inspection into user-facing translation keys and actions.
-/// 将内部数据空间检查投影为用户可见的翻译键与操作。
-///
-/// # Parameters
-/// 参数
-/// `state` is the exact managed data-space inspection state.
-/// `state` 是准确的托管数据空间检查状态。
-///
-/// # Returns
-/// 返回值
-/// A stable product-facing data-space summary.
-/// 返回稳定的产品级数据空间摘要。
-fn vmm_data_space_summary(state: vulcan_service_api::VmmDataSpaceState) -> VmmDataSpaceSummary {
-    use vulcan_service_api::VmmDataSpaceState;
-
-    let (title_key, description_key, action_kind) = match state {
-        VmmDataSpaceState::Unknown => (
-            "memory.dataSpace.unknown.title",
-            "memory.dataSpace.unknown.description",
-            None,
-        ),
-        VmmDataSpaceState::Empty => (
-            "memory.dataSpace.empty.title",
-            "memory.dataSpace.empty.description",
-            None,
-        ),
-        VmmDataSpaceState::Initialized | VmmDataSpaceState::Ready => (
-            "memory.dataSpace.ready.title",
-            "memory.dataSpace.ready.description",
-            None,
-        ),
-        VmmDataSpaceState::UnmarkedHistory => (
-            "memory.dataSpace.unmarkedHistory.title",
-            "memory.dataSpace.unmarkedHistory.description",
-            Some("backup_and_rebuild"),
-        ),
-        VmmDataSpaceState::FingerprintChanged => (
-            "memory.dataSpace.fingerprintChanged.title",
-            "memory.dataSpace.fingerprintChanged.description",
-            Some("backup_and_rebuild"),
-        ),
-        VmmDataSpaceState::MarkerCorrupt => (
-            "memory.dataSpace.markerCorrupt.title",
-            "memory.dataSpace.markerCorrupt.description",
-            Some("inspect_data"),
-        ),
-        VmmDataSpaceState::MarkerVersionUnsupported => (
-            "memory.dataSpace.markerVersionUnsupported.title",
-            "memory.dataSpace.markerVersionUnsupported.description",
-            Some("migrate_data"),
-        ),
-        VmmDataSpaceState::SchemaMigrationRequired => (
-            "memory.dataSpace.schemaMigrationRequired.title",
-            "memory.dataSpace.schemaMigrationRequired.description",
-            Some("migrate_data"),
-        ),
-        VmmDataSpaceState::RebuildRunning => (
-            "memory.dataSpace.rebuildRunning.title",
-            "memory.dataSpace.rebuildRunning.description",
-            Some("view_progress"),
-        ),
-    };
-    VmmDataSpaceSummary {
-        state,
-        title_key: title_key.to_string(),
-        description_key: description_key.to_string(),
-        action_kind: action_kind.map(str::to_string),
     }
 }
 
@@ -380,8 +243,8 @@ pub(super) fn vmm_deployment_mode(global_layer: &vulcan_vmm::VmmConfigLayer) -> 
     }
 }
 
-/// Maps the managed runtime phase to a stable lifecycle enum.
-/// 将托管运行阶段映射为稳定生命周期枚举。
+/// Maps the native or external runtime state to a stable lifecycle enum.
+/// 将原生或外置运行状态映射为稳定生命周期枚举。
 ///
 /// # Parameters
 /// 参数
@@ -393,17 +256,12 @@ pub(super) fn vmm_deployment_mode(global_layer: &vulcan_vmm::VmmConfigLayer) -> 
 /// A stable lifecycle value used by the WebUI.
 /// 返回 WebUI 使用的稳定生命周期值。
 fn vmm_lifecycle_state(runtime: &VmmRuntimeSummary) -> VmmLifecycleState {
-    match runtime.managed_phase.as_str() {
-        "ready" | "unhealthy" => VmmLifecycleState::Running,
-        "starting" => VmmLifecycleState::Starting,
-        "stopping" => VmmLifecycleState::Stopping,
-        "restarting" => VmmLifecycleState::Restarting,
-        "crashed" => VmmLifecycleState::Crashed,
-        "waiting_retry" => VmmLifecycleState::WaitingRetry,
-        "failed" => VmmLifecycleState::Failed,
-        "external" if runtime.process_ready => VmmLifecycleState::Running,
-        "external" | "stopped" => VmmLifecycleState::Stopped,
-        _ => VmmLifecycleState::Stopped,
+    if runtime.backend_error.is_some() {
+        VmmLifecycleState::Failed
+    } else if runtime.process_ready {
+        VmmLifecycleState::Running
+    } else {
+        VmmLifecycleState::Stopped
     }
 }
 
@@ -441,7 +299,8 @@ fn vmm_prerequisites(
             None,
         ));
     }
-    if effective.grpc_target.trim().is_empty() {
+    let external = vmm_deployment_mode(global_layer) == VmmDeploymentMode::External;
+    if external && effective.grpc_target.trim().is_empty() {
         prerequisites.push(vmm_prerequisite(
             "transport",
             "missing",
@@ -453,7 +312,7 @@ fn vmm_prerequisites(
             None,
         ));
     }
-    if effective.user_id.filter(|value| *value > 0).is_none() {
+    if external && effective.user_id.filter(|value| *value > 0).is_none() {
         prerequisites.push(vmm_prerequisite(
             "user",
             "missing",
@@ -465,7 +324,7 @@ fn vmm_prerequisites(
             None,
         ));
     }
-    if effective.project_id.filter(|value| *value > 0).is_none() {
+    if external && effective.project_id.filter(|value| *value > 0).is_none() {
         prerequisites.push(vmm_prerequisite(
             "project",
             "missing",
@@ -477,32 +336,31 @@ fn vmm_prerequisites(
             None,
         ));
     }
-    let managed = global_layer
-        .install
-        .as_ref()
-        .map(|install| install.managed_install_enabled)
-        .unwrap_or(effective.install.managed_install_enabled);
-    if managed && matches!(vmm_lifecycle_state(runtime), VmmLifecycleState::Failed) {
+    if let Some(error) = runtime.backend_error.clone() {
         prerequisites.push(vmm_prerequisite(
-            "managed_runtime",
+            if external {
+                "external_transport"
+            } else {
+                "native_host_ai"
+            },
             "failed",
             "error",
-            "memory.vmm.prerequisite.managedRuntime.title",
-            "memory.vmm.prerequisite.managedRuntime.description",
-            Some("retry_runtime"),
-            Some("overview"),
-            runtime.managed_last_error.clone(),
-        ));
-    }
-    if !managed && let Some(error) = runtime.managed_last_error.clone() {
-        prerequisites.push(vmm_prerequisite(
-            "external_transport",
-            "failed",
-            "error",
-            "memory.vmm.prerequisite.externalTransport.title",
-            "memory.vmm.prerequisite.externalTransport.description",
-            Some("configure_deployment"),
-            Some("advanced"),
+            if external {
+                "memory.vmm.prerequisite.externalTransport.title"
+            } else {
+                "memory.vmm.prerequisite.inference.title"
+            },
+            if external {
+                "memory.vmm.prerequisite.externalTransport.description"
+            } else {
+                "memory.vmm.prerequisite.inference.description"
+            },
+            Some(if external {
+                "configure_deployment"
+            } else {
+                "configure_inference"
+            }),
+            Some(if external { "advanced" } else { "inference" }),
             Some(error),
         ));
     }
@@ -740,30 +598,6 @@ pub(crate) fn vmm_config_draft_summary(
             .map(|_| String::from(WEBUI_REDACTED_SECRET_PLACEHOLDER))
             .unwrap_or_default(),
         management_timeout_ms: layer.management_timeout_ms.unwrap_or(30_000).to_string(),
-        managed_install_enabled: layer
-            .install
-            .as_ref()
-            .map(|install| install.managed_install_enabled)
-            .unwrap_or(effective.install.managed_install_enabled),
-        managed_binary_path: layer
-            .install
-            .as_ref()
-            .and_then(|install| install.managed_binary_path.clone())
-            .or_else(|| effective.install.managed_binary_path.clone())
-            .unwrap_or_default(),
-        auto_start_policy: layer
-            .install
-            .as_ref()
-            .and_then(|install| install.auto_start_policy.clone())
-            .or_else(|| effective.install.auto_start_policy.clone())
-            .unwrap_or_else(|| String::from("on_start")),
-        managed_runtime_settings: vmm_managed_runtime_settings_draft(
-            layer
-                .install
-                .as_ref()
-                .map(|install| &install.runtime_settings)
-                .unwrap_or(&effective.install.runtime_settings),
-        ),
         user_id: layer
             .user_id
             .or(effective.user_id)
@@ -836,63 +670,6 @@ pub(crate) fn vmm_config_draft_summary(
     }
 }
 
-/// Converts persisted managed VMM behavior into an editable service draft.
-/// 将持久化的托管 VMM 行为转换为可编辑服务草稿。
-fn vmm_managed_runtime_settings_draft(
-    settings: &vulcan_vmm::VmmManagedRuntimeSettings,
-) -> vulcan_service_api::VmmManagedRuntimeSettingsDraft {
-    vulcan_service_api::VmmManagedRuntimeSettingsDraft {
-        pii_default_language: settings.pii_default_language.clone(),
-        noise_enabled: settings.noise_enabled,
-        noise_default_language: settings.noise_default_language.clone(),
-        noise_semantic_enabled: settings.noise_semantic_enabled,
-        noise_semantic_threshold: settings.noise_semantic_threshold.to_string(),
-        prompt_language: settings.prompt_language.clone(),
-        precheck_intent_timeout: settings.precheck_intent_timeout.clone(),
-        precheck_top_k: settings.precheck_top_k.to_string(),
-        precheck_search_scope: settings.precheck_search_scope.clone(),
-        precheck_similarity_threshold: settings.precheck_similarity_threshold.to_string(),
-        postaction_input_mode: settings.postaction_input_mode.clone(),
-        postaction_turn_threshold: settings.postaction_turn_threshold.to_string(),
-        postaction_token_threshold: settings.postaction_token_threshold.to_string(),
-        postaction_idle_timeout: settings.postaction_idle_timeout.clone(),
-        postaction_history_turns: settings.postaction_history_turns.to_string(),
-        postaction_max_input_tokens: settings.postaction_max_input_tokens.to_string(),
-        postaction_analysis_timeout: settings.postaction_analysis_timeout.clone(),
-        postaction_failure_pass_threshold: settings.postaction_failure_pass_threshold.to_string(),
-        postaction_max_queue_workers: settings.postaction_max_queue_workers.to_string(),
-        inference_max_connections_per_host: settings.inference_max_connections_per_host.to_string(),
-        pipeline_max_search_keywords: settings.pipeline_max_search_keywords.to_string(),
-        pipeline_min_similarity_score: settings.pipeline_min_similarity_score.to_string(),
-        pipeline_replace_min_similarity_score: settings
-            .pipeline_replace_min_similarity_score
-            .to_string(),
-        pipeline_hard_dedupe_threshold: settings.pipeline_hard_dedupe_threshold.to_string(),
-        pipeline_hard_dedupe_pool_top_k: settings.pipeline_hard_dedupe_pool_top_k.to_string(),
-        pipeline_hybrid_enabled: settings.pipeline_hybrid_enabled,
-        pipeline_lexical_top_k: settings.pipeline_lexical_top_k.to_string(),
-        pipeline_rrf_k: settings.pipeline_rrf_k.to_string(),
-        pipeline_mmr_enabled: settings.pipeline_mmr_enabled,
-        pipeline_mmr_lambda: settings.pipeline_mmr_lambda.to_string(),
-        pipeline_weibull_enabled: settings.pipeline_weibull_enabled,
-        pipeline_weibull_shape: settings.pipeline_weibull_shape.to_string(),
-        pipeline_weibull_scale_hours: settings.pipeline_weibull_scale_hours.to_string(),
-        pipeline_weibull_min_multiplier: settings.pipeline_weibull_min_multiplier.to_string(),
-        pipeline_weibull_reinforce_weight: settings.pipeline_weibull_reinforce_weight.to_string(),
-        pipeline_weibull_cross_session_boost: settings
-            .pipeline_weibull_cross_session_boost
-            .to_string(),
-        retention_enabled: settings.retention_enabled,
-        retention_scan_interval: settings.retention_scan_interval.clone(),
-        retention_turn_keep_extra_turns: settings.retention_turn_keep_extra_turns.to_string(),
-        retention_session_idle_after: settings.retention_session_idle_after.clone(),
-        retention_trash_duration: settings.retention_trash_duration.clone(),
-        retention_priority_floor: settings.retention_priority_floor.clone(),
-        retention_memory_level_floor: settings.retention_memory_level_floor.clone(),
-        retention_skip_protected_shared: settings.retention_skip_protected_shared,
-    }
-}
-
 /// Converts one optional layer policy into a draft mode key.
 /// 将单个可选层级策略转换为草稿模式键。
 fn vmm_layer_policy_mode_for_draft(
@@ -920,124 +697,85 @@ fn vmm_layer_policy_mode(value: Option<bool>) -> String {
 /// 汇总当前选中会话的 VMM 运行态。
 pub(crate) fn vmm_runtime_summary(
     runtime_state: Option<&SessionRuntimeStateEntry>,
-    managed_runtime: Option<&crate::managed_memory_mesh_runtime::ManagedMemoryMeshSnapshot>,
+    effective: &vulcan_vmm::VmmEffectiveConfig,
+    native_host_ai_status: Option<&crate::native_vmm::NativeVmmHostAiStatus>,
 ) -> VmmRuntimeSummary {
-    let data_space_state = managed_runtime
-        .map(|runtime| runtime.data_space_state)
-        .unwrap_or_default();
-    let managed_phase = managed_runtime
-        .map(|runtime| runtime.phase.clone())
-        .unwrap_or_else(|| String::from("external"));
-    let managed_grpc_target = managed_runtime.and_then(|runtime| runtime.grpc_target.clone());
-    let managed_controller_endpoint = managed_runtime
-        .map(|runtime| runtime.controller_endpoint.clone())
-        .unwrap_or_default();
-    let managed_controller_space = managed_runtime
-        .map(|runtime| runtime.controller_space_id.clone())
-        .unwrap_or_default();
-    let managed_data_root = managed_runtime
-        .map(|runtime| runtime.data_root.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let managed_log_path = managed_runtime
-        .map(|runtime| runtime.log_path.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let managed_last_error = managed_runtime.and_then(|runtime| runtime.last_error.clone());
-    let process_ready = managed_runtime
-        .map(|runtime| runtime.phase == "ready")
-        .unwrap_or(false);
-    let capabilities = managed_runtime.map(|runtime| &runtime.capabilities);
-    // Preflight success describes configuration validity; live readiness additionally requires a running child.
-    // 预检成功只代表配置有效；实时可用还必须要求子进程正在运行。
-    let scope_ready = process_ready
-        && managed_runtime
-            .map(|runtime| runtime.scope_ready)
-            .unwrap_or(false);
-    // service_ready is the sole runtime capability boundary: a live child without a configured
-    // scope is still a stopped service for recall, writeback, tools, profiles, and reranking.
-    // service_ready 是唯一运行能力边界：只有子进程但尚未配置作用域时，召回、回写、工具、画像与
-    // 重排都必须继续按服务未启动处理。
-    let service_ready = process_ready && scope_ready;
-    let precheck_ready = service_ready
-        && capabilities
-            .map(|capabilities| capabilities.precheck_ready)
-            .unwrap_or(false);
-    let postaction_ready = service_ready
-        && capabilities
-            .map(|capabilities| capabilities.postaction_ready)
-            .unwrap_or(false);
-    let profile_instruction_ready = service_ready
-        && capabilities
-            .map(|capabilities| capabilities.profile_instruction_ready)
-            .unwrap_or(false);
-    let rerank_ready = service_ready
-        && capabilities
-            .map(|capabilities| capabilities.rerank_ready)
-            .unwrap_or(false);
-    let Some(runtime_state) = runtime_state else {
-        return VmmRuntimeSummary {
-            data_space_state,
-            process_ready,
-            managed_phase,
-            managed_grpc_target,
-            managed_controller_endpoint,
-            managed_controller_space,
-            managed_data_root,
-            managed_log_path,
-            managed_last_error,
-            scope_ready,
-            scope_error: managed_runtime.and_then(|runtime| runtime.scope_error.clone()),
-            precheck_ready,
-            precheck_error: capabilities
-                .and_then(|capabilities| capabilities.precheck_error.clone()),
-            postaction_ready,
-            postaction_error: capabilities
-                .and_then(|capabilities| capabilities.postaction_error.clone()),
-            profile_instruction_ready,
-            profile_instruction_error: capabilities
-                .and_then(|capabilities| capabilities.profile_instruction_error.clone()),
-            rerank_ready,
-            rerank_error: capabilities.and_then(|capabilities| capabilities.rerank_error.clone()),
-            ..VmmRuntimeSummary::default()
-        };
+    let native = effective.backend_mode == vulcan_vmm::VmmBackendMode::Native;
+    let native_ready = native_host_ai_status.is_some_and(|status| status.ready);
+    let scope_ready = effective.enabled
+        && effective.diagnose_memory_flow(native) == vulcan_vmm::VmmConfigDiagnostic::Ready
+        && (!native || native_ready);
+    let native_backend_state = match native_host_ai_status {
+        Some(status) if status.ready => "ready",
+        Some(status) if status.checked => "unavailable",
+        _ => "unchecked",
     };
-    VmmRuntimeSummary {
-        data_space_state,
-        process_ready,
-        managed_phase,
-        managed_grpc_target,
-        managed_controller_endpoint,
-        managed_controller_space,
-        managed_data_root,
-        managed_log_path,
-        managed_last_error,
+    let backend_error = native
+        .then(|| {
+            native_host_ai_status
+                .and_then(|status| status.error.clone())
+                .or_else(|| {
+                    (effective.enabled && !native_ready)
+                        .then(|| String::from("原生 VMM 尚未完成宿主 AI 能力校验"))
+                })
+        })
+        .flatten();
+    let mut summary = VmmRuntimeSummary {
+        process_ready: native && native_ready,
+        backend_state: if native {
+            native_backend_state.to_string()
+        } else {
+            String::from("external")
+        },
+        backend_error,
         scope_ready,
-        scope_error: managed_runtime.and_then(|runtime| runtime.scope_error.clone()),
-        precheck_ready,
-        precheck_error: capabilities.and_then(|capabilities| capabilities.precheck_error.clone()),
-        postaction_ready,
-        postaction_error: capabilities
-            .and_then(|capabilities| capabilities.postaction_error.clone()),
-        profile_instruction_ready,
-        profile_instruction_error: capabilities
-            .and_then(|capabilities| capabilities.profile_instruction_error.clone()),
-        rerank_ready,
-        rerank_error: capabilities.and_then(|capabilities| capabilities.rerank_error.clone()),
-        outbox_count: runtime_state.vmm_writeback_outbox.len(),
-        profile_sync_count: runtime_state.vmm_profile_sync.nodes_by_id.len(),
-        completed_turns: runtime_state.vmm_profile_sync.completed_turns_since_sync,
-        updated_at: runtime_state.vmm_profile_sync.updated_at.clone(),
-        profile_preview: runtime_state
+        precheck_ready: scope_ready && effective.precheck_enabled,
+        postaction_ready: scope_ready && effective.memory_writeback_enabled,
+        profile_instruction_ready: scope_ready
+            && (!native
+                || native_host_ai_status.is_some_and(|status| status.profile_instruction_ready)),
+        profile_instruction_error: native
+            .then(|| {
+                native_host_ai_status.and_then(|status| status.profile_instruction_error.clone())
+            })
+            .flatten(),
+        rerank_ready: scope_ready
+            && (!native || native_host_ai_status.is_some_and(|status| status.rerank_ready)),
+        rerank_error: native
+            .then(|| native_host_ai_status.and_then(|status| status.rerank_error.clone()))
+            .flatten(),
+        ..VmmRuntimeSummary::default()
+    };
+    if let Some(runtime_state) = runtime_state {
+        summary.outbox_count = runtime_state.vmm_writeback_outbox.len();
+        summary.profile_sync_count = runtime_state.vmm_profile_sync.nodes_by_id.len();
+        summary.completed_turns = runtime_state.vmm_profile_sync.completed_turns_since_sync;
+        summary.updated_at = runtime_state.vmm_profile_sync.updated_at.clone();
+        summary.profile_preview = runtime_state
             .vmm_profile_sync
             .base_profile_content
             .as_deref()
             .map(compact_panel_preview)
-            .unwrap_or_default(),
+            .unwrap_or_default();
     }
+    summary
 }
 
-/// Returns the VMM management sections owned by the WebUI workbench.
-/// 返回由 WebUI 工作台持有的 VMM 管理分区。
-pub(crate) fn vmm_management_sections() -> Vec<VmmManagementSectionSummary> {
+/// Returns only the VMM management sections supported by the selected backend.
+/// 仅返回所选后端支持的 VMM 管理分区。
+///
+/// # Parameters
+/// 参数
+/// `backend_mode` is the globally selected native or external backend.
+/// `backend_mode` 是全局选择的原生或外置后端。
+///
+/// # Returns
+/// 返回值
+/// The backend-specific ordered WebUI section list.
+/// 返回后端专用的有序 WebUI 分区列表。
+pub(crate) fn vmm_management_sections(
+    backend_mode: vulcan_vmm::VmmBackendMode,
+) -> Vec<VmmManagementSectionSummary> {
     [
         (
             "overview",
@@ -1083,6 +821,9 @@ pub(crate) fn vmm_management_sections() -> Vec<VmmManagementSectionSummary> {
         ),
     ]
     .into_iter()
+    .filter(|(id, _, _, _)| {
+        backend_mode == vulcan_vmm::VmmBackendMode::Native || *id != "inference"
+    })
     .map(
         |(id, key, label, description)| VmmManagementSectionSummary {
             id: id.to_string(),
@@ -1131,88 +872,4 @@ pub(crate) fn vmm_diagnostic_key(diagnostic: vulcan_vmm::VmmConfigDiagnostic) ->
         vulcan_vmm::VmmConfigDiagnostic::MissingProjectId => "missing_project_id",
     }
     .to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::managed_memory_mesh_runtime::{
-        ManagedMemoryMeshSnapshot, ManagedVmmCapabilityPreflight,
-    };
-
-    /// Verifies the page snapshot does not expose preflight success after the managed child stops.
-    /// 验证托管子进程停止后，页面快照不会把预检成功误报为实时可用。
-    #[test]
-    fn stopped_managed_runtime_summary_disables_live_capabilities() {
-        let root = std::env::temp_dir().join("vulcan-vmm-stopped-page-snapshot");
-        let managed = ManagedMemoryMeshSnapshot {
-            data_space_state: vulcan_service_api::VmmDataSpaceState::Ready,
-            phase: String::from("stopped"),
-            grpc_target: None,
-            controller_endpoint: String::from("http://127.0.0.1:19801"),
-            controller_space_id: String::from("vulcan-code"),
-            data_root: root.join("data"),
-            log_path: root.join("managed.log"),
-            last_error: None,
-            scope_ready: true,
-            scope_error: None,
-            capabilities: ManagedVmmCapabilityPreflight {
-                embedding_dimension: 1024,
-                embedding_fingerprint: None,
-                precheck_ready: true,
-                precheck_error: None,
-                postaction_ready: true,
-                postaction_error: None,
-                profile_instruction_ready: true,
-                profile_instruction_error: None,
-                rerank_ready: true,
-                rerank_error: None,
-            },
-        };
-
-        let runtime = vmm_runtime_summary(None, Some(&managed));
-
-        assert!(!runtime.process_ready);
-        assert!(!runtime.scope_ready);
-        assert!(!runtime.precheck_ready);
-        assert!(!runtime.postaction_ready);
-        assert!(!runtime.profile_instruction_ready);
-        assert!(!runtime.rerank_ready);
-    }
-
-    /// Verifies an owned child with a failed heartbeat remains running but unavailable.
-    /// 验证心跳失败但仍由宿主持有的子进程保持“运行中”，同时健康状态为“不可用”。
-    #[test]
-    fn unhealthy_managed_runtime_keeps_process_and_health_dimensions_separate() {
-        // global_layer describes one fully configured managed VMM deployment.
-        // global_layer 描述一份配置完整的托管 VMM 部署。
-        let global_layer = vulcan_vmm::VmmConfigLayer {
-            enabled: Some(true),
-            grpc_target: Some(String::from("127.0.0.1:17901")),
-            user_id: Some(1),
-            project_id: Some(1),
-            install: Some(vulcan_vmm::VmmInstallReservation {
-                managed_install_enabled: true,
-                ..vulcan_vmm::VmmInstallReservation::default()
-            }),
-            ..vulcan_vmm::VmmConfigLayer::default()
-        };
-        // effective is the exact resolved configuration used by product-state projection.
-        // effective 是产品状态投影使用的准确解析配置。
-        let effective = vulcan_vmm::VmmEffectiveConfig::resolve(&global_layer, None, None);
-        // runtime retains the live child generation while exposing its failed heartbeat.
-        // runtime 在保留存活子进程代次的同时暴露心跳失败。
-        let runtime = VmmRuntimeSummary {
-            managed_phase: String::from("unhealthy"),
-            managed_last_error: Some(String::from("heartbeat timeout")),
-            ..VmmRuntimeSummary::default()
-        };
-
-        // experience keeps lifecycle and transport health as independent dimensions.
-        // experience 将生命周期与传输健康保持为相互独立的维度。
-        let experience = vmm_experience_state(&effective, &global_layer, &runtime);
-
-        assert_eq!(experience.lifecycle, VmmLifecycleState::Running);
-        assert_eq!(experience.health, VmmHealthState::Unavailable);
-    }
 }

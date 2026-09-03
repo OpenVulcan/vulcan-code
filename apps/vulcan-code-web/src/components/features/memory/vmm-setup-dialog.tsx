@@ -104,6 +104,10 @@ interface EditableBindingDecision {
   targetProjectId: string
 }
 
+// EXTERNAL_FIXED_TARGET_SENTINEL represents the not-yet-materialized global fixed project in setup state only.
+// EXTERNAL_FIXED_TARGET_SENTINEL 仅在配置状态中表示尚未物化 ID 的全局固定项目。
+const EXTERNAL_FIXED_TARGET_SENTINEL = "__global_fixed_vmm_project__"
+
 // VmmSetupDialog guides the user through backend, inference, binding, and confirmation.
 // VmmSetupDialog 引导用户完成后端、推理、绑定与确认配置。
 function VmmSetupDialog({
@@ -185,11 +189,13 @@ function VmmSetupDialog({
       : projects.filter((project) => !project.boundProjectId)
     const nextDecisions: Record<string, EditableBindingDecision> = {}
     for (const project of nextUnbound) {
-      const bindFixed = nextMode === "native" && nextBindingMode === "fixed"
+      const bindFixed = nextBindingMode === "fixed"
       nextDecisions[project.projectId] = {
         action: bindFixed ? "bind_existing" : "create_and_bind",
         projectName: project.projectId,
-        targetProjectId: bindFixed ? nativeFixedProjectId : "",
+        targetProjectId: bindFixed
+          ? (nextMode === "native" ? nativeFixedProjectId : EXTERNAL_FIXED_TARGET_SENTINEL)
+          : "",
       }
     }
     setDecisions(nextDecisions)
@@ -215,7 +221,7 @@ function VmmSetupDialog({
       }
       setCatalog(nextCatalog)
       initializeDecisions(mode, bindingMode, nextCatalog)
-      setStep(1)
+      setStep(mode === "native" ? 1 : 2)
     } finally {
       setPreparing(false)
     }
@@ -253,12 +259,16 @@ function VmmSetupDialog({
 
   const bindingPlan = unboundProjects.map((project): VmmProjectBindingPlanEntry => {
     const decision = decisions[project.projectId]
+    const usesPendingExternalFixedTarget = mode === "external"
+      && bindingMode === "fixed"
+      && decision?.action === "bind_existing"
+      && decision.targetProjectId === EXTERNAL_FIXED_TARGET_SENTINEL
     return {
       vulcanProjectId: project.projectId,
       action: decision?.action ?? "create_and_bind",
       projectName: decision?.action === "create_and_bind" ? decision.projectName.trim() : null,
       targetProjectId: decision?.action === "bind_existing"
-        ? Number(decision.targetProjectId)
+        ? (usesPendingExternalFixedTarget ? null : Number(decision.targetProjectId))
         : null,
     }
   })
@@ -266,6 +276,7 @@ function VmmSetupDialog({
     entry.action === "create_and_bind"
       ? Boolean(entry.projectName)
       : Boolean(entry.targetProjectId && entry.targetProjectId > 0)
+        || (mode === "external" && bindingMode === "fixed" && entry.targetProjectId == null)
   ))
   const prefixComplete = externalProjectPrefix.split("/").filter(Boolean).length === 2
   const externalFixedComplete = externalFixedAction === "create_and_bind"
@@ -275,9 +286,13 @@ function VmmSetupDialog({
     ? Number(nativeFixedProjectId) > 0 && rowsComplete
     : Boolean(userName.trim())
       && prefixComplete
-      && (bindingMode === "fixed" ? externalFixedComplete : rowsComplete)
+      && rowsComplete
+      && (bindingMode !== "fixed" || externalFixedComplete)
   const canAdvance = step === 1 ? inferenceReady : step === 2 ? bindingComplete : true
-  const canSubmit = Boolean(catalog) && inferenceReady && bindingComplete && !effectiveBusy
+  const canSubmit = Boolean(catalog)
+    && (mode === "external" || inferenceReady)
+    && bindingComplete
+    && !effectiveBusy
 
   // handleSubmit commits exactly the decisions shown in the confirmation step.
   // handleSubmit 精确提交确认步骤展示的决定。
@@ -297,7 +312,7 @@ function VmmSetupDialog({
         externalFixedTargetProjectId: externalFixedAction === "bind_existing"
           ? Number(externalFixedTargetProjectId)
           : null,
-        bindingPlan: bindingMode === "per_project" || mode === "native" ? bindingPlan : [],
+        bindingPlan,
         externalEndpoint: externalEndpoint.trim(),
         externalApiKey,
         externalManagementBaseUrl: externalManagementBaseUrl.trim(),
@@ -440,6 +455,7 @@ function VmmSetupDialog({
             disabled={effectiveBusy}
             onClick={() => {
               if (step === 0) onOpenChange(false)
+              else if (step === 2 && mode === "external") setStep(0)
               else setStep((current) => current - 1)
             }}
             type="button"
@@ -590,23 +606,32 @@ function SetupBindingsStep(props: {
       )}
 
       {props.mode === "external" && props.bindingMode === "fixed" ? (
-        <div className="grid gap-3 rounded-lg border p-3 sm:grid-cols-[12rem_minmax(0,1fr)]">
-          <ActionSelect onChange={props.onExternalFixedActionChange} value={props.externalFixedAction} />
-          {props.externalFixedAction === "create_and_bind" ? (
-            <Input onChange={(event) => props.onExternalFixedProjectNameChange(event.target.value)} value={props.externalFixedProjectName} />
-          ) : (
-            <ProjectSelect onChange={props.onExternalFixedTargetProjectIdChange} options={existingProjects} value={props.externalFixedTargetProjectId} />
-          )}
+        <div className="space-y-3">
+          <div className="grid gap-3 rounded-lg border p-3 sm:grid-cols-[12rem_minmax(0,1fr)]">
+            <ActionSelect onChange={props.onExternalFixedActionChange} value={props.externalFixedAction} />
+            {props.externalFixedAction === "create_and_bind" ? (
+              <Input onChange={(event) => props.onExternalFixedProjectNameChange(event.target.value)} value={props.externalFixedProjectName} />
+            ) : (
+              <ProjectSelect onChange={props.onExternalFixedTargetProjectIdChange} options={existingProjects} value={props.externalFixedTargetProjectId} />
+            )}
+          </div>
         </div>
       ) : null}
 
-      {props.mode === "native" || props.bindingMode === "per_project" ? (
+      {(
         <div className="space-y-2">
           <p className="text-sm font-medium">{t("vmm.setup.binding.unboundProjects")}</p>
           {props.projects.length === 0 ? (
             <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">{t("vmm.setup.binding.none")}</p>
           ) : props.projects.map((project) => {
             const decision = props.decisions[project.projectId]
+            const fixedExternalLabel = props.externalFixedAction === "create_and_bind"
+              ? props.externalFixedProjectName
+              : existingProjects.find((projectOption) => projectOption.id === props.externalFixedTargetProjectId)?.label
+                ?? t("vmm.setup.binding.selectProject")
+            const rowProjectOptions = props.mode === "external" && props.bindingMode === "fixed"
+              ? [{ id: EXTERNAL_FIXED_TARGET_SENTINEL, label: `${t("vmm.setup.binding.fixed")}: ${fixedExternalLabel}` }, ...existingProjects]
+              : existingProjects
             return (
               <div className="grid gap-3 rounded-lg border p-3 md:grid-cols-[minmax(10rem,1fr)_12rem_minmax(12rem,1fr)]" key={project.projectId}>
                 <div className="min-w-0"><p className="truncate text-sm font-medium">{project.name}</p><p className="truncate text-xs text-muted-foreground">{project.projectId}</p></div>
@@ -614,13 +639,15 @@ function SetupBindingsStep(props: {
                   onChange={(action) => props.onDecisionChange(project.projectId, {
                     action,
                     targetProjectId: action === "bind_existing"
-                      ? (props.mode === "native" && props.bindingMode === "fixed" ? props.nativeFixedProjectId : existingProjects[0]?.id ?? "")
+                      ? (props.bindingMode === "fixed"
+                          ? (props.mode === "native" ? props.nativeFixedProjectId : EXTERNAL_FIXED_TARGET_SENTINEL)
+                          : existingProjects[0]?.id ?? "")
                       : "",
                   })}
                   value={decision?.action ?? "create_and_bind"}
                 />
                 {decision?.action === "bind_existing" ? (
-                  <ProjectSelect onChange={(targetProjectId) => props.onDecisionChange(project.projectId, { targetProjectId })} options={existingProjects} value={decision.targetProjectId} />
+                  <ProjectSelect onChange={(targetProjectId) => props.onDecisionChange(project.projectId, { targetProjectId })} options={rowProjectOptions} value={decision.targetProjectId} />
                 ) : (
                   <Input onChange={(event) => props.onDecisionChange(project.projectId, { projectName: event.target.value })} value={decision?.projectName ?? project.projectId} />
                 )}
@@ -628,7 +655,7 @@ function SetupBindingsStep(props: {
             )
           })}
         </div>
-      ) : null}
+      )}
     </div>
   )
 }

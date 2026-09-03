@@ -13,13 +13,14 @@ workspace = true
 [dependencies]
 base64.workspace = true
 http-range.workspace = true
-reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 time = { workspace = true, features = ["formatting", "local-offset", "macros", "serde"] }
-vulcan-ai-contract.workspace = true
 vulcan-luaskills-config.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-session-core.workspace = true
 vulcan-vmm.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[dev-dependencies]
+vulcan-ai-contract.workspace = true

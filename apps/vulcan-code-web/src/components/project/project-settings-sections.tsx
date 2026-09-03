@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Bot, BrainCircuit, Calendar, Database, FolderCog, LoaderCircle, Network, RefreshCw, Save, Trash2 } from "lucide-react";
+import { Bot, BrainCircuit, Calendar, Database, FolderCog, FolderPlus, LoaderCircle, Network, RefreshCw, Save, Trash2 } from "lucide-react";
 import { StatusPill } from "@/components/shared/status";
 import {
   AlertDialog,
@@ -18,6 +18,7 @@ import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { VmmSelectField, vmmPolicyModeOptions } from "@/components/features/memory/vmm-project-settings-fields";
+import { canonicalProjectPath } from "@/components/features/memory/vmm-identity-project-page";
 import { agentSkillsCatalogSummary } from "@/components/features/agent-skills/agent-skills-types";
 import { useI18n } from "@/i18n";
 import type { TranslationKey } from "@/i18n-messages";
@@ -361,9 +362,9 @@ export function ProjectVmmSection(props: {
   // Applies a partial draft edit.
   // 应用局部草稿编辑。
   onUpdateDraft: (patch: Partial<VmmConfigDraftSummary>) => void;
-  // Persists the current VMM draft.
-  // 持久化当前 VMM 草稿。
-  onSaveDraft: () => void;
+  // Persists the current or supplied exact VMM draft and reports whether it committed.
+  // 持久化当前或给定的准确 VMM 草稿，并报告是否提交成功。
+  onSaveDraft: (draft?: VmmConfigDraftSummary) => Promise<boolean>;
 }) {
   const { t } = useI18n();
   const policyOptions = vmmPolicyModeOptions(t);
@@ -374,6 +375,35 @@ export function ProjectVmmSection(props: {
   const [nativeBindingNotice, setNativeBindingNotice] = React.useState("");
   const [externalUsers, setExternalUsers] = React.useState<VmmProtocolUserEntry[]>([]);
   const [externalProjects, setExternalProjects] = React.useState<VmmProtocolProjectEntry[]>([]);
+  // createProjectName is the editable memory-project display name or external leaf name.
+  // createProjectName 是可编辑的记忆项目显示名或外置项目末级名称。
+  const [createProjectName, setCreateProjectName] = React.useState(props.projectId);
+  // createExternalTeamName is the explicit external Team segment used only by manual creation.
+  // createExternalTeamName 是仅供手动创建使用的显式外置 Team 路径段。
+  const [createExternalTeamName, setCreateExternalTeamName] = React.useState("vulcan");
+  // createExternalSpaceName is the explicit external Space segment used only by manual creation.
+  // createExternalSpaceName 是仅供手动创建使用的显式外置 Space 路径段。
+  const [createExternalSpaceName, setCreateExternalSpaceName] = React.useState("space");
+
+  React.useEffect(() => {
+    if (!props.vmmDraft) return;
+    const prefixSegments = props.vmmDraft.externalProjectPrefix
+      .split("/")
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+    setCreateProjectName(props.projectId);
+    setCreateExternalTeamName(prefixSegments[0] ?? "vulcan");
+    setCreateExternalSpaceName(prefixSegments[1] ?? "space");
+  }, [props.projectId, props.vmmDraft?.backendMode, props.vmmDraft?.externalProjectPrefix]);
+
+  // acceptNativeCatalog synchronizes the owner and recall drafts from one authoritative response.
+  // acceptNativeCatalog 根据一份权威响应同步归属与召回草稿。
+  const acceptNativeCatalog = React.useCallback((catalog: VmmNativeProjectCatalogSummary) => {
+    setNativeCatalog(catalog);
+    const binding = catalog.bindings.find((item) => item.vulcanProjectId === props.projectId);
+    setNativeOwnerId(binding ? String(binding.ownerProjectId) : "");
+    setNativeLinkedIds(binding?.linkedProjectIds ?? []);
+  }, [props.projectId]);
 
   React.useEffect(() => {
     if (!props.vmmDraft) {
@@ -389,10 +419,7 @@ export function ProjectVmmSection(props: {
     }).then((result) => {
       if (cancelled) return;
       if (result.data.kind === "native_project_catalog") {
-        setNativeCatalog(result.data.value);
-        const binding = result.data.value.bindings.find((item) => item.vulcanProjectId === props.projectId);
-        setNativeOwnerId(binding ? String(binding.ownerProjectId) : "");
-        setNativeLinkedIds(binding?.linkedProjectIds ?? []);
+        acceptNativeCatalog(result.data.value);
       } else if (result.data.kind === "users_projects") {
         setExternalUsers(result.data.value.users);
         setExternalProjects(result.data.value.projects);
@@ -403,7 +430,7 @@ export function ProjectVmmSection(props: {
     return () => {
       cancelled = true;
     };
-  }, [props.projectId, props.vmmDraft?.backendMode]);
+  }, [acceptNativeCatalog, props.projectId, props.vmmDraft?.backendMode]);
 
   // saveNativeBinding persists one owner and the separately selected recall-only projects.
   // saveNativeBinding 持久化一个归属项目与单独选择的仅召回项目。
@@ -421,24 +448,80 @@ export function ProjectVmmSection(props: {
           projectId: null,
           payload: { vulcanProjectId: props.projectId },
         });
+        if (result.data.kind === "native_project_catalog") acceptNativeCatalog(result.data.value);
         setNativeBindingNotice(result.summary);
-        setNativeLinkedIds([]);
         return;
       }
-      await runVmmMemoryAction({
-        action: "native_project_bind_existing",
-        commandId: crypto.randomUUID(),
-        scope: "global",
-        projectId: null,
-        payload: { vulcanProjectId: props.projectId, vmmProjectId: ownerProjectId },
-      });
       const result = await runVmmMemoryAction({
-        action: "native_project_replace_query_links",
+        action: "native_project_set_access",
         commandId: crypto.randomUUID(),
         scope: "global",
         projectId: null,
-        payload: { vulcanProjectId: props.projectId, linkedProjectIds: nativeLinkedIds },
+        payload: {
+          vulcanProjectId: props.projectId,
+          ownerProjectId,
+          linkedProjectIds: nativeLinkedIds,
+        },
       });
+      if (result.data.kind === "native_project_catalog") acceptNativeCatalog(result.data.value);
+      setNativeBindingNotice(result.summary);
+    } catch (error) {
+      setNativeBindingNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setNativeBindingBusy(false);
+    }
+  };
+
+  // createAndBindProject creates one backend-specific project and durably binds this project to its stable id.
+  // createAndBindProject 创建一个后端专属项目，并将当前项目耐久绑定到其稳定标识。
+  const createAndBindProject = async () => {
+    if (nativeBindingBusy || !props.vmmDraft || !createProjectName.trim()) return;
+    setNativeBindingBusy(true);
+    setNativeBindingNotice("");
+    try {
+      if (props.vmmDraft.backendMode === "native") {
+        const result = await runVmmMemoryAction({
+          action: "native_project_create_and_bind",
+          commandId: crypto.randomUUID(),
+          scope: "global",
+          projectId: null,
+          payload: {
+            vulcanProjectId: props.projectId,
+            projectName: createProjectName.trim(),
+          },
+        });
+        if (result.data.kind === "native_project_catalog") acceptNativeCatalog(result.data.value);
+        setNativeBindingNotice(result.summary);
+        return;
+      }
+      const projectPath = canonicalProjectPath(
+        createExternalTeamName,
+        createExternalSpaceName,
+        createProjectName,
+      );
+      const result = await runVmmMemoryAction({
+        action: "ensure_project",
+        commandId: crypto.randomUUID(),
+        scope: "global",
+        projectId: null,
+        payload: { projectPath, confirmCreate: true },
+      });
+      if (result.data.kind !== "ensure_project" || !result.data.value.project) {
+        throw new Error(result.summary);
+      }
+      const remoteProjectId = String(result.data.value.project.project_id);
+      const boundDraft = externalProjectBindingDraft(props.vmmDraft, remoteProjectId);
+      if (!await props.onSaveDraft(boundDraft)) return;
+      const catalogResult = await runVmmMemoryAction({
+        action: "load_users_projects",
+        commandId: crypto.randomUUID(),
+        scope: "global",
+        projectId: null,
+      });
+      if (catalogResult.data.kind === "users_projects") {
+        setExternalUsers(catalogResult.data.value.users);
+        setExternalProjects(catalogResult.data.value.projects);
+      }
       setNativeBindingNotice(result.summary);
     } catch (error) {
       setNativeBindingNotice(error instanceof Error ? error.message : String(error));
@@ -552,16 +635,52 @@ export function ProjectVmmSection(props: {
                   ))}
                 </div>
               ) : null}
-              {nativeBindingNotice ? <p className="project-settings-muted">{nativeBindingNotice}</p> : null}
               <Button disabled={nativeBindingBusy || !nativeCatalog} onClick={() => void saveNativeBinding()} type="button" variant="outline">
                 {nativeBindingBusy ? <LoaderCircle className="size-4 animate-spin" /> : <Save size={15} />}
                 {t("projectSettings.vmmNativeSaveBinding")}
               </Button>
             </div>
           ) : null}
+          <div className="project-settings-panel">
+            <strong>{t("projectSettings.vmmCreateBinding")}</strong>
+            {props.vmmDraft.backendMode === "external_grpc" ? (
+              <div className="project-settings-form-grid">
+                <label className="project-settings-field">
+                  <span>{t("memory.identity.teamName")}</span>
+                  <Input disabled={nativeBindingBusy} onChange={(event) => setCreateExternalTeamName(event.target.value)} value={createExternalTeamName} />
+                </label>
+                <label className="project-settings-field">
+                  <span>{t("memory.identity.spaceName")}</span>
+                  <Input disabled={nativeBindingBusy} onChange={(event) => setCreateExternalSpaceName(event.target.value)} value={createExternalSpaceName} />
+                </label>
+              </div>
+            ) : null}
+            <label className="project-settings-field wide">
+              <span>{t("memory.identity.projectName")}</span>
+              <Input disabled={nativeBindingBusy} onChange={(event) => setCreateProjectName(event.target.value)} value={createProjectName} />
+            </label>
+            {props.vmmDraft.backendMode === "external_grpc" ? (
+              <p className="project-settings-muted">
+                {t("memory.identity.projectPathPreview")} {canonicalProjectPath(createExternalTeamName, createExternalSpaceName, createProjectName)}
+              </p>
+            ) : null}
+            {nativeBindingNotice ? <p className="project-settings-muted">{nativeBindingNotice}</p> : null}
+            <Button
+              disabled={nativeBindingBusy
+                || !createProjectName.trim()
+                || (props.vmmDraft.backendMode === "external_grpc"
+                  && (!createExternalTeamName.trim() || !createExternalSpaceName.trim()))}
+              onClick={() => void createAndBindProject()}
+              type="button"
+              variant="outline"
+            >
+              {nativeBindingBusy ? <LoaderCircle className="size-4 animate-spin" /> : <FolderPlus size={15} />}
+              {t("projectSettings.vmmCreateAndBind")}
+            </Button>
+          </div>
           <p className="project-settings-muted">{t("projectSettings.vmmTransportHint")}</p>
           <div className="project-settings-actions">
-            <Button disabled={props.vmmBusy === "saving"} onClick={props.onSaveDraft} type="button">
+            <Button disabled={props.vmmBusy === "saving"} onClick={() => void props.onSaveDraft()} type="button">
               <Save size={15} />
               {props.vmmBusy === "saving" ? t("composer.capability.save.saving") : t("projectSettings.saveVmm")}
             </Button>
@@ -570,6 +689,27 @@ export function ProjectVmmSection(props: {
       )}
     </div>
   );
+}
+
+// externalProjectBindingDraft freezes one returned external project id in a project-owned VMM layer.
+// externalProjectBindingDraft 将一个返回的外置项目标识固定到项目持有的 VMM 配置层。
+// Parameters: draft is the latest visible project draft and projectId is the authoritative remote id.
+// 参数：draft 是最新可见项目草稿，projectId 是权威远端标识。
+// Returns: a project override that preserves every unrelated field and binds by stable id.
+// 返回值：保留所有无关字段并按稳定标识绑定的项目覆盖。
+export function externalProjectBindingDraft(
+  draft: VmmConfigDraftSummary,
+  projectId: string,
+): VmmConfigDraftSummary {
+  const normalizedProjectId = projectId.trim();
+  if (!/^[1-9]\d*$/.test(normalizedProjectId)) {
+    throw new Error("External VMM project binding requires a positive project id.");
+  }
+  return {
+    ...draft,
+    hasOverride: true,
+    projectId: normalizedProjectId,
+  };
 }
 
 // ProjectAgentSkillsSection renders per-project Agent Skill tri-state overrides.
