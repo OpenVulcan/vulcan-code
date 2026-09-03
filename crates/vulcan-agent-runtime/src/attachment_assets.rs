@@ -2,8 +2,8 @@
 //! 供提示词输入区、持久化与 Provider 回放层共享的宿主管理附件暂存辅助模块。
 
 use crate::attachment_asset_index::{
-    AttachmentReplayStatus, current_attachment_timestamp_parts, record_staged_attachment,
-    resolve_attachment_replay_status,
+    AttachmentReplayStatus, current_attachment_timestamp_parts, record_or_reuse_project_attachment,
+    record_staged_attachment, resolve_attachment_replay_status,
 };
 use crate::workspace_path::{
     canonicalize_workspace_path, normalized_workspace_path_text_from_path,
@@ -371,6 +371,56 @@ pub fn stage_attachment_file(
     )
 }
 
+/// Copies one composer-selected file while reusing an identical asset from the same project index.
+/// 复制一个输入区选择的文件，并复用同一项目索引中的相同资产。
+///
+/// # Parameters
+/// 参数
+/// `workspace_path` identifies the project scope and `source_path` identifies the readable source file.
+/// `workspace_path` 标识项目范围，`source_path` 标识可读取的源文件。
+///
+/// # Returns
+/// 返回值
+/// The canonical project attachment selected by SHA-256, byte length, and MIME type.
+/// 返回按 SHA-256、字节长度与 MIME 类型选定的规范项目附件。
+pub fn stage_project_attachment_file(
+    workspace_path: &str,
+    source_path: &Path,
+) -> Result<ConversationAttachment, String> {
+    // descriptor is determined from the exact source name before generic fallback.
+    // descriptor 先依据精确源文件名确定，无法识别时再使用通用描述。
+    let descriptor =
+        attachment_descriptor_from_path(source_path).unwrap_or_else(generic_attachment_descriptor);
+    // canonical_source_path is the exact readable source retained as diagnostics provenance.
+    // canonical_source_path 是作为诊断来源保留的精确可读源路径。
+    let canonical_source_path = canonicalize_workspace_path(source_path);
+    // file_bytes supplies the immutable content fingerprint and managed copy.
+    // file_bytes 提供不可变内容特征与托管副本。
+    let file_bytes = fs::read(&canonical_source_path).map_err(|error| {
+        format!(
+            "读取附件文件 `{}` 失败：{}。",
+            canonical_source_path.display(),
+            error
+        )
+    })?;
+    // file_name retains the exact source display name before host sanitization.
+    // file_name 在宿主清理前保留精确源展示名称。
+    let file_name = canonical_source_path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| {
+            vulcan_runtime_assets::native_host_path_text_from_path(&canonical_source_path)
+        });
+
+    stage_project_attachment_bytes(
+        workspace_path,
+        &descriptor,
+        &file_name,
+        Some(canonical_source_path.as_path()),
+        &file_bytes,
+    )
+}
+
 /// Streams one already described source file into the managed attachment store without buffering its contents.
 /// 将一个已有描述的源文件流式复制到托管附件存储，避免把文件内容整体缓冲到内存。
 ///
@@ -502,6 +552,40 @@ pub fn stage_attachment_bytes(
         source_path,
         descriptor.mime_type,
         bytes,
+        false,
+    )
+}
+
+/// Materializes composer bytes while reusing an identical asset from the same project index.
+/// 物化输入区字节，并复用同一项目索引中的相同资产。
+///
+/// # Parameters
+/// 参数
+/// `workspace_path` identifies the project, `descriptor` owns host MIME semantics,
+/// `suggested_file_name` is display metadata, `source_path` is optional provenance, and `bytes`
+/// are the immutable payload.
+/// `workspace_path` 标识项目，`descriptor` 持有宿主 MIME 语义，`suggested_file_name` 是展示元数据，
+/// `source_path` 是可选来源，`bytes` 是不可变载荷。
+///
+/// # Returns
+/// 返回值
+/// The existing or newly published canonical attachment for the exact project fingerprint.
+/// 返回精确项目特征对应的既有或新发布规范附件。
+pub fn stage_project_attachment_bytes(
+    workspace_path: &str,
+    descriptor: &AttachmentDescriptor,
+    suggested_file_name: &str,
+    source_path: Option<&Path>,
+    bytes: &[u8],
+) -> Result<ConversationAttachment, String> {
+    stage_attachment_bytes_with_effective_mime_type(
+        workspace_path,
+        descriptor,
+        suggested_file_name,
+        source_path,
+        descriptor.mime_type,
+        bytes,
+        true,
     )
 }
 
@@ -536,6 +620,46 @@ pub fn stage_generic_attachment_bytes(
         source_path,
         effective_mime_type.as_str(),
         bytes,
+        false,
+    )
+}
+
+/// Materializes generic composer bytes with exact project-scoped fingerprint reuse.
+/// 使用精确项目级内容特征复用来物化通用输入区字节。
+///
+/// # Parameters
+/// 参数
+/// `workspace_path` identifies the project, `suggested_file_name` is display metadata,
+/// `source_path` is optional provenance, `mime_type` is validated browser metadata, and `bytes`
+/// are the immutable payload.
+/// `workspace_path` 标识项目，`suggested_file_name` 是展示元数据，`source_path` 是可选来源，
+/// `mime_type` 是已校验的浏览器元数据，`bytes` 是不可变载荷。
+///
+/// # Returns
+/// 返回值
+/// The existing or newly published canonical generic attachment for the exact project fingerprint.
+/// 返回精确项目特征对应的既有或新发布规范通用附件。
+pub fn stage_project_generic_attachment_bytes(
+    workspace_path: &str,
+    suggested_file_name: &str,
+    source_path: Option<&Path>,
+    mime_type: &str,
+    bytes: &[u8],
+) -> Result<ConversationAttachment, String> {
+    // effective_mime_type is normalized once before it participates in the deduplication key.
+    // effective_mime_type 在参与排重键前统一规范化一次。
+    let effective_mime_type = normalize_generic_attachment_mime_type(mime_type)?;
+    // descriptor preserves the exact generic modality without claiming a registered file format.
+    // descriptor 保留精确通用模态，但不声称已注册文件格式。
+    let descriptor = generic_attachment_descriptor_for_mime_type(effective_mime_type.as_str());
+    stage_attachment_bytes_with_effective_mime_type(
+        workspace_path,
+        &descriptor,
+        suggested_file_name,
+        source_path,
+        effective_mime_type.as_str(),
+        bytes,
+        true,
     )
 }
 
@@ -558,6 +682,7 @@ fn stage_attachment_bytes_with_effective_mime_type(
     source_path: Option<&Path>,
     effective_mime_type: &str,
     bytes: &[u8],
+    reuse_project_asset: bool,
 ) -> Result<ConversationAttachment, String> {
     let timestamp = current_attachment_timestamp_parts();
     let asset_root = resolve_managed_attachment_root(workspace_path);
@@ -614,13 +739,35 @@ fn stage_attachment_bytes_with_effective_mime_type(
         preview_local_path: None,
         mime_type: effective_mime_type.to_string(),
     };
-    if let Err(error) = record_staged_attachment(workspace_path, &attachment, &timestamp) {
-        return Err(rollback_failed_managed_attachment(
-            &managed_file_path,
-            error,
-        ));
+    // indexed_attachment is either this candidate or the existing project asset selected atomically.
+    // indexed_attachment 是当前候选，或原子选定的既有项目资产。
+    let indexed_attachment = if reuse_project_asset {
+        record_or_reuse_project_attachment(workspace_path, &attachment, &timestamp)
+    } else {
+        record_staged_attachment(workspace_path, &attachment, &timestamp)
+            .map(|()| attachment.clone())
+    };
+    let indexed_attachment = match indexed_attachment {
+        Ok(indexed_attachment) => indexed_attachment,
+        Err(error) => {
+            return Err(rollback_failed_managed_attachment(
+                &managed_file_path,
+                error,
+            ));
+        }
+    };
+    if indexed_attachment.asset_id != attachment.asset_id {
+        // The winning record already owns its managed bytes; this unindexed duplicate must disappear.
+        // 获胜记录已经持有托管字节；当前未入索引的重复副本必须删除。
+        fs::remove_file(&managed_file_path).map_err(|error| {
+            format!(
+                "删除重复托管附件 `{}` 失败：{}。",
+                managed_file_path.display(),
+                error
+            )
+        })?;
     }
-    Ok(attachment)
+    Ok(indexed_attachment)
 }
 
 /// Normalizes one concrete generic-file MIME type without accepting parameters or invalid tokens.
@@ -711,19 +858,19 @@ pub(crate) fn managed_attachment_resource_path(
     Ok(format!(".vulcan/code/attachments/{relative_text}"))
 }
 
-/// Computes the SHA-256 digest of one staged file without retaining the complete file in memory.
-/// 在不把完整文件保留在内存中的情况下计算单个已暂存文件的 SHA-256 摘要。
-fn streaming_file_sha256(path: &Path) -> Result<String, String> {
+/// Computes the SHA-256 digest of one local attachment source without retaining it in memory.
+/// 在不把完整内容保留在内存中的情况下计算一个本地附件来源的 SHA-256 摘要。
+pub(crate) fn streaming_file_sha256(path: &Path) -> Result<String, String> {
     use std::io::Read;
 
     let mut file = fs::File::open(path)
-        .map_err(|error| format!("打开已暂存附件 `{}` 失败：{error}", path.display()))?;
+        .map_err(|error| format!("打开本地附件来源 `{}` 失败：{error}", path.display()))?;
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
         let read = file
             .read(&mut buffer)
-            .map_err(|error| format!("读取已暂存附件 `{}` 失败：{error}", path.display()))?;
+            .map_err(|error| format!("读取本地附件来源 `{}` 失败：{error}", path.display()))?;
         if read == 0 {
             break;
         }
@@ -1373,7 +1520,8 @@ mod tests {
         generic_attachment_descriptor, normalize_attachment_file_name,
         remove_attachment_preview_sidecar, resolve_attachment_replay_path,
         resolve_managed_attachment_root, stage_attachment_bytes, stage_attachment_file,
-        stage_generic_attachment_bytes, write_attachment_bytes_to_directory,
+        stage_generic_attachment_bytes, stage_project_attachment_bytes,
+        stage_project_generic_attachment_bytes, write_attachment_bytes_to_directory,
         write_attachment_image_preview_sidecar,
     };
     use crate::workspace_path::{
@@ -1459,6 +1607,102 @@ mod tests {
         assert!(std::path::Path::new(&attachment.local_path).is_file());
 
         cleanup_workspace_directory(&workspace_directory);
+    }
+
+    /// Verifies repeated composer staging reuses one exact project asset and locator.
+    /// 验证重复输入区暂存会复用同一个精确项目资产与定位符。
+    #[test]
+    fn project_attachment_staging_reuses_identical_content() {
+        // workspace_directory is the project boundary for fingerprint reuse.
+        // workspace_directory 是内容特征复用的项目边界。
+        let workspace_directory = unique_workspace_directory();
+        // descriptor supplies the exact MIME dimension of the deduplication key.
+        // descriptor 提供排重键中的精确 MIME 维度。
+        let descriptor = attachment_descriptor_from_mime_type("image/png")
+            .expect("png mime type should stay supported");
+        // first creates the canonical managed asset.
+        // first 创建规范托管资产。
+        let first = stage_project_attachment_bytes(
+            &workspace_directory.to_string_lossy(),
+            &descriptor,
+            "first-name.png",
+            None,
+            &[0_u8, 1, 2, 3],
+        )
+        .expect("first project attachment should stage");
+        // second carries different display metadata but the same required fingerprint.
+        // second 携带不同展示元数据，但具有相同的必需内容特征。
+        let second = stage_project_attachment_bytes(
+            &workspace_directory.to_string_lossy(),
+            &descriptor,
+            "second-name.png",
+            None,
+            &[0_u8, 1, 2, 3],
+        )
+        .expect("identical project attachment should reuse");
+
+        assert_eq!(second.asset_id, first.asset_id);
+        assert_eq!(second.resource_path, first.resource_path);
+        assert_eq!(second.local_path, first.local_path);
+        assert_eq!(second.file_name, first.file_name);
+        // managed_files proves the duplicate candidate copy was removed after atomic index reuse.
+        // managed_files 证明原子索引复用后重复候选副本已被删除。
+        let managed_files = std::fs::read_dir(
+            resolve_managed_attachment_root(&workspace_directory.to_string_lossy()).join("images"),
+        )
+        .expect("managed image directory should read")
+        .count();
+        assert_eq!(managed_files, 1);
+
+        cleanup_workspace_directory(&workspace_directory);
+    }
+
+    /// Verifies project identity and MIME remain hard dimensions of composer attachment reuse.
+    /// 验证项目身份与 MIME 始终是输入区附件复用的硬维度。
+    #[test]
+    fn project_attachment_staging_keeps_scope_and_mime_isolated() {
+        // first_workspace and second_workspace model two independent project attachment indexes.
+        // first_workspace 与 second_workspace 模拟两个独立项目附件索引。
+        let first_workspace = unique_workspace_directory();
+        let second_workspace = unique_workspace_directory();
+        // source_bytes are intentionally identical across every staging attempt.
+        // source_bytes 在每次暂存尝试中刻意保持完全相同。
+        let source_bytes = b"same immutable bytes";
+        // first_mime and second_mime prove MIME participates even inside one project.
+        // first_mime 与 second_mime 证明即使在同一项目内 MIME 也参与排重。
+        let first_mime = stage_project_generic_attachment_bytes(
+            &first_workspace.to_string_lossy(),
+            "payload.one",
+            None,
+            "application/x-vulcan-one",
+            source_bytes,
+        )
+        .expect("first generic project attachment should stage");
+        let second_mime = stage_project_generic_attachment_bytes(
+            &first_workspace.to_string_lossy(),
+            "payload.two",
+            None,
+            "application/x-vulcan-two",
+            source_bytes,
+        )
+        .expect("different MIME should stage independently");
+        // other_project proves an identical fingerprint cannot cross the workspace-owned index.
+        // other_project 证明完全相同的内容特征不能跨越工作区所有的索引。
+        let other_project = stage_project_generic_attachment_bytes(
+            &second_workspace.to_string_lossy(),
+            "payload.one",
+            None,
+            "application/x-vulcan-one",
+            source_bytes,
+        )
+        .expect("another project should stage independently");
+
+        assert_ne!(first_mime.asset_id, second_mime.asset_id);
+        assert_ne!(first_mime.asset_id, other_project.asset_id);
+        assert_ne!(first_mime.local_path, other_project.local_path);
+
+        cleanup_workspace_directory(&first_workspace);
+        cleanup_workspace_directory(&second_workspace);
     }
 
     /// Verifies an oversized-image derivative is stored as an adjacent sidecar and removed with its canonical asset.

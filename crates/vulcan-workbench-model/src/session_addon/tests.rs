@@ -1,5 +1,8 @@
 use super::*;
-use crate::{SessionOutputStyleState, SessionPendingModelSelection};
+use crate::{
+    SessionMediaUnderstandingModelSelection, SessionMediaUnderstandingReasoningEffort,
+    SessionMediaUnderstandingSelection, SessionOutputStyleState, SessionPendingModelSelection,
+};
 #[test]
 fn session_addon_revision_changes_only_when_namespace_value_changes() {
     let session_id = SessionId::new_v4();
@@ -39,6 +42,17 @@ fn session_addon_extracts_runtime_controls_and_work_mode() {
         }),
         active_reasoning_effort: Some(ReasoningEffortLevel::None),
         active_reasoning_effort_explicit: true,
+        media_understanding_selections: BTreeMap::from([(
+            String::from("video_understand"),
+            SessionMediaUnderstandingSelection::ModelReplacement {
+                selection: SessionMediaUnderstandingModelSelection {
+                    provider_id: String::from("minimax"),
+                    model_id: String::from("minimax-text"),
+                    connection_id: String::from("minimax-current-account"),
+                },
+                reasoning_effort: Some(SessionMediaUnderstandingReasoningEffort::Adaptive),
+            },
+        )]),
         context_compaction_window_node_id: Some(ContextCompactionWindowNodeId::CompressionWindow2),
         active_work_mode: Some(String::from("plan")),
         ..SessionRuntimeStateEntry::default()
@@ -84,6 +98,10 @@ fn session_addon_extracts_runtime_controls_and_work_mode() {
     assert_eq!(
         restored_runtime_state.pending_model_selection,
         runtime_state.pending_model_selection
+    );
+    assert_eq!(
+        restored_runtime_state.media_understanding_selections,
+        runtime_state.media_understanding_selections
     );
 }
 

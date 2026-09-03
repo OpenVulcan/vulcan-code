@@ -118,8 +118,8 @@ fn bundled_video_understanding_targets_compile_with_exact_upload_references() {
     }
 }
 
-/// Verifies MiniMax M3 binds to the video-capable OpenAI route and owns both regional upload channels.
-/// 验证 MiniMax M3 固定绑定支持视频的 OpenAI 路由，并拥有两个区域上传通道。
+/// Verifies MiniMax M3 binds to the video-capable OpenAI route, rejects native structured output, and owns both regional upload channels.
+/// 验证 MiniMax M3 固定绑定支持视频的 OpenAI 路由、不声明原生结构化输出，并拥有两个区域上传通道。
 #[test]
 fn bundled_minimax_m3_declares_image_video_and_provider_upload_contract() {
     // manifestPath is the authoritative MiniMax source asset used by production compilation.
@@ -160,7 +160,7 @@ fn bundled_minimax_m3_declares_image_video_and_provider_upload_contract() {
             vulcan_ai_contract::ResourceKind::Video
         ]
     );
-    assert_ne!(
+    assert_eq!(
         capabilities.structured_output,
         vulcan_ai_contract::StructuredOutputCapability::Unsupported
     );
@@ -183,6 +183,10 @@ fn bundled_minimax_m3_declares_image_video_and_provider_upload_contract() {
         assert_eq!(
             channel.response_id_pointer.as_deref(),
             Some("/file/file_id")
+        );
+        assert_eq!(
+            channel.response_id_encoding,
+            Some(super::UploadResponseIdEncoding::UnsignedInteger)
         );
         assert_eq!(
             channel.reference_template.as_deref(),

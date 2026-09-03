@@ -542,7 +542,7 @@ async fn run_git_commit_summary_model(
         connection_id_override: None,
         provider_route_lease_identity: None,
         provider_tool_selections_override: Default::default(),
-        provider_tool_media_understanding_modes_override: Default::default(),
+        provider_tool_media_understanding_selections_override: Default::default(),
         provider_tool_enabled_capabilities_override: Default::default(),
         provider_extension_target_sets_override: Default::default(),
         subagent_prompt_context: None,

@@ -74,8 +74,8 @@ pub(super) fn media_understanding_resource_kind(
 ///
 /// # Returns
 /// 返回值
-/// `true` only for conversation routes with the required input and stable JSON output.
-/// 仅对支持所需输入、会话能力及稳定 JSON 输出的路由返回 `true`。
+/// `true` only for conversation routes with the required media input.
+/// 仅对支持所需媒体输入及会话能力的路由返回 `true`。
 pub(super) fn model_route_supports_media_understanding(
     capabilities: &ModelCapabilities,
     capability: ProviderToolCapabilityKind,
@@ -87,7 +87,6 @@ pub(super) fn model_route_supports_media_understanding(
         .operations
         .contains(&AiOperation::ConversationRespond)
         && capabilities.input_resources.contains(&resource_kind)
-        && capabilities.structured_output != StructuredOutputCapability::Unsupported
 }
 
 /// Projects model media-input declarations through the encoder set of one frozen protocol route.

@@ -1,6 +1,9 @@
 //! Per-turn provider tool registration and host-side output staging.
 //! 每回合供应商工具注册与宿主侧输出暂存。
 
+use crate::attachment_asset_index::{
+    discard_unreferenced_staged_attachment, retain_generated_attachments_for_session,
+};
 use crate::attachment_assets::{
     attachment_descriptor_from_mime_type, stage_attachment_bytes, stage_attachment_file_streaming,
 };
@@ -19,10 +22,10 @@ use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use vulcan_core::types::ConversationAttachment;
 use vulcan_provider_adapters::{
-    AvailableProviderToolTarget, ManifestSourceLayer, MediaUnderstandingBackendMode,
-    MediaUnderstandingBackendSelection, PersistedAiConfiguration, ProviderToolCapabilityKind,
-    ProviderToolExecutionResult, ProviderToolNormalizedOutput, ProviderToolResourceDownloadPolicy,
-    ProviderToolTargetSelection, PublicAiRuntime,
+    AvailableProviderToolTarget, ManifestSourceLayer, MediaUnderstandingBackendSelection,
+    PersistedAiConfiguration, ProviderToolCapabilityKind, ProviderToolExecutionResult,
+    ProviderToolNormalizedOutput, ProviderToolResourceDownloadPolicy, ProviderToolTargetSelection,
+    PublicAiRuntime,
 };
 use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
@@ -172,8 +175,8 @@ pub(crate) fn build_provider_tool_candidates(
     session_extension_target_sets: &Option<
         BTreeMap<String, BTreeSet<vulcan_workbench_model::SessionProviderToolTargetSelection>>,
     >,
-    session_media_understanding_modes: &Option<
-        BTreeMap<String, vulcan_workbench_model::SessionMediaUnderstandingMode>,
+    session_media_understanding_selections: &Option<
+        BTreeMap<String, vulcan_workbench_model::SessionMediaUnderstandingSelection>,
     >,
     suppress_web_search: bool,
     media_resource_runtime: Option<Arc<dyn crate::media_resource_runtime::MediaResourceRuntime>>,
@@ -183,7 +186,7 @@ pub(crate) fn build_provider_tool_candidates(
         session_selections,
         session_enabled_capabilities,
         session_extension_target_sets,
-        session_media_understanding_modes,
+        session_media_understanding_selections,
     )?;
     validate_enabled_media_understanding_backends(&configuration)?;
     let available = runtime.available_provider_tool_targets(&configuration)?;
@@ -191,7 +194,7 @@ pub(crate) fn build_provider_tool_candidates(
     for (capability, selection) in &configuration.provider_tool_selections {
         if media_understanding_tool_id(*capability).is_some() {
             return Err(format!(
-                "Media-understanding capability `{capability:?}` cannot use the legacy direct-selection store; configure its dedicated global backend."
+                "Media-understanding capability `{capability:?}` cannot use the legacy direct-selection store; select its exact session route."
             ));
         }
         if !capability.is_direct_selection() {
@@ -277,15 +280,9 @@ pub(crate) fn build_provider_tool_candidates(
                 selection,
                 reasoning_effort,
             } => {
-                if !configuration.multimodal_understanding_candidate_is_enabled(
-                    selection.provider_id.as_str(),
-                    selection.model_id.as_str(),
-                ) {
-                    return Err(format!(
-                        "Provider `{}` model `{}` is not enabled as a multimodal understanding candidate.",
-                        selection.provider_id, selection.model_id
-                    ));
-                }
+                // The exact session route is validated below against the current executable catalog;
+                // the global candidate switch owns only new-session system defaults.
+                // 下方会依据当前可执行目录校验精确会话路由；全局候选开关只负责新会话系统默认值。
                 candidates.push(build_model_replacement_media_candidate(
                     Arc::clone(&runtime),
                     configuration.clone(),
@@ -318,8 +315,8 @@ pub(crate) fn build_provider_tool_candidates(
     Ok(candidates)
 }
 
-/// Validates that every enabled fixed media facade has one configured global backend.
-/// 校验每个已启用固定媒体外壳均具有一个已配置全局后端。
+/// Validates that every enabled fixed media facade has one exact effective backend route.
+/// 校验每个已启用固定媒体外壳均具有一条精确生效后端路由。
 ///
 /// # Parameters
 /// 参数
@@ -346,7 +343,7 @@ fn validate_enabled_media_understanding_backends(
                 .contains_key(&capability)
         {
             return Err(format!(
-                "Media-understanding capability `{capability:?}` is enabled but has no configured global backend."
+                "Media-understanding capability `{capability:?}` is enabled but has no exact session backend route."
             ));
         }
     }
@@ -574,7 +571,12 @@ fn build_model_extension_executor_candidate(
                 if media_understanding_tool_id(capability).is_some() {
                     render_media_understanding_provider_result(capability, result)
                 } else {
-                    render_provider_tool_result(workspace_root.as_deref(), result).await
+                    render_provider_tool_result(
+                        workspace_root.as_deref(),
+                        context.session_id.as_str(),
+                        result,
+                    )
+                    .await
                 }
             })
         }),
@@ -622,7 +624,7 @@ fn model_extension_tool_id(capability: ProviderToolCapabilityKind) -> &'static s
 /// 返回要求调用前先查询参数的面向模型说明。
 fn model_extension_tool_description(capability: ProviderToolCapabilityKind) -> String {
     format!(
-        "Executes the `{}` model extension. You MUST call `{MODEL_EXTENSION_PARAMETERS_TOOL_ID}` for this capability immediately before use, then pass one returned model id and args conforming exactly to that model's schema. Never guess or reuse stale model-specific arguments. Declared media-source fields can use a canonical project-resource://ID or an owned attachment://ID from this conversation. The host resolves only declared media bindings and applies independent extension size limits; an oversized or unsupported file returns an explicit error, not an address-only understanding result.",
+        "Executes the `{}` model extension. You MUST call `{MODEL_EXTENSION_PARAMETERS_TOOL_ID}` for this capability immediately before use, then pass one returned model id and args conforming exactly to that model's schema. Never guess or reuse stale model-specific arguments. Declared media-source fields can use a canonical project-resource://ID, an owned attachment://ID from this conversation, or a readable local file path. Relative paths resolve from the active workspace; absolute and project-external paths are accepted until filesystem permissions are enabled. The host resolves only declared media bindings and applies independent extension size limits; an oversized or unsupported file returns an explicit error, not an address-only understanding result.",
         model_extension_tool_id(capability)
     )
 }
@@ -786,7 +788,7 @@ fn render_model_extension_parameters(
         "capability": capability_name,
         "models": models,
         "instruction": if catalog.contains_key(&capability) {
-            "Copy one returned `model` field verbatim into the executor call; it is the only valid callable model identifier. Pass `args` matching that model's exact `args_schema`. In declared media-source fields, a canonical project-resource://ID or owned attachment://ID retains the current conversation's original file metadata and is resolved by the host before provider dispatch. Do not infer alternate model or source fields."
+            "Copy one returned `model` field verbatim into the executor call; it is the only valid callable model identifier. Pass `args` matching that model's exact `args_schema`. In declared media-source fields, use a canonical project-resource://ID, an owned attachment://ID, or a readable local file path. Relative paths resolve from the active workspace; absolute and project-external paths are accepted until filesystem permissions are enabled. The host resolves the exact declared source before provider dispatch. Do not infer alternate model or source fields."
         } else {
             "No native model is currently enabled for this extension capability."
         }
@@ -863,8 +865,8 @@ fn apply_session_provider_tool_selections(
     session_extension_target_sets: &Option<
         BTreeMap<String, BTreeSet<vulcan_workbench_model::SessionProviderToolTargetSelection>>,
     >,
-    session_media_understanding_modes: &Option<
-        BTreeMap<String, vulcan_workbench_model::SessionMediaUnderstandingMode>,
+    session_media_understanding_selections: &Option<
+        BTreeMap<String, vulcan_workbench_model::SessionMediaUnderstandingSelection>,
     >,
 ) -> Result<(), String> {
     match (session_selections, session_enabled_capabilities) {
@@ -880,7 +882,7 @@ fn apply_session_provider_tool_selections(
                     })?;
                 if media_understanding_tool_id(capability).is_some() {
                     return Err(format!(
-                        "Session media-understanding capability `{capability:?}` cannot select a backend; configure the dedicated global backend and retain only the session enable switch."
+                        "Session media-understanding capability `{capability:?}` cannot use the direct target store; use the exact media route store."
                     ));
                 }
                 if !capability.is_direct_selection() {
@@ -922,24 +924,45 @@ fn apply_session_provider_tool_selections(
             ));
         }
     }
-    if let Some(session_media_understanding_modes) = session_media_understanding_modes {
-        for (capability, mode) in session_media_understanding_modes {
-            let capability: ProviderToolCapabilityKind =
-                serde_json::from_value(Value::String(capability.clone())).map_err(|error| {
-                    format!(
-                        "Session media-understanding capability `{capability}` is invalid: {error}"
-                    )
-                })?;
-            let backend_mode = match mode {
-                vulcan_workbench_model::SessionMediaUnderstandingMode::ProviderTool => {
-                    MediaUnderstandingBackendMode::ProviderTool
+    if let Some(session_media_understanding_selections) = session_media_understanding_selections {
+        configuration.media_understanding_selections = session_media_understanding_selections
+            .iter()
+            .map(|(capability, selection)| {
+                let capability: ProviderToolCapabilityKind =
+                    serde_json::from_value(Value::String(capability.clone())).map_err(|error| {
+                        format!(
+                            "Session media-understanding capability `{capability}` is invalid: {error}"
+                        )
+                    })?;
+                if media_understanding_tool_id(capability).is_none() {
+                    return Err(format!(
+                        "Session capability `{capability:?}` cannot use the media-understanding route store."
+                    ));
                 }
-                vulcan_workbench_model::SessionMediaUnderstandingMode::ModelReplacement => {
-                    MediaUnderstandingBackendMode::ModelReplacement
-                }
-            };
-            configuration.apply_media_understanding_mode(capability, backend_mode)?;
-        }
+                let selection = match selection {
+                    vulcan_workbench_model::SessionMediaUnderstandingSelection::ProviderTool {
+                        selection,
+                    } => MediaUnderstandingBackendSelection::ProviderTool {
+                        selection: ProviderToolTargetSelection {
+                            connection_id: selection.connection_id.clone(),
+                            target_id: selection.target_id.clone(),
+                        },
+                    },
+                    vulcan_workbench_model::SessionMediaUnderstandingSelection::ModelReplacement {
+                        selection,
+                        reasoning_effort,
+                    } => MediaUnderstandingBackendSelection::ModelReplacement {
+                        selection: vulcan_provider_adapters::ActiveAiModelSelection {
+                            provider_id: selection.provider_id.clone(),
+                            model_id: selection.model_id.clone(),
+                            connection_id: selection.connection_id.clone(),
+                        },
+                        reasoning_effort: reasoning_effort.map(Into::into),
+                    },
+                };
+                Ok((capability, selection))
+            })
+            .collect::<Result<_, String>>()?;
     }
     if let Some(session_extension_target_sets) = session_extension_target_sets {
         configuration.provider_extension_target_sets = session_extension_target_sets
@@ -1051,7 +1074,10 @@ fn build_direct_provider_tool_candidate(
             // 精确宿主资源解析器遵循发起会话，而非模型选择的项目。
             let media_resource_runtime = media_resource_runtime.clone();
             Box::pin(async move {
-                let owner_session_id = Some(context.session_id);
+                // invoking_session_id remains available after provider dispatch so generated outputs can bind to the same owner.
+                // invoking_session_id 在供应商分派后继续保留，使生成输出可以绑定到相同所有者。
+                let invoking_session_id = context.session_id;
+                let owner_session_id = Some(invoking_session_id.clone());
                 let mut cancellation_guard = ProviderTaskCancellationOnDrop::new(
                     Arc::clone(&runtime),
                     owner_session_id.clone(),
@@ -1062,7 +1088,7 @@ fn build_direct_provider_tool_candidate(
                     if media_understanding_tool_id(capability).is_some() {
                         // Fixed media tools own one explicit resource, including its original filename and digest.
                         // 固定媒体工具持有一个显式资源，包括其原始文件名及摘要。
-                        let (resolved, source) = resolve_media_understanding_resource_arguments(
+                        let (resolved, sources) = resolve_media_understanding_resource_arguments(
                             workspace_root.as_deref(),
                             owner_session_id.as_deref(),
                             capability,
@@ -1070,7 +1096,7 @@ fn build_direct_provider_tool_candidate(
                             media_resource_runtime.as_deref(),
                         )
                         .await?;
-                        (resolved, vec![source])
+                        (resolved, sources)
                     } else {
                         (arguments, Vec::new())
                     };
@@ -1109,7 +1135,12 @@ fn build_direct_provider_tool_candidate(
                 let rendered = if media_understanding_tool_id(capability).is_some() {
                     render_media_understanding_provider_result(capability, result)
                 } else {
-                    render_provider_tool_result(workspace_root.as_deref(), result).await
+                    render_provider_tool_result(
+                        workspace_root.as_deref(),
+                        invoking_session_id.as_str(),
+                        result,
+                    )
+                    .await
                 };
                 cancellation_guard.disarm();
                 rendered
@@ -1123,8 +1154,9 @@ fn build_direct_provider_tool_candidate(
 ///
 /// # Parameters
 /// 参数
-/// `workspace_root` owns managed attachments and `result` is provider-normalized.
-/// `workspace_root` 持有托管附件，`result` 已由供应商归一化。
+/// `workspace_root` owns managed attachments, `session_id` identifies their exact conversation owner,
+/// and `result` is provider-normalized.
+/// `workspace_root` 持有托管附件，`session_id` 标识其精确会话所有者，`result` 已由供应商归一化。
 ///
 /// # Returns
 /// 返回值
@@ -1132,6 +1164,7 @@ fn build_direct_provider_tool_candidate(
 /// 返回包含生成附件宿主元数据的模型可见本地文件结果。
 async fn render_provider_tool_result(
     workspace_root: Option<&Path>,
+    session_id: &str,
     result: ProviderToolExecutionResult,
 ) -> Result<VulcanToolInvocationResult, String> {
     match result.output {
@@ -1151,8 +1184,13 @@ async fn render_provider_tool_result(
             )
         }
         ProviderToolNormalizedOutput::Resources(resources) => {
-            render_provider_resource_result(workspace_root, result.upstream_response_id, resources)
-                .await
+            render_provider_resource_result(
+                workspace_root,
+                session_id,
+                result.upstream_response_id,
+                resources,
+            )
+            .await
         }
         ProviderToolNormalizedOutput::Search(search) => {
             let payload = json!({
@@ -1215,7 +1253,8 @@ async fn render_provider_tool_result(
             )
         }
         ProviderToolNormalizedOutput::Composite(composite) => {
-            let resources = stage_provider_resources(workspace_root, composite.resources).await?;
+            let resources =
+                stage_provider_resources(workspace_root, session_id, composite.resources).await?;
             let has_generated_resources = !resources.host_resources.is_empty();
             let model_payload = json!({
                 "kind": "composite",
@@ -1277,8 +1316,10 @@ struct StagedProviderResources {
 ///
 /// # Parameters
 /// 参数
-/// `workspace_root`, `upstream_response_id`, and `resources` are provider-normalized.
-/// `workspace_root`、`upstream_response_id` 与 `resources` 已由供应商归一化。
+/// `workspace_root` owns managed attachments, `session_id` identifies their exact conversation owner,
+/// and `upstream_response_id` plus `resources` are provider-normalized.
+/// `workspace_root` 持有托管附件，`session_id` 标识其精确会话所有者，
+/// `upstream_response_id` 与 `resources` 已由供应商归一化。
 ///
 /// # Returns
 /// 返回值
@@ -1286,10 +1327,11 @@ struct StagedProviderResources {
 /// 返回包含生成附件宿主元数据的模型可见托管资源结果。
 async fn render_provider_resource_result(
     workspace_root: Option<&Path>,
+    session_id: &str,
     upstream_response_id: Option<String>,
     resources: Vec<vulcan_provider_adapters::ProviderToolGeneratedResource>,
 ) -> Result<VulcanToolInvocationResult, String> {
-    let resources = stage_provider_resources(workspace_root, resources).await?;
+    let resources = stage_provider_resources(workspace_root, session_id, resources).await?;
     let payload = json!({
         "outputs": resources.host_resources,
         "upstream_response_id": upstream_response_id
@@ -1308,8 +1350,9 @@ async fn render_provider_resource_result(
 ///
 /// # Parameters
 /// 参数
-/// `workspace_root` owns managed attachments and `resources` are provider-normalized.
-/// `workspace_root` 持有托管附件，`resources` 已由供应商归一化。
+/// `workspace_root` owns managed attachments, `session_id` identifies their exact conversation owner,
+/// and `resources` are provider-normalized.
+/// `workspace_root` 持有托管附件，`session_id` 标识其精确会话所有者，`resources` 已由供应商归一化。
 ///
 /// # Returns
 /// 返回值
@@ -1317,6 +1360,7 @@ async fn render_provider_resource_result(
 /// 返回分别用于模型输出与宿主卡片的有序公开及私有描述。
 async fn stage_provider_resources(
     workspace_root: Option<&Path>,
+    session_id: &str,
     resources: Vec<vulcan_provider_adapters::ProviderToolGeneratedResource>,
 ) -> Result<StagedProviderResources, String> {
     if resources.is_empty() {
@@ -1331,68 +1375,144 @@ async fn stage_provider_resources(
     let workspace_text = vulcan_runtime_assets::native_host_path_text_from_path(workspace_root);
     let mut model_resources = Vec::with_capacity(resources.len());
     let mut host_resources = Vec::with_capacity(resources.len());
-    for resource in resources {
-        let descriptor = attachment_descriptor_from_mime_type(resource.mime_type.as_str())
-            .ok_or_else(|| {
-                format!(
-                    "Provider tool resource `{}` has unsupported MIME type `{}`.",
-                    resource.output_id, resource.mime_type
-                )
-            })?;
-        let suggested_name = format!("{}.{}", resource.output_id, descriptor.extension);
-        let attachment = match (
-            resource.bytes,
-            resource.download_url.as_deref(),
-            resource.download_policy.as_ref(),
-        ) {
-            (Some(bytes), None, None) => stage_attachment_bytes(
-                workspace_text.as_str(),
-                &descriptor,
-                suggested_name.as_str(),
-                None,
-                bytes.as_slice(),
-            )?,
-            (None, Some(download_url), Some(download_policy)) => {
-                let temporary_path = download_provider_resource_to_temp(
-                    download_url,
-                    resource.kind.as_str(),
-                    download_policy,
-                )
-                .await?;
-                stage_attachment_file_streaming(
+    // staging_result keeps every staged item private until the complete batch has passed validation.
+    // staging_result 在整批通过校验前保持每个暂存项不可披露。
+    let staging_result: Result<(), String> = async {
+        for resource in resources {
+            let descriptor = attachment_descriptor_from_mime_type(resource.mime_type.as_str())
+                .ok_or_else(|| {
+                    format!(
+                        "Provider tool resource `{}` has unsupported MIME type `{}`.",
+                        resource.output_id, resource.mime_type
+                    )
+                })?;
+            let suggested_name = format!("{}.{}", resource.output_id, descriptor.extension);
+            let attachment = match (
+                resource.bytes,
+                resource.download_url.as_deref(),
+                resource.download_policy.as_ref(),
+            ) {
+                (Some(bytes), None, None) => stage_attachment_bytes(
                     workspace_text.as_str(),
                     &descriptor,
                     suggested_name.as_str(),
-                    temporary_path.as_ref(),
-                )?
-            }
-            _ => {
-                return Err(format!(
-                    "Provider tool resource `{}` has an invalid carrier.",
-                    resource.output_id
-                ));
-            }
-        };
-        let asset_id = attachment.asset_id.as_deref().ok_or_else(|| {
-            String::from("Staged provider resource is missing its managed asset identifier.")
-        })?;
-        let resource_path = attachment.resource_path.as_deref().ok_or_else(|| {
-            String::from("Staged provider resource is missing its managed resource path.")
-        })?;
-        model_resources.push(json!({
-            "kind": resource.kind,
-            "asset_id": asset_id,
-            "resource_path": resource_path,
-            "file_name": attachment.file_name.as_str(),
-            "mime_type": attachment.mime_type.as_str(),
-            "byte_len": attachment.byte_len
-        }));
-        host_resources.push(attachment);
+                    None,
+                    bytes.as_slice(),
+                )?,
+                (None, Some(download_url), Some(download_policy)) => {
+                    let temporary_path = download_provider_resource_to_temp(
+                        download_url,
+                        resource.kind.as_str(),
+                        download_policy,
+                    )
+                    .await?;
+                    stage_attachment_file_streaming(
+                        workspace_text.as_str(),
+                        &descriptor,
+                        suggested_name.as_str(),
+                        temporary_path.as_ref(),
+                    )?
+                }
+                _ => {
+                    return Err(format!(
+                        "Provider tool resource `{}` has an invalid carrier.",
+                        resource.output_id
+                    ));
+                }
+            };
+            // The attachment enters the rollback set before any post-staging invariant is checked.
+            // attachment 在任何暂存后不变量校验之前进入回滚集合。
+            host_resources.push(attachment);
+            let attachment = host_resources.last().ok_or_else(|| {
+                String::from("Staged provider resource batch lost its last item.")
+            })?;
+            let asset_id = attachment.asset_id.as_deref().ok_or_else(|| {
+                String::from("Staged provider resource is missing its managed asset identifier.")
+            })?;
+            attachment.resource_path.as_deref().ok_or_else(|| {
+                String::from("Staged provider resource is missing its managed resource path.")
+            })?;
+            // resource_path is the opaque conversation-owned locator disclosed to the model.
+            // resource_path 是向模型披露的不透明会话所有定位符。
+            let resource_path = format!("attachment://{asset_id}");
+            model_resources.push(json!({
+                "kind": resource.kind,
+                "asset_id": asset_id,
+                "resource_path": resource_path,
+                "file_name": attachment.file_name.as_str(),
+                "mime_type": attachment.mime_type.as_str(),
+                "byte_len": attachment.byte_len
+            }));
+        }
+        Ok(())
+    }
+    .await;
+    if let Err(error) = staging_result {
+        return Err(rollback_staged_provider_resources(
+            workspace_text.as_str(),
+            host_resources.as_slice(),
+            error,
+        ));
+    }
+    // Ownership is committed before the locator becomes model-visible, so the next tool call can resolve it immediately.
+    // 所有权在定位符对模型可见前完成提交，使下一次工具调用可以立即解析该定位符。
+    if let Err(error) = retain_generated_attachments_for_session(
+        workspace_text.as_str(),
+        session_id,
+        host_resources.as_slice(),
+    ) {
+        return Err(rollback_staged_provider_resources(
+            workspace_text.as_str(),
+            host_resources.as_slice(),
+            error,
+        ));
     }
     Ok(StagedProviderResources {
         model_resources,
         host_resources,
     })
+}
+
+/// Rolls back every uncommitted resource in one failed provider-output batch.
+/// 回滚一次失败供应商输出批次中的全部未提交资源。
+///
+/// # Parameters
+/// 参数
+/// `workspace_path` owns the project-scoped attachment index, `attachments` is the exact staged
+/// batch, and `primary_error` is the failure that aborted staging or ownership retention.
+/// `workspace_path` 持有项目级附件索引，`attachments` 是精确暂存批次，`primary_error` 是中止暂存或
+/// 所有权保留的失败。
+///
+/// # Returns
+/// 返回值
+/// The primary failure, augmented with every rollback failure without hiding the original cause.
+/// 返回原始失败，并在不隐藏根因的前提下附加每项回滚失败。
+fn rollback_staged_provider_resources(
+    workspace_path: &str,
+    attachments: &[ConversationAttachment],
+    primary_error: String,
+) -> String {
+    // rollback_errors retains exact cleanup failures while reverse order mirrors resource creation.
+    // rollback_errors 保留精确清理失败，逆序处理则与资源创建顺序相反。
+    let mut rollback_errors = Vec::new();
+    for attachment in attachments.iter().rev() {
+        match discard_unreferenced_staged_attachment(workspace_path, attachment) {
+            Ok(true) => {}
+            Ok(false) => rollback_errors.push(format!(
+                "staged asset `{}` was not discarded",
+                attachment.asset_id.as_deref().unwrap_or("missing")
+            )),
+            Err(error) => rollback_errors.push(error),
+        }
+    }
+    if rollback_errors.is_empty() {
+        primary_error
+    } else {
+        format!(
+            "{primary_error} Provider resource batch rollback also failed: {}",
+            rollback_errors.join("; ")
+        )
+    }
 }
 
 /// Downloads one bounded HTTPS provider resource into an automatically cleaned temporary file.
@@ -1416,7 +1536,7 @@ async fn download_provider_resource_to_temp(
 ) -> Result<tempfile::TempPath, String> {
     // The host revalidates the frozen adapter authority immediately before network access.
     // 宿主在网络访问前立即复验适配器冻结的权限。
-    let parsed_url = download_policy.validate_url(download_url, "Provider resource URL")?;
+    let parsed_url = download_policy.validate_url(download_url, "Provider resource")?;
     let byte_limit = match resource_kind {
         "audio" => PROVIDER_TOOL_AUDIO_OUTPUT_BYTE_LIMIT,
         "video" => PROVIDER_TOOL_VIDEO_OUTPUT_BYTE_LIMIT,
@@ -1495,12 +1615,14 @@ mod tests {
         download_provider_resource_to_temp, model_extension_executor_schema,
         model_extension_parameters_schema, model_extension_tool_id,
         render_model_extension_parameters, render_provider_resource_result,
-        render_provider_tool_result, validate_enabled_media_understanding_backends,
+        render_provider_tool_result, stage_provider_resources,
+        validate_enabled_media_understanding_backends,
     };
     use serde_json::json;
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
     use vulcan_ai_contract::ReasoningEffort;
+    use vulcan_core::types::ConversationAttachmentKind;
     use vulcan_provider_adapters::{
         AvailableProviderToolTarget, ManifestSourceLayer, ProviderToolCapabilityKind,
         ProviderToolCompositeOutput, ProviderToolEmbeddingOutput, ProviderToolEmbeddingVector,
@@ -1828,40 +1950,29 @@ mod tests {
         );
     }
 
-    /// Verifies a session media mode selects the matching independently stored backend route.
-    /// 验证会话媒体模式会选择对应的独立后端路由。
+    /// Verifies one exact session media route replaces the global default completely.
+    /// 验证一条精确会话媒体路由会完整替换全局默认值。
     #[test]
-    fn session_media_mode_selects_the_requested_backend_route() {
+    fn session_media_selection_owns_the_requested_backend_route() {
         let capability = ProviderToolCapabilityKind::VideoUnderstand;
-        let provider_selection = ProviderToolTargetSelection {
-            connection_id: String::from("provider-account"),
-            target_id: String::from("provider-video"),
-        };
         let replacement_selection = vulcan_provider_adapters::ActiveAiModelSelection {
             provider_id: String::from("replacement-provider"),
             model_id: String::from("replacement-video-model"),
             connection_id: String::from("replacement-account"),
         };
         let mut configuration = vulcan_provider_adapters::PersistedAiConfiguration::default();
-        let mut backend_options =
-            vulcan_provider_adapters::MediaUnderstandingBackendOptions::default();
-        backend_options.update_from_selection(
-            &vulcan_provider_adapters::MediaUnderstandingBackendSelection::ProviderTool {
-                selection: provider_selection.clone(),
-            },
-        );
-        backend_options.update_from_selection(
-            &vulcan_provider_adapters::MediaUnderstandingBackendSelection::ModelReplacement {
-                selection: replacement_selection.clone(),
-                reasoning_effort: Some(ReasoningEffort::Medium),
-            },
-        );
-        configuration
-            .media_understanding_backend_options
-            .insert(capability, backend_options);
-        let media_modes = BTreeMap::from([(
+        let media_selections = BTreeMap::from([(
             String::from("video_understand"),
-            vulcan_workbench_model::SessionMediaUnderstandingMode::ModelReplacement,
+            vulcan_workbench_model::SessionMediaUnderstandingSelection::ModelReplacement {
+                selection: vulcan_workbench_model::SessionMediaUnderstandingModelSelection {
+                    provider_id: replacement_selection.provider_id.clone(),
+                    model_id: replacement_selection.model_id.clone(),
+                    connection_id: replacement_selection.connection_id.clone(),
+                },
+                reasoning_effort: Some(
+                    vulcan_workbench_model::SessionMediaUnderstandingReasoningEffort::High,
+                ),
+            },
         )]);
 
         apply_session_provider_tool_selections(
@@ -1869,7 +1980,7 @@ mod tests {
             &Some(Default::default()),
             &Some(BTreeSet::from([String::from("video_understand")])),
             &None,
-            &Some(media_modes),
+            &Some(media_selections),
         )
         .expect("session replacement mode should select its stored route");
 
@@ -1880,7 +1991,7 @@ mod tests {
             Some(
                 &vulcan_provider_adapters::MediaUnderstandingBackendSelection::ModelReplacement {
                     selection: replacement_selection,
-                    reasoning_effort: Some(ReasoningEffort::Medium),
+                    reasoning_effort: Some(ReasoningEffort::High),
                 }
             )
         );
@@ -1891,22 +2002,45 @@ mod tests {
         assert!(configuration.provider_tool_selections.is_empty());
     }
 
-    /// Verifies a media switch without its required global backend fails before tool exposure.
-    /// 验证缺少必需全局后端的媒体开关会在工具暴露前失败。
+    /// Verifies provider-tool execution never reintroduces the system-default multimodal candidate gate.
+    /// 验证供应商工具执行绝不会重新引入系统默认多模态候选门禁。
     #[test]
-    fn enabled_media_capability_requires_global_backend() {
-        // configuration simulates a valid session switch over an incomplete global setup.
-        // configuration 模拟在不完整全局配置上启用有效会话开关。
+    fn session_media_execution_has_no_global_candidate_switch_gate() {
+        // source includes tests, so production isolates the exact code compiled outside this module.
+        // source 包含测试，因此 production 隔离当前模块之外实际编译的精确代码。
+        let source = include_str!("provider_tool_bridge.rs");
+        // production ends at the stable test boundary and cannot match this guard's own fragments.
+        // production 截止于稳定测试边界，不会命中当前守卫自身的分段字符串。
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map(|(production, _)| production)
+            .expect("provider tool bridge must retain one explicit test boundary");
+        // forbidden_gate names the global system-default predicate without embedding it literally.
+        // forbidden_gate 通过分段命名全局系统默认谓词，避免字面量自命中。
+        let forbidden_gate = ["multimodal_understanding_", "candidate_", "is_enabled"].concat();
+
+        assert!(
+            !production.contains(forbidden_gate.as_str()),
+            "session media execution must validate only its exact frozen route"
+        );
+    }
+
+    /// Verifies a media switch without its required exact route fails before tool exposure.
+    /// 验证缺少必需精确路由的媒体开关会在工具暴露前失败。
+    #[test]
+    fn enabled_media_capability_requires_exact_backend_route() {
+        // configuration simulates a session switch whose exact route is missing.
+        // configuration 模拟缺少精确路由的会话开关。
         let mut configuration = vulcan_provider_adapters::PersistedAiConfiguration::default();
         configuration
             .provider_tool_enabled_capabilities
             .insert(ProviderToolCapabilityKind::VideoUnderstand);
 
         let error = validate_enabled_media_understanding_backends(&configuration)
-            .expect_err("enabled video understanding must require one global backend");
+            .expect_err("enabled video understanding must require one exact route");
 
         assert!(error.contains("VideoUnderstand"), "{error}");
-        assert!(error.contains("global backend"), "{error}");
+        assert!(error.contains("exact session backend route"), "{error}");
     }
 
     /// Verifies a legacy session media target cannot create a second backend authority.
@@ -1940,7 +2074,10 @@ mod tests {
         )
         .expect_err("legacy session media target must fail closed");
 
-        assert!(error.contains("cannot select a backend"), "{error}");
+        assert!(
+            error.contains("cannot use the direct target store"),
+            "{error}"
+        );
         assert!(configuration.provider_tool_selections.is_empty());
     }
 
@@ -1987,7 +2124,7 @@ mod tests {
                 .expect_err("insecure URL must be rejected");
         assert_eq!(
             error,
-            "Provider resource URL is outside the declared scheme, default port or exact operation origin, and host suffixes."
+            "Provider resource URL host `example.com` is outside the declared scheme, default port or exact operation origin, and host suffixes."
         );
     }
 
@@ -2010,7 +2147,7 @@ mod tests {
         .expect_err("undeclared host must be rejected before networking");
         assert_eq!(
             error,
-            "Provider resource URL is outside the declared scheme, default port or exact operation origin, and host suffixes."
+            "Provider resource URL host `assets.example.org` is outside the declared scheme, default port or exact operation origin, and host suffixes."
         );
     }
 
@@ -2020,6 +2157,7 @@ mod tests {
     async fn embedding_output_preserves_vector_indexes_and_values() {
         let result = render_provider_tool_result(
             None,
+            "embedding-session",
             ProviderToolExecutionResult {
                 upstream_response_id: Some(String::from("embedding-response")),
                 output: ProviderToolNormalizedOutput::Embedding(ProviderToolEmbeddingOutput {
@@ -2048,6 +2186,7 @@ mod tests {
     async fn resource_free_composite_output_keeps_each_semantic_kind() {
         let result = render_provider_tool_result(
             None,
+            "composite-session",
             ProviderToolExecutionResult {
                 upstream_response_id: None,
                 output: ProviderToolNormalizedOutput::Composite(ProviderToolCompositeOutput {
@@ -2083,8 +2222,12 @@ mod tests {
     #[tokio::test]
     async fn generated_resource_output_separates_public_locator_from_private_host_path() {
         let workspace = tempfile::tempdir().expect("temporary workspace");
+        // session_id is the exact owner expected to resolve the generated resource.
+        // session_id 是预期能够解析生成资源的精确所有者。
+        let session_id = "generated-resource-session";
         let result = render_provider_resource_result(
             Some(workspace.path()),
+            session_id,
             Some(String::from("generated-response")),
             vec![ProviderToolGeneratedResource {
                 output_id: String::from("generated-image"),
@@ -2107,20 +2250,145 @@ mod tests {
             .payload["outputs"][0];
 
         assert!(model_resource["asset_id"].as_str().is_some());
-        assert!(
-            model_resource["resource_path"]
-                .as_str()
-                .is_some_and(|value| value.starts_with(".vulcan/code/attachments/images/"))
-        );
+        // asset_id is the stable managed identity returned without any private path.
+        // asset_id 是不携带任何私有路径返回的稳定托管身份。
+        let asset_id = model_resource["asset_id"].as_str().expect("model asset id");
+        // resource_path is the exact model-visible locator reused by understanding tools.
+        // resource_path 是理解工具复用的精确模型可见定位符。
+        let resource_path = model_resource["resource_path"]
+            .as_str()
+            .expect("model resource locator");
+        assert_eq!(resource_path, format!("attachment://{asset_id}"));
         assert!(model_resource.get("local_path").is_none());
         assert!(model_resource.get("preview_local_path").is_none());
         assert!(!model_text.contains(workspace.path().to_string_lossy().as_ref()));
         assert!(host_output["local_path"].as_str().is_some());
         assert_eq!(host_output["asset_id"], model_resource["asset_id"]);
-        assert_eq!(
-            host_output["resource_path"],
-            model_resource["resource_path"]
+        assert!(
+            host_output["resource_path"]
+                .as_str()
+                .is_some_and(|value| value.starts_with(".vulcan/code/attachments/images/"))
         );
+        // workspace_text preserves the native path contract used by the attachment index.
+        // workspace_text 保留附件索引使用的原生路径契约。
+        let workspace_text =
+            vulcan_runtime_assets::native_host_path_text_from_path(workspace.path());
+        // resolved proves the invoking session can immediately reuse the generated attachment.
+        // resolved 证明发起会话可以立即复用生成附件。
+        let resolved = crate::attachment_asset_index::resolve_owned_attachment_resource(
+            workspace_text.as_str(),
+            session_id,
+            resource_path,
+            ConversationAttachmentKind::Image,
+        )
+        .expect("generated resource owned by invoking session");
+        assert_eq!(resolved.asset_id.as_deref(), Some(asset_id));
+        // foreign_error proves the same opaque locator cannot cross the conversation boundary.
+        // foreign_error 证明相同不透明定位符无法跨越会话边界。
+        let foreign_error = crate::attachment_asset_index::resolve_owned_attachment_resource(
+            workspace_text.as_str(),
+            "other-session",
+            resource_path,
+            ConversationAttachmentKind::Image,
+        )
+        .expect_err("generated resource must remain conversation-scoped");
+        assert_eq!(
+            foreign_error,
+            "Attachment resource is not owned by the invoking conversation."
+        );
+    }
+
+    /// Verifies a later resource validation failure removes every earlier staged file and index record.
+    /// 验证后续资源校验失败会移除此前全部暂存文件与索引记录。
+    #[tokio::test]
+    async fn generated_resource_batch_rolls_back_all_prior_staging() {
+        // workspace isolates the managed attachment tree from user projects.
+        // workspace 将托管附件树与用户项目隔离。
+        let workspace = tempfile::tempdir().expect("temporary workspace");
+        // resources places one valid item before the deterministic unsupported-MIME failure.
+        // resources 在确定性的 MIME 不支持失败前放置一个有效项。
+        let resources = vec![
+            ProviderToolGeneratedResource {
+                output_id: String::from("first-image"),
+                kind: String::from("image"),
+                mime_type: String::from("image/png"),
+                bytes: Some(vec![0x89, b'P', b'N', b'G']),
+                download_url: None,
+                download_policy: None,
+            },
+            ProviderToolGeneratedResource {
+                output_id: String::from("invalid-output"),
+                kind: String::from("file"),
+                mime_type: String::from("application/x-unsupported-provider-output"),
+                bytes: Some(vec![1, 2, 3]),
+                download_url: None,
+                download_policy: None,
+            },
+        ];
+
+        let error = stage_provider_resources(Some(workspace.path()), "batch-owner", resources)
+            .await
+            .expect_err("the unsupported second resource must fail the complete batch");
+
+        assert!(error.contains("unsupported MIME type"), "{error}");
+        // asset_root is the exact project-scoped directory that must contain no staged payload.
+        // asset_root 是不得残留暂存载荷的精确项目级目录。
+        let asset_root = crate::attachment_assets::resolve_managed_attachment_root(
+            workspace.path().to_string_lossy().as_ref(),
+        );
+        // image_directory is created by the first stage but must be empty after rollback.
+        // image_directory 由首项暂存创建，但回滚后必须为空。
+        let image_directory = asset_root.join("images");
+        assert_eq!(
+            std::fs::read_dir(&image_directory)
+                .expect("staged image directory should remain readable")
+                .count(),
+            0
+        );
+        // index_document is the durable authority and must publish an empty asset set.
+        // index_document 是持久权威，必须发布空资产集合。
+        let index_document: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(asset_root.join("index").join("assets.json"))
+                .expect("attachment index should remain readable"),
+        )
+        .expect("attachment index should remain valid json");
+        assert_eq!(index_document["assets"], json!([]));
+    }
+
+    /// Verifies ownership-retention failure rolls back the complete staged resource batch.
+    /// 验证所有权保留失败会回滚完整的暂存资源批次。
+    #[tokio::test]
+    async fn generated_resource_batch_rolls_back_when_owner_commit_fails() {
+        // workspace isolates the retention-failure transaction.
+        // workspace 隔离所有权保留失败事务。
+        let workspace = tempfile::tempdir().expect("temporary workspace");
+        // resources contains one valid output so the empty owner fails only at final commit.
+        // resources 包含一个有效输出，使空所有者只在最终提交阶段失败。
+        let resources = vec![ProviderToolGeneratedResource {
+            output_id: String::from("uncommitted-image"),
+            kind: String::from("image"),
+            mime_type: String::from("image/png"),
+            bytes: Some(vec![0x89, b'P', b'N', b'G']),
+            download_url: None,
+            download_policy: None,
+        }];
+
+        let error = stage_provider_resources(Some(workspace.path()), "   ", resources)
+            .await
+            .expect_err("empty owner must fail the atomic ownership commit");
+
+        assert!(error.contains("invoking conversation id"), "{error}");
+        // asset_root contains only an empty durable index after rollback.
+        // asset_root 在回滚后只包含空的持久索引。
+        let asset_root = crate::attachment_assets::resolve_managed_attachment_root(
+            workspace.path().to_string_lossy().as_ref(),
+        );
+        let index_document: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(asset_root.join("index").join("assets.json"))
+                .expect("attachment index should remain readable"),
+        )
+        .expect("attachment index should remain valid json");
+        assert_eq!(index_document["assets"], json!([]));
     }
 
     /// Verifies native web search suppresses only the external search capability.

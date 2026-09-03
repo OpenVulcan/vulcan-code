@@ -2,11 +2,12 @@
 //! 会话继承、规范 V1 排序与显式工具冲突的回归覆盖。
 
 use super::*;
+use vulcan_session_core::v1::config::ProviderMediaUnderstandingReasoningEffort;
 
-/// Rebuilt defaults inherit later global changes; explicit session overrides remain independent.
-/// 重建后的默认值继承后续全局变化；显式会话覆盖仍保持独立。
+/// Materialized session defaults remain independent from later global changes.
+/// 已物化的会话默认值不受后续全局变化影响。
 #[test]
-fn capability_metadata_defaults_keep_inheritance_after_rebuild() {
+fn capability_metadata_defaults_become_session_owned_after_materialization() {
     use super::*;
     // No model catalog or account is needed to resolve the configuration inheritance contract.
     // 解析配置继承契约不需要模型目录或账号。
@@ -24,9 +25,12 @@ fn capability_metadata_defaults_keep_inheritance_after_rebuild() {
     );
     let inherited = provider_tool_selection_config_v1(&defaults, false);
     configuration.provider_tool_enabled_capabilities.clear();
-    let (changed, _) =
+    let (retained_default, _) =
         resolved_session_provider_tool_settings(&runtime, &configuration, &inherited).unwrap();
-    assert!(changed.enabled_capabilities.is_empty());
+    assert_eq!(
+        retained_default.enabled_capabilities,
+        defaults.enabled_capabilities
+    );
     let overridden = provider_tool_selection_config_v1(&defaults, true);
     let (retained, _) =
         resolved_session_provider_tool_settings(&runtime, &configuration, &overridden).unwrap();
@@ -85,16 +89,28 @@ fn provider_tool_selection_v1_orders_final_persisted_keys() {
             },
         ),
     ]);
-    // mediaModes proves media capability entries are sorted by their final persisted key.
-    // mediaModes 证明媒体能力条目按最终持久化键排序。
-    let media_modes = BTreeMap::from([
+    // mediaSelections proves exact media routes are sorted by their final persisted key.
+    // mediaSelections 证明精确媒体路由按最终持久化键排序。
+    let media_selections = BTreeMap::from([
         (
             ProviderToolCapabilityKind::ImageUnderstand,
-            vulcan_workbench_model::SessionMediaUnderstandingMode::ProviderTool,
+            MediaUnderstandingBackendSelection::ProviderTool {
+                selection: ProviderToolTargetSelection {
+                    connection_id: String::from("image-connection"),
+                    target_id: String::from("image-target"),
+                },
+            },
         ),
         (
             ProviderToolCapabilityKind::AudioUnderstand,
-            vulcan_workbench_model::SessionMediaUnderstandingMode::ModelReplacement,
+            MediaUnderstandingBackendSelection::ModelReplacement {
+                selection: vulcan_provider_adapters::ActiveAiModelSelection {
+                    provider_id: String::from("audio-provider"),
+                    model_id: String::from("audio-model"),
+                    connection_id: String::from("audio-connection"),
+                },
+                reasoning_effort: Some(vulcan_ai_contract::ReasoningEffort::Adaptive),
+            },
         ),
     ]);
     // extensionTargets also carries two targets in reverse insertion order for nested sorting.
@@ -127,7 +143,7 @@ fn provider_tool_selection_v1_orders_final_persisted_keys() {
     let selection = provider_tool_selection_config_from_parts_v1(
         &enabled_capabilities,
         &selections,
-        &media_modes,
+        &media_selections,
         &extension_targets,
         true,
     );
@@ -146,12 +162,30 @@ fn provider_tool_selection_v1_orders_final_persisted_keys() {
     );
     assert_eq!(
         selection
-            .media_understanding_modes
+            .media_understanding_selections
             .iter()
             .map(|entry| entry.capability.as_str())
             .collect::<Vec<_>>(),
         vec!["audio_understand", "image_understand"]
     );
+    assert_eq!(
+        selection.media_understanding_selections[0].reasoning_effort,
+        Some(ProviderMediaUnderstandingReasoningEffort::Adaptive)
+    );
+    assert_eq!(
+        selection.media_understanding_selections[1].reasoning_effort,
+        None
+    );
+    assert!(matches!(
+        selection.media_understanding_selections[0].selection,
+        Some(vulcan_session_core::v1::config::ProviderMediaUnderstandingRouteConfig::ModelReplacement(_))
+    ));
+    assert!(matches!(
+        selection.media_understanding_selections[1].selection,
+        Some(
+            vulcan_session_core::v1::config::ProviderMediaUnderstandingRouteConfig::ProviderTool(_)
+        )
+    ));
     assert_eq!(
         selection
             .extension_target_sets
@@ -194,6 +228,33 @@ fn session_media_understanding_settings_reject_missing_backend() {
     );
 }
 
+/// Verifies an unavailable exact session media route is rejected before persistence.
+/// 验证不可用的精确会话媒体路由会在持久化前被拒绝。
+#[test]
+fn session_media_understanding_rejects_unavailable_exact_route() {
+    let runtime = PublicAiRuntime::unavailable().expect("test public AI runtime");
+    let configuration = PersistedAiConfiguration::default();
+    let error = validate_provider_tool_session_settings(
+        &runtime,
+        &configuration,
+        &BTreeSet::from([ProviderToolCapabilityKind::VideoUnderstand]),
+        &BTreeMap::new(),
+        &BTreeMap::from([(
+            ProviderToolCapabilityKind::VideoUnderstand,
+            MediaUnderstandingBackendSelection::ProviderTool {
+                selection: ProviderToolTargetSelection {
+                    connection_id: String::from("missing-connection"),
+                    target_id: String::from("missing-target"),
+                },
+            },
+        )]),
+        &BTreeMap::new(),
+    )
+    .expect_err("unavailable exact media route must be rejected");
+
+    assert!(error.contains("exact session route"));
+}
+
 /// Verifies lazy session provider-tool initialization is deterministic and idempotent.
 /// 验证惰性会话供应商工具初始化具备确定性与幂等性。
 #[test]
@@ -229,7 +290,7 @@ fn session_provider_tool_settings_reconciliation_is_idempotent() {
     let (
         enabled_capabilities,
         selections,
-        media_understanding_modes,
+        media_understanding_selections,
         extension_target_sets,
         first_changed,
     ) = reconcile_session_provider_tool_settings(&mut runtime_state, &configuration)
@@ -245,7 +306,7 @@ fn session_provider_tool_settings_reconciliation_is_idempotent() {
             .map(|selection| selection.connection_id.as_str()),
         Some("search-connection")
     );
-    assert!(media_understanding_modes.is_empty());
+    assert!(media_understanding_selections.is_empty());
     assert_eq!(
         extension_target_sets.get(&ProviderToolCapabilityKind::ImageGenerate),
         Some(&BTreeSet::from([extension_default]))
@@ -255,7 +316,7 @@ fn session_provider_tool_settings_reconciliation_is_idempotent() {
     let (
         _enabled_capabilities,
         _selections,
-        _media_understanding_modes,
+        _media_understanding_selections,
         _extension_target_sets,
         second_changed,
     ) = reconcile_session_provider_tool_settings(&mut runtime_state, &configuration)
@@ -298,7 +359,7 @@ fn session_media_direct_targets_are_removed_from_overridden_sessions() {
     let (
         _enabled_capabilities,
         selections,
-        _media_understanding_modes,
+        _media_understanding_selections,
         _extension_target_sets,
         changed,
     ) = reconcile_session_provider_tool_settings(&mut runtime_state, &configuration)
@@ -323,10 +384,10 @@ fn session_media_direct_targets_are_removed_from_overridden_sessions() {
     assert!(selections.contains_key(&ProviderToolCapabilityKind::WebSearch));
 }
 
-/// Verifies first session materialization persists the active global media backend mode.
-/// 验证首次物化会话时会持久化当前全局媒体后端模式。
+/// Verifies first session materialization copies the exact default media route once.
+/// 验证首次物化会话时仅复制一次精确的默认媒体路由。
 #[test]
-fn session_media_backend_mode_is_materialized_with_session_defaults() {
+fn session_exact_media_route_is_materialized_with_session_defaults() {
     let mut configuration = PersistedAiConfiguration::default();
     configuration.media_understanding_selections.insert(
         ProviderToolCapabilityKind::ImageUnderstand,
@@ -339,20 +400,35 @@ fn session_media_backend_mode_is_materialized_with_session_defaults() {
     );
     let mut runtime_state = vulcan_workbench_model::SessionRuntimeStateEntry::default();
 
-    let (_enabled_capabilities, _selections, modes, _extension_target_sets, changed) =
-        reconcile_session_provider_tool_settings(&mut runtime_state, &configuration)
-            .expect("session defaults should materialize");
+    let (
+        _enabled_capabilities,
+        _selections,
+        media_understanding_selections,
+        _extension_target_sets,
+        changed,
+    ) = reconcile_session_provider_tool_settings(&mut runtime_state, &configuration)
+        .expect("session defaults should materialize");
 
     assert!(changed);
     assert_eq!(
-        modes.get(&ProviderToolCapabilityKind::ImageUnderstand),
-        Some(&vulcan_workbench_model::SessionMediaUnderstandingMode::ProviderTool)
+        media_understanding_selections.get(&ProviderToolCapabilityKind::ImageUnderstand),
+        Some(&MediaUnderstandingBackendSelection::ProviderTool {
+            selection: ProviderToolTargetSelection {
+                connection_id: String::from("image-account"),
+                target_id: String::from("image-target"),
+            },
+        })
     );
     assert_eq!(
-        runtime_state.media_understanding_modes,
+        runtime_state.media_understanding_selections,
         BTreeMap::from([(
             String::from("image_understand"),
-            vulcan_workbench_model::SessionMediaUnderstandingMode::ProviderTool,
+            vulcan_workbench_model::SessionMediaUnderstandingSelection::ProviderTool {
+                selection: vulcan_workbench_model::SessionProviderToolTargetSelection {
+                    connection_id: String::from("image-account"),
+                    target_id: String::from("image-target"),
+                },
+            },
         )])
     );
 }

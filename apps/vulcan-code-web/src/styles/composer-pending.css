@@ -422,9 +422,10 @@
   bottom: 6px;
   display: inline-flex;
   color: #d97706;
+  cursor: help;
   filter: drop-shadow(0 1px 1px color-mix(in oklch, var(--background) 80%, transparent));
-  pointer-events: none;
-  z-index: 2;
+  pointer-events: auto;
+  z-index: 4;
 }
 
 .composer-attachment-retry {
@@ -453,11 +454,4 @@
   pointer-events: auto;
   outline: 2px solid var(--ring);
   outline-offset: -3px;
-}
-
-.composer-attachment-degradation-summary {
-  margin: 5px 14px 0;
-  color: #b45309;
-  font-size: 11px;
-  line-height: 16px;
 }

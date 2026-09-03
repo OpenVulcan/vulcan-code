@@ -84,9 +84,9 @@ fn applied_output_style_snapshot(
 ///
 /// # Returns
 /// 返回值
-/// Success for a complete direct selection or a media capability backed globally; otherwise an
-/// explicit stale-session error.
-/// 直连选择完整或媒体能力由全局后端承载时返回成功；否则返回明确的过期会话错误。
+/// Success when every enabled direct or media capability owns its exact session route; otherwise
+/// returns an explicit incomplete-session error.
+/// 每项已启用的直连或媒体能力都持有精确会话路由时返回成功；否则返回明确的会话配置不完整错误。
 fn validate_session_provider_tool_target_completeness(
     runtime_state: &SessionRuntimeStateEntry,
 ) -> Result<(), String> {
@@ -94,16 +94,26 @@ fn validate_session_provider_tool_target_completeness(
         return Ok(());
     }
     for capability in &runtime_state.provider_tool_enabled_capabilities {
-        // mediaCapability owns only a session enable switch; its backend is global and immutable for this turn.
-        // mediaCapability 只持有会话启用开关；其后端为全局配置且在当前回合不可变。
+        // mediaCapability must own its exact session route before request preparation starts.
+        // mediaCapability 必须在请求准备开始前持有精确的会话路由。
         let media_capability = matches!(
             capability.as_str(),
             "image_understand" | "video_understand" | "audio_understand"
         );
-        if !media_capability
-            && !runtime_state
-                .provider_tool_selections
+        if media_capability {
+            if !runtime_state
+                .media_understanding_selections
                 .contains_key(capability)
+            {
+                return Err(format!(
+                    "Media-understanding capability `{capability}` is enabled but has no exact session route; confirm the session capability settings before sending."
+                ));
+            }
+            continue;
+        }
+        if !runtime_state
+            .provider_tool_selections
+            .contains_key(capability)
         {
             return Err(format!(
                 "Provider tool capability `{capability}` is enabled but has no selected model and account; confirm the session capability settings before sending."
@@ -1050,9 +1060,9 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
                     .collect()
             },
         ),
-        provider_tool_media_understanding_modes_override: runtime_state
+        provider_tool_media_understanding_selections_override: runtime_state
             .provider_tool_settings_initialized
-            .then(|| runtime_state.media_understanding_modes.clone()),
+            .then(|| runtime_state.media_understanding_selections.clone()),
         provider_tool_enabled_capabilities_override: runtime_state
             .provider_tool_settings_initialized
             .then(|| runtime_state.provider_tool_enabled_capabilities.clone()),

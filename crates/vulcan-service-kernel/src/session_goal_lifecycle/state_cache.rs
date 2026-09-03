@@ -898,10 +898,19 @@ mod tests {
                                     },
                             },
                         ],
-                        media_understanding_modes: vec![
+                        media_understanding_selections: vec![
                             vulcan_session_core::v1::config::ProviderMediaUnderstandingSelection {
                                 capability: String::from("image_understanding"),
                                 mode: vulcan_session_core::v1::config::ProviderMediaUnderstandingMode::ProviderTool,
+                                selection: Some(
+                                    vulcan_session_core::v1::config::ProviderMediaUnderstandingRouteConfig::ProviderTool(
+                                        vulcan_session_core::v1::config::ProviderToolTargetConfig {
+                                            connection_id: String::from("connection-image"),
+                                            target_id: String::from("target-image"),
+                                        },
+                                    ),
+                                ),
+                                reasoning_effort: None,
                             },
                         ],
                         extension_target_sets: vec![
@@ -996,9 +1005,16 @@ mod tests {
         );
         assert_eq!(
             runtime_state
-                .media_understanding_modes
+                .media_understanding_selections
                 .get("image_understanding"),
-            Some(&vulcan_workbench_model::SessionMediaUnderstandingMode::ProviderTool)
+            Some(
+                &vulcan_workbench_model::SessionMediaUnderstandingSelection::ProviderTool {
+                    selection: vulcan_workbench_model::SessionProviderToolTargetSelection {
+                        connection_id: String::from("connection-image"),
+                        target_id: String::from("target-image"),
+                    },
+                }
+            )
         );
         assert_eq!(
             runtime_state

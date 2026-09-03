@@ -1,15 +1,9 @@
 import React from "react";
 import {
   AlertTriangle,
-  FileSearch,
-  Image,
   LoaderCircle,
   LockKeyhole,
-  Music,
-  Search,
   SlidersHorizontal,
-  Video,
-  Volume2,
 } from "lucide-react";
 
 import {
@@ -37,6 +31,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { ProviderToolCapabilityIcon } from "@/components/shared/provider-tool-capability-icon";
 import type {
   ComposerProviderToolSettingsSnapshot,
   ComposerSelectOption,
@@ -46,7 +41,13 @@ import { cn } from "@/lib/utils";
 import {
   isDirectProviderToolCapability,
   isModelExtensionCapability,
+  modelCapabilitiesSupportMediaUnderstanding,
 } from "@/lib/provider-tool-capabilities";
+import {
+  mediaReplacementReasoningEfforts,
+  mediaReplacementReasoningOverrides,
+  PUBLIC_AI_REASONING_EFFORT_LABEL_KEYS,
+} from "@/lib/reasoning-effort-labels";
 import {
   loadPublicAiSessionProviderToolSelections,
   rebuildPublicAiSessionProviderToolSelections,
@@ -58,7 +59,7 @@ import type {
   ContextCompactionWindowNodeId,
   ContextUsageSnapshot,
   PublicAiContextCompactionWindowNode,
-  PublicAiModelCapabilities,
+  PublicAiMediaUnderstandingModelCandidate,
   PublicAiMediaUnderstandingBackendMode,
   PublicAiMediaUnderstandingBackendSelection,
   PublicAiProviderToolCapabilityKind,
@@ -472,7 +473,7 @@ export function ComposerAiCapabilityControl(props: {
     enabledCapabilities: [],
     selections: {},
     extensionTargetSets: {},
-    mediaUnderstandingModes: {},
+    mediaUnderstandingSelections: {},
   });
   const [baselineSignature, setBaselineSignature] = React.useState("{}");
   const [saving, setSaving] = React.useState(false);
@@ -517,13 +518,15 @@ export function ComposerAiCapabilityControl(props: {
               enabledCapabilities: sessionSettings.enabledCapabilities,
               selections: sessionSettings.selections,
               extensionTargetSets: sessionSettings.extensionTargetSets,
-              mediaUnderstandingModes: sessionSettings.mediaUnderstandingModes,
+              mediaUnderstandingSelections: sessionSettings.mediaUnderstandingSelections,
             }
-          : props.draftSettings ?? {
+          : props.draftSettings
+            ? normalizedComposerProviderToolSettings(props.draftSettings)
+            : {
               enabledCapabilities: nextSnapshot.providerToolEnabledCapabilities,
               selections: nextSnapshot.providerToolSelections,
               extensionTargetSets: nextSnapshot.providerExtensionTargetSets,
-              mediaUnderstandingModes: mediaUnderstandingModesFromSnapshot(nextSnapshot),
+              mediaUnderstandingSelections: nextSnapshot.mediaUnderstandingSelections ?? {},
             };
         const capabilities = orderedProviderToolCapabilities(nextSnapshot);
         setSnapshot(nextSnapshot);
@@ -550,7 +553,14 @@ export function ComposerAiCapabilityControl(props: {
     };
   }, [open, props.conversationId, props.draftSettings, props.onDraftSettingsChange, reloadVersion]);
 
-  const capabilities = settingsReady && snapshot ? orderedProviderToolCapabilities(snapshot) : [];
+  const capabilities = settingsReady && snapshot
+    ? orderProviderToolCapabilities([
+        ...orderedProviderToolCapabilities(snapshot),
+        ...draft.enabledCapabilities,
+        ...Object.keys(draft.mediaUnderstandingSelections)
+          .filter(isMediaUnderstandingCapability),
+      ] as PublicAiProviderToolCapabilityKind[])
+    : [];
   const capabilityTargets = snapshot?.providerToolTargets.filter(
     (target) => target.target.contract.capability === selectedCapability
       && (!isModelExtensionCapability(selectedCapability)
@@ -570,17 +580,53 @@ export function ComposerAiCapabilityControl(props: {
   const selectedAccount = selectedAccounts.find(
     (target) => target.connectionId === selectedSelection?.connection_id,
   ) ?? null;
-  // selectedMediaMode is the session-selected backend family, defaulting to the global active mode.
-  // selectedMediaMode 是会话选择的后端类型，缺省时使用全局当前活动模式。
-  const selectedMediaMode = snapshot && isMediaUnderstandingCapability(selectedCapability)
-    ? draft.mediaUnderstandingModes[selectedCapability]
-      ?? snapshot.mediaUnderstandingSelections?.[selectedCapability]?.mode
+  // selectedMediaTargets contains every exact provider-tool route for the selected media kind.
+  // selectedMediaTargets 包含当前媒体类型的全部精确供应商工具路由。
+  const selectedMediaTargets = isMediaUnderstandingCapability(selectedCapability)
+    ? capabilityTargets
+    : [];
+  const selectedMediaProviderModels = uniqueProviderToolModels(selectedMediaTargets);
+  // selectedMediaCandidates is independent from system defaults and global enable switches.
+  // selectedMediaCandidates 与系统默认值及全局启用开关完全独立。
+  const selectedMediaCandidates = snapshot && isMediaUnderstandingCapability(selectedCapability)
+    ? (snapshot.mediaUnderstandingModelCandidates ?? []).filter((candidate) => (
+      modelCapabilitiesSupportMediaUnderstanding(candidate.capabilities, selectedCapability)
+    ))
+    : [];
+  const selectedMediaModelChoices = uniqueMediaUnderstandingModels(selectedMediaCandidates);
+  // selectedMediaSelection is the complete route owned by this session.
+  // selectedMediaSelection 是当前会话持有的完整路由。
+  const selectedMediaSelection = isMediaUnderstandingCapability(selectedCapability)
+    ? draft.mediaUnderstandingSelections[selectedCapability]
     : undefined;
-  // selectedMediaBackendSummary describes the selected global route without exposing session model controls.
-  // selectedMediaBackendSummary 描述会话模式对应的全局路由，不暴露会话级模型控件。
-  const selectedMediaBackendSummary = snapshot && isMediaUnderstandingCapability(selectedCapability)
-    ? mediaUnderstandingBackendSummary(snapshot, selectedCapability, t, selectedMediaMode)
-    : null;
+  const selectedMediaProviderTarget = selectedMediaSelection?.mode === "provider_tool"
+    ? selectedMediaTargets.find((target) => (
+      target.connectionId === selectedMediaSelection.selection.connection_id
+      && target.target.target_id === selectedMediaSelection.selection.target_id
+    ))
+    : undefined;
+  const selectedMediaProviderModelKey = selectedMediaProviderTarget
+    ? providerToolModelKey(selectedMediaProviderTarget)
+    : "";
+  const selectedMediaProviderAccounts = selectedMediaTargets.filter(
+    (target) => providerToolModelKey(target) === selectedMediaProviderModelKey,
+  );
+  const selectedMediaModelCandidate = selectedMediaSelection?.mode === "model_replacement"
+    ? selectedMediaCandidates.find((candidate) => (
+      candidate.selection.provider_id === selectedMediaSelection.selection.provider_id
+      && candidate.selection.model_id === selectedMediaSelection.selection.model_id
+      && candidate.selection.connection_id === selectedMediaSelection.selection.connection_id
+    ))
+    : undefined;
+  const selectedMediaModelKey = selectedMediaModelCandidate
+    ? mediaUnderstandingModelKey(selectedMediaModelCandidate)
+    : "";
+  const selectedMediaModelAccounts = selectedMediaCandidates.filter(
+    (candidate) => mediaUnderstandingModelKey(candidate) === selectedMediaModelKey,
+  );
+  const selectedMediaReasoningEfforts = selectedMediaModelCandidate
+    ? mediaReplacementReasoningOverrides(selectedMediaModelCandidate.capabilities)
+    : [];
   const localConflicts = snapshot ? providerToolSettingsConflicts(snapshot, draft) : [];
   const conflicts = localConflicts;
   // enabledCount combines direct enabled capabilities and non-empty extension sets.
@@ -612,7 +658,7 @@ export function ComposerAiCapabilityControl(props: {
         enabledCapabilities: draft.enabledCapabilities,
         selections: draft.selections,
         extensionTargetSets: draft.extensionTargetSets,
-        mediaUnderstandingModes: draft.mediaUnderstandingModes,
+        mediaUnderstandingSelections: draft.mediaUnderstandingSelections,
       });
       if (generation !== saveGeneration.current) {
         return;
@@ -621,7 +667,7 @@ export function ComposerAiCapabilityControl(props: {
         enabledCapabilities: next.enabledCapabilities,
         selections: next.selections,
         extensionTargetSets: next.extensionTargetSets,
-        mediaUnderstandingModes: next.mediaUnderstandingModes,
+        mediaUnderstandingSelections: next.mediaUnderstandingSelections,
       };
       setDraft(nextDraft);
       setBaselineSignature(providerToolSettingsSignature(nextDraft));
@@ -699,7 +745,7 @@ export function ComposerAiCapabilityControl(props: {
                         "--capability-color": providerToolCapabilityColor(capability),
                       } as React.CSSProperties}
                     >
-                      {providerToolCapabilityIcon(capability, 11)}
+                      <ProviderToolCapabilityIcon capability={capability} size={11} />
                     </span>
                   ))}
                 </span>
@@ -763,24 +809,16 @@ export function ComposerAiCapabilityControl(props: {
                   && (!isModelExtensionCapability(capability)
                     || target.manifestSourceLayer !== "custom"),
               ) ?? [];
-              // mediaBackendOptions exposes only the backend families configured globally for this capability.
-              // mediaBackendOptions 只暴露该能力已在全局配置的后端类型。
-              const mediaBackendOptions = snapshot?.mediaUnderstandingBackendOptions?.[capability];
-              const mediaBackendSummary = snapshot && isMediaUnderstandingCapability(capability)
-                ? mediaUnderstandingBackendSummary(
-                  snapshot,
-                  capability,
-                  t,
-                  draft.mediaUnderstandingModes[capability]
-                    ?? snapshot.mediaUnderstandingSelections?.[capability]?.mode,
-                )
-                : null;
-              const mediaBackendModeCount = Number(mediaBackendOptions?.provider_tool !== undefined)
-                + Number(mediaBackendOptions?.model_replacement !== undefined);
-              // targetCount reports configured media backend modes or the regular selectable model count.
-              // targetCount 对媒体能力报告已配置后端类型数量，否则报告常规可选模型数量。
+              const mediaCandidates = snapshot && isMediaUnderstandingCapability(capability)
+                ? (snapshot.mediaUnderstandingModelCandidates ?? []).filter((candidate) => (
+                  modelCapabilitiesSupportMediaUnderstanding(candidate.capabilities, capability)
+                ))
+                : [];
+              // targetCount reports every independently selectable session model across both backend families.
+              // targetCount 报告两种后端类型中全部可由会话独立选择的模型。
               const targetCount = isMediaUnderstandingCapability(capability)
-                ? mediaBackendModeCount
+                ? uniqueProviderToolModels(targets).length
+                  + uniqueMediaUnderstandingModels(mediaCandidates).length
                 : uniqueProviderToolModels(targets).length;
               const conflict = conflicts.find((item) => item.capability === capability);
               return (
@@ -809,7 +847,23 @@ export function ComposerAiCapabilityControl(props: {
                           }
                           enabledCapabilities.add(capability);
                           if (isMediaUnderstandingCapability(capability)) {
-                            return { ...current, enabledCapabilities: Array.from(enabledCapabilities).sort() };
+                            const mediaUnderstandingSelections =
+                              current.mediaUnderstandingSelections[capability]
+                                ? current.mediaUnderstandingSelections
+                                : {
+                                  ...current.mediaUnderstandingSelections,
+                                  [capability]: firstAvailableMediaUnderstandingSelection(
+                                    snapshot!,
+                                    capability,
+                                    targets,
+                                    mediaCandidates,
+                                  ),
+                                };
+                            return {
+                              ...current,
+                              enabledCapabilities: Array.from(enabledCapabilities).sort(),
+                              mediaUnderstandingSelections,
+                            };
                           }
                           const first = targets[0];
                           if (first) {
@@ -840,7 +894,7 @@ export function ComposerAiCapabilityControl(props: {
                     )} style={{
                       "--capability-color": providerToolCapabilityColor(capability),
                     } as React.CSSProperties}>
-                      {providerToolCapabilityIcon(capability, 16)}
+                      <ProviderToolCapabilityIcon capability={capability} size={16} />
                     </span>
                     <span className="composer-capability-kind-copy">
                       <span>{providerToolCapabilityLabel(capability, t)}</span>
@@ -860,46 +914,43 @@ export function ComposerAiCapabilityControl(props: {
           </aside>
           <section className="composer-capability-dialog-right">
             {isMediaUnderstandingCapability(selectedCapability) ? (
-              selectedMediaBackendSummary ? (
+              selectedMediaTargets.length > 0 || selectedMediaCandidates.length > 0 ? (
                 <div className="composer-capability-route-selectors">
                   <label>
                     <span>{t("composer.capability.mediaBackendMode")}</span>
                     <Select
                       disabled={saving}
-                      value={selectedMediaBackendSummary.mode}
+                      value={selectedMediaSelection?.mode ?? ""}
                       onValueChange={(value) => {
                         const mode = value as PublicAiMediaUnderstandingBackendMode;
-                        setDraft((current) => ({
-                          ...current,
-                          mediaUnderstandingModes: {
-                            ...current.mediaUnderstandingModes,
-                            [selectedCapability]: mode,
-                          },
-                        }));
+                        const selection = mode === "provider_tool"
+                          ? selectedMediaTargets[0]
+                            ? providerMediaUnderstandingSelection(selectedMediaTargets[0])
+                            : undefined
+                          : selectedMediaCandidates[0]
+                            ? modelReplacementSelection(selectedMediaCandidates[0])
+                            : undefined;
+                        if (selection) {
+                          setDraft((current) => ({
+                            ...current,
+                            mediaUnderstandingSelections: {
+                              ...current.mediaUnderstandingSelections,
+                              [selectedCapability]: selection,
+                            },
+                          }));
+                        }
                       }}
                     >
                       <SelectTrigger>
-                        <SelectValue />
+                        <SelectValue placeholder={t("settings.providerTools.selectBackendMode")} />
                       </SelectTrigger>
                       <SelectContent>
-                        {selectedMediaBackendSummary.mode === "provider_tool"
-                          && !snapshot?.mediaUnderstandingBackendOptions?.[selectedCapability]?.provider_tool ? (
-                          <SelectItem disabled value="provider_tool">
-                            {t("composer.capability.mode.provider")}
-                          </SelectItem>
-                        ) : null}
-                        {snapshot?.mediaUnderstandingBackendOptions?.[selectedCapability]?.provider_tool ? (
+                        {selectedMediaTargets.length > 0 ? (
                           <SelectItem value="provider_tool">
                             {t("composer.capability.mode.provider")}
                           </SelectItem>
                         ) : null}
-                        {selectedMediaBackendSummary.mode === "model_replacement"
-                          && !snapshot?.mediaUnderstandingBackendOptions?.[selectedCapability]?.model_replacement ? (
-                          <SelectItem disabled value="model_replacement">
-                            {t("composer.capability.mode.model")}
-                          </SelectItem>
-                        ) : null}
-                        {snapshot?.mediaUnderstandingBackendOptions?.[selectedCapability]?.model_replacement ? (
+                        {selectedMediaCandidates.length > 0 ? (
                           <SelectItem value="model_replacement">
                             {t("composer.capability.mode.model")}
                           </SelectItem>
@@ -907,10 +958,196 @@ export function ComposerAiCapabilityControl(props: {
                       </SelectContent>
                     </Select>
                   </label>
-                  <label>
-                    <span>{t("composer.capability.mediaFixedRoute")}</span>
-                    <strong>{selectedMediaBackendSummary.routeLabel}</strong>
-                  </label>
+                  {selectedMediaSelection?.mode === "provider_tool" ? (
+                    <>
+                      <label>
+                        <span>{t("settings.providerTools.model")}</span>
+                        <Select
+                          disabled={saving}
+                          value={selectedMediaProviderModelKey}
+                          onValueChange={(modelKey) => {
+                            const target = selectedMediaTargets.find((candidate) => (
+                              providerToolModelKey(candidate) === modelKey
+                              && candidate.connectionId === selectedMediaProviderTarget?.connectionId
+                            )) ?? selectedMediaTargets.find((candidate) => (
+                              providerToolModelKey(candidate) === modelKey
+                            ));
+                            if (target) {
+                              setDraft((current) => ({
+                                ...current,
+                                mediaUnderstandingSelections: {
+                                  ...current.mediaUnderstandingSelections,
+                                  [selectedCapability]: providerMediaUnderstandingSelection(target),
+                                },
+                              }));
+                            }
+                          }}
+                        >
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {selectedMediaProviderModels.map((target) => (
+                              <SelectItem
+                                key={providerToolModelKey(target)}
+                                value={providerToolModelKey(target)}
+                              >
+                                {target.target.display_name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </label>
+                      <label>
+                        <span>{t("settings.providerTools.account")}</span>
+                        <Select
+                          disabled={saving || selectedMediaProviderAccounts.length === 0}
+                          value={selectedMediaProviderTarget?.connectionId ?? ""}
+                          onValueChange={(connectionId) => {
+                            const target = selectedMediaProviderAccounts.find(
+                              (candidate) => candidate.connectionId === connectionId,
+                            );
+                            if (target) {
+                              setDraft((current) => ({
+                                ...current,
+                                mediaUnderstandingSelections: {
+                                  ...current.mediaUnderstandingSelections,
+                                  [selectedCapability]: providerMediaUnderstandingSelection(target),
+                                },
+                              }));
+                            }
+                          }}
+                        >
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {selectedMediaProviderAccounts.map((target) => (
+                              <SelectItem key={target.connectionId} value={target.connectionId}>
+                                {target.connectionDisplayName}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </label>
+                    </>
+                  ) : selectedMediaSelection?.mode === "model_replacement" ? (
+                    <>
+                      <label>
+                        <span>{t("settings.providerTools.model")}</span>
+                        <Select
+                          disabled={saving}
+                          value={selectedMediaModelKey}
+                          onValueChange={(modelKey) => {
+                            const candidate = selectedMediaCandidates.find(
+                              (item) => mediaUnderstandingModelKey(item) === modelKey,
+                            );
+                            if (candidate) {
+                              setDraft((current) => ({
+                                ...current,
+                                mediaUnderstandingSelections: {
+                                  ...current.mediaUnderstandingSelections,
+                                  [selectedCapability]: modelReplacementSelection(candidate),
+                                },
+                              }));
+                            }
+                          }}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder={t("settings.providerTools.selectModel")} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {selectedMediaModelChoices.map((candidate) => (
+                              <SelectItem
+                                key={mediaUnderstandingModelKey(candidate)}
+                                value={mediaUnderstandingModelKey(candidate)}
+                              >
+                                {candidate.providerDisplayName} · {candidate.modelDisplayName}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </label>
+                      <label>
+                        <span>{t("settings.providerTools.account")}</span>
+                        <Select
+                          disabled={saving || selectedMediaModelAccounts.length === 0}
+                          value={selectedMediaModelCandidate?.selection.connection_id ?? ""}
+                          onValueChange={(connectionId) => {
+                            const candidate = selectedMediaModelAccounts.find(
+                              (item) => item.selection.connection_id === connectionId,
+                            );
+                            if (candidate) {
+                              setDraft((current) => ({
+                                ...current,
+                                mediaUnderstandingSelections: {
+                                  ...current.mediaUnderstandingSelections,
+                                  [selectedCapability]: modelReplacementSelection(
+                                    candidate,
+                                    supportedMediaReplacementReasoningEffort(
+                                      candidate,
+                                      selectedMediaSelection.reasoning_effort,
+                                    ),
+                                  ),
+                                },
+                              }));
+                            }
+                          }}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder={t("settings.providerTools.selectAccount")} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {selectedMediaModelAccounts.map((candidate) => (
+                              <SelectItem
+                                key={candidate.selection.connection_id}
+                                value={candidate.selection.connection_id}
+                              >
+                                {candidate.connectionDisplayName}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </label>
+                      {selectedMediaReasoningEfforts.length > 0 ? (
+                        <label>
+                          <span>{t("settings.providerTools.reasoningEffort")}</span>
+                          <Select
+                            disabled={saving || !selectedMediaModelCandidate}
+                            value={selectedMediaSelection.reasoning_effort ?? "__default__"}
+                            onValueChange={(value) => {
+                              if (!selectedMediaModelCandidate) return;
+                              const effort = value === "__default__"
+                                ? undefined
+                                : value as PublicAiReasoningEffort;
+                              setDraft((current) => ({
+                                ...current,
+                                mediaUnderstandingSelections: {
+                                  ...current.mediaUnderstandingSelections,
+                                  [selectedCapability]: modelReplacementSelection(
+                                    selectedMediaModelCandidate,
+                                    effort,
+                                  ),
+                                },
+                              }));
+                            }}
+                          >
+                            <SelectTrigger><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__default__">
+                                {t("settings.providerTools.modelDefaultReasoning")}
+                              </SelectItem>
+                              {selectedMediaReasoningEfforts.map((effort) => (
+                                <SelectItem key={effort} value={effort}>
+                                  {t(PUBLIC_AI_REASONING_EFFORT_LABEL_KEYS[effort])} ({effort})
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </label>
+                      ) : null}
+                    </>
+                  ) : (
+                    <div className="composer-capability-dialog-empty">
+                      {t("settings.providerTools.noSelection")}
+                    </div>
+                  )}
                   <p className="composer-capability-media-note settings-muted-line">
                     {t("composer.capability.mediaBackendNote")}
                   </p>
@@ -1135,11 +1372,36 @@ function providerToolSettingsSignature(
             .map((selection) => `${selection.connection_id.length}:${selection.connection_id}:${selection.target_id.length}:${selection.target_id}`)
             .sort(),
         ]),
-      Object.entries(settings.mediaUnderstandingModes)
+      Object.entries(settings.mediaUnderstandingSelections)
         .sort(([left], [right]) => left.localeCompare(right))
-        .map(([capability, mode]) => [capability, mode ?? ""]),
+        .map(([capability, selection]) => selection?.mode === "provider_tool"
+          ? [
+              capability,
+              selection.mode,
+              selection.selection.connection_id,
+              selection.selection.target_id,
+            ]
+          : [
+              capability,
+              selection?.mode ?? "",
+              selection?.selection.provider_id ?? "",
+              selection?.selection.model_id ?? "",
+              selection?.selection.connection_id ?? "",
+              selection?.reasoning_effort ?? "",
+            ]),
     ],
   );
+}
+
+// normalizedComposerProviderToolSettings upgrades an older in-memory draft with the exact route map.
+// normalizedComposerProviderToolSettings 使用精确路由映射升级旧版内存草稿。
+function normalizedComposerProviderToolSettings(
+  settings: ComposerProviderToolSettingsSnapshot,
+): ComposerProviderToolSettingsSnapshot {
+  return {
+    ...settings,
+    mediaUnderstandingSelections: settings.mediaUnderstandingSelections ?? {},
+  };
 }
 
 // orderProviderToolCapabilities returns unique capabilities with explicit web-search priority.
@@ -1167,11 +1429,20 @@ export function orderProviderToolCapabilities(
 export function orderedProviderToolCapabilities(
   snapshot: PublicAiSettingsSnapshot,
 ): PublicAiProviderToolCapabilityKind[] {
-  // mediaCapabilities keeps configured replacement backends visible even without a provider-tool target.
-  // mediaCapabilities 让已配置的模型代替后端在没有供应商工具目标时仍然可见。
+  // candidateCapabilities exposes every fixed facade backed by any currently executable model route.
+  // candidateCapabilities 公开由任一当前可执行模型路由支持的全部固定外壳。
+  const candidateCapabilities = ([
+    "image_understand",
+    "video_understand",
+    "audio_understand",
+  ] as const).filter((capability) => (snapshot.mediaUnderstandingModelCandidates ?? [])
+    .some((candidate) => (
+    modelCapabilitiesSupportMediaUnderstanding(candidate.capabilities, capability)
+  )));
+  // mediaCapabilities includes available routes without treating global defaults as an allowlist.
+  // mediaCapabilities 包含可用路由，不把全局默认值当作允许列表。
   const mediaCapabilities = Array.from(new Set([
-    ...Object.keys(snapshot.mediaUnderstandingSelections ?? {}),
-    ...Object.keys(snapshot.mediaUnderstandingBackendOptions ?? {}),
+    ...candidateCapabilities,
   ]))
     .filter(isMediaUnderstandingCapability);
   return orderProviderToolCapabilities(
@@ -1199,165 +1470,6 @@ export function isMediaUnderstandingCapability(
     || capability === "audio_understand";
 }
 
-// mediaUnderstandingModesFromSnapshot derives the default session mode from the active global route.
-// mediaUnderstandingModesFromSnapshot 从全局活动路由派生新会话的默认后端模式。
-function mediaUnderstandingModesFromSnapshot(
-  snapshot: PublicAiSettingsSnapshot,
-): Partial<Record<PublicAiMediaUnderstandingCapabilityKind, PublicAiMediaUnderstandingBackendMode>> {
-  return Object.entries(snapshot.mediaUnderstandingSelections ?? {}).reduce(
-    (result, [capability, backend]) => {
-      if (isMediaUnderstandingCapability(capability)) {
-        result[capability] = backend.mode;
-      }
-      return result;
-    },
-    {} as Partial<Record<PublicAiMediaUnderstandingCapabilityKind, PublicAiMediaUnderstandingBackendMode>>,
-  );
-}
-
-// mediaUnderstandingBackendSummary resolves one fixed backend and its current executable state.
-// mediaUnderstandingBackendSummary 解析一个固定后端及其当前可执行状态。
-function mediaUnderstandingBackendSummary(
-  snapshot: PublicAiSettingsSnapshot,
-  capability: PublicAiProviderToolCapabilityKind,
-  // t is omitted only by the pure conflict validator, which consumes availability and never renders mode labels.
-  // t 仅在纯冲突校验器中省略；该校验器只消费可用性，不渲染模式标签。
-  t?: ReturnType<typeof useI18n>["t"],
-  requestedMode?: PublicAiMediaUnderstandingBackendMode,
-): {
-  mode: PublicAiMediaUnderstandingBackendMode;
-  modeLabel: string;
-  routeLabel: string;
-  available: boolean;
-} | null {
-  // activeBackend remains the legacy/global active choice used when a session has no mode override.
-  // activeBackend 是会话没有模式覆盖时使用的旧版/全局活动选择。
-  const activeBackend = snapshot.mediaUnderstandingSelections?.[capability];
-  const mode = requestedMode ?? activeBackend?.mode;
-  if (!mode) {
-    return null;
-  }
-  // backend resolves the exact independent route stored for the selected session mode.
-  // backend 解析会话选定模式中保存的精确独立路由。
-  const options = snapshot.mediaUnderstandingBackendOptions?.[capability];
-  const backend: PublicAiMediaUnderstandingBackendSelection | null = mode === "provider_tool"
-    ? options?.provider_tool
-      ? { mode, selection: options.provider_tool }
-      : activeBackend?.mode === mode
-        ? activeBackend
-        : null
-    : options?.model_replacement
-      ? {
-          mode,
-          selection: options.model_replacement.selection,
-          reasoning_effort: options.model_replacement.reasoning_effort,
-        }
-      : activeBackend?.mode === mode
-        ? activeBackend
-        : null;
-  if (!backend) {
-    // unavailableRoute preserves the selected mode as a recoverable session choice when its global route was removed.
-    // unavailableRoute 在全局路由被移除时保留会话模式，使用户仍可切换到其他可用模式。
-    return {
-      mode,
-      modeLabel: t
-        ? mode === "provider_tool"
-          ? t("composer.capability.mode.provider")
-          : t("composer.capability.mode.model")
-        : "",
-      routeLabel: t ? t("composer.capability.mediaBackendMissing") : "",
-      available: false,
-    };
-  }
-  if (backend.mode === "provider_tool") {
-    // target resolves the exact persisted account and target without substituting another account.
-    // target 精确解析持久化账号与目标，不替换为其他账号。
-    const target = snapshot.providerToolTargets.find((candidate) => (
-      candidate.connectionId === backend.selection.connection_id
-      && candidate.target.target_id === backend.selection.target_id
-      && candidate.target.contract.capability === capability
-    ));
-    return {
-      mode: backend.mode,
-      modeLabel: t ? t("composer.capability.mode.provider") : "",
-      routeLabel: target
-        ? `${target.target.display_name} · ${target.connectionDisplayName}`
-        : `${backend.selection.target_id} · ${backend.selection.connection_id}`,
-      available: Boolean(target),
-    };
-  }
-  // candidate resolves the exact provider-model-account route selected by settings.
-  // candidate 解析设置选择的精确供应商、模型与账号路由。
-  const candidate = snapshot.mediaUnderstandingModelCandidates?.find((entry) => (
-    entry.selection.provider_id === backend.selection.provider_id
-    && entry.selection.model_id === backend.selection.model_id
-    && entry.selection.connection_id === backend.selection.connection_id
-  ));
-  // candidateEnabled applies the one shared provider-model admission switch.
-  // candidateEnabled 应用唯一共享的供应商模型准入开关。
-  const candidateEnabled = snapshot.multimodalUnderstandingCandidateModels?.some((entry) => (
-    entry.providerId === backend.selection.provider_id
-    && entry.modelId === backend.selection.model_id
-  )) === true;
-  // requiredResource maps the fixed facade to its only accepted non-text resource.
-  // requiredResource 将固定外壳映射到其唯一接受的非文本资源。
-  const requiredResource = capability === "image_understand"
-    ? "image"
-    : capability === "video_understand"
-      ? "video"
-      : "audio";
-  // reasoningAvailable rejects a retained effort that disappeared from the exact model route.
-  // reasoningAvailable 拒绝已从精确模型路由中消失的持久化思考级别。
-  const reasoningAvailable = candidate !== undefined
-    && mediaReplacementReasoningIsAvailable(candidate.capabilities, backend.reasoning_effort);
-  // candidateAvailable mirrors the backend media, conversation, structured-output, and reasoning gates.
-  // candidateAvailable 镜像后端的媒体、会话、结构化输出与思考级别门槛。
-  const candidateAvailable = candidateEnabled
-    && candidate !== undefined
-    && candidate.capabilities.operations?.includes("conversation_respond") === true
-    && candidate.capabilities.input_resources?.includes(requiredResource) === true
-    && candidate.capabilities.structured_output !== "unsupported"
-    && reasoningAvailable;
-  // reasoningLabel renders only the explicitly selected effort.
-  // reasoningLabel 仅渲染显式选择的思考级别。
-  const reasoningLabel = t && backend.reasoning_effort
-    ? ` · ${t("composer.capability.reasoning").replace("{effort}", backend.reasoning_effort)}`
-    : "";
-  return {
-    mode: backend.mode,
-    modeLabel: t ? t("composer.capability.mode.model") : "",
-    routeLabel: candidate
-      ? `${candidate.providerDisplayName} · ${candidate.modelDisplayName} · ${candidate.connectionDisplayName}${reasoningLabel}`
-      : `${backend.selection.provider_id}/${backend.selection.model_id} · ${backend.selection.connection_id}${reasoningLabel}`,
-    available: candidateAvailable,
-  };
-}
-
-// mediaReplacementReasoningIsAvailable mirrors the backend's closed reasoning-control validation.
-// mediaReplacementReasoningIsAvailable 镜像后端封闭的思考控制校验。
-function mediaReplacementReasoningIsAvailable(
-  capabilities: PublicAiModelCapabilities,
-  effort: PublicAiReasoningEffort | undefined,
-): boolean {
-  if (effort === undefined) {
-    return true;
-  }
-  // supportedEfforts is the exact route-declared selectable effort set.
-  // supportedEfforts 是精确路由声明的可选思考档位集合。
-  const supportedEfforts = capabilities.reasoning_efforts ?? [];
-  switch (capabilities.reasoning_control) {
-    case "fixed_off":
-      return effort === "none";
-    case "fixed_on":
-      return effort !== "none" && supportedEfforts.includes(effort);
-    case "toggle":
-    case "effort_selection":
-    case "provider_adaptive":
-      return supportedEfforts.includes(effort);
-    default:
-      return false;
-  }
-}
 
 // composerCapabilityIsEnabled resolves direct switches and extension selections without mixing stores.
 // composerCapabilityIsEnabled 在不混用存储的前提下解析直连开关与扩展选择状态。
@@ -1395,23 +1507,39 @@ export function providerToolSettingsConflicts(
   const conflicts: PublicAiSessionProviderToolConflict[] = [];
   for (const capability of capabilities) {
     if (isMediaUnderstandingCapability(capability)) {
-      // mediaMode is the only session-owned media backend identity; model and account remain global.
-      // mediaMode 是会话唯一持有的媒体后端身份；模型与账号仍由全局配置持有。
-      const mediaMode = settings.mediaUnderstandingModes[capability];
-      if (!mediaMode) {
+      // mediaSelection contains the complete session-owned route and never resolves through system defaults.
+      // mediaSelection 包含完整会话自有路由，绝不通过系统默认值解析。
+      const mediaSelection = settings.mediaUnderstandingSelections[capability];
+      if (!mediaSelection) {
         conflicts.push({
           capability,
           kind: "missing_selection",
-          message: `Capability ${capability} has no selected media-understanding backend mode.`,
+          message: `Capability ${capability} has no exact media-understanding route.`,
         });
         continue;
       }
-      const backendSummary = mediaUnderstandingBackendSummary(snapshot, capability, undefined, mediaMode);
-      if (!backendSummary || !backendSummary.available) {
+      const available = mediaSelection.mode === "provider_tool"
+        ? snapshot.providerToolTargets.some((target) => (
+            target.connectionId === mediaSelection.selection.connection_id
+            && target.target.target_id === mediaSelection.selection.target_id
+            && target.target.contract.capability === capability
+          ))
+        : (snapshot.mediaUnderstandingModelCandidates ?? []).some((candidate) => (
+            candidate.selection.provider_id === mediaSelection.selection.provider_id
+            && candidate.selection.model_id === mediaSelection.selection.model_id
+            && candidate.selection.connection_id === mediaSelection.selection.connection_id
+            && modelCapabilitiesSupportMediaUnderstanding(candidate.capabilities, capability)
+            && (
+              mediaSelection.reasoning_effort === undefined
+              || mediaReplacementReasoningEfforts(candidate.capabilities)
+                .includes(mediaSelection.reasoning_effort)
+            )
+          ));
+      if (!available) {
         conflicts.push({
           capability,
           kind: "target_unavailable",
-          message: `The selected media-understanding backend mode for ${capability} is no longer available.`,
+          message: `The exact media-understanding route for ${capability} is no longer available.`,
         });
       }
       continue;
@@ -1464,6 +1592,104 @@ export function providerToolSettingsConflicts(
 
 // uniqueProviderToolModels collapses account-expanded targets into one row per model.
 // uniqueProviderToolModels 将按账号展开的目标折叠为每个模型一行。
+function providerToolModelKey(target: PublicAiProviderToolTargetSnapshot): string {
+  return JSON.stringify([
+    target.target.provider_id,
+    target.target.upstream_target_id,
+  ]);
+}
+
+// mediaUnderstandingModelKey returns one browser-local provider-model identity.
+// mediaUnderstandingModelKey 返回一个浏览器本地供应商模型身份。
+function mediaUnderstandingModelKey(candidate: PublicAiMediaUnderstandingModelCandidate): string {
+  return JSON.stringify([
+    candidate.selection.provider_id,
+    candidate.selection.model_id,
+  ]);
+}
+
+// uniqueMediaUnderstandingModels collapses exact account routes into stable model choices.
+// uniqueMediaUnderstandingModels 将精确账号路由折叠为稳定模型选择。
+function uniqueMediaUnderstandingModels(
+  candidates: PublicAiMediaUnderstandingModelCandidate[],
+): PublicAiMediaUnderstandingModelCandidate[] {
+  const models = new Map<string, PublicAiMediaUnderstandingModelCandidate>();
+  for (const candidate of candidates) {
+    const modelKey = mediaUnderstandingModelKey(candidate);
+    if (!models.has(modelKey)) models.set(modelKey, candidate);
+  }
+  return Array.from(models.values());
+}
+
+// providerMediaUnderstandingSelection freezes one provider target into the closed backend union.
+// providerMediaUnderstandingSelection 将一个供应商目标冻结为封闭后端联合类型。
+function providerMediaUnderstandingSelection(
+  target: PublicAiProviderToolTargetSnapshot,
+): PublicAiMediaUnderstandingBackendSelection {
+  return {
+    mode: "provider_tool",
+    selection: selectionForTarget(target),
+  };
+}
+
+// modelReplacementSelection freezes one model route and optional reasoning level.
+// modelReplacementSelection 冻结一条模型路由及其可选推理档位。
+function modelReplacementSelection(
+  candidate: PublicAiMediaUnderstandingModelCandidate,
+  reasoningEffort?: PublicAiReasoningEffort,
+): PublicAiMediaUnderstandingBackendSelection {
+  return {
+    mode: "model_replacement",
+    selection: candidate.selection,
+    ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+  };
+}
+
+// supportedMediaReplacementReasoningEffort retains an effort only when the exact route supports it.
+// supportedMediaReplacementReasoningEffort 仅在精确路由支持时保留推理档位。
+export function supportedMediaReplacementReasoningEffort(
+  candidate: PublicAiMediaUnderstandingModelCandidate,
+  reasoningEffort?: PublicAiReasoningEffort,
+): PublicAiReasoningEffort | undefined {
+  if (!reasoningEffort) return undefined;
+  return mediaReplacementReasoningEfforts(candidate.capabilities).includes(reasoningEffort)
+    ? reasoningEffort
+    : undefined;
+}
+
+// firstAvailableMediaUnderstandingSelection resolves the system default only as a preference.
+// firstAvailableMediaUnderstandingSelection 仅把系统默认值作为优先项解析。
+function firstAvailableMediaUnderstandingSelection(
+  snapshot: PublicAiSettingsSnapshot,
+  capability: PublicAiMediaUnderstandingCapabilityKind,
+  targets: PublicAiProviderToolTargetSnapshot[],
+  candidates: PublicAiMediaUnderstandingModelCandidate[],
+): PublicAiMediaUnderstandingBackendSelection | undefined {
+  const systemDefault = snapshot.mediaUnderstandingSelections?.[capability];
+  if (systemDefault?.mode === "provider_tool") {
+    const target = targets.find((candidate) => (
+      candidate.connectionId === systemDefault.selection.connection_id
+      && candidate.target.target_id === systemDefault.selection.target_id
+    ));
+    if (target) return providerMediaUnderstandingSelection(target);
+  }
+  if (systemDefault?.mode === "model_replacement") {
+    const candidate = candidates.find((item) => (
+      item.selection.provider_id === systemDefault.selection.provider_id
+      && item.selection.model_id === systemDefault.selection.model_id
+      && item.selection.connection_id === systemDefault.selection.connection_id
+    ));
+    if (candidate) {
+      return modelReplacementSelection(
+        candidate,
+        supportedMediaReplacementReasoningEffort(candidate, systemDefault.reasoning_effort),
+      );
+    }
+  }
+  if (targets[0]) return providerMediaUnderstandingSelection(targets[0]);
+  return candidates[0] ? modelReplacementSelection(candidates[0]) : undefined;
+}
+
 function uniqueProviderToolModels(
   targets: PublicAiProviderToolTargetSnapshot[],
 ): PublicAiProviderToolTargetSnapshot[] {
@@ -1471,7 +1697,7 @@ function uniqueProviderToolModels(
   for (const target of targets) {
     // modelKey prevents collisions across providers while grouping account-expanded targets.
     // modelKey 在折叠账号展开目标时防止不同供应商之间发生冲突。
-    const modelKey = `${target.target.provider_id}/${target.target.upstream_target_id}`;
+    const modelKey = providerToolModelKey(target);
     if (!models.has(modelKey)) models.set(modelKey, target);
   }
   return Array.from(models.values()).sort((left, right) => (
@@ -1517,36 +1743,6 @@ function providerToolCapabilityColor(capability: PublicAiProviderToolCapabilityK
     return "#84cc16";
   }
   return "#a855f7";
-}
-
-// providerToolCapabilityIcon returns the established capability-family icon.
-// providerToolCapabilityIcon 返回既有能力族图标。
-function providerToolCapabilityIcon(
-  capability: PublicAiProviderToolCapabilityKind,
-  size: number,
-): React.ReactNode {
-  if (capability === "web_search") {
-    return <Search size={size} />;
-  }
-  if (capability === "web_extract") {
-    return <FileSearch size={size} />;
-  }
-  if (capability === "image_understand" || capability === "image_generate" || capability === "image_edit") {
-    return <Image size={size} />;
-  }
-  if (capability === "video_generate" || capability === "video_edit" || capability === "video_extend") {
-    return <Video size={size} />;
-  }
-  if (capability === "video_understand") {
-    return <Video size={size} />;
-  }
-  if (capability === "audio_understand") {
-    return <Volume2 size={size} />;
-  }
-  if (capability === "speech_synthesize" || capability === "speech_transcribe") {
-    return <Volume2 size={size} />;
-  }
-  return <Music size={size} />;
 }
 
 // providerToolCapabilityLabel localizes one provider tool capability.

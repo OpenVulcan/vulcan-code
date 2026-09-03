@@ -850,6 +850,85 @@ pub(crate) async fn persist_failed_webui_context_compaction(
     .await
 }
 
+/// Copies the complete inert session tool snapshot used by compaction preparation.
+/// 复制压缩准备使用的完整惰性会话工具快照。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` owns the materialized session routes; `context` receives the request-local
+/// overrides used when no ordinary source execution can be reused.
+/// `runtime_state` 持有已物化的会话路由；`context` 接收在无法复用普通来源执行时使用的请求级覆盖。
+///
+/// # Returns
+/// 返回值
+/// Returns success after copying a complete snapshot, or an explicit error when an enabled
+/// direct or media capability lacks its required exact route.
+/// 完整快照复制成功时返回成功；已启用的直连或媒体能力缺少所需精确路由时返回明确错误。
+fn apply_session_provider_tool_cache_snapshot_to_compaction(
+    runtime_state: &vulcan_workbench_model::SessionRuntimeStateEntry,
+    context: &mut PromptCompactionLaunchContext,
+) -> Result<(), String> {
+    if !runtime_state.provider_tool_settings_initialized {
+        return Ok(());
+    }
+    for capability in &runtime_state.provider_tool_enabled_capabilities {
+        // mediaCapability must retain the exact session route during compaction.
+        // mediaCapability 必须在压缩期间保留精确会话路由。
+        let media_capability = matches!(
+            capability.as_str(),
+            "image_understand" | "video_understand" | "audio_understand"
+        );
+        if media_capability {
+            if !runtime_state
+                .media_understanding_selections
+                .contains_key(capability)
+            {
+                return Err(format!(
+                    "Media-understanding capability `{capability}` is enabled but has no exact session route; confirm the session capability settings before compacting."
+                ));
+            }
+            continue;
+        }
+        if !runtime_state
+            .provider_tool_selections
+            .contains_key(capability)
+        {
+            return Err(format!(
+                "Provider tool capability `{capability}` is enabled but has no selected model and account; confirm the session capability settings before compacting."
+            ));
+        }
+    }
+    context.provider_tool_selections_override = Some(
+        runtime_state
+            .provider_tool_selections
+            .iter()
+            .filter(|(capability, _)| {
+                runtime_state
+                    .provider_tool_enabled_capabilities
+                    .contains(*capability)
+            })
+            .map(|(capability, selection)| (capability.clone(), selection.clone()))
+            .collect(),
+    );
+    context.provider_tool_enabled_capabilities_override =
+        Some(runtime_state.provider_tool_enabled_capabilities.clone());
+    context.provider_tool_media_understanding_selections_override = Some(
+        runtime_state
+            .media_understanding_selections
+            .iter()
+            .filter(|(capability, _)| {
+                runtime_state
+                    .provider_tool_enabled_capabilities
+                    .contains(*capability)
+            })
+            .map(|(capability, selection)| (capability.clone(), selection.clone()))
+            .collect(),
+    );
+    context.provider_extension_target_sets_override =
+        Some(runtime_state.provider_extension_target_sets.clone());
+    Ok(())
+}
+
 /// Builds one WebUI compaction job from an already frozen plan and exact model target.
 /// 根据已冻结规划与精确模型目标构建一项 WebUI 压缩任务。
 ///
@@ -902,41 +981,7 @@ pub(crate) fn build_webui_context_compaction_job_request(
         if source_execution.is_none()
             && let Some(runtime_state) = runtime_state
         {
-            if runtime_state.provider_tool_settings_initialized {
-                for capability in &runtime_state.provider_tool_enabled_capabilities {
-                    // mediaCapability uses the dedicated global backend and therefore has no session target row.
-                    // mediaCapability 使用专用全局后端，因此没有会话目标行。
-                    let media_capability = matches!(
-                        capability.as_str(),
-                        "image_understand" | "video_understand" | "audio_understand"
-                    );
-                    if !media_capability
-                        && !runtime_state
-                            .provider_tool_selections
-                            .contains_key(capability)
-                    {
-                        return Err(format!(
-                            "Provider tool capability `{capability}` is enabled but has no selected model and account; confirm the session capability settings before compacting."
-                        ));
-                    }
-                }
-                context.provider_tool_selections_override = Some(
-                    runtime_state
-                        .provider_tool_selections
-                        .iter()
-                        .filter(|(capability, _)| {
-                            runtime_state
-                                .provider_tool_enabled_capabilities
-                                .contains(*capability)
-                        })
-                        .map(|(capability, selection)| (capability.clone(), selection.clone()))
-                        .collect(),
-                );
-                context.provider_tool_enabled_capabilities_override =
-                    Some(runtime_state.provider_tool_enabled_capabilities.clone());
-                context.provider_extension_target_sets_override =
-                    Some(runtime_state.provider_extension_target_sets.clone());
-            }
+            apply_session_provider_tool_cache_snapshot_to_compaction(runtime_state, &mut context)?;
             context.execution_mode = runtime_state
                 .active_work_mode
                 .clone()
@@ -1014,6 +1059,7 @@ pub(crate) fn build_webui_context_compaction_job_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     /// Builds one automatic-compaction budget with an exact effective input limit.
     /// 构建一份具有精确生效输入上限的自动压缩预算。
@@ -1118,6 +1164,90 @@ mod tests {
         assert_eq!(
             model_target.label().as_str(),
             "custom-response/response-model"
+        );
+    }
+
+    /// Verifies standalone compaction freezes the exact session media route instead of global defaults.
+    /// 验证独立压缩冻结精确会话媒体路由，而不是使用全局默认值。
+    ///
+    /// # Parameters
+    /// 参数
+    /// This test has no parameters.
+    /// 此测试没有参数。
+    ///
+    /// # Returns
+    /// 返回值
+    /// This test returns no value and fails when media route ownership is omitted or rewritten.
+    /// 此测试无返回值；媒体路由归属被遗漏或改写时测试失败。
+    #[test]
+    fn standalone_cache_preserving_compaction_preserves_exact_session_media_route() {
+        let mut runtime_state = vulcan_workbench_model::SessionRuntimeStateEntry {
+            provider_tool_settings_initialized: true,
+            provider_tool_enabled_capabilities: [String::from("video_understand")]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let exact_route =
+            vulcan_workbench_model::SessionMediaUnderstandingSelection::ProviderTool {
+                selection: vulcan_workbench_model::SessionProviderToolTargetSelection {
+                    connection_id: String::from("session-video-account"),
+                    target_id: String::from("session-video-target"),
+                },
+            };
+        runtime_state
+            .media_understanding_selections
+            .insert(String::from("video_understand"), exact_route.clone());
+        let mut context = PromptCompactionLaunchContext::default();
+
+        apply_session_provider_tool_cache_snapshot_to_compaction(&runtime_state, &mut context)
+            .expect("exact session media route should be accepted");
+
+        assert_eq!(
+            context.provider_tool_media_understanding_selections_override,
+            Some(BTreeMap::from([(
+                String::from("video_understand"),
+                exact_route,
+            )]))
+        );
+        assert_eq!(
+            context.provider_tool_enabled_capabilities_override,
+            Some([String::from("video_understand")].into_iter().collect())
+        );
+    }
+
+    /// Verifies standalone compaction rejects an enabled media capability without a session route.
+    /// 验证独立压缩拒绝缺少会话路由的已启用媒体能力。
+    ///
+    /// # Parameters
+    /// 参数
+    /// This test has no parameters.
+    /// 此测试没有参数。
+    ///
+    /// # Returns
+    /// 返回值
+    /// This test returns no value and fails when incomplete session state reaches compaction.
+    /// 此测试无返回值；不完整会话状态进入压缩流程时测试失败。
+    #[test]
+    fn standalone_compaction_rejects_missing_session_media_route() {
+        let runtime_state = vulcan_workbench_model::SessionRuntimeStateEntry {
+            provider_tool_settings_initialized: true,
+            provider_tool_enabled_capabilities: [String::from("audio_understand")]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let mut context = PromptCompactionLaunchContext::default();
+
+        let error =
+            apply_session_provider_tool_cache_snapshot_to_compaction(&runtime_state, &mut context)
+                .expect_err("missing exact media route must be rejected");
+
+        assert!(error.contains("audio_understand"), "{error}");
+        assert!(
+            context
+                .provider_tool_media_understanding_selections_override
+                .is_none()
         );
     }
 }

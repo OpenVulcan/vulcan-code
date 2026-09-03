@@ -14,7 +14,7 @@
 use crate::{
     CredentialExecutionSecret, CredentialProfile, MediaUploadCancellation, MediaUploadFailure,
     MediaUploadProgressCallback, MediaUploadStage, ServiceEntry, UploadPrimitiveKind,
-    UploadReferenceEncoding,
+    UploadReferenceEncoding, UploadResponseIdEncoding,
 };
 use async_stream::stream;
 use base64::Engine;
@@ -34,7 +34,7 @@ pub(crate) use delivery_policy::{
 };
 pub(crate) use inputs::operation_upload_inputs;
 use std::future::Future;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 
@@ -162,8 +162,8 @@ pub(crate) struct OperationUploadExecutionContext<'a> {
     /// Optional exact model identifier required by model-scoped signing handshakes.
     /// 模型作用域签名握手所需的可选精确模型标识。
     pub model_id: Option<&'a str>,
-    /// Optional canonical workspace boundary for local resource paths.
-    /// 本地资源路径使用的可选规范工作区边界。
+    /// Optional canonical workspace base for relative local resource paths.
+    /// 相对本地资源路径使用的可选规范工作区基准。
     pub workspace_root: Option<&'a Path>,
     /// Fixture-only HTTP loopback origin used by the closed local conformance harness.
     /// 仅由封闭本地一致性夹具使用的 HTTP 回环源地址。
@@ -523,9 +523,9 @@ pub(crate) fn materialize_cached_scalar_operation_upload(
 /// # Parameters
 /// 参数
 /// `binding` owns MIME and channel references; `reference` is an exact local path/Data URL/HTTPS
-/// URL; `workspace_root` bounds ordinary local paths and `media_sources` supplies explicit host-owned identities.
+/// URL; `workspace_root` resolves ordinary relative local paths and `media_sources` supplies explicit host-owned identities.
 /// `binding` 持有 MIME 与通道引用；`reference` 是精确本地路径/Data URL/HTTPS URL；
-/// `workspace_root`约束普通本地路径，`media_sources`提供明确宿主持有身份。
+/// `workspace_root`解析普通相对本地路径，`media_sources`提供明确宿主持有身份。
 /// Each result is one file in one materialization, not the cardinality of its argument array.
 /// 每个结果均是一次物化中的一个文件，而非其参数数组的基数。
 ///
@@ -609,7 +609,12 @@ async fn prepare_operation_upload_resource<'a>(
             inline_base64: Some(encoded),
         });
     }
-    if reference.starts_with("https://") {
+    // is_remote_https recognizes the case-insensitive URL scheme before local-path resolution.
+    // is_remote_https 在本地路径解析前识别不区分大小写的 URL scheme。
+    let is_remote_https = reference
+        .get(.."https://".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("https://"));
+    if is_remote_https {
         // Remote passthrough has unknown source size and is never downloaded as an inline fallback.
         // 远程直通的来源大小未知，绝不下载为内联回退。
         let url = reqwest::Url::parse(reference)
@@ -640,7 +645,7 @@ async fn prepare_operation_upload_resource<'a>(
     }
     // Workspace resolution and file metadata establish local source size before any file read.
     // 工作区解析与文件元数据在任何文件读取之前确定本地来源大小。
-    let path = canonical_workspace_upload_path(workspace_root, reference).await?;
+    let path = resolve_provider_tool_local_path(workspace_root, reference).await?;
     let metadata = tokio::fs::metadata(&path).await.map_err(|error| {
         format!("Operation upload source metadata could not be inspected: {error}")
     })?;
@@ -775,72 +780,47 @@ fn validate_operation_base64_payload(encoded: &str, expected_bytes: u64) -> Resu
     Ok(())
 }
 
-/// Resolves one local upload source inside an explicit workspace without following symlinks.
-/// 在显式工作区内解析一个本地上传来源，且不跟随符号链接。
+/// Resolves one ordinary provider-tool file path against the host filesystem.
+/// 基于宿主文件系统解析一条普通 Provider 工具文件路径。
 ///
 /// # Parameters
 /// 参数
-/// `workspace_root` is the host-owned boundary and `reference` is the AI-visible path value.
-/// `workspace_root` 是宿主持有的边界，`reference` 是 AI 可见路径值。
+/// `workspace_root` is the base directory for relative references and `reference` is the exact
+/// AI-visible local path value. Absolute references do not require a workspace.
+/// `workspace_root` 是相对引用的基准目录，`reference` 是 AI 可见的精确本地路径值；绝对引用
+/// 不要求存在工作区。
 ///
 /// # Returns
 /// 返回值
-/// The canonical existing path only when every lexical component stays inside the workspace and
-/// no existing path component is a symbolic link.
-/// 仅当每个词法组件均位于工作区内且现有路径组件均不是符号链接时，返回规范已存在路径。
-async fn canonical_workspace_upload_path(
+/// The canonical existing path. The current product has no filesystem permission boundary, so
+/// project-external and symlink-resolved targets remain available; a future permission gate must
+/// authorize the canonical target before this resolver is called.
+/// 返回规范的已存在路径。当前产品尚无文件系统权限边界，因此允许项目外路径及符号链接解析后的
+/// 目标；未来权限门必须在调用本解析器前对规范目标完成授权。
+pub async fn resolve_provider_tool_local_path(
     workspace_root: Option<&Path>,
     reference: &str,
 ) -> Result<PathBuf, String> {
-    let workspace_root = workspace_root.ok_or_else(|| {
-        String::from("Local provider-tool resources require an active workspace root.")
-    })?;
     let source = PathBuf::from(reference);
-    if source
-        .components()
-        .any(|component| component == Component::ParentDir)
-    {
+    if source.as_os_str().is_empty() {
         return Err(String::from(
-            "Local provider-tool resource paths cannot contain parent-directory traversal.",
+            "Local provider-tool resource path must not be empty.",
         ));
     }
-    let canonical_root = tokio::fs::canonicalize(workspace_root)
-        .await
-        .map_err(|error| format!("Provider-tool workspace root cannot be resolved: {error}"))?;
     let resolved = if source.is_absolute() {
         source
     } else {
+        let workspace_root = workspace_root.ok_or_else(|| {
+            String::from("Relative local provider-tool resources require an active workspace root.")
+        })?;
+        let canonical_root = tokio::fs::canonicalize(workspace_root)
+            .await
+            .map_err(|_| String::from("Provider-tool workspace root cannot be resolved."))?;
         canonical_root.join(source)
     };
-    for component_path in resolved.ancestors() {
-        let metadata = tokio::fs::symlink_metadata(component_path)
-            .await
-            .map_err(|error| {
-                format!(
-                    "Provider tool resource `{}` cannot be inspected: {error}",
-                    component_path.display()
-                )
-            })?;
-        if metadata.file_type().is_symlink() {
-            return Err(format!(
-                "Provider tool resource `{}` crosses a symbolic link.",
-                component_path.display()
-            ));
-        }
-    }
-    let canonical = tokio::fs::canonicalize(&resolved).await.map_err(|error| {
-        format!(
-            "Provider tool resource `{}` cannot be resolved: {error}",
-            resolved.display()
-        )
-    })?;
-    if !canonical.starts_with(&canonical_root) {
-        return Err(format!(
-            "Provider tool resource `{}` is outside the active workspace.",
-            resolved.display()
-        ));
-    }
-    Ok(canonical)
+    tokio::fs::canonicalize(&resolved)
+        .await
+        .map_err(|_| String::from("Provider tool resource cannot be resolved."))
 }
 
 /// Resolves one exact MIME type from binding-owned literal or extension rules.
@@ -1987,21 +1967,44 @@ fn read_response_reference(
     channel: &crate::UploadChannelDeclaration,
     body: &Value,
 ) -> Result<(Option<String>, Option<String>), MediaUploadFailure> {
-    let read = |pointer: &Option<String>| -> Result<Option<String>, MediaUploadFailure> {
-        let Some(pointer) = pointer.as_deref() else {
-            return Ok(None);
-        };
-        let value = body
-            .pointer(pointer)
-            .ok_or(MediaUploadFailure::MissingReference)?;
-        let text = value
-            .as_str()
-            .filter(|text| !text.trim().is_empty())
-            .ok_or(MediaUploadFailure::InvalidReference)?;
-        Ok(Some(text.to_string()))
+    // responseId follows the exact declared scalar encoding instead of coercing arbitrary JSON.
+    // responseId 严格遵循声明的标量编码，不对任意 JSON 执行隐式转换。
+    let response_id = match channel.response_id_pointer.as_deref() {
+        None => None,
+        Some(pointer) => {
+            let value = body
+                .pointer(pointer)
+                .ok_or(MediaUploadFailure::MissingReference)?;
+            let text = match channel
+                .response_id_encoding
+                .unwrap_or(UploadResponseIdEncoding::String)
+            {
+                UploadResponseIdEncoding::String => value
+                    .as_str()
+                    .filter(|text| !text.trim().is_empty())
+                    .map(str::to_owned)
+                    .ok_or(MediaUploadFailure::InvalidReference)?,
+                UploadResponseIdEncoding::UnsignedInteger => value
+                    .as_u64()
+                    .map(|value| value.to_string())
+                    .ok_or(MediaUploadFailure::InvalidReference)?,
+            };
+            Some(text)
+        }
     };
-    let response_id = read(&channel.response_id_pointer)?;
-    let response_url = read(&channel.response_url_pointer)?;
+    // responseUrl remains a non-empty string because URL validation consumes its exact text.
+    // responseUrl 保持为非空字符串，因为 URL 校验需要消费其精确文本。
+    let response_url = match channel.response_url_pointer.as_deref() {
+        None => None,
+        Some(pointer) => Some(
+            body.pointer(pointer)
+                .ok_or(MediaUploadFailure::MissingReference)?
+                .as_str()
+                .filter(|text| !text.trim().is_empty())
+                .map(str::to_owned)
+                .ok_or(MediaUploadFailure::InvalidReference)?,
+        ),
+    };
     Ok((response_id, response_url))
 }
 
@@ -2535,6 +2538,44 @@ mod tests {
     mod http_failures;
     mod policy;
 
+    /// Verifies direct local paths remain globally readable before filesystem permissions exist.
+    /// 验证在文件系统权限功能存在前，直接本地路径仍可进行全局读取。
+    #[tokio::test]
+    async fn local_path_resolution_accepts_project_external_absolute_and_relative_targets()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // The isolated fixture models one project directory and one sibling file outside it.
+        // 隔离夹具模拟一个项目目录及位于其外部的同级文件。
+        let directory = tempfile::tempdir()?;
+        let workspace = directory.path().join("project");
+        let external = directory.path().join("outside.png");
+        tokio::fs::create_dir(&workspace).await?;
+        tokio::fs::write(&external, b"abc").await?;
+        let canonical_external = tokio::fs::canonicalize(&external).await?;
+
+        // An absolute path never depends on a workspace base.
+        // 绝对路径从不依赖工作区基准。
+        assert_eq!(
+            resolve_provider_tool_local_path(None, external.to_string_lossy().as_ref()).await?,
+            canonical_external
+        );
+
+        // Parent traversal is ordinary relative addressing until a future permission gate decides otherwise.
+        // 在未来权限门作出决定前，父目录跳转属于普通相对寻址。
+        let relative = Path::new("..").join("outside.png");
+        assert_eq!(
+            resolve_provider_tool_local_path(Some(&workspace), relative.to_string_lossy().as_ref())
+                .await?,
+            canonical_external
+        );
+        assert!(
+            resolve_provider_tool_local_path(None, "outside.png")
+                .await
+                .expect_err("a relative path without a workspace base must fail")
+                .contains("workspace root")
+        );
+        Ok(())
+    }
+
     /// Selects test `resource` through the production planner with default independent policy.
     /// 使用默认独立策略，通过生产规划器选择测试 `resource` 的通道。
     /// `channels`, `references` and `credential_role` retain exact manifest authorization; returns its result.
@@ -2646,6 +2687,7 @@ mod tests {
             )
             .then_some(60_000),
             response_id_pointer: Some(String::from("/id")),
+            response_id_encoding: None,
             response_url_pointer: Some(String::from("/url")),
             reference_template: None,
             progress_supported: false,

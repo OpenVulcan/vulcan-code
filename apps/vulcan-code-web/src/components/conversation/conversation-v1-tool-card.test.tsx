@@ -127,6 +127,8 @@ describe("ConversationV1ToolCard", () => {
 
     expect(collapsedMarkup).toContain("Video generation");
     expect(collapsedMarkup).not.toContain("video_generate");
+    expect(collapsedMarkup).toContain('data-provider-tool-icon-family="video"');
+    expect(collapsedMarkup).toContain("lucide-video");
     expect(collapsedMarkup).not.toContain("Input");
     expect(collapsedMarkup).not.toContain("Output");
     expect(collapsedMarkup.match(/aria-expanded="false"/g)).toHaveLength(1);
@@ -140,6 +142,25 @@ describe("ConversationV1ToolCard", () => {
     expect(expandedMarkup).toContain("<span>json</span>");
     expect(expandedMarkup).not.toContain("A blue flame");
     expect(expandedMarkup).toContain("video-task-1");
+  });
+
+  it("localizes every media-understanding card and reuses its capability icon", () => {
+    const markup = renderToStaticMarkup(
+      <I18nProvider initialLocale="zh-CN">
+        <ConversationV1ToolCard
+          item={cardItem({
+            toolName: "video_understand",
+            input: { resource: "attachment://video-1" },
+            output: { text: "视频摘要" },
+          })}
+        />
+      </I18nProvider>,
+    );
+
+    expect(markup).toContain("视频理解");
+    expect(markup).not.toContain("video_understand");
+    expect(markup).toContain('data-provider-tool-icon-family="video"');
+    expect(markup).toContain("lucide-video");
   });
 
   it("shows an independently expandable input card while a model extension is running", () => {

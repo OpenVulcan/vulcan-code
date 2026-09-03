@@ -14,6 +14,7 @@ import {
 import { ConversationMeasuredCollapse, useConversationMeasuredExpansion } from "@/components/conversation/conversation-measured-collapse";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import { ModelExtensionToolPayloadCards } from "@/components/conversation/conversation-model-extension-tool-payloads";
+import { ProviderToolCapabilityIcon } from "@/components/shared/provider-tool-capability-icon";
 import { ToolPresentationCard } from "@/components/conversation/conversation-tool-presentation-card";
 import { ConversationV1GeneratedResourceList } from "@/components/conversation/conversation-v1-resource-list";
 import { resolveV1SubagentOrchestrationPresentation } from "@/components/conversation/tool-presentations/v1-subagent-orchestration-presentation";
@@ -27,6 +28,7 @@ import type {
   V1ToolPresentationState,
 } from "@/components/conversation/tool-presentations/v1-tool-presentation";
 import { resolveV1ToolPresentation } from "@/components/conversation/tool-presentations/v1-tool-presentation";
+import { modelExtensionToolCapability } from "@/components/conversation/tool-presentations/model-extension-tool-presentation";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ExternalResourceRef } from "@/service/conversation-event-window-store";
@@ -220,6 +222,9 @@ function ConversationV1ModelExtensionToolCard(props: {
   // 更新扩展工具主卡展开状态。
   onExpandedChange: (expanded: boolean, options?: { manual?: boolean }) => void;
 }) {
+  // capability selects the same family icon used by the capability settings panel.
+  // capability 选择与能力设置面板相同的能力族图标。
+  const capability = modelExtensionToolCapability(props.presentation.toolName);
   // generatedResources is the exact resource list retained by the tool-call event.
   // generatedResources 是工具调用事件保留的精确资源列表。
   const generatedResources = props.item.tool_call.generated_resources ?? [];
@@ -255,7 +260,11 @@ function ConversationV1ModelExtensionToolCard(props: {
         onClick={() => props.onExpandedChange(!props.expanded)}
         type="button"
       >
-        <ToolPresentationIcon icon={props.presentation.icon} />
+        {capability ? (
+          <span className="v1-tool-card-icon" aria-hidden="true">
+            <ProviderToolCapabilityIcon capability={capability} size={15} />
+          </span>
+        ) : <ToolPresentationIcon icon={props.presentation.icon} />}
         <ToolPresentationState state={props.presentation.state} />
         <span className="v1-tool-card-title">
           {props.presentation.titleKey

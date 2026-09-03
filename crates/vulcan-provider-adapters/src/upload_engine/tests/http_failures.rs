@@ -246,6 +246,37 @@ async fn upload_http_success_requires_the_declared_reference()
     Ok(())
 }
 
+/// Verifies a channel may explicitly decode a provider's non-negative integer file identifier.
+/// 验证通道可以显式解码供应商返回的非负整数文件标识。
+#[test]
+fn upload_response_identifier_honors_declared_scalar_encoding() {
+    // channel owns the scalar contract; no provider-name branch participates in decoding.
+    // channel 持有标量契约；解码过程不参与任何供应商名称分支。
+    let mut channel = channel(
+        UploadPrimitiveKind::MultipartFile,
+        vec![String::from("video/mp4")],
+        Some(1024),
+        Some(1),
+    );
+    channel.response_id_encoding = Some(crate::UploadResponseIdEncoding::UnsignedInteger);
+    channel.response_url_pointer = None;
+    let (response_id, response_url) =
+        read_response_reference(&channel, &serde_json::json!({"id": 437355951645014_u64}))
+            .expect("declared unsigned identifier should decode");
+    assert_eq!(response_id.as_deref(), Some("437355951645014"));
+    assert_eq!(response_url, None);
+    for invalid in [
+        serde_json::json!({"id": -1}),
+        serde_json::json!({"id": 1.5}),
+        serde_json::json!({"id": "437355951645014"}),
+    ] {
+        assert_eq!(
+            read_response_reference(&channel, &invalid),
+            Err(MediaUploadFailure::InvalidReference)
+        );
+    }
+}
+
 /// Signing failures retain their stage and cannot start the object-transfer phase.
 /// 签名失败保留其阶段，且不能启动对象传输阶段。
 #[tokio::test]

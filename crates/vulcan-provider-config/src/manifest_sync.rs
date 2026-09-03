@@ -1001,6 +1001,7 @@ fn validate_upload_channel_trust_ceiling(
         || candidate.credential_role != bundled.credential_role
         || candidate.file_field != bundled.file_field
         || candidate.response_id_pointer != bundled.response_id_pointer
+        || candidate.response_id_encoding != bundled.response_id_encoding
         || candidate.response_url_pointer != bundled.response_url_pointer
         || candidate.reference_template != bundled.reference_template
         || candidate.reference_encoding != bundled.reference_encoding
@@ -2602,6 +2603,25 @@ mod tests {
         root_host.remote_url_host_suffixes = vec![String::from("example.com")];
         validate_upload_channel_trust_ceiling(&baseline, &root_host)
             .expect_err("a strict-subdomain grant must not authorize the root host");
+    }
+
+    /// Verifies signed updates cannot change the reviewed upload response identifier scalar type.
+    /// 验证签名更新不能改变已审核的上传响应标识标量类型。
+    #[test]
+    fn upload_channel_trust_ceiling_freezes_response_id_encoding() {
+        let baseline: vulcan_provider_adapters::UploadChannelDeclaration =
+            serde_json::from_value(serde_json::json!({
+                "upload_channel_id": "numeric-file-id",
+                "primitive": "multipart_file",
+                "response_id_pointer": "/file/file_id",
+                "response_id_encoding": "unsigned_integer"
+            }))
+            .expect("the synthetic upload channel must parse");
+        let mut changed = baseline.clone();
+        changed.response_id_encoding =
+            Some(vulcan_provider_adapters::UploadResponseIdEncoding::String);
+        validate_upload_channel_trust_ceiling(&baseline, &changed)
+            .expect_err("a response identifier scalar change must exceed the trust ceiling");
     }
 
     /// Verifies a signed remote revision may add model rules inside the bundled authority.

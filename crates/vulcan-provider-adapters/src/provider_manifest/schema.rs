@@ -1474,6 +1474,10 @@ pub struct UploadChannelDeclaration {
     /// 响应标识的 JSON Pointer。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_id_pointer: Option<String>,
+    /// Scalar encoding used by the value at `response_id_pointer`.
+    /// `response_id_pointer` 所指向值使用的标量编码。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_id_encoding: Option<UploadResponseIdEncoding>,
     /// JSON Pointer of the response URL.
     /// 响应 URL 的 JSON Pointer。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1506,6 +1510,19 @@ pub struct UploadChannelDeclaration {
     /// 该上传通道返回引用的显式复用边界。
     #[serde(default, skip_serializing_if = "is_provider_protocol_scope")]
     pub reference_scope: UploadReferenceScope,
+}
+
+/// Closed scalar encodings accepted from an upload response identifier pointer.
+/// 上传响应标识指针允许读取的封闭标量编码集合。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UploadResponseIdEncoding {
+    /// Require one non-empty JSON string.
+    /// 要求一个非空 JSON 字符串。
+    String,
+    /// Require one non-negative JSON integer and normalize it to canonical decimal text.
+    /// 要求一个非负 JSON 整数，并将其规范化为十进制文本。
+    UnsignedInteger,
 }
 
 /// One bounded reference encoding for an uploaded object (plan §R9.3).

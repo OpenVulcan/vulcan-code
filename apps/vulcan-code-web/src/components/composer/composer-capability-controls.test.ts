@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { mediaDeliverySettingsFixture } from "@/test-fixtures/media-delivery";
+import {
+  mediaReplacementReasoningEfforts,
+  mediaReplacementReasoningOverrides,
+} from "@/lib/reasoning-effort-labels";
 
-import type { PublicAiContextCompactionWindowNode, PublicAiSettingsSnapshot } from "@/types";
+import type {
+  PublicAiContextCompactionWindowNode,
+  PublicAiModelCapabilities,
+  PublicAiSettingsSnapshot,
+} from "@/types";
 import {
   availableContextCompactionWindowNodes,
   composerCapabilityIsEnabled,
@@ -10,6 +18,7 @@ import {
   orderedProviderToolCapabilities,
   providerToolCapabilitySwitchDisabled,
   providerToolSettingsConflicts,
+  supportedMediaReplacementReasoningEffort,
 } from "./composer-capability-controls";
 
 // contextCompactionWindowNodesFixture returns the official fixed-node test catalog.
@@ -144,6 +153,17 @@ function settingsFixture(): PublicAiSettingsSnapshot {
 }
 
 describe("providerToolSettingsConflicts", () => {
+  it("accepts an empty session-owned media route snapshot", () => {
+    const legacySettings = {
+      enabledCapabilities: [],
+      selections: {},
+      extensionTargetSets: {},
+      mediaUnderstandingSelections: {},
+    } as unknown as Parameters<typeof providerToolSettingsConflicts>[1];
+
+    expect(providerToolSettingsConflicts(settingsFixture(), legacySettings)).toEqual([]);
+  });
+
   it("blocks an enabled capability whose saved account disappeared", () => {
     const conflicts = providerToolSettingsConflicts(settingsFixture(), {
       enabledCapabilities: ["web_search"],
@@ -154,7 +174,7 @@ describe("providerToolSettingsConflicts", () => {
         },
       },
       extensionTargetSets: {},
-      mediaUnderstandingModes: {},
+      mediaUnderstandingSelections: {},
     });
 
     expect(conflicts).toMatchObject([{
@@ -173,26 +193,53 @@ describe("providerToolSettingsConflicts", () => {
         },
       },
       extensionTargetSets: {},
-      mediaUnderstandingModes: {},
+      mediaUnderstandingSelections: {},
     });
 
     expect(conflicts).toEqual([]);
   });
 
-  it("validates enabled media against its fixed global backend without a legacy session selection", () => {
-    // conflicts proves the session switch resolves the dedicated global backend store.
-    // conflicts 证明会话开关解析专用全局后端存储。
+  it("validates enabled media against its exact session route", () => {
+    // conflicts proves the session owns the provider target instead of resolving a global route.
+    // conflicts 证明会话持有供应商目标，而不是解析全局路由。
     const conflicts = providerToolSettingsConflicts(settingsFixture(), {
       enabledCapabilities: ["video_understand"],
       selections: {},
       extensionTargetSets: {},
-      mediaUnderstandingModes: { video_understand: "provider_tool" },
+      mediaUnderstandingSelections: {
+        video_understand: {
+          mode: "provider_tool",
+          selection: {
+            connection_id: "media-account",
+            target_id: "entry.video-01",
+          },
+        },
+      },
     });
 
     expect(conflicts).toEqual([]);
   });
 
-  it("blocks enabled media when its fixed global backend is unavailable", () => {
+  it("ignores a disabled stale media route", () => {
+    const conflicts = providerToolSettingsConflicts(settingsFixture(), {
+      enabledCapabilities: [],
+      selections: {},
+      extensionTargetSets: {},
+      mediaUnderstandingSelections: {
+        video_understand: {
+          mode: "provider_tool",
+          selection: {
+            connection_id: "removed-account",
+            target_id: "entry.video-01",
+          },
+        },
+      },
+    });
+
+    expect(conflicts).toEqual([]);
+  });
+
+  it("blocks enabled media when its exact session route is unavailable", () => {
     // snapshot removes only the selected video target while retaining its backend identity.
     // snapshot 仅移除已选视频目标，同时保留其后端身份。
     const snapshot = settingsFixture();
@@ -205,7 +252,15 @@ describe("providerToolSettingsConflicts", () => {
       enabledCapabilities: ["video_understand"],
       selections: {},
       extensionTargetSets: {},
-      mediaUnderstandingModes: { video_understand: "provider_tool" },
+      mediaUnderstandingSelections: {
+        video_understand: {
+          mode: "provider_tool",
+          selection: {
+            connection_id: "media-account",
+            target_id: "entry.video-01",
+          },
+        },
+      },
     });
 
     expect(conflicts).toMatchObject([{
@@ -214,9 +269,9 @@ describe("providerToolSettingsConflicts", () => {
     }]);
   });
 
-  it("accepts explicit none reasoning for a fixed-off replacement model", () => {
-    // snapshot retains one admitted fixed-off video model with no selectable effort list.
-    // snapshot 保留一个已准入、没有可选思考档位列表的固定关闭视频模型。
+  it("accepts explicit none reasoning for a fixed-off replacement model without structured output", () => {
+    // snapshot retains one admitted fixed-off video model that returns plain text only.
+    // snapshot 保留一个已准入且只返回纯文本的固定关闭视频模型。
     const snapshot = settingsFixture();
     snapshot.providerToolTargets = snapshot.providerToolTargets.filter(
       (target) => target.target.contract.capability !== "video_understand",
@@ -239,7 +294,7 @@ describe("providerToolSettingsConflicts", () => {
       capabilities: {
         operations: ["conversation_respond"],
         input_resources: ["video"],
-        structured_output: "json_object",
+        structured_output: "unsupported",
         reasoning: "unsupported",
         reasoning_control: "fixed_off",
         reasoning_efforts: [],
@@ -281,10 +336,114 @@ describe("providerToolSettingsConflicts", () => {
       enabledCapabilities: ["video_understand"],
       selections: {},
       extensionTargetSets: {},
-      mediaUnderstandingModes: { video_understand: "model_replacement" },
+      mediaUnderstandingSelections: {
+        video_understand: {
+          mode: "model_replacement",
+          selection: {
+            provider_id: "provider",
+            model_id: "video-model",
+            connection_id: "media-account",
+          },
+          reasoning_effort: "none",
+        },
+      },
     });
 
     expect(conflicts).toEqual([]);
+  });
+});
+
+describe("supportedMediaReplacementReasoningEffort", () => {
+  it("drops a stale system effort instead of poisoning an independent session route", () => {
+    const snapshot = settingsFixture();
+    const candidate = {
+      providerDisplayName: "Provider",
+      serviceEntryDisplayName: "Entry",
+      connectionDisplayName: "Media Account",
+      modelDisplayName: "Video Model",
+      selection: {
+        provider_id: "provider",
+        model_id: "video-model",
+        connection_id: "media-account",
+      },
+      catalogGeneration: 1,
+      capabilities: {
+        ...snapshot.customProviderSystemModelDefaults,
+        operations: ["conversation_respond" as const],
+        input_resources: ["video" as const],
+        reasoning_control: "effort_selection" as const,
+        reasoning_efforts: ["low" as const, "high" as const],
+        prompt_cache: {
+          provider_default_behavior: "provider_default" as const,
+          supports_managed_explicit: false,
+          supported_ttl_options: [],
+        },
+        model_parameters: [],
+        evidence_revision: "test",
+      },
+    };
+
+    expect(supportedMediaReplacementReasoningEffort(candidate, "high")).toBe("high");
+    expect(supportedMediaReplacementReasoningEffort(candidate, "adaptive")).toBeUndefined();
+  });
+});
+
+describe("mediaReplacementReasoningEfforts", () => {
+  it("separates route-accepted values from user-overridable selector values", () => {
+    // capabilities contains the complete signed route shape consumed by the selector projector.
+    // capabilities 包含选择器投影器消费的完整签名路由形状。
+    const capabilities: PublicAiModelCapabilities = {
+      operations: ["conversation_respond"],
+      input_resources: ["video"],
+      structured_output: "json_object",
+      reasoning: "native",
+      reasoning_control: "provider_adaptive",
+      reasoning_efforts: ["adaptive"],
+      prompt_cache: {
+        provider_default_behavior: "provider_default",
+        supports_managed_explicit: false,
+        supported_ttl_options: [],
+      },
+      model_parameters: [],
+      evidence_revision: "test",
+    };
+    expect(mediaReplacementReasoningEfforts(capabilities)).toEqual(["adaptive"]);
+    expect(mediaReplacementReasoningOverrides(capabilities)).toEqual([]);
+    expect(mediaReplacementReasoningEfforts({
+      ...capabilities,
+      reasoning_control: "fixed_off",
+      reasoning_efforts: [],
+    })).toEqual(["none"]);
+    expect(mediaReplacementReasoningOverrides({
+      ...capabilities,
+      reasoning_control: "fixed_off",
+      reasoning_efforts: [],
+    })).toEqual([]);
+    expect(mediaReplacementReasoningEfforts({
+      ...capabilities,
+      reasoning_control: "fixed_on",
+      reasoning_efforts: [],
+    })).toEqual([]);
+    expect(mediaReplacementReasoningEfforts({
+      ...capabilities,
+      reasoning_control: "toggle",
+      reasoning_efforts: ["none", "adaptive"],
+    })).toEqual(["none", "adaptive"]);
+    expect(mediaReplacementReasoningOverrides({
+      ...capabilities,
+      reasoning_control: "toggle",
+      reasoning_efforts: ["none", "adaptive"],
+    })).toEqual(["none", "adaptive"]);
+    expect(mediaReplacementReasoningEfforts({
+      ...capabilities,
+      reasoning_control: "effort_selection",
+      reasoning_efforts: ["low", "high"],
+    })).toEqual(["low", "high"]);
+    expect(mediaReplacementReasoningOverrides({
+      ...capabilities,
+      reasoning_control: "effort_selection",
+      reasoning_efforts: ["low", "high"],
+    })).toEqual(["low", "high"]);
   });
 });
 
@@ -296,7 +455,7 @@ describe("composerCapabilityIsEnabled", () => {
       extensionTargetSets: {
         image_generate: [{ connection_id: "image-account", target_id: "image-model" }],
       },
-      mediaUnderstandingModes: {},
+      mediaUnderstandingSelections: {},
     };
 
     expect(composerCapabilityIsEnabled(settings, "web_search")).toBe(true);
@@ -331,26 +490,85 @@ describe("orderProviderToolCapabilities", () => {
     ]);
   });
 
-  it("keeps a model-replacement-only media backend in the composer capability list", () => {
-    // snapshot retains one media backend whose capability has no provider-tool target.
-    // snapshot 保留一个没有供应商工具目标的媒体后端能力。
+  it("keeps an available media model in the list without a system default", () => {
+    // snapshot exposes one executable video model while system defaults remain empty.
+    // snapshot 公开一个可执行视频模型，同时系统默认值保持为空。
     const snapshot = settingsFixture();
     snapshot.providerToolTargets = snapshot.providerToolTargets.filter(
       (target) => target.target.contract.capability !== "video_understand",
     );
-    snapshot.mediaUnderstandingSelections = {
-      video_understand: {
-        mode: "model_replacement",
-        selection: {
+    snapshot.mediaUnderstandingSelections = {};
+    snapshot.multimodalUnderstandingCandidateModels = [];
+    snapshot.mediaUnderstandingModelCandidates = [{
+      providerDisplayName: "Provider",
+      serviceEntryDisplayName: "Entry",
+      connectionDisplayName: "Media Account",
+      modelDisplayName: "Video Model",
+      selection: {
           provider_id: "provider",
           model_id: "video-model",
           connection_id: "media-account",
-        },
-        reasoning_effort: "medium",
       },
-    };
+      catalogGeneration: 1,
+      capabilities: {
+        operations: ["conversation_respond"],
+        input_resources: ["video"],
+        structured_output: "unsupported",
+        reasoning: "native",
+        reasoning_control: "provider_adaptive",
+        reasoning_efforts: ["adaptive"],
+        prompt_cache: {
+          provider_default_behavior: "provider_default",
+          supports_managed_explicit: false,
+          supported_ttl_options: [],
+        },
+        model_parameters: [],
+        evidence_revision: "test",
+      },
+    }];
 
     expect(orderedProviderToolCapabilities(snapshot)).toContain("video_understand");
+  });
+
+  it("shows audio understanding whenever an executable model supports audio input", () => {
+    // snapshot has no saved audio backend and does not require a system admission switch.
+    // snapshot 没有已保存的音频后端，也不要求系统准入开关。
+    const snapshot = settingsFixture();
+    snapshot.multimodalUnderstandingCandidateModels = [{
+      providerId: "provider",
+      modelId: "audio-model",
+    }];
+    snapshot.mediaUnderstandingModelCandidates = [{
+      providerDisplayName: "Provider",
+      serviceEntryDisplayName: "Entry",
+      connectionDisplayName: "Media Account",
+      modelDisplayName: "Audio Model",
+      selection: {
+        provider_id: "provider",
+        model_id: "audio-model",
+        connection_id: "media-account",
+      },
+      catalogGeneration: 1,
+      capabilities: {
+        operations: ["conversation_respond"],
+        input_resources: ["audio"],
+        structured_output: "unsupported",
+        reasoning: "native",
+        reasoning_control: "fixed_on",
+        reasoning_efforts: [],
+        prompt_cache: {
+          provider_default_behavior: "provider_default",
+          supports_managed_explicit: false,
+          supported_ttl_options: [],
+        },
+        model_parameters: [],
+        evidence_revision: "test",
+      },
+    }];
+
+    expect(orderedProviderToolCapabilities(snapshot)).toContain("audio_understand");
+    snapshot.multimodalUnderstandingCandidateModels = [];
+    expect(orderedProviderToolCapabilities(snapshot)).toContain("audio_understand");
   });
 });
 

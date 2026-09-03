@@ -6,7 +6,10 @@ use super::pruning::{
 use super::*;
 use vulcan_ai_contract::{ContentItem, MessageRole};
 use vulcan_context::conversation_state_from_session_messages;
-use vulcan_workbench_model::SessionMediaUnderstandingMode;
+use vulcan_workbench_model::{
+    SessionMediaUnderstandingModelSelection, SessionMediaUnderstandingReasoningEffort,
+    SessionMediaUnderstandingSelection,
+};
 
 fn test_budget() -> CompactionInputBudget {
     CompactionInputBudget {
@@ -227,9 +230,16 @@ fn compaction_launch_request_preserves_ordinary_turn_controls() {
         provider_tool_enabled_capabilities_override: Some(BTreeSet::from([String::from(
             "web_search",
         )])),
-        provider_tool_media_understanding_modes_override: Some(BTreeMap::from([(
+        provider_tool_media_understanding_selections_override: Some(BTreeMap::from([(
             String::from("video_understand"),
-            SessionMediaUnderstandingMode::ModelReplacement,
+            SessionMediaUnderstandingSelection::ModelReplacement {
+                selection: SessionMediaUnderstandingModelSelection {
+                    provider_id: String::from("provider-a"),
+                    model_id: String::from("model-a"),
+                    connection_id: String::from("connection-a"),
+                },
+                reasoning_effort: Some(SessionMediaUnderstandingReasoningEffort::Adaptive),
+            },
         )])),
         tool_request_hidden_tool_ids: vec![String::from("hidden-tool")],
         session_prompt_skill_overrides: BTreeMap::from([(
@@ -272,10 +282,17 @@ fn compaction_launch_request_preserves_ordinary_turn_controls() {
         Some(BTreeSet::from([String::from("web_search")]))
     );
     assert_eq!(
-        request.provider_tool_media_understanding_modes_override,
+        request.provider_tool_media_understanding_selections_override,
         Some(BTreeMap::from([(
             String::from("video_understand"),
-            SessionMediaUnderstandingMode::ModelReplacement,
+            SessionMediaUnderstandingSelection::ModelReplacement {
+                selection: SessionMediaUnderstandingModelSelection {
+                    provider_id: String::from("provider-a"),
+                    model_id: String::from("model-a"),
+                    connection_id: String::from("connection-a"),
+                },
+                reasoning_effort: Some(SessionMediaUnderstandingReasoningEffort::Adaptive),
+            },
         )]))
     );
     assert_eq!(

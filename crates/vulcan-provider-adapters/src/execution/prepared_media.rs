@@ -10,8 +10,10 @@ use base64::Engine as _;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant, SystemTime};
 use tokio::io::AsyncReadExt;
+use tokio::sync::Notify;
 use vulcan_ai_contract::ResourceKind;
 
 /// Maximum process-local prepared media references retained across all providers and accounts.
@@ -47,6 +49,175 @@ pub(super) struct PreparedMediaCacheEntry {
     /// Source metadata prevents a rewritten file from reusing an older provider reference.
     /// 源文件元数据防止被改写的文件复用旧供应商引用。
     source_fingerprint: PreparedMediaSourceFingerprint,
+}
+
+/// Immutable provider reference published by one same-key physical preparation.
+/// 由一次同键真实准备发布的不可变供应商引用。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PreparedMediaFlightOutcome {
+    /// Provider-native value consumed by the request projector.
+    /// 请求投影器消费的供应商原生值。
+    pub(crate) provider_reference: String,
+    /// Exact wire encoding declared by the selected upload channel.
+    /// 选中上传通道声明的精确 Wire 编码。
+    pub(crate) reference_encoding: crate::UploadReferenceEncoding,
+}
+
+/// Shares one terminal preparation result with all same-key followers.
+/// 与全部同键跟随者共享一次准备终态结果。
+pub(crate) struct PreparedMediaFlight {
+    /// Terminal result written exactly once by the physical preparation owner.
+    /// 由真实准备所有者恰好写入一次的终态结果。
+    result: StdMutex<Option<Result<PreparedMediaFlightOutcome, String>>>,
+    /// Waiter notification emitted after the terminal result becomes visible.
+    /// 终态结果可见后发出的等待者通知。
+    notify: Notify,
+}
+
+impl PreparedMediaFlight {
+    /// Creates one unsettled same-key preparation flight.
+    /// 创建一个尚未结算的同键准备飞行项。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A new shared flight with no terminal result.
+    /// 返回尚无终态结果的新共享飞行项。
+    fn new() -> Self {
+        Self {
+            result: StdMutex::new(None),
+            notify: Notify::new(),
+        }
+    }
+
+    /// Publishes the owner's terminal result exactly once and wakes every follower.
+    /// 恰好一次发布所有者终态结果并唤醒全部跟随者。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `result` is the exact shared success or controlled preparation failure.
+    /// `result` 是要共享的精确成功结果或受控准备失败。
+    fn publish(&self, result: Result<PreparedMediaFlightOutcome, String>) {
+        if let Ok(mut current) = self.result.lock()
+            && current.is_none()
+        {
+            *current = Some(result);
+        }
+        self.notify.notify_waiters();
+    }
+
+    /// Waits for the shared terminal result without transferring cancellation ownership.
+    /// 等待共享终态结果，但不转移取消所有权。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `cancellation` belongs only to this follower and cannot cancel the physical owner.
+    /// `cancellation` 仅属于当前跟随者，不能取消真实准备所有者。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The owner's cloned terminal result, or this follower's own cancellation failure.
+    /// 返回所有者终态结果的克隆，或当前跟随者自己的取消失败。
+    pub(crate) async fn wait(
+        &self,
+        cancellation: &MediaUploadCancellation,
+    ) -> Result<PreparedMediaFlightOutcome, String> {
+        loop {
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            // Register before inspecting state so a concurrent publish cannot be lost.
+            // 在检查状态前完成注册，避免丢失并发发布通知。
+            notified.as_mut().enable();
+            let current = self
+                .result
+                .lock()
+                .map_err(|_| String::from("The prepared media flight result lock is poisoned."))?
+                .clone();
+            if let Some(result) = current {
+                return result;
+            }
+            if cancellation.is_cancelled() {
+                return Err(String::from("media upload cancelled"));
+            }
+            tokio::select! {
+                biased;
+                _ = cancellation.wait() => return Err(String::from("media upload cancelled")),
+                _ = notified.as_mut() => {}
+            }
+        }
+    }
+}
+
+/// Process-local registry for physical media preparation ownership.
+/// 真实媒体准备所有权的进程内注册表。
+pub(super) type PreparedMediaFlightRegistry = BTreeMap<String, Arc<PreparedMediaFlight>>;
+
+/// Owns one physical same-key preparation and guarantees abandoned followers terminate.
+/// 持有一次同键真实准备，并保证所有者异常退出时跟随者能够终止。
+pub(crate) struct PreparedMediaFlightOwner {
+    /// Shared registry used to remove only this exact flight instance.
+    /// 用于仅移除当前精确飞行实例的共享注册表。
+    registry: Arc<StdMutex<PreparedMediaFlightRegistry>>,
+    /// Content-addressed coordination key.
+    /// 内容寻址协调键。
+    key: String,
+    /// Shared terminal result cell.
+    /// 共享终态结果单元。
+    flight: Arc<PreparedMediaFlight>,
+    /// True after an explicit terminal result has been published.
+    /// 显式发布终态结果后为真。
+    settled: bool,
+}
+
+impl PreparedMediaFlightOwner {
+    /// Publishes one terminal result and releases same-key ownership.
+    /// 发布一次终态结果并释放同键所有权。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `result` is the exact success or failure observed by the physical preparation.
+    /// `result` 是真实准备观测到的精确成功或失败。
+    pub(crate) fn complete(mut self, result: Result<PreparedMediaFlightOutcome, String>) {
+        self.flight.publish(result);
+        self.remove_exact_registry_entry();
+        self.settled = true;
+    }
+
+    /// Removes the registry entry only when it still points at this owner's flight.
+    /// 仅当注册项仍指向当前所有者飞行实例时移除该项。
+    fn remove_exact_registry_entry(&self) {
+        if let Ok(mut registry) = self.registry.lock()
+            && registry
+                .get(self.key.as_str())
+                .is_some_and(|current| Arc::ptr_eq(current, &self.flight))
+        {
+            registry.remove(self.key.as_str());
+        }
+    }
+}
+
+impl Drop for PreparedMediaFlightOwner {
+    /// Publishes a controlled failure when the physical preparation future is abandoned.
+    /// 当真实准备 Future 被异常丢弃时发布受控失败。
+    fn drop(&mut self) {
+        if self.settled {
+            return;
+        }
+        self.flight.publish(Err(String::from(
+            "Media preparation owner ended before publishing a terminal result.",
+        )));
+        self.remove_exact_registry_entry();
+    }
+}
+
+/// Identifies whether one caller owns or follows a same-key physical preparation.
+/// 标识调用方是同键真实准备的所有者还是跟随者。
+pub(crate) enum PreparedMediaFlightRegistration {
+    /// This caller must execute and publish the physical preparation.
+    /// 当前调用方必须执行并发布真实准备结果。
+    Owner(PreparedMediaFlightOwner),
+    /// This caller waits for the existing owner's terminal result.
+    /// 当前调用方等待既有所有者的终态结果。
+    Follower(Arc<PreparedMediaFlight>),
 }
 
 /// An admitted immutable source whose original filename and identity do not depend on the physical entity path.
@@ -545,7 +716,13 @@ fn upload_channel_contract_fingerprint(
         channel.reference_encoding,
         channel.reference_scope,
     );
-    let bytes = serde_json::to_vec(&contract_material).ok()?;
+    let mut bytes = serde_json::to_vec(&contract_material).ok()?;
+    if let Some(response_id_encoding) = channel.response_id_encoding {
+        // Explicit scalar encoding extends the legacy fingerprint without invalidating unchanged channels.
+        // 显式标量编码扩展旧指纹，同时不使未变化通道的指纹失效。
+        bytes.extend_from_slice(b"\0response_id_encoding\0");
+        bytes.extend_from_slice(serde_json::to_vec(&response_id_encoding).ok()?.as_slice());
+    }
     Some(format!("sha256:{}", hex::encode(Sha256::digest(bytes))))
 }
 
@@ -597,6 +774,60 @@ fn prepared_media_key(
         mime_type,
         session_scope_id,
     })
+}
+
+/// Reconstructs cache-key material from a canonical public source identity.
+/// 从规范公开来源身份重建缓存键材料。
+///
+/// # Parameters
+/// 参数
+/// `identity` is the host-verified byte length and lowercase SHA-256 digest.
+/// `identity` 是宿主已验证的字节长度与小写 SHA-256 摘要。
+///
+/// # Returns
+/// 返回值
+/// Exact key material when the digest is a 32-byte hexadecimal SHA-256 value.
+/// 当摘要为 32 字节十六进制 SHA-256 值时返回精确键材料。
+fn prepared_media_fingerprint_from_identity(
+    identity: &PreparedMediaSourceIdentity,
+) -> Option<PreparedMediaSourceFingerprint> {
+    let content_sha256: [u8; 32] = hex::decode(identity.content_sha256.as_str())
+        .ok()?
+        .try_into()
+        .ok()?;
+    Some(PreparedMediaSourceFingerprint {
+        byte_len: identity.byte_len,
+        modified_at: None,
+        content_sha256,
+    })
+}
+
+/// Builds a physical-preparation coordination key without widening failure sharing across credentials.
+/// 构建真实准备协调键，避免把失败共享扩大到不同凭据连接。
+///
+/// # Parameters
+/// 参数
+/// `route`, `source_fingerprint`, `kind`, `mime_type`, and `session_scope_id` first build the
+/// reusable-reference identity; the exact connection then isolates in-flight authorization.
+/// `route`、`source_fingerprint`、`kind`、`mime_type` 与 `session_scope_id` 先构建可复用引用身份；
+/// 随后由精确连接隔离进行中的授权过程。
+///
+/// # Returns
+/// 返回值
+/// A content-addressed in-flight key, or `None` when the upload contract cannot be resolved.
+/// 返回内容寻址的进行中键；上传契约无法解析时返回 `None`。
+fn prepared_media_flight_key(
+    route: &ProviderExecutionRoute,
+    source_fingerprint: &PreparedMediaSourceFingerprint,
+    kind: ResourceKind,
+    mime_type: &str,
+    session_scope_id: Option<&str>,
+) -> Option<String> {
+    let reusable_reference_key =
+        prepared_media_key(route, source_fingerprint, kind, mime_type, session_scope_id)?;
+    let material =
+        serde_json::to_vec(&(reusable_reference_key, route.connection.id.as_str())).ok()?;
+    Some(format!("sha256:{}", hex::encode(Sha256::digest(material))))
 }
 
 /// Builds the shared cache key used by native conversation and provider-tool video uploads.
@@ -1039,6 +1270,59 @@ impl ProviderExecutionClient {
             byte_len: source.fingerprint.byte_len,
             content_sha256: hex::encode(source.fingerprint.content_sha256),
         })
+    }
+
+    /// Registers one caller as the owner or follower of an exact physical media preparation.
+    /// 将一个调用方注册为精确真实媒体准备的所有者或跟随者。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `route`, `kind`, `mime_type`, and `session_scope_id` freeze the upload boundary;
+    /// `source_identity` identifies the exact bytes shared by concurrent callers.
+    /// `route`、`kind`、`mime_type` 与 `session_scope_id` 冻结上传边界；
+    /// `source_identity` 标识并发调用方共享的精确字节。
+    ///
+    /// # Returns
+    /// One unique owner or a follower handle for the already registered same-key preparation.
+    /// 返回唯一所有者，或已注册同键准备的跟随者句柄。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn register_prepared_media_flight(
+        &self,
+        route: &ProviderExecutionRoute,
+        kind: ResourceKind,
+        mime_type: &str,
+        source_identity: &PreparedMediaSourceIdentity,
+        session_scope_id: Option<&str>,
+    ) -> Result<PreparedMediaFlightRegistration, String> {
+        let source_fingerprint = prepared_media_fingerprint_from_identity(source_identity)
+            .ok_or_else(|| String::from("Prepared media source identity is malformed."))?;
+        let key = prepared_media_flight_key(
+            route,
+            &source_fingerprint,
+            kind,
+            mime_type,
+            session_scope_id,
+        )
+        .ok_or_else(|| {
+            String::from("Prepared media upload contract could not produce a coordination key.")
+        })?;
+        let mut registry = self
+            .prepared_media_flights
+            .lock()
+            .map_err(|_| String::from("The prepared media flight registry lock is poisoned."))?;
+        if let Some(flight) = registry.get(key.as_str()) {
+            return Ok(PreparedMediaFlightRegistration::Follower(flight.clone()));
+        }
+        let flight = Arc::new(PreparedMediaFlight::new());
+        registry.insert(key.clone(), flight.clone());
+        Ok(PreparedMediaFlightRegistration::Owner(
+            PreparedMediaFlightOwner {
+                registry: self.prepared_media_flights.clone(),
+                key,
+                flight,
+                settled: false,
+            },
+        ))
     }
 
     /// Looks up a reusable provider-tool media reference under the shared upload-contract boundary.

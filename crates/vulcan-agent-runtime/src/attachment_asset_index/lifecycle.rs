@@ -21,11 +21,8 @@ pub fn record_staged_attachment(
     let transaction_lock = attachment_index_transaction_lock(&asset_root)?;
     // transaction_guard remains held until the updated durable document has been published.
     // transaction_guard 保持到更新后的持久文档完成发布。
-    let _transaction_guard = transaction_lock.lock().map_err(|error| {
-        format!(
-            "failed to lock attachment index transaction `{}`: {error}",
-            asset_root.display()
-        )
+    let _transaction_guard = transaction_lock.lock().map_err(|_| {
+        String::from("Failed to lock the generated attachment ownership transaction.")
     })?;
     let mut document = load_attachment_asset_index_document_for_mutation(&asset_root)?;
     if let Some(existing_record) = document
@@ -85,6 +82,129 @@ pub fn record_staged_attachment(
         });
     }
     save_attachment_asset_index_document(&asset_root, &document)
+}
+
+/// Atomically publishes a staged project attachment or reuses the oldest valid identical asset.
+/// 原子发布一个项目附件，或复用最早的有效同内容资产。
+///
+/// # Parameters
+/// 参数
+/// `workspace_path` selects the project-scoped index, `attachment` is the newly materialized
+/// candidate, and `timestamp` records its staging time when no reusable asset exists.
+/// `workspace_path` 选择项目级索引，`attachment` 是刚物化的候选资源，`timestamp` 在不存在可复用
+/// 资源时记录其暂存时间。
+///
+/// # Returns
+/// 返回值
+/// The existing canonical attachment for the same SHA-256, byte length, and MIME type, or the newly
+/// published attachment. The caller remains responsible for deleting its unindexed candidate file
+/// when a different asset is returned.
+/// 返回相同 SHA-256、字节长度与 MIME 类型的既有规范附件，或刚发布的附件；当返回不同资产时，
+/// 调用方仍负责删除自己未入索引的候选文件。
+pub fn record_or_reuse_project_attachment(
+    workspace_path: &str,
+    attachment: &ConversationAttachment,
+    timestamp: &AttachmentTimestampParts,
+) -> Result<ConversationAttachment, String> {
+    // candidate_asset_id proves the newly materialized payload can become a managed record.
+    // candidate_asset_id 证明新物化载荷可以成为托管记录。
+    let candidate_asset_id = attachment
+        .asset_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| String::from("Project attachment staging requires a managed asset id."))?;
+    // candidate_byte_len is one dimension of the exact project deduplication key.
+    // candidate_byte_len 是精确项目排重键的一项维度。
+    let candidate_byte_len = attachment
+        .byte_len
+        .ok_or_else(|| String::from("Project attachment staging requires an exact byte length."))?;
+    // candidate_sha256 is the immutable content dimension of the exact project deduplication key.
+    // candidate_sha256 是精确项目排重键中的不可变内容维度。
+    let candidate_sha256 = attachment
+        .source_sha256
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            String::from("Project attachment staging requires an exact SHA-256 digest.")
+        })?;
+    let asset_root = resolve_managed_attachment_root(workspace_path);
+    // transaction_lock closes concurrent duplicate publication races for this project index.
+    // transaction_lock 关闭当前项目索引中的并发重复发布竞态。
+    let transaction_lock = attachment_index_transaction_lock(&asset_root)?;
+    // transaction_guard remains held through fingerprint lookup and final index publication.
+    // transaction_guard 保持到特征查询与最终索引发布完成。
+    let _transaction_guard = transaction_lock.lock().map_err(|error| {
+        format!(
+            "failed to lock attachment index transaction `{}`: {error}",
+            asset_root.display()
+        )
+    })?;
+    let mut document = load_attachment_asset_index_document_for_mutation(&asset_root)?;
+    for record in &document.assets {
+        if record.deletion_pending
+            || record.purged_at_unix_millis.is_some()
+            || record.source_sha256.as_deref() != Some(candidate_sha256)
+            || record.byte_len != Some(candidate_byte_len)
+            || record.mime_type != attachment.mime_type
+        {
+            continue;
+        }
+        // managed_path must still be a safe live file before its locator can be reused.
+        // managed_path 在其定位符可被复用前必须仍是安全且存在的文件。
+        let managed_path = match validate_cleanup_managed_path(&asset_root, record)? {
+            CleanupManagedPath::Existing(path) => path,
+            CleanupManagedPath::Missing => continue,
+        };
+        if crate::attachment_assets::streaming_file_sha256(&managed_path)? != candidate_sha256 {
+            continue;
+        }
+        return Ok(ConversationAttachment {
+            kind: record.kind.clone(),
+            file_name: record.original_file_name.clone(),
+            local_path: vulcan_runtime_assets::native_host_path_text_from_path(&managed_path),
+            resource_path: Some(crate::attachment_assets::managed_attachment_resource_path(
+                workspace_path,
+                &managed_path,
+            )?),
+            source_path: record.source_path.clone(),
+            asset_id: Some(record.asset_id.clone()),
+            byte_len: record.byte_len,
+            source_sha256: record.source_sha256.clone(),
+            delivery_mode: None,
+            preview_local_path: None,
+            mime_type: record.mime_type.clone(),
+        });
+    }
+    document.assets.push(AttachmentAssetRecord {
+        asset_id: candidate_asset_id.to_string(),
+        kind: attachment.kind.clone(),
+        original_file_name: attachment.file_name.clone(),
+        managed_path: vulcan_runtime_assets::native_host_path_text(&attachment.local_path),
+        mime_type: attachment.mime_type.clone(),
+        byte_len: attachment.byte_len,
+        source_sha256: attachment.source_sha256.clone(),
+        staged_at_local_text: timestamp.local_timestamp_text.clone(),
+        staged_date_text: timestamp.local_date_text.clone(),
+        staged_at_unix_millis: timestamp.unix_millis,
+        source_path: attachment
+            .source_path
+            .as_deref()
+            .map(vulcan_runtime_assets::native_host_path_text),
+        session_ids: Vec::new(),
+        message_ids: Vec::new(),
+        staging_refs: Vec::new(),
+        draft_media: BTreeMap::new(),
+        draft_media_handoffs: BTreeMap::new(),
+        media_references: Vec::new(),
+        deletion_pending: false,
+        purged_at_local_text: None,
+        purged_at_unix_millis: None,
+        purge_reason: None,
+    });
+    save_attachment_asset_index_document(&asset_root, &document)?;
+    Ok(attachment.clone())
 }
 
 /// Adds one transient staging reference scope to each provided managed attachment.
@@ -262,6 +382,86 @@ pub fn promote_staged_attachment_to_message_ref(
         }
     }
 
+    if changed {
+        save_attachment_asset_index_document(&asset_root, &document)?;
+    }
+    Ok(())
+}
+
+/// Retains generated managed attachments for the exact conversation that invoked the provider tool.
+/// 为调用供应商工具的精确会话保留生成的托管附件。
+///
+/// # Parameters
+/// 参数
+/// `workspace_path` owns the attachment index, `session_id` identifies the invoking conversation,
+/// and `attachments` contains the canonical generated attachment descriptors.
+/// `workspace_path` 持有附件索引，`session_id` 标识发起调用的会话，`attachments` 包含规范生成附件描述。
+///
+/// # Returns
+/// 返回值
+/// Success after every generated asset is durably bound to the invoking conversation.
+/// 在每个生成资产均持久绑定到发起会话后返回成功。
+pub fn retain_generated_attachments_for_session(
+    workspace_path: &str,
+    session_id: &str,
+    attachments: &[ConversationAttachment],
+) -> Result<(), String> {
+    if attachments.is_empty() {
+        return Ok(());
+    }
+    // session_id is normalized once before it becomes durable ownership data.
+    // session_id 在成为持久所有权数据前统一归一化一次。
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return Err(String::from(
+            "Generated attachment retention requires an invoking conversation id.",
+        ));
+    }
+    // asset_ids is the exact generated-asset set that must receive the same owner atomically.
+    // asset_ids 是必须原子接收相同所有者的精确生成资产集合。
+    let asset_ids = collect_attachment_asset_ids(attachments)?;
+    if asset_ids.is_empty() {
+        return Ok(());
+    }
+    // asset_root selects the one workspace-scoped durable attachment index.
+    // asset_root 选择唯一的工作区级持久附件索引。
+    let asset_root = resolve_managed_attachment_root(workspace_path);
+    // The transaction lock makes generated-resource disclosure and conversation ownership one durable index mutation.
+    // 事务锁使生成资源披露与会话所有权成为一次持久索引变更。
+    let transaction_lock = attachment_index_transaction_lock(&asset_root)?;
+    // transaction_guard keeps validation, ownership mutation, and publication indivisible.
+    // transaction_guard 使校验、所有权变更与发布保持不可分割。
+    let _transaction_guard = transaction_lock.lock().map_err(|error| {
+        format!(
+            "failed to lock attachment index transaction `{}`: {error}",
+            asset_root.display()
+        )
+    })?;
+    // document is the only mutable snapshot published by this transaction.
+    // document 是本次事务发布的唯一可变快照。
+    let mut document = load_attachment_asset_index_document_for_mutation(&asset_root)?;
+    ensure_attachment_asset_ids_are_indexed(
+        &document,
+        &asset_ids,
+        "binding generated attachment conversation ownership",
+    )?;
+    // changed prevents an unnecessary durable rewrite for idempotent replay.
+    // changed 避免幂等回放时发生不必要的持久重写。
+    let mut changed = false;
+    for record in document
+        .assets
+        .iter_mut()
+        .filter(|record| asset_ids.contains(&record.asset_id))
+    {
+        if !record
+            .session_ids
+            .iter()
+            .any(|existing| existing == session_id)
+        {
+            record.session_ids.push(session_id.to_string());
+            changed = true;
+        }
+    }
     if changed {
         save_attachment_asset_index_document(&asset_root, &document)?;
     }

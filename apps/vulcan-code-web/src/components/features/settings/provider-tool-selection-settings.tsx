@@ -11,7 +11,15 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useI18n } from "@/i18n";
-import { isModelExtensionCapability } from "@/lib/provider-tool-capabilities";
+import {
+  isModelExtensionCapability,
+  modelCapabilitiesSupportMediaUnderstanding,
+} from "@/lib/provider-tool-capabilities";
+import {
+  mediaReplacementReasoningEfforts,
+  mediaReplacementReasoningOverrides,
+  PUBLIC_AI_REASONING_EFFORT_LABEL_KEYS,
+} from "@/lib/reasoning-effort-labels";
 import {
   loadPublicAiSettings,
   savePublicAiMediaUnderstandingSelection,
@@ -102,7 +110,7 @@ export function ProviderToolSelectionSettingsArea(props: {
       candidate.selection.provider_id,
       candidate.selection.model_id,
     ]))
-    && modelCandidateSupportsCapability(candidate, props.capability)
+    && modelCapabilitiesSupportMediaUnderstanding(candidate.capabilities, props.capability)
   )) ?? [];
   const selectedTarget = targets.find((target) => (
     target.connectionId === defaultSelection?.connection_id
@@ -444,7 +452,7 @@ export function ProviderToolSelectionSettingsArea(props: {
 
 // MediaUnderstandingDefaults renders one closed mode, model, account, and reasoning selection.
 // MediaUnderstandingDefaults 渲染一个封闭模式、模型、账号与思考级别选择。
-function MediaUnderstandingDefaults(props: {
+export function MediaUnderstandingDefaults(props: {
   // Exact admitted model-replacement account routes for the current media kind.
   // 当前媒体类型精确且已准入的模型代替账号路由。
   candidates: PublicAiMediaUnderstandingModelCandidate[];
@@ -474,14 +482,9 @@ function MediaUnderstandingDefaults(props: {
   targets: PublicAiProviderToolTargetSnapshot[];
 }) {
   const { t } = useI18n();
-  // mode follows persistence and otherwise shows the first actually available backend family.
-  // mode 遵循持久化状态；缺失时展示首个实际可用的后端类型。
-  const mode = props.selection?.mode
-    ?? (props.backendOptions?.provider_tool
-      ? "provider_tool"
-      : props.backendOptions?.model_replacement
-        ? "model_replacement"
-        : (props.targets.length > 0 ? "provider_tool" : "model_replacement"));
+  // mode reflects only the authoritative persisted active backend.
+  // mode 仅反映权威持久化的活动后端。
+  const mode = props.selection?.mode;
   // providerSelection exists only while the provider-specific mode is selected.
   // providerSelection 仅在选择供应商专用模式时存在。
   const providerSelection = props.selection?.mode === "provider_tool"
@@ -500,7 +503,7 @@ function MediaUnderstandingDefaults(props: {
   // providerModelKey 保留不可用的持久化选择，同时避免混淆不同供应商的同名目标。
   const providerModelKey = selectedProviderTarget
     ? providerToolModelKey(selectedProviderTarget)
-    : (providerSelection || !providerModels[0] ? "" : providerToolModelKey(providerModels[0]));
+    : "";
   // providerAccounts contains the exact credential routes for the displayed provider model.
   // providerAccounts 包含当前展示供应商模型的精确凭据路由。
   const providerAccounts = props.targets.filter(
@@ -521,7 +524,7 @@ function MediaUnderstandingDefaults(props: {
     candidate.selection.provider_id === persistedModelSelection?.provider_id
     && candidate.selection.model_id === persistedModelSelection?.model_id
     && candidate.selection.connection_id === persistedModelSelection?.connection_id
-  )) ?? (persistedModelSelection ? undefined : props.candidates[0]);
+  ));
   // selectedModelKey identifies the shared provider-model choice independently from credentials.
   // selectedModelKey 独立于凭据标识共享供应商模型选择。
   const selectedModelKey = selectedModelCandidate
@@ -535,7 +538,7 @@ function MediaUnderstandingDefaults(props: {
   // reasoningEfforts is the exact route-declared selector list.
   // reasoningEfforts 是精确路由声明的选择列表。
   const reasoningEfforts = selectedModelCandidate
-    ? mediaUnderstandingReasoningEfforts(selectedModelCandidate.capabilities)
+    ? mediaReplacementReasoningOverrides(selectedModelCandidate.capabilities)
     : [];
   // selectedReasoningEffort preserves the optional persisted level.
   // selectedReasoningEffort 保留可选的持久化思考档位。
@@ -593,15 +596,20 @@ function MediaUnderstandingDefaults(props: {
                     props.onSelectionChange(modelReplacementSelection(
                       candidate,
                       retainedCandidate
-                        ? props.backendOptions?.model_replacement?.reasoning_effort
+                        ? supportedMediaReplacementReasoningEffort(
+                          candidate,
+                          props.backendOptions?.model_replacement?.reasoning_effort,
+                        )
                         : undefined,
                     ));
                   }
                 }
               }}
-              value={mode}
+              value={mode ?? ""}
             >
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger>
+                <SelectValue placeholder={t("settings.providerTools.selectBackendMode")} />
+              </SelectTrigger>
               <SelectContent>
                 {props.targets.length > 0 ? (
                   <SelectItem value="provider_tool">
@@ -668,7 +676,7 @@ function MediaUnderstandingDefaults(props: {
                 </Select>
               </label>
             </>
-          ) : (
+          ) : mode === "model_replacement" ? (
             <>
               <label>
                 <span>{t("settings.providerTools.model")}</span>
@@ -686,7 +694,9 @@ function MediaUnderstandingDefaults(props: {
                   }}
                   value={selectedModelKey}
                 >
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger>
+                    <SelectValue placeholder={t("settings.providerTools.selectModel")} />
+                  </SelectTrigger>
                   <SelectContent>
                     {modelChoices.map((candidate) => (
                       <SelectItem
@@ -713,14 +723,19 @@ function MediaUnderstandingDefaults(props: {
                       props.onSelectionChange(modelReplacementSelection(
                         replacementCandidate,
                         props.selection?.mode === "model_replacement"
-                          ? props.selection.reasoning_effort
+                          ? supportedMediaReplacementReasoningEffort(
+                            replacementCandidate,
+                            props.selection.reasoning_effort,
+                          )
                           : undefined,
                       ));
                     }
                   }}
                   value={selectedModelCandidate?.selection.connection_id ?? ""}
                 >
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger>
+                    <SelectValue placeholder={t("settings.providerTools.selectAccount")} />
+                  </SelectTrigger>
                   <SelectContent>
                     {modelAccounts.map((candidate) => (
                       <SelectItem
@@ -733,33 +748,41 @@ function MediaUnderstandingDefaults(props: {
                   </SelectContent>
                 </Select>
               </label>
-              <label>
-                <span>{t("settings.providerTools.reasoningEffort")}</span>
-                <Select
-                  disabled={props.pending || !selectedModelCandidate}
-                  onValueChange={(effort) => {
-                    if (!selectedModelCandidate) return;
-                    props.onSelectionChange(modelReplacementSelection(
-                      selectedModelCandidate,
-                      effort === "__default__"
-                        ? undefined
-                        : effort as PublicAiReasoningEffort,
-                    ));
-                  }}
-                  value={selectedReasoningEffort}
-                >
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__default__">
-                      {t("settings.providerTools.modelDefaultReasoning")}
-                    </SelectItem>
-                    {reasoningEfforts.map((effort) => (
-                      <SelectItem key={effort} value={effort}>{effort}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </label>
+              {reasoningEfforts.length > 0 ? (
+                <label>
+                  <span>{t("settings.providerTools.reasoningEffort")}</span>
+                  <Select
+                    disabled={props.pending || !selectedModelCandidate}
+                    onValueChange={(effort) => {
+                      if (!selectedModelCandidate) return;
+                      props.onSelectionChange(modelReplacementSelection(
+                        selectedModelCandidate,
+                        effort === "__default__"
+                          ? undefined
+                          : effort as PublicAiReasoningEffort,
+                      ));
+                    }}
+                    value={selectedReasoningEffort}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__default__">
+                        {t("settings.providerTools.modelDefaultReasoning")}
+                      </SelectItem>
+                      {reasoningEfforts.map((effort) => (
+                        <SelectItem key={effort} value={effort}>
+                          {t(PUBLIC_AI_REASONING_EFFORT_LABEL_KEYS[effort])} ({effort})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </label>
+              ) : null}
             </>
+          ) : (
+            <div className="composer-capability-dialog-empty settings-capability-empty">
+              <span>{t("settings.providerTools.noSelection")}</span>
+            </div>
           )}
         </div>
       )}
@@ -783,28 +806,6 @@ export function mediaUnderstandingCapabilityToggleDisabled(
   return pending || (!backendAvailable && !enabled);
 }
 
-// mediaUnderstandingReasoningEfforts returns every explicit level accepted by one exact route.
-// mediaUnderstandingReasoningEfforts 返回一条精确路由接受的全部显式思考档位。
-function mediaUnderstandingReasoningEfforts(
-  capabilities: PublicAiMediaUnderstandingModelCandidate["capabilities"],
-): string[] {
-  // efforts is the provider-declared selectable list before fixed-control normalization.
-  // efforts 是固定控制规范化前供应商声明的可选列表。
-  const efforts = capabilities.reasoning_efforts ?? [];
-  switch (capabilities.reasoning_control ?? "unknown") {
-    case "fixed_off":
-      return ["none"];
-    case "fixed_on":
-      return efforts.filter((effort) => effort !== "none");
-    case "toggle":
-    case "effort_selection":
-    case "provider_adaptive":
-      return efforts;
-    default:
-      return [];
-  }
-}
-
 // isMediaUnderstandingCapability reports whether one capability uses the fixed media-understanding contract.
 // isMediaUnderstandingCapability 报告一项能力是否使用固定媒体理解契约。
 function isMediaUnderstandingCapability(
@@ -813,27 +814,6 @@ function isMediaUnderstandingCapability(
   return capability === "image_understand"
     || capability === "video_understand"
     || capability === "audio_understand";
-}
-
-// modelCandidateSupportsCapability applies the exact input resource and structured-output gate.
-// modelCandidateSupportsCapability 应用精确输入资源与结构化输出门槛。
-function modelCandidateSupportsCapability(
-  candidate: PublicAiMediaUnderstandingModelCandidate,
-  capability: PublicAiProviderToolCapabilityKind,
-): boolean {
-  // requiredResource is the fixed non-text input required by the selected semantic capability.
-  // requiredResource 是所选语义能力要求的固定非文本输入。
-  const requiredResource = capability === "image_understand"
-    ? "image"
-    : capability === "video_understand"
-      ? "video"
-      : capability === "audio_understand"
-        ? "audio"
-        : null;
-  return requiredResource !== null
-    && candidate.capabilities.structured_output !== "unsupported"
-    && candidate.capabilities.operations?.includes("conversation_respond") === true
-    && candidate.capabilities.input_resources?.includes(requiredResource) === true;
 }
 
 // mediaUnderstandingModelKey returns one browser-local provider-model identity.
@@ -873,6 +853,18 @@ function modelReplacementSelection(
     selection: candidate.selection,
     ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
   };
+}
+
+// supportedMediaReplacementReasoningEffort retains an effort only when the exact route permits user override.
+// supportedMediaReplacementReasoningEffort 仅在精确路由允许用户覆写时保留思考档位。
+function supportedMediaReplacementReasoningEffort(
+  candidate: PublicAiMediaUnderstandingModelCandidate,
+  reasoningEffort?: PublicAiReasoningEffort,
+): PublicAiReasoningEffort | undefined {
+  if (!reasoningEffort) return undefined;
+  return mediaReplacementReasoningEfforts(candidate.capabilities).includes(reasoningEffort)
+    ? reasoningEffort
+    : undefined;
 }
 
 // uniqueProviderToolModels collapses account-expanded targets into stable model rows.

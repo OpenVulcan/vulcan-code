@@ -156,21 +156,31 @@ pub(crate) fn apply_provider_tool_selection_v1(
         .collect();
     runtime_state.provider_tool_enabled_capabilities =
         selection.enabled_capabilities.iter().cloned().collect();
-    runtime_state.media_understanding_modes = selection
-        .media_understanding_modes
+    runtime_state.media_understanding_selections = selection
+        .media_understanding_selections
         .iter()
-        .map(|entry| {
-            (
-                entry.capability.clone(),
-                match entry.mode {
-                    vulcan_session_core::v1::config::ProviderMediaUnderstandingMode::ProviderTool => {
-                        vulcan_workbench_model::SessionMediaUnderstandingMode::ProviderTool
-                    }
-                    vulcan_session_core::v1::config::ProviderMediaUnderstandingMode::ModelReplacement => {
-                        vulcan_workbench_model::SessionMediaUnderstandingMode::ModelReplacement
-                    }
+        .filter_map(|entry| {
+            let route = match entry.selection.as_ref()? {
+                vulcan_session_core::v1::config::ProviderMediaUnderstandingRouteConfig::ProviderTool(
+                    target,
+                ) => vulcan_workbench_model::SessionMediaUnderstandingSelection::ProviderTool {
+                    selection: vulcan_workbench_model::SessionProviderToolTargetSelection {
+                        connection_id: target.connection_id.clone(),
+                        target_id: target.target_id.clone(),
+                    },
                 },
-            )
+                vulcan_session_core::v1::config::ProviderMediaUnderstandingRouteConfig::ModelReplacement(
+                    target,
+                ) => vulcan_workbench_model::SessionMediaUnderstandingSelection::ModelReplacement {
+                    selection: vulcan_workbench_model::SessionMediaUnderstandingModelSelection {
+                        provider_id: target.provider_id.clone(),
+                        model_id: target.model_id.clone(),
+                        connection_id: target.connection_id.clone(),
+                    },
+                    reasoning_effort: entry.reasoning_effort.map(Into::into),
+                },
+            };
+            Some((entry.capability.clone(), route))
         })
         .collect();
     runtime_state.provider_extension_target_sets = selection
@@ -1127,7 +1137,10 @@ mod tests {
         let selection = ProviderToolSelectionConfig {
             initialized: true,
             overridden: true,
-            enabled_capabilities: vec![String::from("web_search")],
+            enabled_capabilities: vec![
+                String::from("video_understand"),
+                String::from("web_search"),
+            ],
             selections: vec![
                 vulcan_session_core::v1::config::ProviderToolCapabilitySelection {
                     capability: String::from("web_search"),
@@ -1137,7 +1150,24 @@ mod tests {
                     },
                 },
             ],
-            media_understanding_modes: Vec::new(),
+            media_understanding_selections: vec![
+                vulcan_session_core::v1::config::ProviderMediaUnderstandingSelection {
+                    capability: String::from("video_understand"),
+                    mode: vulcan_session_core::v1::config::ProviderMediaUnderstandingMode::ModelReplacement,
+                    selection: Some(
+                        vulcan_session_core::v1::config::ProviderMediaUnderstandingRouteConfig::ModelReplacement(
+                            vulcan_session_core::v1::config::ProviderMediaUnderstandingModelTargetConfig {
+                                provider_id: String::from("provider-video"),
+                                model_id: String::from("model-video"),
+                                connection_id: String::from("connection-video"),
+                            },
+                        ),
+                    ),
+                    reasoning_effort: Some(
+                        vulcan_session_core::v1::config::ProviderMediaUnderstandingReasoningEffort::Adaptive,
+                    ),
+                },
+            ],
             extension_target_sets: Vec::new(),
         };
 
@@ -1156,6 +1186,25 @@ mod tests {
             selection
         );
         assert_eq!(backend.flush_count.load(Ordering::SeqCst), 1);
+        let mut runtime_state = vulcan_workbench_model::SessionRuntimeStateEntry::default();
+        apply_provider_tool_selection_v1(&mut runtime_state, &selection);
+        assert_eq!(
+            runtime_state
+                .media_understanding_selections
+                .get("video_understand"),
+            Some(
+                &vulcan_workbench_model::SessionMediaUnderstandingSelection::ModelReplacement {
+                    selection: vulcan_workbench_model::SessionMediaUnderstandingModelSelection {
+                        provider_id: String::from("provider-video"),
+                        model_id: String::from("model-video"),
+                        connection_id: String::from("connection-video"),
+                    },
+                    reasoning_effort: Some(
+                        vulcan_workbench_model::SessionMediaUnderstandingReasoningEffort::Adaptive,
+                    ),
+                }
+            )
+        );
     }
 
     /// The complete first-turn selection bundle is one durable flush and exact replay is a no-op.
@@ -1171,7 +1220,7 @@ mod tests {
                 overridden: false,
                 enabled_capabilities: vec![String::from("web_search")],
                 selections: Vec::new(),
-                media_understanding_modes: Vec::new(),
+                media_understanding_selections: Vec::new(),
                 extension_target_sets: Vec::new(),
             },
             knowledge_libraries: KnowledgeLibrarySelectionConfig {

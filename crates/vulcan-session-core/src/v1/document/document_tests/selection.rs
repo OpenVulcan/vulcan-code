@@ -2,6 +2,9 @@
 //! 会话选择、待生效请求提升及配置校验回归测试。
 
 use super::*;
+use crate::v1::config::{
+    ProviderMediaUnderstandingReasoningEffort, ProviderMediaUnderstandingRouteConfig,
+};
 
 /// Pending request promotion and Goal terminal updates mutate metadata and
 /// append structured display notes.
@@ -368,9 +371,16 @@ fn provider_tool_selection_is_atomic_idempotent_and_strict() -> Result<(), Domai
                 target_id: "search-a".to_string(),
             },
         }],
-        media_understanding_modes: vec![ProviderMediaUnderstandingSelection {
+        media_understanding_selections: vec![ProviderMediaUnderstandingSelection {
             capability: "image_understanding".to_string(),
             mode: ProviderMediaUnderstandingMode::ProviderTool,
+            selection: Some(ProviderMediaUnderstandingRouteConfig::ProviderTool(
+                ProviderToolTargetConfig {
+                    connection_id: "connection-c".to_string(),
+                    target_id: "image-understand-a".to_string(),
+                },
+            )),
+            reasoning_effort: None,
         }],
         extension_target_sets: vec![ProviderExtensionTargetSetConfig {
             capability: "image_generation".to_string(),
@@ -394,6 +404,17 @@ fn provider_tool_selection_is_atomic_idempotent_and_strict() -> Result<(), Domai
         doc.set_provider_tool_selection(invalid, T0 + 3),
         Err(DomainError::InvalidSelectionConfiguration {
             field: "provider_tools.enabled_capabilities.order"
+        })
+    ));
+    assert_eq!(doc, before_invalid);
+
+    let mut invalid_reasoning_mode = selection.clone();
+    invalid_reasoning_mode.media_understanding_selections[0].reasoning_effort =
+        Some(ProviderMediaUnderstandingReasoningEffort::Adaptive);
+    assert!(matches!(
+        doc.set_provider_tool_selection(invalid_reasoning_mode, T0 + 4),
+        Err(DomainError::InvalidSelectionConfiguration {
+            field: "provider_tools.media_understanding_selections.reasoning_effort_mode"
         })
     ));
     assert_eq!(doc, before_invalid);
@@ -492,7 +513,7 @@ fn session_selection_bundle_is_single_revision_idempotent_and_failure_atomic()
                     target_id: "search-a".to_string(),
                 },
             }],
-            media_understanding_modes: Vec::new(),
+            media_understanding_selections: Vec::new(),
             extension_target_sets: Vec::new(),
         },
         knowledge_libraries: KnowledgeLibrarySelectionConfig {

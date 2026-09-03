@@ -63,7 +63,7 @@ async fn project_media_arguments_keep_private_metadata_outside_json()
     };
     // Input whitespace is normalized exactly once without changing the media prompt.
     // 输入空白只规范化一次，不改变媒体提示词。
-    let (arguments, source) = resolve_media_understanding_resource_arguments(
+    let (arguments, sources) = resolve_media_understanding_resource_arguments(
         None,
         Some("invoking-session"),
         ProviderToolCapabilityKind::ImageUnderstand,
@@ -75,6 +75,12 @@ async fn project_media_arguments_keep_private_metadata_outside_json()
         arguments,
         json!({"image_path":"project-resource://7","prompt":"describe"})
     );
+    // source is the only host proof corresponding to the single fixed-facade locator.
+    // source 是与单个固定外壳定位符对应的唯一宿主证据。
+    let source = sources
+        .first()
+        .expect("project locator should produce one host source");
+    assert_eq!(sources.len(), 1);
     assert_eq!(source.reference, "project-resource://7");
     assert_eq!(source.local_path, resolver.path);
     assert_eq!(source.file_name, "original.png");
@@ -83,6 +89,129 @@ async fn project_media_arguments_keep_private_metadata_outside_json()
     assert_eq!(source.source_identity.content_sha256, "a".repeat(64));
     assert_eq!(resolver.calls.load(Ordering::SeqCst), 1);
     Ok(())
+}
+
+/// Direct paths use filesystem identity without borrowing attachment ownership from the conversation.
+/// 直接路径使用文件系统身份，不借用会话附件所有权。
+#[tokio::test]
+async fn direct_media_paths_accept_absolute_and_project_external_files()
+-> Result<(), Box<dyn std::error::Error>> {
+    // The workspace and media file are siblings so one fixture covers absolute and project-external relative paths.
+    // 工作区与媒体文件互为同级，因此一个夹具即可覆盖绝对路径与项目外相对路径。
+    let directory = tempfile::tempdir()?;
+    let workspace = directory.path().join("project");
+    let video = directory.path().join("outside.mp4");
+    tokio::fs::create_dir(&workspace).await?;
+    tokio::fs::write(&video, b"abc").await?;
+    let canonical_video = tokio::fs::canonicalize(&video).await?;
+    let expected_host_path = PathBuf::from(vulcan_runtime_assets::native_host_path_text_from_path(
+        &canonical_video,
+    ));
+
+    // An explicit local path is not an attachment locator and therefore needs no conversation owner.
+    // 显式本地路径不是附件定位符，因此不需要会话所有者。
+    for reference in [
+        video.to_string_lossy().into_owned(),
+        Path::new("..")
+            .join("outside.mp4")
+            .to_string_lossy()
+            .into_owned(),
+    ] {
+        let (arguments, sources) = resolve_media_understanding_resource_arguments(
+            Some(&workspace),
+            None,
+            ProviderToolCapabilityKind::VideoUnderstand,
+            json!({"video_path": reference.clone(), "prompt": "describe"}),
+            None,
+        )
+        .await?;
+        // source is the only local proof corresponding to the fixed media path.
+        // source 是与固定媒体路径对应的唯一本地证据。
+        let source = sources
+            .first()
+            .expect("direct path should produce one host source");
+        assert_eq!(sources.len(), 1);
+        assert_eq!(arguments["video_path"], reference);
+        assert_eq!(source.reference, reference);
+        assert_eq!(source.local_path, expected_host_path);
+        assert_eq!(source.file_name, "outside.mp4");
+        assert_eq!(source.mime_type, "video/mp4");
+        assert_eq!(source.source_identity.byte_len, 3);
+        assert_eq!(
+            source.source_identity.content_sha256,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    // The local-path branch still closes on the exact media modality instead of trusting the requested tool.
+    // 本地路径分支仍按精确媒体模态关闭失败，不会盲信请求的工具。
+    let image = directory.path().join("outside.jpg");
+    tokio::fs::write(&image, b"abc").await?;
+    assert!(
+        resolve_media_understanding_attachment(
+            Some(&workspace),
+            None,
+            ProviderToolCapabilityKind::VideoUnderstand,
+            image.to_string_lossy().as_ref(),
+            None,
+        )
+        .await
+        .expect_err("an image path must not enter video understanding")
+        .contains("does not match")
+    );
+    Ok(())
+}
+
+/// HTTPS media references bypass local path resolution and remain subject to the frozen operation upload route.
+/// HTTPS 媒体引用绕过本地路径解析，并继续受冻结操作上传路线约束。
+#[tokio::test]
+async fn direct_https_media_reference_is_deferred_to_manifest_upload_policy()
+-> Result<(), Box<dyn std::error::Error>> {
+    // reference deliberately points to no local file; successful preparation proves no canonicalization occurred.
+    // reference 刻意不指向本地文件；准备成功证明没有发生路径规范化。
+    let reference = "https://media.example.com/source/video.mp4";
+    // arguments retain the exact URL for operation-level passthrough validation and projection.
+    // arguments 为操作级直通校验与投影保留精确 URL。
+    let (arguments, sources) = resolve_media_understanding_resource_arguments(
+        None,
+        None,
+        ProviderToolCapabilityKind::VideoUnderstand,
+        json!({"video_path": reference, "prompt": "describe"}),
+        None,
+    )
+    .await?;
+
+    assert_eq!(arguments["video_path"], reference);
+    assert!(
+        sources.is_empty(),
+        "remote passthrough must not invent a local host source"
+    );
+    Ok(())
+}
+
+/// Plain HTTP media references fail explicitly instead of entering local canonicalization.
+/// 普通 HTTP 媒体引用会明确失败，而不是进入本地路径规范化。
+#[tokio::test]
+async fn direct_http_media_reference_fails_before_local_path_resolution() {
+    // error must identify the registered HTTPS-only primitive contract.
+    // error 必须指出已注册原语仅支持 HTTPS 的契约。
+    let error = resolve_media_understanding_resource_arguments(
+        None,
+        None,
+        ProviderToolCapabilityKind::VideoUnderstand,
+        json!({
+            "video_path": "http://media.example.com/source/video.mp4",
+            "prompt": "describe"
+        }),
+        None,
+    )
+    .await
+    .expect_err("plain HTTP must not be treated as a local file path");
+
+    assert!(
+        error.contains("manifest-declared HTTPS URL passthrough"),
+        "{error}"
+    );
 }
 
 /// Rejects absent owner/port and noncanonical resource ids before any project lookup or workspace fallback.

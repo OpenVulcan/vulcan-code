@@ -29,12 +29,13 @@ pub(crate) use failure::{
     http_failure, http_send_transport_failure, pre_dispatch_failure,
     response_headers_protocol_failure, sanitize_provider_execution_failure, transport_failure,
 };
-use prepared_media::PreparedMediaCacheEntry;
 pub use prepared_media::{
     AdmittedLocalMediaSource, CONVERSATION_MEDIA_INPUT_OPERATION_ID,
     ConversationMediaUploadContract, ConversationPreparedMediaRetention, LocalMediaMaterialization,
     PreparedConversationMedia, PreparedMediaReferenceSnapshot, PreparedMediaSourceIdentity,
 };
+use prepared_media::{PreparedMediaCacheEntry, PreparedMediaFlightRegistry};
+pub(crate) use prepared_media::{PreparedMediaFlightOutcome, PreparedMediaFlightRegistration};
 pub(crate) use projection_profiles::{
     execute_request_profile_fixture, project_json_request_profiles, project_json_response_profiles,
     project_response_record_text,
@@ -113,6 +114,9 @@ pub struct ProviderExecutionClient {
     /// Process-local prepared media references shared by preflight and dispatch clones.
     /// 由分派前准备与实际分派副本共享的进程内媒体引用缓存。
     prepared_media: Arc<StdMutex<BTreeMap<String, PreparedMediaCacheEntry>>>,
+    /// Same-key physical media preparations shared until one owner publishes a terminal result.
+    /// 同键真实媒体准备在唯一所有者发布终态结果前共享。
+    prepared_media_flights: Arc<StdMutex<PreparedMediaFlightRegistry>>,
     /// Credential-, route-, and session-isolated Responses WebSocket connections.
     /// 按凭据、路由与会话隔离的 Responses WebSocket 连接。
     responses_websocket_sessions:
@@ -143,6 +147,7 @@ impl ProviderExecutionClient {
             http,
             protocols: protocols.into_protocol_runtime(),
             prepared_media: Arc::new(StdMutex::new(BTreeMap::new())),
+            prepared_media_flights: Arc::new(StdMutex::new(BTreeMap::new())),
             responses_websocket_sessions: Arc::new(TokioMutex::new(BTreeMap::new())),
             responses_websocket_breakers: Arc::new(StdMutex::new(BTreeMap::new())),
         }

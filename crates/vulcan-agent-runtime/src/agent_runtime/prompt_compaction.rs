@@ -125,10 +125,10 @@ pub struct PromptCompactionLaunchContext {
     /// 按语义能力索引的可选供应商工具选择。
     pub provider_tool_selections_override:
         Option<BTreeMap<String, SessionProviderToolTargetSelection>>,
-    /// Optional session-selected media backend modes captured from the source turn.
-    /// 从来源回合捕获的可选会话级媒体后端模式。
-    pub provider_tool_media_understanding_modes_override:
-        Option<BTreeMap<String, vulcan_workbench_model::SessionMediaUnderstandingMode>>,
+    /// Optional exact session-owned media-understanding routes captured from the source turn.
+    /// 从来源回合捕获的可选会话自有精确媒体理解路由。
+    pub provider_tool_media_understanding_selections_override:
+        Option<BTreeMap<String, vulcan_workbench_model::SessionMediaUnderstandingSelection>>,
     /// Optional enabled direct and media capability keys captured from the source turn.
     /// 从来源回合捕获的可选已启用直连及媒体能力键。
     pub provider_tool_enabled_capabilities_override: Option<BTreeSet<String>>,
@@ -189,7 +189,7 @@ impl Default for PromptCompactionLaunchContext {
             runtime_policy: ExecutionRuntimePolicy::main_session(),
             agent_prompt_snapshot: None,
             provider_tool_selections_override: None,
-            provider_tool_media_understanding_modes_override: None,
+            provider_tool_media_understanding_selections_override: None,
             provider_tool_enabled_capabilities_override: None,
             provider_extension_target_sets_override: None,
             subagent_prompt_context: None,
@@ -230,8 +230,8 @@ impl PromptCompactionLaunchContext {
             runtime_policy: request.runtime_policy,
             agent_prompt_snapshot: request.agent_prompt_snapshot.clone(),
             provider_tool_selections_override: request.provider_tool_selections_override.clone(),
-            provider_tool_media_understanding_modes_override: request
-                .provider_tool_media_understanding_modes_override
+            provider_tool_media_understanding_selections_override: request
+                .provider_tool_media_understanding_selections_override
                 .clone(),
             provider_tool_enabled_capabilities_override: request
                 .provider_tool_enabled_capabilities_override
@@ -1498,8 +1498,8 @@ fn build_prompt_compaction_launch_request(
         provider_route_lease_identity: model_target
             .map(|target| target.provider_route_lease_identity.clone()),
         provider_tool_selections_override: launch_context.provider_tool_selections_override.clone(),
-        provider_tool_media_understanding_modes_override: launch_context
-            .provider_tool_media_understanding_modes_override
+        provider_tool_media_understanding_selections_override: launch_context
+            .provider_tool_media_understanding_selections_override
             .clone(),
         provider_tool_enabled_capabilities_override: launch_context
             .provider_tool_enabled_capabilities_override

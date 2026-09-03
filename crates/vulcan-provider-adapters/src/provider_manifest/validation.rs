@@ -3188,6 +3188,7 @@ fn validate_upload_reference_contract(
     );
     if !response_driven {
         if declaration.response_id_pointer.is_some()
+            || declaration.response_id_encoding.is_some()
             || declaration.response_url_pointer.is_some()
             || declaration.reference_template.is_some()
         {
@@ -3198,6 +3199,14 @@ fn validate_upload_reference_contract(
             ));
         }
         return;
+    }
+
+    if declaration.response_id_encoding.is_some() && declaration.response_id_pointer.is_none() {
+        errors.push(ManifestValidationError::new(
+            "upload_response_id_encoding_requires_pointer",
+            format!("{path}.response_id_encoding"),
+            "response_id_encoding requires response_id_pointer",
+        ));
     }
 
     let encoding = declaration
@@ -8071,6 +8080,35 @@ mod tests {
         );
     }
 
+    /// Verifies response identifier scalar encodings cannot exist without an identifier pointer.
+    /// 验证响应标识标量编码不能脱离响应标识指针单独存在。
+    #[test]
+    fn upload_response_id_encoding_requires_pointer() {
+        let declaration: super::super::UploadChannelDeclaration =
+            serde_json::from_value(serde_json::json!({
+                "upload_channel_id": "multipart-numeric-id",
+                "description": "Multipart numeric identifier fixture",
+                "primitive": "multipart_file",
+                "endpoint_host": "upload.example.com",
+                "endpoint_path": "/v1/files",
+                "method": "POST",
+                "file_field": "file",
+                "accepted_mime_types": ["video/mp4"],
+                "max_bytes": 1024,
+                "max_count": 1,
+                "response_id_encoding": "unsigned_integer",
+                "reference_encoding": "provider_file_id"
+            }))
+            .expect("multipart channel should parse");
+        let errors = validate_upload_channel_errors(&declaration);
+        assert!(
+            errors
+                .iter()
+                .any(|code| code == "upload_response_id_encoding_requires_pointer"),
+            "an identifier encoding without its pointer must fail: {errors:?}"
+        );
+    }
+
     /// Verifies primitives without host-side network I/O do not require an upload endpoint.
     /// 验证不发起宿主侧网络 I/O 的原语不需要上传端点。
     #[test]
@@ -9031,6 +9069,7 @@ mod tests {
                 max_count: Some(1),
                 timeout_ms: None,
                 response_id_pointer: None,
+                response_id_encoding: None,
                 response_url_pointer: None,
                 reference_template: None,
                 progress_supported: false,

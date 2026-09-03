@@ -305,6 +305,7 @@ pub(crate) fn composer_attachment_kind_accept(kind: &ConversationAttachmentKind)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vulcan_agent_runtime::attachment_assets::stage_attachment_bytes;
 
     /// Verifies composer attachment kind aliases parse through shared metadata.
     /// 验证输入区附件类型别名会通过共享元数据解析。

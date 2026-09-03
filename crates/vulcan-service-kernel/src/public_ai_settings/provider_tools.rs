@@ -219,7 +219,7 @@ pub(crate) async fn service_save_public_ai_multimodal_understanding_candidate(
         });
         if !eligible {
             return Err(format!(
-                "Provider `{}` model `{}` has no executable multimodal conversation route with stable structured output.",
+                "Provider `{}` model `{}` has no executable multimodal conversation route.",
                 request.provider_id, request.model_id
             ));
         }
@@ -338,7 +338,7 @@ pub(crate) async fn service_save_public_ai_media_understanding_selection(
                     request.capability,
                 ) {
                     return Err(format!(
-                        "Provider `{}` model `{}` does not support capability `{:?}` with stable structured output.",
+                        "Provider `{}` model `{}` does not support capability `{:?}` on its executable conversation route.",
                         selection.provider_id, selection.model_id, request.capability
                     ));
                 }
@@ -566,8 +566,8 @@ pub(crate) async fn service_save_public_ai_provider_tool_capability_enabled(
 ///
 /// # Returns
 /// 返回值
-/// `true` only when the exact provider target or admitted structured-output model route still exists.
-/// 仅当精确供应商目标或已准入的结构化输出模型路由仍然存在时返回 `true`。
+/// `true` only when the exact provider target or admitted model-replacement route still exists.
+/// 仅当精确供应商目标或已准入的模型代替路由仍然存在时返回 `true`。
 pub(super) fn media_understanding_backend_is_available(
     configuration: &PersistedAiConfiguration,
     capability: ProviderToolCapabilityKind,

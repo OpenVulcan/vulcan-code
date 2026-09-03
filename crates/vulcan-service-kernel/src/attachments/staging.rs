@@ -110,7 +110,7 @@ pub(crate) async fn service_stage_composer_attachment_bytes(
         .decode(data_base64.trim())
         .map_err(|error| format!("解码附件 `{}` 失败：{}。", file_name.trim(), error))?;
     let attachment = if let Some(descriptor) = descriptor {
-        stage_attachment_bytes(
+        stage_project_attachment_bytes(
             &workspace_path,
             &descriptor,
             file_name.trim(),
@@ -118,7 +118,7 @@ pub(crate) async fn service_stage_composer_attachment_bytes(
             bytes.as_slice(),
         )?
     } else {
-        vulcan_agent_runtime::attachment_assets::stage_generic_attachment_bytes(
+        stage_project_generic_attachment_bytes(
             &workspace_path,
             file_name.trim(),
             None,
@@ -426,7 +426,7 @@ fn stage_composer_attachment_paths_for_workspace(
 ) -> Result<Vec<ComposerAttachmentSummary>, String> {
     paths
         .iter()
-        .map(|path| stage_attachment_file(workspace_path, path))
+        .map(|path| stage_project_attachment_file(workspace_path, path))
         .map(|result| result.map(|attachment| composer_attachment_summary_from_core(&attachment)))
         .collect()
 }

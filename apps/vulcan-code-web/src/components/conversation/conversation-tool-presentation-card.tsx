@@ -26,6 +26,7 @@ import { dispatchConversationManualViewportInteraction } from "@/components/conv
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import { ModelExtensionToolPayloadCards } from "@/components/conversation/conversation-model-extension-tool-payloads";
 import { ConversationMeasuredCollapse } from "@/components/conversation/conversation-measured-collapse";
+import { ProviderToolCapabilityIcon } from "@/components/shared/provider-tool-capability-icon";
 import { FileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import { TerminalOutputView } from "@/components/conversation/conversation-terminal-output";
 import { formatTurnStatsNumber, TurnStatsMetricRow } from "@/components/conversation/conversation-turn-stats-card";
@@ -65,7 +66,10 @@ import {
   type ToolPresentation,
   type ToolPresentationDisplayState,
 } from "@/components/conversation/conversation-tool-presentations";
-import { modelExtensionToolMarkdown } from "@/components/conversation/tool-presentations/model-extension-tool-presentation";
+import {
+  modelExtensionToolCapability,
+  modelExtensionToolMarkdown,
+} from "@/components/conversation/tool-presentations/model-extension-tool-presentation";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 
@@ -344,6 +348,9 @@ function ModelExtensionToolPresentationCard(props: {
     props.presentation.toolName,
     hydratedBody ?? props.presentation.markdown,
   );
+  // capability selects the same family icon used by the capability settings panel.
+  // capability 选择与能力设置面板相同的能力族图标。
+  const capability = modelExtensionToolCapability(props.presentation.toolName);
   // handleToggle updates only the main card and keeps payload expansion memories independent.
   // handleToggle 仅更新主卡，并保持载荷展开记忆相互独立。
   const handleToggle = React.useCallback(() => {
@@ -361,8 +368,17 @@ function ModelExtensionToolPresentationCard(props: {
         onClick={handleToggle}
         type="button"
       >
-        <Code2 className="markdown-tool-icon" size={15} />
-        <span className={cn("tool-presentation-state", status && "shimmer")}>{status}</span>
+        <span
+          className="v1-tool-card-icon markdown-tool-icon"
+          aria-hidden="true"
+        >
+          {capability
+            ? <ProviderToolCapabilityIcon capability={capability} size={15} />
+            : <Code2 size={15} />}
+        </span>
+        {status ? (
+          <span className={cn("tool-presentation-state", "shimmer")}>{status}</span>
+        ) : null}
         <span className="tool-presentation-command">
           <span className="tool-presentation-command-text">{t(titleKey)}</span>
         </span>

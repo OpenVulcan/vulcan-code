@@ -983,16 +983,16 @@ export interface PublicAiMediaUnderstandingBackendOptions {
   // Exact provider-specific target configured for this capability.
   // 为该能力配置的精确供应商专用目标。
   provider_tool?: PublicAiProviderToolTargetSelection;
-  // Exact structured-output model route configured for this capability.
-  // 为该能力配置的精确结构化输出模型路由。
+  // Exact multimodal model route configured as the system default for this capability.
+  // 为该能力配置为系统默认值的精确多模态模型路由。
   model_replacement?: {
     selection: PublicAiActiveSelection;
     reasoning_effort?: PublicAiReasoningEffort;
   };
 }
 
-// PublicAiMultimodalUnderstandingCandidateRecord exposes one shared provider-model admission switch.
-// PublicAiMultimodalUnderstandingCandidateRecord 公开一个共享供应商模型准入开关。
+// PublicAiMultimodalUnderstandingCandidateRecord exposes one shared system-default candidate switch.
+// PublicAiMultimodalUnderstandingCandidateRecord 公开一个共享的系统默认候选开关。
 export interface PublicAiMultimodalUnderstandingCandidateRecord {
   providerId: string;
   modelId: string;
@@ -1032,10 +1032,10 @@ export interface PublicAiSessionProviderToolSettings {
   extensionTargetSets: Partial<
     Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection[]>
   >;
-  // Session-selected backend mode for each retained media-understanding capability.
-  // 当前会话为每项保留的媒体理解能力选择的后端模式。
-  mediaUnderstandingModes: Partial<
-    Record<PublicAiProviderToolCapabilityKind, PublicAiMediaUnderstandingBackendMode>
+  // Exact session-owned route for each retained media-understanding capability.
+  // 当前会话为每项保留的媒体理解能力持有的精确路由。
+  mediaUnderstandingSelections: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiMediaUnderstandingBackendSelection>
   >;
   conflicts: PublicAiSessionProviderToolConflict[];
 }

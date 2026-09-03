@@ -296,8 +296,8 @@ pub enum MediaUnderstandingBackendMode {
     /// Use the provider-specific Manifest-owned understanding endpoint.
     /// 使用供应商专用的 Manifest 理解端点。
     ProviderTool,
-    /// Use an ordinary structured-output multimodal model as the replacement backend.
-    /// 使用具备结构化输出能力的普通多模态模型作为替代后端。
+    /// Use an ordinary multimodal model as the replacement backend.
+    /// 使用普通多模态模型作为替代后端。
     ModelReplacement,
 }
 
@@ -322,8 +322,8 @@ pub struct MediaUnderstandingBackendOptions {
     /// 已配置的精确供应商专用目标。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_tool: Option<ProviderToolTargetSelection>,
-    /// Exact structured-output model route, when configured.
-    /// 已配置的精确结构化输出模型路由。
+    /// Exact multimodal replacement-model route, when configured.
+    /// 已配置的精确多模态替代模型路由。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_replacement: Option<MediaUnderstandingModelReplacementSelection>,
 }
@@ -1097,6 +1097,44 @@ impl PersistedAiConfiguration {
         self.media_understanding_selections
             .insert(capability, selection);
         Ok(())
+    }
+
+    /// Applies one explicit session reasoning override to the active model-replacement backend.
+    /// 将一项显式会话推理档位覆盖应用到活动的模型代替后端。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `capability` identifies the media-understanding facade and `reasoning_effort` is the exact
+    /// provider-neutral override selected for the session.
+    /// `capability` 标识媒体理解外壳，`reasoning_effort` 是当前会话选择的精确供应商无关覆盖值。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success when the active backend is model replacement, otherwise an explicit mode error.
+    /// 活动后端为模型代替时返回成功，否则返回明确的模式错误。
+    pub fn apply_media_understanding_reasoning_effort(
+        &mut self,
+        capability: ProviderToolCapabilityKind,
+        reasoning_effort: ReasoningEffort,
+    ) -> Result<(), String> {
+        let selection = self
+            .media_understanding_selections
+            .get_mut(&capability)
+            .ok_or_else(|| {
+                format!("Media-understanding capability `{capability:?}` has no active backend.")
+            })?;
+        match selection {
+            MediaUnderstandingBackendSelection::ModelReplacement {
+                reasoning_effort: selected_effort,
+                ..
+            } => {
+                *selected_effort = Some(reasoning_effort);
+                Ok(())
+            }
+            MediaUnderstandingBackendSelection::ProviderTool { .. } => Err(format!(
+                "Media-understanding capability `{capability:?}` cannot apply a reasoning override to a provider-tool backend."
+            )),
+        }
     }
 
     /// Copies active media selections into missing independent backend mode slots.

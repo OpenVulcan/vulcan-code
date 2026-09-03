@@ -3,7 +3,7 @@ import type {
   ComposerAttachmentCapabilitySummary,
   ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
-  PublicAiMediaUnderstandingBackendMode,
+  PublicAiMediaUnderstandingBackendSelection,
   PublicAiProviderToolCapabilityKind,
   PublicAiProviderToolTargetSelection,
 } from "@/types";
@@ -24,10 +24,10 @@ export interface ComposerProviderToolSettingsSnapshot {
   extensionTargetSets: Partial<
     Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection[]>
   >;
-  // Session-selected backend family for each media-understanding capability.
-  // 当前会话为每项媒体理解能力选择的后端类型。
-  mediaUnderstandingModes: Partial<
-    Record<PublicAiProviderToolCapabilityKind, PublicAiMediaUnderstandingBackendMode>
+  // Exact session-owned route retained independently for each media-understanding capability.
+  // 为每项媒体理解能力独立保留的会话自有精确路由。
+  mediaUnderstandingSelections: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiMediaUnderstandingBackendSelection>
   >;
 }
 

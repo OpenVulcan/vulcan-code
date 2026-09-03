@@ -1079,6 +1079,9 @@
           "max_count": {"type": "integer", "minimum": 1},
           "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 86400000},
           "response_id_pointer": {"type": "string"},
+          "response_id_encoding": {
+            "enum": ["string", "unsigned_integer"]
+          },
           "response_url_pointer": {"type": "string"},
           "reference_template": {"type": "string"},
           "progress_supported": {"type": "boolean"},

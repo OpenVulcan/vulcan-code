@@ -47,9 +47,6 @@ export interface ComposerAttachmentPreparationController {
   // Number of canonical attachments currently covered by the submission barrier.
   // 当前被发送屏障覆盖的规范附件数量。
   blockingCount: number;
-  // Number of attachments that will be disclosed only as metadata.
-  // 仅以元数据形式告知模型的附件数量。
-  metadataOnlyCount: number;
   // Projects transient delivery decisions onto the exact submission copy of canonical attachments.
   // 将临时传输决策投影到规范附件的精确提交副本。
   projectForSubmission: (attachments: ComposerAttachmentSummary[]) => ComposerAttachmentSummary[];
@@ -874,18 +871,11 @@ export function useComposerAttachmentPreparation(options: {
     : leaseError
       ? canonicalAttachments.length
       : Object.values(visiblePreparations).filter((preparation) => preparation.blocksSubmission).length;
-  const metadataOnlyCount = Object.values(visiblePreparations).filter((preparation) => (
-    !preparation.blocksSubmission
-    && (preparation.deliveryPlan === "metadata_only"
-      || preparation.phase === "failed"
-      || preparation.phase === "cancelled")
-  )).length;
   return {
     preparations: visiblePreparations,
     progresses,
     blocksSubmission,
     blockingCount,
-    metadataOnlyCount,
     projectForSubmission,
     retry,
     cancel,

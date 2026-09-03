@@ -1,4 +1,8 @@
-import type { PublicAiProviderToolCapabilityKind } from "@/types";
+import type {
+  PublicAiModelCapabilities,
+  PublicAiProviderToolCapabilityKind,
+  PublicAiResourceKind,
+} from "@/types";
 
 // DIRECT_PROVIDER_TOOL_CAPABILITIES is the closed set configured through one selected target.
 // DIRECT_PROVIDER_TOOL_CAPABILITIES 是通过一个选定目标配置的封闭能力集合。
@@ -38,4 +42,30 @@ export function isModelExtensionCapability(
   capability: PublicAiProviderToolCapabilityKind,
 ): boolean {
   return MODEL_EXTENSION_CAPABILITIES.has(capability);
+}
+
+// modelCapabilitiesSupportMediaUnderstanding reports whether one exact conversation route can consume the requested media.
+// modelCapabilitiesSupportMediaUnderstanding 判断一条精确会话路由能否消费请求的媒体。
+export function modelCapabilitiesSupportMediaUnderstanding(
+  capabilities: PublicAiModelCapabilities,
+  capability: PublicAiProviderToolCapabilityKind,
+): boolean {
+  // requiredResource is the sole non-text input required by the fixed understanding facade.
+  // requiredResource 是固定理解外壳要求的唯一非文本输入。
+  let requiredResource: PublicAiResourceKind;
+  switch (capability) {
+    case "image_understand":
+      requiredResource = "image";
+      break;
+    case "video_understand":
+      requiredResource = "video";
+      break;
+    case "audio_understand":
+      requiredResource = "audio";
+      break;
+    default:
+      return false;
+  }
+  return capabilities.operations?.includes("conversation_respond") === true
+    && capabilities.input_resources?.includes(requiredResource) === true;
 }

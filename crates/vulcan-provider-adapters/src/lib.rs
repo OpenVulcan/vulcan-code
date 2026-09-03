@@ -64,6 +64,7 @@ pub use provider_operational_telemetry::*;
 pub use provider_task::{ProviderAsyncTaskPhase, ProviderAsyncTaskRecord};
 pub use registry::*;
 pub use runtime::*;
+pub use upload_engine::resolve_provider_tool_local_path;
 // Re-export the shared context override DTO for provider-configuration persistence layers.
 // 为供应商配置持久化层重新导出共享上下文覆盖 DTO。
 pub use vulcan_context::ContextWindowPolicyOverrides;

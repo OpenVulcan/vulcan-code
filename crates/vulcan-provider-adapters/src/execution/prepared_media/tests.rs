@@ -248,6 +248,204 @@ fn prepared_media_key_honors_explicit_upload_reference_scopes() {
     assert_ne!(session_a, session_b);
 }
 
+/// Verifies concurrent callers receive one physical preparation owner and one shared success.
+/// 验证并发调用方只产生一个真实准备所有者，并共享同一个成功结果。
+#[tokio::test]
+async fn prepared_media_flight_has_one_owner_and_shared_terminal_result() {
+    // client owns the process-local registry shared by all of its execution clones.
+    // client 持有全部执行副本共享的进程内注册表。
+    let client = ProviderExecutionClient::new(
+        reqwest::Client::new(),
+        Arc::new(vulcan_ai_protocols::ProtocolRegistry::first_batch().expect("protocol registry")),
+    );
+    let route = bundled_manifest_route("kimi", "coding-plan", ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID);
+    let identity = PreparedMediaSourceIdentity {
+        byte_len: 42,
+        content_sha256: hex::encode([9_u8; 32]),
+    };
+    // first owns the physical upload; later same-key callers can only follow it.
+    // first 持有真实上传；后续同键调用方只能跟随该上传。
+    let owner = match client
+        .register_prepared_media_flight(&route, ResourceKind::Video, "video/mp4", &identity, None)
+        .expect("first registration")
+    {
+        PreparedMediaFlightRegistration::Owner(owner) => owner,
+        PreparedMediaFlightRegistration::Follower(_) => panic!("first caller must own the flight"),
+    };
+    let first_follower = match client
+        .register_prepared_media_flight(&route, ResourceKind::Video, "video/mp4", &identity, None)
+        .expect("second registration")
+    {
+        PreparedMediaFlightRegistration::Follower(flight) => flight,
+        PreparedMediaFlightRegistration::Owner(_) => panic!("second caller must follow"),
+    };
+    let second_follower = match client
+        .clone()
+        .register_prepared_media_flight(&route, ResourceKind::Video, "video/mp4", &identity, None)
+        .expect("third registration")
+    {
+        PreparedMediaFlightRegistration::Follower(flight) => flight,
+        PreparedMediaFlightRegistration::Owner(_) => panic!("third caller must follow"),
+    };
+    let expected = PreparedMediaFlightOutcome {
+        provider_reference: String::from("ms://shared-file"),
+        reference_encoding: crate::UploadReferenceEncoding::Template,
+    };
+    owner.complete(Ok(expected.clone()));
+    let cancellation = MediaUploadCancellation::new();
+    assert_eq!(
+        first_follower.wait(&cancellation).await,
+        Ok(expected.clone())
+    );
+    assert_eq!(second_follower.wait(&cancellation).await, Ok(expected));
+    assert!(matches!(
+        client
+            .register_prepared_media_flight(
+                &route,
+                ResourceKind::Video,
+                "video/mp4",
+                &identity,
+                None,
+            )
+            .expect("terminal flight must release ownership"),
+        PreparedMediaFlightRegistration::Owner(_)
+    ));
+}
+
+/// Verifies an abandoned owner fails current followers and permits a later retry owner.
+/// 验证异常退出的所有者会终止当前跟随者，并允许后续重试重新取得所有权。
+#[tokio::test]
+async fn prepared_media_flight_owner_drop_releases_retry() {
+    let client = ProviderExecutionClient::new(
+        reqwest::Client::new(),
+        Arc::new(vulcan_ai_protocols::ProtocolRegistry::first_batch().expect("protocol registry")),
+    );
+    let route = bundled_manifest_route("kimi", "coding-plan", ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID);
+    let identity = PreparedMediaSourceIdentity {
+        byte_len: 24,
+        content_sha256: hex::encode([10_u8; 32]),
+    };
+    let owner = match client
+        .register_prepared_media_flight(&route, ResourceKind::Video, "video/mp4", &identity, None)
+        .expect("owner registration")
+    {
+        PreparedMediaFlightRegistration::Owner(owner) => owner,
+        PreparedMediaFlightRegistration::Follower(_) => panic!("first caller must own the flight"),
+    };
+    let follower = match client
+        .register_prepared_media_flight(&route, ResourceKind::Video, "video/mp4", &identity, None)
+        .expect("follower registration")
+    {
+        PreparedMediaFlightRegistration::Follower(flight) => flight,
+        PreparedMediaFlightRegistration::Owner(_) => panic!("second caller must follow"),
+    };
+    drop(owner);
+    let error = follower
+        .wait(&MediaUploadCancellation::new())
+        .await
+        .expect_err("abandoned owner must terminate followers");
+    assert_eq!(
+        error,
+        "Media preparation owner ended before publishing a terminal result."
+    );
+    assert!(matches!(
+        client
+            .register_prepared_media_flight(
+                &route,
+                ResourceKind::Video,
+                "video/mp4",
+                &identity,
+                None,
+            )
+            .expect("retry registration"),
+        PreparedMediaFlightRegistration::Owner(_)
+    ));
+}
+
+/// Verifies cancelling one follower never cancels or replaces the physical preparation owner.
+/// 验证取消一个跟随者绝不会取消或替换真实准备所有者。
+#[tokio::test]
+async fn prepared_media_flight_follower_cancellation_is_local() {
+    let client = ProviderExecutionClient::new(
+        reqwest::Client::new(),
+        Arc::new(vulcan_ai_protocols::ProtocolRegistry::first_batch().expect("protocol registry")),
+    );
+    let route = bundled_manifest_route("kimi", "coding-plan", ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID);
+    let identity = PreparedMediaSourceIdentity {
+        byte_len: 12,
+        content_sha256: hex::encode([11_u8; 32]),
+    };
+    let owner = match client
+        .register_prepared_media_flight(&route, ResourceKind::Video, "video/mp4", &identity, None)
+        .expect("owner registration")
+    {
+        PreparedMediaFlightRegistration::Owner(owner) => owner,
+        PreparedMediaFlightRegistration::Follower(_) => panic!("first caller must own the flight"),
+    };
+    let cancelled_follower = match client
+        .register_prepared_media_flight(&route, ResourceKind::Video, "video/mp4", &identity, None)
+        .expect("cancelled follower registration")
+    {
+        PreparedMediaFlightRegistration::Follower(flight) => flight,
+        PreparedMediaFlightRegistration::Owner(_) => panic!("second caller must follow"),
+    };
+    let cancellation = MediaUploadCancellation::new();
+    cancellation.cancel();
+    assert_eq!(
+        cancelled_follower.wait(&cancellation).await,
+        Err(String::from("media upload cancelled"))
+    );
+    let active_follower = match client
+        .register_prepared_media_flight(&route, ResourceKind::Video, "video/mp4", &identity, None)
+        .expect("active follower registration")
+    {
+        PreparedMediaFlightRegistration::Follower(flight) => flight,
+        PreparedMediaFlightRegistration::Owner(_) => {
+            panic!("follower cancellation must not replace the owner")
+        }
+    };
+    let expected = PreparedMediaFlightOutcome {
+        provider_reference: String::from("ms://still-shared"),
+        reference_encoding: crate::UploadReferenceEncoding::Template,
+    };
+    owner.complete(Ok(expected.clone()));
+    assert_eq!(
+        active_follower.wait(&MediaUploadCancellation::new()).await,
+        Ok(expected)
+    );
+}
+
+/// Verifies in-flight failures never cross credential connections even when successful references may.
+/// 验证即使成功引用允许跨凭据复用，进行中失败也绝不会跨凭据连接传播。
+#[test]
+fn prepared_media_flight_isolates_exact_credential_connections() {
+    let client = ProviderExecutionClient::new(
+        reqwest::Client::new(),
+        Arc::new(vulcan_ai_protocols::ProtocolRegistry::first_batch().expect("protocol registry")),
+    );
+    let route = bundled_manifest_route("kimi", "coding-plan", ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID);
+    let mut other_connection = route.clone();
+    other_connection.connection.id = String::from("independent-credential");
+    let identity = PreparedMediaSourceIdentity {
+        byte_len: 8,
+        content_sha256: hex::encode([12_u8; 32]),
+    };
+    let first = client
+        .register_prepared_media_flight(&route, ResourceKind::Video, "video/mp4", &identity, None)
+        .expect("first credential registration");
+    let second = client
+        .register_prepared_media_flight(
+            &other_connection,
+            ResourceKind::Video,
+            "video/mp4",
+            &identity,
+            None,
+        )
+        .expect("second credential registration");
+    assert!(matches!(first, PreparedMediaFlightRegistration::Owner(_)));
+    assert!(matches!(second, PreparedMediaFlightRegistration::Owner(_)));
+}
+
 /// Verifies prepared media cache pruning expires entries and enforces global capacity.
 /// 验证媒体准备缓存裁剪会清除过期项并强制全局容量上限。
 #[test]

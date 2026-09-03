@@ -7,8 +7,8 @@ use std::path::PathBuf;
 /// 一次供应商工具调用的只读本地资源权威；两个字段均不属于模型JSON。
 #[derive(Debug, Clone, Copy)]
 pub struct ProviderToolResourceContext<'a> {
-    /// Existing workspace boundary used only for ordinary declared local-path inputs.
-    /// 仅用于普通已声明本地路径输入的既有工作区边界。
+    /// Existing workspace base used to resolve ordinary relative local-path inputs.
+    /// 用于解析普通已声明相对本地路径输入的既有工作区基准。
     pub workspace_root: Option<&'a std::path::Path>,
     /// Session-owner-resolved sources that retain their own exact entity and catalog identity.
     /// 会话所有者解析的来源，保留各自精确实体和目录身份。

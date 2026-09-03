@@ -204,8 +204,33 @@
 
 /* Model-extension headers remain stable while input and output own separate expansion controls. */
 /* 模型扩展标题保持稳定，输入与返回分别持有独立展开控件。 */
+.tool-presentation-card.model-extension-tool {
+  gap: 0;
+}
+
+.tool-presentation-card.model-extension-tool.expanded {
+  gap: 4px;
+}
+
 .model-extension-tool-header {
-  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  display: flex;
+  gap: 6px;
+}
+
+.model-extension-tool-header .tool-presentation-command,
+.model-extension-tool-header .v1-tool-card-title {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.model-extension-tool-header .tool-presentation-state,
+.model-extension-tool-header .v1-tool-card-icon,
+.model-extension-tool-header .tool-presentation-toggle {
+  flex: none;
+}
+
+.model-extension-tool-header .tool-presentation-toggle {
+  margin-left: auto;
 }
 
 .model-extension-tool-payloads {

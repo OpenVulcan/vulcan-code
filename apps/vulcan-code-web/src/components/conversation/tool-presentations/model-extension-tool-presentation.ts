@@ -1,36 +1,77 @@
 import type { TranslationKey } from "@/i18n";
+import type { PublicAiProviderToolCapabilityKind } from "@/types";
 
-// MODEL_EXTENSION_TOOL_TITLE_KEYS is the complete exact display-name contract for AI model-extension tools.
-// MODEL_EXTENSION_TOOL_TITLE_KEYS 是 AI 模型扩展工具的完整精确显示名称契约。
-const MODEL_EXTENSION_TOOL_TITLE_KEYS = new Map<string, TranslationKey>([
-  ["get_model_extension_parameters", "toolPresentation.modelExtension.parameters"],
-  ["image_generate", "settings.providerTools.imageGenerate"],
-  ["image_edit", "settings.providerTools.imageEdit"],
-  ["video_generate", "settings.providerTools.videoGenerate"],
-  ["video_edit", "settings.providerTools.videoEdit"],
-  ["video_extend", "settings.providerTools.videoExtend"],
-  ["speech_synthesize", "settings.providerTools.speechSynthesize"],
-  ["speech_transcribe", "settings.providerTools.speechTranscribe"],
-  ["music_generate", "settings.providerTools.musicGenerate"],
-  ["music_cover", "settings.providerTools.musicCover"],
-]);
+// PROVIDER_TOOL_TITLE_KEYS is exhaustive over every provider capability, so new capabilities cannot omit i18n silently.
+// PROVIDER_TOOL_TITLE_KEYS 穷尽每项供应商能力，使新增能力无法静默遗漏 i18n。
+const PROVIDER_TOOL_TITLE_KEYS: Readonly<Record<PublicAiProviderToolCapabilityKind, TranslationKey>> = {
+  web_search: "settings.providerTools.webSearch",
+  web_extract: "settings.providerTools.webExtract",
+  image_understand: "settings.aiUnderstandImage",
+  video_understand: "settings.aiUnderstandVideo",
+  audio_understand: "settings.aiUnderstandAudio",
+  image_generate: "settings.providerTools.imageGenerate",
+  image_edit: "settings.providerTools.imageEdit",
+  video_generate: "settings.providerTools.videoGenerate",
+  video_edit: "settings.providerTools.videoEdit",
+  video_extend: "settings.providerTools.videoExtend",
+  speech_synthesize: "settings.providerTools.speechSynthesize",
+  speech_transcribe: "settings.providerTools.speechTranscribe",
+  music_generate: "settings.providerTools.musicGenerate",
+  music_cover: "settings.providerTools.musicCover",
+};
 
-// modelExtensionToolTitleKey returns the localized title key for one exact AI model-extension tool id.
-// modelExtensionToolTitleKey 返回一个精确 AI 模型扩展工具标识对应的本地化标题键。
+// MODEL_EXTENSION_PARAMETERS_TITLE_KEY is the non-capability title reserved for parameter discovery.
+// MODEL_EXTENSION_PARAMETERS_TITLE_KEY 是专用于参数查询的非能力标题。
+const MODEL_EXTENSION_PARAMETERS_TITLE_KEY: TranslationKey = "toolPresentation.modelExtension.parameters";
+
+// providerToolCapabilityFromToolName validates an exact public tool id against the exhaustive capability record.
+// providerToolCapabilityFromToolName 根据穷尽能力记录校验精确公开工具标识。
+// Parameters: toolName is the public tool id retained by the conversation event.
+// 参数：toolName 是会话事件保留的公开工具标识。
+// Returns: the exact provider capability, or null when the tool is outside that contract.
+// 返回值：精确供应商能力；工具不属于该契约时返回 null。
+function providerToolCapabilityFromToolName(
+  toolName: string,
+): PublicAiProviderToolCapabilityKind | null {
+  return Object.prototype.hasOwnProperty.call(PROVIDER_TOOL_TITLE_KEYS, toolName)
+    ? toolName as PublicAiProviderToolCapabilityKind
+    : null;
+}
+
+// modelExtensionToolTitleKey returns the localized title key for one exact provider or parameter-discovery tool id.
+// modelExtensionToolTitleKey 返回一个精确供应商或参数查询工具标识对应的本地化标题键。
 // Parameters: toolName is the public tool id retained by the conversation event.
 // 参数：toolName 是会话事件保留的公开工具标识。
 // Returns: the configured translation key, or null when the tool is outside the extension contract.
 // 返回值：已配置的翻译键；工具不属于扩展契约时返回 null。
 export function modelExtensionToolTitleKey(toolName: string): TranslationKey | null {
-  return MODEL_EXTENSION_TOOL_TITLE_KEYS.get(toolName) ?? null;
+  if (toolName === "get_model_extension_parameters") {
+    return MODEL_EXTENSION_PARAMETERS_TITLE_KEY;
+  }
+  // capability is the validated provider-tool identity used for exhaustive title lookup.
+  // capability 是用于穷尽标题查询的已校验供应商工具身份。
+  const capability = providerToolCapabilityFromToolName(toolName);
+  return capability ? PROVIDER_TOOL_TITLE_KEYS[capability] : null;
 }
 
-// modelExtensionToolMarkdown formats an exact extension result as a bounded Markdown JSON block.
-// modelExtensionToolMarkdown 将精确扩展结果格式化为受限高 Markdown JSON 代码块。
-// Parameters: toolName identifies the public tool contract and content is its visible or hydrated result.
-// 参数：toolName 标识公开工具契约，content 是其可见或补载结果。
-// Returns: pretty JSON Markdown for valid extension JSON, otherwise the original content unchanged.
-// 返回值：有效扩展 JSON 对应的格式化 Markdown；否则原样返回内容。
+// modelExtensionToolCapability returns the provider capability that owns one exact AI extension tool icon.
+// modelExtensionToolCapability 返回持有一个精确 AI 扩展工具图标的供应商能力。
+// Parameters: toolName is the public tool id retained by the conversation event.
+// 参数：toolName 是会话事件保留的公开工具标识。
+// Returns: the exact provider capability, or null for parameter discovery and unknown tools.
+// 返回值：精确供应商能力；参数查询与未知工具返回 null。
+export function modelExtensionToolCapability(
+  toolName: string,
+): PublicAiProviderToolCapabilityKind | null {
+  return providerToolCapabilityFromToolName(toolName);
+}
+
+// modelExtensionToolMarkdown formats an exact recognized AI-tool result as a bounded Markdown JSON block.
+// modelExtensionToolMarkdown 将精确识别的 AI 工具结果格式化为受限高 Markdown JSON 代码块。
+// Parameters: toolName identifies the public AI-tool contract and content is its visible or hydrated result.
+// 参数：toolName 标识公开 AI 工具契约，content 是其可见或补载结果。
+// Returns: pretty JSON Markdown for valid AI-tool JSON, otherwise the original content unchanged.
+// 返回值：有效 AI 工具 JSON 对应的格式化 Markdown；否则原样返回内容。
 export function modelExtensionToolMarkdown(toolName: string, content: string): string {
   if (!modelExtensionToolTitleKey(toolName)) {
     return content;
@@ -51,10 +92,10 @@ export function modelExtensionToolMarkdown(toolName: string, content: string): s
   }
 }
 
-// modelExtensionToolValueMarkdown formats one exact structured extension value for the input card.
-// modelExtensionToolValueMarkdown 为输入卡格式化一个精确的结构化扩展值。
-// Parameters: toolName identifies the public extension contract and value is its persisted input.
-// 参数：toolName 标识公开扩展契约，value 是其持久化输入。
+// modelExtensionToolValueMarkdown formats one exact structured AI-tool value for the input card.
+// modelExtensionToolValueMarkdown 为输入卡格式化一个精确的结构化 AI 工具值。
+// Parameters: toolName identifies the public AI-tool contract and value is its persisted input.
+// 参数：toolName 标识公开 AI 工具契约，value 是其持久化输入。
 // Returns: bounded JSON Markdown, the original string, or an empty string when no input exists.
 // 返回值：受限高 JSON Markdown、原始字符串，或输入不存在时的空字符串。
 export function modelExtensionToolValueMarkdown(toolName: string, value: unknown): string {

@@ -17,7 +17,8 @@ use vulcan_agent_runtime::{
     },
     attachment_assets::{
         attachment_descriptor_from_mime_type, attachment_descriptor_from_path,
-        resolve_attachment_image_preview_sidecar, stage_attachment_bytes, stage_attachment_file,
+        resolve_attachment_image_preview_sidecar, stage_project_attachment_bytes,
+        stage_project_attachment_file, stage_project_generic_attachment_bytes,
         write_attachment_image_preview_sidecar,
     },
 };

@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "minimax",
-  "revision": 22,
-  "published_at": "2026-09-01T15:23:17Z",
+  "revision": 23,
+  "published_at": "2026-09-02T09:54:26Z",
   "engine_contract": {
     "minimum_manifest_engine": 2,
     "required_protocol_profiles": [
@@ -313,7 +313,8 @@
     "selected_protocol": "anthropic-messages.v1",
     "capabilities": {
       "operations": ["conversation_respond"],
-      "evidence_revision": "minimax.default-capabilities.v1"
+      "structured_output": "unsupported",
+      "evidence_revision": "minimax.structured-output-text01-only.2026-09-02"
     },
     "default_usage_profile_refs": [],
     "default_request_profile_refs": [],
@@ -1184,6 +1185,7 @@
       "max_count": 1,
       "timeout_ms": 1800000,
       "response_id_pointer": "/file/file_id",
+      "response_id_encoding": "unsigned_integer",
       "reference_template": "mm_file://{id}",
       "progress_supported": true,
       "cancellation_supported": true,
@@ -1212,6 +1214,7 @@
       "max_count": 1,
       "timeout_ms": 1800000,
       "response_id_pointer": "/file/file_id",
+      "response_id_encoding": "unsigned_integer",
       "reference_template": "mm_file://{id}",
       "progress_supported": true,
       "cancellation_supported": true,
@@ -6029,6 +6032,10 @@
       {
         "url": "https://github.com/MiniMax-AI/cli/commit/2576f4656211e6d296bb1fe885da141080b70f23",
         "note": "MiniMax CLI image generation defaults to response_format=url with a 300-second request timeout; video generation verifies the V1 task, retrieves file metadata by file_id, and downloads file.download_url, while a live CN retrieval returned the exact authorized OSS host recorded by the video output contract."
+      },
+      {
+        "url": "https://platform.minimax.io/docs/api-reference/text-post",
+        "note": "MiniMax documents response_format structured output only for MiniMax-Text-01; the M2 and M3 conversation models therefore remain explicitly unsupported for native structured output."
       }
     ]
   }

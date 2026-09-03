@@ -457,14 +457,21 @@ export function ComposerAttachmentStrip(props: {
           ) : null}
           {degraded ? (
             <>
-              <span
-                aria-label={t("composer.attachment.metadataOnly")}
-                className="composer-attachment-warning"
-                role="status"
-                title={preparation?.error ?? t("composer.attachment.metadataOnly")}
-              >
-                <CircleAlert size={16} />
-              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    aria-label={preparation?.error ?? t("composer.attachment.metadataOnly")}
+                    className="composer-attachment-warning"
+                    role="status"
+                    tabIndex={0}
+                  >
+                    <CircleAlert size={16} />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent className="composer-control-tooltip" side="top">
+                  {preparation?.error ?? t("composer.attachment.metadataOnly")}
+                </TooltipContent>
+              </Tooltip>
               {preparation?.phase === "failed"
                 && preparation.deliveryPlan === "upload_reference"
                 && props.onRetry

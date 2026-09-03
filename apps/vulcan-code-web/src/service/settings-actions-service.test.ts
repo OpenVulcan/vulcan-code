@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mediaDeliverySettingsFixture } from "@/test-fixtures/media-delivery";
-import { resetPublicAiMediaDeliveryPolicy, savePublicAiMediaDeliveryPolicy } from "./settings-actions-service";
+import {
+  loadPublicAiSessionProviderToolSelections,
+  rebuildPublicAiSessionProviderToolSelections,
+  resetPublicAiMediaDeliveryPolicy,
+  savePublicAiMediaDeliveryPolicy,
+  savePublicAiSessionProviderToolSelections,
+} from "./settings-actions-service";
 
 // The hoisted transport spy observes the real settings action without invoking a running service.
 // 提升的传输间谍观察真实设置动作，不调用运行中的服务。
@@ -62,5 +68,66 @@ describe("media delivery settings action", () => {
     await expect(savePublicAiMediaDeliveryPolicy(mediaDeliverySettingsFixture().policy, "read-revision"))
       .rejects.toThrow("media policy publication failed");
     expect(transport.request).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("session provider-tool settings response compatibility", () => {
+  // Reset the shared transport before each response-boundary assertion.
+  // 在每次响应边界断言前重置共享传输。
+  beforeEach(() => {
+    transport.request.mockReset();
+  });
+
+  // Every session-settings response path must upgrade the known pre-media-route payload.
+  // 每条会话设置响应路径都必须升级已知的媒体路由字段引入前负载。
+  it("normalizes a missing media route map after load, rebuild, and save", async () => {
+    // legacySettings is the exact older response shape observed from a stale service process.
+    // legacySettings 是从旧服务进程观察到的精确旧响应结构。
+    const legacySettings = {
+      enabledCapabilities: ["image_understand"],
+      selections: {},
+      extensionTargetSets: {},
+      conflicts: [],
+    };
+    transport.request.mockResolvedValue(legacySettings);
+
+    // loaded, rebuilt, and saved cover every public session-settings response adapter.
+    // loaded、rebuilt 与 saved 覆盖全部公开会话设置响应适配器。
+    const loaded = await loadPublicAiSessionProviderToolSelections("conversation-1");
+    const rebuilt = await rebuildPublicAiSessionProviderToolSelections("conversation-1");
+    const saved = await savePublicAiSessionProviderToolSelections({
+      conversationId: "conversation-1",
+      enabledCapabilities: ["image_understand"],
+      selections: {},
+      extensionTargetSets: {},
+      mediaUnderstandingSelections: {},
+    });
+
+    expect(loaded.mediaUnderstandingSelections).toEqual({});
+    expect(rebuilt.mediaUnderstandingSelections).toEqual({});
+    expect(saved.mediaUnderstandingSelections).toEqual({});
+    expect(transport.request).toHaveBeenNthCalledWith(
+      1,
+      "service_public_ai_session_provider_tool_selections",
+      { conversationId: "conversation-1" },
+    );
+    expect(transport.request).toHaveBeenNthCalledWith(
+      2,
+      "service_rebuild_public_ai_session_provider_tool_selections",
+      { conversationId: "conversation-1" },
+    );
+    expect(transport.request).toHaveBeenNthCalledWith(
+      3,
+      "service_save_public_ai_session_provider_tool_selections",
+      {
+        request: {
+          conversationId: "conversation-1",
+          enabledCapabilities: ["image_understand"],
+          selections: {},
+          extensionTargetSets: {},
+          mediaUnderstandingSelections: {},
+        },
+      },
+    );
   });
 });

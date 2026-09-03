@@ -1603,6 +1603,9 @@ fn apply_resolved_capability_template(
     if declared("output_resources") {
         target.output_resources = template.output_resources.clone();
     }
+    if declared("structured_output") {
+        target.structured_output = template.structured_output;
+    }
     if declared("embedding") {
         target.embedding = template.embedding.clone();
     }
@@ -3506,12 +3509,20 @@ mod tests {
             m3.input_resources,
             vec![ResourceKind::Image, ResourceKind::Video]
         );
+        assert_eq!(
+            m3.structured_output,
+            StructuredOutputCapability::Unsupported
+        );
         assert!(!m3.prompt_cache.supports_managed_explicit);
         assert_eq!(m3.model_parameters[0].id, SAMPLING_TEMPERATURE_PARAMETER_ID);
 
         let m2 = &catalog.models[1].capabilities;
         assert_eq!(m2.context_limit, Some(204_800));
         assert!(m2.input_resources.is_empty());
+        assert_eq!(
+            m2.structured_output,
+            StructuredOutputCapability::Unsupported
+        );
         assert!(m2.prompt_cache.supports_managed_explicit);
         assert_eq!(m2.prompt_cache.minimum_cacheable_tokens, Some(512));
 
@@ -3527,7 +3538,7 @@ mod tests {
         let mut catalog = parse_minimax_openai_model_catalog(
             "connection",
             1,
-            r#"{"object":"list","data":[{"id":"MiniMax-M2.7","object":"model","created":1,"owned_by":"minimax"}]}"#,
+            r#"{"object":"list","data":[{"id":"MiniMax-M3","object":"model","created":1,"owned_by":"minimax"},{"id":"MiniMax-M2.7","object":"model","created":1,"owned_by":"minimax"}]}"#,
         )
         .expect("documented OpenAI-compatible response should parse");
         let manifests = crate::provider_manifest::load_bundled_resolved_catalog();
@@ -3542,7 +3553,16 @@ mod tests {
             &mut catalog,
             &manifest,
         );
-        let capabilities = &catalog.models[0].capabilities;
+        let capabilities = &catalog
+            .models
+            .iter()
+            .find(|model| model.id == "MiniMax-M2.7")
+            .expect("MiniMax M2.7 must remain in the enriched catalog")
+            .capabilities;
+        assert_eq!(
+            capabilities.structured_output,
+            StructuredOutputCapability::Unsupported
+        );
         assert!(!capabilities.prompt_cache.supports_managed_explicit);
         assert!(capabilities.model_parameters.iter().all(|parameter| {
             parameter
@@ -3560,6 +3580,16 @@ mod tests {
             ModelParameterDefault::ExplicitValue {
                 value: vulcan_ai_contract::ModelParameterValue::Boolean(true)
             }
+        );
+        let m3 = &catalog
+            .models
+            .iter()
+            .find(|model| model.id == "MiniMax-M3")
+            .expect("MiniMax M3 must remain in the enriched catalog")
+            .capabilities;
+        assert_eq!(
+            m3.structured_output,
+            StructuredOutputCapability::Unsupported
         );
     }
 

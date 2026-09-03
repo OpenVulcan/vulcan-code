@@ -6,8 +6,8 @@ use vulcan_session_boundary::{SessionBoundaryEventKind, SessionEventVisibility};
 use vulcan_session_core::v1::ids::ClientActionId;
 use vulcan_vmm::{ContextItem, VmmPromptAnchorKind, VmmRecallBatch, VmmSessionMemoryState};
 use vulcan_workbench_model::{
-    PendingSessionPromptSource, SessionId, SessionProviderToolTargetSelection,
-    SessionRuntimeStateEntry, VmmProfileSyncState,
+    PendingSessionPromptSource, SessionId, SessionMediaUnderstandingSelection,
+    SessionProviderToolTargetSelection, SessionRuntimeStateEntry, VmmProfileSyncState,
 };
 
 use crate::{
@@ -27,10 +27,10 @@ fn test_vmm_session_memory(session_id: SessionId) -> VmmSessionMemoryState {
         .expect("test VMM session owner should be valid")
 }
 
-/// Verifies media session switches use the global backend while direct capabilities still require targets.
-/// 验证媒体会话开关使用全局后端，而直连能力仍必须具有目标。
+/// Verifies every enabled media and direct capability requires its exact session route.
+/// 验证每项已启用的媒体与直连能力都需要精确会话路由。
 #[test]
-fn session_provider_tool_target_validation_exempts_only_media_backends() {
+fn session_provider_tool_target_validation_requires_exact_media_routes() {
     // runtimeState represents one initialized session with all three media switches enabled.
     // runtimeState 表示一个已初始化且启用三项媒体开关的会话。
     let mut runtime_state = SessionRuntimeStateEntry {
@@ -42,11 +42,45 @@ fn session_provider_tool_target_validation_exempts_only_media_backends() {
         ]
         .into_iter()
         .collect(),
+        media_understanding_selections: [
+            "image_understand",
+            "video_understand",
+            "audio_understand",
+        ]
+        .into_iter()
+        .map(|capability| {
+            (
+                String::from(capability),
+                SessionMediaUnderstandingSelection::ProviderTool {
+                    selection: SessionProviderToolTargetSelection {
+                        connection_id: format!("{capability}-account"),
+                        target_id: format!("{capability}-target"),
+                    },
+                },
+            )
+        })
+        .collect(),
         ..SessionRuntimeStateEntry::default()
     };
 
     validate_session_provider_tool_target_completeness(&runtime_state)
-        .expect("media switches must use global backend selections");
+        .expect("media switches with exact session routes must pass");
+
+    runtime_state
+        .media_understanding_selections
+        .remove("video_understand");
+    let error = validate_session_provider_tool_target_completeness(&runtime_state)
+        .expect_err("media capability without an exact session route must fail");
+    assert!(error.contains("video_understand"), "{error}");
+    runtime_state.media_understanding_selections.insert(
+        String::from("video_understand"),
+        SessionMediaUnderstandingSelection::ProviderTool {
+            selection: SessionProviderToolTargetSelection {
+                connection_id: String::from("video-account"),
+                target_id: String::from("video-target"),
+            },
+        },
+    );
 
     // webSearch proves a non-media direct capability cannot omit its session target.
     // webSearch 证明非媒体直连能力不能缺少会话目标。
@@ -57,8 +91,8 @@ fn session_provider_tool_target_validation_exempts_only_media_backends() {
         .expect_err("direct capability without target must fail");
     assert!(error.contains("web_search"), "{error}");
 
-    // selection completes the direct capability without adding any media target authority.
-    // selection 补全直连能力，且不会为媒体增加任何目标权威。
+    // selection completes the direct capability without changing exact media route ownership.
+    // selection 补全直连能力，不改变精确媒体路由的归属。
     runtime_state.provider_tool_selections.insert(
         String::from("web_search"),
         SessionProviderToolTargetSelection {
@@ -67,7 +101,7 @@ fn session_provider_tool_target_validation_exempts_only_media_backends() {
         },
     );
     validate_session_provider_tool_target_completeness(&runtime_state)
-        .expect("complete direct target plus global media backends must pass");
+        .expect("complete direct and media session routes must pass");
 }
 
 /// Verifies canonical user ids cannot collide when multiple starts occur within one timestamp tick.

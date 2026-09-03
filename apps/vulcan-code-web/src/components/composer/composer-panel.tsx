@@ -846,14 +846,6 @@ export function ComposerPanel(props: {
               onRetry={handleAttachmentRetry}
               resolveMediaSourceUrl={props.resolveMediaSourceUrl}
             />
-            {attachmentPreparation.metadataOnlyCount > 0 ? (
-              <p className="composer-attachment-degradation-summary" role="status">
-                {t("composer.attachment.metadataOnlyCount").replace(
-                  "{count}",
-                  String(attachmentPreparation.metadataOnlyCount),
-                )}
-              </p>
-            ) : null}
           </>
         ) : null}
         {slashPanelVisible && !isPendingPromptEditing ? (

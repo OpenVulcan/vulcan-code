@@ -325,10 +325,13 @@ pub struct ExecutionPreparationRequest {
             vulcan_workbench_model::SessionProviderToolTargetSelection,
         >,
     >,
-    /// Optional session-selected media backend modes keyed by capability.
-    /// 按能力索引的可选会话级媒体后端模式选择。
-    pub provider_tool_media_understanding_modes_override: Option<
-        std::collections::BTreeMap<String, vulcan_workbench_model::SessionMediaUnderstandingMode>,
+    /// Optional exact session-owned media-understanding routes keyed by capability.
+    /// 按能力索引的可选会话自有精确媒体理解路由。
+    pub provider_tool_media_understanding_selections_override: Option<
+        std::collections::BTreeMap<
+            String,
+            vulcan_workbench_model::SessionMediaUnderstandingSelection,
+        >,
     >,
     /// Optional session-enabled direct and media capability keys, independent from backend identity.
     /// 与后端身份分离的可选会话级已启用直连及媒体能力键。

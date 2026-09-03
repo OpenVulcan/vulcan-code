@@ -22,7 +22,6 @@ import type {
   PublicAiInternalModelOverrides,
   PublicAiOperation,
   PublicAiProviderToolCapabilityKind,
-  PublicAiMediaUnderstandingBackendMode,
   PublicAiMediaUnderstandingBackendSelection,
   PublicAiProviderToolTestResult,
   PublicAiProviderToolTargetSelection,
@@ -591,15 +590,44 @@ export async function savePublicAiProviderToolCapabilityEnabled(request: {
   );
 }
 
+// PublicAiSessionProviderToolSettingsWire admits the sole older response shape that predates exact media routes.
+// PublicAiSessionProviderToolSettingsWire 接纳唯一一种早于精确媒体路由的旧响应结构。
+type PublicAiSessionProviderToolSettingsWire = Omit<
+  PublicAiSessionProviderToolSettings,
+  "mediaUnderstandingSelections"
+> & {
+  // The field is absent only when an older service process answers a newer WebUI.
+  // 仅当旧版服务进程响应新版 WebUI 时该字段才会缺失。
+  mediaUnderstandingSelections?: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiMediaUnderstandingBackendSelection>
+  >;
+};
+
+// normalizePublicAiSessionProviderToolSettings upgrades one versioned service response at the transport boundary.
+// normalizePublicAiSessionProviderToolSettings 在传输边界升级一个版本化服务响应。
+// The input is the exact wire payload; the return value always owns a complete media-route map.
+// 输入为精确线路负载；返回值始终持有完整媒体路由映射。
+function normalizePublicAiSessionProviderToolSettings(
+  settings: PublicAiSessionProviderToolSettingsWire,
+): PublicAiSessionProviderToolSettings {
+  return {
+    ...settings,
+    mediaUnderstandingSelections: settings.mediaUnderstandingSelections ?? {},
+  };
+}
+
 // loadPublicAiSessionProviderToolSelections loads direct and extension targets for one session.
 // loadPublicAiSessionProviderToolSelections 加载单个会话生效的直连与扩展目标。
 export async function loadPublicAiSessionProviderToolSelections(
   conversationId: string,
 ): Promise<PublicAiSessionProviderToolSettings> {
-  return serviceClient.request(
+  // settings is normalized before any component can observe the versioned wire shape.
+  // settings 在任何组件观察到版本化线路结构前完成规范化。
+  const settings = await serviceClient.request<PublicAiSessionProviderToolSettingsWire>(
     "service_public_ai_session_provider_tool_selections",
     { conversationId },
   );
+  return normalizePublicAiSessionProviderToolSettings(settings);
 }
 
 // Saves complete `policy` unchanged and returns the backend's published settings snapshot.
@@ -634,10 +662,13 @@ export async function resetPublicAiMediaDeliveryPolicy(expectedRevision: string)
 export async function rebuildPublicAiSessionProviderToolSelections(
   conversationId: string,
 ): Promise<PublicAiSessionProviderToolSettings> {
-  return serviceClient.request(
+  // settings follows the same response-version boundary as the ordinary load action.
+  // settings 与普通加载动作遵循相同响应版本边界。
+  const settings = await serviceClient.request<PublicAiSessionProviderToolSettingsWire>(
     "service_rebuild_public_ai_session_provider_tool_selections",
     { conversationId },
   );
+  return normalizePublicAiSessionProviderToolSettings(settings);
 }
 
 // savePublicAiSessionProviderToolSelections replaces all session-level direct and extension targets.
@@ -651,14 +682,17 @@ export async function savePublicAiSessionProviderToolSelections(request: {
   extensionTargetSets: Partial<
     Record<PublicAiProviderToolCapabilityKind, PublicAiProviderToolTargetSelection[]>
   >;
-  mediaUnderstandingModes: Partial<
-    Record<PublicAiProviderToolCapabilityKind, PublicAiMediaUnderstandingBackendMode>
+  mediaUnderstandingSelections: Partial<
+    Record<PublicAiProviderToolCapabilityKind, PublicAiMediaUnderstandingBackendSelection>
   >;
 }): Promise<PublicAiSessionProviderToolSettings> {
-  return serviceClient.request(
+  // settings may still come from an older process during a development hot reload.
+  // settings 在开发热重载期间仍可能来自旧版进程。
+  const settings = await serviceClient.request<PublicAiSessionProviderToolSettingsWire>(
     "service_save_public_ai_session_provider_tool_selections",
     { request },
   );
+  return normalizePublicAiSessionProviderToolSettings(settings);
 }
 
 // savePublicAiDefaultConnection changes the explicit initial account for one provider.

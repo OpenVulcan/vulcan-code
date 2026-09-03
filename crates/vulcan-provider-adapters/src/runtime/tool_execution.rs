@@ -76,20 +76,20 @@ impl PublicAiRuntime {
         .await
     }
 
-    /// Executes one selected provider tool with an explicit host workspace boundary.
-    /// 使用显式宿主工作区边界执行一个已选供应商工具。
+    /// Executes one selected provider tool with an explicit host workspace base.
+    /// 使用显式宿主工作区基准执行一个已选供应商工具。
     ///
     /// # Parameters
     /// 参数
     /// `configuration`, `capability`, and `arguments` freeze the target invocation;
-    /// `owner_session_id` owns recoverable work and `workspace_root` bounds local resources.
+    /// `owner_session_id` owns recoverable work and `workspace_root` resolves relative resources.
     /// `configuration`、`capability` 与 `arguments` 冻结目标调用；`owner_session_id` 持有
-    /// 可恢复任务，`workspace_root` 约束本地资源。
+    /// 可恢复任务，`workspace_root` 解析相对资源。
     ///
     /// # Returns
     /// 返回值
-    /// One normalized terminal result after workspace-bounded upload materialization.
-    /// 在工作区有界上传物化后返回一个归一化终态结果。
+    /// One normalized terminal result after local resource upload materialization.
+    /// 在本地资源上传物化后返回一个归一化终态结果。
     pub async fn execute_selected_provider_tool_for_owner_in_workspace(
         &self,
         configuration: &PersistedAiConfiguration,
@@ -156,9 +156,9 @@ impl PublicAiRuntime {
     /// # Parameters
     /// 参数
     /// `configuration`, `capability`, `selection`, and `arguments` freeze the invocation;
-    /// `owner_session_id` owns recoverable tasks and `workspace_root` bounds every local path.
+    /// `owner_session_id` owns recoverable tasks and `workspace_root` resolves relative local paths.
     /// `configuration`、`capability`、`selection` 与 `arguments` 冻结调用；`owner_session_id`
-    /// 持有可恢复任务，`workspace_root` 约束每条本地路径。
+    /// 持有可恢复任务，`workspace_root` 解析相对本地路径。
     ///
     /// # Returns
     /// 返回值
@@ -190,8 +190,8 @@ impl PublicAiRuntime {
 
     /// Executes exact `selection` and `arguments` with session-resolved `media_sources` kept outside tool JSON.
     /// 使用保留在工具JSON之外、由会话解析的`media_sources`执行精确`selection`及`arguments`。
-    /// `configuration` freezes policy, `capability` fixes the tool, and owner/workspace retain their existing task and path boundaries.
-    /// `configuration`冻结策略，`capability`固定工具，所有者及工作区保留既有任务和路径边界。
+    /// `configuration` freezes policy, `capability` fixes the tool, and owner/workspace retain task ownership and relative-path context.
+    /// `configuration`冻结策略，`capability`固定工具，所有者及工作区保留任务所有权与相对路径上下文。
     /// Returns the normalized provider result or an explicit admission, integrity or execution error.
     /// 返回归一化供应商结果或明确准入、完整性、执行错误。
     pub async fn execute_provider_tool_target_with_media_sources(

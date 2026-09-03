@@ -52,7 +52,8 @@ pub use draft_media::{
 pub use lifecycle::{
     acquire_staged_attachment_ref, discard_unreferenced_staged_attachment,
     promote_staged_attachment_to_message_ref, reconcile_staged_attachment_ref_scope,
-    record_staged_attachment, release_staged_attachment_ref,
+    record_or_reuse_project_attachment, record_staged_attachment, release_staged_attachment_ref,
+    retain_generated_attachments_for_session,
 };
 pub use media_references::{find_attachment_media_reference, record_attachment_media_reference};
 pub use replay::{

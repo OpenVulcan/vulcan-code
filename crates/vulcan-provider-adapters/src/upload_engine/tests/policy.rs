@@ -37,6 +37,38 @@ async fn materialize_host_sources(
     .await
 }
 
+/// Materializes one direct local image path through the production operation engine.
+/// 通过生产操作引擎物化一条直接本地图片路径。
+async fn materialize_direct_local_source(
+    workspace_root: Option<&Path>,
+    reference: &str,
+) -> Result<serde_json::Value, String> {
+    materialize_operation_uploads(
+        OperationUploadExecutionContext {
+            media_sources: &[],
+            media_delivery_policy: crate::MediaDeliveryPolicy::default(),
+            http: &reqwest::Client::new(),
+            entry: &dummy_entry(),
+            secret: &dummy_secret(),
+            credential_profile: &dummy_credential_profile(),
+            channels: &[channel(
+                UploadPrimitiveKind::InlineDataUrl,
+                vec![String::from("image/png")],
+                None,
+                None,
+            )],
+            progress: None,
+            cancellation: &MediaUploadCancellation::new(),
+            model_id: None,
+            workspace_root,
+            fixture_loopback_origin: None,
+        },
+        &image_edit_operation(),
+        serde_json::json!({"source_paths": reference, "prompt": "describe"}),
+    )
+    .await
+}
+
 /// Builds a host proof for exact fixture `path`, `reference` and `bytes`, preserving the original image name.
 /// 为精确夹具`path`、`reference`和`bytes`构建宿主证据，保留原始图片名称。
 fn host_source(path: &Path, reference: &str, bytes: &[u8]) -> crate::ProviderToolMediaSource {
@@ -50,6 +82,36 @@ fn host_source(path: &Path, reference: &str, bytes: &[u8]) -> crate::ProviderToo
             content_sha256: hex::encode(Sha256::digest(bytes)),
         },
     }
+}
+
+/// Direct extension inputs accept global paths and replace them before provider dispatch.
+/// 直接扩展输入接受全局路径，并在供应商分派前完成替换。
+#[tokio::test]
+async fn operation_direct_paths_accept_external_files_without_leaking_host_paths()
+-> Result<(), Box<dyn std::error::Error>> {
+    // The file is deliberately outside the active workspace directory.
+    // 文件被有意放置在活动工作区目录之外。
+    let directory = tempfile::tempdir()?;
+    let workspace = directory.path().join("project");
+    let image = directory.path().join("outside.png");
+    tokio::fs::create_dir(&workspace).await?;
+    tokio::fs::write(&image, b"abc").await?;
+    let expected = serde_json::json!({
+        "source_images": "data:image/png;base64,YWJj",
+        "prompt": "describe"
+    });
+
+    // Relative parent traversal and a workspace-free absolute path must reach the same wire-safe result.
+    // 相对父目录跳转与无需工作区的绝对路径必须得到相同的 Wire 安全结果。
+    assert_eq!(
+        materialize_direct_local_source(Some(&workspace), "../outside.png").await?,
+        expected
+    );
+    assert_eq!(
+        materialize_direct_local_source(None, image.to_string_lossy().as_ref()).await?,
+        expected
+    );
+    Ok(())
 }
 
 /// Preserves MIME and exact source bytes for extensionless project entities while keeping private metadata off the wire.
@@ -130,6 +192,27 @@ async fn operation_authoritative_mime_respects_binding_formats()
             .mime_type,
         "audio/wav"
     );
+    Ok(())
+}
+
+/// Verifies an HTTPS URL with a mixed-case scheme stays on the remote-source branch.
+/// 验证 scheme 大小写混合的 HTTPS URL 仍进入远端来源分支。
+#[tokio::test]
+async fn operation_remote_https_scheme_is_case_insensitive()
+-> Result<(), Box<dyn std::error::Error>> {
+    // binding supplies the exact image MIME contract used to classify the URL path.
+    // binding 提供用于分类 URL 路径的精确图片 MIME 契约。
+    let binding = image_edit_operation().upload_bindings.remove(0);
+    // reference deliberately uses a non-canonical scheme spelling accepted by URL syntax.
+    // reference 故意使用 URL 语法允许的非规范 scheme 拼写。
+    let reference = "HTTPS://media.example.com/source.png";
+    // source must retain the URL and must never materialize a local path.
+    // source 必须保留 URL，且绝不能物化本地路径。
+    let source = prepare_operation_upload_resource(&binding, reference, None, &[]).await?;
+
+    assert_eq!(source.resource.remote_url.as_deref(), Some(reference));
+    assert!(source.resource.local_path.is_none());
+    assert_eq!(source.resource.mime_type, "image/png");
     Ok(())
 }
 

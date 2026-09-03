@@ -5,7 +5,8 @@ use super::persistence::DirtyFile;
 use super::{SessionDocument, ensure_api_request_field, validate_timestamp};
 use crate::v1::config::{
     ActiveRequestConfig, KnowledgeLibrarySelectionConfig, KnowledgeLibrarySelectionMode,
-    PendingRequestConfig, ProviderExtensionTargetSetConfig, ProviderMediaUnderstandingSelection,
+    PendingRequestConfig, ProviderExtensionTargetSetConfig, ProviderMediaUnderstandingMode,
+    ProviderMediaUnderstandingRouteConfig, ProviderMediaUnderstandingSelection,
     ProviderToolCapabilitySelection, ProviderToolSelectionConfig, ProviderToolTargetConfig,
     VmmSessionPolicyConfig,
 };
@@ -94,16 +95,64 @@ fn validate_provider_media_understanding_selections(
 ) -> Result<(), DomainError> {
     for selection in selections {
         validate_required_selection_component(
-            "provider_tools.media_understanding_modes.capability",
+            "provider_tools.media_understanding_selections.capability",
             &selection.capability,
         )?;
+        if selection.reasoning_effort.is_some()
+            && selection.mode != ProviderMediaUnderstandingMode::ModelReplacement
+        {
+            return Err(DomainError::InvalidSelectionConfiguration {
+                field: "provider_tools.media_understanding_selections.reasoning_effort_mode",
+            });
+        }
+        match (&selection.mode, &selection.selection) {
+            (
+                ProviderMediaUnderstandingMode::ProviderTool,
+                Some(ProviderMediaUnderstandingRouteConfig::ProviderTool(target)),
+            ) => {
+                validate_required_selection_component(
+                    "provider_tools.media_understanding_selections.selection.connection_id",
+                    &target.connection_id,
+                )?;
+                validate_required_selection_component(
+                    "provider_tools.media_understanding_selections.selection.target_id",
+                    &target.target_id,
+                )?;
+            }
+            (
+                ProviderMediaUnderstandingMode::ModelReplacement,
+                Some(ProviderMediaUnderstandingRouteConfig::ModelReplacement(target)),
+            ) => {
+                validate_required_selection_component(
+                    "provider_tools.media_understanding_selections.selection.provider_id",
+                    &target.provider_id,
+                )?;
+                validate_required_selection_component(
+                    "provider_tools.media_understanding_selections.selection.model_id",
+                    &target.model_id,
+                )?;
+                validate_required_selection_component(
+                    "provider_tools.media_understanding_selections.selection.connection_id",
+                    &target.connection_id,
+                )?;
+            }
+            (_, None) => {
+                // Mode-only entries remain readable solely as a migration boundary and are ignored by runtime projection.
+                // 只含模式的条目仅作为迁移边界保持可读，并会被运行时投影忽略。
+            }
+            _ => {
+                return Err(DomainError::InvalidSelectionConfiguration {
+                    field: "provider_tools.media_understanding_selections.selection_mode",
+                });
+            }
+        }
     }
     if selections
         .windows(2)
         .any(|pair| pair[0].capability >= pair[1].capability)
     {
         return Err(DomainError::InvalidSelectionConfiguration {
-            field: "provider_tools.media_understanding_modes.order",
+            field: "provider_tools.media_understanding_selections.order",
         });
     }
     Ok(())
@@ -167,7 +216,7 @@ pub(in crate::v1) fn validate_provider_tool_selection_config(
         });
     }
     validate_provider_tool_capability_selections(&config.selections)?;
-    validate_provider_media_understanding_selections(&config.media_understanding_modes)?;
+    validate_provider_media_understanding_selections(&config.media_understanding_selections)?;
     validate_provider_extension_target_sets(&config.extension_target_sets)
 }
 

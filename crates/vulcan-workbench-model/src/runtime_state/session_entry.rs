@@ -1,16 +1,198 @@
 use super::*;
 
-/// Selects the backend family for one session media-understanding capability.
-/// 选择单项会话媒体理解能力使用的后端类型。
+/// Selects one explicit session override for a media-replacement model's reasoning effort.
+/// 选择媒体替代模型的一项显式会话级推理档位覆盖。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SessionMediaUnderstandingMode {
-    /// Use the Manifest-owned provider-specific understanding endpoint.
-    /// 使用由 Manifest 持有的供应商专用理解端点。
-    ProviderTool,
-    /// Use an ordinary structured-output multimodal model as the replacement backend.
-    /// 使用具备结构化输出能力的普通多模态模型作为替代后端。
-    ModelReplacement,
+pub enum SessionMediaUnderstandingReasoningEffort {
+    /// Explicitly disables reasoning when the route declares that level.
+    /// 当路由声明该档位时显式关闭推理。
+    None,
+    /// Uses provider-managed adaptive reasoning.
+    /// 使用供应商管理的自适应推理。
+    Adaptive,
+    /// Uses the smallest declared reasoning effort.
+    /// 使用已声明的最小推理档位。
+    Minimal,
+    /// Uses a low reasoning effort.
+    /// 使用低推理档位。
+    Low,
+    /// Uses a balanced reasoning effort.
+    /// 使用中等推理档位。
+    Medium,
+    /// Uses a high reasoning effort.
+    /// 使用高推理档位。
+    High,
+    /// Uses an extra-high reasoning effort.
+    /// 使用超高推理档位。
+    #[serde(rename = "xhigh", alias = "x_high", alias = "x-high")]
+    XHigh,
+    /// Uses the provider-declared maximum reasoning effort.
+    /// 使用供应商声明的最大推理档位。
+    Max,
+    /// Uses a provider-specific ultra reasoning effort.
+    /// 使用供应商特有的极限推理档位。
+    Ultra,
+}
+
+/// Exact replacement-model route selected by one session media-understanding capability.
+/// 一项会话媒体理解能力选择的精确替代模型路由。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionMediaUnderstandingModelSelection {
+    /// Stable provider identifier.
+    /// 稳定供应商标识。
+    pub provider_id: String,
+    /// Exact provider model identifier.
+    /// 精确供应商模型标识。
+    pub model_id: String,
+    /// Explicit credential connection identifier.
+    /// 显式凭据连接标识。
+    pub connection_id: String,
+}
+
+/// Exact backend route owned by one session media-understanding capability.
+/// 一项会话媒体理解能力持有的精确后端路由。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum SessionMediaUnderstandingSelection {
+    /// Execute one exact Manifest-owned provider tool target.
+    /// 执行一个精确的 Manifest 供应商工具目标。
+    ProviderTool {
+        /// Exact provider target and credential selection.
+        /// 精确供应商目标与凭据选择。
+        selection: SessionProviderToolTargetSelection,
+    },
+    /// Execute one exact multimodal model as the replacement backend.
+    /// 使用一个精确多模态模型作为替代理解后端。
+    ModelReplacement {
+        /// Exact model and credential selection.
+        /// 精确模型与凭据选择。
+        selection: SessionMediaUnderstandingModelSelection,
+        /// Optional exact reasoning level selected for this route.
+        /// 为此路由选择的可选精确推理档位。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_effort: Option<SessionMediaUnderstandingReasoningEffort>,
+    },
+}
+
+impl From<SessionMediaUnderstandingReasoningEffort> for vulcan_ai_contract::ReasoningEffort {
+    /// Converts the session-level media effort into the public AI request contract.
+    /// 将会话级媒体推理档位转换为公共 AI 请求契约。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `effort` is the exact session override selected for one media-understanding capability.
+    /// `effort` 是为一项媒体理解能力选择的精确会话覆盖值。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The equivalent provider-neutral request effort.
+    /// 等价的供应商无关请求档位。
+    fn from(effort: SessionMediaUnderstandingReasoningEffort) -> Self {
+        match effort {
+            SessionMediaUnderstandingReasoningEffort::None => Self::None,
+            SessionMediaUnderstandingReasoningEffort::Adaptive => Self::Adaptive,
+            SessionMediaUnderstandingReasoningEffort::Minimal => Self::Minimal,
+            SessionMediaUnderstandingReasoningEffort::Low => Self::Low,
+            SessionMediaUnderstandingReasoningEffort::Medium => Self::Medium,
+            SessionMediaUnderstandingReasoningEffort::High => Self::High,
+            SessionMediaUnderstandingReasoningEffort::XHigh => Self::XHigh,
+            SessionMediaUnderstandingReasoningEffort::Max => Self::Max,
+            SessionMediaUnderstandingReasoningEffort::Ultra => Self::Ultra,
+        }
+    }
+}
+
+impl From<vulcan_ai_contract::ReasoningEffort> for SessionMediaUnderstandingReasoningEffort {
+    /// Converts the public AI request effort into the exact session persistence contract.
+    /// 将公共 AI 请求档位转换为精确的会话持久化契约。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `effort` is the provider-neutral reasoning level selected by the user.
+    /// `effort` 是用户选择的供应商无关推理档位。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The equivalent process-local session effort.
+    /// 等价的进程内会话档位。
+    fn from(effort: vulcan_ai_contract::ReasoningEffort) -> Self {
+        match effort {
+            vulcan_ai_contract::ReasoningEffort::None => Self::None,
+            vulcan_ai_contract::ReasoningEffort::Adaptive => Self::Adaptive,
+            vulcan_ai_contract::ReasoningEffort::Minimal => Self::Minimal,
+            vulcan_ai_contract::ReasoningEffort::Low => Self::Low,
+            vulcan_ai_contract::ReasoningEffort::Medium => Self::Medium,
+            vulcan_ai_contract::ReasoningEffort::High => Self::High,
+            vulcan_ai_contract::ReasoningEffort::XHigh => Self::XHigh,
+            vulcan_ai_contract::ReasoningEffort::Max => Self::Max,
+            vulcan_ai_contract::ReasoningEffort::Ultra => Self::Ultra,
+        }
+    }
+}
+
+impl From<SessionMediaUnderstandingReasoningEffort>
+    for vulcan_session_core::v1::config::ProviderMediaUnderstandingReasoningEffort
+{
+    /// Converts the runtime session effort into the canonical V1 persistence contract.
+    /// 将运行时会话档位转换为规范 V1 持久化契约。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `effort` is the exact process-local session override.
+    /// `effort` 是精确的进程内会话覆盖值。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The equivalent provider-neutral V1 effort.
+    /// 等价的供应商无关 V1 档位。
+    fn from(effort: SessionMediaUnderstandingReasoningEffort) -> Self {
+        match effort {
+            SessionMediaUnderstandingReasoningEffort::None => Self::None,
+            SessionMediaUnderstandingReasoningEffort::Adaptive => Self::Adaptive,
+            SessionMediaUnderstandingReasoningEffort::Minimal => Self::Minimal,
+            SessionMediaUnderstandingReasoningEffort::Low => Self::Low,
+            SessionMediaUnderstandingReasoningEffort::Medium => Self::Medium,
+            SessionMediaUnderstandingReasoningEffort::High => Self::High,
+            SessionMediaUnderstandingReasoningEffort::XHigh => Self::XHigh,
+            SessionMediaUnderstandingReasoningEffort::Max => Self::Max,
+            SessionMediaUnderstandingReasoningEffort::Ultra => Self::Ultra,
+        }
+    }
+}
+
+impl From<vulcan_session_core::v1::config::ProviderMediaUnderstandingReasoningEffort>
+    for SessionMediaUnderstandingReasoningEffort
+{
+    /// Restores one canonical V1 media effort into the runtime session contract.
+    /// 将一项规范 V1 媒体档位恢复为会话运行时契约。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `effort` is the validated provider-neutral V1 value.
+    /// `effort` 是经过校验的供应商无关 V1 值。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The equivalent process-local session effort.
+    /// 等价的进程内会话档位。
+    fn from(
+        effort: vulcan_session_core::v1::config::ProviderMediaUnderstandingReasoningEffort,
+    ) -> Self {
+        use vulcan_session_core::v1::config::ProviderMediaUnderstandingReasoningEffort as V1Effort;
+
+        match effort {
+            V1Effort::None => Self::None,
+            V1Effort::Adaptive => Self::Adaptive,
+            V1Effort::Minimal => Self::Minimal,
+            V1Effort::Low => Self::Low,
+            V1Effort::Medium => Self::Medium,
+            V1Effort::High => Self::High,
+            V1Effort::XHigh => Self::XHigh,
+            V1Effort::Max => Self::Max,
+            V1Effort::Ultra => Self::Ultra,
+        }
+    }
 }
 
 /// Persisted non-secret identity of the provider route leased by one session.
@@ -202,9 +384,9 @@ pub struct SessionRuntimeStateEntry {
     /// Session-selected provider tool targets keyed by semantic capability.
     /// 按语义能力索引的会话级供应商工具目标选择。
     pub provider_tool_selections: BTreeMap<String, SessionProviderToolTargetSelection>,
-    /// Session-selected media backend modes keyed by semantic capability.
-    /// 按语义能力索引的会话级媒体后端模式选择。
-    pub media_understanding_modes: BTreeMap<String, SessionMediaUnderstandingMode>,
+    /// Exact session-owned media-understanding routes keyed by semantic capability.
+    /// 按语义能力索引的会话自有精确媒体理解路由。
+    pub media_understanding_selections: BTreeMap<String, SessionMediaUnderstandingSelection>,
     /// Provider tool capabilities enabled only for this session.
     /// 仅为当前会话启用的供应商工具能力。
     pub provider_tool_enabled_capabilities: BTreeSet<String>,

@@ -11,6 +11,7 @@ use vulcan_provider_adapters::{
 use vulcan_service_api::ServiceEventEmitter;
 use vulcan_session_core::v1::config::{
     ProviderExtensionTargetSetConfig, ProviderMediaUnderstandingMode,
+    ProviderMediaUnderstandingModelTargetConfig, ProviderMediaUnderstandingRouteConfig,
     ProviderMediaUnderstandingSelection, ProviderToolCapabilitySelection,
     ProviderToolSelectionConfig, ProviderToolTargetConfig,
 };
@@ -18,10 +19,9 @@ use vulcan_session_core::v1::config::{
 use super::{
     media_candidates::{
         build_media_understanding_model_candidates, media_understanding_resource_kind,
+        model_route_supports_media_understanding,
     },
-    provider_tools::{
-        media_understanding_backend_is_available, validate_provider_extension_target_sets,
-    },
+    provider_tools::validate_provider_extension_target_sets,
     public_ai_runtime_and_configuration,
     publication::{
         PublicAiWorkspaceReconciliation,
@@ -61,10 +61,10 @@ pub(crate) struct PublicAiSessionProviderToolSettingsSnapshot {
     /// 当前会话选择的精确原生模型扩展目标集合。
     extension_target_sets:
         BTreeMap<ProviderToolCapabilityKind, BTreeSet<ProviderToolTargetSelection>>,
-    /// Session-selected backend mode for each enabled media-understanding capability.
-    /// 当前会话为每项启用的媒体理解能力选择的后端模式。
-    media_understanding_modes:
-        BTreeMap<ProviderToolCapabilityKind, vulcan_workbench_model::SessionMediaUnderstandingMode>,
+    /// Exact session-owned route for each retained media-understanding capability.
+    /// 当前会话为每项保留的媒体理解能力持有的精确路由。
+    media_understanding_selections:
+        BTreeMap<ProviderToolCapabilityKind, MediaUnderstandingBackendSelection>,
     /// Invalid retained choices that require explicit user confirmation.
     /// 需要用户显式确认的无效保留选择。
     conflicts: Vec<PublicAiSessionProviderToolConflict>,
@@ -88,11 +88,11 @@ pub(crate) struct PublicAiSessionProviderToolSelectionsSaveRequest {
     /// 当前会话保留的完整原生模型扩展目标集合。
     extension_target_sets:
         BTreeMap<ProviderToolCapabilityKind, BTreeSet<ProviderToolTargetSelection>>,
-    /// Session-selected provider or model-replacement mode per media capability.
-    /// 当前会话为每项媒体能力选择的供应商专用或模型代替模式。
+    /// Exact session-owned provider-tool or replacement-model route per media capability.
+    /// 当前会话为每项媒体能力持有的精确供应商工具或替代模型路由。
     #[serde(default)]
-    media_understanding_modes:
-        BTreeMap<ProviderToolCapabilityKind, vulcan_workbench_model::SessionMediaUnderstandingMode>,
+    media_understanding_selections:
+        BTreeMap<ProviderToolCapabilityKind, MediaUnderstandingBackendSelection>,
 }
 
 /// Converts one exact public-AI target into the Provider-agnostic V1 metadata contract.
@@ -121,10 +121,10 @@ fn provider_tool_target_config_v1(
 ///
 /// # Parameters
 /// 参数
-/// The collection parameters are the exact enabled capabilities, targets, media modes, and
+/// The collection parameters are the exact enabled capabilities, targets, media routes, and
 /// extension target sets; `overridden` records whether the browser supplied an explicit session
 /// override.
-/// 各集合参数分别是精确的启用能力、目标、媒体模式与扩展目标集合；`overridden` 记录浏览器是否
+/// 各集合参数分别是精确的启用能力、目标、媒体路由与扩展目标集合；`overridden` 记录浏览器是否
 /// 提供了显式会话覆盖。
 ///
 /// # Returns
@@ -134,9 +134,9 @@ fn provider_tool_target_config_v1(
 pub(crate) fn provider_tool_selection_config_from_parts_v1(
     enabled_capabilities: &BTreeSet<ProviderToolCapabilityKind>,
     selections: &BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
-    media_understanding_modes: &BTreeMap<
+    media_understanding_selections: &BTreeMap<
         ProviderToolCapabilityKind,
-        vulcan_workbench_model::SessionMediaUnderstandingMode,
+        MediaUnderstandingBackendSelection,
     >,
     extension_target_sets: &BTreeMap<
         ProviderToolCapabilityKind,
@@ -160,19 +160,49 @@ pub(crate) fn provider_tool_selection_config_from_parts_v1(
                 target: provider_tool_target_config_v1(selection),
             })
             .collect(),
-        media_understanding_modes: media_understanding_modes
+        media_understanding_selections: media_understanding_selections
             .iter()
-            .map(|(capability, mode)| ProviderMediaUnderstandingSelection {
-                capability: provider_tool_capability_key(*capability),
-                mode: match mode {
-                    vulcan_workbench_model::SessionMediaUnderstandingMode::ProviderTool => {
-                        ProviderMediaUnderstandingMode::ProviderTool
-                    }
-                    vulcan_workbench_model::SessionMediaUnderstandingMode::ModelReplacement => {
-                        ProviderMediaUnderstandingMode::ModelReplacement
-                    }
+            .map(
+                |(capability, selection)| ProviderMediaUnderstandingSelection {
+                    capability: provider_tool_capability_key(*capability),
+                    mode: match selection {
+                        MediaUnderstandingBackendSelection::ProviderTool { .. } => {
+                            ProviderMediaUnderstandingMode::ProviderTool
+                        }
+                        MediaUnderstandingBackendSelection::ModelReplacement { .. } => {
+                            ProviderMediaUnderstandingMode::ModelReplacement
+                        }
+                    },
+                    selection: Some(match selection {
+                        MediaUnderstandingBackendSelection::ProviderTool { selection } => {
+                            ProviderMediaUnderstandingRouteConfig::ProviderTool(
+                                provider_tool_target_config_v1(selection),
+                            )
+                        }
+                        MediaUnderstandingBackendSelection::ModelReplacement {
+                            selection, ..
+                        } => ProviderMediaUnderstandingRouteConfig::ModelReplacement(
+                            ProviderMediaUnderstandingModelTargetConfig {
+                                provider_id: selection.provider_id.clone(),
+                                model_id: selection.model_id.clone(),
+                                connection_id: selection.connection_id.clone(),
+                            },
+                        ),
+                    }),
+                    reasoning_effort: match selection {
+                        MediaUnderstandingBackendSelection::ModelReplacement {
+                            reasoning_effort,
+                            ..
+                        } => reasoning_effort.map(|effort| {
+                            vulcan_workbench_model::SessionMediaUnderstandingReasoningEffort::from(
+                                effort,
+                            )
+                            .into()
+                        }),
+                        MediaUnderstandingBackendSelection::ProviderTool { .. } => None,
+                    },
                 },
-            })
+            )
             .collect(),
         extension_target_sets: extension_target_sets
             .iter()
@@ -194,7 +224,7 @@ pub(crate) fn provider_tool_selection_config_from_parts_v1(
         .selections
         .sort_by(|left, right| left.capability.cmp(&right.capability));
     config
-        .media_understanding_modes
+        .media_understanding_selections
         .sort_by(|left, right| left.capability.cmp(&right.capability));
     for target_set in &mut config.extension_target_sets {
         target_set.targets.sort();
@@ -224,14 +254,14 @@ fn provider_tool_selection_config_v1(
     provider_tool_selection_config_from_parts_v1(
         &snapshot.enabled_capabilities,
         &snapshot.selections,
-        &snapshot.media_understanding_modes,
+        &snapshot.media_understanding_selections,
         &snapshot.extension_target_sets,
         overridden,
     )
 }
 
 /// Returns the effective direct, media-mode, and extension configuration for one session.
-/// 返回单个会话生效的直连、媒体模式与扩展配置。
+/// 返回单个会话生效的直连、精确媒体路由与扩展配置。
 ///
 /// # Parameters
 /// 参数
@@ -277,7 +307,8 @@ pub(crate) async fn service_public_ai_session_provider_tool_selections(
                 current.provider_tool_selections != planned.provider_tool_selections
                     || current.provider_tool_enabled_capabilities
                         != planned.provider_tool_enabled_capabilities
-                    || current.media_understanding_modes != planned.media_understanding_modes
+                    || current.media_understanding_selections
+                        != planned.media_understanding_selections
                     || current.provider_extension_target_sets
                         != planned.provider_extension_target_sets
                     || current.provider_tool_settings_initialized
@@ -287,8 +318,8 @@ pub(crate) async fn service_public_ai_session_provider_tool_selections(
             })
     };
     if requires_publication {
-        // Inheritance is an in-memory view. Merely opening settings must not rewrite user metadata.
-        // 继承只是内存视图；仅打开设置绝不能回写用户元数据。
+        // Projection repair is an in-memory view. Merely opening settings must not rewrite user metadata.
+        // 投影修复只是内存视图；仅打开设置绝不能回写用户元数据。
         let effective = provider_tool_selection_config_v1(
             &snapshot,
             planned.provider_tool_selections_overridden,
@@ -329,21 +360,26 @@ fn resolved_session_provider_tool_settings(
 > {
     let mut planned = vulcan_workbench_model::SessionRuntimeStateEntry::default();
     crate::session_request_config_v1::apply_provider_tool_selection_v1(&mut planned, persisted);
-    let (enabled_capabilities, selections, media_understanding_modes, extension_target_sets, _) =
-        reconcile_session_provider_tool_settings(&mut planned, configuration)?;
+    let (
+        enabled_capabilities,
+        selections,
+        media_understanding_selections,
+        extension_target_sets,
+        _,
+    ) = reconcile_session_provider_tool_settings(&mut planned, configuration)?;
     let conflicts = provider_tool_session_conflicts(
         runtime,
         configuration,
         &enabled_capabilities,
         &selections,
-        &media_understanding_modes,
+        &media_understanding_selections,
         &extension_target_sets,
     )?;
     Ok((
         PublicAiSessionProviderToolSettingsSnapshot {
             enabled_capabilities,
             selections,
-            media_understanding_modes,
+            media_understanding_selections,
             extension_target_sets,
             conflicts,
         },
@@ -425,8 +461,8 @@ pub(crate) async fn service_rebuild_public_ai_session_provider_tool_selections(
     Ok(snapshot)
 }
 
-/// Normalizes one session capability projection against its override state and current global defaults.
-/// 根据覆盖状态与当前全局默认值规范化一个会话能力投影。
+/// Initializes one session capability projection once and normalizes its stored keys.
+/// 一次性初始化会话能力投影，并规范化其已存储键。
 ///
 /// # Parameters
 /// 参数
@@ -436,8 +472,8 @@ pub(crate) async fn service_rebuild_public_ai_session_provider_tool_selections(
 ///
 /// # Returns
 /// 返回值
-/// The normalized direct capabilities, direct selections, media modes, extension target sets, and whether projection fields changed.
-/// 返回规范化的直连能力、直连选择、媒体模式、扩展目标集合，以及投影字段是否发生变化。
+/// The normalized direct capabilities, direct selections, exact media routes, extension target sets, and whether projection fields changed.
+/// 返回规范化的直连能力、直连选择、精确媒体路由、扩展目标集合，以及投影字段是否发生变化。
 fn reconcile_session_provider_tool_settings(
     runtime_state: &mut vulcan_workbench_model::SessionRuntimeStateEntry,
     configuration: &PersistedAiConfiguration,
@@ -445,7 +481,7 @@ fn reconcile_session_provider_tool_settings(
     (
         BTreeSet<ProviderToolCapabilityKind>,
         BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
-        BTreeMap<ProviderToolCapabilityKind, vulcan_workbench_model::SessionMediaUnderstandingMode>,
+        BTreeMap<ProviderToolCapabilityKind, MediaUnderstandingBackendSelection>,
         BTreeMap<ProviderToolCapabilityKind, BTreeSet<ProviderToolTargetSelection>>,
         bool,
     ),
@@ -464,69 +500,9 @@ fn reconcile_session_provider_tool_settings(
     .into_iter()
     .map(provider_tool_capability_key)
     .collect::<BTreeSet<_>>();
-    if runtime_state.provider_tool_settings_initialized {
-        if !runtime_state.provider_tool_selections_overridden {
-            // nextSelections mirrors the exact current global target defaults.
-            // nextSelections 镜像精确的当前全局目标默认值。
-            let next_selections = configuration
-                .provider_tool_selections
-                .iter()
-                .filter(|(capability, _)| media_understanding_resource_kind(**capability).is_none())
-                .map(|(capability, selection)| {
-                    (
-                        provider_tool_capability_key(*capability),
-                        vulcan_workbench_model::SessionProviderToolTargetSelection {
-                            connection_id: selection.connection_id.clone(),
-                            target_id: selection.target_id.clone(),
-                        },
-                    )
-                })
-                .collect();
-            // nextEnabledCapabilities mirrors the exact current global enabled defaults.
-            // nextEnabledCapabilities 镜像精确的当前全局启用默认值。
-            let next_enabled_capabilities = configuration
-                .provider_tool_enabled_capabilities
-                .iter()
-                .map(|capability| provider_tool_capability_key(*capability))
-                .collect();
-            // nextMediaUnderstandingModes mirrors the active global media backend family while
-            // keeping the session field independent from exact model and account selections.
-            // nextMediaUnderstandingModes 镜像活动全局媒体后端类型，同时让会话字段独立于精确模型与账号选择。
-            let next_media_understanding_modes = session_media_understanding_modes_to_runtime(
-                &session_media_understanding_modes_from_configuration(configuration),
-            );
-            // nextExtensionTargetSets mirrors the exact current global extension defaults.
-            // nextExtensionTargetSets 镜像精确的当前全局扩展目标默认集合。
-            let next_extension_target_sets = configuration
-                .provider_extension_target_sets
-                .iter()
-                .map(|(capability, selections)| {
-                    (
-                        provider_tool_capability_key(*capability),
-                        selections
-                            .iter()
-                            .map(session_provider_tool_selection_from_contract)
-                            .collect(),
-                    )
-                })
-                .collect();
-            if runtime_state.provider_tool_selections != next_selections
-                || runtime_state.provider_tool_enabled_capabilities != next_enabled_capabilities
-                || runtime_state.media_understanding_modes != next_media_understanding_modes
-                || runtime_state.provider_extension_target_sets != next_extension_target_sets
-            {
-                runtime_state.provider_tool_selections = next_selections;
-                runtime_state.provider_tool_enabled_capabilities = next_enabled_capabilities;
-                runtime_state.media_understanding_modes = next_media_understanding_modes;
-                runtime_state.provider_extension_target_sets = next_extension_target_sets;
-                state_changed = true;
-            }
-        }
-    } else {
-        // Schema 4 intentionally discards pre-extension Provider Tool state and rematerializes
-        // the current defaults instead of guessing an old-to-new semantic conversion.
-        // Schema 4 有意丢弃模型扩展前的 Provider Tool 状态，并重新物化当前默认值，
-        // 而不是猜测旧语义到新语义的转换。
+    if !runtime_state.provider_tool_settings_initialized {
+        // System settings are copied exactly once as this session's initial defaults.
+        // 系统设置仅在此处复制一次，作为当前会话的初始默认值。
         runtime_state.provider_tool_selections = configuration
             .provider_tool_selections
             .iter()
@@ -543,9 +519,10 @@ fn reconcile_session_provider_tool_settings(
             .iter()
             .map(|capability| provider_tool_capability_key(*capability))
             .collect();
-        runtime_state.media_understanding_modes = session_media_understanding_modes_to_runtime(
-            &session_media_understanding_modes_from_configuration(configuration),
-        );
+        runtime_state.media_understanding_selections =
+            session_media_understanding_selections_to_runtime(
+                &configuration.media_understanding_selections,
+            );
         runtime_state.provider_extension_target_sets = configuration
             .provider_extension_target_sets
             .iter()
@@ -575,26 +552,16 @@ fn reconcile_session_provider_tool_settings(
         runtime_state.provider_tool_selections = cleaned_selections;
         state_changed = true;
     }
-    // cleanedMediaModes removes malformed legacy capability keys and fills only missing media
-    // defaults for an explicit session override created before this field existed.
-    // cleanedMediaModes 清理旧的非法能力键，并仅为新增字段之前创建的显式会话补齐缺失媒体默认值。
-    let mut cleaned_media_modes = runtime_state
-        .media_understanding_modes
+    // cleanedMediaSelections removes only malformed capability keys and never consults global routes.
+    // cleanedMediaSelections 仅移除非法能力键，绝不查询全局路由。
+    let cleaned_media_understanding_selections = runtime_state
+        .media_understanding_selections
         .iter()
         .filter(|(capability, _)| media_capability_keys.contains(*capability))
-        .map(|(capability, mode)| (capability.clone(), *mode))
+        .map(|(capability, selection)| (capability.clone(), selection.clone()))
         .collect::<BTreeMap<_, _>>();
-    if runtime_state.provider_tool_selections_overridden {
-        for (capability, mode) in
-            session_media_understanding_modes_from_configuration(configuration)
-        {
-            cleaned_media_modes
-                .entry(provider_tool_capability_key(capability))
-                .or_insert(mode);
-        }
-    }
-    if cleaned_media_modes != runtime_state.media_understanding_modes {
-        runtime_state.media_understanding_modes = cleaned_media_modes;
+    if cleaned_media_understanding_selections != runtime_state.media_understanding_selections {
+        runtime_state.media_understanding_selections = cleaned_media_understanding_selections;
         state_changed = true;
     }
     if state_changed {
@@ -603,19 +570,20 @@ fn reconcile_session_provider_tool_settings(
     let enabled_capabilities =
         session_provider_tool_enabled_capabilities_from_runtime(runtime_state)?;
     let selections = session_provider_tool_selections_from_runtime(runtime_state)?;
-    let media_understanding_modes = session_media_understanding_modes_from_runtime(runtime_state)?;
+    let media_understanding_selections =
+        session_media_understanding_selections_from_runtime(runtime_state)?;
     let extension_target_sets = session_provider_extension_target_sets_from_runtime(runtime_state)?;
     Ok((
         enabled_capabilities,
         selections,
-        media_understanding_modes,
+        media_understanding_selections,
         extension_target_sets,
         state_changed,
     ))
 }
 
-/// Saves the complete direct, media-mode, and extension configuration for one session.
-/// 保存单个会话完整的直连、媒体模式与扩展配置。
+/// Saves the complete direct, exact-media-route, and extension configuration for one session.
+/// 保存单个会话完整的直连、精确媒体路由与扩展配置。
 ///
 /// # Parameters
 /// 参数
@@ -631,14 +599,14 @@ pub(crate) async fn service_save_public_ai_session_provider_tool_selections(
     state: SharedServiceBridgeState,
     request: PublicAiSessionProviderToolSelectionsSaveRequest,
 ) -> Result<PublicAiSessionProviderToolSettingsSnapshot, String> {
-    // normalizedRequest preserves only the session enable switch and backend mode for media capabilities.
-    // normalizedRequest 对媒体能力只保留会话启用开关与后端模式。
+    // normalizedRequest separates direct targets from exact session-owned media routes.
+    // normalizedRequest 将直连目标与会话自有的精确媒体路由分离。
     let mut request = request;
     request
         .selections
         .retain(|capability, _| media_understanding_resource_kind(*capability).is_none());
     request
-        .media_understanding_modes
+        .media_understanding_selections
         .retain(|capability, _| media_understanding_resource_kind(*capability).is_some());
     let session_id = request
         .conversation_id
@@ -664,7 +632,7 @@ pub(crate) async fn service_save_public_ai_session_provider_tool_selections(
         &configuration,
         &request.enabled_capabilities,
         &request.selections,
-        &request.media_understanding_modes,
+        &request.media_understanding_selections,
         &request.extension_target_sets,
     )?;
     // snapshot is complete before any browser-visible or authoritative workspace assignment.
@@ -672,7 +640,7 @@ pub(crate) async fn service_save_public_ai_session_provider_tool_selections(
     let snapshot = PublicAiSessionProviderToolSettingsSnapshot {
         enabled_capabilities: request.enabled_capabilities,
         selections: request.selections,
-        media_understanding_modes: request.media_understanding_modes,
+        media_understanding_selections: request.media_understanding_selections,
         extension_target_sets: request.extension_target_sets,
         conflicts: Vec::new(),
     };
@@ -705,8 +673,8 @@ pub(crate) async fn service_save_public_ai_session_provider_tool_selections(
 ///
 /// # Parameters
 /// 参数
-/// `runtime` and `configuration` fix the target generation; the collections supply enabled capabilities, direct targets, media modes, and extension sets.
-/// `runtime` 与 `configuration` 固定目标代际；各集合提供启用能力、直连目标、媒体模式及扩展集合。
+/// `runtime` and `configuration` fix the target generation; the collections supply enabled capabilities, direct targets, exact media routes, and extension sets.
+/// `runtime` 与 `configuration` 固定目标代际；各集合提供启用能力、直连目标、精确媒体路由及扩展集合。
 ///
 /// # Returns
 /// 返回值
@@ -717,9 +685,9 @@ pub(crate) fn validate_provider_tool_session_settings(
     configuration: &PersistedAiConfiguration,
     enabled_capabilities: &BTreeSet<ProviderToolCapabilityKind>,
     selections: &BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
-    media_understanding_modes: &BTreeMap<
+    media_understanding_selections: &BTreeMap<
         ProviderToolCapabilityKind,
-        vulcan_workbench_model::SessionMediaUnderstandingMode,
+        MediaUnderstandingBackendSelection,
     >,
     extension_target_sets: &BTreeMap<
         ProviderToolCapabilityKind,
@@ -731,7 +699,7 @@ pub(crate) fn validate_provider_tool_session_settings(
         configuration,
         enabled_capabilities,
         selections,
-        media_understanding_modes,
+        media_understanding_selections,
         extension_target_sets,
     )?;
     if conflicts.is_empty() {
@@ -764,37 +732,18 @@ fn provider_tool_session_conflicts(
     configuration: &PersistedAiConfiguration,
     enabled_capabilities: &BTreeSet<ProviderToolCapabilityKind>,
     selections: &BTreeMap<ProviderToolCapabilityKind, ProviderToolTargetSelection>,
-    media_understanding_modes: &BTreeMap<
+    media_understanding_selections: &BTreeMap<
         ProviderToolCapabilityKind,
-        vulcan_workbench_model::SessionMediaUnderstandingMode,
+        MediaUnderstandingBackendSelection,
     >,
     extension_target_sets: &BTreeMap<
         ProviderToolCapabilityKind,
         BTreeSet<ProviderToolTargetSelection>,
     >,
 ) -> Result<Vec<PublicAiSessionProviderToolConflict>, String> {
-    // effectiveConfiguration applies session-selected media modes without mutating global persistence.
-    // effectiveConfiguration 应用会话选定的媒体模式，但不修改全局持久化配置。
-    let mut effective_configuration = configuration.clone();
-    let mut media_mode_errors = BTreeMap::new();
-    for (capability, mode) in media_understanding_modes {
-        let backend_mode = match mode {
-            vulcan_workbench_model::SessionMediaUnderstandingMode::ProviderTool => {
-                vulcan_provider_adapters::MediaUnderstandingBackendMode::ProviderTool
-            }
-            vulcan_workbench_model::SessionMediaUnderstandingMode::ModelReplacement => {
-                vulcan_provider_adapters::MediaUnderstandingBackendMode::ModelReplacement
-            }
-        };
-        if let Err(error) =
-            effective_configuration.apply_media_understanding_mode(*capability, backend_mode)
-        {
-            media_mode_errors.insert(*capability, error);
-        }
-    }
     // settingsCatalog supplies the exact conversation routes needed to validate session-selected media backends.
     // settingsCatalog 提供校验会话选定媒体后端所需的精确会话路由。
-    let settings_catalog = runtime.settings_catalog_snapshot(&effective_configuration)?;
+    let settings_catalog = runtime.settings_catalog_snapshot(configuration)?;
     // available belongs to the same immutable catalog generation as every media model candidate.
     // available 与全部媒体模型候选归属于同一份不可变目录代际。
     let available = &settings_catalog.available_provider_tool_targets;
@@ -830,34 +779,45 @@ fn provider_tool_session_conflicts(
             continue;
         }
         if media_understanding_resource_kind(capability).is_some() {
-            let Some(mode) = media_understanding_modes.get(&capability) else {
+            let Some(selection) = media_understanding_selections.get(&capability) else {
                 conflicts.push(PublicAiSessionProviderToolConflict {
                     capability,
                     kind: String::from("missing_selection"),
                     message: format!(
-                        "Media-understanding capability `{:?}` is enabled but has no selected backend mode.",
+                        "Media-understanding capability `{:?}` is enabled but has no exact session route.",
                         capability
                     ),
                 });
                 continue;
             };
-            if let Some(error) = media_mode_errors.get(&capability) {
-                conflicts.push(PublicAiSessionProviderToolConflict {
-                    capability,
-                    kind: String::from("target_unavailable"),
-                    message: error.clone(),
-                });
-            } else if !media_understanding_backend_is_available(
-                &settings_catalog.runtime_configuration,
-                capability,
-                available,
-                &media_model_candidates,
-            ) {
+            let route_is_available = match selection {
+                MediaUnderstandingBackendSelection::ProviderTool { selection } => {
+                    available.iter().any(|candidate| {
+                        candidate.connection_id == selection.connection_id
+                            && candidate.target.target_id == selection.target_id
+                            && candidate.target.contract.capability == capability
+                    })
+                }
+                MediaUnderstandingBackendSelection::ModelReplacement {
+                    selection,
+                    reasoning_effort,
+                } => media_model_candidates.iter().any(|candidate| {
+                    candidate.selection == *selection
+                        && model_route_supports_media_understanding(
+                            &candidate.capabilities,
+                            capability,
+                        )
+                        && reasoning_effort.is_none_or(|effort| {
+                            candidate.capabilities.reasoning_efforts.contains(&effort)
+                        })
+                }),
+            };
+            if !route_is_available {
                 conflicts.push(PublicAiSessionProviderToolConflict {
                     capability,
                     kind: String::from("target_unavailable"),
                     message: format!(
-                        "The `{mode:?}` backend for media-understanding capability `{:?}` is no longer available; configure it again before sending.",
+                        "The exact session route for media-understanding capability `{:?}` is no longer available; select a model and account again before sending.",
                         capability,
                     ),
                 });
@@ -906,60 +866,25 @@ fn provider_tool_session_conflicts(
     Ok(conflicts)
 }
 
-/// Converts the active global media selections into session backend modes.
-/// 将活动的全局媒体选择转换为会话后端模式。
+/// Converts exact session runtime routes into the typed provider contract.
+/// 将精确会话运行时路由转换为类型化供应商契约。
 ///
 /// # Parameters
 /// 参数
-/// `configuration` owns the currently active global media backend selection for each capability.
-/// `configuration` 持有每项能力当前活动的全局媒体后端选择。
+/// `runtime_state` owns persisted snake_case capability keys and complete routes.
+/// `runtime_state` 持有持久化的 snake_case 能力键与完整路由。
 ///
 /// # Returns
 /// 返回值
-/// A closed map containing only image, video, and audio understanding modes.
-/// 仅包含图片、视频与音频理解模式的封闭映射。
-pub(crate) fn session_media_understanding_modes_from_configuration(
-    configuration: &PersistedAiConfiguration,
-) -> BTreeMap<ProviderToolCapabilityKind, vulcan_workbench_model::SessionMediaUnderstandingMode> {
-    configuration
+/// The typed exact media route map, or an explicit invalid-key error.
+/// 类型化精确媒体路由映射；键非法时返回明确错误。
+fn session_media_understanding_selections_from_runtime(
+    runtime_state: &vulcan_workbench_model::SessionRuntimeStateEntry,
+) -> Result<BTreeMap<ProviderToolCapabilityKind, MediaUnderstandingBackendSelection>, String> {
+    runtime_state
         .media_understanding_selections
         .iter()
-        .filter_map(|(capability, selection)| {
-            let mode = match selection {
-                MediaUnderstandingBackendSelection::ProviderTool { .. } => {
-                    vulcan_workbench_model::SessionMediaUnderstandingMode::ProviderTool
-                }
-                MediaUnderstandingBackendSelection::ModelReplacement { .. } => {
-                    vulcan_workbench_model::SessionMediaUnderstandingMode::ModelReplacement
-                }
-            };
-            media_understanding_resource_kind(*capability).map(|_| (*capability, mode))
-        })
-        .collect()
-}
-
-/// Converts one session runtime mode map into the typed provider contract.
-/// 将会话运行时模式映射转换为类型化供应商契约。
-///
-/// # Parameters
-/// 参数
-/// `runtime_state` owns the persisted snake_case capability keys and closed mode values.
-/// `runtime_state` 持有持久化的 snake_case 能力键与封闭模式值。
-///
-/// # Returns
-/// 返回值
-/// The typed media mode map, or an explicit invalid-key error.
-/// 类型化媒体模式映射；键非法时返回明确错误。
-fn session_media_understanding_modes_from_runtime(
-    runtime_state: &vulcan_workbench_model::SessionRuntimeStateEntry,
-) -> Result<
-    BTreeMap<ProviderToolCapabilityKind, vulcan_workbench_model::SessionMediaUnderstandingMode>,
-    String,
-> {
-    runtime_state
-        .media_understanding_modes
-        .iter()
-        .map(|(capability, mode)| {
+        .map(|(capability, selection)| {
             let capability = serde_json::from_value(serde_json::Value::String(capability.clone()))
                 .map_err(|error| {
                     format!(
@@ -968,35 +893,74 @@ fn session_media_understanding_modes_from_runtime(
                 })?;
             if media_understanding_resource_kind(capability).is_none() {
                 return Err(format!(
-                    "Session capability `{capability:?}` cannot use a media-understanding mode."
+                    "Session capability `{capability:?}` cannot use a media-understanding route."
                 ));
             }
-            Ok((capability, *mode))
+            let selection = match selection {
+                vulcan_workbench_model::SessionMediaUnderstandingSelection::ProviderTool {
+                    selection,
+                } => MediaUnderstandingBackendSelection::ProviderTool {
+                    selection: ProviderToolTargetSelection {
+                        connection_id: selection.connection_id.clone(),
+                        target_id: selection.target_id.clone(),
+                    },
+                },
+                vulcan_workbench_model::SessionMediaUnderstandingSelection::ModelReplacement {
+                    selection,
+                    reasoning_effort,
+                } => MediaUnderstandingBackendSelection::ModelReplacement {
+                    selection: vulcan_provider_adapters::ActiveAiModelSelection {
+                        provider_id: selection.provider_id.clone(),
+                        model_id: selection.model_id.clone(),
+                        connection_id: selection.connection_id.clone(),
+                    },
+                    reasoning_effort: reasoning_effort.map(Into::into),
+                },
+            };
+            Ok((capability, selection))
         })
         .collect()
 }
 
-/// Converts one typed media mode map into the session runtime persistence contract.
-/// 将类型化媒体模式映射转换为会话运行时持久化契约。
+/// Converts typed exact media routes into the session runtime persistence contract.
+/// 将类型化精确媒体路由转换为会话运行时持久化契约。
 ///
 /// # Parameters
 /// 参数
-/// `modes` supplies typed media capabilities and closed backend modes.
-/// `modes` 提供类型化媒体能力与封闭后端模式。
+/// `selections` supplies typed media capabilities and complete provider or model routes.
+/// `selections` 提供类型化媒体能力及完整供应商工具或模型路由。
 ///
 /// # Returns
 /// 返回值
-/// Returns the same modes keyed by their canonical serialized capability names.
-/// 返回按规范序列化能力名称建键的同一模式集合。
-fn session_media_understanding_modes_to_runtime(
-    modes: &BTreeMap<
-        ProviderToolCapabilityKind,
-        vulcan_workbench_model::SessionMediaUnderstandingMode,
-    >,
-) -> BTreeMap<String, vulcan_workbench_model::SessionMediaUnderstandingMode> {
-    modes
+/// Returns the same routes keyed by their canonical serialized capability names.
+/// 返回按规范序列化能力名称建键的同一路由集合。
+pub(crate) fn session_media_understanding_selections_to_runtime(
+    selections: &BTreeMap<ProviderToolCapabilityKind, MediaUnderstandingBackendSelection>,
+) -> BTreeMap<String, vulcan_workbench_model::SessionMediaUnderstandingSelection> {
+    selections
         .iter()
-        .map(|(capability, mode)| (provider_tool_capability_key(*capability), *mode))
+        .filter_map(|(capability, selection)| {
+            let selection = match selection {
+                MediaUnderstandingBackendSelection::ProviderTool { selection } => {
+                    vulcan_workbench_model::SessionMediaUnderstandingSelection::ProviderTool {
+                        selection: session_provider_tool_selection_from_contract(selection),
+                    }
+                }
+                MediaUnderstandingBackendSelection::ModelReplacement {
+                    selection,
+                    reasoning_effort,
+                } => vulcan_workbench_model::SessionMediaUnderstandingSelection::ModelReplacement {
+                    selection: vulcan_workbench_model::SessionMediaUnderstandingModelSelection {
+                        provider_id: selection.provider_id.clone(),
+                        model_id: selection.model_id.clone(),
+                        connection_id: selection.connection_id.clone(),
+                    },
+                    reasoning_effort: reasoning_effort.map(Into::into),
+                },
+            };
+            media_understanding_resource_kind(*capability)
+                .map(|_| (provider_tool_capability_key(*capability), selection))
+        })
         .collect()
 }
 
@@ -1140,8 +1104,8 @@ pub(crate) fn provider_tool_capability_key(capability: ProviderToolCapabilityKin
 /// Returns every media resource backed by a valid understanding bridge for the effective session.
 /// 返回当前会话生效配置中由有效理解桥接承载的全部媒体资源。
 ///
-/// Inherited sessions read the current global defaults, while explicit session overrides remain isolated.
-/// 继承全局设置的会话读取当前全局默认值，会话显式覆盖则保持隔离。
+/// System defaults are used only before session initialization; initialized sessions own their routes.
+/// 系统默认值仅在会话初始化前使用；已初始化会话持有自己的路由。
 ///
 /// # Parameters
 /// 参数
@@ -1159,34 +1123,24 @@ pub(crate) fn public_ai_session_media_understanding_bridge_kinds(
     configuration: &PersistedAiConfiguration,
     runtime_state: Option<&vulcan_workbench_model::SessionRuntimeStateEntry>,
 ) -> Result<BTreeSet<ResourceKind>, String> {
-    let explicit_session_settings = runtime_state.is_some_and(|state| {
-        state.provider_tool_settings_initialized && state.provider_tool_selections_overridden
-    });
-    // enabledCapabilities preserves the session switch layer while media modes are applied to a
-    // detached configuration copy for this bridge calculation.
-    // enabledCapabilities 保留会话开关层，同时把媒体模式应用到独立配置副本供本次桥接计算使用。
-    let enabled_capabilities = if explicit_session_settings {
-        let runtime_state = runtime_state.expect("explicit session settings require runtime state");
-        session_provider_tool_enabled_capabilities_from_runtime(runtime_state)?
+    let initialized_session_settings =
+        runtime_state.is_some_and(|state| state.provider_tool_settings_initialized);
+    // Session initialization copies defaults once; every later bridge resolves only session-owned routes.
+    // 会话初始化仅复制一次默认值；此后每次桥接都只解析会话自有路由。
+    let (enabled_capabilities, media_understanding_selections) = if initialized_session_settings {
+        let runtime_state =
+            runtime_state.expect("initialized session settings require runtime state");
+        (
+            session_provider_tool_enabled_capabilities_from_runtime(runtime_state)?,
+            session_media_understanding_selections_from_runtime(runtime_state)?,
+        )
     } else {
-        configuration.provider_tool_enabled_capabilities.clone()
+        (
+            configuration.provider_tool_enabled_capabilities.clone(),
+            configuration.media_understanding_selections.clone(),
+        )
     };
-    let mut effective_configuration = configuration.clone();
-    if explicit_session_settings {
-        let runtime_state = runtime_state.expect("explicit session settings require runtime state");
-        for (capability, mode) in session_media_understanding_modes_from_runtime(runtime_state)? {
-            let backend_mode = match mode {
-                vulcan_workbench_model::SessionMediaUnderstandingMode::ProviderTool => {
-                    vulcan_provider_adapters::MediaUnderstandingBackendMode::ProviderTool
-                }
-                vulcan_workbench_model::SessionMediaUnderstandingMode::ModelReplacement => {
-                    vulcan_provider_adapters::MediaUnderstandingBackendMode::ModelReplacement
-                }
-            };
-            effective_configuration.apply_media_understanding_mode(capability, backend_mode)?;
-        }
-    }
-    let settings_catalog = runtime.settings_catalog_snapshot(&effective_configuration)?;
+    let settings_catalog = runtime.settings_catalog_snapshot(configuration)?;
     // availableProviderTargets shares one immutable generation with modelCandidates.
     // availableProviderTargets 与 modelCandidates 共享同一份不可变目录代际。
     let available_provider_targets = &settings_catalog.available_provider_tool_targets;
@@ -1204,12 +1158,31 @@ pub(crate) fn public_ai_session_media_understanding_bridge_kinds(
         if !enabled_capabilities.contains(&capability) {
             continue;
         }
-        if media_understanding_backend_is_available(
-            &settings_catalog.runtime_configuration,
-            capability,
-            available_provider_targets,
-            &model_candidates,
-        ) {
+        let route_is_available = media_understanding_selections.get(&capability).is_some_and(
+            |selection| match selection {
+                MediaUnderstandingBackendSelection::ProviderTool { selection } => {
+                    available_provider_targets.iter().any(|candidate| {
+                        candidate.connection_id == selection.connection_id
+                            && candidate.target.target_id == selection.target_id
+                            && candidate.target.contract.capability == capability
+                    })
+                }
+                MediaUnderstandingBackendSelection::ModelReplacement {
+                    selection,
+                    reasoning_effort,
+                } => model_candidates.iter().any(|candidate| {
+                    candidate.selection == *selection
+                        && model_route_supports_media_understanding(
+                            &candidate.capabilities,
+                            capability,
+                        )
+                        && reasoning_effort.is_none_or(|effort| {
+                            candidate.capabilities.reasoning_efforts.contains(&effort)
+                        })
+                }),
+            },
+        );
+        if route_is_available {
             bridged_media_kinds.insert(
                 media_understanding_resource_kind(capability)
                     .expect("closed media-understanding capability must map to a resource"),

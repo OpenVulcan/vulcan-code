@@ -74,10 +74,10 @@ fn anthropic_video_candidate_excludes_unregistered_audio_input() {
     ));
 }
 
-/// Verifies Anthropic routes cannot admit schema-free JSON Object output as stable replacement output.
-/// 验证 Anthropic 路由不能把无 Schema 的 JSON Object 输出准入为稳定替代输出。
+/// Verifies a media route remains eligible when its protocol requires host-wrapped plain text.
+/// 验证协议需要宿主包装纯文本时，媒体路线仍保持可选。
 #[test]
-fn anthropic_candidate_requires_json_schema_capability() {
+fn anthropic_candidate_can_use_host_wrapped_plain_text() {
     // capabilities uses the product default so the protocol projection must close the mismatch.
     // capabilities 使用产品默认值，因此协议投影必须关闭这一不匹配。
     let capabilities = ModelCapabilities {
@@ -94,7 +94,7 @@ fn anthropic_candidate_requires_json_schema_capability() {
         projected.structured_output,
         StructuredOutputCapability::Unsupported
     );
-    assert!(!model_route_supports_media_understanding(
+    assert!(model_route_supports_media_understanding(
         &projected,
         ProviderToolCapabilityKind::ImageUnderstand,
     ));

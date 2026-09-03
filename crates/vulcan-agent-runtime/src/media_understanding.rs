@@ -2,7 +2,7 @@
 //! 固定 Schema 的图片、视频与音频理解后端。
 
 use crate::attachment_assets::{
-    attachment_descriptor_from_path, registered_media_attachment_mime_types,
+    attachment_descriptor_from_path, registered_media_attachment_mime_types, streaming_file_sha256,
 };
 use futures_util::StreamExt;
 use serde_json::{Value, json};
@@ -13,7 +13,7 @@ use vulcan_ai_contract::{
     AiExecutionRequest, AiMessage, AiOperation, AiStreamEvent, ContentItem, MessageRole,
     ModelCapabilities, ParallelToolCallPolicy, PromptCachePolicy, ReasoningControlMode,
     ReasoningEffort, ReasoningOutputPolicy, ResourceKind, ResourceReference, ResourceSourceKind,
-    StructuredOutputCapability, StructuredOutputPolicy, ToolChoicePolicy,
+    StructuredOutputPolicy, ToolChoicePolicy,
 };
 use vulcan_core::types::ConversationAttachmentKind;
 use vulcan_provider_adapters::{
@@ -42,8 +42,8 @@ const MEDIA_UNDERSTANDING_WARNING_LIMIT: usize = 64;
 /// Maximum UTF-8 byte length accepted for one warning.
 /// 单条警告允许的最大 UTF-8 字节长度。
 const MEDIA_UNDERSTANDING_WARNING_BYTE_LIMIT: usize = 4 * 1024;
-/// Maximum serialized byte length accepted for one complete replacement-model document.
-/// 单份模型替代理解完整文档允许的最大序列化字节长度。
+/// Maximum UTF-8 byte length accepted for one complete replacement-model answer.
+/// 单份模型替代理解完整回答允许的最大 UTF-8 字节长度。
 const MEDIA_UNDERSTANDING_OUTPUT_DOCUMENT_BYTE_LIMIT: usize = 32 * 1024 * 1024;
 
 /// Returns the stable AI-facing tool id for one media-understanding capability.
@@ -73,7 +73,7 @@ pub(crate) fn media_understanding_input_schema(
             (path_argument): {
                 "type": "string",
                 "minLength": 1,
-                "description": "Exact project-resource:// id, canonical project-relative attachment path, or attachment:// id disclosed in this conversation. Project resources are resolved only within the invoking session's project. Absolute host paths are not accepted."
+                "description": "Exact project-resource:// id, owned attachment:// id, or readable local file path. Relative paths resolve from the active workspace; absolute and project-external paths are accepted until filesystem permissions are enabled. The file extension must match this understanding tool's media type."
             },
             "prompt": {
                 "type": "string",
@@ -310,8 +310,8 @@ async fn execute_model_replacement_media_understanding(
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| String::from("Media-understanding argument `prompt` is required."))?;
-    // attachment resolves only a canonical resource owned by the invoking conversation.
-    // attachment 只解析由发起调用会话持有的规范资源。
+    // attachment resolves either an owned locator or an explicit readable host path.
+    // attachment 解析归当前会话持有的定位符或显式可读宿主路径。
     let attachment = resolve_media_understanding_attachment(
         workspace_root,
         owner_session_id.as_deref(),
@@ -414,32 +414,11 @@ async fn execute_model_replacement_media_understanding(
         local_path: None,
         url: resource_url,
     };
-    // outputSchema is the invariant canonical media-understanding result contract.
-    // outputSchema 是不变的规范媒体理解结果契约。
-    let output_schema = media_understanding_output_schema(capability)?;
-    // structuredOutput uses native JSON Schema when available and otherwise JSON Object mode.
-    // structuredOutput 在可用时使用原生 JSON Schema，否则使用 JSON Object 模式。
-    let structured_output = match resolved_selection.model.capabilities.structured_output {
-        StructuredOutputCapability::JsonSchema => StructuredOutputPolicy::JsonSchema {
-            name: String::from("media_understanding_result"),
-            description: Some(String::from(
-                "Canonical image, video, or audio understanding result.",
-            )),
-            schema: output_schema.clone(),
-            strict: true,
-        },
-        StructuredOutputCapability::JsonObject => StructuredOutputPolicy::JsonObject,
-        StructuredOutputCapability::Unsupported => {
-            return Err(String::from(
-                "The selected replacement model no longer supports stable structured output.",
-            ));
-        }
-    };
-    // modelPrompt requires the same schema when only JSON Object mode is available.
-    // modelPrompt 在仅有 JSON Object 模式时仍要求相同 Schema。
+    // modelPrompt asks for one visible answer; the host owns the canonical result envelope and
+    // never delegates its internal JSON contract to a conversation model.
+    // modelPrompt 请求一个可见回答；规范结果信封由宿主持有，绝不把内部 JSON 契约委托给会话模型。
     let model_prompt = format!(
-        "Act as a media-understanding backend. Return only one JSON object matching this exact schema: {}\n\nUser instruction: {}",
-        serde_json::to_string(&output_schema).map_err(|error| error.to_string())?,
+        "Act as a media-understanding backend. Answer the user instruction directly from the attached media. Return only the answer text without a JSON or Markdown wrapper.\n\nUser instruction: {}",
         prompt.trim()
     );
     // request contains one actual media input and never exposes backend controls to the caller.
@@ -463,11 +442,11 @@ async fn execute_model_replacement_media_understanding(
         native_tools: Vec::new(),
         tool_choice: ToolChoicePolicy::Disabled,
         parallel_tool_calls: ParallelToolCallPolicy::Disabled,
-        structured_output,
+        structured_output: StructuredOutputPolicy::None,
         stop_sequences: Vec::new(),
         prompt_cache: PromptCachePolicy::default(),
         reasoning_effort,
-        reasoning_output: ReasoningOutputPolicy::Hidden,
+        reasoning_output: media_replacement_reasoning_output_policy(reasoning_effort),
         model_parameters: BTreeMap::new(),
         resources: vec![resource],
         output_token_limit: None,
@@ -481,12 +460,9 @@ async fn execute_model_replacement_media_understanding(
         .execute_internal_llm(&resolved_selection, request, execution_id)
         .await
         .map_err(|failure| failure.to_string())?;
-    // outputText accumulates JSON text when no StructuredJson item is emitted.
-    // outputText 在未产生 StructuredJson 项时累积 JSON 文本。
+    // outputText accumulates the sole result channel declared by the replacement request.
+    // outputText 累积替代请求声明的唯一结果通道。
     let mut output_text = String::new();
-    // structuredValue retains the sole complete structured item and rejects duplicates immediately.
-    // structuredValue 保留唯一完整结构化项，并立即拒绝重复项。
-    let mut structured_value = None;
     // completed distinguishes terminal completion from a truncated stream.
     // completed 区分终态完成与截断流。
     let mut completed = false;
@@ -496,8 +472,10 @@ async fn execute_model_replacement_media_understanding(
         let event = next_event.map_err(|failure| failure.to_string())?;
         match event {
             AiStreamEvent::ResponseItemStarted { item, .. } => match item {
-                ContentItem::StructuredJson { value } => {
-                    record_structured_media_output(&mut structured_value, value)?
+                ContentItem::StructuredJson { .. } => {
+                    return Err(String::from(
+                        "Media-understanding replacement returned structured output for a plain-text request.",
+                    ));
                 }
                 ContentItem::Text { text } => {
                     append_bounded_media_output_text(&mut output_text, text.as_str())?
@@ -531,43 +509,11 @@ async fn execute_model_replacement_media_understanding(
             "Media-understanding replacement stream ended before terminal completion.",
         ));
     }
-    // payload accepts exactly one native structured item or one textual JSON document, never both.
-    // payload 仅接受一个原生结构化项或一个文本 JSON 文档，绝不同时接受两种通道。
-    let payload = finalize_media_understanding_output(structured_value, output_text.as_str())?;
+    // payload canonicalizes the model's plain answer in the host-owned result contract.
+    // payload 在宿主持有的结果契约中规范化模型的纯文本回答。
+    let payload = finalize_media_understanding_output(output_text.as_str(), capability)?;
     validate_media_understanding_payload(&payload, capability)?;
     Ok(media_understanding_invocation_result(payload))
-}
-
-/// Records the sole native structured result emitted by a replacement-model stream.
-/// 记录替代模型流发出的唯一原生结构化结果。
-///
-/// # Parameters
-/// 参数
-/// `slot` owns the previously observed structured item and `value` is the newly emitted item.
-/// `slot` 持有此前观察到的结构化项，`value` 是新发出的结构化项。
-///
-/// # Returns
-/// 返回值
-/// `Ok(())` for the first item, or an explicit error when the stream emits multiple JSON values.
-/// 首个结构化项返回 `Ok(())`；流发出多个 JSON 值时返回明确错误。
-fn record_structured_media_output(slot: &mut Option<Value>, value: Value) -> Result<(), String> {
-    if slot.is_some() {
-        return Err(String::from(
-            "Media-understanding replacement returned multiple structured JSON items.",
-        ));
-    }
-    // serializedLength applies the same whole-document ceiling to native structured events.
-    // serializedLength 对原生结构化事件应用相同的整份文档上限。
-    let serialized_length = serde_json::to_vec(&value)
-        .map_err(|error| format!("Media-understanding structured output is invalid: {error}"))?
-        .len();
-    if serialized_length > MEDIA_UNDERSTANDING_OUTPUT_DOCUMENT_BYTE_LIMIT {
-        return Err(String::from(
-            "Media-understanding replacement structured output exceeds the host byte limit.",
-        ));
-    }
-    *slot = Some(value);
-    Ok(())
 }
 
 /// Appends one text event while enforcing the whole-document byte ceiling before allocation.
@@ -575,8 +521,8 @@ fn record_structured_media_output(slot: &mut Option<Value>, value: Value) -> Res
 ///
 /// # Parameters
 /// 参数
-/// `output` owns prior UTF-8 JSON fragments and `fragment` is the next normalized stream event.
-/// `output` 持有此前 UTF-8 JSON 分片，`fragment` 是下一项归一化流事件。
+/// `output` owns prior UTF-8 answer fragments and `fragment` is the next normalized stream event.
+/// `output` 持有此前 UTF-8 回答分片，`fragment` 是下一项归一化流事件。
 ///
 /// # Returns
 /// 返回值
@@ -596,32 +542,35 @@ fn append_bounded_media_output_text(output: &mut String, fragment: &str) -> Resu
     Ok(())
 }
 
-/// Finalizes exactly one replacement-model result channel into a JSON value.
-/// 将唯一的替代模型结果通道终结为 JSON 值。
+/// Wraps one replacement-model text answer in the canonical host result.
+/// 将一份替代模型文本回答包装为规范宿主结果。
 ///
 /// # Parameters
 /// 参数
-/// `structured_value` is the optional native item and `output_text` is the accumulated text channel.
-/// `structured_value` 是可选原生结构化项，`output_text` 是累积文本通道。
+/// `output_text` is the accumulated text channel and `capability` fixes the canonical media kind.
+/// `output_text` 是累积文本通道，`capability` 固定规范媒体类型。
 ///
 /// # Returns
 /// 返回值
-/// One JSON value, or an explicit error for mixed channels or invalid textual JSON.
-/// 返回一个 JSON 值；混合通道或无效文本 JSON 时返回明确错误。
+/// One canonical JSON value, or an explicit error when the model returned no answer text.
+/// 返回一个规范 JSON 值；模型没有返回回答文本时返回明确错误。
 fn finalize_media_understanding_output(
-    structured_value: Option<Value>,
     output_text: &str,
+    capability: ProviderToolCapabilityKind,
 ) -> Result<Value, String> {
-    if let Some(value) = structured_value {
-        if !output_text.trim().is_empty() {
-            return Err(String::from(
-                "Media-understanding replacement mixed structured JSON with text output.",
-            ));
-        }
-        return Ok(value);
+    let trimmed_output = output_text.trim();
+    if trimmed_output.is_empty() {
+        return Err(String::from(
+            "Media-understanding replacement returned no answer text.",
+        ));
     }
-    serde_json::from_str(output_text.trim())
-        .map_err(|error| format!("Media-understanding replacement returned invalid JSON: {error}"))
+    Ok(json!({
+        "schema_version": "vulcan.media-understanding.v1",
+        "media_kind": media_understanding_media_label(capability)?,
+        "answer": trimmed_output,
+        "segments": [],
+        "warnings": []
+    }))
 }
 
 /// Renders one provider-specific response into the canonical model-neutral shape.
@@ -813,56 +762,6 @@ fn optional_non_negative_milliseconds(value: Option<&Value>) -> Result<Option<u6
     }
 }
 
-/// Builds the invariant structured result schema for one media capability.
-/// 为一项媒体能力构建不变的结构化结果 Schema。
-fn media_understanding_output_schema(
-    capability: ProviderToolCapabilityKind,
-) -> Result<Value, String> {
-    // mediaKind is the only allowed semantic media label.
-    // mediaKind 是唯一允许的语义媒体标签。
-    let media_kind = media_understanding_media_label(capability)?;
-    Ok(json!({
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-            "schema_version": { "type": "string", "enum": ["vulcan.media-understanding.v1"] },
-            "media_kind": { "type": "string", "enum": [media_kind] },
-            "answer": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": MEDIA_UNDERSTANDING_ANSWER_BYTE_LIMIT
-            },
-            "segments": {
-                "type": "array",
-                "maxItems": MEDIA_UNDERSTANDING_SEGMENT_LIMIT,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "properties": {
-                        "start_ms": { "type": ["integer", "null"], "minimum": 0 },
-                        "end_ms": { "type": ["integer", "null"], "minimum": 0 },
-                        "content": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": MEDIA_UNDERSTANDING_SEGMENT_BYTE_LIMIT
-                        }
-                    },
-                    "required": ["start_ms", "end_ms", "content"]
-                }
-            },
-            "warnings": {
-                "type": "array",
-                "maxItems": MEDIA_UNDERSTANDING_WARNING_LIMIT,
-                "items": {
-                    "type": "string",
-                    "maxLength": MEDIA_UNDERSTANDING_WARNING_BYTE_LIMIT
-                }
-            }
-        },
-        "required": ["schema_version", "media_kind", "answer", "segments", "warnings"]
-    }))
-}
-
 /// Returns the exact resource kind for one understanding capability.
 /// 返回一项理解能力的精确资源类型。
 fn media_understanding_resource_kind(
@@ -912,8 +811,8 @@ fn media_understanding_attachment_kind(
 ///
 /// # Returns
 /// 返回值
-/// `true` only when conversation execution, media input, protocol encoding, and stable JSON output all exist.
-/// 仅当会话执行、媒体输入、协议编码与稳定 JSON 输出全部存在时返回 `true`。
+/// `true` only when conversation execution, media input, and the protocol encoder all exist.
+/// 仅当会话执行、媒体输入与协议编码器全部存在时返回 `true`。
 fn model_replacement_route_supports_media_understanding(
     capabilities: &ModelCapabilities,
     protocol_profile_id: &str,
@@ -932,10 +831,6 @@ fn model_replacement_route_supports_media_understanding(
         .operations
         .contains(&AiOperation::ConversationRespond)
         && capabilities.input_resources.contains(&resource_kind)
-        && crate::provider_input_normalizer::protocol_profile_supports_structured_output(
-            protocol_profile_id,
-            capabilities.structured_output,
-        )
         && crate::provider_input_normalizer::protocol_profile_supports_attachment_kind(
             protocol_profile_id,
             attachment_kind,
@@ -1033,7 +928,7 @@ fn media_understanding_description(
         .map(|max_count| format!(" Frozen route count limit: {max_count}."))
         .unwrap_or_default();
     Ok(format!(
-        "Understand exactly one {media_label} using the configured media-understanding backend. Use only a canonical project-relative resource path or `attachment://` id disclosed in this conversation; absolute paths are rejected. Accepted source MIME types: {mime_description}.{byte_description}{count_description} The host never calls this tool automatically; preserve the user's exact analysis intent in `prompt`."
+        "Understand exactly one {media_label} using the configured media-understanding backend. Use a canonical `project-resource://` id, an owned `attachment://` id, or a readable local file path. Relative paths resolve from the active workspace; absolute and project-external paths are accepted until filesystem permissions are enabled. Accepted source MIME types: {mime_description}.{byte_description}{count_description} The host never calls this tool automatically; preserve the user's exact analysis intent in `prompt`."
     ))
 }
 
@@ -1104,7 +999,7 @@ pub(crate) fn direct_media_understanding_description(
         ));
     }
     Ok(format!(
-        "{} Use exactly one conversation-owned canonical project-relative resource path or `attachment://` id; absolute paths and Provider file ids are rejected. {} The host never invokes this understanding tool automatically, so preserve the user's exact analysis intent.",
+        "{} Use exactly one canonical `project-resource://` id, owned `attachment://` id, or readable local file path. Relative paths resolve from the active workspace; absolute and project-external paths are accepted until filesystem permissions are enabled. Provider file ids are rejected. {} The host never invokes this understanding tool automatically, so preserve the user's exact analysis intent.",
         base_description.trim(),
         route_descriptions.join(" ")
     ))
@@ -1137,20 +1032,50 @@ fn validate_media_replacement_reasoning(
     })
 }
 
-/// Resolves one AI-visible resource locator into an owned canonical media attachment.
-/// 将一个 AI 可见资源定位符解析为归当前会话所有的规范媒体附件。
+/// Selects reasoning-output control only when the replacement request activates reasoning.
+/// 仅在替代请求实际启用推理时选择推理输出控制。
 ///
 /// # Parameters
 /// 参数
-/// `workspace_root` owns the managed asset index, `owner_session_id` is the invoking conversation,
-/// `capability` fixes the expected modality, and `reference` is the disclosed safe locator.
-/// `workspace_root` 持有托管资产索引，`owner_session_id` 是发起调用的会话，`capability`
-/// 固定预期模态，`reference` 是已告知 AI 的安全定位符。
+/// `reasoning_effort` is the explicit provider-neutral effort selected for this media capability.
+/// `reasoning_effort` 是为当前媒体能力显式选择的供应商无关推理档位。
 ///
 /// # Returns
 /// 返回值
-/// The integrity-checked canonical attachment without exposing its provider reference to the model.
-/// 返回通过完整性校验的规范附件，且不向模型暴露供应商引用。
+/// Hidden reasoning for an active effort, otherwise the exact protocol profile default.
+/// 推理已启用时隐藏推理输出，否则使用精确协议 Profile 的默认行为。
+fn media_replacement_reasoning_output_policy(
+    reasoning_effort: Option<ReasoningEffort>,
+) -> ReasoningOutputPolicy {
+    match reasoning_effort {
+        Some(ReasoningEffort::Adaptive)
+        | Some(ReasoningEffort::Minimal)
+        | Some(ReasoningEffort::Low)
+        | Some(ReasoningEffort::Medium)
+        | Some(ReasoningEffort::High)
+        | Some(ReasoningEffort::XHigh)
+        | Some(ReasoningEffort::Max)
+        | Some(ReasoningEffort::Ultra) => ReasoningOutputPolicy::Hidden,
+        Some(ReasoningEffort::None) | None => ReasoningOutputPolicy::ProviderDefault,
+    }
+}
+
+/// Resolves one AI-visible resource locator or local path into a canonical media attachment.
+/// 将一个 AI 可见资源定位符或本地路径解析为规范媒体附件。
+///
+/// # Parameters
+/// 参数
+/// `workspace_root` owns the managed asset index and resolves relative paths,
+/// `owner_session_id` is required only by project or attachment locators, `capability` fixes the
+/// expected modality, and `reference` is the exact disclosed locator or path.
+/// `workspace_root` 持有托管资产索引并解析相对路径，`owner_session_id` 仅供项目或附件定位符
+/// 使用，`capability` 固定预期模态，`reference` 是已告知 AI 的精确定位符或路径。
+///
+/// # Returns
+/// 返回值
+/// The integrity-checked canonical attachment. Direct paths are read from the host only and are
+/// replaced by the selected provider delivery channel before dispatch.
+/// 返回通过完整性校验的规范附件。直接路径仅由宿主读取，并在分派前由所选供应商投递通道替换。
 pub(crate) async fn resolve_media_understanding_attachment(
     workspace_root: Option<&Path>,
     owner_session_id: Option<&str>,
@@ -1177,26 +1102,92 @@ pub(crate) async fn resolve_media_understanding_attachment(
             )
             .await;
     }
-    let workspace_root = workspace_root.ok_or_else(|| {
-        String::from("Media-understanding resources require an active workspace root.")
-    })?;
-    let owner_session_id = owner_session_id.ok_or_else(|| {
-        String::from("Media-understanding resources require an owning conversation id.")
-    })?;
     let expected_kind = media_understanding_attachment_kind(capability)?;
-    let workspace_path = vulcan_runtime_assets::native_host_path_text_from_path(workspace_root);
-    let owner_session_id = owner_session_id.to_string();
-    let reference = reference.to_string();
-    tokio::task::spawn_blocking(move || {
-        crate::attachment_asset_index::resolve_owned_attachment_resource_metadata_for_kind(
-            workspace_path.as_str(),
-            owner_session_id.as_str(),
-            reference.as_str(),
-            expected_kind,
-        )
+    if reference.starts_with("attachment:") {
+        let workspace_root = workspace_root.ok_or_else(|| {
+            String::from("Managed media attachments require an active workspace root.")
+        })?;
+        let owner_session_id = owner_session_id.ok_or_else(|| {
+            String::from("Managed media attachments require an owning conversation id.")
+        })?;
+        let workspace_path = vulcan_runtime_assets::native_host_path_text_from_path(workspace_root);
+        let owner_session_id = owner_session_id.to_string();
+        let reference = reference.to_string();
+        return tokio::task::spawn_blocking(move || {
+            crate::attachment_asset_index::resolve_owned_attachment_resource_metadata_for_kind(
+                workspace_path.as_str(),
+                owner_session_id.as_str(),
+                reference.as_str(),
+                expected_kind,
+            )
+        })
+        .await
+        .map_err(|error| format!("Media-understanding resource resolver task failed: {error}"))?;
+    }
+    resolve_direct_media_understanding_attachment(workspace_root, capability, reference).await
+}
+
+/// Resolves one explicit local path without applying attachment ownership semantics.
+/// 在不应用附件所有权语义的情况下解析一条显式本地路径。
+///
+/// # Parameters
+/// 参数
+/// `workspace_root` is used only as the base for relative paths, `capability` fixes the required
+/// media kind, and `reference` may address any readable host file.
+/// `workspace_root` 仅作为相对路径的基准，`capability` 固定所需媒体类型，`reference` 可指向
+/// 任意可读宿主文件。
+///
+/// # Returns
+/// 返回值
+/// A canonical attachment carrying exact file metadata and a content digest for safe delivery.
+/// 返回携带精确文件元数据及内容摘要、可供安全投递的规范附件。
+async fn resolve_direct_media_understanding_attachment(
+    workspace_root: Option<&Path>,
+    capability: ProviderToolCapabilityKind,
+    reference: &str,
+) -> Result<vulcan_core::types::ConversationAttachment, String> {
+    // The shared provider-tool resolver intentionally treats the workspace as a relative-path base,
+    // not an authorization boundary; future permissions must gate the canonical target separately.
+    // 共享 Provider 工具解析器有意仅将工作区视为相对路径基准，而非授权边界；未来权限系统
+    // 必须单独门控规范目标。
+    let local_path =
+        vulcan_provider_adapters::resolve_provider_tool_local_path(workspace_root, reference)
+            .await?;
+    let metadata = tokio::fs::metadata(&local_path)
+        .await
+        .map_err(|_| String::from("Media-understanding source could not be inspected."))?;
+    if !metadata.is_file() {
+        return Err(String::from(
+            "Media-understanding source must be a regular file.",
+        ));
+    }
+    let resource_kind = media_understanding_resource_kind(capability)
+        .ok_or_else(|| format!("Capability `{capability:?}` is not media understanding."))?;
+    let mime_type = media_understanding_mime_type(resource_kind, &local_path)?;
+    let file_name = local_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| String::from("Media-understanding source has no valid file name."))?
+        .to_string();
+    let digest_path = local_path.clone();
+    let source_sha256 = tokio::task::spawn_blocking(move || streaming_file_sha256(&digest_path))
+        .await
+        .map_err(|_| String::from("Media-understanding digest task failed."))?
+        .map_err(|_| String::from("Media-understanding source could not be read."))?;
+    Ok(vulcan_core::types::ConversationAttachment {
+        kind: media_understanding_attachment_kind(capability)?,
+        file_name,
+        local_path: vulcan_runtime_assets::native_host_path_text_from_path(&local_path),
+        resource_path: None,
+        source_path: Some(reference.to_string()),
+        asset_id: None,
+        byte_len: Some(metadata.len()),
+        source_sha256: Some(source_sha256),
+        delivery_mode: None,
+        preview_local_path: None,
+        mime_type: mime_type.to_string(),
     })
-    .await
-    .map_err(|error| format!("Media-understanding resource resolver task failed: {error}"))?
 }
 
 /// Resolves the safe AI-visible locator while carrying its private source metadata outside tool arguments.
@@ -1204,10 +1195,10 @@ pub(crate) async fn resolve_media_understanding_attachment(
 ///
 /// # Parameters
 /// 参数
-/// `workspace_root`, `owner_session_id`, and `capability` define the ownership boundary; `arguments`
-/// is the exact fixed-schema model call.
-/// `workspace_root`、`owner_session_id` 与 `capability` 定义所有权边界；`arguments` 是精确的
-/// 固定 Schema 模型调用。
+/// `workspace_root` supplies relative-path context, `owner_session_id` supplies locator ownership,
+/// `capability` fixes the modality, and `arguments` is the exact fixed-schema model call.
+/// `workspace_root` 提供相对路径上下文，`owner_session_id` 提供定位符所有权，`capability`
+/// 固定模态，`arguments` 是精确的固定 Schema 模型调用。
 ///
 /// # Returns
 /// 返回值
@@ -1219,7 +1210,13 @@ pub(crate) async fn resolve_media_understanding_resource_arguments(
     capability: ProviderToolCapabilityKind,
     arguments: Value,
     media_resource_runtime: Option<&dyn crate::media_resource_runtime::MediaResourceRuntime>,
-) -> Result<(Value, vulcan_provider_adapters::ProviderToolMediaSource), String> {
+) -> Result<
+    (
+        Value,
+        Vec<vulcan_provider_adapters::ProviderToolMediaSource>,
+    ),
+    String,
+> {
     let path_argument = media_understanding_path_argument(capability)
         .ok_or_else(|| format!("Capability `{capability:?}` has no media path argument."))?;
     let reference = arguments
@@ -1229,6 +1226,12 @@ pub(crate) async fn resolve_media_understanding_resource_arguments(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| format!("Media-understanding argument `{path_argument}` is required."))?;
+    // A declared HTTPS source remains in operation arguments so the frozen manifest upload binding
+    // can validate its passthrough primitive and host allowlist before provider dispatch.
+    // 已声明的 HTTPS 来源保留在操作参数中，使冻结 Manifest 上传绑定能在供应商分派前校验直通原语与宿主白名单。
+    if media_understanding_reference_is_remote_url(reference)? {
+        return Ok((arguments, Vec::new()));
+    }
     let attachment = resolve_media_understanding_attachment(
         workspace_root,
         owner_session_id,
@@ -1263,7 +1266,40 @@ pub(crate) async fn resolve_media_understanding_resource_arguments(
             path_argument.to_string(),
             Value::String(source.reference.clone()),
         );
-    Ok((resolved, source))
+    Ok((resolved, vec![source]))
+}
+
+/// Detects HTTP(S) media inputs before any local-path canonicalization.
+/// 在执行任何本地路径规范化之前识别 HTTP(S) 媒体输入。
+///
+/// # Parameters
+/// 参数
+/// `reference` is the exact fixed-facade media string supplied by the AI.
+/// `reference` 是 AI 向固定媒体外壳提供的精确媒体字符串。
+///
+/// # Returns
+/// 返回值
+/// `true` for a syntactically valid HTTPS URL that must be authorized by the frozen manifest
+/// upload route, `false` for local or host-owned locators, and an explicit error for HTTP URLs.
+/// 对必须由冻结 Manifest 上传路线授权的合法 HTTPS URL 返回 `true`，对本地或宿主持有定位符返回
+/// `false`，对 HTTP URL 返回明确错误。
+fn media_understanding_reference_is_remote_url(reference: &str) -> Result<bool, String> {
+    // normalized_prefix performs only case-insensitive scheme classification; the URL parser remains authoritative.
+    // normalized_prefix 只执行不区分大小写的 scheme 分类；URL 解析器仍是权威。
+    let normalized_prefix = reference.to_ascii_lowercase();
+    if !normalized_prefix.starts_with("http://") && !normalized_prefix.starts_with("https://") {
+        return Ok(false);
+    }
+    // parsed_url rejects malformed network references before they can reach path handling.
+    // parsed_url 在异常网络引用进入路径处理前拒绝它们。
+    let parsed_url = reqwest::Url::parse(reference)
+        .map_err(|_| String::from("Media-understanding source is not a valid HTTP(S) URL."))?;
+    if parsed_url.scheme() != "https" {
+        return Err(String::from(
+            "Media-understanding remote sources require a manifest-declared HTTPS URL passthrough route; HTTP is not supported.",
+        ));
+    }
+    Ok(true)
 }
 
 /// Resolves one exact MIME type from the shared host attachment format registry.
@@ -1303,6 +1339,7 @@ fn media_understanding_mime_type(kind: ResourceKind, path: &Path) -> Result<&'st
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vulcan_ai_contract::StructuredOutputCapability;
 
     mod project_resources;
 
@@ -1324,6 +1361,11 @@ mod tests {
             assert_eq!(properties.len(), 2);
             assert!(properties.contains_key(path_argument));
             assert!(properties.contains_key("prompt"));
+            assert!(
+                properties[path_argument]["description"]
+                    .as_str()
+                    .is_some_and(|description| description.contains("project-external paths"))
+            );
             assert_eq!(schema["additionalProperties"], Value::Bool(false));
         }
     }
@@ -1395,27 +1437,52 @@ mod tests {
         );
     }
 
-    /// Rejects multiple native structured values instead of silently accepting the last one.
-    /// 拒绝多个原生结构化值，而不是静默接受最后一个。
+    /// Wraps plain answer text in the host-owned media-understanding contract.
+    /// 将纯文本回答包装到宿主持有的媒体理解契约中。
     #[test]
-    fn replacement_result_rejects_multiple_structured_items() {
-        // slot represents the single result channel after its first complete value.
-        // slot 表示已经接收首个完整值的单一结果通道。
-        let mut slot = Some(json!({ "answer": "first" }));
+    fn replacement_plain_text_is_wrapped_by_the_host_contract() {
+        let payload = finalize_media_understanding_output(
+            "  Two birds appear near the center of the frame.  ",
+            ProviderToolCapabilityKind::VideoUnderstand,
+        )
+        .expect("plain-text replacement output should be canonicalized");
 
-        assert!(record_structured_media_output(&mut slot, json!({ "answer": "second" })).is_err());
+        assert_eq!(payload["schema_version"], "vulcan.media-understanding.v1");
+        assert_eq!(payload["media_kind"], "video");
+        assert_eq!(
+            payload["answer"],
+            "Two birds appear near the center of the frame."
+        );
+        assert_eq!(payload["segments"], json!([]));
+        assert_eq!(payload["warnings"], json!([]));
     }
 
-    /// Rejects a response that combines native structured JSON with non-empty text.
-    /// 拒绝同时包含原生结构化 JSON 与非空文本的响应。
+    /// Preserves JSON-looking model text as answer text instead of interpreting an undeclared schema.
+    /// 将看似 JSON 的模型文本保留为回答文本，而不是解释未声明的 Schema。
     #[test]
-    fn replacement_result_rejects_mixed_output_channels() {
-        assert!(
-            finalize_media_understanding_output(
-                Some(json!({ "answer": "structured" })),
-                r#"{"answer":"text"}"#,
-            )
-            .is_err()
+    fn replacement_json_looking_text_remains_answer_text() {
+        // payload proves JSON-looking characters stay inside the host-owned answer field.
+        // payload 证明看似 JSON 的字符仍保留在宿主持有的回答字段中。
+        let payload = finalize_media_understanding_output(
+            r#"{"summary":"A bird crosses the frame."}"#,
+            ProviderToolCapabilityKind::VideoUnderstand,
+        )
+        .expect("JSON-looking text is still a valid plain-text answer");
+
+        assert_eq!(
+            payload["answer"],
+            r#"{"summary":"A bird crosses the frame."}"#
+        );
+    }
+
+    /// Rejects terminal completion without an answer instead of reporting a JSON parser location.
+    /// 拒绝没有回答的终态完成，而不是报告 JSON 解析器位置。
+    #[test]
+    fn replacement_empty_output_reports_the_missing_result_channel() {
+        assert_eq!(
+            finalize_media_understanding_output("  ", ProviderToolCapabilityKind::VideoUnderstand,)
+                .expect_err("empty replacement output must fail"),
+            "Media-understanding replacement returned no answer text."
         );
     }
 
@@ -1433,6 +1500,24 @@ mod tests {
         assert_eq!(output.len(), MEDIA_UNDERSTANDING_OUTPUT_DOCUMENT_BYTE_LIMIT);
     }
 
+    /// Verifies internal media requests control reasoning output only for an active effort.
+    /// 验证内部媒体请求仅在推理档位实际启用时控制推理输出。
+    #[test]
+    fn replacement_reasoning_output_requires_an_active_effort() {
+        assert_eq!(
+            media_replacement_reasoning_output_policy(None),
+            ReasoningOutputPolicy::ProviderDefault
+        );
+        assert_eq!(
+            media_replacement_reasoning_output_policy(Some(ReasoningEffort::None)),
+            ReasoningOutputPolicy::ProviderDefault
+        );
+        assert_eq!(
+            media_replacement_reasoning_output_policy(Some(ReasoningEffort::Adaptive)),
+            ReasoningOutputPolicy::Hidden
+        );
+    }
+
     /// Verifies replacement admission intersects model declarations with the frozen protocol encoder.
     /// 验证替代理解准入会把模型声明与冻结协议编码器取交集。
     #[test]
@@ -1442,6 +1527,7 @@ mod tests {
         let capabilities = ModelCapabilities {
             operations: vec![AiOperation::ConversationRespond],
             input_resources: vec![ResourceKind::Video],
+            structured_output: StructuredOutputCapability::Unsupported,
             ..ModelCapabilities::default()
         };
 
@@ -1485,6 +1571,7 @@ mod tests {
         assert!(!description.contains("image/svg+xml"));
         assert!(description.contains("Maximum source size: 1048576 bytes."));
         assert!(description.contains("Frozen route count limit: 2."));
+        assert!(description.contains("absolute and project-external paths are accepted"));
     }
 
     /// Verifies direct-provider documentation intersects host formats and keeps per-route limits.
@@ -1518,6 +1605,7 @@ mod tests {
         assert!(description.contains("maximum source size 8388608 bytes"));
         assert!(description.contains("maximum source count 1"));
         assert!(description.contains("Provider file ids are rejected"));
+        assert!(description.contains("absolute and project-external paths are accepted"));
     }
 
     /// Verifies model replacement accepts every extended video container recognized for Kimi uploads.

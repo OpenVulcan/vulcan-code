@@ -273,6 +273,70 @@ pub enum ProviderMediaUnderstandingMode {
     ModelReplacement,
 }
 
+/// Exact non-secret model route selected for one session media-understanding capability.
+/// 为一项会话媒体理解能力选择的精确非敏感模型路由。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderMediaUnderstandingModelTargetConfig {
+    /// Stable provider identifier.
+    /// 稳定供应商标识。
+    pub provider_id: String,
+    /// Exact provider model identifier.
+    /// 精确供应商模型标识。
+    pub model_id: String,
+    /// Explicit credential connection identifier.
+    /// 显式凭据连接标识。
+    pub connection_id: String,
+}
+
+/// Exact backend route selected for one session media-understanding capability.
+/// 为一项会话媒体理解能力选择的精确后端路由。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ProviderMediaUnderstandingRouteConfig {
+    /// Exact Manifest-owned provider tool target.
+    /// 精确的 Manifest 供应商工具目标。
+    ProviderTool(ProviderToolTargetConfig),
+    /// Exact replacement model and account route.
+    /// 精确的替代模型与账号路由。
+    ModelReplacement(ProviderMediaUnderstandingModelTargetConfig),
+}
+
+/// One provider-neutral reasoning effort persisted for a session media replacement.
+/// 为会话媒体替代模型持久化的一项供应商无关推理档位。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderMediaUnderstandingReasoningEffort {
+    /// Explicitly disable reasoning.
+    /// 显式关闭推理。
+    None,
+    /// Use provider-managed adaptive reasoning.
+    /// 使用供应商管理的自适应推理。
+    Adaptive,
+    /// Use the smallest declared reasoning effort.
+    /// 使用已声明的最小推理档位。
+    Minimal,
+    /// Use a low reasoning effort.
+    /// 使用低推理档位。
+    Low,
+    /// Use a balanced reasoning effort.
+    /// 使用中等推理档位。
+    Medium,
+    /// Use a high reasoning effort.
+    /// 使用高推理档位。
+    High,
+    /// Use an extra-high reasoning effort.
+    /// 使用超高推理档位。
+    #[serde(rename = "xhigh", alias = "x_high", alias = "x-high")]
+    XHigh,
+    /// Use the provider-declared maximum reasoning effort.
+    /// 使用供应商声明的最大推理档位。
+    Max,
+    /// Use a provider-specific ultra reasoning effort.
+    /// 使用供应商特有的极限推理档位。
+    Ultra,
+}
+
 /// One media capability backend selection in canonical capability order.
 /// 一项按规范能力顺序排列的媒体能力后端选择。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -284,6 +348,14 @@ pub struct ProviderMediaUnderstandingSelection {
     /// Exact backend family selected for the capability.
     /// 为该能力选择的精确后端类型。
     pub mode: ProviderMediaUnderstandingMode,
+    /// Exact route owned by this session; absent only for legacy mode-only metadata.
+    /// 当前会话持有的精确路由；仅旧版只含模式的元数据可以缺省。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<ProviderMediaUnderstandingRouteConfig>,
+    /// Optional session override for the selected replacement model's reasoning effort.
+    /// 所选替代模型的可选会话级推理档位覆盖。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ProviderMediaUnderstandingReasoningEffort>,
 }
 
 /// One native model-extension capability and its ordered target set.
@@ -308,8 +380,8 @@ pub struct ProviderToolSelectionConfig {
     /// 全局默认值是否已经物化到当前会话。
     #[serde(default, skip_serializing_if = "is_false")]
     pub initialized: bool,
-    /// Whether this session explicitly overrides global defaults.
-    /// 当前会话是否显式覆盖全局默认值。
+    /// Whether this session selection was explicitly saved after default materialization.
+    /// 当前会话选择是否在默认值物化后被显式保存。
     #[serde(default, skip_serializing_if = "is_false")]
     pub overridden: bool,
     /// Enabled semantic capability keys in canonical order.
@@ -323,7 +395,8 @@ pub struct ProviderToolSelectionConfig {
     /// Media backend selections in canonical order.
     /// 按规范顺序排列的媒体后端选择。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub media_understanding_modes: Vec<ProviderMediaUnderstandingSelection>,
+    #[serde(alias = "media_understanding_modes")]
+    pub media_understanding_selections: Vec<ProviderMediaUnderstandingSelection>,
     /// Native extension target sets in canonical order.
     /// 按规范顺序排列的原生扩展目标集合。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -346,7 +419,7 @@ impl ProviderToolSelectionConfig {
             && !self.overridden
             && self.enabled_capabilities.is_empty()
             && self.selections.is_empty()
-            && self.media_understanding_modes.is_empty()
+            && self.media_understanding_selections.is_empty()
             && self.extension_target_sets.is_empty()
     }
 }

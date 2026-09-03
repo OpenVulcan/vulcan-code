@@ -246,7 +246,7 @@ pub(super) use session_tools::{
 pub(crate) use session_tools::{
     provider_tool_capability_key, provider_tool_selection_config_from_parts_v1,
     public_ai_session_media_understanding_bridge_kinds,
-    session_media_understanding_modes_from_configuration, validate_provider_tool_session_settings,
+    session_media_understanding_selections_to_runtime, validate_provider_tool_session_settings,
 };
 pub(super) use session_tools::{
     service_public_ai_session_provider_tool_selections,

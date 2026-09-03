@@ -561,6 +561,7 @@ export type TranslationKey =
   | "composer.capability.mode.provider"
   | "composer.capability.mode.model"
   | "composer.capability.reasoning"
+  | "composer.capability.inheritGlobalReasoning"
   | "composer.reasoning.off"
   | "composer.reasoning.low"
   | "composer.reasoning.medium"
@@ -593,7 +594,6 @@ export type TranslationKey =
   | "composer.attachment.processing"
   | "composer.attachment.preparationBlocked"
   | "composer.attachment.metadataOnly"
-  | "composer.attachment.metadataOnlyCount"
   | "composer.attachment.retry"
   | "composer.attachment.unsupported"
   | "composer.attachment.maxLimit"
@@ -2529,6 +2529,7 @@ export type TranslationKey =
   | "settings.models.multimodalUnderstandingCandidate"
   | "settings.models.multimodalUnderstandingUnavailable"
   | "settings.providerTools.mediaBackendMode"
+  | "settings.providerTools.selectBackendMode"
   | "settings.providerTools.providerToolMode"
   | "settings.providerTools.modelReplacementMode"
   | "settings.providerTools.reasoningEffort"
@@ -3506,7 +3507,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.attachment.processing": "正在确认上传资源",
     "composer.attachment.preparationBlocked": "仍有 {count} 个附件正在准备，完成后才能发送。",
     "composer.attachment.metadataOnly": "此附件不会直接交给模型理解，仅会作为附件清单告知模型。",
-    "composer.attachment.metadataOnlyCount": "{count} 个附件将仅作为附件清单告知模型。",
     "composer.attachment.retry": "重试上传",
     "composer.attachment.unsupported": "无法暂存这些附件。",
     "composer.attachment.maxLimit": "最多只能添加 {count} 个附件。",
@@ -5335,6 +5335,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.models.multimodalUnderstandingCandidate": "多模态理解候选",
     "settings.models.multimodalUnderstandingUnavailable": "需要图片、视频或音频输入能力，以及 JSON Object 或 JSON Schema 输出能力",
     "settings.providerTools.mediaBackendMode": "理解后端模式",
+    "settings.providerTools.selectBackendMode": "请选择理解后端模式",
     "settings.providerTools.providerToolMode": "供应商专用模式",
     "settings.providerTools.modelReplacementMode": "模型代替模式",
     "settings.providerTools.reasoningEffort": "思考级别",
@@ -5744,7 +5745,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.contextUsage.totalTokens": "总 Tokens",
     "composer.capability.mediaBackendMode": "后端模式",
     "composer.capability.mediaFixedRoute": "固定路由",
-    "composer.capability.mediaBackendNote": "当前会话可以选择后端模式；具体模型、账号与思考级别由全局对应模式统一配置，工具参数结构不会变化。",
+    "composer.capability.mediaBackendNote": "当前会话可独立选择任意可用的后端、模型、账号与模型代替推理档位；会话选择覆盖系统默认值，工具参数结构不会变化。",
     "composer.capability.mediaBackendMissing": "请先在模型设置中配置此媒体理解能力的可用后端模式。",
     "composer.capability.extensionHint": "选择可供 AI 通过模型扩展参数查询后按需调用的模型。切换此集合不会改变已注册工具名。",
     "composer.capability.extensionProfileMissing": "缺少已审核模型扩展说明，当前不可选择。",
@@ -5753,6 +5754,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.capability.mode.provider": "供应商专用模式",
     "composer.capability.mode.model": "模型代替模式",
     "composer.capability.reasoning": "思考 {effort}",
+    "composer.capability.inheritGlobalReasoning": "继承系统推理档位",
     "settings.usageRefresh.title": "账号用量后台刷新",
     "settings.usageRefresh.description": "仅刷新声明支持用量查询且已具备必要凭据的账号；默认每 30 分钟刷新，缓存只保存在内存中。",
     "settings.usageRefresh.minute": "每 {count} 分钟",
@@ -6433,7 +6435,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.attachment.processing": "Confirming uploaded resource",
     "composer.attachment.preparationBlocked": "{count} attachment(s) are still being prepared. Wait for completion before sending.",
     "composer.attachment.metadataOnly": "This attachment will be disclosed as metadata only and will not be sent for direct model understanding.",
-    "composer.attachment.metadataOnlyCount": "{count} attachment(s) will be disclosed as metadata only.",
     "composer.attachment.retry": "Retry upload",
     "composer.attachment.unsupported": "These attachments could not be staged.",
     "composer.attachment.maxLimit": "You can add at most {count} attachments.",
@@ -8262,6 +8263,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.models.multimodalUnderstandingCandidate": "Multimodal understanding candidate",
     "settings.models.multimodalUnderstandingUnavailable": "Requires image, video, or audio input plus JSON Object or JSON Schema output",
     "settings.providerTools.mediaBackendMode": "Understanding backend mode",
+    "settings.providerTools.selectBackendMode": "Select an understanding backend mode",
     "settings.providerTools.providerToolMode": "Provider-specific mode",
     "settings.providerTools.modelReplacementMode": "Model replacement mode",
     "settings.providerTools.reasoningEffort": "Reasoning effort",
@@ -8671,7 +8673,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.contextUsage.totalTokens": "Total tokens",
     "composer.capability.mediaBackendMode": "Backend mode",
     "composer.capability.mediaFixedRoute": "Fixed route",
-    "composer.capability.mediaBackendNote": "This session can choose the backend mode; the model, account, and reasoning level come from the global configuration for that mode, and tool parameter schemas do not change.",
+    "composer.capability.mediaBackendNote": "This session can independently select any available backend, model, account, and model-replacement reasoning effort. Session choices override system defaults without changing tool parameter schemas.",
     "composer.capability.mediaBackendMissing": "Configure at least one available backend mode for this media-understanding capability in Model settings first.",
     "composer.capability.extensionHint": "Choose models that AI can query for extension parameters and call on demand. Changing this set does not change registered tool names.",
     "composer.capability.extensionProfileMissing": "No reviewed model-extension description is available, so this model cannot be selected.",
@@ -8680,6 +8682,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.capability.mode.provider": "Provider-specific mode",
     "composer.capability.mode.model": "Model replacement mode",
     "composer.capability.reasoning": "Reasoning {effort}",
+    "composer.capability.inheritGlobalReasoning": "Inherit system reasoning effort",
     "settings.usageRefresh.title": "Background account-usage refresh",
     "settings.usageRefresh.description": "Refresh only accounts that declare usage-query support and have the required credentials; the default interval is 30 minutes and the cache stays in memory.",
     "settings.usageRefresh.minute": "Every {count} minute",

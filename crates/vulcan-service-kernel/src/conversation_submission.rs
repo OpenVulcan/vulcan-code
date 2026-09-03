@@ -201,12 +201,12 @@ struct SubmissionProviderToolSettings {
         vulcan_provider_adapters::ProviderToolCapabilityKind,
         std::collections::BTreeSet<vulcan_provider_adapters::ProviderToolTargetSelection>,
     >,
-    /// Session-selected provider or model-replacement mode per media capability.
-    /// 当前会话为每项媒体能力选择的供应商专用或模型代替模式。
+    /// Exact session-owned provider-tool or replacement-model route per media capability.
+    /// 当前会话为每项媒体能力持有的精确供应商工具或替代模型路由。
     #[serde(default)]
-    media_understanding_modes: BTreeMap<
+    media_understanding_selections: BTreeMap<
         vulcan_provider_adapters::ProviderToolCapabilityKind,
-        vulcan_workbench_model::SessionMediaUnderstandingMode,
+        vulcan_provider_adapters::MediaUnderstandingBackendSelection,
     >,
 }
 
@@ -222,8 +222,8 @@ pub(super) struct SubmissionSessionSettings {
     /// Optional explicit VMM policy pair; absence preserves inherited defaults.
     /// 可选显式 VMM 策略对；缺省时保留继承默认值。
     vmm_policy: Option<SubmissionVmmPolicy>,
-    /// Optional complete provider-tool snapshot; absence preserves an explicit session override or inherits current global defaults.
-    /// 可选完整供应商工具快照；缺省时保留会话显式覆盖，或继承当前全局默认值。
+    /// Optional complete provider-tool snapshot; absence preserves initialized session state or materializes defaults for a new session.
+    /// 可选完整供应商工具快照；缺省时保留已初始化会话状态，或为新会话物化默认值。
     provider_tool_settings: Option<SubmissionProviderToolSettings>,
     /// Optional knowledge selection; absence preserves project inheritance.
     /// 可选知识库选择；缺省时保留项目继承。
@@ -233,16 +233,25 @@ pub(super) struct SubmissionSessionSettings {
     initial_goal: Option<SubmissionInitialGoal>,
 }
 
-/// Reports whether an absent per-turn snapshot must preserve an explicit session override.
-/// 判断缺失的本回合快照是否必须保留会话显式覆盖。
+/// Reports whether an absent per-turn snapshot must preserve initialized session-owned settings.
+/// 判断缺失的本回合快照是否必须保留已初始化的会话自有设置。
+///
+/// # Parameters
+/// 参数
+/// `has_explicit_settings` reports whether this submission carries a complete replacement snapshot;
+/// `provider_tool_settings_initialized` reports whether defaults were already materialized for the session.
+/// `has_explicit_settings` 表示本次提交是否携带完整替换快照；
+/// `provider_tool_settings_initialized` 表示默认值是否已经为当前会话物化。
+///
+/// # Returns
+/// 返回值
+/// Returns `true` only when the submission omits settings and the session already owns a materialized snapshot.
+/// 仅当提交未携带设置且会话已持有物化快照时返回 `true`。
 fn should_preserve_existing_provider_tool_settings(
     has_explicit_settings: bool,
     provider_tool_settings_initialized: bool,
-    provider_tool_selections_overridden: bool,
 ) -> bool {
-    !has_explicit_settings
-        && provider_tool_settings_initialized
-        && provider_tool_selections_overridden
+    !has_explicit_settings && provider_tool_settings_initialized
 }
 
 /// Converts one submitted VMM tri-state mode into the persisted optional layer value.
@@ -320,10 +329,6 @@ async fn apply_submission_session_settings(
     )?;
     let provider_tool_settings =
         settings.and_then(|settings| settings.provider_tool_settings.as_ref());
-    let global_media_understanding_modes =
-        crate::public_ai_settings::session_media_understanding_modes_from_configuration(
-            &configuration,
-        );
     let has_explicit_provider_tool_settings = provider_tool_settings.is_some();
     let preserve_existing_provider_tools = should_preserve_existing_provider_tool_settings(
         has_explicit_provider_tool_settings,
@@ -331,10 +336,6 @@ async fn apply_submission_session_settings(
             .session_runtime_state
             .get(&session_id)
             .is_some_and(|runtime_state| runtime_state.provider_tool_settings_initialized),
-        workspace_snapshot
-            .session_runtime_state
-            .get(&session_id)
-            .is_some_and(|runtime_state| runtime_state.provider_tool_selections_overridden),
     );
     let enabled_capabilities = provider_tool_settings
         .map(|settings| &settings.enabled_capabilities)
@@ -345,16 +346,16 @@ async fn apply_submission_session_settings(
     let provider_extension_target_sets = provider_tool_settings
         .map(|settings| &settings.extension_target_sets)
         .unwrap_or(&configuration.provider_extension_target_sets);
-    let media_understanding_modes = provider_tool_settings
-        .map(|settings| &settings.media_understanding_modes)
-        .unwrap_or(&global_media_understanding_modes);
+    let media_understanding_selections = provider_tool_settings
+        .map(|settings| &settings.media_understanding_selections)
+        .unwrap_or(&configuration.media_understanding_selections);
     if !preserve_existing_provider_tools {
         crate::public_ai_settings::validate_provider_tool_session_settings(
             runtime,
             &configuration,
             enabled_capabilities,
             provider_tool_selections,
-            media_understanding_modes,
+            media_understanding_selections,
             provider_extension_target_sets,
         )?;
     }
@@ -433,7 +434,7 @@ async fn apply_submission_session_settings(
             crate::public_ai_settings::provider_tool_selection_config_from_parts_v1(
                 enabled_capabilities,
                 provider_tool_selections,
-                media_understanding_modes,
+                media_understanding_selections,
                 provider_extension_target_sets,
                 has_explicit_provider_tool_settings,
             )
@@ -481,10 +482,10 @@ async fn apply_submission_session_settings(
             .iter()
             .map(|capability| provider_tool_capability_key(*capability))
             .collect();
-        runtime_state.media_understanding_modes = media_understanding_modes
-            .iter()
-            .map(|(capability, mode)| (provider_tool_capability_key(*capability), *mode))
-            .collect();
+        runtime_state.media_understanding_selections =
+            crate::public_ai_settings::session_media_understanding_selections_to_runtime(
+                media_understanding_selections,
+            );
         runtime_state.provider_extension_target_sets = provider_extension_target_sets
             .iter()
             .map(|(capability, selections)| {
@@ -3386,21 +3387,14 @@ mod submission_session_settings_tests {
     };
     use vulcan_agent_runtime::provider_config::PersistedPromptOutputStyleSelection;
 
-    /// Verifies only an explicitly overridden session is preserved when a submission omits settings.
-    /// 验证提交缺少设置时仅保留显式覆盖的会话。
+    /// Verifies every initialized session is preserved when a submission omits settings.
+    /// 验证提交缺少设置时保留所有已初始化会话。
     #[test]
-    fn omitted_settings_preserve_explicit_session_only() {
-        assert!(should_preserve_existing_provider_tool_settings(
-            false, true, true
-        ));
+    fn omitted_settings_preserve_every_initialized_session() {
+        assert!(should_preserve_existing_provider_tool_settings(false, true));
+        assert!(!should_preserve_existing_provider_tool_settings(true, true));
         assert!(!should_preserve_existing_provider_tool_settings(
-            true, true, true
-        ));
-        assert!(!should_preserve_existing_provider_tool_settings(
-            false, true, false
-        ));
-        assert!(!should_preserve_existing_provider_tool_settings(
-            false, false, false
+            false, false
         ));
     }
 

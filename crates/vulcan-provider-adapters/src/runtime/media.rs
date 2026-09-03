@@ -419,6 +419,55 @@ impl PublicAiRuntime {
                 reference_encoding: Some(cached_reference.reference_encoding),
             });
         }
+        // uploadFlight assigns exactly one physical preparation owner after the completed cache miss.
+        // uploadFlight 在已完成缓存未命中后仅分配一个真实准备所有者。
+        let mut upload_flight_owner = if use_provider_upload {
+            match self.execution_client.register_prepared_media_flight(
+                &selection.route,
+                kind,
+                mime_type,
+                expected_source_identity,
+                owner_session_id,
+            )? {
+                crate::execution::PreparedMediaFlightRegistration::Owner(owner) => {
+                    // Recheck the completed cache after ownership acquisition to close the miss/register race.
+                    // 取得所有权后再次检查已完成缓存，以封闭未命中与注册之间的竞态窗口。
+                    if let Some(cached_reference) = self
+                        .execution_client
+                        .prepared_media_reference_for_admitted_source(
+                            &selection.route,
+                            local_path,
+                            kind,
+                            mime_type,
+                            expected_source_identity,
+                            owner_session_id,
+                            Some(cancellation),
+                        )
+                        .await
+                    {
+                        let shared = crate::execution::PreparedMediaFlightOutcome {
+                            provider_reference: cached_reference.provider_reference,
+                            reference_encoding: cached_reference.reference_encoding,
+                        };
+                        owner.complete(Ok(shared.clone()));
+                        return Ok(PreparedLocalMediaReference {
+                            reference: shared.provider_reference,
+                            reference_encoding: Some(shared.reference_encoding),
+                        });
+                    }
+                    Some(owner)
+                }
+                crate::execution::PreparedMediaFlightRegistration::Follower(flight) => {
+                    let shared = flight.wait(cancellation).await?;
+                    return Ok(PreparedLocalMediaReference {
+                        reference: shared.provider_reference,
+                        reference_encoding: Some(shared.reference_encoding),
+                    });
+                }
+            }
+        } else {
+            None
+        };
         // observer is cloned before any callback invocation to avoid retaining the registry lock.
         // observer 在任何回调调用前完成克隆，避免占用注册表锁。
         let observer = self
@@ -552,6 +601,9 @@ impl PublicAiRuntime {
         let prepared = match preparation_result {
             Ok(prepared) => prepared,
             Err(error) => {
+                if let Some(owner) = upload_flight_owner.take() {
+                    owner.complete(Err(error.clone()));
+                }
                 if let Some(context) = progress_context.as_ref() {
                     // terminalPhase distinguishes cooperative cancellation from provider failure.
                     // terminalPhase 区分协作式取消与供应商失败。
@@ -574,26 +626,52 @@ impl PublicAiRuntime {
         };
         // preparedReference binds this physical invocation directly to the verified bytes.
         // preparedReference 将本次物理调用直接绑定到已验证字节。
-        let prepared_reference = prepared
-            .prepared_reference()
-            .ok_or_else(|| {
-                String::from("Media-understanding preparation did not produce a request reference.")
-            })?
-            .to_string();
+        let prepared_reference = match prepared.prepared_reference() {
+            Some(reference) => reference.to_string(),
+            None => {
+                let error = String::from(
+                    "Media-understanding preparation did not produce a request reference.",
+                );
+                if let Some(owner) = upload_flight_owner.take() {
+                    owner.complete(Err(error.clone()));
+                }
+                if let Some(context) = progress_context.as_ref() {
+                    context.emit(
+                        crate::RuntimeMediaUploadPhase::Failed,
+                        context.last_bytes_sent.load(Ordering::Acquire),
+                        context.base.total_bytes,
+                        Some(error.clone()),
+                    );
+                }
+                progress_terminal_guard.disarm();
+                return Err(error);
+            }
+        };
         // referenceEncoding preserves the exact wire channel for uploaded media and distinguishes
         // host-inline Data URLs without guessing from the reference string.
         // referenceEncoding 为已上传媒体保留精确 Wire 通道，并在不猜测引用字符串的情况下区分宿主内联 Data URL。
         let reference_encoding = if use_provider_upload {
-            Some(
-                upload_contract
-                    .as_ref()
-                    .ok_or_else(|| {
-                        String::from(
-                            "Media-understanding upload completed without its frozen contract.",
-                        )
-                    })?
-                    .reference_encoding,
-            )
+            match upload_contract.as_ref() {
+                Some(contract) => Some(contract.reference_encoding),
+                None => {
+                    let error = String::from(
+                        "Media-understanding upload completed without its frozen contract.",
+                    );
+                    if let Some(owner) = upload_flight_owner.take() {
+                        owner.complete(Err(error.clone()));
+                    }
+                    if let Some(context) = progress_context.as_ref() {
+                        context.emit(
+                            crate::RuntimeMediaUploadPhase::Failed,
+                            context.last_bytes_sent.load(Ordering::Acquire),
+                            context.base.total_bytes,
+                            Some(error.clone()),
+                        );
+                    }
+                    progress_terminal_guard.disarm();
+                    return Err(error);
+                }
+            }
         } else {
             None
         };
@@ -616,6 +694,14 @@ impl PublicAiRuntime {
             );
         }
         progress_terminal_guard.disarm();
+        if let (Some(owner), Some(reference_encoding)) =
+            (upload_flight_owner.take(), reference_encoding)
+        {
+            owner.complete(Ok(crate::execution::PreparedMediaFlightOutcome {
+                provider_reference: prepared_reference.clone(),
+                reference_encoding,
+            }));
+        }
         Ok(PreparedLocalMediaReference {
             reference: prepared_reference,
             reference_encoding,

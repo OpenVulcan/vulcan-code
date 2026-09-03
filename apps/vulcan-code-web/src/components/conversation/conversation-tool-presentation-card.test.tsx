@@ -257,6 +257,8 @@ describe("ToolPresentationCard file access icons", () => {
 
     expect(markup).toContain("语音合成");
     expect(markup).not.toContain("speech_synthesize");
+    expect(markup).toContain('data-provider-tool-icon-family="audio"');
+    expect(markup).toContain("lucide-volume-2");
     expect(markup).toContain('data-model-extension-payload="input"');
     expect(markup).toContain('data-model-extension-payload="output"');
     expect(markup).toContain("model-extension-payload-body");
