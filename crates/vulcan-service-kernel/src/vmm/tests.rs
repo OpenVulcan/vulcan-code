@@ -173,6 +173,7 @@ fn vmm_suppression_command_id_is_stable_and_strict() {
 fn vmm_config_layer_from_draft_parses_transport_and_behavior_fields() {
     let draft = VmmConfigDraftSummary {
         has_override: true,
+        backend_mode: String::from("external_grpc"),
         enabled: true,
         grpc_target: String::from(" http://127.0.0.1:50051 "),
         grpc_api_key: String::from(" secret "),

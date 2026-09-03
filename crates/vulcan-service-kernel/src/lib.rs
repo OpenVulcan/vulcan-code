@@ -174,11 +174,13 @@ mod git_watcher;
 mod host_tools_settings;
 pub mod inference_access;
 mod inference_service;
+mod internal_ai;
 mod knowledge_base_services;
 mod managed_memory_mesh_maintenance;
 mod managed_memory_mesh_runtime;
 mod mcp_settings;
 mod media_upload;
+mod native_vmm;
 mod output_style;
 mod pending_prompt_services;
 mod pending_prompts;
@@ -428,6 +430,7 @@ pub fn create_service_bridge_state(
         agent_runtime: None,
         codebase_memory_controller: Default::default(),
         managed_memory_mesh_runtime: None,
+        native_vmm_maintenance: None,
         vmm_controller_registry: Default::default(),
         service_runtime: None,
         webui_service_discovery: None,

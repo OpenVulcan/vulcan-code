@@ -22,15 +22,17 @@ pub use adapter::{
     post_action_request_from_completed_payload, precheck_request_from_payload,
     render_vmm_context_item_detail, render_vmm_context_item_model, render_vmm_context_item_panel,
 };
-pub use client::{VmmClient, VmmClientError};
+pub use client::{
+    VmmClient, VmmClientError, install_process_native_vmm_client, process_native_vmm_client,
+};
 pub use config::{
     DEFAULT_GRPC_KEEPALIVE_PERMIT_WITHOUT_CALLS, DEFAULT_GRPC_KEEPALIVE_TIME_MS,
     DEFAULT_GRPC_KEEPALIVE_TIMEOUT_MS, DEFAULT_HANDSHAKE_TIMEOUT_MS, DEFAULT_IMPLICIT_MEMORY_TURNS,
     DEFAULT_PROFILE_NODE_LIMIT, DEFAULT_PROFILE_REFRESH_TURNS, DEFAULT_RECEIVE_TIMEOUT_MS,
     DEFAULT_VMM_INJECTION_DESCRIPTION, DEFAULT_VMM_INJECTION_TAG, MAX_PROFILE_NODE_LIMIT,
     VMM_OPENAI_APPEND_CONTINUATION_FEATURE_ENV, VMM_SESSION_STATE_FEATURE_ENV,
-    VMM_STABLE_ANCHORS_FEATURE_ENV, VmmConfigDiagnostic, VmmConfigLayer, VmmEffectiveConfig,
-    VmmEffectiveConfigSource, VmmInstallReservation, VmmManagedRuntimeSettings,
+    VMM_STABLE_ANCHORS_FEATURE_ENV, VmmBackendMode, VmmConfigDiagnostic, VmmConfigLayer,
+    VmmEffectiveConfig, VmmEffectiveConfigSource, VmmInstallReservation, VmmManagedRuntimeSettings,
     VmmRuntimeFeaturePolicy,
 };
 pub use managed::{

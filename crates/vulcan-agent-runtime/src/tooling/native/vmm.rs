@@ -466,10 +466,18 @@ fn effective_vmm_config_for_native_request(
 /// 为一次原生工具调用连接 VMM 客户端。
 async fn connect_vmm_native_client(
     config: &VmmEffectiveConfig,
-) -> Result<TonicVmmClient, NativeToolError> {
-    TonicVmmClient::connect(VmmTransportConfig::from_effective(config))
-        .await
-        .map_err(|error| NativeToolError::new(error.to_string()))
+) -> Result<Arc<dyn VmmClient>, NativeToolError> {
+    match config.backend_mode {
+        VmmBackendMode::Native => {
+            process_native_vmm_client().map_err(|error| NativeToolError::new(error.to_string()))
+        }
+        VmmBackendMode::ExternalGrpc => {
+            TonicVmmClient::connect(VmmTransportConfig::from_effective(config))
+                .await
+                .map(|client| Arc::new(client) as Arc<dyn VmmClient>)
+                .map_err(|error| NativeToolError::new(error.to_string()))
+        }
+    }
 }
 
 async fn execute_vmm_memory_search_tool(
@@ -483,6 +491,7 @@ async fn execute_vmm_memory_search_tool(
         .search_memory_events(SearchMemoryEventsRequest {
             user_id: config.user_id.unwrap_or_default(),
             project_id: config.project_id.unwrap_or_default(),
+            host_project_id: request.host_project_id.clone().unwrap_or_default(),
             queries: parsed_args.queries,
             top_k: parsed_args.top_k.unwrap_or(5),
         })
@@ -522,6 +531,9 @@ async fn execute_vmm_turn_details_tool(
     let client = connect_vmm_native_client(&config).await?;
     let response = client
         .get_turn_details(GetTurnDetailsRequest {
+            user_id: config.user_id.unwrap_or_default(),
+            project_id: config.project_id.unwrap_or_default(),
+            host_project_id: request.host_project_id.clone().unwrap_or_default(),
             turn_ids: parsed_args.turn_ids,
         })
         .await
@@ -568,6 +580,7 @@ async fn execute_vmm_memory_write_tool(
             session_id,
             user_id: config.user_id.unwrap_or_default(),
             project_id: config.project_id.unwrap_or_default(),
+            host_project_id: request.host_project_id.clone().unwrap_or_default(),
             items: parsed_args
                 .items
                 .into_iter()
@@ -607,6 +620,7 @@ async fn execute_vmm_memory_delete_tool(
         .delete_memories(DeleteMemoriesRequest {
             user_id: config.user_id.unwrap_or_default(),
             project_id: config.project_id.unwrap_or_default(),
+            host_project_id: request.host_project_id.clone().unwrap_or_default(),
             memory_ids: parsed_args.memory_ids,
             reason: parsed_args.reason,
         })

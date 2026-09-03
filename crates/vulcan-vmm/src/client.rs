@@ -16,6 +16,11 @@ use crate::protocol::{
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display};
+use std::sync::{Arc, OnceLock, RwLock};
+
+/// Process-local native VMM client registry installed by the VulcanCode composition root.
+/// 由 VulcanCode 组合根安装的进程内原生 VMM 客户端注册表。
+static PROCESS_NATIVE_VMM_CLIENT: OnceLock<RwLock<Option<Arc<dyn VmmClient>>>> = OnceLock::new();
 
 /// Transport or business error returned by a VMM client implementation.
 /// VMM 客户端实现返回的传输或业务错误。
@@ -62,6 +67,53 @@ impl Display for VmmClientError {
 }
 
 impl std::error::Error for VmmClientError {}
+
+/// Installs or replaces the process-local native VMM client without exposing a network endpoint.
+/// 安装或替换进程内原生 VMM 客户端，且不暴露网络端点。
+///
+/// # Parameters
+/// 参数
+/// `client` is the host-owned direct Rust adapter over the copied Core.
+/// `client` 是宿主持有并直接覆盖复制 Core 的 Rust 适配器。
+///
+/// # Returns
+/// 返回值
+/// Success after atomic replacement, or a lock-poison diagnostic.
+/// 原子替换后返回成功，锁中毒时返回诊断。
+pub fn install_process_native_vmm_client(client: Arc<dyn VmmClient>) -> Result<(), String> {
+    let registry = PROCESS_NATIVE_VMM_CLIENT.get_or_init(|| RwLock::new(None));
+    let mut slot = registry
+        .write()
+        .map_err(|_| String::from("The process-local native VMM client registry is locked."))?;
+    *slot = Some(client);
+    Ok(())
+}
+
+/// Resolves the process-local native VMM client installed by the service host.
+/// 解析由服务宿主安装的进程内原生 VMM 客户端。
+///
+/// # Returns
+/// 返回值
+/// The shared direct Rust client, or an explicit readiness error.
+/// 返回共享的直接 Rust 客户端，未就绪时返回显式错误。
+pub fn process_native_vmm_client() -> Result<Arc<dyn VmmClient>, VmmClientError> {
+    PROCESS_NATIVE_VMM_CLIENT
+        .get_or_init(|| RwLock::new(None))
+        .read()
+        .map_err(|_| {
+            VmmClientError::new(
+                "native_registry_locked",
+                "The process-local native VMM client registry cannot be read.",
+            )
+        })?
+        .clone()
+        .ok_or_else(|| {
+            VmmClientError::new(
+                "native_not_ready",
+                "The process-local native VMM client is not installed.",
+            )
+        })
+}
 
 /// Async VMM client abstraction.
 /// 异步 VMM 客户端抽象。

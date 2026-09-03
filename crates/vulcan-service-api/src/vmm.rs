@@ -28,6 +28,9 @@ pub enum VmmDeploymentMode {
     /// 长期记忆尚未配置。
     #[default]
     Disabled,
+    /// Vulcan Code owns the Rust-native VMM Core in-process.
+    /// VulcanCode 在进程内负责 Rust 原生 VMM Core。
+    Native,
     /// Vulcan Code owns the local VMM process.
     /// Vulcan Code 托管本地 VMM 进程。
     Managed,
@@ -752,6 +755,9 @@ pub struct VmmConfigDraftSummary {
     /// Whether this layer has explicit overrides.
     /// 当前层是否存在显式覆盖。
     pub has_override: bool,
+    /// Editable global backend selector using `native` or `external_grpc`.
+    /// 可编辑的全局后端选择器，取值为 `native` 或 `external_grpc`。
+    pub backend_mode: String,
     /// Whether memory is enabled on this layer.
     /// 当前层是否启用记忆。
     pub enabled: bool,
@@ -991,6 +997,120 @@ pub struct VmmMemoryActionRequest {
     pub payload: serde_json::Value,
 }
 
+/// Counts native VMM records affected by one project maintenance operation.
+/// 统计一次原生 VMM 项目维护操作影响的记录。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeProjectContentCounts {
+    /// Number of distinct host sessions.
+    /// 不同宿主会话数量。
+    pub sessions: u64,
+    /// Number of canonical turns.
+    /// 规范回合数量。
+    pub turns: u64,
+    /// Number of durable memories.
+    /// 持久记忆数量。
+    pub memories: u64,
+    /// Number of project profile nodes.
+    /// 项目画像节点数量。
+    pub profile_nodes: u64,
+    /// Number of context-evidence rows.
+    /// 情境证据数量。
+    pub context_evidence: u64,
+    /// Number of compact boundaries.
+    /// 压缩边界数量。
+    pub compact_boundaries: u64,
+    /// Number of affected vector rows.
+    /// 受影响的向量行数量。
+    pub vector_rows: u64,
+}
+
+/// Describes one mandatory automatic session rename in a native migration.
+/// 描述原生迁移中的一次必须自动会话改名。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeSessionRename {
+    /// Original source session identity.
+    /// 原始来源会话身份。
+    pub from: String,
+    /// Collision-free migrated session identity.
+    /// 无冲突的迁移后会话身份。
+    pub to: String,
+}
+
+/// Side-effect-free preview returned before a native project migration.
+/// 原生项目迁移前返回的无副作用预检。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeMigrationPreview {
+    /// Storage version required by the confirmation request.
+    /// 确认请求必须携带的存储版本。
+    pub storage_version: u64,
+    /// Source native project identity.
+    /// 来源原生项目身份。
+    pub source_project_id: u64,
+    /// Target native project identity.
+    /// 目标原生项目身份。
+    pub target_project_id: u64,
+    /// Source content to move.
+    /// 将迁移的来源内容。
+    pub source: VmmNativeProjectContentCounts,
+    /// Target content before migration.
+    /// 迁移前的目标内容。
+    pub target_before: VmmNativeProjectContentCounts,
+    /// Projected target content after migration.
+    /// 迁移后的预计目标内容。
+    pub target_after: VmmNativeProjectContentCounts,
+    /// Conflicting sessions and their deterministic new identities.
+    /// 冲突会话及其确定性新身份。
+    pub session_renames: Vec<VmmNativeSessionRename>,
+}
+
+/// Result returned after a native project migration commits.
+/// 原生项目迁移提交后返回的结果。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeMigrationResult {
+    /// New committed storage version.
+    /// 新提交的存储版本。
+    pub storage_version: u64,
+    /// Content moved from the source project.
+    /// 从来源项目迁出的内容。
+    pub moved: VmmNativeProjectContentCounts,
+    /// Session renames applied by the migration.
+    /// 迁移实际应用的会话改名。
+    pub session_renames: Vec<VmmNativeSessionRename>,
+}
+
+/// Side-effect-free preview returned before clearing a native project.
+/// 清空原生项目前返回的无副作用预检。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeClearPreview {
+    /// Storage version required by the confirmation request.
+    /// 确认请求必须携带的存储版本。
+    pub storage_version: u64,
+    /// Native project whose content will be cleared.
+    /// 将被清空内容的原生项目。
+    pub project_id: u64,
+    /// Content that will be removed.
+    /// 将被删除的内容。
+    pub removed: VmmNativeProjectContentCounts,
+}
+
+/// Result returned after clearing a native project commits.
+/// 清空原生项目提交后返回的结果。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeClearResult {
+    /// New committed storage version.
+    /// 新提交的存储版本。
+    pub storage_version: u64,
+    /// Content removed by the clear.
+    /// 本次清空删除的内容。
+    pub removed: VmmNativeProjectContentCounts,
+}
+
 /// Typed payload returned by one VMM management action.
 /// VMM 单次管理动作返回的强类型载荷。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1068,6 +1188,18 @@ pub enum VmmMemoryActionResponse {
     /// Memory deletion result.
     /// 记忆删除结果。
     DeleteMemories(vulcan_vmm::DeleteMemoriesResponse),
+    /// Native project migration preview.
+    /// 原生项目迁移预检。
+    NativeMigrationPreview(VmmNativeMigrationPreview),
+    /// Committed native project migration result.
+    /// 已提交的原生项目迁移结果。
+    NativeMigration(VmmNativeMigrationResult),
+    /// Native project clear preview.
+    /// 原生项目清空预检。
+    NativeClearPreview(VmmNativeClearPreview),
+    /// Committed native project clear result.
+    /// 已提交的原生项目清空结果。
+    NativeClear(VmmNativeClearResult),
     /// Managed backup and vector-rebuild status.
     /// 托管备份与向量重建状态。
     Maintenance(VmmMaintenanceSummary),

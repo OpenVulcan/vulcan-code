@@ -146,6 +146,7 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
         agent_runtime: None,
         codebase_memory_controller: Default::default(),
         managed_memory_mesh_runtime: None,
+        native_vmm_maintenance: None,
         service_runtime: None,
         webui_service_discovery: None,
         controller_runtime: None,

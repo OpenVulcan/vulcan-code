@@ -1511,6 +1511,7 @@ fn build_prompt_compaction_launch_request(
         session_storage_directory: launch_context.session_storage_directory.clone(),
         session_title: session_title.to_string(),
         workspace_path: workspace_path.to_string(),
+        project_id: None,
         prompt: build_compaction_request_prompt_for_mode(prompt_mode),
         output_style_snapshot: launch_context.output_style_snapshot.clone(),
         provider_visible_agent_messages: Vec::new(),

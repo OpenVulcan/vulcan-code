@@ -539,6 +539,7 @@ async fn run_vmm_profile_bundle_preview(
         .get_profile_bundle(GetProfileBundleRequest {
             user_id,
             project_id,
+            host_project_id: String::new(),
             mode: ProfileBundleMode::ProfileBundleModeFull,
             include_explanation: Some(true),
         })
@@ -578,6 +579,7 @@ async fn run_vmm_profile_nodes(
             target,
             user_id,
             project_id,
+            host_project_id: String::new(),
             limit: 200,
         })
         .await
@@ -623,6 +625,7 @@ async fn run_vmm_apply_profile_instruction(
             target,
             user_id,
             project_id,
+            host_project_id: String::new(),
             instruction,
         })
         .await
@@ -689,6 +692,7 @@ async fn run_vmm_search_memory_events(
         .search_memory_events(SearchMemoryEventsRequest {
             user_id,
             project_id,
+            host_project_id: String::new(),
             queries,
             top_k: top_k.max(1),
         })
@@ -707,7 +711,10 @@ async fn run_vmm_get_turn_details(
         return Err(String::from("Turn ID 列表不能为空。"));
     }
     let response = client
-        .get_turn_details(GetTurnDetailsRequest { turn_ids })
+        .get_turn_details(GetTurnDetailsRequest {
+            turn_ids,
+            ..GetTurnDetailsRequest::default()
+        })
         .await
         .map_err(|error| error.to_string())?;
     Ok(VmmManagementOutcome::GetTurnDetails(response))
@@ -735,6 +742,7 @@ async fn run_vmm_write_memories(
             session_id,
             user_id,
             project_id,
+            host_project_id: String::new(),
             items: vec![item],
         })
         .await
@@ -762,6 +770,7 @@ async fn run_vmm_delete_memories(
         .delete_memories(DeleteMemoriesRequest {
             user_id,
             project_id,
+            host_project_id: String::new(),
             memory_ids,
             reason,
         })

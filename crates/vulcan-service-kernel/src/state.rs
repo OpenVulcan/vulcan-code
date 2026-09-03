@@ -17,6 +17,9 @@ pub(crate) struct AgentRuntimeBridge {
     /// 面向内部与受限 RPC 调用方的宿主授权已配置推理服务。
     pub(crate) configured_inference_service:
         Arc<crate::configured_inference::ConfiguredInferenceService>,
+    /// Unified native AI Port shared by built-in Rust consumers.
+    /// 供内置 Rust 消费者共享的统一原生 AI Port。
+    pub(crate) internal_ai_port: Arc<dyn vulcan_ai_contract::HostAiPort>,
     /// Request-scoped provider override retained only by a queued prompt runtime clone.
     /// 仅由排队提示词运行时克隆保留的请求级供应商覆盖。
     pub(crate) provider_id_override: Option<String>,
@@ -284,6 +287,9 @@ pub struct ServiceBridgeState {
     /// 宿主持有的 VulcanMemoryMesh 托管子运行时。
     pub(crate) managed_memory_mesh_runtime:
         Option<Arc<Mutex<crate::managed_memory_mesh_runtime::ManagedMemoryMeshRuntime>>>,
+    /// Host-owned native VMM project maintenance facade.
+    /// 宿主持有的原生 VMM 项目维护门面。
+    pub(crate) native_vmm_maintenance: Option<crate::native_vmm::NativeVmmMaintenance>,
     /// Process-wide registry owning one serialized VMM controller per session.
     /// 进程级注册表，为每个会话拥有一个串行化 VMM 控制器。
     pub(crate) vmm_controller_registry: crate::vmm_session_controller::SessionVmmControllerRegistry,

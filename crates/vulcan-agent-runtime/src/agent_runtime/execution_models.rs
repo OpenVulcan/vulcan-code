@@ -356,6 +356,9 @@ pub struct ExecutionPreparationRequest {
     /// Current workspace path.
     /// 当前工作区路径。
     pub workspace_path: String,
+    /// Stable VulcanCode project identity owning the current execution when one exists.
+    /// 当前执行存在所属项目时对应的稳定 VulcanCode 项目身份。
+    pub project_id: Option<String>,
     /// Current composer prompt.
     /// 当前提示词输入区内容。
     pub prompt: String,

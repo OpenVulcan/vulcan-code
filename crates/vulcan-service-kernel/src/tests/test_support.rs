@@ -281,6 +281,7 @@ pub(crate) fn test_service_state_with_parent_session(
         agent_runtime: None,
         codebase_memory_controller: Default::default(),
         managed_memory_mesh_runtime: None,
+        native_vmm_maintenance: None,
         service_runtime: None,
         webui_service_discovery: None,
         controller_runtime: None,
@@ -639,10 +640,14 @@ pub(super) fn test_agent_runtime_bridge() -> AgentRuntimeBridge {
             &public_ai_runtime,
         )),
     );
+    let internal_ai_port = Arc::new(crate::internal_ai::ConfiguredInferenceHostAiPort::new(
+        Arc::clone(&configured_inference_service),
+    ));
     AgentRuntimeBridge {
         provider_configuration,
         public_ai_runtime,
         configured_inference_service,
+        internal_ai_port,
         provider_id_override: None,
         model_id_override: None,
         connection_id_override: None,

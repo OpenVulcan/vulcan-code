@@ -196,6 +196,9 @@ pub(crate) fn vmm_config_layer_from_draft(
         }
     }
     let layer = vulcan_vmm::VmmConfigLayer {
+        backend_mode: include_transport
+            .then(|| vmm_backend_mode_from_draft(&draft.backend_mode))
+            .transpose()?,
         enabled: Some(draft.enabled),
         grpc_target: include_transport
             .then(|| vmm_non_empty_text(&draft.grpc_target))
@@ -280,6 +283,18 @@ pub(crate) fn vmm_config_layer_from_draft(
     };
     validate_external_management_layer(&layer)?;
     Ok(layer)
+}
+
+/// Parses the explicit global backend selector without accepting ambiguous aliases.
+/// 解析明确的全局后端选择器，不接受含义不明确的别名。
+fn vmm_backend_mode_from_draft(value: &str) -> Result<vulcan_vmm::VmmBackendMode, String> {
+    match value.trim() {
+        "" | "native" => Ok(vulcan_vmm::VmmBackendMode::Native),
+        "external_grpc" => Ok(vulcan_vmm::VmmBackendMode::ExternalGrpc),
+        other => Err(format!(
+            "VMM 后端模式无效：{other}，只允许 native 或 external_grpc"
+        )),
+    }
 }
 
 /// Validates the optional external management endpoint and secret as one inseparable pair.

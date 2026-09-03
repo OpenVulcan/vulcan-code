@@ -1,0 +1,275 @@
+manifest_version = 1
+resource_package_version = "0.1.0"
+minimum_core_version = "0.1.0"
+
+[schema_versions]
+prompts = 1
+pii_rules = 1
+noise_rules = 1
+
+[defaults]
+prompt_bundle = "default_en"
+pii_language = "zh-CN"
+noise_language = "zh-CN"
+prompt_aliases_default_en = ["", "default", "en", "english", "default_en"]
+prompt_aliases_default_cn = ["cn", "zh", "zh-cn", "zh_hans", "chinese", "default_cn"]
+
+[layering]
+prompt_bundle = "selected_user_bundle_replaces_system_bundle_else_system_bundle"
+pii_bundle = "user_language_or_common_bundle_replaces_same_system_bundle"
+noise_bundle = "user_file_precedes_system_file_then_language_category_overrides_common_category"
+
+[prompts]
+bundles = ["default_cn", "default_en"]
+required_scene_files = [
+  "precheck_l1_main.md",
+  "precheck_l2_main.md",
+  "postaction_l1_main.md",
+  "postaction_l2_main.md",
+  "profile_instruction_main.md",
+]
+
+[[files]]
+path = "noise_rules/common.json"
+length = 2216
+sha256 = "db3d7109c9237144ae054acd19257863fd14061e54c44f4830906c362ab780a0"
+
+[[files]]
+path = "noise_rules/zh-CN.json"
+length = 1194
+sha256 = "5b9b27ff8be0ee49d3d827bf6b31de47879104d36776bac0538212b641ae64d8"
+
+[[files]]
+path = "pii_rules/ar-AE.json"
+length = 547
+sha256 = "ccf0d20d7b2b343a67806b27cd35a8691d51394cecf37f6709e3a7930eee9e24"
+
+[[files]]
+path = "pii_rules/common.json"
+length = 5143
+sha256 = "d6b833bfec5700dff53e05979845e8e2185250d60bd9761e60e72b7f562c0e23"
+
+[[files]]
+path = "pii_rules/da-DK.json"
+length = 534
+sha256 = "8e5c5821f9f759b28369f7518ec73171430b6f7ac2e27597d8858329eeb6f3a5"
+
+[[files]]
+path = "pii_rules/de-DE.json"
+length = 666
+sha256 = "8e8fa4541cfdd1c60e79b6f9a75993d93e32a0fa257257c694a40d15a80047e3"
+
+[[files]]
+path = "pii_rules/en-AU.json"
+length = 749
+sha256 = "48d2e182aaa6c5e64e7556652eb61317711ae90bf682630ccb6b6c207d5e5bf1"
+
+[[files]]
+path = "pii_rules/en-CA.json"
+length = 681
+sha256 = "f9769b5eb15334fd594faeabc7bfed2d9cc6d7dcdf3fcd8ca33457dd3cb997df"
+
+[[files]]
+path = "pii_rules/en-GB.json"
+length = 753
+sha256 = "b6f12302edd31364b4ba191d3e1e505ed11c6138d6a498a9b25c3fa3ea5e8bed"
+
+[[files]]
+path = "pii_rules/en-IE.json"
+length = 614
+sha256 = "0fa23abfdbd58305faae9c74cd1e39bc9de32a4142aa61c15ce3dbf06c90a0b8"
+
+[[files]]
+path = "pii_rules/en-IN.json"
+length = 793
+sha256 = "04bfdf14ba1ce909cc2a46a31728b01b0fc073830ca839a7976de6e4e323ba9d"
+
+[[files]]
+path = "pii_rules/en-MY.json"
+length = 560
+sha256 = "d4093a0382f19f7481aeebfd1661389345aa94a84d704c1fb6325fc99e008f1b"
+
+[[files]]
+path = "pii_rules/en-NZ.json"
+length = 625
+sha256 = "c0dafff71b8bc0a140960ca46fd0aa8ad539c2c15da5afb2b79a0ed0f51772fc"
+
+[[files]]
+path = "pii_rules/en-PH.json"
+length = 574
+sha256 = "41c8f5c7e092cac4367748c1a2e0c7d99757ec3c171f8f9c7382370c6163578a"
+
+[[files]]
+path = "pii_rules/en-SG.json"
+length = 709
+sha256 = "6ba100c4013cdcf3cbbd2d760b9b47a7105c9d8195f750748948f016a3cbda3c"
+
+[[files]]
+path = "pii_rules/en-US.json"
+length = 769
+sha256 = "a65800dd3dcedfeca5a380a5c177ac7245ca5434baa121cf8e82007c0e09f3b1"
+
+[[files]]
+path = "pii_rules/es-AR.json"
+length = 727
+sha256 = "49fb53febb325a2fc0a74cad19e6eada92dd08fdf92bcbade886d248d81ae8e5"
+
+[[files]]
+path = "pii_rules/es-CL.json"
+length = 606
+sha256 = "614c64cbbc6bb3bcb800a7c425e168646cad62a2bc6a75cffe8b3cf0c6424c67"
+
+[[files]]
+path = "pii_rules/es-ES.json"
+length = 683
+sha256 = "273e5c2c423a831cf8c3c1b424da0f3e6f6431a76a833bef249ad47723dc530c"
+
+[[files]]
+path = "pii_rules/es-MX.json"
+length = 960
+sha256 = "17e2b0cacbf6c4eb0469cdd58cc422d668aa4c67116bbfd69c179ff97ddd1c24"
+
+[[files]]
+path = "pii_rules/es-PE.json"
+length = 592
+sha256 = "4a90160e0342feb5e797ffa57d3f004344aaa6db419b955ba741563618dd65e8"
+
+[[files]]
+path = "pii_rules/fi-FI.json"
+length = 548
+sha256 = "5f873ddb5d1d594c2e47ac4004a6a20c72eadf4b075458eaf4f869d06dbc0887"
+
+[[files]]
+path = "pii_rules/fr-FR.json"
+length = 691
+sha256 = "71cb7d2f6c3964bff494e82266416c879a35d915b545b0a0030f916d4c7dea3a"
+
+[[files]]
+path = "pii_rules/id-ID.json"
+length = 599
+sha256 = "70caa4cf9726537e148e6323b1297a0cf7609e7ecd1974c8372af7a687ac117a"
+
+[[files]]
+path = "pii_rules/it-IT.json"
+length = 672
+sha256 = "114d109f0b26d6ebb9afac7ff0890af4997d9c77d266afaf0edf8029dd8733d5"
+
+[[files]]
+path = "pii_rules/ja-JP.json"
+length = 554
+sha256 = "c1c3910572ba493eed8e7d65ccbc4232b89ce40fcdc83ca7edadef44ded9f0dd"
+
+[[files]]
+path = "pii_rules/ko-KR.json"
+length = 658
+sha256 = "e9e4d50a950b9c59b055272b30e5f9a6d630d29e69acd30346799de154a01be8"
+
+[[files]]
+path = "pii_rules/nb-NO.json"
+length = 541
+sha256 = "1a7dd9187ee48045cb7eb943f8fbe85e1e3e3002782433c48962ff5bf32b0151"
+
+[[files]]
+path = "pii_rules/nl-NL.json"
+length = 524
+sha256 = "6f7c0cf028150858b3953f200c92251dd5901c3f22c2b78917a70536aaf980dd"
+
+[[files]]
+path = "pii_rules/pl-PL.json"
+length = 599
+sha256 = "2c749546225212de7f223e3d232cc2273cb7c5caa9dfa6a456ebb6e35d4753aa"
+
+[[files]]
+path = "pii_rules/pt-BR.json"
+length = 765
+sha256 = "2e23bd896d902d3dba0aaf719e3a84998bfd369441ca793c03592f4f174766fc"
+
+[[files]]
+path = "pii_rules/pt-PT.json"
+length = 533
+sha256 = "c5a82ccdeba14717c925da9b920cee5fbf2191cc0c1e37b0f6a0734032106418"
+
+[[files]]
+path = "pii_rules/sv-SE.json"
+length = 569
+sha256 = "a73e46d83883a866122c8b6bdba8b2b5ebff7aee7e3301bbfefad7d8b33e455c"
+
+[[files]]
+path = "pii_rules/th-TH.json"
+length = 615
+sha256 = "fd33fb9f51b02931ecd61fb557d5b8f60593d83a01bc6000fbe8534197fc45ca"
+
+[[files]]
+path = "pii_rules/tr-TR.json"
+length = 602
+sha256 = "06f09cc00ba64f4eca7d2edac355b9fb2373ba26f5759330ecd0af1d2e5d7ea4"
+
+[[files]]
+path = "pii_rules/vi-VN.json"
+length = 467
+sha256 = "45ce2a4dda5547863f3bc0635d5f343890b1c0d6a908f380b4d6954f6874918a"
+
+[[files]]
+path = "pii_rules/zh-CN.json"
+length = 2710
+sha256 = "90df794ffe1f5b3d697440c27123596e183c233530124f9ed65d0820fd92f53a"
+
+[[files]]
+path = "pii_rules/zh-HK.json"
+length = 458
+sha256 = "6816a6d43125d42db86f5e962b3c798665bf4fb55ccc3067a20e2882bfef7d2e"
+
+[[files]]
+path = "pii_rules/zh-TW.json"
+length = 580
+sha256 = "0e4df56a192ccd50a18f4e8c578f14a75ed0240eba8d7440e09667840de8c18a"
+
+[[files]]
+path = "prompts/default_cn/postaction_l1_main.md"
+length = 9209
+sha256 = "3623e0ae444abfd1d9178f289b992d20af9f93bc5c5e03cffbfb23b3a523ba73"
+
+[[files]]
+path = "prompts/default_cn/postaction_l2_main.md"
+length = 5901
+sha256 = "8eb89c0d50c67843730c4e40c5fcabd427692eff42c2c8419bc7256905cb7e0a"
+
+[[files]]
+path = "prompts/default_cn/precheck_l1_main.md"
+length = 4104
+sha256 = "ef8a45d817e266c4a69bbabd4437ae384082ee855a98e105b95f6c635b85ba01"
+
+[[files]]
+path = "prompts/default_cn/precheck_l2_main.md"
+length = 2551
+sha256 = "719f8653380d492c0129b3620bb4f47f5599a17e10934caf1b63cf9f5f376249"
+
+[[files]]
+path = "prompts/default_cn/profile_instruction_main.md"
+length = 5439
+sha256 = "002abdf72660a1ba032571b941728fb826e3681dfdefe529d3e6d107a5726d3b"
+
+[[files]]
+path = "prompts/default_en/postaction_l1_main.md"
+length = 10204
+sha256 = "cd3f71e995f705b6bb1c7f475a4320795359231acbbd45f090e8eda65eeb9383"
+
+[[files]]
+path = "prompts/default_en/postaction_l2_main.md"
+length = 6218
+sha256 = "183d92826c4d07fb8afa681395b74aa30b2970ba2f59d8dadbc1c63294432f1c"
+
+[[files]]
+path = "prompts/default_en/precheck_l1_main.md"
+length = 4241
+sha256 = "87bcb3f45b73d598b500c3a9e8aecb67df0460abd9fc50c1627fade68c3627cf"
+
+[[files]]
+path = "prompts/default_en/precheck_l2_main.md"
+length = 2575
+sha256 = "b37df62d7d88bb54f3d3c5e6c32487e26248ffd569c86082f707795b4896f02d"
+
+[[files]]
+path = "prompts/default_en/profile_instruction_main.md"
+length = 5930
+sha256 = "c2bde49edff5e24cc9d66f6105f999de03e3d2da8eea16d0df8dfa242ff53406"

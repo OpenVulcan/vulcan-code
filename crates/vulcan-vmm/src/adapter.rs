@@ -133,9 +133,11 @@ pub fn precheck_request_from_payload(
     let session_id = required_string(payload, "session_id")?;
     let user_content = required_string(payload, "user_content")?;
     Ok(PreCheckRequest {
+        operation_id: required_string(payload, "turn_id")?,
         session_id,
         user_id: required_config_id(config.user_id, "user_id")?,
         project_id: required_config_id(config.project_id, "project_id")?,
+        host_project_id: optional_string(payload, "project_id").unwrap_or_default(),
         user_content: compact_text(&user_content, USER_CONTENT_LIMIT),
         recall_mode: config.precheck_recall_mode(),
     })
@@ -149,9 +151,11 @@ pub fn post_action_request_from_completed_payload(
 ) -> Result<PostActionRequest, VmmAdapterError> {
     let projection = completed_turn_projection_from_payload(payload)?;
     Ok(PostActionRequest {
+        operation_id: required_string(payload, "turn_id")?,
         session_id: projection.session_id,
         user_id: required_config_id(config.user_id, "user_id")?,
         project_id: required_config_id(config.project_id, "project_id")?,
+        host_project_id: optional_string(payload, "project_id").unwrap_or_default(),
         user_content: projection.user_content,
         assistant_content: projection.assistant_content,
         timeline: projection.timeline,
@@ -165,9 +169,11 @@ pub fn chat_compact_request_from_payload(
     config: &VmmEffectiveConfig,
 ) -> Result<crate::protocol::ChatCompactRequest, VmmAdapterError> {
     Ok(crate::protocol::ChatCompactRequest {
+        operation_id: String::new(),
         session_id: required_string(payload, "session_id")?,
         user_id: required_config_id(config.user_id, "user_id")?,
         project_id: required_config_id(config.project_id, "project_id")?,
+        host_project_id: optional_string(payload, "project_id").unwrap_or_default(),
     })
 }
 
@@ -673,6 +679,7 @@ mod tests {
         let mut config = ready_config();
         config.session_compact_recall = true;
         let payload = json!({
+            "turn_id": "turn-a",
             "session_id": "session-a",
             "user_content": " hello "
         });
@@ -691,6 +698,7 @@ mod tests {
     #[test]
     fn completed_payload_projects_only_vmm_middle_timeline() {
         let payload = json!({
+            "turn_id": "turn-a",
             "session_id": "session-a",
             "user_content": "first user",
             "assistant_content": "final answer",

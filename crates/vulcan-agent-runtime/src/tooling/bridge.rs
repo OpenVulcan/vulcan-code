@@ -74,6 +74,7 @@ pub fn build_vulcan_tools_manager(
     candidate_provider_tools: Vec<VulcanToolCandidate>,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     workspace_root: Option<PathBuf>,
+    host_project_id: Option<String>,
     controller_runtime: Option<ControllerRuntimeHandle>,
     native_goal_runtime: Option<Arc<dyn crate::tooling::native::NativeGoalRuntime>>,
     knowledge_access: Option<crate::agent_runtime::ExecutionKnowledgeAccessContext>,
@@ -130,6 +131,7 @@ pub fn build_vulcan_tools_manager(
         let catalog = native_catalog.clone();
         let tool_id = definition.descriptor.id.clone();
         let workspace_root_for_context = workspace_root.clone();
+        let host_project_id_for_context = host_project_id.clone();
         let controller_runtime_for_context = controller_runtime.clone();
         let native_goal_runtime_for_context = native_goal_runtime.clone();
         let knowledge_access_for_context = knowledge_access.clone();
@@ -148,6 +150,7 @@ pub fn build_vulcan_tools_manager(
                 let catalog = catalog.clone();
                 let tool_id = tool_id.clone();
                 let workspace_root = workspace_root_for_context.clone();
+                let host_project_id = host_project_id_for_context.clone();
                 let controller_runtime = controller_runtime_for_context.clone();
                 let goal_runtime = native_goal_runtime_for_context.clone();
                 let knowledge_access = knowledge_access_for_context.clone();
@@ -163,6 +166,7 @@ pub fn build_vulcan_tools_manager(
                             NativeToolExecutionRequest {
                                 arguments: args,
                                 session_id: Uuid::parse_str(&context.session_id).ok(),
+                                host_project_id,
                                 spill_root: None,
                                 workspace_root,
                                 controller_runtime,

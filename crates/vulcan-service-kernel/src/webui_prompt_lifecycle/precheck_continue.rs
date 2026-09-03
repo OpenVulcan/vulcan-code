@@ -77,6 +77,7 @@ pub(crate) fn webui_vmm_runtime_readiness(
                 precheck_ready,
             ))
         }
+        VmmDeploymentMode::Native => Ok(project_webui_vmm_runtime_readiness(false, false, false)),
         VmmDeploymentMode::Disabled => Ok(project_webui_vmm_runtime_readiness(false, false, false)),
     }
 }

@@ -48,6 +48,14 @@ pub const DEFAULT_PROFILE_NODE_LIMIT: u32 = 256;
 /// 宿主允许的每个目标画像节点拉取最大值。
 pub const MAX_PROFILE_NODE_LIMIT: u32 = 512;
 
+/// Fixed native subject identity used by the single-user VulcanCode host.
+/// 单用户 VulcanCode 宿主使用的固定原生主体标识。
+pub const DEFAULT_NATIVE_USER_ID: u64 = 1;
+
+/// Protected fallback native VMM project identity.
+/// 受保护的原生 VMM 兜底项目标识。
+pub const DEFAULT_NATIVE_PROJECT_ID: u64 = 1;
+
 /// Internal environment switch for independent `vmm.json` session state.
 /// 独立 `vmm.json` 会话状态的内部环境开关。
 pub const VMM_SESSION_STATE_FEATURE_ENV: &str = "VULCAN_VMM_SESSION_STATE_ENABLED";
@@ -403,6 +411,31 @@ pub struct VmmInstallReservation {
     pub runtime_settings: VmmManagedRuntimeSettings,
 }
 
+/// Selects the process-local native core or the externally hosted gRPC backend.
+/// 选择进程内原生 Core 或外置 gRPC 后端。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VmmBackendMode {
+    /// Uses the Rust-native VMM Core owned by VulcanCode.
+    /// 使用由 VulcanCode 负责生命周期的 Rust 原生 VMM Core。
+    #[default]
+    Native,
+    /// Uses the externally deployed VMM gRPC service.
+    /// 使用由用户自行部署的外置 VMM gRPC 服务。
+    ExternalGrpc,
+}
+
+impl VmmBackendMode {
+    /// Returns the stable serialized spelling used by service APIs.
+    /// 返回服务 API 使用的稳定序列化名称。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::ExternalGrpc => "external_grpc",
+        }
+    }
+}
+
 impl Default for VmmInstallReservation {
     /// Returns disabled managed installation with audited behavior defaults.
     /// 返回禁用的托管安装与经过审计的行为默认值。
@@ -420,6 +453,10 @@ impl Default for VmmInstallReservation {
 /// 一层可选的 VMM 配置。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VmmConfigLayer {
+    /// Optional global backend selection; project and session layers leave it unset.
+    /// 可选的全局后端选择；项目层和会话层保持未设置。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_mode: Option<VmmBackendMode>,
     /// Optional layer-level enable override.
     /// 可选的层级启用覆盖。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -553,6 +590,9 @@ pub enum VmmEffectiveConfigSource {
 /// 解析全局、项目与会话层之后得到的最终 VMM 配置。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VmmEffectiveConfig {
+    /// Final backend selected by the global configuration.
+    /// 由全局配置选择出的最终后端。
+    pub backend_mode: VmmBackendMode,
     /// Final enable switch before online and scope diagnostics.
     /// 在线状态和作用域诊断前的最终启用开关。
     pub enabled: bool,
@@ -638,6 +678,7 @@ impl Default for VmmEffectiveConfig {
     /// 构建默认关闭且尚未配置的 VMM 最终配置。
     fn default() -> Self {
         Self {
+            backend_mode: VmmBackendMode::Native,
             enabled: false,
             enabled_source: VmmEffectiveConfigSource::Default,
             grpc_target: String::new(),
@@ -684,12 +725,31 @@ impl VmmEffectiveConfig {
         if let Some(session) = session {
             apply_layer(&mut config, session, VmmEffectiveConfigSource::Session);
         }
+        // A pre-existing non-empty gRPC target is the only unambiguous legacy signal for the
+        // external backend when the new explicit selector is absent. A newly enabled empty
+        // configuration therefore keeps the native default selected.
+        // 当新的显式选择器缺失时，已有非空 gRPC 目标是唯一明确的旧配置外置信号；新启用但没有目标的配置保留原生默认值。
+        if global.backend_mode.is_none()
+            && project.is_none_or(|layer| layer.backend_mode.is_none())
+            && session.is_none_or(|layer| layer.backend_mode.is_none())
+            && non_empty(&global.grpc_target).is_some()
+        {
+            config.backend_mode = VmmBackendMode::ExternalGrpc;
+        }
         config.grpc_target = config.grpc_target.trim().to_string();
         config.visible_memory_injection = false;
         config.session_compact_recall = true;
         config.injection_tag = normalize_tag_or_default(&config.injection_tag);
         config.injection_description =
             normalize_description_or_default(&config.injection_description);
+        // Native execution resolves the real project scope from the host project binding. These
+        // fixed envelope identifiers keep fallback calls valid, while external gRPC continues to
+        // require its explicitly configured remote identities.
+        // 原生执行会从宿主项目绑定解析真实项目作用域；固定封套标识保证兜底调用有效，外置 gRPC 则继续要求显式远端身份。
+        if config.backend_mode == VmmBackendMode::Native {
+            config.user_id = Some(DEFAULT_NATIVE_USER_ID);
+            config.project_id = Some(DEFAULT_NATIVE_PROJECT_ID);
+        }
         config
     }
 
@@ -708,6 +768,9 @@ impl VmmEffectiveConfig {
     pub fn diagnose_memory_flow(&self, grpc_online: bool) -> VmmConfigDiagnostic {
         if !self.enabled {
             return VmmConfigDiagnostic::DisabledByConfig;
+        }
+        if self.backend_mode == VmmBackendMode::Native {
+            return VmmConfigDiagnostic::Ready;
         }
         if self.grpc_target.trim().is_empty() {
             return VmmConfigDiagnostic::MissingGrpcTarget;
@@ -775,6 +838,9 @@ fn apply_layer(
     layer: &VmmConfigLayer,
     source: VmmEffectiveConfigSource,
 ) {
+    if let Some(backend_mode) = layer.backend_mode {
+        config.backend_mode = backend_mode;
+    }
     if let Some(enabled) = layer.enabled {
         config.enabled = enabled;
         config.enabled_source = source;
@@ -971,6 +1037,33 @@ mod tests {
     }
 
     #[test]
+    fn native_identity_is_host_owned_while_external_identity_remains_explicit() {
+        let native = VmmEffectiveConfig::resolve(
+            &VmmConfigLayer {
+                backend_mode: Some(VmmBackendMode::Native),
+                user_id: Some(91),
+                project_id: Some(92),
+                ..VmmConfigLayer::default()
+            },
+            None,
+            None,
+        );
+        assert_eq!(native.user_id, Some(DEFAULT_NATIVE_USER_ID));
+        assert_eq!(native.project_id, Some(DEFAULT_NATIVE_PROJECT_ID));
+
+        let external = VmmEffectiveConfig::resolve(
+            &VmmConfigLayer {
+                backend_mode: Some(VmmBackendMode::ExternalGrpc),
+                ..VmmConfigLayer::default()
+            },
+            None,
+            None,
+        );
+        assert_eq!(external.user_id, None);
+        assert_eq!(external.project_id, None);
+    }
+
+    #[test]
     fn diagnose_requires_online_target_and_business_scope() {
         let resolved = VmmEffectiveConfig::resolve(&base_global_layer(), None, None);
         assert_eq!(
@@ -984,6 +1077,7 @@ mod tests {
 
         let missing_target = VmmEffectiveConfig::resolve(
             &VmmConfigLayer {
+                backend_mode: Some(VmmBackendMode::ExternalGrpc),
                 enabled: Some(true),
                 ..VmmConfigLayer::default()
             },

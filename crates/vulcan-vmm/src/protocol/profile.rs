@@ -125,6 +125,10 @@ pub struct GetProfileNodesRequest {
     /// Numeric VMM project identifier.
     /// VMM 数字项目标识。
     pub project_id: u64,
+    /// Stable VulcanCode project identity used only by the process-local native backend.
+    /// 仅供进程内原生后端使用的稳定 VulcanCode 项目身份。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub host_project_id: String,
     /// Maximum node count to return.
     /// 最大返回节点数量。
     pub limit: u32,
@@ -171,6 +175,10 @@ pub struct GetProfileBundleRequest {
     /// Numeric VMM project identifier.
     /// VMM 数字项目标识。
     pub project_id: u64,
+    /// Stable VulcanCode project identity used only by the process-local native backend.
+    /// 仅供进程内原生后端使用的稳定 VulcanCode 项目身份。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub host_project_id: String,
     /// Requested bundle shape.
     /// 请求的 bundle 形态。
     pub mode: ProfileBundleMode,
@@ -236,6 +244,10 @@ pub struct ApplyProfileInstructionRequest {
     /// Numeric VMM project identifier.
     /// VMM 数字项目标识。
     pub project_id: u64,
+    /// Stable VulcanCode project identity used only by the process-local native backend.
+    /// 仅供进程内原生后端使用的稳定 VulcanCode 项目身份。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub host_project_id: String,
     /// Natural-language manual profile instruction.
     /// 自然语言手工画像指令。
     pub instruction: String,

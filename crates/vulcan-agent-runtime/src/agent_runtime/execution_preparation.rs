@@ -308,6 +308,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         provider_tool_candidates,
         luaskills_runtime,
         workspace_root,
+        request.project_id.clone(),
         request.controller_runtime.clone(),
         request.native_goal_runtime.clone(),
         request.knowledge_access.clone(),

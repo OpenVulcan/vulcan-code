@@ -857,6 +857,7 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         subagent_prompt_context: None,
         session_title: String::from("测试会话"),
         workspace_path: String::from(r"D:\workspace"),
+        project_id: None,
         prompt: String::from("请规划当前任务"),
         output_style_snapshot: None,
         provider_visible_agent_messages: Vec::new(),

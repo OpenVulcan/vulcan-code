@@ -847,9 +847,11 @@ mod tests {
     /// 为写回测试构建稳定的 PostAction 请求。
     fn test_post_action_request() -> vulcan_vmm::PostActionRequest {
         vulcan_vmm::PostActionRequest {
+            operation_id: String::from("turn-a"),
             session_id: String::from("session-a"),
             user_id: 7,
             project_id: 11,
+            host_project_id: String::from("host-project-a"),
             user_content: String::from("hello"),
             assistant_content: String::from("world"),
             timeline: vec![vulcan_vmm::PostActionTimelineItem {

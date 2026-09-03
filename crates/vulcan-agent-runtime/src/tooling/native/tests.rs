@@ -88,6 +88,7 @@ fn test_native_request(arguments: serde_json::Value) -> NativeToolExecutionReque
         arguments,
         session_id: None,
         workspace_root: None,
+        host_project_id: None,
         controller_runtime: None,
         goal_runtime: None,
         knowledge_access: None,

@@ -160,6 +160,9 @@ pub struct SharedPromptTurnStart {
     /// Workspace path locked for this prompt turn.
     /// 该提示词回合锁定的工作区路径。
     pub workspace_path: String,
+    /// Stable VulcanCode project identity that owns this prompt turn.
+    /// 拥有该提示词回合的稳定 VulcanCode 项目身份。
+    pub project_id: Option<String>,
     /// Prompt entry source shared with service queue semantics.
     /// 与服务队列语义共享的提示词来源。
     pub source: PendingSessionPromptSource,
@@ -603,6 +606,7 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
         continuation_action_id: input.continuation_action_id,
         session_title: input.session_title.to_string(),
         workspace_path: input.workspace_path.to_string(),
+        project_id: input.owning_project_id,
         source: input.source,
         vmm_runtime_ready: input.vmm_runtime_ready,
         vmm_precheck_ready: input.vmm_precheck_ready,
@@ -1073,6 +1077,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         session_storage_directory: None,
         session_title: input.start.session_title,
         workspace_path: input.start.workspace_path,
+        project_id: input.start.project_id,
         prompt: request_prompt,
         output_style_snapshot: applied_output_style_snapshot(runtime_state),
         provider_visible_agent_messages: input.start.provider_visible_agent_messages,

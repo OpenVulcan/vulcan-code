@@ -1,0 +1,16 @@
+[package]
+name = "vulcan-memorymesh-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+vulcan-memorymesh-core-config.workspace = true
+vulcan-memorymesh-core-contracts.workspace = true
+vulcan-memorymesh-core-engine.workspace = true
+vulcan-memorymesh-core-storage.workspace = true
+
+[lints]
+workspace = true

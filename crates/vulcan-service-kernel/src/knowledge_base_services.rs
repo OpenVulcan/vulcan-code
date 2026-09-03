@@ -15,7 +15,9 @@ use vulcan_ai_contract::ExecutionRouteSnapshot;
 use vulcan_ai_contract::{
     AiMessage, AiOperation, AiStreamEvent, ContentItem, EmbeddingEncoding, EmbeddingInput,
     EmbeddingInputContent, EmbeddingInvalidInputPolicy, EmbeddingOutputKind, EmbeddingPayload,
-    EmbeddingRequest, EmbeddingResponse, EmbeddingTask, INFERENCE_CONTRACT_VERSION,
+    EmbeddingRequest, EmbeddingResponse, EmbeddingTask, HostAiCallContext, HostAiCapabilityHandle,
+    HostAiCapabilityRegistration, HostAiCapabilityRequirement, HostAiEmbeddingRequest, HostAiError,
+    HostAiErrorCode, HostAiEventStream, HostAiPort, HostAiRetryReason, INFERENCE_CONTRACT_VERSION,
     InferenceCallerBudget, InferenceCallerContext, InferencePermission, InferenceUsageScope,
     MessageRole, ModelCapabilities, ReasoningControlMode, ReasoningEffort, ReasoningOutputPolicy,
     RequestUsage, ResponsesExecutionRequest, ResponsesExecutionResult, StructuredOutputPolicy,
@@ -804,6 +806,84 @@ fn knowledge_embedding_caller(consumer_profile_id: &str) -> Result<InferenceCall
     })
 }
 
+/// Returns the stable registration identity for one library's curation capability.
+/// 返回一个资料库整理能力的稳定注册标识。
+fn knowledge_curation_registration_id(consumer_profile_id: &str) -> String {
+    format!("knowledge-profile:{consumer_profile_id}:curation")
+}
+
+/// Returns the stable registration identity for one library's embedding capability.
+/// 返回一个资料库向量能力的稳定注册标识。
+fn knowledge_embedding_registration_id(consumer_profile_id: &str) -> String {
+    format!("knowledge-profile:{consumer_profile_id}:embedding")
+}
+
+/// Declares the host capability required by one library's curation worker.
+/// 声明一个资料库整理后台任务所需的宿主能力。
+fn knowledge_curation_registration(
+    consumer_profile_id: &str,
+) -> Result<HostAiCapabilityRegistration, String> {
+    Ok(HostAiCapabilityRegistration {
+        registration_id: knowledge_curation_registration_id(consumer_profile_id),
+        owner_id: consumer_profile_id.to_string(),
+        consumer_profile_id: consumer_profile_id.to_string(),
+        caller: knowledge_curation_caller(consumer_profile_id)?,
+        requirements: vec![HostAiCapabilityRequirement {
+            operation: AiOperation::ConversationRespond,
+            purpose_id: Some(crate::public_ai_settings::KNOWLEDGE_CURATION_PURPOSE_ID.to_string()),
+            required: true,
+        }],
+    })
+}
+
+/// Declares the host capability required by one library's embedding worker and query path.
+/// 声明一个资料库向量后台任务及查询路径所需的宿主能力。
+fn knowledge_embedding_registration(
+    consumer_profile_id: &str,
+) -> Result<HostAiCapabilityRegistration, String> {
+    Ok(HostAiCapabilityRegistration {
+        registration_id: knowledge_embedding_registration_id(consumer_profile_id),
+        owner_id: consumer_profile_id.to_string(),
+        consumer_profile_id: consumer_profile_id.to_string(),
+        caller: knowledge_embedding_caller(consumer_profile_id)?,
+        requirements: vec![HostAiCapabilityRequirement {
+            operation: AiOperation::EmbeddingCreate,
+            purpose_id: None,
+            required: true,
+        }],
+    })
+}
+
+/// Retrieves the unified native AI Port without holding the service-state lock across execution.
+/// 获取统一原生 AI Port，且不会在执行期间持有服务状态锁。
+fn knowledge_host_ai_port(state: &SharedServiceBridgeState) -> Result<Arc<dyn HostAiPort>, String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("读取资料库宿主 AI Port 失败：{error}"))?;
+    guard
+        .agent_runtime
+        .as_ref()
+        .map(|runtime| Arc::clone(&runtime.internal_ai_port))
+        .ok_or_else(|| String::from("资料库宿主 AI Port 仍在启动"))
+}
+
+/// Registers one library-owned capability and converts host errors to service diagnostics.
+/// 注册一个资料库能力并将宿主错误转换为服务诊断。
+fn register_knowledge_capability(
+    port: &dyn HostAiPort,
+    registration: HostAiCapabilityRegistration,
+) -> Result<HostAiCapabilityHandle, String> {
+    let registration_id = registration.registration_id.clone();
+    port.register_capability(registration)
+        .map_err(|error| format!("资料库 AI 能力注册失败（{registration_id}）：{error}"))
+}
+
+/// Builds a stable operation context for one knowledge-base AI request.
+/// 为一项资料库 AI 请求构造稳定的操作上下文。
+fn knowledge_ai_call_context(job_id: &str, request_id: &str) -> HostAiCallContext {
+    HostAiCallContext::new(format!("knowledge:{job_id}:{request_id}"))
+}
+
 /// Returns the current Unix timestamp used by derived-corpus provenance records.
 /// 返回派生资料库来源记录使用的当前 Unix 毫秒时间戳。
 fn knowledge_now_unix_millis() -> i64 {
@@ -1146,50 +1226,32 @@ fn knowledge_display_requires_schema_repair_retry(error_message: &str) -> bool {
 /// 观察一次分离式 LLM 执行的历史与实时事件，直到收到终态事件为止。
 async fn observe_knowledge_llm_stream(
     reporter: &KnowledgeOperationReporter,
-    replay: Vec<AiStreamEvent>,
-    mut receiver: tokio::sync::broadcast::Receiver<AiStreamEvent>,
-) {
-    for event in replay {
+    mut events: HostAiEventStream,
+) -> Result<(), HostAiError> {
+    while let Some(event) = events.next().await {
+        let event = event?;
         let terminal = matches!(
-            event,
+            &event,
             AiStreamEvent::ResponseCompleted
                 | AiStreamEvent::ResponseFailed { .. }
                 | AiStreamEvent::ResponseCancelled
         );
         reporter.observe_llm_event(&event).await;
         if terminal {
-            return;
+            return Ok(());
         }
     }
-    loop {
-        match receiver.recv().await {
-            Ok(event) => {
-                let terminal = matches!(
-                    event,
-                    AiStreamEvent::ResponseCompleted
-                        | AiStreamEvent::ResponseFailed { .. }
-                        | AiStreamEvent::ResponseCancelled
-                );
-                reporter.observe_llm_event(&event).await;
-                if terminal {
-                    return;
-                }
-            }
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_))
-            | Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
-        }
-    }
+    Ok(())
 }
 
 /// Waits for one LLM response while translating durable cancellation into provider cancellation.
 /// 等待 LLM 响应，并将持久化取消请求转换为供应商执行取消。
 async fn wait_knowledge_llm_with_cancel(
-    service: &Arc<crate::configured_inference::ConfiguredInferenceService>,
-    caller_id: &str,
-    execution_id: &str,
+    port: &dyn HostAiPort,
+    execution: &vulcan_ai_contract::HostAiExecutionHandle,
     reporter: &KnowledgeOperationReporter,
-) -> Result<ResponsesExecutionResult, crate::configured_inference::ConfiguredInferenceError> {
-    let response = service.wait_response(caller_id, execution_id);
+) -> Result<ResponsesExecutionResult, HostAiError> {
+    let response = port.wait_response(execution);
     tokio::pin!(response);
     let mut cancellation_poll = tokio::time::interval(std::time::Duration::from_millis(200));
     loop {
@@ -1197,7 +1259,7 @@ async fn wait_knowledge_llm_with_cancel(
             result = &mut response => return result,
             _ = cancellation_poll.tick() => {
                 if reporter.is_cancelled().await {
-                    let _ = service.cancel_execution(caller_id, execution_id);
+                    let _ = port.cancel_execution(execution);
                 }
             }
         }
@@ -1207,55 +1269,60 @@ async fn wait_knowledge_llm_with_cancel(
 /// Executes one curation attempt through the existing streaming inference registry.
 /// 通过现有流式推理注册表执行一次资料库整理尝试。
 async fn execute_knowledge_display_attempt(
-    service: &Arc<crate::configured_inference::ConfiguredInferenceService>,
-    caller: &InferenceCallerContext,
+    port: &dyn HostAiPort,
+    capability: &HostAiCapabilityHandle,
+    context: HostAiCallContext,
     request: ResponsesExecutionRequest,
     label: &str,
     reporter: &KnowledgeOperationReporter,
     is_retry: bool,
 ) -> Result<ResponsesExecutionResult, String> {
-    let execution_id = service
-        .start_response_execution(caller.clone(), request.clone())
+    let execution = port
+        .start_response_execution(capability, context, request.clone())
         .await
         .map_err(|error| format!("{error}"))?;
-    let caller_id = caller.caller_id.as_str();
-    let execution = service
-        .execution_status(caller_id, execution_id.as_str())
+    let execution_snapshot = port
+        .execution_status(&execution)
         .map_err(|error| format!("{error}"))?;
-    let protocol = knowledge_execution_route_protocol(&execution.route);
+    let route = execution_snapshot
+        .route
+        .as_ref()
+        .ok_or_else(|| String::from("资料库整理 LLM 执行尚未解析路由"))?;
+    let protocol = knowledge_execution_route_protocol(route);
     reporter
         .begin_request(
             request.request_id.as_str(),
             label,
             "curating",
-            execution.route.provider_id.as_str(),
-            execution.route.model_id.as_str(),
+            route.provider_id.as_str(),
+            route.model_id.as_str(),
             protocol.as_str(),
             true,
             is_retry,
         )
         .await;
-    let (replay, receiver) = match service.stream_response(caller_id, execution_id.as_str()) {
+    let event_stream = match port.stream_response(&execution) {
         Ok(stream) => stream,
         Err(error) => {
             reporter.finish_request_error("failed").await;
             return Err(format!("{error}"));
         }
     };
-    let observer = observe_knowledge_llm_stream(reporter, replay, receiver);
-    let response =
-        wait_knowledge_llm_with_cancel(service, caller_id, execution_id.as_str(), reporter);
-    let (response, _) = tokio::join!(response, observer);
+    let observer = observe_knowledge_llm_stream(reporter, event_stream);
+    let response = wait_knowledge_llm_with_cancel(port, &execution, reporter);
+    let (response, observation) = tokio::join!(response, observer);
+    if let Err(error) = observation {
+        reporter.finish_request_error("failed").await;
+        return Err(format!("{error}"));
+    }
     match response {
         Ok(response) => {
             reporter.finish_llm_request(&response, "completed").await;
             Ok(response)
         }
         Err(error) => {
-            let status = match error.category {
-                crate::configured_inference::ConfiguredInferenceErrorCategory::Cancelled => {
-                    "cancelled"
-                }
+            let status = match error.code {
+                HostAiErrorCode::Cancelled => "cancelled",
                 _ => "failed",
             };
             reporter.finish_request_error(status).await;
@@ -1267,16 +1334,17 @@ async fn execute_knowledge_display_attempt(
 /// Executes one curation request and performs at most one structured-output repair retry.
 /// 执行一次整理请求，并针对结构化输出问题最多进行一次修复重试。
 async fn execute_knowledge_display_request(
-    service: &Arc<crate::configured_inference::ConfiguredInferenceService>,
-    consumer_profile_id: &str,
+    port: &dyn HostAiPort,
+    capability: &HostAiCapabilityHandle,
+    context: HostAiCallContext,
     request: ResponsesExecutionRequest,
     label: &str,
     reporter: &KnowledgeOperationReporter,
 ) -> Result<vulcan_ai_contract::ResponsesExecutionResult, String> {
-    let caller = knowledge_curation_caller(consumer_profile_id)?;
     match execute_knowledge_display_attempt(
-        service,
-        &caller,
+        port,
+        capability,
+        context.clone(),
         request.clone(),
         label,
         reporter,
@@ -1290,10 +1358,14 @@ async fn execute_knowledge_display_request(
                 knowledge_display_schema_repair_request(request).map_err(|repair_error| {
                     format!("整理 {label} 无法构建 Schema 修复重试：{repair_error}")
                 })?;
-            let retry_caller = knowledge_curation_caller(consumer_profile_id)?;
+            let retry_context = context.clone().with_attempt(
+                context.attempt.saturating_add(1),
+                HostAiRetryReason::SchemaRepair,
+            );
             execute_knowledge_display_attempt(
-                service,
-                &retry_caller,
+                port,
+                capability,
+                retry_context,
                 repair_request,
                 label,
                 reporter,
@@ -1405,14 +1477,15 @@ fn parse_knowledge_display_batch(
 /// Executes one source-document curation request and decodes its validated draft.
 /// 执行一份来源文档整理请求并解码其已验证的草稿。
 async fn execute_knowledge_display_draft(
-    service: &Arc<crate::configured_inference::ConfiguredInferenceService>,
-    consumer_profile_id: &str,
+    port: &dyn HostAiPort,
+    capability: &HostAiCapabilityHandle,
+    context: HostAiCallContext,
     request: ResponsesExecutionRequest,
     label: &str,
     reporter: &KnowledgeOperationReporter,
 ) -> Result<KnowledgeDisplayDraft, String> {
     let response =
-        execute_knowledge_display_request(service, consumer_profile_id, request, label, reporter)
+        execute_knowledge_display_request(port, capability, context, request, label, reporter)
             .await?;
     let structured = response
         .structured_output
@@ -1540,17 +1613,12 @@ async fn run_knowledge_display_index(
         .route
         .as_ref()
         .ok_or_else(|| String::from("显示库整理模型路由未配置"))?;
-    let service = {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("读取资料库整理推理服务失败：{error}"))?;
-        guard
-            .agent_runtime
-            .as_ref()
-            .map(|runtime| Arc::clone(&runtime.configured_inference_service))
-            .ok_or_else(|| String::from("资料库整理推理服务仍在启动"))?
-    };
+    let port = knowledge_host_ai_port(&state)?;
 
+    let capability = register_knowledge_capability(
+        port.as_ref(),
+        knowledge_curation_registration(route.consumer_profile_id.as_str())?,
+    )?;
     let reporter = KnowledgeOperationReporter::new(runtime.clone(), job_id.clone());
 
     runtime
@@ -1681,8 +1749,9 @@ async fn run_knowledge_display_index(
                     &item.source.content,
                 ) {
                     Ok(request) => match execute_knowledge_display_draft(
-                        &service,
-                        route.consumer_profile_id.as_str(),
+                        port.as_ref(),
+                        &capability,
+                        knowledge_ai_call_context(&job_id, request.request_id.as_str()),
                         request,
                         item.source.document.relative_path.as_str(),
                         &reporter,
@@ -1712,8 +1781,9 @@ async fn run_knowledge_display_index(
                     .join(", ");
                 let batch_result = match knowledge_display_batch_request(&settings, &marked_batch) {
                     Ok(request) => match execute_knowledge_display_request(
-                        &service,
-                        route.consumer_profile_id.as_str(),
+                        port.as_ref(),
+                        &capability,
+                        knowledge_ai_call_context(&job_id, request.request_id.as_str()),
                         request,
                         label.as_str(),
                         &reporter,
@@ -1747,8 +1817,12 @@ async fn run_knowledge_display_index(
                             match single_result {
                                 Ok((request, stable_label)) => {
                                     match execute_knowledge_display_draft(
-                                        &service,
-                                        route.consumer_profile_id.as_str(),
+                                        port.as_ref(),
+                                        &capability,
+                                        knowledge_ai_call_context(
+                                            &job_id,
+                                            request.request_id.as_str(),
+                                        ),
                                         request,
                                         stable_label.as_str(),
                                         &reporter,
@@ -2052,17 +2126,11 @@ async fn run_knowledge_vector_index(
     {
         return Err(format!("向量维度 {dimension} 不在官方模型能力范围内"));
     }
-    let caller = knowledge_embedding_caller(route.consumer_profile_id.as_str())?;
-    let service = {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("读取资料库向量推理服务失败：{error}"))?;
-        guard
-            .agent_runtime
-            .as_ref()
-            .map(|runtime| Arc::clone(&runtime.configured_inference_service))
-            .ok_or_else(|| String::from("资料库向量推理服务仍在启动"))?
-    };
+    let port = knowledge_host_ai_port(&state)?;
+    let capability = register_knowledge_capability(
+        port.as_ref(),
+        knowledge_embedding_registration(route.consumer_profile_id.as_str())?,
+    )?;
     let total_chunks = runtime.count_display_chunks(&library_id).await?;
     let reporter = KnowledgeOperationReporter::new(runtime.clone(), job_id.clone());
 
@@ -2128,8 +2196,18 @@ async fn run_knowledge_vector_index(
                         route,
                     )
                     .await;
-                let response = match service.create_embeddings(&caller, request.clone()).await {
-                    Ok(response) => response,
+                let response = match port
+                    .create_embeddings(
+                        &capability,
+                        knowledge_ai_call_context(&job_id, request.request_id.as_str()),
+                        HostAiEmbeddingRequest {
+                            vector_space_id: format!("knowledge_base:{library_id}"),
+                            request: request.clone(),
+                        },
+                    )
+                    .await
+                {
+                    Ok(response) => response.response,
                     Err(error) => {
                         reporter.finish_request_error("failed").await;
                         return Err(format!("向量批次 {batch_number} 生成失败：{error}"));
@@ -2393,6 +2471,8 @@ async fn sync_knowledge_profile(
         .flatten()
         .map(|route| knowledge_inference_route(route, AiOperation::EmbeddingCreate))
         .transpose()?;
+    let curation_enabled = curation_route.is_some();
+    let embedding_enabled = embedding_route.is_some();
     crate::public_ai_settings::sync_knowledge_inference_profile(
         app.clone(),
         state.clone(),
@@ -2400,7 +2480,24 @@ async fn sync_knowledge_profile(
         curation_route,
         embedding_route,
     )
-    .await
+    .await?;
+    let port = knowledge_host_ai_port(state)?;
+    if curation_enabled {
+        register_knowledge_capability(port.as_ref(), knowledge_curation_registration(profile_id)?)?;
+    } else {
+        port.unregister_capability(&knowledge_curation_registration_id(profile_id))
+            .map_err(|error| format!("资料库整理能力注销失败：{error}"))?;
+    }
+    if embedding_enabled {
+        register_knowledge_capability(
+            port.as_ref(),
+            knowledge_embedding_registration(profile_id)?,
+        )?;
+    } else {
+        port.unregister_capability(&knowledge_embedding_registration_id(profile_id))
+            .map_err(|error| format!("资料库向量能力注销失败：{error}"))?;
+    }
+    Ok(())
 }
 
 /// Persists library settings only after its isolated inference profile is synchronized.
@@ -2759,7 +2856,13 @@ pub(super) async fn service_delete_knowledge_library(
         .delete_library(&library_id)
         .await?;
     let profile_id = knowledge_consumer_profile_id(&library_id);
-    crate::public_ai_settings::remove_knowledge_inference_profile(app, state, &profile_id).await?;
+    crate::public_ai_settings::remove_knowledge_inference_profile(app, state.clone(), &profile_id)
+        .await?;
+    let port = knowledge_host_ai_port(&state)?;
+    port.unregister_capability(&knowledge_curation_registration_id(&profile_id))
+        .map_err(|error| format!("资料库整理能力注销失败：{error}"))?;
+    port.unregister_capability(&knowledge_embedding_registration_id(&profile_id))
+        .map_err(|error| format!("资料库向量能力注销失败：{error}"))?;
     Ok(json!({ "deleted": true, "libraryId": library_id }))
 }
 
@@ -3060,17 +3163,11 @@ async fn service_search_one_knowledge_library(
     {
         return Err(String::from("选定向量模型不支持稠密浮点查询向量"));
     }
-    let caller = knowledge_embedding_caller(route.consumer_profile_id.as_str())?;
-    let service = {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("读取资料库查询向量服务失败：{error}"))?;
-        guard
-            .agent_runtime
-            .as_ref()
-            .map(|runtime| Arc::clone(&runtime.configured_inference_service))
-            .ok_or_else(|| String::from("资料库查询向量服务仍在启动"))?
-    };
+    let port = knowledge_host_ai_port(state)?;
+    let capability = register_knowledge_capability(
+        port.as_ref(),
+        knowledge_embedding_registration(route.consumer_profile_id.as_str())?,
+    )?;
     let request = EmbeddingRequest {
         contract_version: INFERENCE_CONTRACT_VERSION,
         request_id: format!("knowledge-query-{}", sha256_hex(query.as_bytes())),
@@ -3088,10 +3185,18 @@ async fn service_search_one_knowledge_library(
         encoding: EmbeddingEncoding::Float,
         invalid_input_policy: EmbeddingInvalidInputPolicy::FailBatch,
     };
-    let response = service
-        .create_embeddings(&caller, request)
+    let response = port
+        .create_embeddings(
+            &capability,
+            knowledge_ai_call_context(&format!("query:{library_id}"), request.request_id.as_str()),
+            HostAiEmbeddingRequest {
+                vector_space_id: format!("knowledge_base:{library_id}"),
+                request,
+            },
+        )
         .await
-        .map_err(|error| format!("查询向量生成失败：{error}"))?;
+        .map_err(|error| format!("查询向量生成失败：{error}"))?
+        .response;
     if response.fingerprint.dimensions != dimension
         || response.fingerprint.output_kind != EmbeddingOutputKind::Dense
         || response.fingerprint.encoding != EmbeddingEncoding::Float

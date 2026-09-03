@@ -357,26 +357,24 @@ fn vmm_data_space_summary(state: vulcan_service_api::VmmDataSpaceState) -> VmmDa
 /// The configured deployment mode.
 /// 返回已配置的部署方式。
 pub(super) fn vmm_deployment_mode(global_layer: &vulcan_vmm::VmmConfigLayer) -> VmmDeploymentMode {
-    let managed = global_layer
-        .install
-        .as_ref()
-        .map(|install| install.managed_install_enabled)
-        .unwrap_or(false);
+    if global_layer.enabled != Some(true) {
+        return VmmDeploymentMode::Disabled;
+    }
     // Built-in effective values keep runtime clients ready but do not prove that a user configured
     // a deployment. Only explicit global transport or enable state may classify external VMM.
     // 内置最终值用于让运行时客户端保持就绪，但不能证明用户已经配置部署。只有明确的
     // 全局传输或启用状态才能归类为外部 VMM。
-    let external = global_layer.enabled == Some(true)
-        || global_layer
+    match global_layer.backend_mode {
+        Some(vulcan_vmm::VmmBackendMode::Native) => VmmDeploymentMode::Native,
+        Some(vulcan_vmm::VmmBackendMode::ExternalGrpc) => VmmDeploymentMode::External,
+        None if global_layer
             .grpc_target
             .as_deref()
-            .is_some_and(|target| !target.trim().is_empty());
-    if managed {
-        VmmDeploymentMode::Managed
-    } else if external {
-        VmmDeploymentMode::External
-    } else {
-        VmmDeploymentMode::Disabled
+            .is_some_and(|target| !target.trim().is_empty()) =>
+        {
+            VmmDeploymentMode::External
+        }
+        None => VmmDeploymentMode::Native,
     }
 }
 
@@ -699,6 +697,11 @@ pub(crate) fn vmm_config_draft_summary(
 ) -> VmmConfigDraftSummary {
     VmmConfigDraftSummary {
         has_override,
+        backend_mode: layer
+            .backend_mode
+            .unwrap_or(effective.backend_mode)
+            .as_str()
+            .to_string(),
         enabled: layer.enabled.unwrap_or(effective.enabled),
         grpc_target: layer
             .grpc_target

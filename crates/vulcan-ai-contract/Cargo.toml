@@ -7,7 +7,14 @@ authors.workspace = true
 license.workspace = true
 description = "Provider-neutral AI request, event, capability, usage, and configuration contracts for Vulcan Code."
 
+[features]
+# Enables the runtime-free mock Port used by downstream contract tests.
+# 启用下游契约测试使用的无运行时 mock Port。
+test-support = []
+
 [dependencies]
+async-trait.workspace = true
+futures-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 vulcan-apply-patch.workspace = true

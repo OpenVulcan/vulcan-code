@@ -7,7 +7,9 @@ use crate::{
     emit_context_injection_changed_delta_for_session, emit_workbench_event,
 };
 use vulcan_service_api::{
-    ProjectSettingsDomain, ServiceEventEmitter, VmmMemoryActionResponse, VmmProjectDisplaySummary,
+    ProjectSettingsDomain, ServiceEventEmitter, VmmMemoryActionResponse, VmmNativeClearPreview,
+    VmmNativeClearResult, VmmNativeMigrationPreview, VmmNativeMigrationResult,
+    VmmNativeProjectContentCounts, VmmNativeSessionRename, VmmProjectDisplaySummary,
     VmmUserDisplaySummary,
 };
 
@@ -35,6 +37,15 @@ pub(crate) async fn service_run_vmm_memory_action(
     normalize_vmm_memory_action_command_id(&request.command_id)?;
     if request.action.trim() == "suppress_context_injection_item" {
         return service_suppress_context_injection_item(app, state, request).await;
+    }
+    if matches!(
+        request.action.trim(),
+        "native_project_migration_preview"
+            | "native_project_migrate"
+            | "native_project_clear_preview"
+            | "native_project_clear"
+    ) {
+        return service_run_native_vmm_maintenance_action(state, request).await;
     }
     if matches!(
         request.action.trim(),
@@ -115,6 +126,254 @@ pub(crate) async fn service_run_vmm_memory_action(
         refresh_vmm_health_workbench(&app, &state).await;
     }
     Ok(result)
+}
+
+/// Runs one host-owned native VMM project maintenance action.
+/// 执行一次宿主持有的原生 VMM 项目维护动作。
+async fn service_run_native_vmm_maintenance_action(
+    state: SharedServiceBridgeState,
+    request: VmmMemoryActionRequest,
+) -> Result<VmmMemoryActionResult, String> {
+    let (layer, _, _) = vmm_action_context(&state, &request)?;
+    let effective = vulcan_vmm::VmmEffectiveConfig::resolve(&layer, None, None);
+    if effective.backend_mode != vulcan_vmm::VmmBackendMode::Native {
+        return Err(String::from("原生 VMM 项目维护仅在内部原生模式下可用。"));
+    }
+    let maintenance = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("锁定原生 VMM 维护运行时失败：{error}"))?;
+        guard
+            .native_vmm_maintenance
+            .clone()
+            .ok_or_else(|| String::from("原生 VMM 维护运行时尚未就绪。"))?
+    };
+    let action = request.action.trim();
+    let request_preview = request.payload.clone();
+    match action {
+        "native_project_migration_preview" => {
+            let source_project_id =
+                required_native_project_id(&request.payload, "sourceProjectId")?;
+            let target_project_id =
+                required_native_project_id(&request.payload, "targetProjectId")?;
+            let preview = native_migration_preview(
+                maintenance
+                    .preview_migration(source_project_id, target_project_id)
+                    .await?,
+            );
+            native_action_result(
+                action,
+                format!(
+                    "迁移预检完成：来源 {} 个会话、{} 条记忆；目标迁移后 {} 个会话、{} 条记忆；会话冲突 {} 个。",
+                    preview.source.sessions,
+                    preview.source.memories,
+                    preview.target_after.sessions,
+                    preview.target_after.memories,
+                    preview.session_renames.len()
+                ),
+                "native_migration_preview",
+                request_preview,
+                &preview,
+                VmmMemoryActionResponse::NativeMigrationPreview(preview.clone()),
+            )
+        }
+        "native_project_migrate" => {
+            let source_project_id =
+                required_native_project_id(&request.payload, "sourceProjectId")?;
+            let target_project_id =
+                required_native_project_id(&request.payload, "targetProjectId")?;
+            let expected_storage_version =
+                required_native_storage_version(&request.payload, "expectedStorageVersion")?;
+            let result = native_migration_result(
+                maintenance
+                    .execute_migration(
+                        source_project_id,
+                        target_project_id,
+                        expected_storage_version,
+                        vmm_payload_bool(&request.payload, "acceptSessionRenames"),
+                    )
+                    .await?,
+            );
+            native_action_result(
+                action,
+                format!(
+                    "项目记忆迁移完成：迁移 {} 个会话、{} 个回合、{} 条记忆和 {} 个项目画像节点。",
+                    result.moved.sessions,
+                    result.moved.turns,
+                    result.moved.memories,
+                    result.moved.profile_nodes
+                ),
+                "native_migration",
+                request_preview,
+                &result,
+                VmmMemoryActionResponse::NativeMigration(result.clone()),
+            )
+        }
+        "native_project_clear_preview" => {
+            let project_id = required_native_project_id(&request.payload, "vmmProjectId")?;
+            let preview = native_clear_preview(maintenance.preview_clear(project_id).await?);
+            native_action_result(
+                action,
+                format!(
+                    "清空预检完成：将删除 {} 个会话、{} 个回合、{} 条记忆和 {} 个项目画像节点。",
+                    preview.removed.sessions,
+                    preview.removed.turns,
+                    preview.removed.memories,
+                    preview.removed.profile_nodes
+                ),
+                "native_clear_preview",
+                request_preview,
+                &preview,
+                VmmMemoryActionResponse::NativeClearPreview(preview.clone()),
+            )
+        }
+        "native_project_clear" => {
+            let project_id = required_native_project_id(&request.payload, "vmmProjectId")?;
+            let expected_storage_version =
+                required_native_storage_version(&request.payload, "expectedStorageVersion")?;
+            let result = native_clear_result(
+                maintenance
+                    .execute_clear(project_id, expected_storage_version)
+                    .await?,
+            );
+            native_action_result(
+                action,
+                format!(
+                    "项目记忆已清空：删除 {} 个会话、{} 个回合、{} 条记忆和 {} 个项目画像节点。",
+                    result.removed.sessions,
+                    result.removed.turns,
+                    result.removed.memories,
+                    result.removed.profile_nodes
+                ),
+                "native_clear",
+                request_preview,
+                &result,
+                VmmMemoryActionResponse::NativeClear(result.clone()),
+            )
+        }
+        _ => Err(format!(
+            "unsupported native VMM maintenance action `{action}`"
+        )),
+    }
+}
+
+/// Requires one positive native VMM numeric identifier from an action payload.
+/// 从动作载荷中读取一个必需的正数原生 VMM 标识符。
+fn required_native_project_id(payload: &Value, key: &str) -> Result<u64, String> {
+    vmm_payload_u64(payload, key)
+        .filter(|value| *value > 0)
+        .ok_or_else(|| format!("原生 VMM 动作缺少有效字段 `{key}`。"))
+}
+
+/// Requires one native VMM storage version, including the valid initial version zero.
+/// 读取一个必需的原生 VMM 存储版本，包含合法的初始版本零。
+fn required_native_storage_version(payload: &Value, key: &str) -> Result<u64, String> {
+    vmm_payload_u64(payload, key).ok_or_else(|| format!("原生 VMM 动作缺少有效字段 `{key}`。"))
+}
+
+/// Builds one standard WebUI action result from a serializable native response.
+/// 从可序列化的原生响应构建标准 WebUI 动作结果。
+fn native_action_result<T: serde::Serialize>(
+    action: &str,
+    summary: String,
+    kind: &str,
+    request: Value,
+    response: &T,
+    data: VmmMemoryActionResponse,
+) -> Result<VmmMemoryActionResult, String> {
+    Ok(VmmMemoryActionResult {
+        action: action.to_owned(),
+        summary,
+        kind: kind.to_owned(),
+        request,
+        response: serde_json::to_value(response)
+            .map_err(|error| format!("序列化原生 VMM 动作结果失败：{error}"))?,
+        data,
+    })
+}
+
+/// Maps internal project-content counts into the stable service API.
+/// 将内部项目内容计数映射为稳定服务 API。
+fn native_content_counts(
+    counts: crate::native_vmm::NativeVmmProjectContentCounts,
+) -> VmmNativeProjectContentCounts {
+    VmmNativeProjectContentCounts {
+        sessions: counts.sessions,
+        turns: counts.turns,
+        memories: counts.memories,
+        profile_nodes: counts.profile_nodes,
+        context_evidence: counts.context_evidence,
+        compact_boundaries: counts.compact_boundaries,
+        vector_rows: counts.vector_rows,
+    }
+}
+
+/// Maps an internal deterministic session rename into the stable service API.
+/// 将内部确定性会话改名映射为稳定服务 API。
+fn native_session_rename(
+    rename: crate::native_vmm::NativeVmmSessionRename,
+) -> VmmNativeSessionRename {
+    VmmNativeSessionRename {
+        from: rename.from,
+        to: rename.to,
+    }
+}
+
+/// Maps an internal migration preview into the stable service API.
+/// 将内部迁移预检映射为稳定服务 API。
+fn native_migration_preview(
+    preview: crate::native_vmm::NativeVmmMigrationPreview,
+) -> VmmNativeMigrationPreview {
+    VmmNativeMigrationPreview {
+        storage_version: preview.storage_version,
+        source_project_id: preview.source_project_id,
+        target_project_id: preview.target_project_id,
+        source: native_content_counts(preview.source),
+        target_before: native_content_counts(preview.target_before),
+        target_after: native_content_counts(preview.target_after),
+        session_renames: preview
+            .session_renames
+            .into_iter()
+            .map(native_session_rename)
+            .collect(),
+    }
+}
+
+/// Maps an internal migration result into the stable service API.
+/// 将内部迁移结果映射为稳定服务 API。
+fn native_migration_result(
+    result: crate::native_vmm::NativeVmmMigrationResult,
+) -> VmmNativeMigrationResult {
+    VmmNativeMigrationResult {
+        storage_version: result.storage_version,
+        moved: native_content_counts(result.moved),
+        session_renames: result
+            .session_renames
+            .into_iter()
+            .map(native_session_rename)
+            .collect(),
+    }
+}
+
+/// Maps an internal clear preview into the stable service API.
+/// 将内部清空预检映射为稳定服务 API。
+fn native_clear_preview(
+    preview: crate::native_vmm::NativeVmmClearPreview,
+) -> VmmNativeClearPreview {
+    VmmNativeClearPreview {
+        storage_version: preview.storage_version,
+        project_id: preview.project_id,
+        removed: native_content_counts(preview.removed),
+    }
+}
+
+/// Maps an internal clear result into the stable service API.
+/// 将内部清空结果映射为稳定服务 API。
+fn native_clear_result(result: crate::native_vmm::NativeVmmClearResult) -> VmmNativeClearResult {
+    VmmNativeClearResult {
+        storage_version: result.storage_version,
+        removed: native_content_counts(result.removed),
+    }
 }
 
 /// Rebuilds and emits the workbench after one explicit VMM health probe.
@@ -868,6 +1127,7 @@ pub(crate) fn vmm_action_layer_from_effective(
     effective: &vulcan_vmm::VmmEffectiveConfig,
 ) -> vulcan_vmm::VmmConfigLayer {
     vulcan_vmm::VmmConfigLayer {
+        backend_mode: Some(effective.backend_mode),
         enabled: Some(effective.enabled),
         grpc_target: (!effective.grpc_target.trim().is_empty())
             .then(|| effective.grpc_target.clone()),

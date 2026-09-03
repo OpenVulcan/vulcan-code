@@ -878,9 +878,11 @@ mod tests {
     #[test]
     fn post_action_conversion_keeps_wire_timeline_types() {
         let request = grpc_post_action_request(PostActionRequest {
+            operation_id: String::from("operation"),
             session_id: String::from("s"),
             user_id: 1,
             project_id: 2,
+            host_project_id: String::from("host-project"),
             user_content: String::from("u"),
             assistant_content: String::from("a"),
             timeline: vec![crate::protocol::PostActionTimelineItem {
@@ -899,6 +901,7 @@ mod tests {
             target: ProfileTarget::ProfileTargetTeam,
             user_id: 7,
             project_id: 11,
+            host_project_id: String::from("host-project"),
             limit: 50,
         });
         assert_eq!(request.target, GrpcProfileTarget::Team as i32);

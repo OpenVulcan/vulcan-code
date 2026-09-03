@@ -40,8 +40,8 @@ use vulcan_prompt_skills::{PromptSkill, render_skill_tool_output};
 use vulcan_tools_manager::{VulcanToolHostResult, VulcanToolInvocationResult};
 use vulcan_vmm::{
     DeleteMemoriesRequest, GetTurnDetailsRequest, SearchMemoryEventsRequest, TonicVmmClient,
-    VmmClient, VmmConfigDiagnostic, VmmConfigLayer, VmmEffectiveConfig, VmmTransportConfig,
-    WriteMemoriesRequest, WriteMemoryItem,
+    VmmBackendMode, VmmClient, VmmConfigDiagnostic, VmmConfigLayer, VmmEffectiveConfig,
+    VmmTransportConfig, WriteMemoriesRequest, WriteMemoryItem, process_native_vmm_client,
 };
 use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
 
@@ -336,6 +336,9 @@ pub struct NativeToolExecutionRequest {
     /// Optional stable controller session identifier that owns this tool invocation.
     /// 拥有当前工具调用的可选稳定控制器会话标识。
     pub session_id: Option<SessionId>,
+    /// Optional stable VulcanCode project identity that owns this tool invocation.
+    /// 拥有当前工具调用的可选稳定 VulcanCode 项目身份。
+    pub host_project_id: Option<String>,
     /// Optional workspace root resolved for the current execution turn.
     /// 为当前执行回合解析得到的可选工作区根目录。
     pub workspace_root: Option<PathBuf>,

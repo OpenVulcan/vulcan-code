@@ -64,6 +64,10 @@ impl PreCheckRecallMode {
 /// VMM PreCheck 请求体。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreCheckRequest {
+    /// Stable host turn identity used by native Core mutation reconciliation.
+    /// 原生 Core 变更对账使用的稳定宿主回合标识。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub operation_id: String,
     /// Host session identifier used by VMM as the conversation scope.
     /// VMM 用作对话作用域的宿主会话标识。
     pub session_id: String,
@@ -73,6 +77,10 @@ pub struct PreCheckRequest {
     /// Numeric VMM project identifier.
     /// VMM 数字项目标识。
     pub project_id: u64,
+    /// Stable VulcanCode project identity used only by the process-local native backend.
+    /// 仅供进程内原生后端使用的稳定 VulcanCode 项目身份。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub host_project_id: String,
     /// Current user prompt content.
     /// 当前用户提示词内容。
     pub user_content: String,
@@ -178,6 +186,10 @@ pub struct PostActionTimelineItem {
 /// VMM PostAction 请求体。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PostActionRequest {
+    /// Stable host turn identity used by native Core intake and analysis retries.
+    /// 原生 Core 登记与分析重试使用的稳定宿主回合标识。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub operation_id: String,
     /// Host session identifier used by VMM as the conversation scope.
     /// VMM 用作对话作用域的宿主会话标识。
     pub session_id: String,
@@ -187,6 +199,10 @@ pub struct PostActionRequest {
     /// Numeric VMM project identifier.
     /// VMM 数字项目标识。
     pub project_id: u64,
+    /// Stable VulcanCode project identity used only by the process-local native backend.
+    /// 仅供进程内原生后端使用的稳定 VulcanCode 项目身份。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub host_project_id: String,
     /// First user prompt for the completed logical turn.
     /// 已完成逻辑回合的首个用户提示词。
     pub user_content: String,
@@ -221,6 +237,10 @@ pub struct PostActionResponse {
 /// VMM ChatCompact 请求体。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatCompactRequest {
+    /// Optional stable host compaction identity used by native Core reconciliation.
+    /// 原生 Core 对账使用的可选稳定宿主压缩标识。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub operation_id: String,
     /// Host session identifier used by VMM as the conversation scope.
     /// VMM 用作对话作用域的宿主会话标识。
     pub session_id: String,
@@ -230,6 +250,10 @@ pub struct ChatCompactRequest {
     /// Numeric VMM project identifier.
     /// VMM 数字项目标识。
     pub project_id: u64,
+    /// Stable VulcanCode project identity used only by the process-local native backend.
+    /// 仅供进程内原生后端使用的稳定 VulcanCode 项目身份。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub host_project_id: String,
 }
 
 /// Response body for VMM ChatCompact.
@@ -264,6 +288,10 @@ pub struct SearchMemoryEventsRequest {
     /// Numeric VMM project identifier.
     /// VMM 数字项目标识。
     pub project_id: u64,
+    /// Stable VulcanCode project identity used only by the process-local native backend.
+    /// 仅供进程内原生后端使用的稳定 VulcanCode 项目身份。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub host_project_id: String,
     /// Simple natural-language query list.
     /// 简单自然语言查询列表。
     #[serde(default)]
@@ -336,6 +364,18 @@ pub struct SearchMemoryEventsResponse {
 /// VMM GetTurnDetails 请求体。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GetTurnDetailsRequest {
+    /// Numeric VMM user identifier required by the native authorization path.
+    /// 原生授权路径要求的 VMM 数字用户标识。
+    #[serde(default)]
+    pub user_id: u64,
+    /// Numeric VMM project identifier required by the native authorization path.
+    /// 原生授权路径要求的 VMM 数字项目标识。
+    #[serde(default)]
+    pub project_id: u64,
+    /// Stable VulcanCode project identity used only by the process-local native backend.
+    /// 仅供进程内原生后端使用的稳定 VulcanCode 项目身份。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub host_project_id: String,
     /// Durable VMM turn identifiers to inspect.
     /// 需要查看的长期 VMM turn 标识集合。
     #[serde(default)]
@@ -428,6 +468,10 @@ pub struct WriteMemoriesRequest {
     /// Numeric VMM project identifier.
     /// VMM 数字项目标识。
     pub project_id: u64,
+    /// Stable VulcanCode project identity used only by the process-local native backend.
+    /// 仅供进程内原生后端使用的稳定 VulcanCode 项目身份。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub host_project_id: String,
     /// Direct memory items to persist.
     /// 需要持久化的主动记忆项。
     #[serde(default)]
@@ -470,6 +514,10 @@ pub struct DeleteMemoriesRequest {
     /// Numeric VMM project identifier used to scope the delete.
     /// 用于限定删除范围的 VMM 数字项目标识。
     pub project_id: u64,
+    /// Stable VulcanCode project identity used only by the process-local native backend.
+    /// 仅供进程内原生后端使用的稳定 VulcanCode 项目身份。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub host_project_id: String,
     /// Durable memory ids requested for deletion.
     /// 请求删除的长期记忆标识集合。
     #[serde(default)]

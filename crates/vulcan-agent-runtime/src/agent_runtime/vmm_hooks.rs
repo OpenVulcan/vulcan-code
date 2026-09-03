@@ -22,10 +22,10 @@ use vulcan_hooks::{
     SystemPromptHookBaselineProvenance, SystemPromptHookBlock, SystemPromptHookPhase,
 };
 use vulcan_vmm::{
-    GetProfileNodesRequest, ProfileNodeEntry, ProfileTarget, TonicVmmClient, VmmClient,
-    VmmConfigDiagnostic, VmmConfigLayer, VmmEffectiveConfig, VmmRecallBatch, VmmTransportConfig,
-    chat_compact_request_from_payload, post_action_request_from_completed_payload,
-    precheck_request_from_payload,
+    GetProfileNodesRequest, ProfileNodeEntry, ProfileTarget, TonicVmmClient, VmmBackendMode,
+    VmmClient, VmmConfigDiagnostic, VmmConfigLayer, VmmEffectiveConfig, VmmRecallBatch,
+    VmmTransportConfig, chat_compact_request_from_payload,
+    post_action_request_from_completed_payload, precheck_request_from_payload,
 };
 
 /// Stable id used by the built-in VMM precheck hook.
@@ -90,6 +90,9 @@ pub struct VmmHookRuntimeHandle {
     /// Authoritative configuration and runtime profile snapshot visible to hook handlers.
     /// hook 处理器可见的权威配置与运行时画像快照。
     state: Arc<RwLock<VmmHookConfigSnapshot>>,
+    /// Process-local native VMM client installed by the VulcanCode service host.
+    /// 由 VulcanCode 服务宿主安装的进程内原生 VMM 客户端。
+    native_client: Arc<RwLock<Option<Arc<dyn VmmClient>>>>,
 }
 
 /// Applies the five fields owned by the process-local managed transport contract.
@@ -130,7 +133,49 @@ impl VmmHookRuntimeHandle {
     pub fn new(snapshot: VmmHookConfigSnapshot) -> Self {
         Self {
             state: Arc::new(RwLock::new(snapshot)),
+            native_client: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Installs the process-local native VMM client used by native backend invocations.
+    /// 安装由原生后端调用使用的进程内 VMM 客户端。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `client` is the service-hosted native implementation of the shared VMM client contract.
+    /// `client` 是由服务宿主管理并实现共享 VMM 客户端契约的原生实现。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns an explicit error when the native-client registry lock is poisoned.
+    /// 当原生客户端注册锁中毒时返回显式错误。
+    pub fn install_native_client(&self, client: Arc<dyn VmmClient>) -> Result<(), String> {
+        let mut slot = self.native_client.write().map_err(|_| {
+            String::from("The native VMM client registry is locked and cannot update.")
+        })?;
+        *slot = Some(client);
+        Ok(())
+    }
+
+    /// Reads the currently installed process-local native VMM client.
+    /// 读取当前已安装的进程内原生 VMM 客户端。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the installed client or an explicit readiness diagnostic.
+    /// 返回已安装客户端或显式就绪诊断。
+    fn native_client(&self) -> Result<Arc<dyn VmmClient>, HookError> {
+        self.native_client
+            .read()
+            .map_err(|_| {
+                HookError::handler("The native VMM client registry is locked and cannot be read.")
+            })?
+            .clone()
+            .ok_or_else(|| {
+                HookError::handler(
+                    "The native VMM backend is enabled but its service client is not installed.",
+                )
+            })
     }
 
     /// Acquires the authoritative VMM runtime state for a read operation.
@@ -680,9 +725,9 @@ async fn handle_vmm_profile_prepare(
         return Ok(HookResult::default());
     }
     ensure_vmm_ready(&config)?;
-    let client = connect_vmm_client(&config).await?;
+    let client = resolve_vmm_client(&runtime, &config).await?;
     let Some(profile_sync) =
-        maybe_sync_vmm_profile(&client, &runtime, &invocation, &config).await?
+        maybe_sync_vmm_profile(client.as_ref(), &runtime, &invocation, &config).await?
     else {
         return Ok(HookResult::default());
     };
@@ -727,7 +772,7 @@ async fn handle_vmm_precheck(
         return Ok(HookResult::default());
     }
     ensure_vmm_ready(&config)?;
-    let client = connect_vmm_client(&config).await?;
+    let client = resolve_vmm_client(&runtime, &config).await?;
     let request = precheck_request_from_payload(&invocation.payload.value, &config)
         .map_err(|error| HookError::handler(error.to_string()))?;
     let response = client
@@ -772,7 +817,7 @@ async fn handle_vmm_post_action(
     }
     let request = post_action_request_from_completed_payload(&invocation.payload.value, &config)
         .map_err(|error| HookError::handler(error.to_string()))?;
-    let client = match connect_vmm_client(&config).await {
+    let client = match resolve_vmm_client(&runtime, &config).await {
         Ok(client) => client,
         Err(error) => {
             return Ok(vmm_writeback_effect_result(vec![
@@ -788,7 +833,7 @@ async fn handle_vmm_post_action(
     let outbox = runtime
         .outbox_for_invocation(&invocation)
         .map_err(HookError::handler)?;
-    let mut effects = flush_vmm_writeback_outbox(&client, outbox).await;
+    let mut effects = flush_vmm_writeback_outbox(client.as_ref(), outbox).await;
     if effects
         .iter()
         .any(|effect| matches!(effect, VmmWritebackHookEffect::Failed { .. }))
@@ -800,7 +845,7 @@ async fn handle_vmm_post_action(
             ),
         });
     } else {
-        match accepted_post_action(&client, request.clone()).await {
+        match accepted_post_action(client.as_ref(), request.clone()).await {
             Ok(status) => effects.push(VmmWritebackHookEffect::SessionStatus { status }),
             Err(error) => effects.push(VmmWritebackHookEffect::Enqueue {
                 request,
@@ -841,7 +886,7 @@ async fn handle_vmm_chat_compact(
     ensure_vmm_ready(&config)?;
     let request = chat_compact_request_from_payload(&invocation.payload.value, &config)
         .map_err(|error| HookError::handler(error.to_string()))?;
-    let client = connect_vmm_client(&config).await?;
+    let client = resolve_vmm_client(&runtime, &config).await?;
     client
         .chat_compact(request)
         .await
@@ -849,13 +894,34 @@ async fn handle_vmm_chat_compact(
     Ok(HookResult::default())
 }
 
-/// Connects a one-shot VMM tonic client for one hook invocation.
-/// 为一次 hook 调用连接一个一次性 VMM tonic 客户端。
-async fn connect_vmm_client(config: &VmmEffectiveConfig) -> Result<TonicVmmClient, HookError> {
-    let transport_config = VmmTransportConfig::from_effective(config);
-    TonicVmmClient::connect(transport_config)
-        .await
-        .map_err(|error| HookError::handler(error.to_string()))
+/// Resolves the backend-specific VMM client for one hook invocation.
+/// 为一次 hook 调用解析后端专属的 VMM 客户端。
+///
+/// # Parameters
+/// 参数
+/// `runtime` owns the process-local native client registry.
+/// `runtime` 持有进程内原生客户端注册表。
+/// `config` selects either the native client or one external gRPC connection.
+/// `config` 选择原生客户端或一次外部 gRPC 连接。
+///
+/// # Returns
+/// 返回值
+/// Returns one shared client implementing the transport-neutral VMM contract.
+/// 返回一个实现传输无关 VMM 契约的共享客户端。
+async fn resolve_vmm_client(
+    runtime: &VmmHookRuntimeHandle,
+    config: &VmmEffectiveConfig,
+) -> Result<Arc<dyn VmmClient>, HookError> {
+    match config.backend_mode {
+        VmmBackendMode::Native => runtime.native_client(),
+        VmmBackendMode::ExternalGrpc => {
+            let transport_config = VmmTransportConfig::from_effective(config);
+            TonicVmmClient::connect(transport_config)
+                .await
+                .map(|client| Arc::new(client) as Arc<dyn VmmClient>)
+                .map_err(|error| HookError::handler(error.to_string()))
+        }
+    }
 }
 
 /// Ensures the effective configuration is ready for outbound VMM calls.
@@ -886,7 +952,7 @@ struct VmmProfileSyncOutput {
 /// Runs the VMM profile synchronization policy before provider preparation.
 /// 在 Provider 准备前运行 VMM 画像同步策略。
 async fn maybe_sync_vmm_profile(
-    client: &TonicVmmClient,
+    client: &dyn VmmClient,
     runtime: &VmmHookRuntimeHandle,
     invocation: &HookInvocation,
     config: &VmmEffectiveConfig,
@@ -898,10 +964,13 @@ async fn maybe_sync_vmm_profile(
         .last_compaction_id_for_invocation(invocation)
         .map_err(HookError::handler)?;
     let sync_phase = vmm_profile_sync_phase(&state, latest_compaction_id.as_deref());
+    let host_project_id =
+        payload_string(&invocation.payload.value, "project_id").unwrap_or_default();
 
     match sync_phase {
         SystemPromptHookPhase::FirstSession | SystemPromptHookPhase::AfterContextCompaction => {
-            let nodes_by_id = fetch_all_profile_nodes(client, config).await?;
+            let nodes_by_id =
+                fetch_all_profile_nodes(client, config, host_project_id.as_str()).await?;
             let content = render_profile_system_prompt_from_nodes(&nodes_by_id);
             apply_vmm_profile_base_refresh(
                 &mut state,
@@ -932,7 +1001,8 @@ async fn maybe_sync_vmm_profile(
             }
 
             let previous_nodes_by_id = state.nodes_by_id.clone();
-            let latest_nodes_by_id = fetch_all_profile_nodes(client, config).await?;
+            let latest_nodes_by_id =
+                fetch_all_profile_nodes(client, config, host_project_id.as_str()).await?;
             let delta = render_profile_node_diff(&previous_nodes_by_id, &latest_nodes_by_id);
             state.completed_turns_since_sync = 0;
             state.delta_profile_content = normalized_optional_text(&delta);
@@ -988,8 +1058,9 @@ pub fn vmm_profile_sync_phase(
 /// Fetches active profile nodes for every supported VMM target.
 /// 为所有受支持的 VMM 目标拉取 active 画像节点。
 async fn fetch_all_profile_nodes(
-    client: &TonicVmmClient,
+    client: &dyn VmmClient,
     config: &VmmEffectiveConfig,
+    host_project_id: &str,
 ) -> Result<BTreeMap<u64, ProfileNodeEntry>, HookError> {
     let mut nodes = BTreeMap::new();
     for target in [
@@ -1003,6 +1074,7 @@ async fn fetch_all_profile_nodes(
                 target,
                 user_id: config.user_id.unwrap_or_default(),
                 project_id: config.project_id.unwrap_or_default(),
+                host_project_id: host_project_id.to_string(),
                 limit: effective_profile_node_limit(config),
             })
             .await
@@ -1368,7 +1440,7 @@ fn vmm_profile_hidden_user_injection(
 /// Flushes queued VMM writebacks in FIFO order until the first failure.
 /// 按 FIFO 顺序冲刷排队的 VMM 写回，直到遇到第一个失败。
 async fn flush_vmm_writeback_outbox(
-    client: &TonicVmmClient,
+    client: &dyn VmmClient,
     outbox: Vec<VmmWritebackOutboxEntry>,
 ) -> Vec<VmmWritebackHookEffect> {
     let mut flushed = Vec::new();
@@ -1402,7 +1474,7 @@ async fn flush_vmm_writeback_outbox(
 /// Calls VMM PostAction and requires an accepted response.
 /// 调用 VMM PostAction 并要求返回 accepted。
 async fn accepted_post_action(
-    client: &TonicVmmClient,
+    client: &dyn VmmClient,
     request: vulcan_vmm::PostActionRequest,
 ) -> Result<vulcan_vmm::SessionMemoryStatus, HookError> {
     let response = client

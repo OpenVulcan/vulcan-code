@@ -24,6 +24,7 @@ use vulcan_agent_runtime::{
     runtime_assets,
     tooling::CommandSessionRuntime,
 };
+use vulcan_ai_contract::HostAiPort;
 use vulcan_provider_config::config::ProviderConfigurationFile;
 use vulcan_service_api::{
     ServiceEvent, ServiceEventEmitter, StartupSnapshot, StartupStepSnapshot, StartupStepStatus,
@@ -941,6 +942,62 @@ fn run_service_bootstrap(
         .with_native_usage_controller(controller_runtime.clone())
         .with_plugin_telemetry(vulcan_plugin_runtime.clone()),
     );
+    let internal_ai_port: Arc<dyn HostAiPort> =
+        Arc::new(crate::internal_ai::ConfiguredInferenceHostAiPort::new(
+            Arc::clone(&configured_inference_service),
+        ));
+    // nativeVmmDataPlane creates the host-owned SQLite/LanceDB split and protected fallback project.
+    // nativeVmmDataPlane 创建宿主持有的 SQLite/LanceDB 分离存储及受保护兜底项目。
+    let native_vmm_data_plane = runtime
+        .block_on(
+            vulcan_workspace_store::vmm_data_plane::bootstrap_vmm_data_plane(&controller_runtime),
+        )
+        .map_err(|error| {
+            ServiceBootstrapError::new(
+                "workspace",
+                "Workspace",
+                format!("原生 VMM 数据平面初始化失败：{error}"),
+            )
+        })?;
+    let native_vmm_runtime = Arc::new(
+        runtime
+            .block_on(crate::native_vmm::NativeVmmCoreRuntime::bootstrap(
+                Arc::clone(&internal_ai_port),
+                native_vmm_data_plane.clone(),
+            ))
+            .map_err(|error| {
+                ServiceBootstrapError::new(
+                    "workspace",
+                    "Workspace",
+                    format!("原生 VMM Core 初始化失败：{error}"),
+                )
+            })?,
+    );
+    let native_vmm_maintenance = crate::native_vmm::NativeVmmMaintenance::new(
+        Arc::clone(&native_vmm_runtime),
+        native_vmm_data_plane.clone(),
+    );
+    let native_vmm_client: Arc<dyn vulcan_vmm::VmmClient> =
+        Arc::new(crate::native_vmm::NativeVmmClient::new(
+            Arc::clone(&native_vmm_runtime),
+            native_vmm_data_plane,
+        ));
+    vmm_hook_runtime
+        .install_native_client(Arc::clone(&native_vmm_client))
+        .map_err(|error| {
+            ServiceBootstrapError::new(
+                "workspace",
+                "Workspace",
+                format!("原生 VMM Hook 客户端安装失败：{error}"),
+            )
+        })?;
+    vulcan_vmm::install_process_native_vmm_client(native_vmm_client).map_err(|error| {
+        ServiceBootstrapError::new(
+            "workspace",
+            "Workspace",
+            format!("原生 VMM 进程客户端安装失败：{error}"),
+        )
+    })?;
     let task_runtime = Arc::new(TaskRuntime::new());
     task_runtime
         .replace_subagent_catalog(subagent_catalog.clone())
@@ -949,6 +1006,7 @@ fn run_service_bootstrap(
         provider_configuration: provider_configuration.clone(),
         public_ai_runtime,
         configured_inference_service,
+        internal_ai_port,
         provider_id_override: None,
         model_id_override: None,
         connection_id_override: None,
@@ -1228,6 +1286,7 @@ fn run_service_bootstrap(
         guard.workbench = workbench.clone();
         guard.workspace_snapshot = Some(workspace_snapshot);
         guard.agent_runtime = Some(agent_runtime);
+        guard.native_vmm_maintenance = Some(native_vmm_maintenance);
         guard.service_runtime = Some(runtime.clone());
         guard.controller_runtime = Some(controller_runtime);
         guard.knowledge_runtime = Some(knowledge_runtime);
