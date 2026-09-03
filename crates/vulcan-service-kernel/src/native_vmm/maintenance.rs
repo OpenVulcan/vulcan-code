@@ -4,10 +4,55 @@
 use super::driver::NativeVmmCoreRuntime;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use vulcan_memorymesh_core::{
     MutationOutcome, ScopeId, SessionSourceId, StorageSnapshot, context_evidence_domain_id,
 };
-use vulcan_workspace_store::vmm_data_plane::VmmDataPlaneHandle;
+use vulcan_workspace_store::vmm_data_plane::{
+    NativeVmmProject, NativeVmmProjectBindingAccess, NativeVmmProjectUsage, VmmDataPlaneHandle,
+};
+
+/// Carries one native VMM project together with all current consumers.
+/// 携带一个原生 VMM 项目及其全部当前使用方。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct NativeVmmProjectCatalogItem {
+    /// One-level native VMM project metadata.
+    /// 一级原生 VMM 项目元数据。
+    pub project: NativeVmmProject,
+    /// Owner and recall-only associations currently using the project.
+    /// 当前使用该项目的所有者与仅召回关联。
+    pub usage: NativeVmmProjectUsage,
+}
+
+/// Carries the complete native project and binding catalog.
+/// 携带完整的原生项目与绑定目录。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct NativeVmmProjectCatalog {
+    /// Every one-level native VMM project.
+    /// 全部一级原生 VMM 项目。
+    pub projects: Vec<NativeVmmProjectCatalogItem>,
+    /// Every stable VulcanCode project binding.
+    /// 全部稳定的 VulcanCode 项目绑定。
+    pub bindings: Vec<NativeVmmProjectBindingAccess>,
+}
+
+/// Carries the exact impact of deleting one native VMM project.
+/// 携带删除一个原生 VMM 项目的准确影响。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct NativeVmmProjectDeletePreview {
+    /// Storage version that must still match when deletion is confirmed.
+    /// 确认删除时必须仍然匹配的存储版本。
+    pub storage_version: u64,
+    /// Native VMM project selected for deletion.
+    /// 选择删除的原生 VMM 项目。
+    pub project: NativeVmmProject,
+    /// Owner and recall-only associations that will be detached.
+    /// 将被解除的所有者与仅召回关联。
+    pub usage: NativeVmmProjectUsage,
+    /// Project-owned Core content that will be removed.
+    /// 将被删除的项目归属 Core 内容。
+    pub content: NativeVmmProjectContentCounts,
+}
 
 /// Summarizes content attributable to one native VMM project scope.
 /// 汇总可归属于一个原生 VMM 项目作用域的内容。
@@ -127,20 +172,156 @@ pub(crate) struct NativeVmmMaintenance {
     /// Host project catalog used to reject nonexistent maintenance targets.
     /// 用于拒绝不存在维护目标的宿主项目目录。
     data_plane: VmmDataPlaneHandle,
+    /// Serializes project catalog and content mutations across UI and project creation paths.
+    /// 在界面操作与项目创建路径之间串行化项目目录及内容变更。
+    project_mutation_gate: Arc<Mutex<()>>,
 }
 
 impl NativeVmmMaintenance {
     /// Creates one maintenance facade over the exact runtime and project catalog.
     /// 基于精确运行时与项目目录创建一个维护门面。
     #[must_use]
-    pub(crate) const fn new(
-        runtime: Arc<NativeVmmCoreRuntime>,
-        data_plane: VmmDataPlaneHandle,
-    ) -> Self {
+    pub(crate) fn new(runtime: Arc<NativeVmmCoreRuntime>, data_plane: VmmDataPlaneHandle) -> Self {
         Self {
             runtime,
             data_plane,
+            project_mutation_gate: Arc::new(Mutex::new(())),
         }
+    }
+
+    /// Loads every native VMM project, its consumers, and every VulcanCode binding.
+    /// 加载全部原生 VMM 项目、使用方以及每条 VulcanCode 绑定。
+    pub(crate) async fn project_catalog(&self) -> Result<NativeVmmProjectCatalog, String> {
+        let projects = self.data_plane.list_projects().await?;
+        let mut catalog_projects = Vec::with_capacity(projects.len());
+        for project in projects {
+            let usage = self.data_plane.project_usage(project.id).await?;
+            catalog_projects.push(NativeVmmProjectCatalogItem { project, usage });
+        }
+        Ok(NativeVmmProjectCatalog {
+            projects: catalog_projects,
+            bindings: self.data_plane.list_project_bindings().await?,
+        })
+    }
+
+    /// Binds one VulcanCode project to an existing native VMM owner project.
+    /// 将一个 VulcanCode 项目绑定到已有原生 VMM 所有者项目。
+    pub(crate) async fn bind_existing_project(
+        &self,
+        vulcan_project_id: &str,
+        vmm_project_id: u64,
+    ) -> Result<NativeVmmProject, String> {
+        let _guard = self.project_mutation_gate.lock().await;
+        let project = self
+            .data_plane
+            .project_by_id(vmm_project_id)
+            .await?
+            .ok_or_else(|| format!("原生 VMM 项目 {vmm_project_id} 不存在"))?;
+        self.data_plane
+            .bind_vulcan_project(vulcan_project_id, vmm_project_id)
+            .await?;
+        Ok(project)
+    }
+
+    /// Creates or reuses the project tag and binds it as the unique write owner.
+    /// 创建或复用项目标签，并将其绑定为唯一写入所有者。
+    pub(crate) async fn create_and_bind_project(
+        &self,
+        vulcan_project_id: &str,
+        project_name: &str,
+    ) -> Result<NativeVmmProject, String> {
+        let _guard = self.project_mutation_gate.lock().await;
+        let project = self
+            .data_plane
+            .ensure_project(project_name, vulcan_project_id)
+            .await?;
+        self.data_plane
+            .bind_vulcan_project(vulcan_project_id, project.id)
+            .await?;
+        Ok(project)
+    }
+
+    /// Removes one VulcanCode project's owner binding and all recall-only links.
+    /// 删除一个 VulcanCode 项目的所有者绑定及全部仅召回连带关系。
+    pub(crate) async fn unbind_project(&self, vulcan_project_id: &str) -> Result<(), String> {
+        let _guard = self.project_mutation_gate.lock().await;
+        self.data_plane
+            .unbind_vulcan_project(vulcan_project_id)
+            .await
+    }
+
+    /// Replaces one bound VulcanCode project's ordered recall-only project list.
+    /// 替换一个已绑定 VulcanCode 项目的有序仅召回项目列表。
+    pub(crate) async fn replace_query_links(
+        &self,
+        vulcan_project_id: &str,
+        linked_project_ids: &[u64],
+    ) -> Result<(), String> {
+        let _guard = self.project_mutation_gate.lock().await;
+        self.data_plane
+            .replace_query_links(vulcan_project_id, linked_project_ids)
+            .await?;
+        Ok(())
+    }
+
+    /// Renames one native VMM project while preserving every stable binding.
+    /// 在保留全部稳定绑定的同时重命名一个原生 VMM 项目。
+    pub(crate) async fn rename_project(
+        &self,
+        project_id: u64,
+        name: &str,
+    ) -> Result<NativeVmmProject, String> {
+        let _guard = self.project_mutation_gate.lock().await;
+        self.data_plane.rename_project(project_id, name).await
+    }
+
+    /// Previews project deletion, detached consumers, and removed Core content.
+    /// 预检项目删除、被解除的使用方以及将删除的 Core 内容。
+    pub(crate) async fn preview_project_delete(
+        &self,
+        project_id: u64,
+    ) -> Result<NativeVmmProjectDeletePreview, String> {
+        let project = self
+            .data_plane
+            .project_by_id(project_id)
+            .await?
+            .ok_or_else(|| format!("原生 VMM 项目 {project_id} 不存在"))?;
+        if project.protected {
+            return Err(String::from("default VMM 项目不允许删除"));
+        }
+        let snapshot = self.runtime.storage_snapshot()?;
+        Ok(NativeVmmProjectDeletePreview {
+            storage_version: snapshot.storage_version,
+            usage: self.data_plane.project_usage(project_id).await?,
+            content: project_content_counts(&snapshot, &project_scope(project_id)?),
+            project,
+        })
+    }
+
+    /// Deletes one project after validating the preview version and detaches every consumer.
+    /// 校验预检版本后删除一个项目，并解除全部使用方。
+    pub(crate) async fn delete_project(
+        &self,
+        project_id: u64,
+        expected_storage_version: u64,
+    ) -> Result<NativeVmmProjectDeletePreview, String> {
+        let _guard = self.project_mutation_gate.lock().await;
+        let preview = self.preview_project_delete(project_id).await?;
+        if preview.storage_version != expected_storage_version {
+            return Err(format!(
+                "原生 VMM 存储版本已变化：预期 {expected_storage_version}，实际 {}，请重新预检",
+                preview.storage_version
+            ));
+        }
+        self.runtime
+            .transform_storage_snapshot(expected_storage_version, |snapshot| {
+                clear_project(snapshot, project_id)
+            })
+            .await?;
+        self.data_plane
+            .delete_project_with_bindings(project_id)
+            .await?;
+        Ok(preview)
     }
 
     /// Previews a content move without changing Core, SQLite, or LanceDB state.
@@ -168,6 +349,7 @@ impl NativeVmmMaintenance {
         expected_storage_version: u64,
         accept_session_renames: bool,
     ) -> Result<NativeVmmMigrationResult, String> {
+        let _guard = self.project_mutation_gate.lock().await;
         self.ensure_distinct_projects(source_project_id, target_project_id)
             .await?;
         let output = self
@@ -213,6 +395,7 @@ impl NativeVmmMaintenance {
         project_id: u64,
         expected_storage_version: u64,
     ) -> Result<NativeVmmClearResult, String> {
+        let _guard = self.project_mutation_gate.lock().await;
         self.ensure_project(project_id).await?;
         let removed = self
             .runtime

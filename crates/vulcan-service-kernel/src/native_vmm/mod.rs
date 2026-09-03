@@ -11,5 +11,6 @@ pub(crate) use client::NativeVmmClient;
 pub(crate) use driver::NativeVmmCoreRuntime;
 pub(crate) use maintenance::{
     NativeVmmClearPreview, NativeVmmClearResult, NativeVmmMaintenance, NativeVmmMigrationPreview,
-    NativeVmmMigrationResult, NativeVmmProjectContentCounts, NativeVmmSessionRename,
+    NativeVmmMigrationResult, NativeVmmProjectCatalog, NativeVmmProjectContentCounts,
+    NativeVmmProjectDeletePreview, NativeVmmSessionRename,
 };

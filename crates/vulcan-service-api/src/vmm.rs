@@ -496,6 +496,34 @@ pub struct VmmMemorySnapshot {
     /// Human-readable notice for the current VMM page.
     /// 当前 VMM 页面的可读提示。
     pub notice: String,
+    /// One transient result attached only to the project-add response snapshot.
+    /// 仅附加在项目添加响应快照上的一次性结果。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_binding_notice: Option<VmmProjectBindingNotice>,
+}
+
+/// Reports the native or external VMM binding attempted after adding one VulcanCode project.
+/// 报告添加一个 VulcanCode 项目后尝试的原生或外置 VMM 绑定。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmProjectBindingNotice {
+    /// Stable VulcanCode project tag.
+    /// 稳定的 VulcanCode 项目标签。
+    pub vulcan_project_id: String,
+    /// Stable outcome token: `bound` or `failed`.
+    /// 稳定结果标记：`bound` 或 `failed`。
+    pub status: String,
+    /// Bound VMM project display name when successful.
+    /// 成功时绑定的 VMM 项目显示名称。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vmm_project_name: Option<String>,
+    /// Bound native VMM project id when available.
+    /// 可用时绑定的原生 VMM 项目标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_vmm_project_id: Option<u64>,
+    /// Explicit success or failure message suitable for a toast.
+    /// 适合通知提示的明确成功或失败消息。
+    pub message: String,
 }
 
 /// Effective VMM configuration summary.
@@ -758,6 +786,18 @@ pub struct VmmConfigDraftSummary {
     /// Editable global backend selector using `native` or `external_grpc`.
     /// 可编辑的全局后端选择器，取值为 `native` 或 `external_grpc`。
     pub backend_mode: String,
+    /// Native new-project binding policy, either `fixed` or `per_project`.
+    /// 原生新增项目绑定策略，取值为 `fixed` 或 `per_project`。
+    pub native_project_binding_mode: String,
+    /// External new-project binding policy, either `fixed` or `per_project`.
+    /// 外置新增项目绑定策略，取值为 `fixed` 或 `per_project`。
+    pub external_project_binding_mode: String,
+    /// Stable native VMM project id used by the fixed binding policy.
+    /// 固定绑定策略使用的稳定原生 VMM 项目标识。
+    pub native_fixed_project_id: String,
+    /// External Team/Space prefix used only for automatic project creation.
+    /// 仅用于外置自动创建项目的 Team/Space 前缀。
+    pub external_project_prefix: String,
     /// Whether memory is enabled on this layer.
     /// 当前层是否启用记忆。
     pub enabled: bool,
@@ -861,6 +901,9 @@ pub struct VmmProjectScopeSummary {
     /// Whether this project has explicit VMM overrides.
     /// 该项目是否存在显式 VMM 覆盖。
     pub has_override: bool,
+    /// External VMM project id explicitly persisted for this VulcanCode project.
+    /// 为该 VulcanCode 项目显式持久化的外置 VMM 项目标识。
+    pub bound_project_id: Option<u64>,
 }
 
 /// Runtime state summary for VMM hooks.
@@ -995,6 +1038,76 @@ pub struct VmmMemoryActionRequest {
     /// 动作专用 JSON 载荷。
     #[serde(default)]
     pub payload: serde_json::Value,
+}
+
+/// One one-level native VMM project exposed to the product UI.
+/// 向产品界面暴露的单个一级原生 VMM 项目。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeProjectSummary {
+    /// Stable numeric native VMM project identity.
+    /// 稳定的原生 VMM 数字项目标识。
+    pub project_id: u64,
+    /// Editable display name.
+    /// 可编辑显示名称。
+    pub name: String,
+    /// Immutable project tag used for deterministic rebinding.
+    /// 用于确定性重新绑定的不可变项目标签。
+    pub tag: String,
+    /// Whether deletion is prohibited by the data model.
+    /// 数据模型是否禁止删除该项目。
+    pub protected: bool,
+    /// VulcanCode projects that write to this native VMM project.
+    /// 写入该原生 VMM 项目的 VulcanCode 项目。
+    pub owner_vulcan_project_ids: Vec<String>,
+    /// VulcanCode projects that additionally query this native VMM project.
+    /// 额外查询该原生 VMM 项目的 VulcanCode 项目。
+    pub linked_vulcan_project_ids: Vec<String>,
+}
+
+/// One stable VulcanCode-to-native-VMM project binding.
+/// 单个稳定的 VulcanCode 到原生 VMM 项目绑定。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeProjectBindingSummary {
+    /// Stable VulcanCode project tag.
+    /// 稳定的 VulcanCode 项目标签。
+    pub vulcan_project_id: String,
+    /// Unique native VMM owner project id used for writes.
+    /// 写入使用的唯一原生 VMM 所有者项目标识。
+    pub owner_project_id: u64,
+    /// Ordered additional native VMM project ids used only for recall.
+    /// 仅用于召回的有序附加原生 VMM 项目标识。
+    pub linked_project_ids: Vec<u64>,
+}
+
+/// Complete native project and binding catalog loaded from the host-owned data plane.
+/// 从宿主持有的数据平面加载的完整原生项目及绑定目录。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeProjectCatalogSummary {
+    /// Every one-level native VMM project.
+    /// 全部一级原生 VMM 项目。
+    pub projects: Vec<VmmNativeProjectSummary>,
+    /// Every current VulcanCode project binding.
+    /// 全部当前 VulcanCode 项目绑定。
+    pub bindings: Vec<VmmNativeProjectBindingSummary>,
+}
+
+/// Preview of deleting one native VMM project and detaching its consumers.
+/// 删除一个原生 VMM 项目并解除其使用方之前的预检结果。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeProjectDeletePreview {
+    /// Core storage version that must still match when deletion is confirmed.
+    /// 确认删除时必须仍然匹配的 Core 存储版本。
+    pub storage_version: u64,
+    /// Project selected for deletion.
+    /// 选择删除的项目。
+    pub project: VmmNativeProjectSummary,
+    /// Project-owned content that will be permanently removed.
+    /// 将被永久删除的项目归属内容。
+    pub content: VmmNativeProjectContentCounts,
 }
 
 /// Counts native VMM records affected by one project maintenance operation.
@@ -1188,6 +1301,12 @@ pub enum VmmMemoryActionResponse {
     /// Memory deletion result.
     /// 记忆删除结果。
     DeleteMemories(vulcan_vmm::DeleteMemoriesResponse),
+    /// Native one-level project and binding catalog.
+    /// 原生一级项目与绑定目录。
+    NativeProjectCatalog(VmmNativeProjectCatalogSummary),
+    /// Native project deletion impact preview.
+    /// 原生项目删除影响预检。
+    NativeProjectDeletePreview(VmmNativeProjectDeletePreview),
     /// Native project migration preview.
     /// 原生项目迁移预检。
     NativeMigrationPreview(VmmNativeMigrationPreview),
@@ -1256,4 +1375,29 @@ pub struct VmmConfigSaveRequest {
     /// Draft data to persist.
     /// 需要持久化的草稿数据。
     pub draft: VmmConfigDraftSummary,
+    /// Explicit decisions for every currently unbound project under the selected backend.
+    /// 针对所选后端的每个当前未绑定项目作出的明确决定。
+    #[serde(default)]
+    pub binding_plan: Vec<VmmProjectBindingPlanEntry>,
+}
+
+/// One explicit binding decision submitted while the selected VMM backend is being enabled.
+/// 启用所选 VMM 后端时提交的单个明确绑定决定。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmProjectBindingPlanEntry {
+    /// Stable VulcanCode project tag being configured.
+    /// 正在配置的稳定 VulcanCode 项目标签。
+    pub vulcan_project_id: String,
+    /// Action token: `create_and_bind` or `bind_existing`.
+    /// 动作标记：`create_and_bind` 或 `bind_existing`。
+    pub action: String,
+    /// Editable native VMM project name used by `create_and_bind`.
+    /// `create_and_bind` 使用的可编辑原生 VMM 项目名称。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_name: Option<String>,
+    /// Existing native VMM project id used by `bind_existing`.
+    /// `bind_existing` 使用的已有原生 VMM 项目标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_project_id: Option<u64>,
 }

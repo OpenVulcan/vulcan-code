@@ -5,7 +5,7 @@ use crate::data_plane::ControllerRuntimeHandle;
 use crate::runtime_assets;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -178,6 +178,21 @@ pub struct NativeVmmProjectBinding {
     pub vmm_project_id: u64,
 }
 
+/// Carries one project binding together with its ordered recall-only links.
+/// 携带一条项目绑定及其有序的仅召回连带项目。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeVmmProjectBindingAccess {
+    /// Stable VulcanCode project identity.
+    /// 稳定的 VulcanCode 项目身份。
+    pub vulcan_project_id: String,
+    /// Unique native VMM owner project identity used for writes.
+    /// 写入使用的唯一原生 VMM 所有者项目身份。
+    pub owner_project_id: u64,
+    /// Ordered native VMM project identities used only for recall.
+    /// 仅用于召回的有序原生 VMM 项目身份。
+    pub linked_project_ids: Vec<u64>,
+}
+
 /// Carries one owner project and its ordered read-only linked projects.
 /// 携带一个所有者项目及其有序只读连带项目。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -297,6 +312,29 @@ impl VmmDataPlaneHandle {
             .ok_or_else(|| String::from("创建原生 VMM 项目后无法按标签回读"))
     }
 
+    /// Resolves a native project by immutable tag or creates it exactly once.
+    /// 按不可变标签解析原生项目，若不存在则只创建一次。
+    ///
+    /// # Parameters
+    /// `name` is the editable display name used only when creation is required.
+    /// `name` 是仅在需要创建时使用的可编辑显示名称。
+    /// `tag` is the immutable VulcanCode project tag used for retry-safe rebinding.
+    /// `tag` 是用于可重试重新绑定的不可变 VulcanCode 项目标签。
+    ///
+    /// # Errors
+    /// Returns a controller, validation, or catalog consistency error.
+    /// 返回控制器、校验或目录一致性错误。
+    pub async fn ensure_project(&self, name: &str, tag: &str) -> Result<NativeVmmProject, String> {
+        let tag = validate_native_project_text(tag, "VMM 项目标签", 256)?;
+        if let Some(project) = self.project_by_tag(tag).await? {
+            return Ok(project);
+        }
+        match self.create_project(name, tag).await {
+            Ok(project) => Ok(project),
+            Err(create_error) => self.project_by_tag(tag).await?.ok_or(create_error),
+        }
+    }
+
     /// Renames one native VMM project without changing its identity, scope, tag, or bindings.
     /// 重命名一个原生 VMM 项目，且不改变身份、作用域、标签或绑定。
     ///
@@ -399,6 +437,66 @@ impl VmmDataPlaneHandle {
         })
     }
 
+    /// Lists every native project binding with its ordered recall-only links.
+    /// 列出每条原生项目绑定及其有序的仅召回连带项目。
+    ///
+    /// # Errors
+    /// Returns a controller, JSON, or persisted-identity validation error.
+    /// 返回控制器、JSON 或持久身份校验错误。
+    pub async fn list_project_bindings(
+        &self,
+    ) -> Result<Vec<NativeVmmProjectBindingAccess>, String> {
+        let binding_result = self
+            .client
+            .query_sqlite_json_typed(
+                VMM_SPACE_ID,
+                self.sqlite_binding_id.as_str(),
+                "SELECT vulcan_project_id, vmm_project_id FROM vmm_project_bindings ORDER BY vulcan_project_id ASC;",
+                Vec::new(),
+            )
+            .await
+            .map_err(|error| format!("读取原生 VMM 项目绑定列表失败：{error}"))?;
+        let link_result = self
+            .client
+            .query_sqlite_json_typed(
+                VMM_SPACE_ID,
+                self.sqlite_binding_id.as_str(),
+                "SELECT vulcan_project_id, linked_vmm_project_id, position FROM vmm_project_query_links ORDER BY vulcan_project_id ASC, position ASC, linked_vmm_project_id ASC;",
+                Vec::new(),
+            )
+            .await
+            .map_err(|error| format!("读取原生 VMM 连带查询列表失败：{error}"))?;
+        let bindings: Vec<NativeProjectBindingRow> =
+            serde_json::from_str(&binding_result.json_data)
+                .map_err(|error| format!("解析原生 VMM 项目绑定列表失败：{error}"))?;
+        let links: Vec<NativeProjectQueryLinkRow> = serde_json::from_str(&link_result.json_data)
+            .map_err(|error| format!("解析原生 VMM 连带查询列表失败：{error}"))?;
+        let mut links_by_project = BTreeMap::<String, Vec<u64>>::new();
+        for link in links {
+            let linked_project_id = u64::try_from(link.linked_vmm_project_id)
+                .map_err(|_| String::from("原生 VMM 连带查询项目包含无效标识"))?;
+            links_by_project
+                .entry(link.vulcan_project_id)
+                .or_default()
+                .push(linked_project_id);
+        }
+        bindings
+            .into_iter()
+            .map(|binding| {
+                let owner_project_id = u64::try_from(binding.vmm_project_id)
+                    .map_err(|_| String::from("原生 VMM 项目绑定包含无效所有者标识"))?;
+                let vulcan_project_id = binding.vulcan_project_id;
+                Ok(NativeVmmProjectBindingAccess {
+                    linked_project_ids: links_by_project
+                        .remove(&vulcan_project_id)
+                        .unwrap_or_default(),
+                    vulcan_project_id,
+                    owner_project_id,
+                })
+            })
+            .collect()
+    }
+
     /// Deletes one unbound non-protected native VMM project row.
     /// 删除一个未绑定且不受保护的原生 VMM 项目记录。
     ///
@@ -439,6 +537,58 @@ impl VmmDataPlaneHandle {
             return Err(format!("原生 VMM 项目 {project_id} 未被删除"));
         }
         Ok(())
+    }
+
+    /// Deletes one non-protected project after atomically detaching every owner and query link.
+    /// 原子解除全部所有者与查询连带关系后删除一个不受保护的项目。
+    ///
+    /// # Parameters
+    /// `project_id` is the stable native VMM project selected after an explicit impact preview.
+    /// `project_id` 是在明确影响预检后选择的稳定原生 VMM 项目标识。
+    ///
+    /// # Returns
+    /// Returns the exact associations detached by the committed deletion.
+    /// 返回已提交删除所解除的准确关联。
+    ///
+    /// # Errors
+    /// Returns when the project is missing, protected, or the controller transaction fails.
+    /// 当项目不存在、受保护或控制器事务失败时返回错误。
+    pub async fn delete_project_with_bindings(
+        &self,
+        project_id: u64,
+    ) -> Result<NativeVmmProjectUsage, String> {
+        let project = self
+            .project_by_id(project_id)
+            .await?
+            .ok_or_else(|| format!("原生 VMM 项目 {project_id} 不存在"))?;
+        if project.protected {
+            return Err(String::from("default VMM 项目不允许删除"));
+        }
+        let usage = self.project_usage(project_id).await?;
+        let project_id_i64 = project_id_i64(project_id)?;
+        let script = format!(
+            "BEGIN IMMEDIATE;\nDELETE FROM vmm_project_query_links WHERE linked_vmm_project_id = {project_id_i64};\nDELETE FROM vmm_project_bindings WHERE vmm_project_id = {project_id_i64};\nDELETE FROM vmm_projects WHERE id = {project_id_i64} AND protected = 0;\nCOMMIT;"
+        );
+        let result = self
+            .client
+            .execute_sqlite_script_typed(
+                VMM_SPACE_ID,
+                self.sqlite_binding_id.as_str(),
+                script.as_str(),
+                Vec::new(),
+            )
+            .await
+            .map_err(|error| format!("删除原生 VMM 项目并解除绑定失败：{error}"))?;
+        if !result.success {
+            return Err(format!(
+                "删除原生 VMM 项目并解除绑定失败：{}",
+                result.message
+            ));
+        }
+        if self.project_by_id(project.id).await?.is_some() {
+            return Err(format!("原生 VMM 项目 {project_id} 未被删除"));
+        }
+        Ok(usage)
     }
 
     /// Creates or replaces one VulcanCode project binding by stable project identities.
@@ -1131,6 +1281,30 @@ struct VulcanProjectIdRow {
     /// Stable VulcanCode project identity.
     /// 稳定的 VulcanCode 项目身份。
     vulcan_project_id: String,
+}
+
+/// Carries one persisted native VMM owner binding row.
+/// 携带一条持久化原生 VMM 所有者绑定记录。
+#[derive(Debug, Deserialize)]
+struct NativeProjectBindingRow {
+    /// Stable VulcanCode project identity.
+    /// 稳定的 VulcanCode 项目身份。
+    vulcan_project_id: String,
+    /// Stable native VMM owner project identity.
+    /// 稳定的原生 VMM 所有者项目身份。
+    vmm_project_id: i64,
+}
+
+/// Carries one persisted ordered native VMM query-link row.
+/// 携带一条持久化有序原生 VMM 查询连带记录。
+#[derive(Debug, Deserialize)]
+struct NativeProjectQueryLinkRow {
+    /// Stable VulcanCode project identity.
+    /// 稳定的 VulcanCode 项目身份。
+    vulcan_project_id: String,
+    /// Stable linked native VMM project identity.
+    /// 稳定的连带原生 VMM 项目身份。
+    linked_vmm_project_id: i64,
 }
 
 /// Carries one persisted logical-to-physical vector-space binding.

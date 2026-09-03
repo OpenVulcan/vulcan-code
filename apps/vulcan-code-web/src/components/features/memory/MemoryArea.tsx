@@ -10,11 +10,14 @@ import { VmmInferenceSettings } from "./vmm-inference-settings"
 import { VmmDataPage } from "./vmm-data-page"
 import { VmmAdvancedPage } from "./vmm-advanced-page"
 import { VmmIdentityProjectPage } from "./vmm-identity-project-page"
+import { VmmNativeProjectPage } from "./vmm-native-project-page"
 import { VmmOverviewPage } from "./vmm-overview-page"
 import { VmmProfilePage } from "./vmm-profile-page"
 import { VmmRulesPage } from "./vmm-rules-page"
 import {
   VmmSetupDialog,
+  type VmmQuickSetupCatalog,
+  type VmmQuickSetupConnectionInput,
   type VmmQuickSetupInput,
 } from "./vmm-setup-dialog"
 
@@ -140,89 +143,94 @@ export function MemoryArea(props: {
     runAction,
   ])
 
-  // handleQuickSetup persists the selected service mode, verifies it, creates identity bindings, and applies one explicit scope.
-  // handleQuickSetup 持久化选中的服务模式、完成验证、创建身份绑定并应用到一个明确范围。
-  const handleQuickSetup = React.useCallback(async (input: VmmQuickSetupInput): Promise<boolean> => {
-    // connectionDraft is saved before any RPC so every following action uses the exact visible connection choice.
-    // connectionDraft 在任何 RPC 前保存，确保后续动作使用用户可见的准确连接选择。
+  // handleQuickSetupPrepare verifies one disabled backend and returns its authoritative project catalog.
+  // handleQuickSetupPrepare 校验一个禁用状态的后端并返回其权威项目目录。
+  const handleQuickSetupPrepare = React.useCallback(async (
+    input: VmmQuickSetupConnectionInput,
+  ): Promise<VmmQuickSetupCatalog | null> => {
+    if (input.mode === "native") {
+      const catalogResult = await runAction("native_project_catalog")
+      return catalogResult?.data.kind === "native_project_catalog"
+        ? { native: catalogResult.data.value }
+        : null
+    }
+    // connectionDraft must be persisted before any external management request uses it.
+    // connectionDraft 必须在任何外置管理请求使用前完成持久化。
     const connectionDraft = {
       ...globalDraft,
+      backendMode: "external_grpc" as const,
       enabled: false,
+      grpcTarget: input.externalEndpoint,
+      grpcApiKey: input.externalApiKey,
+      managementBaseUrl: input.externalManagementBaseUrl,
+      managementBearerToken: input.externalManagementToken,
+      managedInstallEnabled: false,
+      autoStartPolicy: "manual",
+    }
+    if (!await applyDraft("global", null, connectionDraft)) return null
+    if (!await runAction("healthz")) return null
+    if (!await runAction("management_capabilities")) return null
+    const catalogResult = await runAction("load_users_projects")
+    return catalogResult?.data.kind === "users_projects"
+      ? {
+          externalUsers: catalogResult.data.value.users,
+          externalProjects: catalogResult.data.value.projects,
+        }
+      : null
+  }, [applyDraft, globalDraft, runAction])
+
+  // handleQuickSetup resolves external identities when needed and enables the selected backend with explicit bindings.
+  // handleQuickSetup 在需要时解析外置身份，并使用显式绑定启用所选后端。
+  const handleQuickSetup = React.useCallback(async (input: VmmQuickSetupInput): Promise<boolean> => {
+    let userId = ""
+    let projectId = ""
+    if (input.mode === "external") {
+      const userResult = await runAction("resolve_user", {
+        userRef: input.userName,
+        confirmCreate: true,
+      })
+      userId = userResult?.data.kind === "resolve_user"
+        ? String(userResult.data.value.user?.user_id ?? "")
+        : ""
+      if (!userId) return false
+      if (input.bindingMode === "fixed") {
+        if (input.externalFixedAction === "bind_existing") {
+          projectId = String(input.externalFixedTargetProjectId ?? "")
+        } else {
+          const projectResult = await runAction("ensure_project", {
+            projectPath: `${input.externalProjectPrefix}/${input.externalFixedProjectName}`,
+            confirmCreate: true,
+          })
+          projectId = projectResult?.data.kind === "ensure_project"
+            ? String(projectResult.data.value.project?.project_id ?? "")
+            : ""
+        }
+        if (!projectId) return false
+      }
+    }
+    const enabledDraft = {
+      ...globalDraft,
+      backendMode: input.mode === "native" ? "native" as const : "external_grpc" as const,
+      nativeProjectBindingMode: input.mode === "native" ? input.bindingMode : globalDraft.nativeProjectBindingMode,
+      externalProjectBindingMode: input.mode === "external" ? input.bindingMode : globalDraft.externalProjectBindingMode,
+      nativeFixedProjectId: String(input.nativeFixedProjectId),
+      externalProjectPrefix: input.externalProjectPrefix,
+      enabled: true,
       grpcTarget: input.mode === "external" ? input.externalEndpoint : "",
       grpcApiKey: input.mode === "external" ? input.externalApiKey : "",
       managementBaseUrl: input.mode === "external" ? input.externalManagementBaseUrl : "",
       managementBearerToken: input.mode === "external" ? input.externalManagementToken : "",
-      managedInstallEnabled: input.mode === "managed",
-      autoStartPolicy: input.mode === "managed" ? "on_start" : "manual",
-    }
-    if (!await applyDraft("global", null, connectionDraft)) {
-      return false
-    }
-    // Saving the managed on-start draft performs the single authoritative startup reconciliation.
-    // 保存托管自动启动草稿会执行唯一权威的启动协调，此处仅验证连接，避免重复启动。
-    if (!await runAction("healthz")) {
-      return false
-    }
-    if (!await runAction("management_capabilities")) {
-      return false
-    }
-    const userResult = await runAction("resolve_user", {
-      userRef: input.userName,
-      confirmCreate: true,
-    })
-    const userId = userResult?.data.kind === "resolve_user"
-      ? String(userResult.data.value.user?.user_id ?? "")
-      : ""
-    if (!userId) {
-      return false
-    }
-    const projectResult = await runAction("ensure_project", {
-      projectPath: vmmSetupProjectPath(input.projectName),
-      confirmCreate: true,
-    })
-    const projectId = projectResult?.data.kind === "ensure_project"
-      ? String(projectResult.data.value.project?.project_id ?? "")
-      : ""
-    if (!projectId) {
-      return false
-    }
-    // identityDraft stores durable VMM ids while keeping internal ids out of the setup UI.
-    // identityDraft 保存持久化 VMM 标识，同时不在配置界面暴露内部标识。
-    const identityDraft = {
-      ...connectionDraft,
-      enabled: input.scope === "all_projects",
+      managedInstallEnabled: false,
+      autoStartPolicy: "manual",
       userId,
       projectId,
     }
-    if (!await applyDraft("global", null, identityDraft)) {
-      return false
-    }
-    if (input.scope === "current_project") {
-      const currentProjectId = props.snapshot.selectedProjectId
-        ?? props.snapshot.projectScopes[0]?.projectId
-        ?? null
-      if (!currentProjectId) {
-        return false
-      }
-      const projectDraft = {
-        ...identityDraft,
-        enabled: true,
-        hasOverride: true,
-      }
-      if (!await applyDraft("project", currentProjectId, projectDraft)) {
-        return false
-      }
-    }
+    if (!await applyDraft("global", null, enabledDraft, input.bindingPlan)) return false
     await runAction("healthz")
-    await runAction("load_users_projects")
+    if (input.mode === "external") await runAction("load_users_projects")
+    else await runAction("native_project_catalog")
     return true
-  }, [
-    applyDraft,
-    globalDraft,
-    props.snapshot.projectScopes,
-    props.snapshot.selectedProjectId,
-    runAction,
-  ])
+  }, [applyDraft, globalDraft, runAction])
 
   // overviewPage is the safe product fallback for stale navigation and first-time setup.
   // overviewPage 是旧导航与首次配置共用的安全产品回退页。
@@ -241,21 +249,13 @@ export function MemoryArea(props: {
           />
           <VmmSetupDialog
             busy={operationBusy}
-            currentProjectAvailable={Boolean(
-              props.snapshot.selectedProjectId
-              ?? props.snapshot.projectScopes[0]?.projectId,
-            )}
-            defaultProjectName={props.snapshot.projectScopes.find(
-              (project) => project.projectId === props.snapshot.selectedProjectId,
-            )?.name
-              ?? props.snapshot.projectScopes[0]?.name
-              ?? "Vulcan Code"}
-            defaultUserName={props.snapshot.displayIdentity.userName ?? "Vulcan Code"}
             notice={notice}
             onOpenCredentialManagement={props.onOpenCredentialManagement}
             onOpenChange={setSetupDialogOpen}
+            onPrepare={handleQuickSetupPrepare}
             onSubmit={handleQuickSetup}
             open={setupDialogOpen}
+            projects={props.snapshot.projectScopes}
           />
         </main>
       </div>
@@ -291,6 +291,22 @@ export function MemoryArea(props: {
   }
 
   if (activeSection === "identity_projects") {
+    if (globalDraft.backendMode === "native") {
+      return (
+        <section className="vmm-memory-page">
+          <div className="vmm-memory-shell status-only">
+            <main className="vmm-memory-main vmm-status-page">
+              <VmmNativeProjectPage
+                busy={operationBusy}
+                notice={notice}
+                onRunAction={runAction}
+                projects={props.snapshot.projectScopes}
+              />
+            </main>
+          </div>
+        </section>
+      )
+    }
     return (
       <section className="vmm-memory-page">
         <div className="vmm-memory-shell status-only">
@@ -381,18 +397,11 @@ export function MemoryArea(props: {
               draft={globalDraft}
               notice={notice}
               onChange={(patch) => setGlobalDraft((draft) => ({ ...draft, ...patch }))}
-              onMaintenance={async (action) => {
-                const maintenanceResult = await runAction(action)
-                return maintenanceResult?.data.kind === "maintenance"
-                  ? maintenanceResult.data.value
-                  : null
-              }}
               onSave={() => saveDraft("global")}
               onTestManagement={async () => {
                 if (!await saveDraft("global")) return false
                 return Boolean(await runAction("management_capabilities"))
               }}
-              onStartRuntime={async () => Boolean(await runAction("managed_runtime_start"))}
               snapshot={props.snapshot}
             />
           </main>
@@ -418,12 +427,4 @@ function vmmVisibleSection(section: MemorySubAreaId): MemorySubAreaId {
   ])
   return visibleSections.has(section) ? section : "overview"
 }
-
-// vmmSetupProjectPath converts one visible project name into the canonical VMM hierarchy.
-// vmmSetupProjectPath 将一个可见项目名称转换为标准 VMM 层级路径。
-function vmmSetupProjectPath(projectName: string): string {
-  const normalizedName = projectName.trim().replace(/[\\/]+/g, "-")
-  return `default/default/${normalizedName}`
-}
-
 

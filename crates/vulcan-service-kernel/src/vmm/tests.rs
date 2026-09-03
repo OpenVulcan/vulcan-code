@@ -174,6 +174,10 @@ fn vmm_config_layer_from_draft_parses_transport_and_behavior_fields() {
     let draft = VmmConfigDraftSummary {
         has_override: true,
         backend_mode: String::from("external_grpc"),
+        native_project_binding_mode: String::from("fixed"),
+        external_project_binding_mode: String::from("per_project"),
+        native_fixed_project_id: String::from("1"),
+        external_project_prefix: String::from("vulcan/space"),
         enabled: true,
         grpc_target: String::from(" http://127.0.0.1:50051 "),
         grpc_api_key: String::from(" secret "),

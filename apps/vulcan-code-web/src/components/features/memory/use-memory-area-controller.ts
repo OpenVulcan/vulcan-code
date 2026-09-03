@@ -7,6 +7,7 @@ import type {
   VmmMemoryActionRequest,
   VmmMemoryActionResult,
   VmmMemorySnapshot,
+  VmmProjectBindingPlanEntry,
   VmmSearchMemoryEventsActionValue,
 } from "@/types";
 
@@ -71,6 +72,7 @@ export interface MemoryAreaController {
     targetScope: VmmScope,
     targetProjectId: string | null,
     draft: VmmConfigDraftSummary,
+    bindingPlan?: VmmProjectBindingPlanEntry[],
   ) => Promise<boolean>;
   // Selects and loads one exact project configuration route.
   // 选择并加载一个准确项目配置路由。
@@ -594,6 +596,7 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
     targetScope: VmmScope,
     targetProjectId: string | null,
     draft: VmmConfigDraftSummary,
+    bindingPlan: VmmProjectBindingPlanEntry[] = [],
   ): Promise<boolean> => {
     if (targetScope === "project" && !targetProjectId?.trim()) {
       return false;
@@ -610,6 +613,7 @@ export function useMemoryAreaController(options: UseMemoryAreaControllerOptions)
         scope: targetScope,
         projectId: targetScope === "project" ? targetProjectId : null,
         draft,
+        bindingPlan,
       });
       if (!ownsOperation(operation)) {
         return false;

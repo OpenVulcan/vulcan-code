@@ -395,9 +395,18 @@ pub async fn service_add_project_from_path(
     );
     vulcan_workspace_store::workspace_store::persist_new_project(controller_runtime, &project)
         .await?;
+    // Memory binding is intentionally non-fatal: the durable VulcanCode project remains created and
+    // the response carries an explicit retry notice when VMM binding fails.
+    // 记忆绑定有意采用非致命语义：VMM 绑定失败时，持久化的 VulcanCode 项目仍创建成功，响应携带明确重试通知。
+    let project_binding_notice = crate::vmm::bind_new_vulcan_project_to_vmm(&state, &project).await;
     // refresh_result publishes the new project before another project-row writer proceeds.
     // refresh_result 在其他项目行写入者继续前发布新项目。
-    let refresh_result = refresh_workbench_snapshot(state.clone()).await;
+    let refresh_result = refresh_workbench_snapshot(state.clone())
+        .await
+        .map(|mut workbench| {
+            workbench.vmm_memory.project_binding_notice = project_binding_notice;
+            workbench
+        });
     drop(persist_guard);
     refresh_result.map(Some)
 }

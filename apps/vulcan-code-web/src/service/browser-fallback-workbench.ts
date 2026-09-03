@@ -525,6 +525,11 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     },
     globalDraft: {
       hasOverride: false,
+      backendMode: "native",
+      nativeProjectBindingMode: "fixed",
+      externalProjectBindingMode: "fixed",
+      nativeFixedProjectId: "1",
+      externalProjectPrefix: "vulcan/space",
       enabled: false,
       grpcTarget: "",
       grpcApiKey: "",
@@ -556,6 +561,11 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     },
     projectDraft: {
       hasOverride: false,
+      backendMode: "native",
+      nativeProjectBindingMode: "fixed",
+      externalProjectBindingMode: "fixed",
+      nativeFixedProjectId: "1",
+      externalProjectPrefix: "vulcan/space",
       enabled: false,
       grpcTarget: "",
       grpcApiKey: "",

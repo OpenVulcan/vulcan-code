@@ -888,6 +888,9 @@ export type TranslationKey =
   | "projectSettings.overrideDisabledHint"
   | "projectSettings.vmmTransportHint"
   | "projectSettings.saveVmm"
+  | "projectSettings.vmmNativeBinding"
+  | "projectSettings.vmmNativeOwner"
+  | "projectSettings.vmmNativeSaveBinding"
   | "projectSettings.agentTitle"
   | "projectSettings.agentDescription"
   | "projectSettings.agent.globalEnabled"
@@ -1562,6 +1565,8 @@ export type TranslationKey =
   | "memory.advanced.title"
   | "memory.advanced.description"
   | "memory.advanced.deployment"
+  | "memory.advanced.native"
+  | "memory.advanced.nativeDescription"
   | "memory.advanced.managed"
   | "memory.advanced.managedDescription"
   | "memory.advanced.external"
@@ -1573,6 +1578,11 @@ export type TranslationKey =
   | "memory.advanced.managementToken"
   | "memory.advanced.testManagement"
   | "memory.advanced.managementTimeout"
+  | "memory.advanced.defaultBinding"
+  | "memory.advanced.nativeFixedProject"
+  | "memory.advanced.externalPrefix"
+  | "memory.advanced.nativeStorage"
+  | "memory.advanced.nativeStorageDescription"
   | "memory.advanced.runtime"
   | "memory.advanced.autoStart"
   | "memory.advanced.manualStart"
@@ -1585,6 +1595,7 @@ export type TranslationKey =
   | "memory.advanced.externalReliabilityDescription"
   | "memory.advanced.diagnostics"
   | "memory.advanced.diagnosticRuntime"
+  | "memory.advanced.diagnosticBackend"
   | "memory.advanced.diagnosticGrpc"
   | "memory.advanced.diagnosticController"
   | "memory.advanced.diagnosticData"
@@ -1645,6 +1656,39 @@ export type TranslationKey =
   | "vmm.experience.capability.tools"
   | "vmm.experience.capability.profile"
   | "vmm.experience.capability.rerank"
+  | "vmm.nativeProjects.title"
+  | "vmm.nativeProjects.description"
+  | "vmm.nativeProjects.refresh"
+  | "vmm.nativeProjects.running"
+  | "vmm.nativeProjects.createTitle"
+  | "vmm.nativeProjects.createDescription"
+  | "vmm.nativeProjects.selectVulcanProject"
+  | "vmm.nativeProjects.projectName"
+  | "vmm.nativeProjects.create"
+  | "vmm.nativeProjects.bindingsTitle"
+  | "vmm.nativeProjects.bindingsDescription"
+  | "vmm.nativeProjects.unbound"
+  | "vmm.nativeProjects.saveBinding"
+  | "vmm.nativeProjects.linkedRecall"
+  | "vmm.nativeProjects.catalogTitle"
+  | "vmm.nativeProjects.catalogDescription"
+  | "vmm.nativeProjects.rename"
+  | "vmm.nativeProjects.clear"
+  | "vmm.nativeProjects.delete"
+  | "vmm.nativeProjects.protected"
+  | "vmm.nativeProjects.migrateTitle"
+  | "vmm.nativeProjects.migrateDescription"
+  | "vmm.nativeProjects.source"
+  | "vmm.nativeProjects.target"
+  | "vmm.nativeProjects.previewMigration"
+  | "vmm.nativeProjects.preview.migration"
+  | "vmm.nativeProjects.preview.clear"
+  | "vmm.nativeProjects.preview.delete"
+  | "vmm.nativeProjects.previewCounts"
+  | "vmm.nativeProjects.previewConflicts"
+  | "vmm.nativeProjects.previewOwners"
+  | "vmm.nativeProjects.confirmRenameMigration"
+  | "vmm.nativeProjects.confirm"
   | "vmm.setup.title"
   | "vmm.setup.description"
   | "vmm.setup.stepLabel"
@@ -1652,6 +1696,8 @@ export type TranslationKey =
   | "vmm.setup.next"
   | "vmm.setup.mode.title"
   | "vmm.setup.mode.description"
+  | "vmm.setup.native.title"
+  | "vmm.setup.native.description"
   | "vmm.setup.managed.title"
   | "vmm.setup.managed.description"
   | "vmm.setup.external.title"
@@ -1660,6 +1706,19 @@ export type TranslationKey =
   | "vmm.setup.inference.description"
   | "vmm.setup.inference.required"
   | "vmm.setup.inference.openCredentials"
+  | "vmm.setup.binding.title"
+  | "vmm.setup.binding.description"
+  | "vmm.setup.binding.fixed"
+  | "vmm.setup.binding.fixedDescription"
+  | "vmm.setup.binding.separate"
+  | "vmm.setup.binding.separateDescription"
+  | "vmm.setup.binding.defaultProject"
+  | "vmm.setup.binding.prefix"
+  | "vmm.setup.binding.unboundProjects"
+  | "vmm.setup.binding.none"
+  | "vmm.setup.binding.create"
+  | "vmm.setup.binding.existing"
+  | "vmm.setup.binding.selectProject"
   | "vmm.setup.scope.title"
   | "vmm.setup.scope.description"
   | "vmm.setup.scope.all_projects"
@@ -3804,6 +3863,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "projectSettings.overrideDisabledHint": "保存后清空项目覆盖并继承全局设置。",
     "projectSettings.vmmTransportHint": "项目级设置继承全局 gRPC 连接与 API Key；连接参数请在 VMM 记忆的全局配置中调整。",
     "projectSettings.saveVmm": "保存 VMM 设置",
+    "projectSettings.vmmNativeBinding": "原生记忆项目绑定",
+    "projectSettings.vmmNativeOwner": "写入归属项目",
+    "projectSettings.vmmNativeSaveBinding": "保存原生绑定",
     "projectSettings.agentTitle": "项目级 Agent Skills",
     "projectSettings.agentDescription": "对系统与用户技能建立当前项目专属启停覆盖。",
     "projectSettings.agent.globalEnabled": "全局已启用",
@@ -4476,8 +4538,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.profile.priority": "优先级",
     "memory.profile.level": "层级",
     "memory.advanced.title": "高级设置",
-    "memory.advanced.description": "选择本地托管或外部服务，并在需要时查看连接、数据恢复与技术诊断。",
+    "memory.advanced.description": "选择内置原生或外置 gRPC 后端，并查看各自专属配置与技术诊断。",
     "memory.advanced.deployment": "运行方式",
+    "memory.advanced.native": "内置原生 VMM（推荐）",
+    "memory.advanced.nativeDescription": "VMM Core 直接运行在 Vulcan Code 内并复用宿主 AI 与 VLDB。",
     "memory.advanced.managed": "本地托管（推荐）",
     "memory.advanced.managedDescription": "由 Vulcan Code 自动启动、停止和保护本地记忆服务。",
     "memory.advanced.external": "连接外部 VMM",
@@ -4489,6 +4553,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.advanced.managementToken": "管理 Token",
     "memory.advanced.testManagement": "保存并测试管理连接",
     "memory.advanced.managementTimeout": "管理请求超时（毫秒）",
+    "memory.advanced.defaultBinding": "新增项目默认绑定规则",
+    "memory.advanced.nativeFixedProject": "默认固定原生项目 ID",
+    "memory.advanced.externalPrefix": "自动创建项目前缀",
+    "memory.advanced.nativeStorage": "由 Vulcan Code 管理的原生存储",
+    "memory.advanced.nativeStorageDescription": "关系数据与 LanceDB 向量分别存放在 .vulcan/code/vmm 下；项目级迁移和清空请在“用户与项目”页面执行。",
     "memory.advanced.runtime": "本地运行",
     "memory.advanced.autoStart": "随 Vulcan Code 自动启动",
     "memory.advanced.manualStart": "仅手动启动",
@@ -4501,6 +4570,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.advanced.externalReliabilityDescription": "外部模式下，后台分析超时与连续失败 Pass 阈值必须在外部 VMM 配置或环境变量中设置；连接上限由外部 VMM 自身的有界传输控制。Vulcan Code 不会伪装成可远程修改这些参数。",
     "memory.advanced.diagnostics": "技术诊断",
     "memory.advanced.diagnosticRuntime": "运行状态",
+    "memory.advanced.diagnosticBackend": "当前后端",
     "memory.advanced.diagnosticGrpc": "服务地址",
     "memory.advanced.diagnosticController": "存储控制器",
     "memory.advanced.diagnosticData": "数据目录",
@@ -4561,13 +4631,48 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "vmm.experience.capability.tools": "AI 记忆工具",
     "vmm.experience.capability.profile": "画像指令",
     "vmm.experience.capability.rerank": "记忆重排",
+    "vmm.nativeProjects.title": "原生记忆项目",
+    "vmm.nativeProjects.description": "管理一级记忆项目、稳定 ID 绑定和仅召回的连带项目。写入始终只进入归属项目。",
+    "vmm.nativeProjects.refresh": "刷新目录",
+    "vmm.nativeProjects.running": "正在执行原生记忆项目操作…",
+    "vmm.nativeProjects.createTitle": "为未绑定项目创建记忆项目",
+    "vmm.nativeProjects.createDescription": "新名称默认使用稳定项目标签；创建后立即按 ID 绑定。",
+    "vmm.nativeProjects.selectVulcanProject": "选择未绑定的 VulcanCode 项目",
+    "vmm.nativeProjects.projectName": "记忆项目名称",
+    "vmm.nativeProjects.create": "创建并绑定",
+    "vmm.nativeProjects.bindingsTitle": "项目绑定与连带查询",
+    "vmm.nativeProjects.bindingsDescription": "每个 VulcanCode 项目只有一个写入归属，可额外选择多个仅召回项目。",
+    "vmm.nativeProjects.unbound": "不绑定（关闭项目记忆）",
+    "vmm.nativeProjects.saveBinding": "保存绑定",
+    "vmm.nativeProjects.linkedRecall": "额外连带查询项目",
+    "vmm.nativeProjects.catalogTitle": "记忆项目目录",
+    "vmm.nativeProjects.catalogDescription": "名称可以修改但绑定 ID 不变；受保护的 default 项目不可删除。",
+    "vmm.nativeProjects.rename": "修改名称",
+    "vmm.nativeProjects.clear": "清空内容",
+    "vmm.nativeProjects.delete": "删除项目",
+    "vmm.nativeProjects.protected": "受保护",
+    "vmm.nativeProjects.migrateTitle": "迁移项目记忆",
+    "vmm.nativeProjects.migrateDescription": "先检测来源、目标、迁移后数量与会话冲突；确认后移动内容，旧项目保留为空。",
+    "vmm.nativeProjects.source": "来源记忆项目",
+    "vmm.nativeProjects.target": "目标记忆项目",
+    "vmm.nativeProjects.previewMigration": "检测迁移",
+    "vmm.nativeProjects.preview.migration": "确认迁移项目记忆",
+    "vmm.nativeProjects.preview.clear": "确认清空项目内容",
+    "vmm.nativeProjects.preview.delete": "确认删除记忆项目",
+    "vmm.nativeProjects.previewCounts": "会话 {sessions}，记忆 {memories}，项目画像 {profiles}，向量节点 {vectors}。",
+    "vmm.nativeProjects.previewConflicts": "检测到 {count} 个会话名称冲突。确认后将按 -1、-2 依次改名并迁移。",
+    "vmm.nativeProjects.previewOwners": "以下 VulcanCode 项目当前绑定到此记忆项目，删除后会解除绑定并关闭其 VMM：{projects}",
+    "vmm.nativeProjects.confirmRenameMigration": "⚠ 自动改名并迁移",
+    "vmm.nativeProjects.confirm": "确认执行",
     "vmm.setup.title": "快速配置长期记忆",
-    "vmm.setup.description": "使用本机托管模式建立记忆用户与当前项目。整个过程会先检查数据安全状态。",
+    "vmm.setup.description": "选择内置原生记忆或外置 VMM，并明确绑定当前尚未关联的项目。",
     "vmm.setup.stepLabel": "第 {current} 步，共 {total} 步",
     "vmm.setup.previous": "上一步",
     "vmm.setup.next": "下一步",
     "vmm.setup.mode.title": "记忆服务在哪里运行",
-    "vmm.setup.mode.description": "大多数用户选择本机托管；已有独立 VMM 服务时再选择外部连接。",
+    "vmm.setup.mode.description": "内置模式直接使用 Vulcan Code 的 AI 与存储能力；已有独立 VMM 服务时选择外部连接。",
+    "vmm.setup.native.title": "内置原生记忆",
+    "vmm.setup.native.description": "记忆内核直接运行在 Vulcan Code 内，不提供额外外部接口。",
     "vmm.setup.managed.title": "本机托管",
     "vmm.setup.managed.description": "Vulcan Code 负责启动、停止和连接本机 VMM 服务。",
     "vmm.setup.external.title": "连接外部服务",
@@ -4576,6 +4681,19 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "vmm.setup.inference.description": "为记忆提取、整理、向量和重排选择模型与账号。下拉列表会自动过滤到适合对应任务的模型。",
     "vmm.setup.inference.required": "必须先配置并启用向量模型，以及 PreCheck 与 PostAction 的 L1/L2 基础模型和账号。全部路由有效后才会初始化记忆；画像与重排可稍后补充。",
     "vmm.setup.inference.openCredentials": "配置模型账号",
+    "vmm.setup.binding.title": "项目记忆绑定",
+    "vmm.setup.binding.description": "选择新项目的默认规则，并逐项确认当前未绑定项目的处理方式。绑定使用稳定 ID，后续改名不会失效。",
+    "vmm.setup.binding.fixed": "默认绑定固定项目",
+    "vmm.setup.binding.fixedDescription": "新增项目默认绑定同一个记忆项目；内置模式默认使用受保护的 default。",
+    "vmm.setup.binding.separate": "按项目自动创建",
+    "vmm.setup.binding.separateDescription": "新增项目以稳定项目标签创建独立记忆项目。",
+    "vmm.setup.binding.defaultProject": "默认固定记忆项目",
+    "vmm.setup.binding.prefix": "自动创建前缀（团队/空间）",
+    "vmm.setup.binding.unboundProjects": "当前未绑定项目",
+    "vmm.setup.binding.none": "当前没有未绑定项目。",
+    "vmm.setup.binding.create": "创建并绑定项目",
+    "vmm.setup.binding.existing": "绑定已有项目",
+    "vmm.setup.binding.selectProject": "选择已有项目",
     "vmm.setup.scope.title": "选择启用范围",
     "vmm.setup.scope.description": "先确定记忆身份，再决定立即应用到哪里；以后可在“记忆规则”中调整。",
     "vmm.setup.scope.all_projects": "立即对所有项目启用",
@@ -4583,15 +4701,15 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "vmm.setup.scope.currentProjectUnavailable": "当前没有可关联的工作区项目",
     "vmm.setup.scope.not_yet": "暂不启用，只完成配置",
     "vmm.setup.confirm.title": "确认配置",
-    "vmm.setup.confirm.description": "模型与账号选择已在上一步即时保存；确认后将保存服务位置与启用范围，并创建记忆空间。",
+    "vmm.setup.confirm.description": "确认后将保存后端、默认绑定规则和每个未绑定项目的明确决定。",
     "vmm.setup.user": "记忆用户名称",
     "vmm.setup.user.placeholder": "例如：本地用户",
     "vmm.setup.project": "当前项目名称",
     "vmm.setup.project.placeholder": "例如：vulcan-code",
-    "vmm.setup.safety": "已有数据不会被自动覆盖。发现旧数据、向量空间变化或损坏标记时，配置会暂停并提供明确处理选项。",
+    "vmm.setup.safety": "已有绑定不会按名称重建；项目名称调整后仍由稳定 ID 保持关联。",
     "vmm.setup.cancel": "取消",
     "vmm.setup.submit": "配置并启动",
-    "vmm.setup.running": "正在检查、启动并建立记忆空间…",
+    "vmm.setup.running": "正在检查配置并建立项目绑定…",
     "vmm.setup.failed": "快速配置尚未完成，请根据下方提示处理后重试。",
     "vmm.overview.outboxProfiles": "outbox：{outbox} · 画像节点：{profiles}",
     "vmm.overview.completedTurns": "已完成回合：{turns}",
@@ -6735,6 +6853,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "projectSettings.overrideDisabledHint": "After saving, project overrides are cleared and global settings are inherited.",
     "projectSettings.vmmTransportHint": "Project-level settings inherit the global gRPC connection and API Key; adjust connection parameters in global VMM memory settings.",
     "projectSettings.saveVmm": "Save VMM settings",
+    "projectSettings.vmmNativeBinding": "Native memory project binding",
+    "projectSettings.vmmNativeOwner": "Write owner project",
+    "projectSettings.vmmNativeSaveBinding": "Save native binding",
     "projectSettings.agentTitle": "Project Agent Skills",
     "projectSettings.agentDescription": "Create project-specific enablement overrides for system and user skills.",
     "projectSettings.agent.globalEnabled": "Global enabled",
@@ -7407,8 +7528,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.profile.priority": "Priority",
     "memory.profile.level": "Level",
     "memory.advanced.title": "Advanced settings",
-    "memory.advanced.description": "Choose local hosting or an external service, and inspect connections, data recovery, and diagnostics when needed.",
+    "memory.advanced.description": "Choose the built-in native or external gRPC backend and inspect only its relevant settings and diagnostics.",
     "memory.advanced.deployment": "Deployment",
+    "memory.advanced.native": "Built-in native VMM (recommended)",
+    "memory.advanced.nativeDescription": "VMM Core runs directly inside Vulcan Code and reuses host AI and VLDB.",
     "memory.advanced.managed": "Locally managed (recommended)",
     "memory.advanced.managedDescription": "Vulcan Code starts, stops, and protects the local memory service automatically.",
     "memory.advanced.external": "Connect an external VMM",
@@ -7420,6 +7543,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.advanced.managementToken": "Management token",
     "memory.advanced.testManagement": "Save and test management connection",
     "memory.advanced.managementTimeout": "Management timeout (ms)",
+    "memory.advanced.defaultBinding": "Default binding for new projects",
+    "memory.advanced.nativeFixedProject": "Default fixed native project ID",
+    "memory.advanced.externalPrefix": "Auto-create project prefix",
+    "memory.advanced.nativeStorage": "Native storage managed by Vulcan Code",
+    "memory.advanced.nativeStorageDescription": "Relational data and LanceDB vectors are stored separately under .vulcan/code/vmm. Use Users & Projects for project migration and clearing.",
     "memory.advanced.runtime": "Local runtime",
     "memory.advanced.autoStart": "Start with Vulcan Code",
     "memory.advanced.manualStart": "Manual start only",
@@ -7432,6 +7560,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.advanced.externalReliabilityDescription": "In external mode, configure the background analysis timeout and consecutive-failure Pass threshold in the external VMM configuration or environment; the external VMM owns its bounded transport connection limit. Vulcan Code does not pretend to modify those settings remotely.",
     "memory.advanced.diagnostics": "Technical diagnostics",
     "memory.advanced.diagnosticRuntime": "Runtime state",
+    "memory.advanced.diagnosticBackend": "Current backend",
     "memory.advanced.diagnosticGrpc": "Service endpoint",
     "memory.advanced.diagnosticController": "Storage controller",
     "memory.advanced.diagnosticData": "Data directory",
@@ -7492,13 +7621,48 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "vmm.experience.capability.tools": "AI memory tools",
     "vmm.experience.capability.profile": "Profile instructions",
     "vmm.experience.capability.rerank": "Memory reranking",
+    "vmm.nativeProjects.title": "Native memory projects",
+    "vmm.nativeProjects.description": "Manage one-level memory projects, stable ID bindings, and recall-only linked projects. Writes always use the owner project only.",
+    "vmm.nativeProjects.refresh": "Refresh catalog",
+    "vmm.nativeProjects.running": "Running native memory project operation…",
+    "vmm.nativeProjects.createTitle": "Create a memory project for an unbound project",
+    "vmm.nativeProjects.createDescription": "The stable project tag is the default name. Creation immediately binds by ID.",
+    "vmm.nativeProjects.selectVulcanProject": "Select an unbound VulcanCode project",
+    "vmm.nativeProjects.projectName": "Memory project name",
+    "vmm.nativeProjects.create": "Create and bind",
+    "vmm.nativeProjects.bindingsTitle": "Project bindings and linked recall",
+    "vmm.nativeProjects.bindingsDescription": "Each VulcanCode project has one write owner and may include multiple recall-only projects.",
+    "vmm.nativeProjects.unbound": "Unbound (disable project memory)",
+    "vmm.nativeProjects.saveBinding": "Save binding",
+    "vmm.nativeProjects.linkedRecall": "Additional recall-only projects",
+    "vmm.nativeProjects.catalogTitle": "Memory project catalog",
+    "vmm.nativeProjects.catalogDescription": "Names can change without changing binding IDs. The protected default project cannot be deleted.",
+    "vmm.nativeProjects.rename": "Rename",
+    "vmm.nativeProjects.clear": "Clear content",
+    "vmm.nativeProjects.delete": "Delete project",
+    "vmm.nativeProjects.protected": "Protected",
+    "vmm.nativeProjects.migrateTitle": "Migrate project memory",
+    "vmm.nativeProjects.migrateDescription": "Preview source, target, post-migration totals, and session conflicts before moving content. The source project remains empty.",
+    "vmm.nativeProjects.source": "Source memory project",
+    "vmm.nativeProjects.target": "Target memory project",
+    "vmm.nativeProjects.previewMigration": "Preview migration",
+    "vmm.nativeProjects.preview.migration": "Confirm project memory migration",
+    "vmm.nativeProjects.preview.clear": "Confirm project content clear",
+    "vmm.nativeProjects.preview.delete": "Confirm memory project deletion",
+    "vmm.nativeProjects.previewCounts": "Sessions {sessions}, memories {memories}, project profiles {profiles}, vector nodes {vectors}.",
+    "vmm.nativeProjects.previewConflicts": "Detected {count} session-name conflicts. Confirm to rename with -1, -2, and so on before migration.",
+    "vmm.nativeProjects.previewOwners": "These VulcanCode projects are bound to this memory project. Deletion detaches them and disables their VMM: {projects}",
+    "vmm.nativeProjects.confirmRenameMigration": "⚠ Rename and migrate",
+    "vmm.nativeProjects.confirm": "Confirm",
     "vmm.setup.title": "Quick setup for long-term memory",
-    "vmm.setup.description": "Use local managed mode to create a memory user and link the current project. Data safety is checked before any startup.",
+    "vmm.setup.description": "Choose native memory or an external VMM and explicitly bind every currently unbound project.",
     "vmm.setup.stepLabel": "Step {current} of {total}",
     "vmm.setup.previous": "Previous",
     "vmm.setup.next": "Next",
     "vmm.setup.mode.title": "Where the memory service runs",
-    "vmm.setup.mode.description": "Managed locally is best for most users. Choose an external connection only when a VMM service already exists.",
+    "vmm.setup.mode.description": "Native mode directly uses Vulcan Code AI and storage. Choose external mode when an independent VMM service already exists.",
+    "vmm.setup.native.title": "Built-in native memory",
+    "vmm.setup.native.description": "The memory core runs directly inside Vulcan Code without an extra public interface.",
     "vmm.setup.managed.title": "Managed locally",
     "vmm.setup.managed.description": "Vulcan Code starts, stops, and connects to the local VMM service.",
     "vmm.setup.external.title": "Connect to an external service",
@@ -7507,6 +7671,19 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "vmm.setup.inference.description": "Select the model and account for memory extraction, organization, embeddings, and reranking. Each list is filtered to suitable models.",
     "vmm.setup.inference.required": "Configure and enable an embedding model plus the PreCheck and PostAction L1/L2 base models and accounts first. Memory is initialized only after every required route is valid; profile and reranking routes can be added later.",
     "vmm.setup.inference.openCredentials": "Configure model accounts",
+    "vmm.setup.binding.title": "Project memory bindings",
+    "vmm.setup.binding.description": "Choose the default for new projects, then confirm every currently unbound project. Stable IDs keep bindings intact after renames.",
+    "vmm.setup.binding.fixed": "Bind to one fixed project",
+    "vmm.setup.binding.fixedDescription": "New projects use one memory project; native mode defaults to the protected default project.",
+    "vmm.setup.binding.separate": "Create one per project",
+    "vmm.setup.binding.separateDescription": "New projects create a separate memory project from the stable project tag.",
+    "vmm.setup.binding.defaultProject": "Default fixed memory project",
+    "vmm.setup.binding.prefix": "Auto-create prefix (team/space)",
+    "vmm.setup.binding.unboundProjects": "Currently unbound projects",
+    "vmm.setup.binding.none": "There are no unbound projects.",
+    "vmm.setup.binding.create": "Create and bind project",
+    "vmm.setup.binding.existing": "Bind existing project",
+    "vmm.setup.binding.selectProject": "Select an existing project",
     "vmm.setup.scope.title": "Choose where to enable memory",
     "vmm.setup.scope.description": "Define the memory identity, then choose where it takes effect. You can change this later under Memory rules.",
     "vmm.setup.scope.all_projects": "Enable for all projects now",
@@ -7514,15 +7691,15 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "vmm.setup.scope.currentProjectUnavailable": "No workspace project is available to link",
     "vmm.setup.scope.not_yet": "Configure only; do not enable yet",
     "vmm.setup.confirm.title": "Confirm setup",
-    "vmm.setup.confirm.description": "Model and account choices were saved in the previous step. Confirm to save the service location and enablement scope, then create the memory space.",
+    "vmm.setup.confirm.description": "Confirm to save the backend, default binding policy, and every explicit unbound-project decision.",
     "vmm.setup.user": "Memory user name",
     "vmm.setup.user.placeholder": "For example: Local user",
     "vmm.setup.project": "Current project name",
     "vmm.setup.project.placeholder": "For example: vulcan-code",
-    "vmm.setup.safety": "Existing data is never overwritten automatically. Setup pauses and offers explicit recovery options for historical data, vector-space changes, or corrupt markers.",
+    "vmm.setup.safety": "Existing bindings are not rebuilt by name. Stable IDs keep them intact after project renames.",
     "vmm.setup.cancel": "Cancel",
     "vmm.setup.submit": "Configure and start",
-    "vmm.setup.running": "Checking, starting, and creating the memory space…",
+    "vmm.setup.running": "Checking settings and creating project bindings…",
     "vmm.setup.failed": "Quick setup is not complete. Follow the guidance below and try again.",
     "vmm.overview.outboxProfiles": "outbox: {outbox} · profile nodes: {profiles}",
     "vmm.overview.completedTurns": "Completed turns: {turns}",

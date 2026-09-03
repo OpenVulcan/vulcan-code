@@ -822,6 +822,7 @@ export function ProjectSettingsDialog(props: {
               <ProjectVmmSection
                 onSaveDraft={() => void saveVmmDraft()}
                 onUpdateDraft={updateVmmDraft}
+                projectId={project.id}
                 vmmBusy={vmmBusy}
                 vmmDraft={vmmDraft}
               />

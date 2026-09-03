@@ -6,11 +6,8 @@ import {
   CircleAlert,
   Database,
   FolderKanban,
-  Play,
   RefreshCw,
-  RotateCw,
   Settings2,
-  Square,
   UserRound,
 } from "lucide-react"
 
@@ -58,7 +55,6 @@ function VmmOverviewPage({
   const { locale, t } = useI18n()
   const state = snapshot.experienceState
   const configured = state.deployment !== "disabled"
-  const running = state.lifecycle === "running"
   const dataSpaceBlocked = [
     "unmarked_history",
     "fingerprint_changed",
@@ -213,37 +209,6 @@ function VmmOverviewPage({
           <RefreshCw className="size-4" aria-hidden="true" />
           {t("vmm.experience.refresh")}
         </Button>
-        {state.deployment === "managed" ? (
-          <>
-            <Button
-              disabled={busy || running}
-              onClick={() => void onControl("managed_runtime_start")}
-              type="button"
-              variant="outline"
-            >
-              <Play className="size-4" aria-hidden="true" />
-              {t("vmm.experience.start")}
-            </Button>
-            <Button
-              disabled={busy || !running}
-              onClick={() => void onControl("managed_runtime_restart")}
-              type="button"
-              variant="outline"
-            >
-              <RotateCw className="size-4" aria-hidden="true" />
-              {t("vmm.experience.restart")}
-            </Button>
-            <Button
-              disabled={busy || !running}
-              onClick={() => void onControl("managed_runtime_stop")}
-              type="button"
-              variant="outline"
-            >
-              <Square className="size-4" aria-hidden="true" />
-              {t("vmm.experience.stop")}
-            </Button>
-          </>
-        ) : null}
         <Button disabled={busy} onClick={onOpenAdvanced} type="button" variant="ghost">
           <Settings2 className="size-4" aria-hidden="true" />
           {t("vmm.experience.openAdvanced")}

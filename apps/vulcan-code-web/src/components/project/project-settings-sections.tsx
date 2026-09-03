@@ -1,3 +1,4 @@
+import * as React from "react";
 import { Bot, BrainCircuit, Calendar, Database, FolderCog, LoaderCircle, Network, RefreshCw, Save, Trash2 } from "lucide-react";
 import { StatusPill } from "@/components/shared/status";
 import {
@@ -21,11 +22,15 @@ import { agentSkillsCatalogSummary } from "@/components/features/agent-skills/ag
 import { useI18n } from "@/i18n";
 import type { TranslationKey } from "@/i18n-messages";
 import { cn } from "@/lib/utils";
+import { runVmmMemoryAction } from "@/service/memory-actions-service";
 import type {
   ProjectSummary,
   CodebaseMemoryIndexJobSummary,
   CodebaseMemoryProjectSettingsSummary,
   VmmConfigDraftSummary,
+  VmmNativeProjectCatalogSummary,
+  VmmProtocolProjectEntry,
+  VmmProtocolUserEntry,
   WorkbenchSnapshot,
 } from "@/types";
 import type {
@@ -344,6 +349,9 @@ export function ProjectOverviewSection(props: {
 // ProjectVmmSection renders project-level VMM memory override controls.
 // ProjectVmmSection 渲染项目级 VMM 记忆覆盖控件。
 export function ProjectVmmSection(props: {
+  // Stable VulcanCode project id whose binding is being edited.
+  // 当前编辑绑定的稳定 VulcanCode 项目标识。
+  projectId: string;
   // Editable VMM draft loaded for the project.
   // 为当前项目加载的可编辑 VMM 草稿。
   vmmDraft: VmmConfigDraftSummary | null;
@@ -359,6 +367,85 @@ export function ProjectVmmSection(props: {
 }) {
   const { t } = useI18n();
   const policyOptions = vmmPolicyModeOptions(t);
+  const [nativeCatalog, setNativeCatalog] = React.useState<VmmNativeProjectCatalogSummary | null>(null);
+  const [nativeOwnerId, setNativeOwnerId] = React.useState("");
+  const [nativeLinkedIds, setNativeLinkedIds] = React.useState<number[]>([]);
+  const [nativeBindingBusy, setNativeBindingBusy] = React.useState(false);
+  const [nativeBindingNotice, setNativeBindingNotice] = React.useState("");
+  const [externalUsers, setExternalUsers] = React.useState<VmmProtocolUserEntry[]>([]);
+  const [externalProjects, setExternalProjects] = React.useState<VmmProtocolProjectEntry[]>([]);
+
+  React.useEffect(() => {
+    if (!props.vmmDraft) {
+      setNativeCatalog(null);
+      return;
+    }
+    let cancelled = false;
+    void runVmmMemoryAction({
+      action: props.vmmDraft.backendMode === "native" ? "native_project_catalog" : "load_users_projects",
+      commandId: crypto.randomUUID(),
+      scope: "global",
+      projectId: null,
+    }).then((result) => {
+      if (cancelled) return;
+      if (result.data.kind === "native_project_catalog") {
+        setNativeCatalog(result.data.value);
+        const binding = result.data.value.bindings.find((item) => item.vulcanProjectId === props.projectId);
+        setNativeOwnerId(binding ? String(binding.ownerProjectId) : "");
+        setNativeLinkedIds(binding?.linkedProjectIds ?? []);
+      } else if (result.data.kind === "users_projects") {
+        setExternalUsers(result.data.value.users);
+        setExternalProjects(result.data.value.projects);
+      }
+    }).catch((error) => {
+      if (!cancelled) setNativeBindingNotice(error instanceof Error ? error.message : String(error));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [props.projectId, props.vmmDraft?.backendMode]);
+
+  // saveNativeBinding persists one owner and the separately selected recall-only projects.
+  // saveNativeBinding 持久化一个归属项目与单独选择的仅召回项目。
+  const saveNativeBinding = async () => {
+    if (nativeBindingBusy) return;
+    setNativeBindingBusy(true);
+    setNativeBindingNotice("");
+    try {
+      const ownerProjectId = Number(nativeOwnerId);
+      if (!ownerProjectId) {
+        const result = await runVmmMemoryAction({
+          action: "native_project_unbind",
+          commandId: crypto.randomUUID(),
+          scope: "global",
+          projectId: null,
+          payload: { vulcanProjectId: props.projectId },
+        });
+        setNativeBindingNotice(result.summary);
+        setNativeLinkedIds([]);
+        return;
+      }
+      await runVmmMemoryAction({
+        action: "native_project_bind_existing",
+        commandId: crypto.randomUUID(),
+        scope: "global",
+        projectId: null,
+        payload: { vulcanProjectId: props.projectId, vmmProjectId: ownerProjectId },
+      });
+      const result = await runVmmMemoryAction({
+        action: "native_project_replace_query_links",
+        commandId: crypto.randomUUID(),
+        scope: "global",
+        projectId: null,
+        payload: { vulcanProjectId: props.projectId, linkedProjectIds: nativeLinkedIds },
+      });
+      setNativeBindingNotice(result.summary);
+    } catch (error) {
+      setNativeBindingNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setNativeBindingBusy(false);
+    }
+  };
   const updatePolicyMode = (policy: "precheck" | "writeback", mode: string) => {
     if (policy === "precheck") {
       props.onUpdateDraft({
@@ -407,8 +494,24 @@ export function ProjectVmmSection(props: {
             </label>
             <VmmSelectField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.precheckPolicy")} options={policyOptions} value={props.vmmDraft.precheckMode} onChange={(mode) => updatePolicyMode("precheck", mode)} />
             <VmmSelectField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.writebackPolicy")} options={policyOptions} value={props.vmmDraft.memoryWritebackMode} onChange={(mode) => updatePolicyMode("writeback", mode)} />
-            <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.userId")} value={props.vmmDraft.userId} onChange={(userId) => props.onUpdateDraft({ userId })} />
-            <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.projectId")} value={props.vmmDraft.projectId} onChange={(projectId) => props.onUpdateDraft({ projectId })} />
+            {props.vmmDraft.backendMode === "external_grpc" ? (
+              <>
+                <VmmSelectField
+                  disabled={!props.vmmDraft.hasOverride}
+                  label={t("vmm.settings.userId")}
+                  onChange={(userId) => props.onUpdateDraft({ userId })}
+                  options={externalUsers.map((user) => ({ value: String(user.user_id), label: user.user_name }))}
+                  value={props.vmmDraft.userId}
+                />
+                <VmmSelectField
+                  disabled={!props.vmmDraft.hasOverride}
+                  label={t("vmm.settings.projectId")}
+                  onChange={(projectId) => props.onUpdateDraft({ projectId })}
+                  options={externalProjects.map((project) => ({ value: String(project.project_id), label: project.display_path }))}
+                  value={props.vmmDraft.projectId}
+                />
+              </>
+            ) : null}
             <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.implicitMemoryTtl")} value={props.vmmDraft.implicitMemoryTurns} onChange={(implicitMemoryTurns) => props.onUpdateDraft({ implicitMemoryTurns })} />
             <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.profileRefreshInterval")} value={props.vmmDraft.profileRefreshTurns} onChange={(profileRefreshTurns) => props.onUpdateDraft({ profileRefreshTurns })} />
             <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.profileNodeLimit")} value={props.vmmDraft.profileNodeLimit} onChange={(profileNodeLimit) => props.onUpdateDraft({ profileNodeLimit })} />
@@ -418,6 +521,44 @@ export function ProjectVmmSection(props: {
               <Textarea disabled={!props.vmmDraft.hasOverride} value={props.vmmDraft.injectionDescription} onChange={(event) => props.onUpdateDraft({ injectionDescription: event.target.value })} />
             </label>
           </div>
+          {props.vmmDraft.backendMode === "native" ? (
+            <div className="project-settings-panel">
+              <strong>{t("projectSettings.vmmNativeBinding")}</strong>
+              <VmmSelectField
+                label={t("projectSettings.vmmNativeOwner")}
+                onChange={(value) => {
+                  setNativeOwnerId(value === "unbound" ? "" : value);
+                  if (value === "unbound") setNativeLinkedIds([]);
+                }}
+                options={[
+                  { value: "unbound", label: t("vmm.nativeProjects.unbound") },
+                  ...(nativeCatalog?.projects ?? []).map((project) => ({ value: String(project.projectId), label: project.name })),
+                ]}
+                value={nativeOwnerId || "unbound"}
+              />
+              {nativeOwnerId ? (
+                <div className="project-settings-form-grid">
+                  {(nativeCatalog?.projects ?? []).filter((project) => String(project.projectId) !== nativeOwnerId).map((project) => (
+                    <label className="project-settings-check-row" key={project.projectId}>
+                      <input
+                        checked={nativeLinkedIds.includes(project.projectId)}
+                        onChange={() => setNativeLinkedIds((current) => current.includes(project.projectId)
+                          ? current.filter((value) => value !== project.projectId)
+                          : [...current, project.projectId])}
+                        type="checkbox"
+                      />
+                      {project.name}
+                    </label>
+                  ))}
+                </div>
+              ) : null}
+              {nativeBindingNotice ? <p className="project-settings-muted">{nativeBindingNotice}</p> : null}
+              <Button disabled={nativeBindingBusy || !nativeCatalog} onClick={() => void saveNativeBinding()} type="button" variant="outline">
+                {nativeBindingBusy ? <LoaderCircle className="size-4 animate-spin" /> : <Save size={15} />}
+                {t("projectSettings.vmmNativeSaveBinding")}
+              </Button>
+            </div>
+          ) : null}
           <p className="project-settings-muted">{t("projectSettings.vmmTransportHint")}</p>
           <div className="project-settings-actions">
             <Button disabled={props.vmmBusy === "saving"} onClick={props.onSaveDraft} type="button">

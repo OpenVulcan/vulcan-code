@@ -27,6 +27,9 @@ pub(crate) async fn save_vmm_memory_config(
     }
     let scope = request.scope.trim().to_ascii_lowercase();
     if scope == "project" {
+        if !request.binding_plan.is_empty() {
+            return Err(String::from("项目级 VMM 设置不接受全局项目绑定计划。"));
+        }
         let project_path = vmm_project_scope_path(state, request.project_id.as_deref())?;
         return mutate_project_configuration(
             &PathBuf::from(&project_path),
@@ -53,25 +56,31 @@ pub(crate) async fn save_vmm_memory_config(
     if scope != "global" {
         return Err(format!("不支持的 VMM 配置作用域：{scope}"));
     }
+    let current_configuration = provider_configuration_from_state(state)?;
+    if request.draft.grpc_api_key.trim() == WEBUI_REDACTED_SECRET_PLACEHOLDER {
+        request.draft.grpc_api_key = current_configuration
+            .vmm
+            .grpc_api_key
+            .clone()
+            .unwrap_or_default();
+    }
+    if request.draft.management_bearer_token.trim() == WEBUI_REDACTED_SECRET_PLACEHOLDER {
+        request.draft.management_bearer_token = current_configuration
+            .vmm
+            .management_bearer_token
+            .clone()
+            .unwrap_or_default();
+    }
+    let next_layer = vmm_config_layer_from_draft(&request.draft, true)?;
+    apply_project_binding_plan(state, &next_layer, &request.binding_plan).await?;
     // A saved global transport may point at a different endpoint, so no previous probe remains authoritative.
     // 保存后的全局传输可能指向其他端点，因此此前的探测结果不再具备权威性。
     clear_external_vmm_health_probe();
     mutate_provider_configuration(
         state,
         "保存 VMM 全局配置失败",
-        |configuration| {
-            if request.draft.grpc_api_key.trim() == WEBUI_REDACTED_SECRET_PLACEHOLDER {
-                request.draft.grpc_api_key =
-                    configuration.vmm.grpc_api_key.clone().unwrap_or_default();
-            }
-            if request.draft.management_bearer_token.trim() == WEBUI_REDACTED_SECRET_PLACEHOLDER {
-                request.draft.management_bearer_token = configuration
-                    .vmm
-                    .management_bearer_token
-                    .clone()
-                    .unwrap_or_default();
-            }
-            configuration.vmm = vmm_config_layer_from_draft(&request.draft, true)?;
+        move |configuration| {
+            configuration.vmm = next_layer;
             Ok(())
         },
         refresh_guard_vmm_hook_snapshot,
@@ -93,6 +102,413 @@ pub(crate) async fn save_vmm_memory_config(
         eprintln!("{message}");
     }
     Ok(())
+}
+
+/// Validates and applies every explicit unbound-project decision before native VMM is enabled.
+/// 在启用原生 VMM 前校验并应用每项明确的未绑定项目决定。
+async fn apply_project_binding_plan(
+    state: &SharedServiceBridgeState,
+    next_layer: &vulcan_vmm::VmmConfigLayer,
+    plan: &[vulcan_service_api::VmmProjectBindingPlanEntry],
+) -> Result<(), String> {
+    let effective = vulcan_vmm::VmmEffectiveConfig::resolve(next_layer, None, None);
+    if !effective.enabled {
+        if !plan.is_empty() {
+            return Err(String::from("VMM 禁用时不允许提交项目绑定计划。"));
+        }
+        return Ok(());
+    }
+    match effective.backend_mode {
+        vulcan_vmm::VmmBackendMode::Native => {
+            apply_native_project_binding_plan(state, &effective, plan).await
+        }
+        vulcan_vmm::VmmBackendMode::ExternalGrpc => {
+            apply_external_project_binding_plan(state, next_layer, &effective, plan).await
+        }
+    }
+}
+
+/// Validates and applies enable-time bindings for the native backend.
+/// 校验并应用原生后端启用时的项目绑定。
+async fn apply_native_project_binding_plan(
+    state: &SharedServiceBridgeState,
+    effective: &vulcan_vmm::VmmEffectiveConfig,
+    plan: &[vulcan_service_api::VmmProjectBindingPlanEntry],
+) -> Result<(), String> {
+    let (maintenance, workspace) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("锁定原生 VMM 项目绑定状态失败：{error}"))?;
+        (
+            guard
+                .native_vmm_maintenance
+                .clone()
+                .ok_or_else(|| String::from("原生 VMM 项目绑定运行时尚未就绪。"))?,
+            guard
+                .workspace_snapshot
+                .clone()
+                .ok_or_else(|| String::from("工作区项目列表尚未就绪。"))?,
+        )
+    };
+    let catalog = maintenance.project_catalog().await?;
+    if effective.native_project_binding_mode == vulcan_vmm::VmmNativeProjectBindingMode::Fixed
+        && !catalog
+            .projects
+            .iter()
+            .any(|item| item.project.id == effective.native_fixed_project_id)
+    {
+        return Err(format!(
+            "原生 VMM 固定项目 {} 不存在，请选择已有项目。",
+            effective.native_fixed_project_id
+        ));
+    }
+    let bound_ids = catalog
+        .bindings
+        .iter()
+        .map(|binding| binding.vulcan_project_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let unbound_projects = workspace
+        .task_projects
+        .iter()
+        .filter(|project| !bound_ids.contains(project.id.as_str()))
+        .map(|project| (project.id.clone(), project.title.clone()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut decisions = std::collections::BTreeMap::new();
+    for entry in plan {
+        if decisions
+            .insert(entry.vulcan_project_id.as_str(), entry)
+            .is_some()
+        {
+            return Err(format!(
+                "原生 VMM 绑定计划重复包含项目 `{}`。",
+                entry.vulcan_project_id
+            ));
+        }
+    }
+    let expected_ids = unbound_projects
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let actual_ids = decisions.keys().copied().collect::<Vec<_>>();
+    if expected_ids != actual_ids {
+        return Err(format!(
+            "原生 VMM 绑定计划必须准确覆盖当前未绑定项目。未绑定项目：[{}]。",
+            expected_ids.join(", ")
+        ));
+    }
+    for entry in plan {
+        match entry.action.trim() {
+            "bind_existing" => {
+                let project_id = entry
+                    .target_project_id
+                    .filter(|project_id| *project_id > 0)
+                    .ok_or_else(|| {
+                        format!(
+                            "项目 `{}` 缺少待绑定的已有 VMM 项目。",
+                            entry.vulcan_project_id
+                        )
+                    })?;
+                if !catalog
+                    .projects
+                    .iter()
+                    .any(|item| item.project.id == project_id)
+                {
+                    return Err(format!(
+                        "项目 `{}` 选择的原生 VMM 项目 {} 不存在。",
+                        entry.vulcan_project_id, project_id
+                    ));
+                }
+            }
+            "create_and_bind" => {
+                let name = entry
+                    .project_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .ok_or_else(|| {
+                        format!("项目 `{}` 缺少新 VMM 项目名称。", entry.vulcan_project_id)
+                    })?;
+                if name.chars().count() > 512 {
+                    return Err(format!(
+                        "项目 `{}` 的新 VMM 项目名称超过 512 个字符。",
+                        entry.vulcan_project_id
+                    ));
+                }
+            }
+            action => {
+                return Err(format!(
+                    "项目 `{}` 使用了不支持的绑定动作 `{action}`。",
+                    entry.vulcan_project_id
+                ));
+            }
+        }
+    }
+    for entry in plan {
+        match entry.action.trim() {
+            "bind_existing" => {
+                let project_id = entry
+                    .target_project_id
+                    .ok_or_else(|| String::from("已校验的原生 VMM 绑定目标意外缺失"))?;
+                maintenance
+                    .bind_existing_project(&entry.vulcan_project_id, project_id)
+                    .await?;
+            }
+            "create_and_bind" => {
+                let name = entry
+                    .project_name
+                    .as_deref()
+                    .ok_or_else(|| String::from("已校验的原生 VMM 项目名称意外缺失"))?;
+                maintenance
+                    .create_and_bind_project(&entry.vulcan_project_id, name)
+                    .await?;
+            }
+            action => {
+                return Err(format!("已校验的原生 VMM 绑定动作意外变化为 `{action}`。"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validates and applies enable-time bindings for the external gRPC backend.
+/// 校验并应用外置 gRPC 后端启用时的项目绑定。
+async fn apply_external_project_binding_plan(
+    state: &SharedServiceBridgeState,
+    next_layer: &vulcan_vmm::VmmConfigLayer,
+    effective: &vulcan_vmm::VmmEffectiveConfig,
+    plan: &[vulcan_service_api::VmmProjectBindingPlanEntry],
+) -> Result<(), String> {
+    if effective.user_id.filter(|user_id| *user_id > 0).is_none() {
+        return Err(String::from("启用外置 VMM 前必须选择有效用户。"));
+    }
+    let workspace = state
+        .lock()
+        .map_err(|error| format!("锁定外置 VMM 项目绑定状态失败：{error}"))?
+        .workspace_snapshot
+        .clone()
+        .ok_or_else(|| String::from("工作区项目列表尚未就绪。"))?;
+    let remote_projects = load_external_vmm_projects(next_layer.clone()).await?;
+    if effective.external_project_binding_mode == vulcan_vmm::VmmNativeProjectBindingMode::Fixed {
+        if !plan.is_empty() {
+            return Err(String::from(
+                "外置固定项目策略通过全局项目 ID 继承，不接受逐项目绑定计划。",
+            ));
+        }
+        let project_id = effective
+            .project_id
+            .filter(|project_id| *project_id > 0)
+            .ok_or_else(|| String::from("启用外置固定项目策略前必须选择有效项目。"))?;
+        if !remote_projects
+            .iter()
+            .any(|project| project.project_id == project_id)
+        {
+            return Err(format!("外置 VMM 固定项目 {project_id} 不存在。"));
+        }
+        return Ok(());
+    }
+    let unbound_projects = workspace
+        .task_projects
+        .iter()
+        .filter(|project| cached_project_vmm_layer(&project.path).project_id.is_none())
+        .map(|project| (project.id.clone(), project.path.clone()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let decisions = validate_binding_plan_coverage(&unbound_projects, plan, "外置 VMM")?;
+    for entry in decisions.values() {
+        match entry.action.trim() {
+            "bind_existing" => {
+                let project_id = entry
+                    .target_project_id
+                    .filter(|project_id| *project_id > 0)
+                    .ok_or_else(|| {
+                        format!(
+                            "项目 `{}` 缺少待绑定的已有外置 VMM 项目。",
+                            entry.vulcan_project_id
+                        )
+                    })?;
+                if !remote_projects
+                    .iter()
+                    .any(|project| project.project_id == project_id)
+                {
+                    return Err(format!(
+                        "项目 `{}` 选择的外置 VMM 项目 {} 不存在。",
+                        entry.vulcan_project_id, project_id
+                    ));
+                }
+            }
+            "create_and_bind" => {
+                validate_external_project_leaf(entry)?;
+            }
+            action => {
+                return Err(format!(
+                    "项目 `{}` 使用了不支持的外置 VMM 绑定动作 `{action}`。",
+                    entry.vulcan_project_id
+                ));
+            }
+        }
+    }
+    for entry in decisions.values() {
+        let project_config_path = unbound_projects
+            .get(&entry.vulcan_project_id)
+            .ok_or_else(|| String::from("已校验的外置 VMM 项目路径意外缺失"))?;
+        let remote_project_id = match entry.action.trim() {
+            "bind_existing" => entry
+                .target_project_id
+                .ok_or_else(|| String::from("已校验的外置 VMM 绑定目标意外缺失"))?,
+            "create_and_bind" => {
+                let project_name = entry
+                    .project_name
+                    .as_deref()
+                    .ok_or_else(|| String::from("已校验的外置 VMM 项目名称意外缺失"))?;
+                ensure_external_vmm_project(
+                    next_layer.clone(),
+                    format!("{}/{}", effective.external_project_prefix, project_name),
+                )
+                .await?
+                .project_id
+            }
+            action => {
+                return Err(format!("已校验的外置 VMM 绑定动作意外变化为 `{action}`。"));
+            }
+        };
+        persist_external_project_id(state, project_config_path, remote_project_id).await?;
+    }
+    Ok(())
+}
+
+/// Validates that one binding plan exactly covers the supplied unbound project ids.
+/// 校验一份绑定计划是否准确覆盖给定的未绑定项目标识。
+fn validate_binding_plan_coverage<'a>(
+    unbound_projects: &std::collections::BTreeMap<String, String>,
+    plan: &'a [vulcan_service_api::VmmProjectBindingPlanEntry],
+    label: &str,
+) -> Result<
+    std::collections::BTreeMap<&'a str, &'a vulcan_service_api::VmmProjectBindingPlanEntry>,
+    String,
+> {
+    let mut decisions = std::collections::BTreeMap::new();
+    for entry in plan {
+        if decisions
+            .insert(entry.vulcan_project_id.as_str(), entry)
+            .is_some()
+        {
+            return Err(format!(
+                "{label} 绑定计划重复包含项目 `{}`。",
+                entry.vulcan_project_id
+            ));
+        }
+    }
+    let expected_ids = unbound_projects
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let actual_ids = decisions.keys().copied().collect::<Vec<_>>();
+    if expected_ids != actual_ids {
+        return Err(format!(
+            "{label} 绑定计划必须准确覆盖当前未绑定项目。未绑定项目：[{}]。",
+            expected_ids.join(", ")
+        ));
+    }
+    Ok(decisions)
+}
+
+/// Validates one external project leaf without allowing hierarchy injection.
+/// 校验一个外置项目末级名称，不允许注入额外层级。
+fn validate_external_project_leaf(
+    entry: &vulcan_service_api::VmmProjectBindingPlanEntry,
+) -> Result<(), String> {
+    let project_name = entry
+        .project_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| format!("项目 `{}` 缺少外置 VMM 项目名称。", entry.vulcan_project_id))?;
+    if project_name.contains('/') {
+        return Err(format!(
+            "项目 `{}` 的外置 VMM 项目名称不得包含 `/`。",
+            entry.vulcan_project_id
+        ));
+    }
+    if project_name.chars().count() > 128 {
+        return Err(format!(
+            "项目 `{}` 的外置 VMM 项目名称超过 128 个字符。",
+            entry.vulcan_project_id
+        ));
+    }
+    Ok(())
+}
+
+/// Loads the exact durable project catalog from an external VMM endpoint.
+/// 从外置 VMM 端点加载准确的持久项目目录。
+async fn load_external_vmm_projects(
+    layer: vulcan_vmm::VmmConfigLayer,
+) -> Result<Vec<vulcan_vmm::ProjectEntry>, String> {
+    match vulcan_service_runtime::vmm_management::run_vmm_workbench_action(
+        vulcan_service_runtime::vmm_management::VmmWorkbenchAction::LoadUsersAndProjects,
+        layer,
+        String::new(),
+        String::new(),
+    )
+    .await?
+    {
+        vulcan_service_runtime::vmm_management::VmmManagementOutcome::UsersAndProjects {
+            projects,
+            ..
+        } => Ok(projects.projects),
+        _ => Err(String::from("外置 VMM 返回了不匹配的项目目录结果。")),
+    }
+}
+
+/// Ensures one external canonical project path and returns its durable identity.
+/// 确保一个外置规范项目路径存在，并返回其持久身份。
+async fn ensure_external_vmm_project(
+    layer: vulcan_vmm::VmmConfigLayer,
+    project_path: String,
+) -> Result<vulcan_vmm::ProjectEntry, String> {
+    match vulcan_service_runtime::vmm_management::run_vmm_workbench_action(
+        vulcan_service_runtime::vmm_management::VmmWorkbenchAction::EnsureProject {
+            project_path,
+            confirm_create: true,
+        },
+        layer,
+        String::new(),
+        String::new(),
+    )
+    .await?
+    {
+        vulcan_service_runtime::vmm_management::VmmManagementOutcome::EnsureProject(response) => {
+            response
+                .project
+                .ok_or_else(|| format!("外置 VMM 未返回已确保项目：{}", response.message))
+        }
+        _ => Err(String::from("外置 VMM 返回了不匹配的项目创建结果。")),
+    }
+}
+
+/// Persists one external project id in the exact VulcanCode project layer.
+/// 将一个外置项目标识持久化到准确的 VulcanCode 项目层。
+async fn persist_external_project_id(
+    state: &SharedServiceBridgeState,
+    project_path: &str,
+    remote_project_id: u64,
+) -> Result<(), String> {
+    let project_path = project_path.to_owned();
+    mutate_project_configuration(
+        &PathBuf::from(&project_path),
+        "保存外置 VMM 项目 ID 绑定失败",
+        |project_configuration| {
+            project_configuration.vmm.project_id = Some(remote_project_id);
+            Ok(())
+        },
+        |project_configuration| {
+            update_cached_project_vmm_layer(&project_path, project_configuration.vmm.clone());
+            refresh_exact_vmm_hook_project_projection(
+                state,
+                &project_path,
+                &project_configuration.vmm,
+            )
+        },
+    )
+    .await
 }
 
 /// Validates the exact embedding and foundational LLM routes before any VMM layer is enabled.
@@ -199,6 +615,24 @@ pub(crate) fn vmm_config_layer_from_draft(
         backend_mode: include_transport
             .then(|| vmm_backend_mode_from_draft(&draft.backend_mode))
             .transpose()?,
+        native_project_binding_mode: include_transport
+            .then(|| vmm_native_binding_mode_from_draft(&draft.native_project_binding_mode))
+            .transpose()?,
+        external_project_binding_mode: include_transport
+            .then(|| vmm_native_binding_mode_from_draft(&draft.external_project_binding_mode))
+            .transpose()?,
+        native_fixed_project_id: include_transport
+            .then(|| {
+                vmm_parse_optional_positive_u64(
+                    &draft.native_fixed_project_id,
+                    "原生 VMM 固定项目 ID",
+                )
+            })
+            .transpose()?
+            .flatten(),
+        external_project_prefix: include_transport
+            .then(|| vmm_external_project_prefix(&draft.external_project_prefix))
+            .transpose()?,
         enabled: Some(draft.enabled),
         grpc_target: include_transport
             .then(|| vmm_non_empty_text(&draft.grpc_target))
@@ -295,6 +729,35 @@ fn vmm_backend_mode_from_draft(value: &str) -> Result<vulcan_vmm::VmmBackendMode
             "VMM 后端模式无效：{other}，只允许 native 或 external_grpc"
         )),
     }
+}
+
+/// Parses the global native project binding policy without accepting aliases.
+/// 解析全局原生项目绑定策略，不接受别名。
+fn vmm_native_binding_mode_from_draft(
+    value: &str,
+) -> Result<vulcan_vmm::VmmNativeProjectBindingMode, String> {
+    match value.trim() {
+        "fixed" => Ok(vulcan_vmm::VmmNativeProjectBindingMode::Fixed),
+        "per_project" => Ok(vulcan_vmm::VmmNativeProjectBindingMode::PerProject),
+        value => Err(format!("不支持的原生 VMM 项目绑定策略：{value}")),
+    }
+}
+
+/// Validates the external automatic-project Team/Space prefix.
+/// 校验外置自动项目使用的 Team/Space 前缀。
+fn vmm_external_project_prefix(value: &str) -> Result<String, String> {
+    let segments = value.split('/').map(str::trim).collect::<Vec<_>>();
+    if segments.len() != 2 || segments.iter().any(|segment| segment.is_empty()) {
+        return Err(String::from(
+            "外置 VMM 项目前缀必须使用非空 team/space 格式。",
+        ));
+    }
+    if segments.iter().any(|segment| segment.chars().count() > 128) {
+        return Err(String::from(
+            "外置 VMM 项目前缀的单个层级不得超过 128 个字符。",
+        ));
+    }
+    Ok(format!("{}/{}", segments[0], segments[1]))
 }
 
 /// Validates the optional external management endpoint and secret as one inseparable pair.

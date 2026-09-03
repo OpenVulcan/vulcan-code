@@ -15,7 +15,7 @@ export interface MemorySummary {
 
 // VmmDeploymentMode identifies how Vulcan Code reaches the VMM runtime.
 // VmmDeploymentMode 标识 Vulcan Code 连接 VMM 运行时的方式。
-export type VmmDeploymentMode = "disabled" | "managed" | "external";
+export type VmmDeploymentMode = "disabled" | "native" | "external";
 
 // VmmSetupState identifies whether the user-facing setup is complete.
 // VmmSetupState 标识面向用户的设置是否完整。
@@ -330,6 +330,19 @@ export interface VmmMemorySnapshot {
   // Human-readable notice.
   // 人类可读提示。
   notice: string;
+  // Transient native or external binding outcome attached only to one project-add response.
+  // 仅附加到单次项目添加响应的原生或外置绑定结果。
+  projectBindingNotice?: VmmProjectBindingNotice | null;
+}
+
+// VmmProjectBindingNotice reports the memory binding attempted after project creation.
+// VmmProjectBindingNotice 报告项目创建后尝试的记忆绑定。
+export interface VmmProjectBindingNotice {
+  vulcanProjectId: string;
+  status: "bound" | "failed";
+  vmmProjectName?: string | null;
+  nativeVmmProjectId?: number | null;
+  message: string;
 }
 
 // VmmEffectiveSummary describes resolved VMM settings.
@@ -410,6 +423,21 @@ export interface VmmManagedRuntimeSettingsDraft {
 // VmmConfigDraftSummary 描述可编辑 VMM 配置字段。
 export interface VmmConfigDraftSummary {
   hasOverride: boolean;
+  // Global backend selector using native or external_grpc.
+  // 使用 native 或 external_grpc 的全局后端选择器。
+  backendMode: "native" | "external_grpc";
+  // Native new-project policy using one fixed project or one project per VulcanCode tag.
+  // 使用固定项目或按 VulcanCode 标签独立创建项目的原生新增项目策略。
+  nativeProjectBindingMode: "fixed" | "per_project";
+  // External new-project policy using one fixed project or one project per VulcanCode tag.
+  // 使用固定项目或按 VulcanCode 标签独立创建项目的外置新增项目策略。
+  externalProjectBindingMode: "fixed" | "per_project";
+  // Stable native project id used by fixed binding.
+  // 固定绑定使用的稳定原生项目标识。
+  nativeFixedProjectId: string;
+  // External automatic project Team/Space prefix.
+  // 外置自动项目的 Team/Space 前缀。
+  externalProjectPrefix: string;
   enabled: boolean;
   grpcTarget: string;
   grpcApiKey: string;
@@ -461,6 +489,9 @@ export interface VmmProjectScopeSummary {
   name: string;
   path: string;
   hasOverride: boolean;
+  // External VMM project id explicitly persisted for this VulcanCode project.
+  // 为该 VulcanCode 项目显式持久化的外置 VMM 项目标识。
+  boundProjectId?: number | null;
 }
 
 // VmmRuntimeSummary describes selected-session VMM runtime side effects.
@@ -524,6 +555,94 @@ export interface VmmMemoryActionRequest {
   // Action-specific JSON payload.
   // 动作专用 JSON 载荷。
   payload?: unknown;
+}
+
+// VmmNativeProjectSummary describes one one-level native VMM project.
+// VmmNativeProjectSummary 描述一个一级原生 VMM 项目。
+export interface VmmNativeProjectSummary {
+  projectId: number;
+  name: string;
+  tag: string;
+  protected: boolean;
+  ownerVulcanProjectIds: string[];
+  linkedVulcanProjectIds: string[];
+}
+
+// VmmNativeProjectBindingSummary describes one stable write owner plus recall-only links.
+// VmmNativeProjectBindingSummary 描述一个稳定写入所有者及仅召回连带项目。
+export interface VmmNativeProjectBindingSummary {
+  vulcanProjectId: string;
+  ownerProjectId: number;
+  linkedProjectIds: number[];
+}
+
+// VmmNativeProjectCatalogSummary contains every native project and current binding.
+// VmmNativeProjectCatalogSummary 包含全部原生项目与当前绑定。
+export interface VmmNativeProjectCatalogSummary {
+  projects: VmmNativeProjectSummary[];
+  bindings: VmmNativeProjectBindingSummary[];
+}
+
+// VmmNativeProjectContentCounts summarizes project-owned native Core records.
+// VmmNativeProjectContentCounts 汇总项目归属的原生 Core 记录。
+export interface VmmNativeProjectContentCounts {
+  sessions: number;
+  turns: number;
+  memories: number;
+  profileNodes: number;
+  contextEvidence: number;
+  compactBoundaries: number;
+  vectorRows: number;
+}
+
+// VmmNativeSessionRename describes one deterministic migration collision rename.
+// VmmNativeSessionRename 描述一次确定性的迁移冲突会话改名。
+export interface VmmNativeSessionRename {
+  from: string;
+  to: string;
+}
+
+// VmmNativeMigrationPreview is the side-effect-free native migration impact report.
+// VmmNativeMigrationPreview 是无副作用的原生迁移影响报告。
+export interface VmmNativeMigrationPreview {
+  storageVersion: number;
+  sourceProjectId: number;
+  targetProjectId: number;
+  source: VmmNativeProjectContentCounts;
+  targetBefore: VmmNativeProjectContentCounts;
+  targetAfter: VmmNativeProjectContentCounts;
+  sessionRenames: VmmNativeSessionRename[];
+}
+
+// VmmNativeMigrationResult is the committed native migration result.
+// VmmNativeMigrationResult 是已提交的原生迁移结果。
+export interface VmmNativeMigrationResult {
+  storageVersion: number;
+  moved: VmmNativeProjectContentCounts;
+  sessionRenames: VmmNativeSessionRename[];
+}
+
+// VmmNativeClearPreview is the side-effect-free native clear impact report.
+// VmmNativeClearPreview 是无副作用的原生清空影响报告。
+export interface VmmNativeClearPreview {
+  storageVersion: number;
+  projectId: number;
+  removed: VmmNativeProjectContentCounts;
+}
+
+// VmmNativeClearResult is the committed native clear result.
+// VmmNativeClearResult 是已提交的原生清空结果。
+export interface VmmNativeClearResult {
+  storageVersion: number;
+  removed: VmmNativeProjectContentCounts;
+}
+
+// VmmNativeProjectDeletePreview reports consumers and content affected by deletion.
+// VmmNativeProjectDeletePreview 报告删除影响的使用方与内容。
+export interface VmmNativeProjectDeletePreview {
+  storageVersion: number;
+  project: VmmNativeProjectSummary;
+  content: VmmNativeProjectContentCounts;
 }
 
 // VmmProtocolUserEntry is one exact durable VMM user row.
@@ -709,6 +828,12 @@ export type VmmMemoryActionResponse =
         trace_id: string;
       };
     }
+  | { kind: "native_project_catalog"; value: VmmNativeProjectCatalogSummary }
+  | { kind: "native_project_delete_preview"; value: VmmNativeProjectDeletePreview }
+  | { kind: "native_migration_preview"; value: VmmNativeMigrationPreview }
+  | { kind: "native_migration"; value: VmmNativeMigrationResult }
+  | { kind: "native_clear_preview"; value: VmmNativeClearPreview }
+  | { kind: "native_clear"; value: VmmNativeClearResult }
   | { kind: "maintenance"; value: VmmMaintenanceSummary }
   | { kind: "management"; value: unknown };
 
@@ -729,4 +854,16 @@ export interface VmmConfigSaveRequest {
   scope: string;
   projectId?: string | null;
   draft: VmmConfigDraftSummary;
+  // Explicit decisions for every currently unbound VulcanCode project.
+  // 每个当前未绑定 VulcanCode 项目的明确决定。
+  bindingPlan?: VmmProjectBindingPlanEntry[];
+}
+
+// VmmProjectBindingPlanEntry is one explicit enable-time binding decision for the selected backend.
+// VmmProjectBindingPlanEntry 是启用时针对所选后端的一项明确绑定决定。
+export interface VmmProjectBindingPlanEntry {
+  vulcanProjectId: string;
+  action: "create_and_bind" | "bind_existing";
+  projectName?: string | null;
+  targetProjectId?: number | null;
 }

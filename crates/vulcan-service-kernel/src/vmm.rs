@@ -34,6 +34,7 @@ mod external_health;
 mod health_monitor;
 mod management_http;
 mod memory_actions;
+mod project_bindings;
 mod snapshot;
 mod static_profile;
 
@@ -41,6 +42,7 @@ pub(super) use config::*;
 use external_health::*;
 pub(super) use health_monitor::*;
 pub(super) use memory_actions::*;
+pub(super) use project_bindings::*;
 pub(super) use snapshot::*;
 pub(super) use static_profile::*;
 

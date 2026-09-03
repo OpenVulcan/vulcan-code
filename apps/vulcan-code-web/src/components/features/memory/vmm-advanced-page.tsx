@@ -1,43 +1,19 @@
 import * as React from "react"
-import { Database, Save, Settings2, ShieldAlert, Stethoscope, Unplug } from "lucide-react"
+import { Database, Save, Settings2, Stethoscope, Unplug } from "lucide-react"
 
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from "@/components/ui/accordion"
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useI18n } from "@/i18n"
-import type { TranslationKey } from "@/i18n-messages"
-import type {
-  VmmConfigDraftSummary,
-  VmmMaintenanceSummary,
-  VmmMemorySnapshot,
-} from "@/types"
+import type { VmmConfigDraftSummary, VmmMemorySnapshot } from "@/types"
 
-import { VmmMaintenanceDialog } from "./vmm-maintenance-dialog"
-
-// VmmAdvancedPageProps defines deployment settings, diagnostics, and data recovery actions.
-// VmmAdvancedPageProps 定义部署设置、诊断与数据恢复操作。
+// VmmAdvancedPageProps defines global native or external settings and diagnostics.
+// VmmAdvancedPageProps 定义全局原生或外置设置与诊断。
 interface VmmAdvancedPageProps {
   busy: boolean
   draft: VmmConfigDraftSummary
@@ -46,288 +22,79 @@ interface VmmAdvancedPageProps {
   onChange: (patch: Partial<VmmConfigDraftSummary>) => void
   onSave: () => Promise<boolean>
   onTestManagement: () => Promise<boolean>
-  onMaintenance: (
-    action: "managed_maintenance_start" | "managed_maintenance_status" | "managed_maintenance_cancel",
-  ) => Promise<VmmMaintenanceSummary | null>
-  onStartRuntime: () => Promise<boolean>
 }
 
-// VmmAdvancedPage renders progressive disclosure for deployment and technical details.
-// VmmAdvancedPage 渲染部署与技术详情的渐进式披露界面。
-function VmmAdvancedPage({
-  busy,
-  draft,
-  snapshot,
-  notice,
-  onChange,
-  onSave,
-  onTestManagement,
-  onMaintenance,
-  onStartRuntime,
-}: VmmAdvancedPageProps) {
+// VmmAdvancedPage renders mutually exclusive backend settings without legacy managed-runtime controls.
+// VmmAdvancedPage 渲染互斥后端设置且不包含旧托管运行时控制。
+function VmmAdvancedPage({ busy, draft, snapshot, notice, onChange, onSave, onTestManagement }: VmmAdvancedPageProps) {
   const { t } = useI18n()
-  const dataBlocked = [
-    "unmarked_history",
-    "fingerprint_changed",
-    "marker_corrupt",
-    "marker_version_unsupported",
-    "schema_migration_required",
-  ].includes(snapshot.dataSpaceState.state)
+  const native = draft.backendMode === "native"
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold">{t("memory.advanced.title")}</h2>
-          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            {t("memory.advanced.description")}
-          </p>
+          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{t("memory.advanced.description")}</p>
         </div>
-        <Button disabled={busy} onClick={() => void onSave()} type="button">
-          <Save className="size-4" aria-hidden="true" />
-          {t("memory.advanced.save")}
-        </Button>
+        <Button disabled={busy} onClick={() => void onSave()} type="button"><Save className="size-4" aria-hidden="true" />{t("memory.advanced.save")}</Button>
       </div>
 
-      {notice ? (
-        <p className="rounded-lg border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
-          {notice}
-        </p>
-      ) : null}
+      {notice ? <p className="rounded-lg border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">{notice}</p> : null}
 
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Settings2 className="size-4" aria-hidden="true" />
-            {t("memory.advanced.deployment")}
-          </CardTitle>
-          <CardDescription>{t("memory.advanced.description")}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <RadioGroup
-            className="grid gap-3 md:grid-cols-2"
-            onValueChange={(value) => onChange({
-              managedInstallEnabled: value === "managed",
-            })}
-            value={draft.managedInstallEnabled ? "managed" : "external"}
-          >
-            <label className="flex cursor-pointer items-start gap-3 rounded-lg border p-4">
-              <RadioGroupItem value="managed" />
-              <span>
-                <span className="block text-sm font-medium">{t("memory.advanced.managed")}</span>
-                <span className="mt-1 block text-xs text-muted-foreground">
-                  {t("memory.advanced.managedDescription")}
-                </span>
-              </span>
-            </label>
-            <label className="flex cursor-pointer items-start gap-3 rounded-lg border p-4">
-              <RadioGroupItem value="external" />
-              <span>
-                <span className="block text-sm font-medium">{t("memory.advanced.external")}</span>
-                <span className="mt-1 block text-xs text-muted-foreground">
-                  {t("memory.advanced.externalDescription")}
-                </span>
-              </span>
-            </label>
+        <CardHeader><CardTitle className="flex items-center gap-2"><Settings2 className="size-4" aria-hidden="true" />{t("memory.advanced.deployment")}</CardTitle><CardDescription>{t("memory.advanced.description")}</CardDescription></CardHeader>
+        <CardContent className="space-y-4">
+          <RadioGroup className="grid gap-3 md:grid-cols-2" onValueChange={(value) => onChange({ backendMode: value as VmmConfigDraftSummary["backendMode"] })} value={draft.backendMode}>
+            <label className="flex cursor-pointer items-start gap-3 rounded-lg border p-4"><RadioGroupItem value="native" /><span><span className="block text-sm font-medium">{t("memory.advanced.native")}</span><span className="mt-1 block text-xs text-muted-foreground">{t("memory.advanced.nativeDescription")}</span></span></label>
+            <label className="flex cursor-pointer items-start gap-3 rounded-lg border p-4"><RadioGroupItem value="external_grpc" /><span><span className="block text-sm font-medium">{t("memory.advanced.external")}</span><span className="mt-1 block text-xs text-muted-foreground">{t("memory.advanced.externalDescription")}</span></span></label>
           </RadioGroup>
 
-          {draft.managedInstallEnabled ? (
-            <div className="mt-4 max-w-sm space-y-2">
-              <Label>{t("memory.advanced.runtime")}</Label>
-              <Select
-                onValueChange={(autoStartPolicy) => onChange({ autoStartPolicy })}
-                value={draft.autoStartPolicy || "on_start"}
-              >
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="on_start">{t("memory.advanced.autoStart")}</SelectItem>
-                  <SelectItem value="manual">{t("memory.advanced.manualStart")}</SelectItem>
-                </SelectContent>
-              </Select>
+          {native ? (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <BindingModeSelect label={t("memory.advanced.defaultBinding")} onChange={(nativeProjectBindingMode) => onChange({ nativeProjectBindingMode })} value={draft.nativeProjectBindingMode} />
+              <AdvancedNumberField label={t("memory.advanced.nativeFixedProject")} onChange={(nativeFixedProjectId) => onChange({ nativeFixedProjectId })} value={draft.nativeFixedProjectId} />
             </div>
           ) : (
-            <div className="mt-4 grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="vmm-external-endpoint">{t("memory.advanced.endpoint")}</Label>
-                <Input
-                  id="vmm-external-endpoint"
-                  onChange={(event) => onChange({ grpcTarget: event.target.value })}
-                  placeholder="127.0.0.1:17625"
-                  value={draft.grpcTarget}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="vmm-external-key">{t("memory.advanced.apiKey")}</Label>
-                <Input
-                  id="vmm-external-key"
-                  onChange={(event) => onChange({ grpcApiKey: event.target.value })}
-                  type="password"
-                  value={draft.grpcApiKey}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="vmm-management-endpoint">{t("memory.advanced.managementEndpoint")}</Label>
-                <Input
-                  id="vmm-management-endpoint"
-                  onChange={(event) => onChange({ managementBaseUrl: event.target.value })}
-                  placeholder="http://127.0.0.1:17635"
-                  value={draft.managementBaseUrl}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="vmm-management-token">{t("memory.advanced.managementToken")}</Label>
-                <Input
-                  id="vmm-management-token"
-                  onChange={(event) => onChange({ managementBearerToken: event.target.value })}
-                  type="password"
-                  value={draft.managementBearerToken}
-                />
-              </div>
-              <div className="flex items-end sm:col-span-2">
-                <Button disabled={busy} onClick={() => void onTestManagement()} type="button" variant="outline">
-                  <Unplug className="size-4" aria-hidden="true" />
-                  {t("memory.advanced.testManagement")}
-                </Button>
-              </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <AdvancedTextField label={t("memory.advanced.endpoint")} onChange={(grpcTarget) => onChange({ grpcTarget })} placeholder="127.0.0.1:17625" value={draft.grpcTarget} />
+              <AdvancedSecretField label={t("memory.advanced.apiKey")} onChange={(grpcApiKey) => onChange({ grpcApiKey })} value={draft.grpcApiKey} />
+              <AdvancedTextField label={t("memory.advanced.managementEndpoint")} onChange={(managementBaseUrl) => onChange({ managementBaseUrl })} placeholder="http://127.0.0.1:17635" value={draft.managementBaseUrl} />
+              <AdvancedSecretField label={t("memory.advanced.managementToken")} onChange={(managementBearerToken) => onChange({ managementBearerToken })} value={draft.managementBearerToken} />
+              <BindingModeSelect label={t("memory.advanced.defaultBinding")} onChange={(externalProjectBindingMode) => onChange({ externalProjectBindingMode })} value={draft.externalProjectBindingMode} />
+              <AdvancedTextField label={t("memory.advanced.externalPrefix")} onChange={(externalProjectPrefix) => onChange({ externalProjectPrefix })} placeholder="vulcan/space" value={draft.externalProjectPrefix} />
+              <div className="flex items-end sm:col-span-2"><Button disabled={busy} onClick={() => void onTestManagement()} type="button" variant="outline"><Unplug className="size-4" aria-hidden="true" />{t("memory.advanced.testManagement")}</Button></div>
             </div>
           )}
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Database className="size-4" aria-hidden="true" />
-            {t("memory.advanced.data")}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Alert variant={dataBlocked ? "destructive" : "default"}>
-            {dataBlocked ? <ShieldAlert aria-hidden="true" /> : <Database aria-hidden="true" />}
-            <AlertTitle>{t(snapshot.dataSpaceState.titleKey as TranslationKey)}</AlertTitle>
-            <AlertDescription className="space-y-3">
-              <p>{t(snapshot.dataSpaceState.descriptionKey as TranslationKey)}</p>
-              {dataBlocked ? (
-                <VmmMaintenanceDialog
-                  busy={busy}
-                  maintenance={snapshot.maintenance}
-                  onRun={onMaintenance}
-                  onStartRuntime={onStartRuntime}
-                />
-              ) : null}
-            </AlertDescription>
-          </Alert>
-        </CardContent>
-      </Card>
+      {native ? (
+        <Card>
+          <CardHeader><CardTitle className="flex items-center gap-2"><Database className="size-4" aria-hidden="true" />{t("memory.advanced.data")}</CardTitle></CardHeader>
+          <CardContent><Alert><Database aria-hidden="true" /><AlertTitle>{t("memory.advanced.nativeStorage")}</AlertTitle><AlertDescription>{t("memory.advanced.nativeStorageDescription")}</AlertDescription></Alert></CardContent>
+        </Card>
+      ) : null}
 
       <Accordion className="rounded-xl border px-4" collapsible type="single">
-        <AccordionItem value="transport">
-          <AccordionTrigger>{t("memory.advanced.transport")}</AccordionTrigger>
-          <AccordionContent className="grid gap-4 pb-4 sm:grid-cols-2">
-            <AdvancedNumberField
-              label={t("memory.advanced.managementTimeout")}
-              onChange={(managementTimeoutMs) => onChange({ managementTimeoutMs })}
-              value={draft.managementTimeoutMs}
-            />
-            <AdvancedNumberField
-              label={t("vmm.settings.receiveTimeout")}
-              onChange={(receiveTimeoutMs) => onChange({ receiveTimeoutMs })}
-              value={draft.receiveTimeoutMs}
-            />
-            <AdvancedNumberField
-              label={t("vmm.settings.handshakeTimeout")}
-              onChange={(handshakeTimeoutMs) => onChange({ handshakeTimeoutMs })}
-              value={draft.handshakeTimeoutMs}
-            />
-            <AdvancedNumberField
-              label={t("vmm.settings.keepaliveInterval")}
-              onChange={(grpcKeepaliveTimeMs) => onChange({ grpcKeepaliveTimeMs })}
-              value={draft.grpcKeepaliveTimeMs}
-            />
-            <AdvancedNumberField
-              label={t("vmm.settings.keepaliveTimeout")}
-              onChange={(grpcKeepaliveTimeoutMs) => onChange({ grpcKeepaliveTimeoutMs })}
-              value={draft.grpcKeepaliveTimeoutMs}
-            />
-          </AccordionContent>
-        </AccordionItem>
-        <AccordionItem value="postaction-reliability">
-          <AccordionTrigger>{t("memory.advanced.postactionReliability")}</AccordionTrigger>
-          <AccordionContent className="space-y-4 pb-4">
-            {draft.managedInstallEnabled ? (
-              <div className="grid gap-4 sm:grid-cols-3">
-                <AdvancedTextField
-                  label={t("memory.advanced.postactionTimeout")}
-                  onChange={(postactionAnalysisTimeout) => onChange({
-                    managedRuntimeSettings: {
-                      ...draft.managedRuntimeSettings,
-                      postactionAnalysisTimeout,
-                    },
-                  })}
-                  value={draft.managedRuntimeSettings.postactionAnalysisTimeout}
-                />
-                <AdvancedNumberField
-                  label={t("memory.advanced.failurePassThreshold")}
-                  onChange={(postactionFailurePassThreshold) => onChange({
-                    managedRuntimeSettings: {
-                      ...draft.managedRuntimeSettings,
-                      postactionFailurePassThreshold,
-                    },
-                  })}
-                  value={draft.managedRuntimeSettings.postactionFailurePassThreshold}
-                />
-                <AdvancedNumberField
-                  label={t("memory.advanced.maxConnectionsPerHost")}
-                  onChange={(inferenceMaxConnectionsPerHost) => onChange({
-                    managedRuntimeSettings: {
-                      ...draft.managedRuntimeSettings,
-                      inferenceMaxConnectionsPerHost,
-                    },
-                  })}
-                  value={draft.managedRuntimeSettings.inferenceMaxConnectionsPerHost}
-                />
-              </div>
-            ) : (
-              <Alert>
-                <AlertTitle>{t("memory.advanced.externalReliability")}</AlertTitle>
-                <AlertDescription>{t("memory.advanced.externalReliabilityDescription")}</AlertDescription>
-              </Alert>
-            )}
-          </AccordionContent>
-        </AccordionItem>
+        {!native ? (
+          <AccordionItem value="transport">
+            <AccordionTrigger>{t("memory.advanced.transport")}</AccordionTrigger>
+            <AccordionContent className="grid gap-4 pb-4 sm:grid-cols-2">
+              <AdvancedNumberField label={t("memory.advanced.managementTimeout")} onChange={(managementTimeoutMs) => onChange({ managementTimeoutMs })} value={draft.managementTimeoutMs} />
+              <AdvancedNumberField label={t("vmm.settings.receiveTimeout")} onChange={(receiveTimeoutMs) => onChange({ receiveTimeoutMs })} value={draft.receiveTimeoutMs} />
+              <AdvancedNumberField label={t("vmm.settings.handshakeTimeout")} onChange={(handshakeTimeoutMs) => onChange({ handshakeTimeoutMs })} value={draft.handshakeTimeoutMs} />
+              <AdvancedNumberField label={t("vmm.settings.keepaliveInterval")} onChange={(grpcKeepaliveTimeMs) => onChange({ grpcKeepaliveTimeMs })} value={draft.grpcKeepaliveTimeMs} />
+              <AdvancedNumberField label={t("vmm.settings.keepaliveTimeout")} onChange={(grpcKeepaliveTimeoutMs) => onChange({ grpcKeepaliveTimeoutMs })} value={draft.grpcKeepaliveTimeoutMs} />
+            </AccordionContent>
+          </AccordionItem>
+        ) : null}
         <AccordionItem value="diagnostics">
-          <AccordionTrigger>
-            <span className="flex items-center gap-2">
-              <Stethoscope className="size-4" aria-hidden="true" />
-              {t("memory.advanced.diagnostics")}
-            </span>
-          </AccordionTrigger>
+          <AccordionTrigger><span className="flex items-center gap-2"><Stethoscope className="size-4" aria-hidden="true" />{t("memory.advanced.diagnostics")}</span></AccordionTrigger>
           <AccordionContent className="space-y-2 pb-4 text-sm">
-            <DiagnosticRow
-              label={t("memory.advanced.diagnosticRuntime")}
-              value={snapshot.runtime.managedPhase}
-            />
-            <DiagnosticRow
-              label={t("memory.advanced.diagnosticGrpc")}
-              value={snapshot.runtime.managedGrpcTarget ?? "-"}
-            />
-            <DiagnosticRow
-              label={t("memory.advanced.diagnosticController")}
-              value={snapshot.runtime.managedControllerEndpoint || "-"}
-            />
-            <DiagnosticRow
-              label={t("memory.advanced.diagnosticData")}
-              value={snapshot.runtime.managedDataRoot || "-"}
-            />
-            <DiagnosticRow
-              label={t("memory.advanced.diagnosticLog")}
-              value={snapshot.runtime.managedLogPath || "-"}
-            />
-            {snapshot.runtime.managedLastError ? (
-              <p className="whitespace-pre-wrap rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-destructive">
-                {snapshot.runtime.managedLastError}
-              </p>
-            ) : null}
+            <DiagnosticRow label={t("memory.advanced.diagnosticBackend")} value={draft.backendMode} />
+            <DiagnosticRow label={t("memory.advanced.diagnosticRuntime")} value={snapshot.effective.diagnostic} />
+            {!native ? <DiagnosticRow label={t("memory.advanced.diagnosticGrpc")} value={draft.grpcTarget || "-"} /> : null}
           </AccordionContent>
         </AccordionItem>
       </Accordion>
@@ -335,68 +102,43 @@ function VmmAdvancedPage({
   )
 }
 
-// AdvancedNumberField renders one direct numeric transport setting.
-// AdvancedNumberField 渲染一个直接数值传输设置。
-function AdvancedNumberField({
-  label,
-  onChange,
-  value,
-}: {
+// BindingModeSelect renders the exact fixed or per-project global default.
+// BindingModeSelect 渲染准确的固定或逐项目全局默认值。
+function BindingModeSelect({ label, onChange, value }: {
   label: string
-  onChange: (value: string) => void
-  value: string
+  onChange: (value: "fixed" | "per_project") => void
+  value: "fixed" | "per_project"
 }) {
-  // inputId binds the generated label and direct runtime-value input accessibly.
-  // inputId 用于以无障碍方式绑定生成的标签与直接运行时值输入框。
+  const { t } = useI18n()
   const inputId = React.useId()
-  return (
-    <div className="space-y-2">
-      <Label htmlFor={inputId}>{label}</Label>
-      <Input
-        id={inputId}
-        inputMode="numeric"
-        onChange={(event) => onChange(event.target.value.replace(/\D+/g, ""))}
-        value={value}
-      />
-    </div>
-  )
+  return <div className="space-y-2"><Label htmlFor={inputId}>{label}</Label><Select onValueChange={(next) => onChange(next as "fixed" | "per_project")} value={value}><SelectTrigger id={inputId}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fixed">{t("vmm.setup.binding.fixed")}</SelectItem><SelectItem value="per_project">{t("vmm.setup.binding.separate")}</SelectItem></SelectContent></Select></div>
 }
 
-// AdvancedTextField renders one direct managed-runtime text setting such as a Go duration.
-// AdvancedTextField 渲染一个直接的托管运行时文本设置，例如 Go duration。
-function AdvancedTextField({
-  label,
-  onChange,
-  value,
-}: {
-  label: string
-  onChange: (value: string) => void
-  value: string
-}) {
-  // inputId binds the generated label and direct runtime-value input accessibly.
-  // inputId 用于以无障碍方式绑定生成的标签与直接运行时值输入框。
+// AdvancedNumberField renders one direct positive numeric setting.
+// AdvancedNumberField 渲染一个直接的正数设置。
+function AdvancedNumberField({ label, onChange, value }: { label: string; onChange: (value: string) => void; value: string }) {
   const inputId = React.useId()
-  return (
-    <div className="space-y-2">
-      <Label htmlFor={inputId}>{label}</Label>
-      <Input
-        id={inputId}
-        onChange={(event) => onChange(event.target.value)}
-        value={value}
-      />
-    </div>
-  )
+  return <div className="space-y-2"><Label htmlFor={inputId}>{label}</Label><Input id={inputId} inputMode="numeric" onChange={(event) => onChange(event.target.value.replace(/\D+/g, ""))} value={value} /></div>
 }
 
-// DiagnosticRow renders one technical value only inside the collapsed diagnostics section.
-// DiagnosticRow 仅在折叠诊断区内渲染一个技术值。
+// AdvancedTextField renders one plain backend setting.
+// AdvancedTextField 渲染一个普通后端设置。
+function AdvancedTextField({ label, onChange, placeholder, value }: { label: string; onChange: (value: string) => void; placeholder?: string; value: string }) {
+  const inputId = React.useId()
+  return <div className="space-y-2"><Label htmlFor={inputId}>{label}</Label><Input id={inputId} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} value={value} /></div>
+}
+
+// AdvancedSecretField renders one masked external credential.
+// AdvancedSecretField 渲染一个遮罩的外置凭据。
+function AdvancedSecretField({ label, onChange, value }: { label: string; onChange: (value: string) => void; value: string }) {
+  const inputId = React.useId()
+  return <div className="space-y-2"><Label htmlFor={inputId}>{label}</Label><Input id={inputId} onChange={(event) => onChange(event.target.value)} type="password" value={value} /></div>
+}
+
+// DiagnosticRow renders one controlled technical value inside diagnostics.
+// DiagnosticRow 在诊断区内渲染一个受控技术值。
 function DiagnosticRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="grid gap-1 rounded-lg border bg-muted/20 px-3 py-2 sm:grid-cols-[8rem_minmax(0,1fr)]">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="break-all font-mono text-xs">{value}</span>
-    </div>
-  )
+  return <div className="grid gap-1 rounded-lg border bg-muted/20 px-3 py-2 sm:grid-cols-[8rem_minmax(0,1fr)]"><span className="text-muted-foreground">{label}</span><span className="break-all font-mono text-xs">{value}</span></div>
 }
 
 export { VmmAdvancedPage }

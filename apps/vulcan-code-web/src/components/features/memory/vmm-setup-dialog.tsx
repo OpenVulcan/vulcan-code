@@ -2,9 +2,9 @@ import * as React from "react"
 import {
   BrainCircuit,
   Check,
-  CircleAlert,
   ChevronLeft,
   ChevronRight,
+  CircleAlert,
   LoaderCircle,
   Server,
   ShieldCheck,
@@ -26,124 +26,278 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Progress } from "@/components/ui/progress"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { useI18n, type TranslationKey } from "@/i18n"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { useI18n } from "@/i18n"
+import type {
+  VmmNativeProjectCatalogSummary,
+  VmmProjectBindingPlanEntry,
+  VmmProjectScopeSummary,
+  VmmProtocolProjectEntry,
+  VmmProtocolUserEntry,
+} from "@/types"
 
-// VmmQuickSetupMode identifies the service ownership selected by the user.
-// VmmQuickSetupMode 标识用户选择的服务所有权。
-type VmmQuickSetupMode = "managed" | "external"
+// VmmQuickSetupMode identifies the mutually exclusive VMM backend.
+// VmmQuickSetupMode 标识互斥的 VMM 后端。
+type VmmQuickSetupMode = "native" | "external"
 
-// VmmQuickSetupScope identifies where the initial memory policy is enabled.
-// VmmQuickSetupScope 标识首次记忆策略启用范围。
-type VmmQuickSetupScope = "all_projects" | "current_project" | "not_yet"
+// VmmProjectBindingMode identifies the default binding policy for new VulcanCode projects.
+// VmmProjectBindingMode 标识新建 VulcanCode 项目的默认绑定策略。
+type VmmProjectBindingMode = "fixed" | "per_project"
 
-// VmmQuickSetupInput contains the visible decisions used by the setup workflow.
-// VmmQuickSetupInput 包含快速配置流程使用的可见决策。
-interface VmmQuickSetupInput {
+// VmmQuickSetupConnectionInput contains only the connection values required to load a catalog.
+// VmmQuickSetupConnectionInput 只包含加载目录所需的连接值。
+interface VmmQuickSetupConnectionInput {
   mode: VmmQuickSetupMode
-  scope: VmmQuickSetupScope
-  userName: string
-  projectName: string
   externalEndpoint: string
   externalApiKey: string
   externalManagementBaseUrl: string
   externalManagementToken: string
 }
 
-// VmmSetupDialogProps defines controlled visibility and the asynchronous setup action.
-// VmmSetupDialogProps 定义受控可见性与异步配置操作。
+// VmmQuickSetupCatalog contains backend-specific projects available to the binding step.
+// VmmQuickSetupCatalog 包含绑定步骤可用的后端专属项目。
+interface VmmQuickSetupCatalog {
+  native?: VmmNativeProjectCatalogSummary | null
+  externalUsers?: VmmProtocolUserEntry[]
+  externalProjects?: VmmProtocolProjectEntry[]
+}
+
+// VmmQuickSetupInput contains every visible decision committed by the setup workflow.
+// VmmQuickSetupInput 包含快速配置流程提交的全部可见决定。
+interface VmmQuickSetupInput extends VmmQuickSetupConnectionInput {
+  bindingMode: VmmProjectBindingMode
+  userName: string
+  nativeFixedProjectId: number
+  externalProjectPrefix: string
+  externalFixedAction: "create_and_bind" | "bind_existing"
+  externalFixedProjectName: string
+  externalFixedTargetProjectId?: number | null
+  bindingPlan: VmmProjectBindingPlanEntry[]
+}
+
+// VmmSetupDialogProps defines controlled visibility and backend preparation actions.
+// VmmSetupDialogProps 定义受控可见性与后端准备操作。
 interface VmmSetupDialogProps {
   open: boolean
   busy: boolean
-  currentProjectAvailable: boolean
-  defaultUserName: string
-  defaultProjectName: string
+  projects: VmmProjectScopeSummary[]
   notice: string
   // Opens credential management while keeping VMM disabled.
   // 在保持 VMM 禁用时打开凭据管理。
   onOpenCredentialManagement: () => void
   onOpenChange: (open: boolean) => void
+  onPrepare: (input: VmmQuickSetupConnectionInput) => Promise<VmmQuickSetupCatalog | null>
   onSubmit: (input: VmmQuickSetupInput) => Promise<boolean>
 }
 
-// VmmSetupDialog guides a first-time user through four task-oriented setup steps.
-// VmmSetupDialog 通过四个任务导向步骤引导首次使用者完成配置。
+// EditableBindingDecision owns one unbound project's explicit setup decision.
+// EditableBindingDecision 持有一个未绑定项目的显式配置决定。
+interface EditableBindingDecision {
+  action: "create_and_bind" | "bind_existing"
+  projectName: string
+  targetProjectId: string
+}
+
+// VmmSetupDialog guides the user through backend, inference, binding, and confirmation.
+// VmmSetupDialog 引导用户完成后端、推理、绑定与确认配置。
 function VmmSetupDialog({
   open,
   busy,
-  currentProjectAvailable,
-  defaultUserName,
-  defaultProjectName,
+  projects,
   notice,
   onOpenCredentialManagement,
   onOpenChange,
+  onPrepare,
   onSubmit,
 }: VmmSetupDialogProps) {
   const { t } = useI18n()
   const [step, setStep] = React.useState(0)
-  const [mode, setMode] = React.useState<VmmQuickSetupMode>("managed")
-  const [scope, setScope] = React.useState<VmmQuickSetupScope>("all_projects")
-  const [userName, setUserName] = React.useState(defaultUserName)
-  const [projectName, setProjectName] = React.useState(defaultProjectName)
+  const [mode, setMode] = React.useState<VmmQuickSetupMode>("native")
+  const [bindingMode, setBindingMode] = React.useState<VmmProjectBindingMode>("fixed")
+  const [userName, setUserName] = React.useState("Vulcan Code")
+  const [nativeFixedProjectId, setNativeFixedProjectId] = React.useState("1")
+  const [externalProjectPrefix, setExternalProjectPrefix] = React.useState("vulcan/space")
   const [externalEndpoint, setExternalEndpoint] = React.useState("")
   const [externalApiKey, setExternalApiKey] = React.useState("")
   const [externalManagementBaseUrl, setExternalManagementBaseUrl] = React.useState("")
   const [externalManagementToken, setExternalManagementToken] = React.useState("")
+  const [externalFixedAction, setExternalFixedAction] = React.useState<"create_and_bind" | "bind_existing">("create_and_bind")
+  const [externalFixedProjectName, setExternalFixedProjectName] = React.useState("default")
+  const [externalFixedTargetProjectId, setExternalFixedTargetProjectId] = React.useState("")
+  const [catalog, setCatalog] = React.useState<VmmQuickSetupCatalog | null>(null)
+  const [decisions, setDecisions] = React.useState<Record<string, EditableBindingDecision>>({})
   const [inferenceReady, setInferenceReady] = React.useState(false)
   const [failed, setFailed] = React.useState(false)
-  // submitting keeps the whole multi-request setup workflow visibly exclusive.
-  // submitting 让整个多请求配置流程保持可见的独占状态。
+  const [preparing, setPreparing] = React.useState(false)
   const [submitting, setSubmitting] = React.useState(false)
 
   React.useEffect(() => {
-    if (!open) {
-      return
-    }
+    if (!open) return
     setStep(0)
-    setMode("managed")
-    setScope("all_projects")
-    setUserName(defaultUserName)
-    setProjectName(defaultProjectName)
+    setMode("native")
+    setBindingMode("fixed")
+    setUserName("Vulcan Code")
+    setNativeFixedProjectId("1")
+    setExternalProjectPrefix("vulcan/space")
     setExternalEndpoint("")
     setExternalApiKey("")
     setExternalManagementBaseUrl("")
     setExternalManagementToken("")
+    setExternalFixedAction("create_and_bind")
+    setExternalFixedProjectName("default")
+    setExternalFixedTargetProjectId("")
+    setCatalog(null)
+    setDecisions({})
     setInferenceReady(false)
     setFailed(false)
+    setPreparing(false)
     setSubmitting(false)
-  }, [defaultProjectName, defaultUserName, open])
+  }, [open])
 
-  const effectiveBusy = busy || submitting
-  const identityComplete = userName.trim().length > 0 && projectName.trim().length > 0
-  const connectionComplete = mode === "managed"
+  const nativeBindings = catalog?.native?.bindings ?? []
+  const unboundProjects = mode === "native"
+    ? projects.filter((project) => !nativeBindings.some((binding) => binding.vulcanProjectId === project.projectId))
+    : projects.filter((project) => !project.boundProjectId)
+  const nativeProjects = catalog?.native?.projects ?? []
+  const externalProjects = catalog?.externalProjects ?? []
+  const effectiveBusy = busy || preparing || submitting
+  const connectionComplete = mode === "native"
     || (externalEndpoint.trim().length > 0
       && externalManagementBaseUrl.trim().length > 0
       && externalManagementToken.trim().length > 0)
-  const canAdvance = step === 0
-    ? connectionComplete
-    : step === 1
-      ? inferenceReady
-      : true
-  // canSubmit keeps the final enable action gated even after the inference step has been left.
-  // canSubmit 在离开推理步骤后仍继续门控最终启用动作。
-  const canSubmit = identityComplete
-    && connectionComplete
-    && inferenceReady
-    && !effectiveBusy
 
-  // handleSubmit validates visible decisions and keeps the dialog open on failure.
-  // handleSubmit 校验可见决策，并在失败时保持弹窗打开。
-  const handleSubmit = React.useCallback(async () => {
-    if (!canSubmit) {
-      return
+  // initializeDecisions creates one explicit row for every currently unbound project.
+  // initializeDecisions 为每个当前未绑定项目创建一条显式决定。
+  const initializeDecisions = React.useCallback((
+    nextMode: VmmQuickSetupMode,
+    nextBindingMode: VmmProjectBindingMode,
+    nextCatalog: VmmQuickSetupCatalog,
+  ) => {
+    const boundIds = new Set((nextCatalog.native?.bindings ?? []).map((binding) => binding.vulcanProjectId))
+    const nextUnbound = nextMode === "native"
+      ? projects.filter((project) => !boundIds.has(project.projectId))
+      : projects.filter((project) => !project.boundProjectId)
+    const nextDecisions: Record<string, EditableBindingDecision> = {}
+    for (const project of nextUnbound) {
+      const bindFixed = nextMode === "native" && nextBindingMode === "fixed"
+      nextDecisions[project.projectId] = {
+        action: bindFixed ? "bind_existing" : "create_and_bind",
+        projectName: project.projectId,
+        targetProjectId: bindFixed ? nativeFixedProjectId : "",
+      }
     }
+    setDecisions(nextDecisions)
+  }, [nativeFixedProjectId, projects])
+
+  // handlePrepare verifies the selected backend and loads the authoritative binding catalog.
+  // handlePrepare 校验所选后端并加载权威绑定目录。
+  const handlePrepare = React.useCallback(async () => {
+    if (!connectionComplete || effectiveBusy) return
+    setFailed(false)
+    setPreparing(true)
+    try {
+      const nextCatalog = await onPrepare({
+        mode,
+        externalEndpoint: externalEndpoint.trim(),
+        externalApiKey,
+        externalManagementBaseUrl: externalManagementBaseUrl.trim(),
+        externalManagementToken,
+      })
+      if (!nextCatalog) {
+        setFailed(true)
+        return
+      }
+      setCatalog(nextCatalog)
+      initializeDecisions(mode, bindingMode, nextCatalog)
+      setStep(1)
+    } finally {
+      setPreparing(false)
+    }
+  }, [
+    bindingMode,
+    connectionComplete,
+    effectiveBusy,
+    externalApiKey,
+    externalEndpoint,
+    externalManagementBaseUrl,
+    externalManagementToken,
+    initializeDecisions,
+    mode,
+    onPrepare,
+  ])
+
+  // updateBindingMode resets row defaults so the visible global policy and row decisions agree.
+  // updateBindingMode 重置行默认值，使可见全局策略与逐行决定一致。
+  const updateBindingMode = React.useCallback((nextMode: VmmProjectBindingMode) => {
+    setBindingMode(nextMode)
+    if (catalog) initializeDecisions(mode, nextMode, catalog)
+  }, [catalog, initializeDecisions, mode])
+
+  // updateDecision applies one exact row edit without changing any neighboring project.
+  // updateDecision 应用一条准确行编辑且不改变其他项目。
+  const updateDecision = React.useCallback((
+    vulcanProjectId: string,
+    patch: Partial<EditableBindingDecision>,
+  ) => {
+    setDecisions((current) => ({
+      ...current,
+      [vulcanProjectId]: { ...current[vulcanProjectId], ...patch },
+    }))
+  }, [])
+
+  const bindingPlan = unboundProjects.map((project): VmmProjectBindingPlanEntry => {
+    const decision = decisions[project.projectId]
+    return {
+      vulcanProjectId: project.projectId,
+      action: decision?.action ?? "create_and_bind",
+      projectName: decision?.action === "create_and_bind" ? decision.projectName.trim() : null,
+      targetProjectId: decision?.action === "bind_existing"
+        ? Number(decision.targetProjectId)
+        : null,
+    }
+  })
+  const rowsComplete = bindingPlan.every((entry) => (
+    entry.action === "create_and_bind"
+      ? Boolean(entry.projectName)
+      : Boolean(entry.targetProjectId && entry.targetProjectId > 0)
+  ))
+  const prefixComplete = externalProjectPrefix.split("/").filter(Boolean).length === 2
+  const externalFixedComplete = externalFixedAction === "create_and_bind"
+    ? Boolean(externalFixedProjectName.trim())
+    : Number(externalFixedTargetProjectId) > 0
+  const bindingComplete = mode === "native"
+    ? Number(nativeFixedProjectId) > 0 && rowsComplete
+    : Boolean(userName.trim())
+      && prefixComplete
+      && (bindingMode === "fixed" ? externalFixedComplete : rowsComplete)
+  const canAdvance = step === 1 ? inferenceReady : step === 2 ? bindingComplete : true
+  const canSubmit = Boolean(catalog) && inferenceReady && bindingComplete && !effectiveBusy
+
+  // handleSubmit commits exactly the decisions shown in the confirmation step.
+  // handleSubmit 精确提交确认步骤展示的决定。
+  const handleSubmit = React.useCallback(async () => {
+    if (!canSubmit) return
     setFailed(false)
     setSubmitting(true)
     try {
       const completed = await onSubmit({
         mode,
-        scope,
+        bindingMode,
         userName: userName.trim(),
-        projectName: projectName.trim(),
+        nativeFixedProjectId: Number(nativeFixedProjectId),
+        externalProjectPrefix: externalProjectPrefix.trim(),
+        externalFixedAction,
+        externalFixedProjectName: externalFixedProjectName.trim(),
+        externalFixedTargetProjectId: externalFixedAction === "bind_existing"
+          ? Number(externalFixedTargetProjectId)
+          : null,
+        bindingPlan: bindingMode === "per_project" || mode === "native" ? bindingPlan : [],
         externalEndpoint: externalEndpoint.trim(),
         externalApiKey,
         externalManagementBaseUrl: externalManagementBaseUrl.trim(),
@@ -158,32 +312,34 @@ function VmmSetupDialog({
       setSubmitting(false)
     }
   }, [
+    bindingMode,
+    bindingPlan,
     canSubmit,
     externalApiKey,
     externalEndpoint,
+    externalFixedAction,
+    externalFixedProjectName,
+    externalFixedTargetProjectId,
     externalManagementBaseUrl,
     externalManagementToken,
+    externalProjectPrefix,
     mode,
+    nativeFixedProjectId,
     onOpenChange,
     onSubmit,
-    projectName,
-    scope,
     userName,
   ])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <BrainCircuit className="size-5" aria-hidden="true" />
             {t("vmm.setup.title")}
           </DialogTitle>
           <DialogDescription>
-            {formatSkillText(t("vmm.setup.stepLabel"), {
-              current: step + 1,
-              total: 4,
-            })}
+            {formatSkillText(t("vmm.setup.stepLabel"), { current: step + 1, total: 4 })}
           </DialogDescription>
         </DialogHeader>
 
@@ -232,22 +388,34 @@ function VmmSetupDialog({
             </div>
           ) : null}
           {step === 2 ? (
-            <SetupScopeStep
-              currentProjectAvailable={currentProjectAvailable}
-              onProjectNameChange={setProjectName}
-              onScopeChange={setScope}
+            <SetupBindingsStep
+              bindingMode={bindingMode}
+              decisions={decisions}
+              externalFixedAction={externalFixedAction}
+              externalFixedProjectName={externalFixedProjectName}
+              externalFixedTargetProjectId={externalFixedTargetProjectId}
+              externalProjectPrefix={externalProjectPrefix}
+              externalProjects={externalProjects}
+              mode={mode}
+              nativeFixedProjectId={nativeFixedProjectId}
+              nativeProjects={nativeProjects}
+              onBindingModeChange={updateBindingMode}
+              onDecisionChange={updateDecision}
+              onExternalFixedActionChange={setExternalFixedAction}
+              onExternalFixedProjectNameChange={setExternalFixedProjectName}
+              onExternalFixedTargetProjectIdChange={setExternalFixedTargetProjectId}
+              onExternalProjectPrefixChange={setExternalProjectPrefix}
+              onNativeFixedProjectIdChange={setNativeFixedProjectId}
               onUserNameChange={setUserName}
-              projectName={projectName}
-              scope={scope}
+              projects={unboundProjects}
               userName={userName}
             />
           ) : null}
           {step === 3 ? (
             <SetupConfirmationStep
+              bindingMode={bindingMode}
               mode={mode}
-              projectName={projectName}
-              scope={scope}
-              userName={userName}
+              projectCount={unboundProjects.length}
             />
           ) : null}
 
@@ -271,11 +439,8 @@ function VmmSetupDialog({
           <Button
             disabled={effectiveBusy}
             onClick={() => {
-              if (step === 0) {
-                onOpenChange(false)
-              } else {
-                setStep((current) => current - 1)
-              }
+              if (step === 0) onOpenChange(false)
+              else setStep((current) => current - 1)
             }}
             type="button"
             variant="outline"
@@ -285,8 +450,11 @@ function VmmSetupDialog({
           </Button>
           {step < 3 ? (
             <Button
-              disabled={effectiveBusy || !canAdvance}
-              onClick={() => setStep((current) => current + 1)}
+              disabled={effectiveBusy || (step === 0 ? !connectionComplete : !canAdvance)}
+              onClick={() => {
+                if (step === 0) void handlePrepare()
+                else setStep((current) => current + 1)
+              }}
               type="button"
             >
               {t("vmm.setup.next")}
@@ -304,8 +472,8 @@ function VmmSetupDialog({
   )
 }
 
-// SetupModeStep renders local or external ownership without exposing runtime internals.
-// SetupModeStep 渲染本地或外部所有权且不暴露运行时内部信息。
+// SetupModeStep renders native or external ownership and only external connection fields.
+// SetupModeStep 渲染原生或外置模式，并且只在外置模式显示连接字段。
 function SetupModeStep({
   apiKey,
   endpoint,
@@ -332,25 +500,16 @@ function SetupModeStep({
   const { t } = useI18n()
   return (
     <div className="space-y-4">
-      <SetupStepHeading
-        description={t("vmm.setup.mode.description")}
-        title={t("vmm.setup.mode.title")}
-      />
-      <RadioGroup
-        className="grid gap-3 sm:grid-cols-2"
-        onValueChange={(value) => onModeChange(value as VmmQuickSetupMode)}
-        value={mode}
-      >
+      <SetupStepHeading description={t("vmm.setup.mode.description")} title={t("vmm.setup.mode.title")} />
+      <RadioGroup className="grid gap-3 sm:grid-cols-2" onValueChange={(value) => onModeChange(value as VmmQuickSetupMode)} value={mode}>
         <label className="flex cursor-pointer items-start gap-3 rounded-xl border p-4">
-          <RadioGroupItem value="managed" />
+          <RadioGroupItem value="native" />
           <span>
             <span className="flex items-center gap-2 font-medium">
               <BrainCircuit className="size-4" aria-hidden="true" />
-              {t("vmm.setup.managed.title")}
+              {t("vmm.setup.native.title")}
             </span>
-            <span className="mt-1 block text-sm text-muted-foreground">
-              {t("vmm.setup.managed.description")}
-            </span>
+            <span className="mt-1 block text-sm text-muted-foreground">{t("vmm.setup.native.description")}</span>
           </span>
         </label>
         <label className="flex cursor-pointer items-start gap-3 rounded-xl border p-4">
@@ -360,145 +519,135 @@ function SetupModeStep({
               <Server className="size-4" aria-hidden="true" />
               {t("vmm.setup.external.title")}
             </span>
-            <span className="mt-1 block text-sm text-muted-foreground">
-              {t("vmm.setup.external.description")}
-            </span>
+            <span className="mt-1 block text-sm text-muted-foreground">{t("vmm.setup.external.description")}</span>
           </span>
         </label>
       </RadioGroup>
       {mode === "external" ? (
         <div className="grid gap-4 rounded-xl border p-4 sm:grid-cols-2">
-          <div className="space-y-2">
-            <Label htmlFor="vmm-setup-endpoint">{t("memory.advanced.endpoint")}</Label>
-            <Input
-              id="vmm-setup-endpoint"
-              onChange={(event) => onEndpointChange(event.target.value)}
-              placeholder="127.0.0.1:17625"
-              value={endpoint}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="vmm-setup-api-key">{t("memory.advanced.apiKey")}</Label>
-            <Input
-              id="vmm-setup-api-key"
-              onChange={(event) => onApiKeyChange(event.target.value)}
-              type="password"
-              value={apiKey}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="vmm-setup-management-url">{t("memory.advanced.managementEndpoint")}</Label>
-            <Input
-              id="vmm-setup-management-url"
-              onChange={(event) => onManagementBaseUrlChange(event.target.value)}
-              placeholder="http://127.0.0.1:17635"
-              value={managementBaseUrl}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="vmm-setup-management-token">{t("memory.advanced.managementToken")}</Label>
-            <Input
-              id="vmm-setup-management-token"
-              onChange={(event) => onManagementTokenChange(event.target.value)}
-              type="password"
-              value={managementToken}
-            />
-          </div>
+          <SetupInput id="vmm-setup-endpoint" label={t("memory.advanced.endpoint")} onChange={onEndpointChange} placeholder="127.0.0.1:17625" value={endpoint} />
+          <SetupInput id="vmm-setup-api-key" label={t("memory.advanced.apiKey")} onChange={onApiKeyChange} password value={apiKey} />
+          <SetupInput id="vmm-setup-management-url" label={t("memory.advanced.managementEndpoint")} onChange={onManagementBaseUrlChange} placeholder="http://127.0.0.1:17635" value={managementBaseUrl} />
+          <SetupInput id="vmm-setup-management-token" label={t("memory.advanced.managementToken")} onChange={onManagementTokenChange} password value={managementToken} />
         </div>
       ) : null}
     </div>
   )
 }
 
-// SetupScopeStep captures visible identity and initial application scope.
-// SetupScopeStep 收集可见身份与首次应用范围。
-function SetupScopeStep({
-  currentProjectAvailable,
-  onProjectNameChange,
-  onScopeChange,
-  onUserNameChange,
-  projectName,
-  scope,
-  userName,
-}: {
-  currentProjectAvailable: boolean
-  onProjectNameChange: (value: string) => void
-  onScopeChange: (value: VmmQuickSetupScope) => void
-  onUserNameChange: (value: string) => void
-  projectName: string
-  scope: VmmQuickSetupScope
+// SetupBindingsStep renders backend-specific global policy and explicit unbound-project rows.
+// SetupBindingsStep 渲染后端专属全局策略与显式未绑定项目行。
+function SetupBindingsStep(props: {
+  mode: VmmQuickSetupMode
+  bindingMode: VmmProjectBindingMode
+  projects: VmmProjectScopeSummary[]
+  decisions: Record<string, EditableBindingDecision>
+  nativeProjects: VmmNativeProjectCatalogSummary["projects"]
+  externalProjects: VmmProtocolProjectEntry[]
+  nativeFixedProjectId: string
+  externalProjectPrefix: string
   userName: string
+  externalFixedAction: "create_and_bind" | "bind_existing"
+  externalFixedProjectName: string
+  externalFixedTargetProjectId: string
+  onBindingModeChange: (value: VmmProjectBindingMode) => void
+  onDecisionChange: (projectId: string, patch: Partial<EditableBindingDecision>) => void
+  onNativeFixedProjectIdChange: (value: string) => void
+  onExternalProjectPrefixChange: (value: string) => void
+  onUserNameChange: (value: string) => void
+  onExternalFixedActionChange: (value: "create_and_bind" | "bind_existing") => void
+  onExternalFixedProjectNameChange: (value: string) => void
+  onExternalFixedTargetProjectIdChange: (value: string) => void
 }) {
   const { t } = useI18n()
+  const existingProjects = props.mode === "native"
+    ? props.nativeProjects.map((project) => ({ id: String(project.projectId), label: project.name }))
+    : props.externalProjects.map((project) => ({ id: String(project.project_id), label: project.display_path }))
   return (
     <div className="space-y-4">
-      <SetupStepHeading
-        description={t("vmm.setup.scope.description")}
-        title={t("vmm.setup.scope.title")}
-      />
-      <RadioGroup className="grid gap-2" onValueChange={(value) => onScopeChange(value as VmmQuickSetupScope)} value={scope}>
-        {(["all_projects", "current_project", "not_yet"] as VmmQuickSetupScope[]).map((value) => {
-          const disabled = value === "current_project" && !currentProjectAvailable
-          return (
-            <label
-              className="flex cursor-pointer items-center gap-3 rounded-lg border p-3 has-[[data-disabled]]:cursor-not-allowed has-[[data-disabled]]:opacity-50"
-              key={value}
-            >
-              <RadioGroupItem disabled={disabled} value={value} />
-              <span className="text-sm font-medium">
-                {t(`vmm.setup.scope.${value}` as TranslationKey)}
-                {disabled ? (
-                  <span className="ml-2 font-normal text-muted-foreground">
-                    {t("vmm.setup.scope.currentProjectUnavailable")}
-                  </span>
-                ) : null}
-              </span>
-            </label>
-          )
-        })}
+      <SetupStepHeading description={t("vmm.setup.binding.description")} title={t("vmm.setup.binding.title")} />
+      <RadioGroup className="grid gap-3 sm:grid-cols-2" onValueChange={(value) => props.onBindingModeChange(value as VmmProjectBindingMode)} value={props.bindingMode}>
+        <label className="flex cursor-pointer items-start gap-3 rounded-lg border p-3">
+          <RadioGroupItem value="fixed" />
+          <span><span className="block text-sm font-medium">{t("vmm.setup.binding.fixed")}</span><span className="text-xs text-muted-foreground">{t("vmm.setup.binding.fixedDescription")}</span></span>
+        </label>
+        <label className="flex cursor-pointer items-start gap-3 rounded-lg border p-3">
+          <RadioGroupItem value="per_project" />
+          <span><span className="block text-sm font-medium">{t("vmm.setup.binding.separate")}</span><span className="text-xs text-muted-foreground">{t("vmm.setup.binding.separateDescription")}</span></span>
+        </label>
       </RadioGroup>
-      <div className="grid gap-4 sm:grid-cols-2">
+
+      {props.mode === "native" ? (
         <div className="space-y-2">
-          <Label htmlFor="vmm-setup-user">{t("vmm.setup.user")}</Label>
-          <Input id="vmm-setup-user" onChange={(event) => onUserNameChange(event.target.value)} value={userName} />
+          <Label>{t("vmm.setup.binding.defaultProject")}</Label>
+          <ProjectSelect onChange={props.onNativeFixedProjectIdChange} options={existingProjects} value={props.nativeFixedProjectId} />
         </div>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <SetupInput id="vmm-setup-user" label={t("vmm.setup.user")} onChange={props.onUserNameChange} value={props.userName} />
+          <SetupInput id="vmm-setup-prefix" label={t("vmm.setup.binding.prefix")} onChange={props.onExternalProjectPrefixChange} placeholder="vulcan/space" value={props.externalProjectPrefix} />
+        </div>
+      )}
+
+      {props.mode === "external" && props.bindingMode === "fixed" ? (
+        <div className="grid gap-3 rounded-lg border p-3 sm:grid-cols-[12rem_minmax(0,1fr)]">
+          <ActionSelect onChange={props.onExternalFixedActionChange} value={props.externalFixedAction} />
+          {props.externalFixedAction === "create_and_bind" ? (
+            <Input onChange={(event) => props.onExternalFixedProjectNameChange(event.target.value)} value={props.externalFixedProjectName} />
+          ) : (
+            <ProjectSelect onChange={props.onExternalFixedTargetProjectIdChange} options={existingProjects} value={props.externalFixedTargetProjectId} />
+          )}
+        </div>
+      ) : null}
+
+      {props.mode === "native" || props.bindingMode === "per_project" ? (
         <div className="space-y-2">
-          <Label htmlFor="vmm-setup-project">{t("vmm.setup.project")}</Label>
-          <Input id="vmm-setup-project" onChange={(event) => onProjectNameChange(event.target.value)} value={projectName} />
+          <p className="text-sm font-medium">{t("vmm.setup.binding.unboundProjects")}</p>
+          {props.projects.length === 0 ? (
+            <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">{t("vmm.setup.binding.none")}</p>
+          ) : props.projects.map((project) => {
+            const decision = props.decisions[project.projectId]
+            return (
+              <div className="grid gap-3 rounded-lg border p-3 md:grid-cols-[minmax(10rem,1fr)_12rem_minmax(12rem,1fr)]" key={project.projectId}>
+                <div className="min-w-0"><p className="truncate text-sm font-medium">{project.name}</p><p className="truncate text-xs text-muted-foreground">{project.projectId}</p></div>
+                <ActionSelect
+                  onChange={(action) => props.onDecisionChange(project.projectId, {
+                    action,
+                    targetProjectId: action === "bind_existing"
+                      ? (props.mode === "native" && props.bindingMode === "fixed" ? props.nativeFixedProjectId : existingProjects[0]?.id ?? "")
+                      : "",
+                  })}
+                  value={decision?.action ?? "create_and_bind"}
+                />
+                {decision?.action === "bind_existing" ? (
+                  <ProjectSelect onChange={(targetProjectId) => props.onDecisionChange(project.projectId, { targetProjectId })} options={existingProjects} value={decision.targetProjectId} />
+                ) : (
+                  <Input onChange={(event) => props.onDecisionChange(project.projectId, { projectName: event.target.value })} value={decision?.projectName ?? project.projectId} />
+                )}
+              </div>
+            )
+          })}
         </div>
-      </div>
+      ) : null}
     </div>
   )
 }
 
-// SetupConfirmationStep summarizes the choices that will be written.
-// SetupConfirmationStep 汇总即将写入的选择。
-function SetupConfirmationStep({
-  mode,
-  projectName,
-  scope,
-  userName,
-}: {
+// SetupConfirmationStep summarizes the immutable backend policy and affected project count.
+// SetupConfirmationStep 汇总不可变的后端策略与受影响项目数量。
+function SetupConfirmationStep({ mode, bindingMode, projectCount }: {
   mode: VmmQuickSetupMode
-  projectName: string
-  scope: VmmQuickSetupScope
-  userName: string
+  bindingMode: VmmProjectBindingMode
+  projectCount: number
 }) {
   const { t } = useI18n()
   return (
     <div className="space-y-4">
-      <SetupStepHeading
-        description={t("vmm.setup.confirm.description")}
-        title={t("vmm.setup.confirm.title")}
-      />
+      <SetupStepHeading description={t("vmm.setup.confirm.description")} title={t("vmm.setup.confirm.title")} />
       <dl className="grid gap-3 rounded-xl border p-4 sm:grid-cols-2">
-        <SetupSummaryRow label={t("vmm.setup.mode.title")} value={mode === "managed" ? t("vmm.setup.managed.title") : t("vmm.setup.external.title")} />
-        <SetupSummaryRow
-          label={t("vmm.setup.scope.title")}
-          value={t(`vmm.setup.scope.${scope}` as TranslationKey)}
-        />
-        <SetupSummaryRow label={t("vmm.setup.user")} value={userName} />
-        <SetupSummaryRow label={t("vmm.setup.project")} value={projectName} />
+        <SetupSummaryRow label={t("vmm.setup.mode.title")} value={mode === "native" ? t("vmm.setup.native.title") : t("vmm.setup.external.title")} />
+        <SetupSummaryRow label={t("vmm.setup.binding.title")} value={bindingMode === "fixed" ? t("vmm.setup.binding.fixed") : t("vmm.setup.binding.separate")} />
+        <SetupSummaryRow label={t("vmm.setup.binding.unboundProjects")} value={String(projectCount)} />
       </dl>
       <Alert>
         <ShieldCheck aria-hidden="true" />
@@ -508,32 +657,58 @@ function SetupConfirmationStep({
   )
 }
 
+// SetupInput renders one labeled setup input with optional secret masking.
+// SetupInput 渲染一个带标签并可选密码遮罩的配置输入框。
+function SetupInput({ id, label, onChange, password = false, placeholder, value }: {
+  id: string
+  label: string
+  onChange: (value: string) => void
+  password?: boolean
+  placeholder?: string
+  value: string
+}) {
+  return <div className="space-y-2"><Label htmlFor={id}>{label}</Label><Input id={id} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} type={password ? "password" : "text"} value={value} /></div>
+}
+
+// ActionSelect switches one row between creating a project and binding an existing project.
+// ActionSelect 在创建项目与绑定已有项目之间切换一行决定。
+function ActionSelect({ onChange, value }: {
+  onChange: (value: "create_and_bind" | "bind_existing") => void
+  value: "create_and_bind" | "bind_existing"
+}) {
+  const { t } = useI18n()
+  return <Select onValueChange={(next) => onChange(next as "create_and_bind" | "bind_existing")} value={value}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="create_and_bind">{t("vmm.setup.binding.create")}</SelectItem><SelectItem value="bind_existing">{t("vmm.setup.binding.existing")}</SelectItem></SelectContent></Select>
+}
+
+// ProjectSelect renders opaque project ids through stable human-readable names.
+// ProjectSelect 通过稳定的人类可读名称渲染不透明项目标识。
+function ProjectSelect({ onChange, options, value }: {
+  onChange: (value: string) => void
+  options: Array<{ id: string; label: string }>
+  value: string
+}) {
+  const { t } = useI18n()
+  return <Select onValueChange={onChange} value={value}><SelectTrigger><SelectValue placeholder={t("vmm.setup.binding.selectProject")} /></SelectTrigger><SelectContent>{options.map((option) => <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>)}</SelectContent></Select>
+}
+
 // SetupStepHeading renders one consistent wizard step heading.
 // SetupStepHeading 渲染一致的向导步骤标题。
 function SetupStepHeading({ description, title }: { description: string; title: string }) {
-  return (
-    <div>
-      <h3 className="text-base font-semibold">{title}</h3>
-      <p className="mt-1 text-sm text-muted-foreground">{description}</p>
-    </div>
-  )
+  return <div><h3 className="text-base font-semibold">{title}</h3><p className="mt-1 text-sm text-muted-foreground">{description}</p></div>
 }
 
 // SetupSummaryRow renders one human-readable confirmation fact.
 // SetupSummaryRow 渲染一条人类可读确认事实。
 function SetupSummaryRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="mt-1 truncate text-sm font-medium" title={value}>{value}</dd>
-    </div>
-  )
+  return <div><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 truncate text-sm font-medium" title={value}>{value}</dd></div>
 }
 
 export { VmmSetupDialog }
 export type {
+  VmmProjectBindingMode,
+  VmmQuickSetupCatalog,
+  VmmQuickSetupConnectionInput,
   VmmQuickSetupInput,
   VmmQuickSetupMode,
-  VmmQuickSetupScope,
   VmmSetupDialogProps,
 }

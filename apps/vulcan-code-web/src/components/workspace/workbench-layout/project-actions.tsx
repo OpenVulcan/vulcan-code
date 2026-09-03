@@ -411,6 +411,14 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     const snapshot = await addProjectFromPath(path) ?? await loadWorkbenchSnapshot();
     applyProjectActionSnapshot(snapshot);
     toast.success(t("projectActions.listUpdated"));
+    // The binding notice belongs only to this project-add response and must not be inferred later.
+    // 绑定提示只属于本次项目添加响应，后续不得根据快照状态推断。
+    const bindingNotice = snapshot.vmmMemory.projectBindingNotice;
+    if (bindingNotice?.status === "bound") {
+      toast.success(bindingNotice.message);
+    } else if (bindingNotice?.status === "failed") {
+      toast.error(bindingNotice.message);
+    }
   }, [applyProjectActionSnapshot, t]);
 
   // handleReorderProjects persists a same-section project order using the existing order model.

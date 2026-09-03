@@ -5,12 +5,14 @@ use super::*;
 use crate::{
     commit_and_emit_project_settings_changed_delta,
     emit_context_injection_changed_delta_for_session, emit_workbench_event,
+    mutate_project_configuration,
 };
 use vulcan_service_api::{
     ProjectSettingsDomain, ServiceEventEmitter, VmmMemoryActionResponse, VmmNativeClearPreview,
     VmmNativeClearResult, VmmNativeMigrationPreview, VmmNativeMigrationResult,
-    VmmNativeProjectContentCounts, VmmNativeSessionRename, VmmProjectDisplaySummary,
-    VmmUserDisplaySummary,
+    VmmNativeProjectBindingSummary, VmmNativeProjectCatalogSummary, VmmNativeProjectContentCounts,
+    VmmNativeProjectDeletePreview, VmmNativeProjectSummary, VmmNativeSessionRename,
+    VmmProjectDisplaySummary, VmmUserDisplaySummary,
 };
 
 /// Runs one VMM memory management action and returns its structured result.
@@ -40,7 +42,15 @@ pub(crate) async fn service_run_vmm_memory_action(
     }
     if matches!(
         request.action.trim(),
-        "native_project_migration_preview"
+        "native_project_catalog"
+            | "native_project_create_and_bind"
+            | "native_project_bind_existing"
+            | "native_project_unbind"
+            | "native_project_replace_query_links"
+            | "native_project_rename"
+            | "native_project_delete_preview"
+            | "native_project_delete"
+            | "native_project_migration_preview"
             | "native_project_migrate"
             | "native_project_clear_preview"
             | "native_project_clear"
@@ -136,7 +146,9 @@ async fn service_run_native_vmm_maintenance_action(
 ) -> Result<VmmMemoryActionResult, String> {
     let (layer, _, _) = vmm_action_context(&state, &request)?;
     let effective = vulcan_vmm::VmmEffectiveConfig::resolve(&layer, None, None);
-    if effective.backend_mode != vulcan_vmm::VmmBackendMode::Native {
+    if effective.backend_mode != vulcan_vmm::VmmBackendMode::Native
+        && request.action.trim() != "native_project_catalog"
+    {
         return Err(String::from("原生 VMM 项目维护仅在内部原生模式下可用。"));
     }
     let maintenance = {
@@ -151,6 +163,169 @@ async fn service_run_native_vmm_maintenance_action(
     let action = request.action.trim();
     let request_preview = request.payload.clone();
     match action {
+        "native_project_catalog" => {
+            let catalog = native_project_catalog(maintenance.project_catalog().await?);
+            native_action_result(
+                action,
+                format!(
+                    "已加载 {} 个原生 VMM 项目和 {} 条 VulcanCode 项目绑定。",
+                    catalog.projects.len(),
+                    catalog.bindings.len()
+                ),
+                "native_project_catalog",
+                request_preview,
+                &catalog,
+                VmmMemoryActionResponse::NativeProjectCatalog(catalog.clone()),
+            )
+        }
+        "native_project_create_and_bind" => {
+            let vulcan_project_id = required_native_text(&request.payload, "vulcanProjectId")?;
+            let project_name = required_native_text(&request.payload, "projectName")?;
+            let project = maintenance
+                .create_and_bind_project(&vulcan_project_id, &project_name)
+                .await?;
+            let catalog = native_project_catalog(maintenance.project_catalog().await?);
+            native_action_result(
+                action,
+                format!(
+                    "VulcanCode 项目 `{vulcan_project_id}` 已绑定到原生 VMM 项目 `{}`。",
+                    project.name
+                ),
+                "native_project_catalog",
+                request_preview,
+                &catalog,
+                VmmMemoryActionResponse::NativeProjectCatalog(catalog.clone()),
+            )
+        }
+        "native_project_bind_existing" => {
+            let vulcan_project_id = required_native_text(&request.payload, "vulcanProjectId")?;
+            let project_id = required_native_project_id(&request.payload, "vmmProjectId")?;
+            let project = maintenance
+                .bind_existing_project(&vulcan_project_id, project_id)
+                .await?;
+            let catalog = native_project_catalog(maintenance.project_catalog().await?);
+            native_action_result(
+                action,
+                format!(
+                    "VulcanCode 项目 `{vulcan_project_id}` 已绑定到原生 VMM 项目 `{}`。",
+                    project.name
+                ),
+                "native_project_catalog",
+                request_preview,
+                &catalog,
+                VmmMemoryActionResponse::NativeProjectCatalog(catalog.clone()),
+            )
+        }
+        "native_project_unbind" => {
+            let vulcan_project_id = required_native_text(&request.payload, "vulcanProjectId")?;
+            maintenance.unbind_project(&vulcan_project_id).await?;
+            let catalog = native_project_catalog(maintenance.project_catalog().await?);
+            native_action_result(
+                action,
+                format!("VulcanCode 项目 `{vulcan_project_id}` 已解除原生 VMM 绑定。"),
+                "native_project_catalog",
+                request_preview,
+                &catalog,
+                VmmMemoryActionResponse::NativeProjectCatalog(catalog.clone()),
+            )
+        }
+        "native_project_replace_query_links" => {
+            let vulcan_project_id = required_native_text(&request.payload, "vulcanProjectId")?;
+            let linked_project_ids = vmm_payload_u64_list(&request.payload, "linkedProjectIds")?;
+            maintenance
+                .replace_query_links(&vulcan_project_id, &linked_project_ids)
+                .await?;
+            let catalog = native_project_catalog(maintenance.project_catalog().await?);
+            native_action_result(
+                action,
+                format!(
+                    "VulcanCode 项目 `{vulcan_project_id}` 的连带查询项目已更新为 {} 个。",
+                    linked_project_ids.len()
+                ),
+                "native_project_catalog",
+                request_preview,
+                &catalog,
+                VmmMemoryActionResponse::NativeProjectCatalog(catalog.clone()),
+            )
+        }
+        "native_project_rename" => {
+            let project_id = required_native_project_id(&request.payload, "vmmProjectId")?;
+            let name = required_native_text(&request.payload, "name")?;
+            let project = maintenance.rename_project(project_id, &name).await?;
+            let catalog = native_project_catalog(maintenance.project_catalog().await?);
+            native_action_result(
+                action,
+                format!(
+                    "原生 VMM 项目 {} 已改名为 `{}`，现有 ID 绑定保持不变。",
+                    project.id, project.name
+                ),
+                "native_project_catalog",
+                request_preview,
+                &catalog,
+                VmmMemoryActionResponse::NativeProjectCatalog(catalog.clone()),
+            )
+        }
+        "native_project_delete_preview" => {
+            let project_id = required_native_project_id(&request.payload, "vmmProjectId")?;
+            let preview = native_project_delete_preview(
+                maintenance.preview_project_delete(project_id).await?,
+            );
+            native_action_result(
+                action,
+                format!(
+                    "删除预检完成：{} 个归属项目、{} 个连带查询项目、{} 条记忆将受影响。",
+                    preview.project.owner_vulcan_project_ids.len(),
+                    preview.project.linked_vulcan_project_ids.len(),
+                    preview.content.memories
+                ),
+                "native_project_delete_preview",
+                request_preview,
+                &preview,
+                VmmMemoryActionResponse::NativeProjectDeletePreview(preview.clone()),
+            )
+        }
+        "native_project_delete" => {
+            let project_id = required_native_project_id(&request.payload, "vmmProjectId")?;
+            let expected_storage_version =
+                required_native_storage_version(&request.payload, "expectedStorageVersion")?;
+            let preview = maintenance.preview_project_delete(project_id).await?;
+            if !preview.usage.owner_vulcan_project_ids.is_empty()
+                && !vmm_payload_bool(&request.payload, "confirmDetachBindings")
+            {
+                return Err(String::from(
+                    "该原生 VMM 项目仍有 VulcanCode 项目绑定，请确认解除绑定后再删除。",
+                ));
+            }
+            let deleted = maintenance
+                .delete_project(project_id, expected_storage_version)
+                .await?;
+            let disable_failures = disable_deleted_native_project_owners(
+                &state,
+                &deleted.usage.owner_vulcan_project_ids,
+            )
+            .await;
+            let catalog = native_project_catalog(maintenance.project_catalog().await?);
+            native_action_result(
+                action,
+                if disable_failures.is_empty() {
+                    format!(
+                        "原生 VMM 项目 `{}` 已删除；{} 个 VulcanCode 项目的 VMM 已关闭。",
+                        deleted.project.name,
+                        deleted.usage.owner_vulcan_project_ids.len()
+                    )
+                } else {
+                    format!(
+                        "原生 VMM 项目 `{}` 已删除且绑定已解除；项目配置关闭写回失败：[{}]，这些项目仍因无绑定而无法使用 VMM。",
+                        deleted.project.name,
+                        disable_failures.join(", ")
+                    )
+                },
+                "native_project_catalog",
+                request_preview,
+                &catalog,
+                VmmMemoryActionResponse::NativeProjectCatalog(catalog.clone()),
+            )
+        }
         "native_project_migration_preview" => {
             let source_project_id =
                 required_native_project_id(&request.payload, "sourceProjectId")?;
@@ -265,6 +440,15 @@ fn required_native_project_id(payload: &Value, key: &str) -> Result<u64, String>
         .ok_or_else(|| format!("原生 VMM 动作缺少有效字段 `{key}`。"))
 }
 
+/// Requires one trimmed non-empty native VMM action text field.
+/// 读取一个必需的、裁剪后非空的原生 VMM 动作文本字段。
+fn required_native_text(payload: &Value, key: &str) -> Result<String, String> {
+    vmm_payload_text(payload, key)
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("原生 VMM 动作缺少有效字段 `{key}`。"))
+}
+
 /// Requires one native VMM storage version, including the valid initial version zero.
 /// 读取一个必需的原生 VMM 存储版本，包含合法的初始版本零。
 fn required_native_storage_version(payload: &Value, key: &str) -> Result<u64, String> {
@@ -290,6 +474,113 @@ fn native_action_result<T: serde::Serialize>(
             .map_err(|error| format!("序列化原生 VMM 动作结果失败：{error}"))?,
         data,
     })
+}
+
+/// Maps the internal native project catalog into the stable service API.
+/// 将内部原生项目目录映射为稳定服务 API。
+fn native_project_catalog(
+    catalog: crate::native_vmm::NativeVmmProjectCatalog,
+) -> VmmNativeProjectCatalogSummary {
+    VmmNativeProjectCatalogSummary {
+        projects: catalog
+            .projects
+            .into_iter()
+            .map(|item| native_project_summary(item.project, item.usage))
+            .collect(),
+        bindings: catalog
+            .bindings
+            .into_iter()
+            .map(|binding| VmmNativeProjectBindingSummary {
+                vulcan_project_id: binding.vulcan_project_id,
+                owner_project_id: binding.owner_project_id,
+                linked_project_ids: binding.linked_project_ids,
+            })
+            .collect(),
+    }
+}
+
+/// Maps one internal native VMM project and its consumers into the service API.
+/// 将一个内部原生 VMM 项目及其使用方映射为服务 API。
+fn native_project_summary(
+    project: vulcan_workspace_store::vmm_data_plane::NativeVmmProject,
+    usage: vulcan_workspace_store::vmm_data_plane::NativeVmmProjectUsage,
+) -> VmmNativeProjectSummary {
+    VmmNativeProjectSummary {
+        project_id: project.id,
+        name: project.name,
+        tag: project.tag,
+        protected: project.protected,
+        owner_vulcan_project_ids: usage.owner_vulcan_project_ids,
+        linked_vulcan_project_ids: usage.linked_vulcan_project_ids,
+    }
+}
+
+/// Maps one internal native project deletion preview into the service API.
+/// 将一份内部原生项目删除预检映射为服务 API。
+fn native_project_delete_preview(
+    preview: crate::native_vmm::NativeVmmProjectDeletePreview,
+) -> VmmNativeProjectDeletePreview {
+    VmmNativeProjectDeletePreview {
+        storage_version: preview.storage_version,
+        project: native_project_summary(preview.project, preview.usage),
+        content: native_content_counts(preview.content),
+    }
+}
+
+/// Persists a project-level VMM disable override after its owner binding is deleted.
+/// 在所有者绑定被删除后持久化项目级 VMM 禁用覆盖。
+async fn disable_deleted_native_project_owners(
+    state: &SharedServiceBridgeState,
+    owner_project_ids: &[String],
+) -> Vec<String> {
+    let workspace = match state.lock() {
+        Ok(guard) => guard.workspace_snapshot.clone(),
+        Err(error) => {
+            eprintln!(
+                "[webui-service] failed to lock workspace after native VMM deletion: {error}"
+            );
+            return owner_project_ids.to_vec();
+        }
+    };
+    let Some(workspace) = workspace else {
+        return owner_project_ids.to_vec();
+    };
+    let mut failures = Vec::new();
+    for owner_project_id in owner_project_ids {
+        let project = workspace
+            .task_projects
+            .iter()
+            .chain(workspace.archived_task_projects.iter())
+            .find(|project| project.id == *owner_project_id);
+        let Some(project) = project else {
+            continue;
+        };
+        let project_path = project.path.clone();
+        let result = mutate_project_configuration(
+            &std::path::PathBuf::from(&project_path),
+            "关闭已解除绑定项目的 VMM 配置失败",
+            |project_configuration| {
+                project_configuration.vmm.enabled = Some(false);
+                Ok(())
+            },
+            |project_configuration| {
+                update_cached_project_vmm_layer(&project_path, project_configuration.vmm.clone());
+                refresh_exact_vmm_hook_project_projection(
+                    state,
+                    &project_path,
+                    &project_configuration.vmm,
+                )
+            },
+        )
+        .await;
+        if let Err(error) = result {
+            eprintln!(
+                "[webui-service] failed to disable VMM for detached project `{owner_project_id}`: {error}"
+            );
+            failures.push(owner_project_id.clone());
+        }
+    }
+    failures
 }
 
 /// Maps internal project-content counts into the stable service API.
@@ -1128,6 +1419,10 @@ pub(crate) fn vmm_action_layer_from_effective(
 ) -> vulcan_vmm::VmmConfigLayer {
     vulcan_vmm::VmmConfigLayer {
         backend_mode: Some(effective.backend_mode),
+        native_project_binding_mode: Some(effective.native_project_binding_mode),
+        external_project_binding_mode: Some(effective.external_project_binding_mode),
+        native_fixed_project_id: Some(effective.native_fixed_project_id),
+        external_project_prefix: Some(effective.external_project_prefix.clone()),
         enabled: Some(effective.enabled),
         grpc_target: (!effective.grpc_target.trim().is_empty())
             .then(|| effective.grpc_target.clone()),

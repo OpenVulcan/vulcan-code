@@ -56,6 +56,35 @@ pub const DEFAULT_NATIVE_USER_ID: u64 = 1;
 /// 受保护的原生 VMM 兜底项目标识。
 pub const DEFAULT_NATIVE_PROJECT_ID: u64 = 1;
 
+/// Default external Team/Space prefix used for automatically created VMM projects.
+/// 自动创建外置 VMM 项目时使用的默认 Team/Space 前缀。
+pub const DEFAULT_EXTERNAL_PROJECT_PREFIX: &str = "vulcan/space";
+
+/// Selects how newly discovered VulcanCode projects obtain a native VMM owner project.
+/// 选择新发现的 VulcanCode 项目如何获得原生 VMM 所有者项目。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VmmNativeProjectBindingMode {
+    /// Binds every new VulcanCode project to one configured native VMM project.
+    /// 将每个新增 VulcanCode 项目绑定到一个已配置的原生 VMM 项目。
+    #[default]
+    Fixed,
+    /// Creates or reuses one native VMM project from each VulcanCode project tag.
+    /// 根据每个 VulcanCode 项目标签创建或复用一个原生 VMM 项目。
+    PerProject,
+}
+
+impl VmmNativeProjectBindingMode {
+    /// Returns the stable serialized spelling used by service APIs.
+    /// 返回服务 API 使用的稳定序列化名称。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fixed => "fixed",
+            Self::PerProject => "per_project",
+        }
+    }
+}
+
 /// Internal environment switch for independent `vmm.json` session state.
 /// 独立 `vmm.json` 会话状态的内部环境开关。
 pub const VMM_SESSION_STATE_FEATURE_ENV: &str = "VULCAN_VMM_SESSION_STATE_ENABLED";
@@ -457,6 +486,22 @@ pub struct VmmConfigLayer {
     /// 可选的全局后端选择；项目层和会话层保持未设置。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_mode: Option<VmmBackendMode>,
+    /// Optional global native project binding policy; project and session layers ignore it.
+    /// 可选的全局原生项目绑定策略；项目层与会话层忽略该字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_project_binding_mode: Option<VmmNativeProjectBindingMode>,
+    /// Optional global external project binding policy; project and session layers ignore it.
+    /// 可选的全局外置项目绑定策略；项目层与会话层忽略该字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_project_binding_mode: Option<VmmNativeProjectBindingMode>,
+    /// Optional global fixed native VMM project identity.
+    /// 可选的全局固定原生 VMM 项目标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_fixed_project_id: Option<u64>,
+    /// Optional global Team/Space prefix for external automatic project creation.
+    /// 外置 VMM 自动创建项目时使用的可选全局 Team/Space 前缀。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_project_prefix: Option<String>,
     /// Optional layer-level enable override.
     /// 可选的层级启用覆盖。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -593,6 +638,18 @@ pub struct VmmEffectiveConfig {
     /// Final backend selected by the global configuration.
     /// 由全局配置选择出的最终后端。
     pub backend_mode: VmmBackendMode,
+    /// Final native project binding policy resolved only from global configuration.
+    /// 仅从全局配置解析出的最终原生项目绑定策略。
+    pub native_project_binding_mode: VmmNativeProjectBindingMode,
+    /// Final external project binding policy resolved only from global configuration.
+    /// 仅从全局配置解析出的最终外置项目绑定策略。
+    pub external_project_binding_mode: VmmNativeProjectBindingMode,
+    /// Final fixed native VMM project identity.
+    /// 最终固定原生 VMM 项目标识。
+    pub native_fixed_project_id: u64,
+    /// Final external Team/Space prefix for automatic project creation.
+    /// 外置 VMM 自动创建项目使用的最终 Team/Space 前缀。
+    pub external_project_prefix: String,
     /// Final enable switch before online and scope diagnostics.
     /// 在线状态和作用域诊断前的最终启用开关。
     pub enabled: bool,
@@ -679,6 +736,10 @@ impl Default for VmmEffectiveConfig {
     fn default() -> Self {
         Self {
             backend_mode: VmmBackendMode::Native,
+            native_project_binding_mode: VmmNativeProjectBindingMode::Fixed,
+            external_project_binding_mode: VmmNativeProjectBindingMode::Fixed,
+            native_fixed_project_id: DEFAULT_NATIVE_PROJECT_ID,
+            external_project_prefix: DEFAULT_EXTERNAL_PROJECT_PREFIX.to_string(),
             enabled: false,
             enabled_source: VmmEffectiveConfigSource::Default,
             grpc_target: String::new(),
@@ -750,6 +811,18 @@ impl VmmEffectiveConfig {
             config.user_id = Some(DEFAULT_NATIVE_USER_ID);
             config.project_id = Some(DEFAULT_NATIVE_PROJECT_ID);
         }
+        // Project binding behavior is global application policy and must never inherit project or
+        // session overrides. Empty persisted prefixes resolve to the public external default.
+        // 项目绑定行为属于全局应用策略，绝不能继承项目层或会话层覆盖；空持久化前缀回退到公开的外置默认值。
+        config.native_project_binding_mode = global.native_project_binding_mode.unwrap_or_default();
+        config.external_project_binding_mode =
+            global.external_project_binding_mode.unwrap_or_default();
+        config.native_fixed_project_id = global
+            .native_fixed_project_id
+            .filter(|project_id| *project_id > 0)
+            .unwrap_or(DEFAULT_NATIVE_PROJECT_ID);
+        config.external_project_prefix =
+            normalize_external_project_prefix(global.external_project_prefix.as_deref());
         config
     }
 
@@ -942,6 +1015,19 @@ fn normalize_description_or_default(value: &str) -> String {
     }
 }
 
+/// Normalizes one external automatic-project prefix to an exact Team/Space pair.
+/// 将一个外置自动项目的前缀规范化为准确的 Team/Space 二元组。
+fn normalize_external_project_prefix(value: Option<&str>) -> String {
+    let Some(value) = value else {
+        return DEFAULT_EXTERNAL_PROJECT_PREFIX.to_string();
+    };
+    let segments = value.split('/').map(str::trim).collect::<Vec<_>>();
+    if segments.len() != 2 || segments.iter().any(|segment| segment.is_empty()) {
+        return DEFAULT_EXTERNAL_PROJECT_PREFIX.to_string();
+    }
+    format!("{}/{}", segments[0], segments[1])
+}
+
 /// Normalizes a configured profile-node limit into the accepted host range.
 /// 将配置的画像节点上限规范化到宿主接受范围内。
 const fn normalize_profile_node_limit(value: u32) -> u32 {
@@ -1061,6 +1147,53 @@ mod tests {
         );
         assert_eq!(external.user_id, None);
         assert_eq!(external.project_id, None);
+    }
+
+    /// Verifies project-binding behavior is global-only and has stable public defaults.
+    /// 验证项目绑定行为仅由全局层控制，并具有稳定的公开默认值。
+    #[test]
+    fn project_binding_policy_is_global_only() {
+        let global = VmmConfigLayer {
+            native_project_binding_mode: Some(VmmNativeProjectBindingMode::PerProject),
+            external_project_binding_mode: Some(VmmNativeProjectBindingMode::PerProject),
+            native_fixed_project_id: Some(42),
+            external_project_prefix: Some(String::from(" custom / memory ")),
+            ..VmmConfigLayer::default()
+        };
+        let project = VmmConfigLayer {
+            native_project_binding_mode: Some(VmmNativeProjectBindingMode::Fixed),
+            external_project_binding_mode: Some(VmmNativeProjectBindingMode::Fixed),
+            native_fixed_project_id: Some(7),
+            external_project_prefix: Some(String::from("ignored/project")),
+            ..VmmConfigLayer::default()
+        };
+        let resolved = VmmEffectiveConfig::resolve(&global, Some(&project), None);
+
+        assert_eq!(
+            resolved.native_project_binding_mode,
+            VmmNativeProjectBindingMode::PerProject
+        );
+        assert_eq!(
+            resolved.external_project_binding_mode,
+            VmmNativeProjectBindingMode::PerProject
+        );
+        assert_eq!(resolved.native_fixed_project_id, 42);
+        assert_eq!(resolved.external_project_prefix, "custom/memory");
+
+        let defaults = VmmEffectiveConfig::default();
+        assert_eq!(
+            defaults.native_project_binding_mode,
+            VmmNativeProjectBindingMode::Fixed
+        );
+        assert_eq!(
+            defaults.external_project_binding_mode,
+            VmmNativeProjectBindingMode::Fixed
+        );
+        assert_eq!(defaults.native_fixed_project_id, DEFAULT_NATIVE_PROJECT_ID);
+        assert_eq!(
+            defaults.external_project_prefix,
+            DEFAULT_EXTERNAL_PROJECT_PREFIX
+        );
     }
 
     #[test]

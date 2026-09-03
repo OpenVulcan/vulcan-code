@@ -102,6 +102,7 @@ pub(crate) fn vmm_memory_snapshot(
                     name: project.title.clone(),
                     path: project.path.clone(),
                     has_override: !project_vmm.is_empty(),
+                    bound_project_id: project_vmm.project_id,
                 }
             })
             .collect(),
@@ -110,6 +111,7 @@ pub(crate) fn vmm_memory_snapshot(
         runtime,
         sections: vmm_management_sections(),
         notice: vmm_memory_notice(&effective, selected_project),
+        project_binding_notice: None,
     }
 }
 
@@ -702,6 +704,24 @@ pub(crate) fn vmm_config_draft_summary(
             .unwrap_or(effective.backend_mode)
             .as_str()
             .to_string(),
+        native_project_binding_mode: layer
+            .native_project_binding_mode
+            .unwrap_or(effective.native_project_binding_mode)
+            .as_str()
+            .to_string(),
+        external_project_binding_mode: layer
+            .external_project_binding_mode
+            .unwrap_or(effective.external_project_binding_mode)
+            .as_str()
+            .to_string(),
+        native_fixed_project_id: layer
+            .native_fixed_project_id
+            .unwrap_or(effective.native_fixed_project_id)
+            .to_string(),
+        external_project_prefix: layer
+            .external_project_prefix
+            .clone()
+            .unwrap_or_else(|| effective.external_project_prefix.clone()),
         enabled: layer.enabled.unwrap_or(effective.enabled),
         grpc_target: layer
             .grpc_target
