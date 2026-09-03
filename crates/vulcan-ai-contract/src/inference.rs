@@ -1072,6 +1072,93 @@ pub struct RerankResponse {
     pub duration_ms: u64,
 }
 
+impl RerankResponse {
+    /// Validates ranked identities, positions, bounds, and score ordering against one request.
+    /// 根据单个请求校验重排身份、位置、边界与分数顺序。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `request` is the immutable rerank request that produced this response.
+    /// `request` 是生成当前响应的不可变重排请求。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success only when every result maps exactly once to an original candidate and rank.
+    /// 仅当每项结果都准确且唯一地映射到原始候选与排名时返回成功。
+    pub fn validate_for_request(&self, request: &RerankRequest) -> Result<(), String> {
+        request.validate()?;
+        if self.request_id != request.request_id {
+            return Err(String::from(
+                "Rerank response request_id does not match the originating request.",
+            ));
+        }
+        if self.results.len() > request.top_n as usize {
+            return Err(format!(
+                "Rerank response returned {} results, exceeding requested top_n {}.",
+                self.results.len(),
+                request.top_n
+            ));
+        }
+        let mut covered_indices = BTreeSet::new();
+        let mut previous_score = None;
+        for (rank, result) in self.results.iter().enumerate() {
+            let expected_rank = u32::try_from(rank)
+                .map_err(|_| String::from("Rerank response rank exceeds the u32 contract."))?;
+            if result.rank != expected_rank {
+                return Err(format!(
+                    "Rerank response rank {} does not match result position {expected_rank}.",
+                    result.rank
+                ));
+            }
+            let candidate_index = result.original_index as usize;
+            let Some(candidate) = request.candidates.get(candidate_index) else {
+                return Err(format!(
+                    "Rerank response candidate index {} is out of range.",
+                    result.original_index
+                ));
+            };
+            if result.candidate_id != candidate.id {
+                return Err(format!(
+                    "Rerank response candidate identity `{}` does not match request candidate `{}` at index {}.",
+                    result.candidate_id, candidate.id, result.original_index
+                ));
+            }
+            if !covered_indices.insert(result.original_index) {
+                return Err(format!(
+                    "Rerank response candidate index {} appears more than once.",
+                    result.original_index
+                ));
+            }
+            if !result.score.is_finite() {
+                return Err(format!(
+                    "Rerank response score for candidate `{}` must be finite.",
+                    result.candidate_id
+                ));
+            }
+            if !request.return_content && result.content.is_some() {
+                return Err(format!(
+                    "Rerank response returned content for candidate `{}` when return_content is false.",
+                    result.candidate_id
+                ));
+            }
+            if let Some(previous_score) = previous_score {
+                let ordered = match self.fingerprint.score_semantics {
+                    RerankScoreSemantics::Unknown => true,
+                    RerankScoreSemantics::HigherIsMoreRelevant => previous_score >= result.score,
+                    RerankScoreSemantics::LowerIsMoreRelevant => previous_score <= result.score,
+                };
+                if !ordered {
+                    return Err(String::from(
+                        "Rerank response score order does not match its declared score semantics.",
+                    ));
+                }
+            }
+            previous_score = Some(result.score);
+        }
+        Ok(())
+    }
+}
+
 /// Retains one normalized Responses output item together with its stable item identity.
 /// 将一项归一化 Responses 输出与其稳定项目身份一起保留。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1368,6 +1455,109 @@ impl RerankCapabilities {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Builds one complete rerank request used by response-contract tests.
+    /// 构建一份供响应契约测试使用的完整重排请求。
+    fn rerank_request_fixture() -> RerankRequest {
+        RerankRequest {
+            contract_version: INFERENCE_CONTRACT_VERSION,
+            request_id: String::from("rerank-request"),
+            idempotency_key: None,
+            consumer_profile_id: String::from("vmm"),
+            query: RerankText {
+                id: String::from("query"),
+                text: String::from("query text"),
+            },
+            candidates: vec![
+                RerankText {
+                    id: String::from("candidate-a"),
+                    text: String::from("alpha"),
+                },
+                RerankText {
+                    id: String::from("candidate-b"),
+                    text: String::from("beta"),
+                },
+            ],
+            top_n: 2,
+            truncation: RerankTruncation::Disabled,
+            return_content: false,
+        }
+    }
+
+    /// Builds one ranked response with exact candidate identities and positions.
+    /// 构建一份候选身份与位置准确的排序响应。
+    fn rerank_response_fixture() -> RerankResponse {
+        RerankResponse {
+            request_id: String::from("rerank-request"),
+            route: ExecutionRouteSnapshot {
+                provider_id: String::from("provider"),
+                service_entry_id: String::from("rerank"),
+                connection_id: String::from("connection"),
+                model_id: String::from("model"),
+                protocol_binding_id: None,
+                action_binding_id: Some(String::from("rerank")),
+                secondary_route_id: None,
+                secondary_provider_name: None,
+                secondary_endpoint_name: None,
+                capability_revision: String::from("capability"),
+                catalog_revision: String::from("catalog"),
+                route_revision: String::from("route"),
+                usage_scope: InferenceUsageScope::InternalBackground,
+            },
+            fingerprint: RerankProfileFingerprint {
+                provider_id: String::from("provider"),
+                service_entry_id: String::from("rerank"),
+                deployment_id: None,
+                secondary_route_id: None,
+                model_id: String::from("model"),
+                binding_id: String::from("rerank"),
+                capability_revision: String::from("capability"),
+                score_semantics: RerankScoreSemantics::HigherIsMoreRelevant,
+            },
+            results: vec![
+                RerankResult {
+                    candidate_id: String::from("candidate-b"),
+                    original_index: 1,
+                    rank: 0,
+                    score: 0.9,
+                    content: None,
+                },
+                RerankResult {
+                    candidate_id: String::from("candidate-a"),
+                    original_index: 0,
+                    rank: 1,
+                    score: 0.5,
+                    content: None,
+                },
+            ],
+            usage: RequestUsage::default(),
+            duration_ms: 1,
+        }
+    }
+
+    /// Verifies rerank responses preserve exact candidate identities and ranked positions.
+    /// 验证重排响应保留准确的候选身份与排序位置。
+    #[test]
+    fn rerank_response_validates_against_originating_request() {
+        let request = rerank_request_fixture();
+        let response = rerank_response_fixture();
+        response
+            .validate_for_request(&request)
+            .expect("exact rerank response should be valid");
+
+        let mut duplicate = response.clone();
+        duplicate.results[1].original_index = 1;
+        duplicate.results[1].candidate_id = String::from("candidate-b");
+        assert!(duplicate.validate_for_request(&request).is_err());
+
+        let mut mismatched_rank = response.clone();
+        mismatched_rank.results[1].rank = 0;
+        assert!(mismatched_rank.validate_for_request(&request).is_err());
+
+        let mut unordered = response;
+        unordered.results[1].score = 1.0;
+        assert!(unordered.validate_for_request(&request).is_err());
+    }
 
     /// Verifies an explicitly present idempotency key cannot collapse to an empty identity.
     /// 验证明示存在的幂等键不能折叠为空身份。

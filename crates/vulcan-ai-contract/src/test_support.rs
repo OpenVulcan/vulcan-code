@@ -542,13 +542,10 @@ impl HostAiPort for MockHostAiPort {
                 )
                 .with_request_context(&context, Some(request.request_id.as_str()))
             })?;
-        if response.request_id != request.request_id {
-            return Err(HostAiError::new(
-                HostAiErrorCode::InvalidRequest,
-                "Mock rerank fixture request_id does not match the request.",
-            )
-            .with_request_context(&context, Some(request.request_id.as_str())));
-        }
+        response.validate_for_request(&request).map_err(|message| {
+            HostAiError::new(HostAiErrorCode::InvalidRequest, message)
+                .with_request_context(&context, Some(request.request_id.as_str()))
+        })?;
         Ok(response)
     }
 
