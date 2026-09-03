@@ -3,7 +3,7 @@
 
 use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::execution_models::ExecutionPreparation;
-use crate::agent_runtime::provider_reasoning::resolve_effective_wire_reasoning_effort;
+use crate::agent_runtime::provider_reasoning::validate_exact_wire_reasoning_effort;
 use crate::agent_runtime::provider_runtime_inputs::one_shot_provider_error_stream;
 use crate::agent_runtime::provider_stream::ProviderDeltaStream;
 use crate::agent_runtime::provider_transport::build_provider_transport_execution_request;
@@ -109,10 +109,7 @@ fn resolve_runtime_reasoning_effort(
     execution: &ResolvedPublicAiExecution,
     requested: crate::provider_config::ReasoningEffortLevel,
 ) -> Result<Option<ReasoningEffort>, String> {
-    Ok(resolve_runtime_reasoning_effort_for_capabilities(
-        &execution.model.capabilities,
-        requested,
-    ))
+    resolve_runtime_reasoning_effort_for_capabilities(&execution.model.capabilities, requested)
 }
 
 /// Converts one resolved model capability contract into the final provider-neutral wire effort.
@@ -132,11 +129,10 @@ fn resolve_runtime_reasoning_effort(
 fn resolve_runtime_reasoning_effort_for_capabilities(
     capabilities: &vulcan_ai_contract::ModelCapabilities,
     requested: crate::provider_config::ReasoningEffortLevel,
-) -> Option<ReasoningEffort> {
-    // Reuse the shared wire resolver so catalog defaults, explicit disablement, and stale
-    // capability contracts have one final interpretation before transport encoding.
-    // 复用共享 Wire 解析器，确保目录默认值、显式关闭和旧能力契约在编码前只有一种解释。
-    resolve_effective_wire_reasoning_effort(capabilities, Some(requested))
+) -> Result<Option<ReasoningEffort>, String> {
+    // Transport consumes the already selected session level and rejects drift instead of silently recalculating it.
+    // 传输层消费会话已经选定的档位；发生漂移时明确拒绝，而不是静默重新计算。
+    validate_exact_wire_reasoning_effort(capabilities, requested)
 }
 
 /// Executes one provider prompt against the currently selected runtime family and returns a delta stream.
@@ -696,10 +692,10 @@ mod tests {
         );
     }
 
-    /// Verifies the legacy `Off` sentinel now selects an enabled default for a text model.
-    /// 验证旧版 `Off` 哨兵现在会为文本模型选择启用的默认档位。
+    /// Verifies the provider-default sentinel remains omitted at transport time.
+    /// 验证供应商默认哨兵在传输阶段保持省略。
     #[test]
-    fn off_preference_resolves_to_enabled_default() {
+    fn off_preference_remains_provider_default() {
         let capabilities = ModelCapabilities {
             reasoning: CapabilitySupport::Native,
             reasoning_control: ReasoningControlMode::EffortSelection,
@@ -712,7 +708,7 @@ mod tests {
                 &capabilities,
                 ReasoningEffortLevel::Off,
             ),
-            Some(ReasoningEffort::Medium)
+            Ok(None)
         );
     }
 
@@ -732,7 +728,7 @@ mod tests {
                 &capabilities,
                 ReasoningEffortLevel::Off,
             ),
-            None
+            Ok(None)
         );
     }
 
@@ -752,8 +748,27 @@ mod tests {
                 &capabilities,
                 ReasoningEffortLevel::None,
             ),
-            Some(ReasoningEffort::None)
+            Ok(Some(ReasoningEffort::None))
         );
+    }
+
+    /// Verifies transport rejects a stale unsupported level instead of silently selecting another one.
+    /// 验证传输层拒绝已经失效的不支持档位，而不是静默选择其他档位。
+    #[test]
+    fn unsupported_reasoning_level_is_rejected_without_recalculation() {
+        let capabilities = ModelCapabilities {
+            reasoning: CapabilitySupport::Native,
+            reasoning_control: ReasoningControlMode::EffortSelection,
+            reasoning_efforts: vec![ReasoningEffort::Low, ReasoningEffort::High],
+            ..ModelCapabilities::default()
+        };
+
+        let error = resolve_runtime_reasoning_effort_for_capabilities(
+            &capabilities,
+            ReasoningEffortLevel::Adaptive,
+        )
+        .expect_err("transport must reject an unsupported active level");
+        assert!(error.contains("not supported"));
     }
 
     /// R0/P0-03: a prepared turn keeps its frozen route after a manifest hot replace.

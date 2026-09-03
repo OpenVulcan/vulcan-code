@@ -212,6 +212,9 @@ pub(crate) struct SessionProviderProjectionSnapshot {
     /// Latest completed V1 API pair eligible to calibrate the next exact request.
     /// 可用于校准下一份精确请求的最近一组已完成 V1 API 事实。
     pub(crate) provider_usage_budget_anchor: Option<ProviderUsageBudgetAnchor>,
+    /// Persisted initialized baseline for this exact generation; `None` permits first initialization.
+    /// 本精确 generation 已持久化的初始化基线；`None` 允许首次初始化。
+    pub(crate) initialized_locked_baseline: Option<LockedBaselineProjection>,
 }
 
 /// Transport payload and projection proof built from one immutable V1 snapshot.
@@ -242,6 +245,9 @@ pub(crate) struct SessionPreparedPhysicalApi<T> {
     /// Exact transport value reconstructed before the Core start transaction.
     /// 在 Core 起始事务前重建的精确传输值。
     pub(crate) transport: T,
+    /// Exact baseline committed with this physical API start.
+    /// 与本次物理 API 起始一同提交的精确基线。
+    pub(crate) locked_baseline: LockedBaselineProjection,
 }
 
 /// Durable receipt for one in-place history-generation replacement.
@@ -1421,25 +1427,26 @@ impl SessionHandle {
     ///
     /// # Parameters
     /// 参数
-    /// `purpose`, `request`, `locked_baseline`, and `continuation_action_id` are typed request
+    /// `purpose`, `request`, `candidate_locked_baseline`, and `continuation_action_id` are typed request
     /// facts; `build` consumes the immutable durable V1 projection and its scoped completion authority,
     /// returning the only transport value that may be released or an explicit stale-result rejection.
-    /// `purpose`、`request`、`locked_baseline` 与 `continuation_action_id` 是强类型请求事实；
+    /// `purpose`、`request`、`candidate_locked_baseline` 与 `continuation_action_id` 是强类型请求事实；
     /// `build`消费不可变可靠V1投影及其作用域完成权限，返回唯一允许放行的传输值或明确陈旧结果拒绝。
     ///
     /// # Returns
     /// 返回值
     /// Returns a receipt only after prior state, `api_started`, and any fresh baseline are durable.
     /// 仅在先前状态、`api_started` 与首次基线全部可靠落盘后返回回执。
-    /// Returns `None` when pending selection or an external document frontier changed before commit; own completion writes require real durable recapture.
-    /// 待生效选择或外部文档前沿在提交之前变化时返回`None`；自身完成写入要求真实可靠重捕获。
+    /// Returns `None` when the candidate differs from the active selection or an external document
+    /// frontier changed before commit; own completion writes require real durable recapture.
+    /// 候选与活动选择不一致，或外部文档前沿在提交之前变化时返回 `None`；自身完成写入要求真实可靠重捕获。
     /// The asynchronous preparation gate serializes builders; writer/publisher guards cover capture and commit only.
     /// 异步准备门串行化构建者；写入器与发布器守卫仅覆盖捕获和提交。
     pub(crate) async fn prepare_physical_api_durable<T, BuildFuture>(
         self: &Arc<Self>,
         purpose: ApiPurposeKind,
         request: ApiRequestSnapshot,
-        locked_baseline: LockedBaselineProjection,
+        candidate_locked_baseline: LockedBaselineProjection,
         continuation_action_id: Option<ClientActionId>,
         now_ms: i64,
         build: impl FnOnce(
@@ -1493,47 +1500,26 @@ impl SessionHandle {
                 if document.active_api().is_some() {
                     return Err(DomainError::NoActiveApi.into());
                 }
-            }
-            // A picker write may arrive after construction. Rebuild before promotion, without a failed API or a false switch record.
-            // 选择器写入可能晚于请求构建；必须在提升前重建，不制造失败 API 或虚假切换记录。
-            let selection_changed = self
-                .document
-                .lock()
-                .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?
-                .metadata
-                .config
-                .pending_request
-                .as_ref()
-                .is_some_and(|pending| {
-                    pending.provider.as_deref() != Some(request.provider.as_str())
-                        || pending.connection_id != request.connection_id
-                        || pending.model.as_deref() != Some(request.model.as_str())
+                let active = &document.metadata.config.active_request;
+                let active_route_initialized = active.provider.is_some() || active.model.is_some();
+                if active_route_initialized
+                    && (active.provider.as_deref() != Some(request.provider.as_str())
+                        || active.connection_id != request.connection_id
+                        || active.model.as_deref() != Some(request.model.as_str())
                         || vulcan_session_core::v1::config::canonical_request_thinking_level(
-                            pending.thinking_level.as_deref(),
+                            active.thinking_level.as_deref(),
                         ) != vulcan_session_core::v1::config::canonical_request_thinking_level(
                             request.thinking_level.as_deref(),
                         )
-                        || pending.temperature != request.temperature
-                });
-            if selection_changed {
-                return Ok(None);
+                        || active.temperature != request.temperature)
+                {
+                    return Ok(None);
+                }
             }
-            // pendingPromotion is owned by the same serialized Provider permit boundary that captures
-            // the projection and starts the next physical API. No legacy runtime document participates.
-            // pendingPromotion 由捕获投影并启动下一次物理 API 的同一串行 Provider permit 边界拥有；
-            // 旧运行态文档不再参与该事务。
-            let pending_promotion = self.mutate_in_memory_if_changed_with_publisher_locked(
-                SessionFlushReason::ApiStarted,
-                |document| {
-                    if document.metadata.config.pending_request.is_none() {
-                        return Ok(SessionMutationChange::Unchanged(()));
-                    }
-                    let turn_id = document.active_turn().map(|active| active.turn_id);
-                    document.promote_pending_request(turn_id, now_ms)?;
-                    Ok(SessionMutationChange::Changed(()))
-                },
-            )?;
-            self.flush_through_with_writer_and_publisher_locked(pending_promotion.revision)?;
+            // Provider preparation consumes only the already active request configuration. Picker
+            // writes remain pending until an explicit user-input or Continue boundary activates them.
+            // Provider 准备仅消费已经活动的请求配置。选择器写入保持待生效，直到明确的用户输入或
+            // Continue 边界激活它们。
             self.capture_provider_projection_snapshot_with_publisher_locked()?
         };
         // Completed-result workers retain this same lease if the asynchronous builder is dropped.
@@ -1593,6 +1579,14 @@ impl SessionHandle {
         let expected_request = request.clone();
         let expected_projection = prepared.projection.clone();
         let expected_request_budget_evidence = prepared.request_budget_evidence.clone();
+        // An initialized generation owns its persisted baseline. The newly assembled candidate is
+        // authoritative only while the generation is fresh or explicitly refresh-pending.
+        // 已初始化 generation 以其持久化基线为准；新组装候选只在 generation 为全新或明确待刷新时权威。
+        let locked_baseline = snapshot
+            .initialized_locked_baseline
+            .clone()
+            .unwrap_or(candidate_locked_baseline);
+        let receipt_locked_baseline = locked_baseline.clone();
         let receipt = self.mutate_in_memory_if_changed_with_publisher_locked(
             SessionFlushReason::ApiStarted,
             move |document| {
@@ -1613,6 +1607,7 @@ impl SessionHandle {
                         Ok(SessionMutationChange::Changed(SessionPreparedPhysicalApi {
                             core_start,
                             transport: prepared.transport,
+                            locked_baseline: receipt_locked_baseline,
                         }))
                     }
                     IdempotentMutation::Idempotent(core_start) => {
@@ -1643,6 +1638,7 @@ impl SessionHandle {
                             SessionPreparedPhysicalApi {
                                 core_start,
                                 transport: prepared.transport,
+                                locked_baseline: receipt_locked_baseline,
                             },
                         ))
                     }
@@ -1711,6 +1707,7 @@ impl SessionHandle {
             retained_from_seq,
             through_seq,
             preparing_user_prompt_media_seqs,
+            initialized_locked_baseline,
         ) = {
             let document = self
                 .document
@@ -1751,6 +1748,7 @@ impl SessionHandle {
                 retained_from_seq,
                 Seq::try_new(through_value)?,
                 document.preparing_user_prompt_media_seqs(),
+                LockedBaselineProjection::from_initialized_runtime_lock(&document.runtime_lock)?,
             )
         };
         let range = locator.load_event_range(Seq::try_new(1)?, through_seq)?;
@@ -1786,6 +1784,7 @@ impl SessionHandle {
             sourced_items,
             project_directory: locator.project_directory(),
             provider_usage_budget_anchor: latest_provider_usage_budget_anchor(&range.events),
+            initialized_locked_baseline,
         })
     }
 
@@ -2397,6 +2396,38 @@ impl SessionHandle {
                 document
                     .continue_open_turn(request, now_ms)
                     .map(session_change_from_idempotent)
+            },
+        )
+    }
+
+    /// Activates the initial request intent staged after a newly created session root.
+    /// 激活在新建会话根输入之后暂存的首个请求意图。
+    ///
+    /// # Parameters / 参数
+    /// `now_ms` is the exact admission timestamp used by the request-switch fact.
+    /// `now_ms` 是请求切换事实使用的精确准入时间戳。
+    ///
+    /// # Returns / 返回值
+    /// Returns whether a pending request was consumed. Absence is an idempotent no-op.
+    /// 返回是否消费了待生效请求；不存在待生效请求时为幂等 no-op。
+    pub(crate) fn activate_pending_request_for_new_session_root(
+        &self,
+        now_ms: i64,
+    ) -> Result<SessionConditionalMutationReceipt<Option<Seq>>, SessionRuntimeError> {
+        self.mutate_durable_if_changed(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::DisplayBoundary,
+            move |document| {
+                if document.metadata.config.pending_request.is_none() {
+                    return Ok(SessionMutationChange::Unchanged(None));
+                }
+                let turn_id = document
+                    .active_turn()
+                    .map(|turn| turn.turn_id)
+                    .ok_or(DomainError::NoActiveTurn)?;
+                document
+                    .promote_pending_request(Some(turn_id), now_ms)
+                    .map(SessionMutationChange::Changed)
             },
         )
     }
@@ -4253,12 +4284,13 @@ mod tests {
             .api_call_id
     }
 
-    /// The physical Provider permit promotes the exact pending request before request capture.
-    /// 物理 Provider 许可会在捕获请求前提升精确待生效配置。
+    /// The physical Provider permit consumes active request facts and leaves newer picker intent pending.
+    /// 物理 Provider 许可只消费活动请求事实，并让更新的选择器意图继续处于待生效状态。
     #[tokio::test]
-    async fn physical_provider_permit_promotes_pending_thinking_before_api_start() {
-        // Both historical encodings are accepted as the same setting, not a perpetual route change.
-        // 两种历史编码均作为同一设置接受，不能造成永久路由切换循环。
+    async fn physical_provider_permit_uses_active_thinking_without_pending_promotion() {
+        // User admission activates both historical encodings; later Provider preparation consumes
+        // that active value while preserving a newer picker intent.
+        // 用户准入会激活两种历史编码；后续 Provider 准备消费该活动值并保留更新的选择器意图。
         for (stored_level, request_level) in [
             ("max", Some("max")),
             ("off", None),
@@ -4306,6 +4338,26 @@ mod tests {
                     3,
                 )
                 .expect("submit root input");
+            handle
+                .mutate_durable_if_changed(
+                    SessionMutationAdmission::MetadataOnly,
+                    SessionFlushReason::MetadataChanged,
+                    |document| {
+                        document.set_pending_request(
+                            PendingRequestConfig {
+                                provider: Some(String::from("future-provider")),
+                                connection_id: Some(String::from("future-connection")),
+                                model: Some(String::from("future-model")),
+                                thinking_level: Some(String::from("low")),
+                                temperature: Some(0.3),
+                                set_at_ms: 4,
+                            },
+                            4,
+                        )?;
+                        Ok(SessionMutationChange::Changed(()))
+                    },
+                )
+                .expect("publish a newer picker intent after user admission");
             let fingerprint_sha256 = handle
                 .read(|document| {
                     let through_seq = document.events().last().expect("root event").seq();
@@ -4322,11 +4374,14 @@ mod tests {
                 temperature: Some(0.2),
             };
 
-            // Simulate a picker write overtaking construction for every request control.
-            // 模拟选择器写入超越请求构建，覆盖每一种请求控制项。
+            // Simulate stale construction for every active request control.
+            // 模拟每一种活动请求控制项上的陈旧构建。
             let revision_before = handle
                 .read(|document| document.memory_revision())
                 .expect("read pre-preparation revision");
+            let event_count_before = handle
+                .read(|document| document.events().len())
+                .expect("read pre-preparation event count");
             for field in 0..5 {
                 let mut stale = request.clone();
                 match field {
@@ -4355,10 +4410,7 @@ mod tests {
                         assert_eq!(document.memory_revision(), revision_before);
                         assert!(document.metadata.config.pending_request.is_some());
                         assert!(document.active_api().is_none());
-                        assert!(!document.events().iter().any(|event| matches!(
-                            &event.event,
-                            EventBody::RequestConfigChanged(_) | EventBody::DisplayNote(_)
-                        )));
+                        assert_eq!(document.events().len(), event_count_before);
                     })
                     .expect("verify unchanged stale-request state");
             }
@@ -4386,13 +4438,19 @@ mod tests {
                     },
                 )
                 .await
-                .expect("prepare physical API after pending promotion")
-                .expect("candidate matches pending selection");
+                .expect("prepare physical API from the active user-boundary selection")
+                .expect("candidate matches the active selection");
 
             assert!(receipt.changed);
             handle
                 .read(|document| {
-                    assert!(document.metadata.config.pending_request.is_none());
+                    let pending = document
+                        .metadata
+                        .config
+                        .pending_request
+                        .as_ref()
+                        .expect("newer picker intent must remain pending");
+                    assert_eq!(pending.model.as_deref(), Some("future-model"));
                     assert_eq!(
                         document
                             .metadata
@@ -4411,7 +4469,7 @@ mod tests {
                         )
                     }));
                 })
-                .expect("read promoted request facts");
+                .expect("read active request facts");
             assert_eq!(
                 handle
                     .read(|document| document.memory_revision() == document.durable_revision())
@@ -5630,7 +5688,6 @@ mod tests {
                     provider: Some(String::from("minimax")),
                     connection_id: Some(String::from("minimax-account")),
                     model: Some(String::from("MiniMax-M2.7-highspeed")),
-                    thinking_level: None,
                     temperature: None,
                 },
                 3,

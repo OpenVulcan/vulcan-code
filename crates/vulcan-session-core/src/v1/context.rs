@@ -201,6 +201,30 @@ impl LockedBaselineProjection {
         self.locked_sources
     }
 
+    /// Restores the already initialized baseline from one authoritative runtime lock.
+    /// 从一个权威运行时锁恢复已经初始化的基线。
+    ///
+    /// # Parameters / 参数
+    /// `runtime_lock` is the exact persisted generation lock captured by the session owner.
+    /// `runtime_lock` 是会话 owner 捕获的精确持久化 generation 锁。
+    ///
+    /// # Returns / 返回值
+    /// Returns `Some` for an initialized generation, including an intentionally empty baseline;
+    /// fresh or refresh-pending generations return `None` so the next request may establish it.
+    /// 已初始化 generation 返回 `Some`，包括有意为空的基线；全新或待刷新 generation 返回
+    /// `None`，允许下一请求建立基线。
+    pub fn from_initialized_runtime_lock(
+        runtime_lock: &RuntimeLock,
+    ) -> Result<Option<Self>, DomainError> {
+        match runtime_lock.initialization_state {
+            RuntimeInitializationState::Initialized => {
+                Self::from_locked_sources(runtime_lock.locked_sources.clone()).map(Some)
+            }
+            RuntimeInitializationState::FreshUninitialized
+            | RuntimeInitializationState::BaselineRefreshPending => Ok(None),
+        }
+    }
+
     /// Validates one already materialized projection used by strict decoding.
     /// 校验一份由严格解码恢复的已物化投影。
     pub(crate) fn from_locked_sources(

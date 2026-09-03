@@ -6,6 +6,7 @@ use super::input::{
 };
 use super::modes::goal_notice_event;
 use super::persistence::DirtyFile;
+use super::selection::active_request_from_pending;
 use super::{
     ActiveTurnState, IdempotentMutation, SessionDocument, TurnOrigin, client_action_conflict,
     validate_system_context_content, validate_timestamp,
@@ -26,7 +27,7 @@ use std::collections::BTreeSet;
 
 /// One explicit request to resume the current unfinished logical Turn.
 /// 一次恢复当前未完成逻辑回合的显式请求。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ContinuationRequest {
     /// Client submission and optional supplementary user payload.
     /// 客户端提交身份与可选补充用户载荷。
@@ -206,6 +207,7 @@ impl SessionDocument {
             client_action_id,
             text,
             resource_ids,
+            bound_request_config,
         } = submission;
         let has_input = !text.is_empty() || !resource_ids.is_empty();
         if has_input {
@@ -214,13 +216,33 @@ impl SessionDocument {
         let hidden_model_guidance = hidden_model_guidance
             .map(validate_system_context_content)
             .transpose()?;
-        let event_count = 2 + u64::from(has_input) + u64::from(hidden_model_guidance.is_some());
+        let request_config = bound_request_config.or_else(|| {
+            self.metadata
+                .config
+                .pending_request
+                .as_ref()
+                .map(active_request_from_pending)
+        });
+        let event_count = 2
+            + u64::from(has_input)
+            + u64::from(hidden_model_guidance.is_some())
+            + u64::from(request_config.is_some());
         let local_id_count = u64::from(has_input);
         self.ensure_transition_capacity(event_count, local_id_count)?;
 
         let mut staged_allocator = self.id_allocator;
         let mut staged_events = Vec::with_capacity(event_count as usize);
         let mut staged_metadata = self.metadata.clone();
+        if let Some(request_config) = request_config {
+            self.stage_bound_request_activation(
+                &mut staged_metadata,
+                &mut staged_allocator,
+                &mut staged_events,
+                request_config,
+                Some(turn_id),
+                now_ms,
+            )?;
+        }
         let draft_consumed =
             has_input && consume_matching_draft(&mut staged_metadata, &text, &resource_ids);
         let (input_id, input_seq) = if has_input {
@@ -675,8 +697,14 @@ impl SessionDocument {
         let goal_objective = (queued_successor.is_none() && decision.should_continue)
             .then(|| self.metadata.mode.goal.objective.clone());
         let has_successor = queued_successor.is_some() || goal_objective.is_some();
-        let appended_event_count =
-            if has_successor { 3 } else { 2 } + u64::from(next_goal_state.is_some());
+        let queued_request_config_count = u64::from(
+            queued_successor
+                .as_ref()
+                .is_some_and(|queued| queued.bound_request_config.is_some()),
+        );
+        let appended_event_count = (if has_successor { 3 } else { 2 })
+            + u64::from(next_goal_state.is_some())
+            + queued_request_config_count;
         self.ensure_transition_capacity(appended_event_count, u64::from(has_successor))?;
         let buckets = self.aggregate_turn_buckets(expected_turn_id, turn.start_seq)?;
         // Stage the boundary, the unique turn statistics, and the optional successor before
@@ -726,6 +754,16 @@ impl SessionDocument {
         }
         let successor = if let Some(queued) = queued_successor {
             let turn_id = TurnId::try_new(staged_allocator.next_local_id()?)?;
+            if let Some(request_config) = queued.bound_request_config.clone() {
+                self.stage_bound_request_activation(
+                    &mut staged_metadata,
+                    &mut staged_allocator,
+                    &mut staged_events,
+                    request_config,
+                    Some(turn_id),
+                    now_ms,
+                )?;
+            }
             let input_seq = self.stage_event(
                 &mut staged_allocator,
                 &mut staged_events,

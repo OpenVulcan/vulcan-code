@@ -87,6 +87,10 @@ pub(crate) struct PublicAiCustomProviderSaveRequest {
     /// 全部路由共享的有界非敏感固定请求头。
     #[serde(default)]
     request_headers: BTreeMap<String, String>,
+    /// Optional regular-conversation session-header name for this provider.
+    /// 此供应商可选的常规会话请求头名称。
+    #[serde(default)]
+    session_header: Option<String>,
     /// Allows an explicitly confirmed manual fallback after unsupported, invalid, or empty discovery.
     /// 允许在目录不受支持、格式无效或为空后使用已明确确认的手工回退。
     #[serde(default)]
@@ -241,6 +245,7 @@ fn prepare_custom_provider_candidate(
         model_discovery_path: request.model_discovery_path.clone(),
         protocol_routes: request.protocol_routes.clone(),
         request_headers: request.request_headers.clone(),
+        session_header: request.session_header.clone(),
     }
     .into_descriptor()?;
     let declares_codex = descriptor

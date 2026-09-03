@@ -16,6 +16,65 @@ fn root_input_rejected_while_turn_open() {
     ));
 }
 
+/// A root user admission activates its exact bound request before the provider-visible input.
+/// 根用户输入准入会在 Provider 可见输入之前激活其精确绑定请求。
+#[test]
+fn root_input_activates_bound_request_at_admission() -> Result<(), DomainError> {
+    let mut doc = new_document();
+    doc.metadata.config.active_request = ActiveRequestConfig {
+        provider: Some(String::from("openai")),
+        connection_id: None,
+        model: Some(String::from("gpt-5")),
+        thinking_level: Some(String::from("high")),
+        temperature: None,
+    };
+    let bound_request = ActiveRequestConfig {
+        provider: Some(String::from("openai")),
+        connection_id: None,
+        model: Some(String::from("gpt-5.1")),
+        thinking_level: Some(String::from("low")),
+        temperature: None,
+    };
+    doc.set_pending_request(
+        PendingRequestConfig {
+            provider: bound_request.provider.clone(),
+            connection_id: bound_request.connection_id.clone(),
+            model: bound_request.model.clone(),
+            thinking_level: bound_request.thinking_level.clone(),
+            temperature: bound_request.temperature,
+            set_at_ms: T0 + 1,
+        },
+        T0 + 1,
+    )?;
+
+    doc.submit_root_input(
+        ClientInputSubmission::new(
+            ClientActionId::try_new("bound-root-request")?,
+            "run with the selected request",
+            Vec::new(),
+        )
+        .with_bound_request_config(bound_request.clone()),
+        T0 + 2,
+    )?;
+
+    assert_eq!(doc.metadata.config.active_request, bound_request);
+    assert!(doc.metadata.config.pending_request.is_none());
+    let request_change_seq = doc
+        .events()
+        .iter()
+        .find(|event| matches!(event.event, EventBody::RequestConfigChanged(_)))
+        .map(ConversationEvent::seq)
+        .expect("request switch event");
+    let user_input_seq = doc
+        .events()
+        .iter()
+        .find(|event| matches!(event.event, EventBody::UserInput(_)))
+        .map(ConversationEvent::seq)
+        .expect("root input event");
+    assert!(request_change_seq < user_input_seq);
+    Ok(())
+}
+
 /// A queued user input atomically supersedes an undispatched Goal continuation and is restart-idempotent.
 /// 一条排队用户输入会原子取代尚未派发的 Goal 续跑，并在重启后保持幂等。
 #[test]

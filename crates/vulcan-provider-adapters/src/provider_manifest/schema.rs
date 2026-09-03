@@ -235,6 +235,10 @@ pub struct ManifestServiceEntry {
     /// 为此入口每个请求添加的固定非敏感请求头。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub request_headers: BTreeMap<String, String>,
+    /// Optional header name that receives the current public session identifier.
+    /// 可选的请求头名称；配置后接收当前公共会话标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_header: Option<String>,
     /// Optional credential-scoped service-origin override contract.
     /// 可选的凭据作用域服务源地址覆盖契约。
     #[serde(default, skip_serializing_if = "Option::is_none")]

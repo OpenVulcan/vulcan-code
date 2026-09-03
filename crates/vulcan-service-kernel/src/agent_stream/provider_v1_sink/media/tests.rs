@@ -635,6 +635,7 @@ fn snapshot(
         sourced_items,
         project_directory: project.to_path_buf(),
         provider_usage_budget_anchor: None,
+        initialized_locked_baseline: None,
     })
 }
 

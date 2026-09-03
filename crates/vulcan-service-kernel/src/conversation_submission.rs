@@ -14,7 +14,7 @@ use vulcan_service_api::{
     UpdateConversationRunPhaseDelta, WorkbenchDelta, WorkbenchDeltaEnvelope,
 };
 use vulcan_session_core::v1::config::{
-    KnowledgeLibrarySelectionConfig as KnowledgeLibrarySelectionConfigV1,
+    ActiveRequestConfig, KnowledgeLibrarySelectionConfig as KnowledgeLibrarySelectionConfigV1,
     KnowledgeLibrarySelectionMode as KnowledgeLibrarySelectionModeV1,
     KnowledgeRetrievalMode as KnowledgeRetrievalModeV1, VmmSessionPolicyConfig,
 };
@@ -2094,11 +2094,12 @@ async fn load_existing_submission_v1_authority(
 /// owns the exact data root and SQLite locator, `materialized_session` contains the authoritative
 /// session/project/title classification, `client_submission_id` is the browser-owned idempotency
 /// identity, `root_text` is the accepted first user text, `attachments` are the already resolved
-/// host-managed resources, and `now_ms` is the root publication time.
+/// host-managed resources, `bound_request_config` is the existing session's accepted next-node
+/// route, and `now_ms` is the root publication time.
 /// `state` 持有进程内会话与项目资源注册表，`controller_runtime` 持有精确数据根与 SQLite
 /// 定位器，`materialized_session` 包含权威会话/项目/标题分类，`client_submission_id` 是浏览器
 /// 持有的幂等身份，`root_text` 是已接纳的首条用户正文，`attachments` 是已经解析的宿主管理资源，
-/// `now_ms` 是根发布时刻。
+/// `bound_request_config` 是已有会话接纳的下一节点路由，`now_ms` 是根发布时刻。
 ///
 /// # Returns
 /// 返回值
@@ -2118,6 +2119,7 @@ async fn materialize_submission_session_v1(
     hidden_model_guidance: Option<&str>,
     submission_mode: &ConversationSubmissionMode,
     existing_authority: Option<&ExistingSubmissionV1Authority>,
+    bound_request_config: Option<&ActiveRequestConfig>,
     now_ms: i64,
 ) -> Result<(), String> {
     // clientActionId preserves the browser-owned durable idempotency identity
@@ -2174,6 +2176,7 @@ async fn materialize_submission_session_v1(
                     title: materialized_session.session_title.clone(),
                     root_submission: ClientInputSubmission {
                         parameters,
+                        bound_request_config: None,
                         client_action_id,
                         text: root_text.to_string(),
                         resource_ids,
@@ -2214,6 +2217,7 @@ async fn materialize_submission_session_v1(
                         .submit_root_input(
                             ClientInputSubmission {
                                 parameters,
+                                bound_request_config: bound_request_config.cloned(),
                                 client_action_id,
                                 text: root_text.to_string(),
                                 resource_ids,
@@ -2229,6 +2233,7 @@ async fn materialize_submission_session_v1(
                         ContinuationRequest::new(client_action_id, root_text, resource_ids)
                             .with_hidden_model_guidance(hidden_model_guidance.map(str::to_string));
                     continuation.submission.parameters = parameters;
+                    continuation.submission.bound_request_config = bound_request_config.cloned();
                     authority
                         .handle
                         .continue_turn(continuation, now_ms)
@@ -2463,6 +2468,49 @@ async fn service_start_conversation_execution(
             .map_err(|error| error.to_string())?,
         None => None,
     };
+    // existingBoundRequestConfig is captured only from durable Session V1 authority. Submitted
+    // selector echoes are ignored for established sessions because explicit picker RPCs already own
+    // pending Meta updates.
+    // existingBoundRequestConfig 仅从可靠 Session V1 权威捕获。已有会话会忽略提交时回显的
+    // 选择器值，因为显式选择器 RPC 已经唯一负责更新待生效 Meta。
+    let existing_bound_request_config = match existing_submission_v1_authority.as_ref() {
+        Some(authority) => {
+            let bound_from_existing_input = authority
+                .handle
+                .read(|document| {
+                    document
+                        .metadata
+                        .input_state
+                        .queued_inputs
+                        .iter()
+                        .find(|input| input.client_action_id == accepted_action_id)
+                        .and_then(|input| input.bound_request_config.clone())
+                        .or_else(|| {
+                            document
+                                .metadata
+                                .input_state
+                                .pending_in_turn_inputs
+                                .iter()
+                                .find(|input| input.client_action_id == accepted_action_id)
+                                .and_then(|input| input.bound_request_config.clone())
+                        })
+                })
+                .map_err(|error| error.to_string())?;
+            Some(match bound_from_existing_input {
+                Some(config) => config,
+                None => crate::session_request_config_v1::reconcile_pending_reasoning_for_next_user_boundary_v1(
+                    authority.handle.as_ref(),
+                    agent_runtime.public_ai_runtime.as_ref(),
+                )?,
+            })
+        }
+        None => None,
+    };
+    let (reasoning_effort, model_selection) = if submission_session_id.is_some() {
+        (None, None)
+    } else {
+        (reasoning_effort, model_selection)
+    };
     if accepted_input
         .as_ref()
         .is_some_and(|accepted| accepted.text != prompt)
@@ -2597,6 +2645,26 @@ async fn service_start_conversation_execution(
         .map_err(|error| error.to_string())?;
         let client_action_id = ClientActionId::try_new(client_submission_id.clone())
             .map_err(|error| format!("invalid queued client submission id: {error}"))?;
+        let bound_request_config = existing_bound_request_config.clone().ok_or_else(|| {
+            format!("queued existing session `{session_id}` has no bound request configuration")
+        })?;
+        let queued_model_selection = SubmissionModelSelection {
+            provider_id: bound_request_config.provider.clone().ok_or_else(|| {
+                format!("queued existing session `{session_id}` has no active provider")
+            })?,
+            model_id: bound_request_config.model.clone().ok_or_else(|| {
+                format!("queued existing session `{session_id}` has no active model")
+            })?,
+            connection_id: bound_request_config.connection_id.clone().ok_or_else(|| {
+                format!("queued existing session `{session_id}` has no active connection")
+            })?,
+        };
+        let queued_reasoning_effort = Some(
+            bound_request_config
+                .thinking_level
+                .clone()
+                .unwrap_or_else(|| String::from("off")),
+        );
         let scheduled_handle = Arc::clone(&v1_authority.handle);
         let scheduled_client_action_id = client_action_id.clone();
         let acknowledgement = queue_existing_submission(
@@ -2607,6 +2675,7 @@ async fn service_start_conversation_execution(
                 v1_handle: Arc::clone(&v1_authority.handle),
                 v1_submission: ClientInputSubmission {
                     parameters,
+                    bound_request_config: Some(bound_request_config),
                     client_action_id,
                     text: prompt,
                     resource_ids,
@@ -2616,10 +2685,15 @@ async fn service_start_conversation_execution(
                 hidden_model_guidance,
                 attachments: requested_provider_attachments,
                 attachment_draft_scope,
-                reasoning_effort,
-                model_selection,
+                reasoning_effort: queued_reasoning_effort,
+                model_selection: Some(queued_model_selection),
                 submit_total_started_at,
             },
+        )?;
+        crate::session_request_config_v1::persist_missing_reasoning_reconciliation_after_user_admission_v1(
+            v1_authority.handle.as_ref(),
+            agent_runtime.public_ai_runtime.as_ref(),
+            crate::current_v1_unix_millis()?,
         )?;
         if acknowledgement.turn_id.is_some() {
             // Goal supersession has already created the exact open UserRoot Turn durably.
@@ -2686,9 +2760,17 @@ async fn service_start_conversation_execution(
         hidden_model_guidance.as_deref(),
         &submission_mode,
         existing_submission_v1_authority.as_ref(),
+        existing_bound_request_config.as_ref(),
         i64::try_from(materialize_started_at).unwrap_or(i64::MAX),
     )
     .await?;
+    if let Some(authority) = existing_submission_v1_authority.as_ref() {
+        crate::session_request_config_v1::persist_missing_reasoning_reconciliation_after_user_admission_v1(
+            authority.handle.as_ref(),
+            agent_runtime.public_ai_runtime.as_ref(),
+            crate::current_v1_unix_millis()?,
+        )?;
+    }
     webui_submit_trace(
         "submit_prompt_materialize_ready",
         format!(
@@ -2738,6 +2820,7 @@ async fn service_start_conversation_execution(
                 selection.provider_id.clone(),
                 selection.connection_id.clone(),
                 selection.model_id.clone(),
+                None,
                 crate::session_request_config_v1::SessionRequestFallback::from_runtime_state(
                     runtime_state,
                 ),
@@ -2787,6 +2870,27 @@ async fn service_start_conversation_execution(
         },
     )
     .await?;
+    let handle =
+        crate::session_goal_lifecycle::registered_session_v1_handle_from_state(&state, session_id)?;
+    if materialized_session.kind == PromptSessionMaterializationKind::Created {
+        // A newly created session stages its first route after root materialization, so that exact
+        // root boundary must activate it. Existing inputs already activated their immutable bound
+        // config inside Core; consuming a newer picker intent here would rewrite the running node.
+        // 新建会话在根输入物化后才暂存首个路由，因此必须由该精确根边界激活。既有输入已经在 Core
+        // 内激活其不可变绑定配置；若在此消费更新的选择器意图，就会改写正在运行的节点。
+        handle
+            .activate_pending_request_for_new_session_root(crate::current_v1_unix_millis()?)
+            .map_err(|error| format!("激活新建会话根边界的 V1 请求配置失败：{error}"))?;
+    }
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&session_id)
+        .ok_or_else(|| format!("Session `{session_id}` has no admitted runtime state."))?;
+    crate::session_request_config_v1::synchronize_v1_dispatch_model_selection(
+        handle.as_ref(),
+        agent_runtime.public_ai_runtime.as_ref(),
+        runtime_state,
+    )?;
     webui_submit_trace(
         "submit_prompt_runtime_options_ready",
         format!(

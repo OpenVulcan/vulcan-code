@@ -177,6 +177,41 @@ fn identical_pending_request_clears_without_switch_notice() -> Result<(), Domain
     Ok(())
 }
 
+/// Conditional pending cleanup removes only the exact intent consumed by an admitted boundary.
+/// 条件式待生效清理只移除已准入边界实际消费的精确意图。
+#[test]
+fn pending_request_cleanup_preserves_a_newer_different_intent() -> Result<(), DomainError> {
+    let mut doc = new_document();
+    let pending = PendingRequestConfig {
+        provider: Some(String::from("openai")),
+        connection_id: Some(String::from("connection")),
+        model: Some(String::from("gpt-5")),
+        thinking_level: Some(String::from("high")),
+        temperature: None,
+        set_at_ms: T0,
+    };
+    doc.set_pending_request(pending, T0)?;
+    let revision = doc.memory_revision();
+    let different = ActiveRequestConfig {
+        provider: Some(String::from("openai")),
+        connection_id: Some(String::from("connection")),
+        model: Some(String::from("gpt-5")),
+        thinking_level: Some(String::from("low")),
+        temperature: None,
+    };
+    assert!(!doc.clear_pending_request_if_matches(&different, T0 + 1)?);
+    assert_eq!(doc.memory_revision(), revision);
+    let exact = ActiveRequestConfig {
+        thinking_level: Some(String::from("high")),
+        ..different
+    };
+    assert!(doc.clear_pending_request_if_matches(&exact, T0 + 2)?);
+    assert!(doc.metadata.config.pending_request.is_none());
+    assert_eq!(doc.memory_revision(), revision + 1);
+    assert!(doc.events().is_empty());
+    Ok(())
+}
+
 /// Initializes the first route without appending a misleading model-switch event.
 /// 初始化首次路线，不追加误导的模型切换事件。
 /// Parameters: none. Returns: success after checking metadata and unchanged event history.

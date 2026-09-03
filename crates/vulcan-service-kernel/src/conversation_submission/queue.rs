@@ -100,6 +100,7 @@ pub(crate) fn commit_existing_submission_v1_queue(
             if queued_input.client_action_id != submission.client_action_id
                 || queued_input.text != submission.text
                 || queued_input.resource_ids != submission.resource_ids
+                || queued_input.bound_request_config != submission.bound_request_config
             {
                 return Err(format!(
                     "durable V1 queue input {} does not match the submitted client action",

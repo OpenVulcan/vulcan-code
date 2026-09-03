@@ -32,6 +32,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { ProviderToolCapabilityIcon } from "@/components/shared/provider-tool-capability-icon";
+import { ProviderToolExtensionModelCard } from "@/components/shared/provider-tool-extension-model-card";
 import type {
   ComposerProviderToolSettingsSnapshot,
   ComposerSelectOption,
@@ -784,12 +785,6 @@ export function ComposerAiCapabilityControl(props: {
             </div>
           </div>
         ) : null}
-        {settingsReady && conflicts.length ? (
-          <div className="composer-capability-conflict-banner">
-            <AlertTriangle aria-hidden="true" size={16} />
-            <span>{t("composer.capability.conflict.banner")}</span>
-          </div>
-        ) : null}
         {settingsReady ? <div className="composer-capability-dialog-grid">
           <aside className="composer-capability-dialog-left">
             {capabilities.map((capability) => {
@@ -826,7 +821,9 @@ export function ComposerAiCapabilityControl(props: {
                   className={cn(
                     "composer-capability-kind-row",
                     selectedCapability === capability && "selected",
+                    conflict && "conflict",
                   )}
+                  aria-invalid={conflict ? true : undefined}
                   key={capability}
                   onClick={() => setSelectedCapability(capability)}
                   role="button"
@@ -897,10 +894,13 @@ export function ComposerAiCapabilityControl(props: {
                       <ProviderToolCapabilityIcon capability={capability} size={16} />
                     </span>
                     <span className="composer-capability-kind-copy">
-                      <span>{providerToolCapabilityLabel(capability, t)}</span>
+                      <span className="composer-capability-kind-title">
+                        {providerToolCapabilityLabel(capability, t)}
+                        {conflict ? <AlertTriangle aria-hidden="true" size={13} /> : null}
+                      </span>
                       <small>{targetCount} {t("settings.providerTools.targets")}</small>
                       {conflict ? (
-                        <small className="settings-error-text">
+                        <small className="composer-capability-node-warning" role="alert">
                           {t(conflict.kind === "missing_selection"
                             ? "composer.capability.conflict.missingSelection"
                             : "composer.capability.conflict.targetUnavailable")}
@@ -1135,7 +1135,7 @@ export function ComposerAiCapabilityControl(props: {
                               </SelectItem>
                               {selectedMediaReasoningEfforts.map((effort) => (
                                 <SelectItem key={effort} value={effort}>
-                                  {t(PUBLIC_AI_REASONING_EFFORT_LABEL_KEYS[effort])} ({effort})
+                                  {t(PUBLIC_AI_REASONING_EFFORT_LABEL_KEYS[effort])}
                                 </SelectItem>
                               ))}
                             </SelectContent>
@@ -1187,68 +1187,75 @@ export function ComposerAiCapabilityControl(props: {
                   // profile 包含已审核的模型行为与约束。
                   const profile = model.target.contract.extension_profile;
                   return (
-                    <article className="composer-capability-extension-row" key={`${model.target.provider_id}/${model.target.upstream_target_id}`}>
-                      <input
-                        checked={Boolean(selectedExtension)}
-                        disabled={saving || !profile}
-                        onChange={(event) => {
-                          const retained = selectedExtensionTargets.filter((selection) => !modelTargets.some((target) => (
-                            target.connectionId === selection.connection_id
-                            && target.target.target_id === selection.target_id
-                          )));
-                          if (event.currentTarget.checked && selectedExtensionTarget) {
-                            retained.push(selectionForTarget(selectedExtensionTarget));
-                          }
-                          setDraft((current) => ({
-                            ...current,
-                            extensionTargetSets: {
-                              ...current.extensionTargetSets,
-                              [selectedCapability]: retained,
-                            },
-                          }));
-                        }}
-                        type="checkbox"
-                      />
-                      <span className="composer-capability-extension-copy">
-                        <strong>{model.target.display_name}</strong>
-                        <small>{profile?.summary ?? t("composer.capability.extensionProfileMissing")}</small>
-                        {profile?.constraints?.length ? (
-                          <small>{t("composer.capability.extensionConstraints").replace("{value}", profile.constraints.join(t("global.listDelimiter")))}</small>
-                        ) : null}
-                        {profile?.limitations?.length ? (
-                          <small>{t("composer.capability.extensionLimitations").replace("{value}", profile.limitations.join(t("global.listDelimiter")))}</small>
-                        ) : null}
-                      </span>
-                      <Select
-                        disabled={saving || !selectedExtension}
-                        onValueChange={(connectionId) => {
-                          const replacement = modelTargets.find((target) => target.connectionId === connectionId);
-                          if (!replacement) return;
-                          const retained = selectedExtensionTargets.filter((selection) => !modelTargets.some((target) => (
-                            target.connectionId === selection.connection_id
-                            && target.target.target_id === selection.target_id
-                          )));
-                          retained.push(selectionForTarget(replacement));
-                          setDraft((current) => ({
-                            ...current,
-                            extensionTargetSets: {
-                              ...current.extensionTargetSets,
-                              [selectedCapability]: retained,
-                            },
-                          }));
-                        }}
-                        value={selectedExtensionTarget?.connectionId ?? ""}
-                      >
-                        <SelectTrigger><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          {modelTargets.map((target) => (
-                            <SelectItem key={target.connectionId} value={target.connectionId}>
-                              {target.connectionDisplayName}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </article>
+                    <ProviderToolExtensionModelCard
+                      accountControl={(
+                        <Select
+                          disabled={saving || !selectedExtension}
+                          onValueChange={(connectionId) => {
+                            const replacement = modelTargets.find((target) => target.connectionId === connectionId);
+                            if (!replacement) return;
+                            const retained = selectedExtensionTargets.filter((selection) => !modelTargets.some((target) => (
+                              target.connectionId === selection.connection_id
+                              && target.target.target_id === selection.target_id
+                            )));
+                            retained.push(selectionForTarget(replacement));
+                            setDraft((current) => ({
+                              ...current,
+                              extensionTargetSets: {
+                                ...current.extensionTargetSets,
+                                [selectedCapability]: retained,
+                              },
+                            }));
+                          }}
+                          value={selectedExtensionTarget?.connectionId ?? ""}
+                        >
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {modelTargets.map((target) => (
+                              <SelectItem key={target.connectionId} value={target.connectionId}>
+                                {target.connectionDisplayName}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                      characteristics={null}
+                      checked={Boolean(selectedExtension)}
+                      checkboxDisabled={saving || !profile}
+                      constraints={t("composer.capability.extensionConstraints").replace(
+                        "{value}",
+                        profile?.constraints?.length
+                          ? profile.constraints.join(t("global.listDelimiter"))
+                          : "—",
+                      )}
+                      key={`${model.target.provider_id}/${model.target.upstream_target_id}`}
+                      limitations={t("composer.capability.extensionLimitations").replace(
+                        "{value}",
+                        profile?.limitations?.length
+                          ? profile.limitations.join(t("global.listDelimiter"))
+                          : "—",
+                      )}
+                      modelId={model.target.upstream_target_id}
+                      onCheckedChange={(checked) => {
+                        const retained = selectedExtensionTargets.filter((selection) => !modelTargets.some((target) => (
+                          target.connectionId === selection.connection_id
+                          && target.target.target_id === selection.target_id
+                        )));
+                        if (checked && selectedExtensionTarget) {
+                          retained.push(selectionForTarget(selectedExtensionTarget));
+                        }
+                        setDraft((current) => ({
+                          ...current,
+                          extensionTargetSets: {
+                            ...current.extensionTargetSets,
+                            [selectedCapability]: retained,
+                          },
+                        }));
+                      }}
+                      providerId={model.target.provider_id}
+                      summary={profile?.summary ?? t("composer.capability.extensionProfileMissing")}
+                      title={model.target.display_name}
+                    />
                   );
                 })}
               </div>

@@ -492,6 +492,13 @@
               "maxLength": 1024
             }
           },
+          "session_header": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9._-]+$",
+            "description": "Optional request header name that receives the current public session identifier."
+          },
           "service_origin_override_policy": {
             "type": "object",
             "additionalProperties": false,
@@ -734,7 +741,20 @@
               }
             }
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": ["kind"],
+              "properties": {
+                "kind": {"const": "provider_tools"}
+              }
+            },
+            "then": {
+              "not": {"required": ["session_header"]}
+            }
+          }
+        ]
       }
     },
     "model_defaults": {

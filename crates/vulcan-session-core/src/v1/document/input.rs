@@ -2,12 +2,14 @@
 //! 客户端输入身份、可靠队列转换及对应输入历史校验。
 
 use super::persistence::DirtyFile;
+use super::selection::active_request_from_pending;
 use super::{
     ActiveTurnState, IdempotentMutation, SessionDocument, TurnOrigin, client_action_conflict,
     validate_timestamp,
 };
 use crate::v1::config::{
-    DraftState, MetadataDocument, PendingInTurnInput, QueuedInput, QueuedInputIdentity,
+    ActiveRequestConfig, DraftState, MetadataDocument, PendingInTurnInput, QueuedInput,
+    QueuedInputIdentity,
 };
 use crate::v1::errors::DomainError;
 use crate::v1::event::{
@@ -46,11 +48,14 @@ fn validate_draft_attachment_ids(
 
 /// One client-authored input carrying its durable RPC idempotency identity.
 /// 一条携带持久化 RPC 幂等身份的客户端输入。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ClientInputSubmission {
     /// Optional host-proven earlier preparation; omission creates fresh pending parameters only at new input admission.
     /// 可选宿主已证明更早准备；仅在新输入准入时将省略值创建为新的待准备参数。
     pub parameters: Option<crate::v1::UserPromptParameters>,
+    /// Exact request configuration bound to this input before durable admission, when applicable.
+    /// 适用时在可靠准入前绑定到本输入的精确请求配置。
+    pub bound_request_config: Option<ActiveRequestConfig>,
     /// Stable external idempotency identity supplied by the client.
     /// 客户端提供的稳定外部幂等身份。
     pub client_action_id: ClientActionId,
@@ -83,6 +88,7 @@ impl ClientInputSubmission {
     ) -> Self {
         Self {
             parameters: None,
+            bound_request_config: None,
             client_action_id,
             text: text.into(),
             resource_ids,
@@ -98,6 +104,21 @@ impl ClientInputSubmission {
         parameters.validate_pending(&self.resource_ids)?;
         self.parameters = Some(parameters);
         Ok(self)
+    }
+
+    /// Binds the exact request configuration selected for this input's next execution boundary.
+    /// 绑定为本输入下一执行边界选定的精确请求配置。
+    ///
+    /// # Parameters / 参数
+    /// `request_config` is the already resolved session-owned provider request selection.
+    /// `request_config` 是已经解析、由会话持有的 Provider 请求选择。
+    ///
+    /// # Returns / 返回值
+    /// Returns this submission with the immutable request configuration attached.
+    /// 返回附带不可变请求配置的本提交。
+    pub fn with_bound_request_config(mut self, request_config: ActiveRequestConfig) -> Self {
+        self.bound_request_config = Some(request_config);
+        self
     }
 }
 
@@ -724,6 +745,7 @@ impl SessionDocument {
                     text: text.to_owned(),
                     resource_ids: resource_ids.to_vec(),
                     parameters: parameters.cloned(),
+                    bound_request_config: None,
                 },
             ));
             Ok(())
@@ -844,6 +866,7 @@ impl SessionDocument {
     ) -> Result<IdempotentMutation<TurnId>, DomainError> {
         let ClientInputSubmission {
             parameters,
+            bound_request_config,
             client_action_id,
             text,
             resource_ids,
@@ -884,7 +907,18 @@ impl SessionDocument {
                 turn_id: turn.turn_id.value(),
             });
         }
-        self.ensure_transition_capacity(if undispatched_return.is_some() { 3 } else { 1 }, 2)?;
+        let request_config = bound_request_config.or_else(|| {
+            self.metadata
+                .config
+                .pending_request
+                .as_ref()
+                .map(active_request_from_pending)
+        });
+        self.ensure_transition_capacity(
+            (if undispatched_return.is_some() { 3 } else { 1 })
+                + u64::from(request_config.is_some()),
+            2,
+        )?;
         let mut staged_allocator = self.id_allocator;
         let input_id = PendingInputId::try_new(staged_allocator.next_local_id()?)?;
         let turn_id = TurnId::try_new(staged_allocator.next_local_id()?)?;
@@ -905,6 +939,16 @@ impl SessionDocument {
                 0,
                 now_ms,
                 buckets,
+            )?;
+        }
+        if let Some(request_config) = request_config {
+            self.stage_bound_request_activation(
+                &mut staged_metadata,
+                &mut staged_allocator,
+                &mut staged_events,
+                request_config,
+                Some(turn_id),
+                now_ms,
             )?;
         }
         let seq = self.stage_event(
@@ -955,6 +999,7 @@ impl SessionDocument {
     ) -> Result<IdempotentMutation<EnqueueInputReceipt>, DomainError> {
         let ClientInputSubmission {
             parameters,
+            bound_request_config,
             client_action_id,
             text,
             resource_ids,
@@ -967,6 +1012,7 @@ impl SessionDocument {
             &text,
             &resource_ids,
             parameters.as_ref(),
+            bound_request_config.as_ref(),
         )? {
             return Ok(IdempotentMutation::Idempotent(existing_receipt));
         }
@@ -990,7 +1036,7 @@ impl SessionDocument {
                 });
             }
             let buckets = self.aggregate_turn_buckets(goal_turn.turn_id, goal_turn.start_seq)?;
-            self.ensure_transition_capacity(3, 2)?;
+            self.ensure_transition_capacity(3 + u64::from(bound_request_config.is_some()), 2)?;
             let mut staged_allocator = self.id_allocator;
             let input_id = PendingInputId::try_new(staged_allocator.next_local_id()?)?;
             let scheduled_turn_id = TurnId::try_new(staged_allocator.next_local_id()?)?;
@@ -1007,6 +1053,16 @@ impl SessionDocument {
                 now_ms,
                 buckets,
             )?;
+            if let Some(request_config) = bound_request_config {
+                self.stage_bound_request_activation(
+                    &mut staged_metadata,
+                    &mut staged_allocator,
+                    &mut staged_events,
+                    request_config,
+                    Some(scheduled_turn_id),
+                    now_ms,
+                )?;
+            }
             let input_seq = self.stage_event(
                 &mut staged_allocator,
                 &mut staged_events,
@@ -1060,6 +1116,7 @@ impl SessionDocument {
         consume_matching_draft(&mut staged_metadata, &text, &resource_ids);
         staged_metadata.input_state.queued_inputs.push(QueuedInput {
             parameters,
+            bound_request_config,
             client_action_id: client_action_id.clone(),
             input_id,
             text,
@@ -1496,6 +1553,7 @@ impl SessionDocument {
             .pending_in_turn_inputs
             .push(PendingInTurnInput {
                 parameters: queued.parameters,
+                bound_request_config: queued.bound_request_config,
                 client_action_id: queued.client_action_id,
                 input_id: queued.input_id,
                 turn_id,
@@ -1662,6 +1720,7 @@ impl SessionDocument {
     ) -> Result<IdempotentMutation<PendingInputId>, DomainError> {
         let ClientInputSubmission {
             parameters,
+            bound_request_config,
             client_action_id,
             text,
             resource_ids,
@@ -1690,6 +1749,7 @@ impl SessionDocument {
             .pending_in_turn_inputs
             .push(PendingInTurnInput {
                 parameters,
+                bound_request_config,
                 client_action_id,
                 input_id,
                 turn_id,
@@ -1753,6 +1813,7 @@ impl SessionDocument {
         text: &str,
         resource_ids: &[ResourceId],
         parameters: Option<&crate::v1::UserPromptParameters>,
+        bound_request_config: Option<&ActiveRequestConfig>,
     ) -> Result<Option<EnqueueInputReceipt>, DomainError> {
         for queued in &self.metadata.input_state.queued_inputs {
             if queued.client_action_id != *client_action_id {
@@ -1761,6 +1822,7 @@ impl SessionDocument {
             if queued.text == text
                 && queued.resource_ids == resource_ids
                 && initial_preparation_matches(queued.parameters.as_ref(), parameters)
+                && queued.bound_request_config.as_ref() == bound_request_config
             {
                 return Ok(Some(EnqueueInputReceipt {
                     client_action_id: client_action_id.clone(),

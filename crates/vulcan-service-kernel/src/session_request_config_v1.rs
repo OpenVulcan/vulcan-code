@@ -219,17 +219,14 @@ pub(crate) struct SessionRequestFallback {
     /// Exact model id used when the V1 root is still fresh.
     /// V1 根仍为 fresh 时使用的精确模型标识。
     pub(crate) model: Option<String>,
-    /// Exact reasoning preference selected for the session.
-    /// 当前会话选择的精确思考偏好。
-    pub(crate) thinking_level: Option<ReasoningEffortLevel>,
     /// Exact optional temperature selected for the session.
     /// 当前会话选择的精确可选温度。
     pub(crate) temperature: Option<f32>,
 }
 
 impl SessionRequestFallback {
-    /// Captures the exact next-request route and controls from one admitted runtime projection.
-    /// 从一份已准入运行时投影捕获精确的下一请求路由与控制项。
+    /// Captures the exact legacy route and temperature from one admitted runtime projection.
+    /// 从一份已准入运行时投影捕获精确的旧路由与温度值。
     ///
     /// # Parameters
     /// 参数
@@ -238,8 +235,8 @@ impl SessionRequestFallback {
     ///
     /// # Returns
     /// 返回值
-    /// A complete fallback that prefers the pending route over the active route without inventing values.
-    /// 返回一份完整回退事实；其严格优先使用待生效路由，其次使用活动路由，不会发明任何值。
+    /// A fallback that prefers the pending route over the active route without carrying reasoning.
+    /// 返回一份严格优先使用待生效路由、其次使用活动路由且不携带思考档位的回退事实。
     pub(crate) fn from_runtime_state(runtime_state: &SessionRuntimeStateEntry) -> Self {
         let pending_route = runtime_state.pending_model_selection.as_ref();
         Self {
@@ -252,7 +249,6 @@ impl SessionRequestFallback {
             model: pending_route
                 .map(|selection| selection.model_id.clone())
                 .or_else(|| runtime_state.active_model_id.clone()),
-            thinking_level: runtime_state.active_reasoning_effort,
             temperature: runtime_state.active_temperature,
         }
     }
@@ -263,8 +259,12 @@ impl SessionRequestFallback {
 ///
 /// # Parameters
 /// 参数
-/// `handle` owns the V1 document; route ids are the validated target; `fallback` is used only before V1 initialization.
-/// `handle` 持有 V1 文档；路由标识是已校验目标；`fallback` 仅在 V1 初始化前使用。
+/// `handle` owns the V1 document; route ids are the validated target; `fallback` supplies only
+/// temperature for sessions predating initialized temperature Meta.
+/// `handle` 持有 V1 文档；路由标识是已校验目标；`fallback` 仅为温度 Meta 初始化之前的会话
+/// 提供温度值。
+/// `reasoning_override` is present only when a user-selected target model cannot retain the previous level.
+/// `reasoning_override` 仅在用户选择的目标模型无法保留先前档位时存在。
 ///
 /// # Returns
 /// 返回值
@@ -275,6 +275,7 @@ pub(crate) fn set_pending_model_request_v1(
     provider: String,
     connection_id: String,
     model: String,
+    reasoning_override: Option<ReasoningEffortLevel>,
     fallback: SessionRequestFallback,
     now_ms: i64,
 ) -> Result<bool, String> {
@@ -285,14 +286,16 @@ pub(crate) fn set_pending_model_request_v1(
             move |document| {
                 let active = &document.metadata.config.active_request;
                 let pending = document.metadata.config.pending_request.as_ref();
+                let preserved_reasoning = pending
+                    .map(|value| value.thinking_level.clone())
+                    .unwrap_or_else(|| active.thinking_level.clone());
                 let request = PendingRequestConfig {
                     provider: Some(provider.clone()),
                     connection_id: Some(connection_id.clone()),
                     model: Some(model.clone()),
-                    thinking_level: pending
-                        .and_then(|value| value.thinking_level.clone())
-                        .or_else(|| active.thinking_level.clone())
-                        .or_else(|| fallback.thinking_level.map(reasoning_effort_level_key)),
+                    thinking_level: reasoning_override
+                        .map(reasoning_effort_level_key)
+                        .or(preserved_reasoning),
                     temperature: pending
                         .and_then(|value| value.temperature)
                         .or(active.temperature)
@@ -306,22 +309,23 @@ pub(crate) fn set_pending_model_request_v1(
     Ok(receipt.changed)
 }
 
-/// Binds the next main-session request to its durable pending selection, or its durable active selection.
-/// 将主会话下一请求绑定到可靠的待生效选择；没有待生效选择时使用可靠活动选择。
-/// `handle` owns the configuration, `runtime` owns process route leases, and `runtime_state` is only a request-local mirror.
-/// `handle` 持有配置，`runtime` 持有进程路由租约，`runtime_state` 仅为请求局部镜像。
-/// Returns after replacing stale mirror fields; the existing API-start boundary still publishes the switch record.
-/// 替换过期镜像字段后返回；切换记录仍由既有 API 开始边界发布。
-pub(crate) fn synchronize_v1_dispatch_model_selection(
+/// Captures the exact request configuration to bind when a new user node is admitted.
+/// 捕获新用户节点准入时要绑定的精确请求配置。
+///
+/// # Parameters / 参数
+/// `handle` owns the authoritative active and pending request configuration.
+/// `handle` 持有权威活动请求配置与待生效请求配置。
+///
+/// # Returns / 返回值
+/// Returns pending intent when present, otherwise the current active configuration. No provider
+/// default or process-local mirror participates.
+/// 存在待生效意图时返回该意图，否则返回当前活动配置；不参与任何 Provider 默认值或进程内镜像。
+pub(crate) fn capture_next_request_config_v1(
     handle: &SessionHandle,
-    runtime: &vulcan_provider_adapters::PublicAiRuntime,
-    runtime_state: &mut SessionRuntimeStateEntry,
-) -> Result<(), String> {
-    // One document read selects the complete route; a pending request is a full snapshot, not independent fallback fields.
-    // 单次文档读取选择完整路由；待生效请求是完整快照，而不是可独立回退的字段。
-    let (session_id, route) = handle
-        .read(|document| {
-            let route = match document.metadata.config.pending_request.as_ref() {
+) -> Result<ActiveRequestConfig, String> {
+    handle
+        .read(
+            |document| match document.metadata.config.pending_request.as_ref() {
                 Some(pending) => ActiveRequestConfig {
                     provider: pending.provider.clone(),
                     connection_id: pending.connection_id.clone(),
@@ -330,7 +334,160 @@ pub(crate) fn synchronize_v1_dispatch_model_selection(
                     temperature: pending.temperature,
                 },
                 None => document.metadata.config.active_request.clone(),
-            };
+            },
+        )
+        .map_err(|error| format!("Read V1 next request configuration failed: {error}"))
+}
+
+/// Reconciles a removed reasoning level immediately before a new user boundary is admitted.
+/// 在新的用户边界准入之前校正已经消失的思考档位。
+///
+/// # Parameters / 参数
+/// `handle` owns durable active and pending request Meta; `runtime` resolves the exact current
+/// model contract. No process-local fallback participates.
+/// `handle` 持有可靠活动与待生效请求 Meta；`runtime` 解析精确的当前模型契约；不参与任何
+/// 进程内 fallback。
+///
+/// # Returns / 返回值
+/// Returns the exact request snapshot to bind to the new input. A removed level is corrected only
+/// in this snapshot; the Core admission transaction decides whether it becomes durable.
+/// 返回要绑定到新输入的精确请求快照。已消失档位只在此快照中校正；是否持久化由 Core 准入事务决定。
+pub(crate) fn reconcile_pending_reasoning_for_next_user_boundary_v1(
+    handle: &SessionHandle,
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+) -> Result<ActiveRequestConfig, String> {
+    let mut next_request = capture_next_request_config_v1(handle)?;
+    let Some(stored_reasoning) = next_request.thinking_level.as_deref() else {
+        return Ok(next_request);
+    };
+    let current_reasoning =
+        crate::workspace_persistence_versions::parse_reasoning_effort(stored_reasoning)
+            .ok_or_else(|| format!("Invalid V1 reasoning level: {stored_reasoning}"))?;
+    if current_reasoning == ReasoningEffortLevel::Off {
+        return Ok(next_request);
+    }
+    let selection = match (
+        next_request.provider.as_deref(),
+        next_request.connection_id.as_deref(),
+        next_request.model.as_deref(),
+    ) {
+        (None, None, None) => return Ok(next_request),
+        (Some(provider), Some(connection_id), Some(model)) => {
+            let configuration = runtime.configuration_snapshot()?;
+            runtime.resolve_connection_model_selection(
+                &configuration,
+                connection_id,
+                provider,
+                model,
+            )?
+        }
+        (Some(provider), None, Some(model)) => {
+            let configuration = runtime.configuration_snapshot()?;
+            runtime.resolve_model_selection(&configuration, provider, model)?
+        }
+        _ => {
+            return Err(String::from(
+                "The V1 next request model selection is incomplete.",
+            ));
+        }
+    };
+    let resolved_reasoning =
+        vulcan_agent_runtime::agent_runtime::provider_reasoning::resolve_effective_reasoning_effort(
+            &selection.model.capabilities,
+            Some(current_reasoning),
+        );
+    if resolved_reasoning != current_reasoning {
+        next_request.thinking_level = Some(reasoning_effort_level_key(resolved_reasoning));
+    }
+    Ok(next_request)
+}
+
+/// Persists a capability-driven reasoning correction after a user boundary was accepted.
+/// 在用户边界被接纳后持久化由能力变化驱动的思考档位校正。
+///
+/// # Parameters / 参数
+/// `handle` and `runtime` identify the same authority used to bind the accepted input; `now_ms`
+/// timestamps the post-admission Meta write.
+/// `handle` 与 `runtime` 标识绑定已接纳输入时使用的同一权威；`now_ms` 为准入后的 Meta 写入
+/// 提供时间戳。
+///
+/// # Returns / 返回值
+/// Returns `true` only when the expected next-request snapshot was still current and its removed
+/// reasoning level was replaced. A concurrent picker change wins unchanged.
+/// 仅当预期下一请求快照仍然有效且其中已消失档位被替换时返回 `true`；并发选择器变更保持优先。
+pub(crate) fn persist_missing_reasoning_reconciliation_after_user_admission_v1(
+    handle: &SessionHandle,
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    now_ms: i64,
+) -> Result<bool, String> {
+    let expected = capture_next_request_config_v1(handle)?;
+    let reconciled = reconcile_pending_reasoning_for_next_user_boundary_v1(handle, runtime)?;
+    if expected.thinking_level == reconciled.thinking_level {
+        return Ok(false);
+    }
+    let reconciled_active = reconciled.clone();
+    let request = PendingRequestConfig {
+        provider: reconciled.provider,
+        connection_id: reconciled.connection_id,
+        model: reconciled.model,
+        thinking_level: reconciled.thinking_level,
+        temperature: reconciled.temperature,
+        set_at_ms: now_ms,
+    };
+    let receipt = handle
+        .mutate_durable_if_changed(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            move |document| {
+                let current = match document.metadata.config.pending_request.as_ref() {
+                    Some(pending) => ActiveRequestConfig {
+                        provider: pending.provider.clone(),
+                        connection_id: pending.connection_id.clone(),
+                        model: pending.model.clone(),
+                        thinking_level: pending.thinking_level.clone(),
+                        temperature: pending.temperature,
+                    },
+                    None => document.metadata.config.active_request.clone(),
+                };
+                if current != expected {
+                    return Ok(SessionMutationChange::Unchanged(()));
+                }
+                if document.metadata.config.active_request == reconciled_active {
+                    return document
+                        .clear_pending_request_if_matches(&expected, now_ms)
+                        .map(|changed| {
+                            if changed {
+                                SessionMutationChange::Changed(())
+                            } else {
+                                SessionMutationChange::Unchanged(())
+                            }
+                        });
+                }
+                set_pending_request_if_effectively_changed(document, request, now_ms)
+            },
+        )
+        .map_err(|error| format!("保存 V1 缺失思考档位校正失败：{error}"))?;
+    Ok(receipt.changed)
+}
+
+/// Binds one physical Provider request to the already active durable session selection.
+/// 将一次物理 Provider 请求绑定到已经活动的可靠会话选择。
+/// `handle` owns the configuration, `runtime` owns process route leases, and `runtime_state` is only a request-local mirror.
+/// `handle` 持有配置，`runtime` 持有进程路由租约，`runtime_state` 仅为请求局部镜像。
+/// Returns after replacing stale mirror fields. Pending intent is intentionally ignored because
+/// only user-input and Continue boundaries may activate it.
+/// 替换过期镜像字段后返回。待生效意图会被有意忽略，因为只有用户输入与 Continue 边界可以激活它。
+pub(crate) fn synchronize_v1_dispatch_model_selection(
+    handle: &SessionHandle,
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    runtime_state: &mut SessionRuntimeStateEntry,
+) -> Result<(), String> {
+    // One document read selects only the complete active route. A pending picker change must not
+    // alter another physical API inside the currently running node.
+    // 单次文档读取只选择完整活动路由。待生效选择器变更不得改变当前运行节点内的另一物理 API。
+    let (session_id, route) = handle
+        .read(|document| {
+            let route = document.metadata.config.active_request.clone();
             (document.metadata.session_id.clone(), route)
         })
         .map_err(|error| format!("Read V1 dispatch model selection failed: {error}"))?;
@@ -845,6 +1002,7 @@ mod tests {
                 String::from("provider-b"),
                 String::from("connection-b"),
                 String::from("model-b"),
+                None,
                 fallback.clone(),
                 2,
             )
@@ -856,6 +1014,7 @@ mod tests {
                 String::from("provider-b"),
                 String::from("connection-b"),
                 String::from("model-b"),
+                None,
                 fallback,
                 3,
             )
@@ -877,12 +1036,70 @@ mod tests {
         assert_eq!(backend.flush_count.load(Ordering::SeqCst), 1);
     }
 
+    /// Verifies model selection preserves the provider-default session reasoning level.
+    /// 验证模型选择会保留会话中的供应商默认思考档位。
+    #[test]
+    fn pending_model_request_preserves_provider_default_reasoning() {
+        let session_id = SessionId::from_u128(0x6206);
+        let (handle, _) = request_config_handle(
+            session_id,
+            ActiveRequestConfig {
+                provider: Some(String::from("provider-a")),
+                connection_id: Some(String::from("connection-a")),
+                model: Some(String::from("model-a")),
+                thinking_level: None,
+                temperature: None,
+            },
+        );
+
+        assert!(
+            set_pending_model_request_v1(
+                handle.as_ref(),
+                String::from("provider-b"),
+                String::from("connection-b"),
+                String::from("model-b"),
+                None,
+                SessionRequestFallback::default(),
+                2,
+            )
+            .expect("new pending model route should persist")
+        );
+        let pending = handle
+            .read(|document| document.metadata.config.pending_request.clone())
+            .expect("request metadata should read")
+            .expect("pending route should exist");
+        assert_eq!(pending.thinking_level, None);
+    }
+
+    /// Verifies provider-default Meta remains unchanged without consulting model capabilities.
+    /// 验证供应商默认 Meta 保持不变，并且不会查询模型能力。
+    #[test]
+    fn provider_default_reasoning_skips_capability_reconciliation() {
+        let active_request = ActiveRequestConfig {
+            provider: Some(String::from("provider-a")),
+            connection_id: Some(String::from("connection-a")),
+            model: Some(String::from("model-a")),
+            thinking_level: None,
+            temperature: None,
+        };
+        let (handle, _) =
+            request_config_handle(SessionId::from_u128(0x6207), active_request.clone());
+        let runtime = vulcan_provider_adapters::PublicAiRuntime::unavailable()
+            .expect("unavailable runtime should construct");
+
+        assert_eq!(
+            reconcile_pending_reasoning_for_next_user_boundary_v1(handle.as_ref(), &runtime)
+                .expect("provider-default reasoning should not require capability resolution"),
+            active_request
+        );
+    }
+
     /// Exercises changed providers, models and accounts through the same V1 promotion and API validation used by dispatch.
     /// 使用分发采用的同一 V1 提升与 API 校验，验证供应商、模型和账号变化。
     /// Returns nothing; each case proves the old mirror fails and the synchronized selection starts with one switch record.
     /// 无返回值；每个场景证明旧镜像失败，而同步后的选择可启动并仅生成一条切换记录。
     #[test]
-    fn v1_dispatch_model_switch_replaces_stale_mirror_and_starts_api() {
+    fn v1_dispatch_model_switch_waits_for_user_admission_before_starting_api() {
         use vulcan_session_core::v1::context::LockedBaselineProjection;
         use vulcan_session_core::v1::event::ApiRequestSnapshot;
         use vulcan_session_core::v1::projection::provider_visible_fingerprint;
@@ -943,30 +1160,42 @@ mod tests {
                 selected.0.into(),
                 selected.1.into(),
                 selected.2.into(),
+                None,
                 SessionRequestFallback::default(),
                 2,
             )
             .unwrap();
             let runtime = vulcan_provider_adapters::PublicAiRuntime::unavailable().unwrap();
             synchronize_v1_dispatch_model_selection(&handle, &runtime, &mut mirror).unwrap();
-            assert_eq!(mirror.active_provider_id.as_deref(), Some(selected.0));
-            assert_eq!(mirror.active_connection_id.as_deref(), Some(selected.1));
-            assert_eq!(mirror.active_model_id.as_deref(), Some(selected.2));
-            // A detached document runs the production promotion and API admission without any network or user-file writes.
-            // 分离文档运行生产提升与 API 准入，不发网络请求、不写用户文件。
-            let mut document = handle.read(Clone::clone).unwrap();
-            document
+            assert_eq!(mirror.active_provider_id.as_deref(), Some(previous.0));
+            assert_eq!(mirror.active_connection_id.as_deref(), Some(previous.1));
+            assert_eq!(mirror.active_model_id.as_deref(), Some(previous.2));
+            // A detached document runs the production user-bound activation and API admission
+            // without any network or user-file writes.
+            // 分离文档运行生产用户边界激活与 API 准入，不发网络请求、不写用户文件。
+            let selected_request = ActiveRequestConfig {
+                provider: Some(selected.0.into()),
+                connection_id: Some(selected.1.into()),
+                model: Some(selected.2.into()),
+                thinking_level: Some("max".into()),
+                temperature: None,
+            };
+            handle
                 .submit_root_input(
                     ClientInputSubmission::new(
                         ClientActionId::try_new("switch-root").unwrap(),
                         "continue",
                         vec![],
-                    ),
+                    )
+                    .with_bound_request_config(selected_request),
                     3,
                 )
                 .unwrap();
-            let turn_id = document.active_turn().unwrap().turn_id;
-            document.promote_pending_request(Some(turn_id), 4).unwrap();
+            synchronize_v1_dispatch_model_selection(&handle, &runtime, &mut mirror).unwrap();
+            assert_eq!(mirror.active_provider_id.as_deref(), Some(selected.0));
+            assert_eq!(mirror.active_connection_id.as_deref(), Some(selected.1));
+            assert_eq!(mirror.active_model_id.as_deref(), Some(selected.2));
+            let mut document = handle.read(Clone::clone).unwrap();
             let through_seq = document.events().last().unwrap().seq;
             let input = PrepareAndStartApiInput {
                 purpose: ApiPurposeKind::MainGeneration,
@@ -1057,6 +1286,7 @@ mod tests {
             String::from("provider-b"),
             String::from("connection-b"),
             String::from("model-b"),
+            None,
             SessionRequestFallback::default(),
             2,
         )
@@ -1111,8 +1341,8 @@ mod tests {
                 String::from("provider-a"),
                 String::from("connection-a"),
                 String::from("model-a"),
+                None,
                 SessionRequestFallback {
-                    thinking_level: Some(ReasoningEffortLevel::High),
                     temperature: Some(0.5),
                     ..SessionRequestFallback::default()
                 },

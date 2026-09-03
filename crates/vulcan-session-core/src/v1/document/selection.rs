@@ -5,14 +5,16 @@ use super::persistence::DirtyFile;
 use super::{SessionDocument, ensure_api_request_field, validate_timestamp};
 use crate::v1::config::{
     ActiveRequestConfig, KnowledgeLibrarySelectionConfig, KnowledgeLibrarySelectionMode,
-    PendingRequestConfig, ProviderExtensionTargetSetConfig, ProviderMediaUnderstandingMode,
-    ProviderMediaUnderstandingRouteConfig, ProviderMediaUnderstandingSelection,
-    ProviderToolCapabilitySelection, ProviderToolSelectionConfig, ProviderToolTargetConfig,
-    VmmSessionPolicyConfig,
+    MetadataDocument, PendingRequestConfig, ProviderExtensionTargetSetConfig,
+    ProviderMediaUnderstandingMode, ProviderMediaUnderstandingRouteConfig,
+    ProviderMediaUnderstandingSelection, ProviderToolCapabilitySelection,
+    ProviderToolSelectionConfig, ProviderToolTargetConfig, VmmSessionPolicyConfig,
 };
 use crate::v1::errors::DomainError;
-use crate::v1::event::{ApiRequestSnapshot, EventBody, EventVisibility, RequestConfigChangedEvent};
-use crate::v1::ids::{Seq, TurnId};
+use crate::v1::event::{
+    ApiRequestSnapshot, ConversationEvent, EventBody, EventVisibility, RequestConfigChangedEvent,
+};
+use crate::v1::ids::{IdAllocator, Seq, TurnId};
 
 /// Complete metadata-only session selection mutation committed as one domain revision.
 /// 作为一个领域修订提交的完整纯 metadata 会话选择修改。
@@ -370,8 +372,63 @@ fn pending_request_effectively_equal(
 // Keep all mutations on the single authoritative document instance.
 // 所有修改仍作用于唯一权威文档实例。
 impl SessionDocument {
-    /// Sets the request configuration to apply at the next safe API boundary.
-    /// 设置将在下一个安全 API 边界生效的请求配置。
+    /// Stages one input-bound request configuration without publishing partial owner state.
+    /// 暂存一份输入绑定请求配置，且不发布任何部分 owner 状态。
+    ///
+    /// # Parameters / 参数
+    /// `staged_metadata`, `staged_allocator`, and `staged_events` are the caller's atomic
+    /// transition copies; `next_active` is the exact configuration bound to the admitted node;
+    /// `turn_id` scopes an optional UI notice; `now_ms` is the transition timestamp.
+    /// `staged_metadata`、`staged_allocator` 与 `staged_events` 是调用方的原子转换副本；
+    /// `next_active` 是绑定到已准入节点的精确配置；`turn_id` 限定可选界面提示范围；
+    /// `now_ms` 是转换时间戳。
+    ///
+    /// # Returns / 返回值
+    /// Returns the optional request-switch notice sequence. A matching pending request is consumed;
+    /// a newer different pending request remains staged for a later user boundary.
+    /// 返回可选请求切换提示序号。匹配的待生效请求会被消费；更新且不同的待生效请求继续保留，
+    /// 等待后续用户边界。
+    pub(super) fn stage_bound_request_activation(
+        &self,
+        staged_metadata: &mut MetadataDocument,
+        staged_allocator: &mut IdAllocator,
+        staged_events: &mut Vec<ConversationEvent>,
+        next_active: ActiveRequestConfig,
+        turn_id: Option<TurnId>,
+        now_ms: i64,
+    ) -> Result<Option<Seq>, DomainError> {
+        let previous_active = staged_metadata.config.active_request.clone();
+        let changed = previous_active != next_active;
+        let emits_notice =
+            changed && (previous_active.provider.is_some() || previous_active.model.is_some());
+        if staged_metadata
+            .config
+            .pending_request
+            .as_ref()
+            .is_some_and(|pending| active_request_from_pending(pending) == next_active)
+        {
+            staged_metadata.config.pending_request = None;
+        }
+        staged_metadata.config.active_request = next_active.clone();
+        if !emits_notice {
+            return Ok(None);
+        }
+        self.stage_event(
+            staged_allocator,
+            staged_events,
+            turn_id,
+            EventVisibility::UiOnly,
+            EventBody::RequestConfigChanged(RequestConfigChangedEvent {
+                previous: previous_active,
+                current: next_active,
+            }),
+            now_ms,
+        )
+        .map(Some)
+    }
+
+    /// Sets the request configuration to apply at the next admitted user or Continue boundary.
+    /// 设置将在下一个已准入用户输入或 Continue 边界生效的请求配置。
     ///
     /// This mutation affects only `metadata.json`; it never appends a timeline
     /// event because no switch has occurred yet.
@@ -394,6 +451,37 @@ impl SessionDocument {
             return Ok(false);
         }
         self.metadata.config.pending_request = Some(pending);
+        self.bump_revision(&[DirtyFile::Metadata], now_ms, &[]);
+        Ok(true)
+    }
+
+    /// Clears one pending request only when it still matches the caller's exact captured intent.
+    /// 仅当待生效请求仍匹配调用方捕获的精确意图时清除它。
+    ///
+    /// # Parameters / 参数
+    /// `expected` is the immutable pending projection captured before admission; `now_ms` is the
+    /// metadata mutation timestamp.
+    /// `expected` 是准入前捕获的不可变待生效投影；`now_ms` 是 metadata 修改时间戳。
+    ///
+    /// # Returns / 返回值
+    /// Returns `true` only when the matching pending request was removed.
+    /// 仅当匹配的待生效请求已被移除时返回 `true`。
+    pub fn clear_pending_request_if_matches(
+        &mut self,
+        expected: &ActiveRequestConfig,
+        now_ms: i64,
+    ) -> Result<bool, DomainError> {
+        validate_timestamp("updated_at_ms", now_ms)?;
+        let matches_expected = self
+            .metadata
+            .config
+            .pending_request
+            .as_ref()
+            .is_some_and(|pending| active_request_from_pending(pending) == *expected);
+        if !matches_expected {
+            return Ok(false);
+        }
+        self.metadata.config.pending_request = None;
         self.bump_revision(&[DirtyFile::Metadata], now_ms, &[]);
         Ok(true)
     }
@@ -548,8 +636,8 @@ impl SessionDocument {
         Ok(true)
     }
 
-    /// Promotes pending configuration at a safe API boundary; only changes to an established route emit notices.
-    /// 在安全 API 边界提升待生效配置；只有已建立路线发生变化才发出通知，首次初始化不提示切换。
+    /// Activates pending configuration at an explicit admitted execution boundary.
+    /// 在明确已准入的执行边界激活待生效配置。
     ///
     /// `turn_id` explicitly scopes the display fact when the boundary belongs
     /// to an open turn; `None` records a session-level boundary. The method
@@ -575,13 +663,7 @@ impl SessionDocument {
         if self.active_api.is_some() {
             return Err(DomainError::PromoteWhileApiOpen);
         }
-        let next_active = ActiveRequestConfig {
-            provider: pending.provider,
-            connection_id: pending.connection_id,
-            model: pending.model,
-            thinking_level: pending.thinking_level,
-            temperature: pending.temperature,
-        };
+        let next_active = active_request_from_pending(&pending);
         let previous_active = self.metadata.config.active_request.clone();
         let changed = previous_active != next_active;
         // Initial selection initializes the route; only an established previous route can produce a switch notice.
@@ -602,35 +684,47 @@ impl SessionDocument {
                 self.ensure_transition_capacity(1, 0)?;
             }
         }
-        let mut staged_metadata = self.metadata.clone();
-        staged_metadata.config.active_request = next_active.clone();
-        staged_metadata.config.pending_request = None;
-        if !emits_notice {
-            self.metadata = staged_metadata;
-            self.bump_revision(&[DirtyFile::Metadata], now_ms, &[]);
-            return Ok(None);
-        }
         let mut staged_allocator = self.id_allocator;
-        let mut staged_events = Vec::with_capacity(1);
-        let notice_seq = self.stage_event(
+        let mut staged_events = Vec::with_capacity(usize::from(emits_notice));
+        let mut staged_metadata = self.metadata.clone();
+        let notice_seq = self.stage_bound_request_activation(
+            &mut staged_metadata,
             &mut staged_allocator,
             &mut staged_events,
+            next_active,
             turn_id,
-            EventVisibility::UiOnly,
-            EventBody::RequestConfigChanged(RequestConfigChangedEvent {
-                previous: previous_active,
-                current: next_active,
-            }),
             now_ms,
         )?;
         self.metadata = staged_metadata;
         self.id_allocator = staged_allocator;
         self.events.extend(staged_events);
-        self.bump_revision(
-            &[DirtyFile::Metadata, DirtyFile::ActiveTail],
-            now_ms,
-            &[notice_seq],
-        );
-        Ok(Some(notice_seq))
+        let changed_event_seqs = notice_seq.into_iter().collect::<Vec<_>>();
+        let dirty_files: &[DirtyFile] = if changed_event_seqs.is_empty() {
+            &[DirtyFile::Metadata]
+        } else {
+            &[DirtyFile::Metadata, DirtyFile::ActiveTail]
+        };
+        self.bump_revision(dirty_files, now_ms, &changed_event_seqs);
+        Ok(changed_event_seqs.first().copied())
+    }
+}
+
+/// Converts one pending request into the exact active configuration it represents.
+/// 把一份待生效请求转换为它所表示的精确活动配置。
+///
+/// # Parameters / 参数
+/// `pending` is the session-owned request intent already validated by its setter.
+/// `pending` 是已经由 setter 校验的会话自有请求意图。
+///
+/// # Returns / 返回值
+/// Returns the corresponding active configuration without normalization or fallback.
+/// 返回对应活动配置，不执行规范化或回退。
+pub(super) fn active_request_from_pending(pending: &PendingRequestConfig) -> ActiveRequestConfig {
+    ActiveRequestConfig {
+        provider: pending.provider.clone(),
+        connection_id: pending.connection_id.clone(),
+        model: pending.model.clone(),
+        thinking_level: pending.thinking_level.clone(),
+        temperature: pending.temperature,
     }
 }

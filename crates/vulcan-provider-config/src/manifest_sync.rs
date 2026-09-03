@@ -830,16 +830,24 @@ fn validate_service_entry_trust_ceiling(
     bundled: &vulcan_provider_adapters::ManifestServiceEntry,
     candidate: &vulcan_provider_adapters::ManifestServiceEntry,
 ) -> Result<(), String> {
+    // A remote update may remove a reviewed session header, but it may not introduce or retarget
+    // the dynamic session scope to a new header name.
+    // 远端更新可以移除已审核的会话请求头，但不能新增或把动态会话作用域改投到新请求头名称。
+    let session_header_expands = candidate
+        .session_header
+        .as_ref()
+        .is_some_and(|candidate_header| bundled.session_header.as_ref() != Some(candidate_header));
     if candidate.kind != bundled.kind
         || candidate.base_url != bundled.base_url
         || candidate.default_authentication != bundled.default_authentication
         || candidate.request_projector != bundled.request_projector
         || candidate.service_origin_override_policy != bundled.service_origin_override_policy
         || candidate.native_inference_bindings != bundled.native_inference_bindings
+        || session_header_expands
         || !map_is_exact_subset(&candidate.request_headers, &bundled.request_headers)
     {
         return Err(format!(
-            "Service entry `{}` expands its bundled host, authentication, header, or projector authority.",
+            "Service entry `{}` expands its bundled host, authentication, header, session-header, or projector authority.",
             candidate.service_entry_id
         ));
     }
@@ -2251,6 +2259,23 @@ mod tests {
         let error = validate_bundled_trust_ceiling(&bundled, &changed_host)
             .expect_err("an unreviewed host must be rejected");
         assert!(error.contains("host"), "{error}");
+
+        let mut reviewed_session_header = bundled.clone();
+        reviewed_session_header.services[0].session_header =
+            Some(String::from("x-reviewed-session"));
+        let mut changed_session_header = reviewed_session_header.clone();
+        changed_session_header.services[0].session_header =
+            Some(String::from("x-unreviewed-session"));
+        let error =
+            validate_bundled_trust_ceiling(&reviewed_session_header, &changed_session_header)
+                .expect_err("remote session-header retargeting must be rejected");
+        assert!(error.contains("session-header"), "{error}");
+        let mut removed_session_header = reviewed_session_header.clone();
+        removed_session_header.services[0].session_header = None;
+        validate_bundled_trust_ceiling(&reviewed_session_header, &removed_session_header)
+            .expect("remote session-header removal must remain allowed");
+        validate_bundled_trust_ceiling(&reviewed_session_header, &reviewed_session_header)
+            .expect("unchanged session-header authority must remain allowed");
 
         let mut changed_credential = bundled.clone();
         changed_credential.services[0].credential_profiles[0].credential_role =

@@ -3505,6 +3505,7 @@ mod tests {
             credential_profiles: Vec::new(),
             authentication: crate::AuthenticationProjection::BearerAuthorization,
             request_headers: BTreeMap::new(),
+            session_header: None,
             service_origin_override_policy: None,
             native_inference_bindings: Vec::new(),
             request_projector: crate::RequestProjectorKind::Direct,

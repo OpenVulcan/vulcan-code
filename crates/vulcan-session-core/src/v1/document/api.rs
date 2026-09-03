@@ -718,11 +718,6 @@ impl SessionDocument {
         validate_api_request_snapshot(&request)?;
         validate_provider_projection_proof(self, &projection)?;
         validate_provider_request_budget_evidence(&request_budget_evidence)?;
-        if self.metadata.config.pending_request.is_some() {
-            return Err(DomainError::InvalidRequestConfiguration {
-                field: "pending_request_not_promoted",
-            });
-        }
         let requested_active = active_request_from_snapshot(&request);
         let active_is_empty = self.metadata.config.active_request == ActiveRequestConfig::default();
         // A rewritten history generation owns a fresh request boundary even though it retains the
@@ -1489,6 +1484,10 @@ impl SessionDocument {
         let redacted_detail = completion.error.as_ref().map(|error| error.message.clone());
         let pending_inputs = self.metadata.input_state.pending_in_turn_inputs.clone();
         let had_pending_inputs = !pending_inputs.is_empty();
+        let bound_request_config = pending_inputs
+            .iter()
+            .rev()
+            .find_map(|pending| pending.bound_request_config.clone());
         for pending in &pending_inputs {
             validate_user_input(pending.text.clone(), &pending.resource_ids)?;
             if let Some(parameters) = &pending.parameters {
@@ -1507,7 +1506,9 @@ impl SessionDocument {
         let promotable_count = u64::try_from(promotable_count)
             .map_err(|_| DomainError::invalid_id("pending_input_count", u64::MAX))?;
         self.ensure_transition_capacity(
-            1 + u64::from(failure_notice.is_some()) + promotable_count,
+            1 + u64::from(failure_notice.is_some())
+                + promotable_count
+                + u64::from(bound_request_config.is_some()),
             0,
         )?;
         self.validate_active_api_events(&api)?;
@@ -1646,6 +1647,16 @@ impl SessionDocument {
                 completion.completed_at_ms,
             )?;
         }
+        if let Some(request_config) = bound_request_config {
+            self.stage_bound_request_activation(
+                &mut staged_metadata,
+                &mut staged_allocator,
+                &mut staged_events,
+                request_config,
+                Some(api.turn_id),
+                completion.completed_at_ms,
+            )?;
+        }
         let mut promoted_input_seqs = Vec::new();
         for pending in pending_inputs {
             if self.input_id_already_streamed(pending.input_id) {
@@ -1778,6 +1789,10 @@ impl SessionDocument {
     ) -> Result<(u32, ApiGroupCompletionReceipt), DomainError> {
         let api = self.active_api.clone().ok_or(DomainError::NoActiveApi)?;
         let pending_inputs = self.metadata.input_state.pending_in_turn_inputs.clone();
+        let bound_request_config = pending_inputs
+            .iter()
+            .rev()
+            .find_map(|pending| pending.bound_request_config.clone());
         for pending in &pending_inputs {
             validate_user_input(pending.text.clone(), &pending.resource_ids)?;
             if let Some(parameters) = &pending.parameters {
@@ -1792,6 +1807,7 @@ impl SessionDocument {
             .map_err(|_| DomainError::invalid_id("pending_input_count", u64::MAX))?;
         let appended_event_count = u64::from(if record_execution_control { 2u8 } else { 1u8 })
             .checked_add(promotable_count)
+            .and_then(|count| count.checked_add(u64::from(bound_request_config.is_some())))
             .ok_or_else(|| DomainError::invalid_id("event_count", u64::MAX))?;
         self.ensure_transition_capacity(appended_event_count, 0)?;
         self.validate_active_api_events(&api)?;
@@ -1819,6 +1835,7 @@ impl SessionDocument {
         let staged_capacity = usize::try_from(appended_event_count)
             .map_err(|_| DomainError::invalid_id("event_count", appended_event_count))?;
         let mut staged_events = Vec::with_capacity(staged_capacity);
+        let mut staged_metadata = self.metadata.clone();
         if record_execution_control {
             self.stage_event(
                 &mut staged_allocator,
@@ -1860,6 +1877,16 @@ impl SessionDocument {
             }),
             now_ms,
         )?;
+        if let Some(request_config) = bound_request_config {
+            self.stage_bound_request_activation(
+                &mut staged_metadata,
+                &mut staged_allocator,
+                &mut staged_events,
+                request_config,
+                Some(api.turn_id),
+                now_ms,
+            )?;
+        }
         let mut promoted_input_seqs = Vec::with_capacity(promotable_count as usize);
         for pending in pending_inputs.iter().cloned() {
             if self.input_id_already_streamed(pending.input_id) {
@@ -1883,7 +1910,6 @@ impl SessionDocument {
             promoted_input_seqs.push(promoted_seq);
         }
         let had_pending_inputs = !pending_inputs.is_empty();
-        let mut staged_metadata = self.metadata.clone();
         staged_metadata.input_state.pending_in_turn_inputs.clear();
         let mut changed_event_seqs: Vec<Seq> = staged_event_updates
             .values()

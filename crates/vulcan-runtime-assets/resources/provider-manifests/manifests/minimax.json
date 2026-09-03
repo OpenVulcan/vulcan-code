@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "minimax",
-  "revision": 23,
-  "published_at": "2026-09-02T09:54:26Z",
+  "revision": 26,
+  "published_at": "2026-09-03T09:10:59Z",
   "engine_contract": {
     "minimum_manifest_engine": 2,
     "required_protocol_profiles": [
@@ -834,10 +834,10 @@
     },
     {
       "profile_id": "minimax.speech.request.v1",
-      "description": "Build the reviewed MiniMax synchronous speech wire body with format-dependent defaults.",
+      "description": "Build the reviewed MiniMax synchronous speech wire body with URL delivery and format-dependent defaults.",
       "payload": {
         "profile_id": "minimax.speech.request.v1",
-        "revision": 1,
+        "revision": 2,
         "steps": [
           {
             "op": "rebuild_json_template",
@@ -845,7 +845,7 @@
               "model": {"$vulcan_model_id": true},
               "text": {"$vulcan_ref": {"path": "/text"}},
               "stream": false,
-              "output_format": "hex",
+              "output_format": "url",
               "voice_setting": {
                 "voice_id": {"$vulcan_ref": {"path": "/voice_id"}},
                 "speed": {"$vulcan_ref": {"path": "/speed"}},
@@ -900,54 +900,6 @@
           },
           {"op": "remove_if_empty", "path": "/pronunciation_dict/tone"},
           {"op": "remove_if_empty", "path": "/pronunciation_dict"}
-        ]
-      }
-    },
-    {
-      "profile_id": "minimax.music.request.v1",
-      "description": "Build the reviewed MiniMax synchronous music URL-output wire body.",
-      "payload": {
-        "profile_id": "minimax.music.request.v1",
-        "revision": 1,
-        "steps": [
-          {
-            "op": "rebuild_json_template",
-            "template": {
-              "model": {"$vulcan_model_id": true},
-              "stream": false,
-              "output_format": "url",
-              "audio_setting": {
-                "sample_rate": {"$vulcan_ref": {"path": "/sample_rate"}},
-                "bitrate": {"$vulcan_ref": {"path": "/bitrate"}},
-                "format": {"$vulcan_ref": {"path": "/output_format"}},
-                "channel": {"$vulcan_ref": {"path": "/channels", "optional": true}}
-              },
-              "prompt": {"$vulcan_ref": {"path": "/prompt", "optional": true}},
-              "lyrics": {"$vulcan_ref": {"path": "/lyrics", "optional": true}},
-              "is_instrumental": {
-                "$vulcan_if_equals": {
-                  "path": "/instrumental",
-                  "equals": true,
-                  "then": true
-                }
-              },
-              "lyrics_optimizer": {
-                "$vulcan_if_equals": {
-                  "path": "/lyrics_optimizer",
-                  "equals": true,
-                  "then": true
-                }
-              },
-              "seed": {"$vulcan_ref": {"path": "/seed", "optional": true}},
-              "aigc_watermark": {
-                "$vulcan_if_equals": {
-                  "path": "/watermark",
-                  "equals": true,
-                  "then": true
-                }
-              }
-            }
-          }
         ]
       }
     },
@@ -1087,7 +1039,7 @@
     },
     {
       "profile_id": "minimax.speech.response.v1",
-      "description": "Normalize MiniMax speech status while preserving hex audio and optional subtitle carriers.",
+      "description": "Normalize MiniMax speech status while preserving URL audio and optional subtitle carriers.",
       "payload": {
         "profile_id": "minimax.speech.response.v1",
         "revision": 1,
@@ -1107,47 +1059,6 @@
                       "error": {
                         "code": "incomplete_result",
                         "message": "Provider response did not contain completed speech audio."
-                      }
-                    }
-                  }
-                },
-                "otherwise": {
-                  "error": {
-                    "code": {"$vulcan_ref": {"path": "/base_resp/status_code"}},
-                    "message": {"$vulcan_ref": {"path": "/base_resp/status_msg"}}
-                  }
-                }
-              }
-            }
-          }
-        ]
-      }
-    },
-    {
-      "profile_id": "minimax.music.response.v1",
-      "description": "Normalize MiniMax music status while preserving the reviewed public audio URL.",
-      "payload": {
-        "profile_id": "minimax.music.response.v1",
-        "revision": 1,
-        "steps": [
-          {
-            "op": "rebuild_json_template",
-            "template": {
-              "$vulcan_if_equals": {
-                "path": "/base_resp/status_code",
-                "equals": 0,
-                "then": {
-                  "$vulcan_if_equals": {
-                    "path": "/data/status",
-                    "equals": 2,
-                    "then": {
-                      "id": {"$vulcan_ref": {"path": "/trace_id"}},
-                      "data": {"$vulcan_ref": {"path": "/data"}}
-                    },
-                    "otherwise": {
-                      "error": {
-                        "code": "incomplete_result",
-                        "message": "Provider response did not contain a completed music result."
                       }
                     }
                   }
@@ -1231,9 +1142,11 @@
       "accepted_mime_types": [
         "image/jpeg",
         "image/png",
-        "image/webp"
+        "image/webp",
+        "image/heic",
+        "image/heif"
       ],
-      "max_bytes": 20971520,
+      "max_bytes": 52428800,
       "max_count": 16,
       "progress_supported": false,
       "cancellation_supported": false,
@@ -1245,7 +1158,9 @@
       "operation_id": "minimax.mini_max_coding_plan_vision",
       "operation": "image_understand",
       "carrier": "provider_tool",
-      "input_resources": [],
+      "input_resources": [
+        "image"
+      ],
       "output_resources": [],
       "tool_target_refs": [
         "global:coding-plan-vlm",
@@ -1267,7 +1182,9 @@
             "jpg": "image/jpeg",
             "jpeg": "image/jpeg",
             "png": "image/png",
-            "webp": "image/webp"
+            "webp": "image/webp",
+            "heic": "image/heic",
+            "heif": "image/heif"
           },
           "required": true,
           "remove_source": true
@@ -1352,33 +1269,6 @@
       ],
       "request_profile_refs": ["minimax.speech.request.v1"],
       "response_profile_refs": ["minimax.speech.response.v1"],
-      "upload_channel_refs": [],
-      "upload_bindings": [],
-      "timeout_ms": 60000,
-      "idempotent": false
-    },
-    {
-      "operation_id": "minimax.mini_max_music_generate",
-      "operation": "music_generate",
-      "carrier": "provider_tool",
-      "input_resources": [],
-      "output_resources": [
-        "audio"
-      ],
-      "tool_target_refs": [
-        "global.music-3.0",
-        "global.music-2.6",
-        "global.music-2.6-free",
-        "global.music-2.5+",
-        "global.music-2.5",
-        "cn.music-3.0",
-        "cn.music-2.6",
-        "cn.music-2.6-free",
-        "cn.music-2.5+",
-        "cn.music-2.5"
-      ],
-      "request_profile_refs": ["minimax.music.request.v1"],
-      "response_profile_refs": ["minimax.music.response.v1"],
       "upload_channel_refs": [],
       "upload_bindings": [],
       "timeout_ms": 60000,
@@ -1491,7 +1381,7 @@
         "token-plan-key",
         "token-plan-oauth"
       ],
-      "description": "Analyze one local JPEG, PNG, or WebP image with the selected MiniMax Coding Plan account.",
+      "description": "Analyze one local JPEG, PNG, WebP, HEIC, or HEIF image with the selected MiniMax Coding Plan account.",
       "display_name": "MiniMax Coding Plan Image Understanding",
       "execution": {
         "adapter": "generic_json",
@@ -1503,7 +1393,7 @@
         "additionalProperties": false,
         "properties": {
           "image_path": {
-            "description": "Local path to one JPEG, PNG, or WebP image.",
+            "description": "Local path to one JPEG, PNG, WebP, HEIC, or HEIF image.",
             "minLength": 1,
             "type": "string"
           },
@@ -1899,7 +1789,8 @@
         "resource_decoders": [
           {
             "source_path": "/data/audio",
-            "encoding": "hex",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -1912,7 +1803,6 @@
               "opus": "audio/opus"
             },
             "optional": false,
-            "max_bytes": 10000000,
             "output_id_prefix": "audio"
           },
           {
@@ -2113,7 +2003,8 @@
         "resource_decoders": [
           {
             "source_path": "/data/audio",
-            "encoding": "hex",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -2126,7 +2017,6 @@
               "opus": "audio/opus"
             },
             "optional": false,
-            "max_bytes": 10000000,
             "output_id_prefix": "audio"
           },
           {
@@ -2327,7 +2217,8 @@
         "resource_decoders": [
           {
             "source_path": "/data/audio",
-            "encoding": "hex",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -2340,7 +2231,6 @@
               "opus": "audio/opus"
             },
             "optional": false,
-            "max_bytes": 10000000,
             "output_id_prefix": "audio"
           },
           {
@@ -2541,7 +2431,8 @@
         "resource_decoders": [
           {
             "source_path": "/data/audio",
-            "encoding": "hex",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -2554,7 +2445,6 @@
               "opus": "audio/opus"
             },
             "optional": false,
-            "max_bytes": 10000000,
             "output_id_prefix": "audio"
           },
           {
@@ -2572,666 +2462,6 @@
       "target_id": "global.speech-02",
       "tool_id": "speech_synthesize",
       "upstream_target_id": "speech-02"
-    },
-    {
-      "capability": "music_generate",
-      "credential_profile_ids": [
-        "payg-api-key",
-        "token-plan-key",
-        "token-plan-oauth"
-      ],
-      "description": "Generate one music audio resource with the selected MiniMax music model.",
-      "display_name": "MiniMax Music 3.0",
-      "execution": {
-        "adapter": "generic_json",
-        "authentication": "bearer_authorization",
-        "endpoint_path": "/v1/music_generation",
-        "execution_kind": "http_json_sync"
-      },
-      "input_schema": {
-        "additionalProperties": false,
-        "oneOf": [
-          {
-            "properties": {
-              "instrumental": {"const": true},
-              "lyrics_optimizer": {"const": false},
-              "lyrics": {"maxLength": 0},
-              "prompt": {"minLength": 1}
-            },
-            "required": ["instrumental", "prompt"]
-          },
-          {
-            "properties": {
-              "instrumental": {"const": false},
-              "lyrics_optimizer": {"const": true},
-              "lyrics": {"maxLength": 0},
-              "prompt": {"minLength": 1}
-            },
-            "required": ["lyrics_optimizer", "prompt"]
-          },
-          {
-            "properties": {
-              "instrumental": {"const": false},
-              "lyrics_optimizer": {"const": false},
-              "lyrics": {"minLength": 1}
-            },
-            "required": ["lyrics"]
-          }
-        ],
-        "properties": {
-          "bitrate": {
-            "default": 256000,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "channels": {
-            "maximum": 2,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "instrumental": {
-            "default": false,
-            "description": "Generate instrumental music without lyrics.",
-            "type": "boolean"
-          },
-          "lyrics": {
-            "description": "Exact lyrics; omit for instrumental or optimized lyric generation.",
-            "maxLength": 3500,
-            "type": "string"
-          },
-          "lyrics_optimizer": {
-            "default": false,
-            "description": "Let MiniMax generate optimized lyrics from the prompt.",
-            "type": "boolean"
-          },
-          "output_format": {
-            "default": "mp3",
-            "enum": [
-              "mp3",
-              "wav",
-              "pcm"
-            ],
-            "type": "string"
-          },
-          "prompt": {
-            "description": "Style, mood, and scenario guidance.",
-            "maxLength": 2000,
-            "type": "string"
-          },
-          "sample_rate": {
-            "default": 44100,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "seed": {
-            "type": "integer"
-          },
-          "watermark": {
-            "default": false,
-            "type": "boolean"
-          }
-        },
-        "type": "object"
-      },
-      "output": {
-        "kind": "resources",
-        "mime_types": [
-          "audio/mpeg",
-          "audio/wav",
-          "audio/L16"
-        ],
-        "normalized_result_path": "resources",
-        "resource_kind": "audio",
-        "source_path": "/data/audio_url",
-        "resource_decoders": [
-          {
-            "source_path": "/data/audio_url",
-            "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
-            "resource_kind": "audio",
-            "mime_type_request_path": "/output_format",
-            "mime_types_by_request_value": {
-              "mp3": "audio/mpeg",
-              "wav": "audio/wav",
-              "pcm": "audio/L16"
-            },
-            "optional": false,
-            "output_id_prefix": "music"
-          }
-        ]
-      },
-      "service_entry_id": "global",
-      "target_id": "global.music-3.0",
-      "tool_id": "music_generate",
-      "upstream_target_id": "music-3.0"
-    },
-    {
-      "capability": "music_generate",
-      "credential_profile_ids": [
-        "payg-api-key",
-        "token-plan-key",
-        "token-plan-oauth"
-      ],
-      "description": "Generate one music audio resource with the selected MiniMax music model.",
-      "display_name": "MiniMax Music 2.6",
-      "execution": {
-        "adapter": "generic_json",
-        "authentication": "bearer_authorization",
-        "endpoint_path": "/v1/music_generation",
-        "execution_kind": "http_json_sync"
-      },
-      "input_schema": {
-        "additionalProperties": false,
-        "oneOf": [
-          {
-            "properties": {
-              "instrumental": {"const": true},
-              "lyrics_optimizer": {"const": false},
-              "lyrics": {"maxLength": 0},
-              "prompt": {"minLength": 1}
-            },
-            "required": ["instrumental", "prompt"]
-          },
-          {
-            "properties": {
-              "instrumental": {"const": false},
-              "lyrics_optimizer": {"const": true},
-              "lyrics": {"maxLength": 0},
-              "prompt": {"minLength": 1}
-            },
-            "required": ["lyrics_optimizer", "prompt"]
-          },
-          {
-            "properties": {
-              "instrumental": {"const": false},
-              "lyrics_optimizer": {"const": false},
-              "lyrics": {"minLength": 1}
-            },
-            "required": ["lyrics"]
-          }
-        ],
-        "properties": {
-          "bitrate": {
-            "default": 256000,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "channels": {
-            "maximum": 2,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "instrumental": {
-            "default": false,
-            "description": "Generate instrumental music without lyrics.",
-            "type": "boolean"
-          },
-          "lyrics": {
-            "description": "Exact lyrics; omit for instrumental or optimized lyric generation.",
-            "maxLength": 3500,
-            "type": "string"
-          },
-          "lyrics_optimizer": {
-            "default": false,
-            "description": "Let MiniMax generate optimized lyrics from the prompt.",
-            "type": "boolean"
-          },
-          "output_format": {
-            "default": "mp3",
-            "enum": [
-              "mp3",
-              "wav",
-              "pcm"
-            ],
-            "type": "string"
-          },
-          "prompt": {
-            "description": "Style, mood, and scenario guidance.",
-            "maxLength": 2000,
-            "type": "string"
-          },
-          "sample_rate": {
-            "default": 44100,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "seed": {
-            "type": "integer"
-          },
-          "watermark": {
-            "default": false,
-            "type": "boolean"
-          }
-        },
-        "type": "object"
-      },
-      "output": {
-        "kind": "resources",
-        "mime_types": [
-          "audio/mpeg",
-          "audio/wav",
-          "audio/L16"
-        ],
-        "normalized_result_path": "resources",
-        "resource_kind": "audio",
-        "source_path": "/data/audio_url",
-        "resource_decoders": [
-          {
-            "source_path": "/data/audio_url",
-            "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
-            "resource_kind": "audio",
-            "mime_type_request_path": "/output_format",
-            "mime_types_by_request_value": {
-              "mp3": "audio/mpeg",
-              "wav": "audio/wav",
-              "pcm": "audio/L16"
-            },
-            "optional": false,
-            "output_id_prefix": "music"
-          }
-        ]
-      },
-      "service_entry_id": "global",
-      "target_id": "global.music-2.6",
-      "tool_id": "music_generate",
-      "upstream_target_id": "music-2.6"
-    },
-    {
-      "capability": "music_generate",
-      "credential_profile_ids": [
-        "payg-api-key",
-        "token-plan-key",
-        "token-plan-oauth"
-      ],
-      "description": "Generate one music audio resource with the selected MiniMax music model.",
-      "display_name": "MiniMax Music 2.6 Free",
-      "execution": {
-        "adapter": "generic_json",
-        "authentication": "bearer_authorization",
-        "endpoint_path": "/v1/music_generation",
-        "execution_kind": "http_json_sync"
-      },
-      "input_schema": {
-        "additionalProperties": false,
-        "oneOf": [
-          {
-            "properties": {
-              "instrumental": {"const": true},
-              "lyrics_optimizer": {"const": false},
-              "lyrics": {"maxLength": 0},
-              "prompt": {"minLength": 1}
-            },
-            "required": ["instrumental", "prompt"]
-          },
-          {
-            "properties": {
-              "instrumental": {"const": false},
-              "lyrics_optimizer": {"const": true},
-              "lyrics": {"maxLength": 0},
-              "prompt": {"minLength": 1}
-            },
-            "required": ["lyrics_optimizer", "prompt"]
-          },
-          {
-            "properties": {
-              "instrumental": {"const": false},
-              "lyrics_optimizer": {"const": false},
-              "lyrics": {"minLength": 1}
-            },
-            "required": ["lyrics"]
-          }
-        ],
-        "properties": {
-          "bitrate": {
-            "default": 256000,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "channels": {
-            "maximum": 2,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "instrumental": {
-            "default": false,
-            "description": "Generate instrumental music without lyrics.",
-            "type": "boolean"
-          },
-          "lyrics": {
-            "description": "Exact lyrics; omit for instrumental or optimized lyric generation.",
-            "maxLength": 3500,
-            "type": "string"
-          },
-          "lyrics_optimizer": {
-            "default": false,
-            "description": "Let MiniMax generate optimized lyrics from the prompt.",
-            "type": "boolean"
-          },
-          "output_format": {
-            "default": "mp3",
-            "enum": [
-              "mp3",
-              "wav",
-              "pcm"
-            ],
-            "type": "string"
-          },
-          "prompt": {
-            "description": "Style, mood, and scenario guidance.",
-            "maxLength": 2000,
-            "type": "string"
-          },
-          "sample_rate": {
-            "default": 44100,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "seed": {
-            "type": "integer"
-          },
-          "watermark": {
-            "default": false,
-            "type": "boolean"
-          }
-        },
-        "type": "object"
-      },
-      "output": {
-        "kind": "resources",
-        "mime_types": [
-          "audio/mpeg",
-          "audio/wav",
-          "audio/L16"
-        ],
-        "normalized_result_path": "resources",
-        "resource_kind": "audio",
-        "source_path": "/data/audio_url",
-        "resource_decoders": [
-          {
-            "source_path": "/data/audio_url",
-            "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
-            "resource_kind": "audio",
-            "mime_type_request_path": "/output_format",
-            "mime_types_by_request_value": {
-              "mp3": "audio/mpeg",
-              "wav": "audio/wav",
-              "pcm": "audio/L16"
-            },
-            "optional": false,
-            "output_id_prefix": "music"
-          }
-        ]
-      },
-      "service_entry_id": "global",
-      "target_id": "global.music-2.6-free",
-      "tool_id": "music_generate",
-      "upstream_target_id": "music-2.6-free"
-    },
-    {
-      "capability": "music_generate",
-      "credential_profile_ids": [
-        "payg-api-key",
-        "token-plan-key",
-        "token-plan-oauth"
-      ],
-      "description": "Generate one music audio resource with the selected MiniMax music model.",
-      "display_name": "MiniMax Music 2.5 Plus",
-      "execution": {
-        "adapter": "generic_json",
-        "authentication": "bearer_authorization",
-        "endpoint_path": "/v1/music_generation",
-        "execution_kind": "http_json_sync"
-      },
-      "input_schema": {
-        "additionalProperties": false,
-        "oneOf": [
-          {
-            "properties": {
-              "instrumental": {"const": true},
-              "lyrics_optimizer": {"const": false},
-              "lyrics": {"maxLength": 0},
-              "prompt": {"minLength": 1}
-            },
-            "required": ["instrumental", "prompt"]
-          },
-          {
-            "properties": {
-              "instrumental": {"const": false},
-              "lyrics_optimizer": {"const": true},
-              "lyrics": {"maxLength": 0},
-              "prompt": {"minLength": 1}
-            },
-            "required": ["lyrics_optimizer", "prompt"]
-          },
-          {
-            "properties": {
-              "instrumental": {"const": false},
-              "lyrics_optimizer": {"const": false},
-              "lyrics": {"minLength": 1}
-            },
-            "required": ["lyrics"]
-          }
-        ],
-        "properties": {
-          "bitrate": {
-            "default": 256000,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "channels": {
-            "maximum": 2,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "instrumental": {
-            "default": false,
-            "description": "Generate instrumental music without lyrics.",
-            "type": "boolean"
-          },
-          "lyrics": {
-            "description": "Exact lyrics; omit for instrumental or optimized lyric generation.",
-            "maxLength": 3500,
-            "type": "string"
-          },
-          "lyrics_optimizer": {
-            "default": false,
-            "description": "Let MiniMax generate optimized lyrics from the prompt.",
-            "type": "boolean"
-          },
-          "output_format": {
-            "default": "mp3",
-            "enum": [
-              "mp3",
-              "wav",
-              "pcm"
-            ],
-            "type": "string"
-          },
-          "prompt": {
-            "description": "Style, mood, and scenario guidance.",
-            "maxLength": 2000,
-            "type": "string"
-          },
-          "sample_rate": {
-            "default": 44100,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "seed": {
-            "type": "integer"
-          },
-          "watermark": {
-            "default": false,
-            "type": "boolean"
-          }
-        },
-        "type": "object"
-      },
-      "output": {
-        "kind": "resources",
-        "mime_types": [
-          "audio/mpeg",
-          "audio/wav",
-          "audio/L16"
-        ],
-        "normalized_result_path": "resources",
-        "resource_kind": "audio",
-        "source_path": "/data/audio_url",
-        "resource_decoders": [
-          {
-            "source_path": "/data/audio_url",
-            "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
-            "resource_kind": "audio",
-            "mime_type_request_path": "/output_format",
-            "mime_types_by_request_value": {
-              "mp3": "audio/mpeg",
-              "wav": "audio/wav",
-              "pcm": "audio/L16"
-            },
-            "optional": false,
-            "output_id_prefix": "music"
-          }
-        ]
-      },
-      "service_entry_id": "global",
-      "target_id": "global.music-2.5+",
-      "tool_id": "music_generate",
-      "upstream_target_id": "music-2.5+"
-    },
-    {
-      "capability": "music_generate",
-      "credential_profile_ids": [
-        "payg-api-key",
-        "token-plan-key",
-        "token-plan-oauth"
-      ],
-      "description": "Generate one music audio resource with the selected MiniMax music model.",
-      "display_name": "MiniMax Music 2.5",
-      "execution": {
-        "adapter": "generic_json",
-        "authentication": "bearer_authorization",
-        "endpoint_path": "/v1/music_generation",
-        "execution_kind": "http_json_sync"
-      },
-      "input_schema": {
-        "additionalProperties": false,
-        "oneOf": [
-          {
-            "properties": {
-              "instrumental": {"const": true},
-              "lyrics_optimizer": {"const": false},
-              "lyrics": {"maxLength": 0},
-              "prompt": {"minLength": 1}
-            },
-            "required": ["instrumental", "prompt"]
-          },
-          {
-            "properties": {
-              "instrumental": {"const": false},
-              "lyrics_optimizer": {"const": true},
-              "lyrics": {"maxLength": 0},
-              "prompt": {"minLength": 1}
-            },
-            "required": ["lyrics_optimizer", "prompt"]
-          },
-          {
-            "properties": {
-              "instrumental": {"const": false},
-              "lyrics_optimizer": {"const": false},
-              "lyrics": {"minLength": 1}
-            },
-            "required": ["lyrics"]
-          }
-        ],
-        "properties": {
-          "bitrate": {
-            "default": 256000,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "channels": {
-            "maximum": 2,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "instrumental": {
-            "default": false,
-            "description": "Generate instrumental music without lyrics.",
-            "type": "boolean"
-          },
-          "lyrics": {
-            "description": "Exact lyrics; omit for instrumental or optimized lyric generation.",
-            "maxLength": 3500,
-            "type": "string"
-          },
-          "lyrics_optimizer": {
-            "default": false,
-            "description": "Let MiniMax generate optimized lyrics from the prompt.",
-            "type": "boolean"
-          },
-          "output_format": {
-            "default": "mp3",
-            "enum": [
-              "mp3",
-              "wav",
-              "pcm"
-            ],
-            "type": "string"
-          },
-          "prompt": {
-            "description": "Style, mood, and scenario guidance.",
-            "maxLength": 2000,
-            "type": "string"
-          },
-          "sample_rate": {
-            "default": 44100,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "seed": {
-            "type": "integer"
-          },
-          "watermark": {
-            "default": false,
-            "type": "boolean"
-          }
-        },
-        "type": "object"
-      },
-      "output": {
-        "kind": "resources",
-        "mime_types": [
-          "audio/mpeg",
-          "audio/wav",
-          "audio/L16"
-        ],
-        "normalized_result_path": "resources",
-        "resource_kind": "audio",
-        "source_path": "/data/audio_url",
-        "resource_decoders": [
-          {
-            "source_path": "/data/audio_url",
-            "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
-            "resource_kind": "audio",
-            "mime_type_request_path": "/output_format",
-            "mime_types_by_request_value": {
-              "mp3": "audio/mpeg",
-              "wav": "audio/wav",
-              "pcm": "audio/L16"
-            },
-            "optional": false,
-            "output_id_prefix": "music"
-          }
-        ]
-      },
-      "service_entry_id": "global",
-      "target_id": "global.music-2.5",
-      "tool_id": "music_generate",
-      "upstream_target_id": "music-2.5"
     },
     {
       "capability": "video_generate",
@@ -3490,7 +2720,7 @@
         "token-plan-key",
         "token-plan-oauth"
       ],
-      "description": "Analyze one local JPEG, PNG, or WebP image with the selected MiniMax Coding Plan account.",
+      "description": "Analyze one local JPEG, PNG, WebP, HEIC, or HEIF image with the selected MiniMax Coding Plan account.",
       "display_name": "MiniMax Coding Plan Image Understanding",
       "execution": {
         "adapter": "generic_json",
@@ -3502,7 +2732,7 @@
         "additionalProperties": false,
         "properties": {
           "image_path": {
-            "description": "Local path to one JPEG, PNG, or WebP image.",
+            "description": "Local path to one JPEG, PNG, WebP, HEIC, or HEIF image.",
             "minLength": 1,
             "type": "string"
           },
@@ -4081,7 +3311,8 @@
         "resource_decoders": [
           {
             "source_path": "/data/audio",
-            "encoding": "hex",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -4094,7 +3325,6 @@
               "opus": "audio/opus"
             },
             "optional": false,
-            "max_bytes": 10000000,
             "output_id_prefix": "audio"
           },
           {
@@ -4295,7 +3525,8 @@
         "resource_decoders": [
           {
             "source_path": "/data/audio",
-            "encoding": "hex",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -4308,7 +3539,6 @@
               "opus": "audio/opus"
             },
             "optional": false,
-            "max_bytes": 10000000,
             "output_id_prefix": "audio"
           },
           {
@@ -4509,7 +3739,8 @@
         "resource_decoders": [
           {
             "source_path": "/data/audio",
-            "encoding": "hex",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -4522,7 +3753,6 @@
               "opus": "audio/opus"
             },
             "optional": false,
-            "max_bytes": 10000000,
             "output_id_prefix": "audio"
           },
           {
@@ -4723,7 +3953,8 @@
         "resource_decoders": [
           {
             "source_path": "/data/audio",
-            "encoding": "hex",
+            "encoding": "public_http_url",
+            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com", ".aliyuncs.com"],
             "resource_kind": "audio",
             "mime_type_request_path": "/output_format",
             "mime_types_by_request_value": {
@@ -4736,7 +3967,6 @@
               "opus": "audio/opus"
             },
             "optional": false,
-            "max_bytes": 10000000,
             "output_id_prefix": "audio"
           },
           {
@@ -4754,666 +3984,6 @@
       "target_id": "cn.speech-02",
       "tool_id": "speech_synthesize",
       "upstream_target_id": "speech-02"
-    },
-    {
-      "capability": "music_generate",
-      "credential_profile_ids": [
-        "payg-api-key",
-        "token-plan-key",
-        "token-plan-oauth"
-      ],
-      "description": "Generate one music audio resource with the selected MiniMax music model.",
-      "display_name": "MiniMax Music 3.0",
-      "execution": {
-        "adapter": "generic_json",
-        "authentication": "bearer_authorization",
-        "endpoint_path": "/v1/music_generation",
-        "execution_kind": "http_json_sync"
-      },
-      "input_schema": {
-        "additionalProperties": false,
-        "oneOf": [
-          {
-            "properties": {
-              "instrumental": {"const": true},
-              "lyrics_optimizer": {"const": false},
-              "lyrics": {"maxLength": 0},
-              "prompt": {"minLength": 1}
-            },
-            "required": ["instrumental", "prompt"]
-          },
-          {
-            "properties": {
-              "instrumental": {"const": false},
-              "lyrics_optimizer": {"const": true},
-              "lyrics": {"maxLength": 0},
-              "prompt": {"minLength": 1}
-            },
-            "required": ["lyrics_optimizer", "prompt"]
-          },
-          {
-            "properties": {
-              "instrumental": {"const": false},
-              "lyrics_optimizer": {"const": false},
-              "lyrics": {"minLength": 1}
-            },
-            "required": ["lyrics"]
-          }
-        ],
-        "properties": {
-          "bitrate": {
-            "default": 256000,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "channels": {
-            "maximum": 2,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "instrumental": {
-            "default": false,
-            "description": "Generate instrumental music without lyrics.",
-            "type": "boolean"
-          },
-          "lyrics": {
-            "description": "Exact lyrics; omit for instrumental or optimized lyric generation.",
-            "maxLength": 3500,
-            "type": "string"
-          },
-          "lyrics_optimizer": {
-            "default": false,
-            "description": "Let MiniMax generate optimized lyrics from the prompt.",
-            "type": "boolean"
-          },
-          "output_format": {
-            "default": "mp3",
-            "enum": [
-              "mp3",
-              "wav",
-              "pcm"
-            ],
-            "type": "string"
-          },
-          "prompt": {
-            "description": "Style, mood, and scenario guidance.",
-            "maxLength": 2000,
-            "type": "string"
-          },
-          "sample_rate": {
-            "default": 44100,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "seed": {
-            "type": "integer"
-          },
-          "watermark": {
-            "default": false,
-            "type": "boolean"
-          }
-        },
-        "type": "object"
-      },
-      "output": {
-        "kind": "resources",
-        "mime_types": [
-          "audio/mpeg",
-          "audio/wav",
-          "audio/L16"
-        ],
-        "normalized_result_path": "resources",
-        "resource_kind": "audio",
-        "source_path": "/data/audio_url",
-        "resource_decoders": [
-          {
-            "source_path": "/data/audio_url",
-            "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
-            "resource_kind": "audio",
-            "mime_type_request_path": "/output_format",
-            "mime_types_by_request_value": {
-              "mp3": "audio/mpeg",
-              "wav": "audio/wav",
-              "pcm": "audio/L16"
-            },
-            "optional": false,
-            "output_id_prefix": "music"
-          }
-        ]
-      },
-      "service_entry_id": "cn",
-      "target_id": "cn.music-3.0",
-      "tool_id": "music_generate",
-      "upstream_target_id": "music-3.0"
-    },
-    {
-      "capability": "music_generate",
-      "credential_profile_ids": [
-        "payg-api-key",
-        "token-plan-key",
-        "token-plan-oauth"
-      ],
-      "description": "Generate one music audio resource with the selected MiniMax music model.",
-      "display_name": "MiniMax Music 2.6",
-      "execution": {
-        "adapter": "generic_json",
-        "authentication": "bearer_authorization",
-        "endpoint_path": "/v1/music_generation",
-        "execution_kind": "http_json_sync"
-      },
-      "input_schema": {
-        "additionalProperties": false,
-        "oneOf": [
-          {
-            "properties": {
-              "instrumental": {"const": true},
-              "lyrics_optimizer": {"const": false},
-              "lyrics": {"maxLength": 0},
-              "prompt": {"minLength": 1}
-            },
-            "required": ["instrumental", "prompt"]
-          },
-          {
-            "properties": {
-              "instrumental": {"const": false},
-              "lyrics_optimizer": {"const": true},
-              "lyrics": {"maxLength": 0},
-              "prompt": {"minLength": 1}
-            },
-            "required": ["lyrics_optimizer", "prompt"]
-          },
-          {
-            "properties": {
-              "instrumental": {"const": false},
-              "lyrics_optimizer": {"const": false},
-              "lyrics": {"minLength": 1}
-            },
-            "required": ["lyrics"]
-          }
-        ],
-        "properties": {
-          "bitrate": {
-            "default": 256000,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "channels": {
-            "maximum": 2,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "instrumental": {
-            "default": false,
-            "description": "Generate instrumental music without lyrics.",
-            "type": "boolean"
-          },
-          "lyrics": {
-            "description": "Exact lyrics; omit for instrumental or optimized lyric generation.",
-            "maxLength": 3500,
-            "type": "string"
-          },
-          "lyrics_optimizer": {
-            "default": false,
-            "description": "Let MiniMax generate optimized lyrics from the prompt.",
-            "type": "boolean"
-          },
-          "output_format": {
-            "default": "mp3",
-            "enum": [
-              "mp3",
-              "wav",
-              "pcm"
-            ],
-            "type": "string"
-          },
-          "prompt": {
-            "description": "Style, mood, and scenario guidance.",
-            "maxLength": 2000,
-            "type": "string"
-          },
-          "sample_rate": {
-            "default": 44100,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "seed": {
-            "type": "integer"
-          },
-          "watermark": {
-            "default": false,
-            "type": "boolean"
-          }
-        },
-        "type": "object"
-      },
-      "output": {
-        "kind": "resources",
-        "mime_types": [
-          "audio/mpeg",
-          "audio/wav",
-          "audio/L16"
-        ],
-        "normalized_result_path": "resources",
-        "resource_kind": "audio",
-        "source_path": "/data/audio_url",
-        "resource_decoders": [
-          {
-            "source_path": "/data/audio_url",
-            "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
-            "resource_kind": "audio",
-            "mime_type_request_path": "/output_format",
-            "mime_types_by_request_value": {
-              "mp3": "audio/mpeg",
-              "wav": "audio/wav",
-              "pcm": "audio/L16"
-            },
-            "optional": false,
-            "output_id_prefix": "music"
-          }
-        ]
-      },
-      "service_entry_id": "cn",
-      "target_id": "cn.music-2.6",
-      "tool_id": "music_generate",
-      "upstream_target_id": "music-2.6"
-    },
-    {
-      "capability": "music_generate",
-      "credential_profile_ids": [
-        "payg-api-key",
-        "token-plan-key",
-        "token-plan-oauth"
-      ],
-      "description": "Generate one music audio resource with the selected MiniMax music model.",
-      "display_name": "MiniMax Music 2.6 Free",
-      "execution": {
-        "adapter": "generic_json",
-        "authentication": "bearer_authorization",
-        "endpoint_path": "/v1/music_generation",
-        "execution_kind": "http_json_sync"
-      },
-      "input_schema": {
-        "additionalProperties": false,
-        "oneOf": [
-          {
-            "properties": {
-              "instrumental": {"const": true},
-              "lyrics_optimizer": {"const": false},
-              "lyrics": {"maxLength": 0},
-              "prompt": {"minLength": 1}
-            },
-            "required": ["instrumental", "prompt"]
-          },
-          {
-            "properties": {
-              "instrumental": {"const": false},
-              "lyrics_optimizer": {"const": true},
-              "lyrics": {"maxLength": 0},
-              "prompt": {"minLength": 1}
-            },
-            "required": ["lyrics_optimizer", "prompt"]
-          },
-          {
-            "properties": {
-              "instrumental": {"const": false},
-              "lyrics_optimizer": {"const": false},
-              "lyrics": {"minLength": 1}
-            },
-            "required": ["lyrics"]
-          }
-        ],
-        "properties": {
-          "bitrate": {
-            "default": 256000,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "channels": {
-            "maximum": 2,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "instrumental": {
-            "default": false,
-            "description": "Generate instrumental music without lyrics.",
-            "type": "boolean"
-          },
-          "lyrics": {
-            "description": "Exact lyrics; omit for instrumental or optimized lyric generation.",
-            "maxLength": 3500,
-            "type": "string"
-          },
-          "lyrics_optimizer": {
-            "default": false,
-            "description": "Let MiniMax generate optimized lyrics from the prompt.",
-            "type": "boolean"
-          },
-          "output_format": {
-            "default": "mp3",
-            "enum": [
-              "mp3",
-              "wav",
-              "pcm"
-            ],
-            "type": "string"
-          },
-          "prompt": {
-            "description": "Style, mood, and scenario guidance.",
-            "maxLength": 2000,
-            "type": "string"
-          },
-          "sample_rate": {
-            "default": 44100,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "seed": {
-            "type": "integer"
-          },
-          "watermark": {
-            "default": false,
-            "type": "boolean"
-          }
-        },
-        "type": "object"
-      },
-      "output": {
-        "kind": "resources",
-        "mime_types": [
-          "audio/mpeg",
-          "audio/wav",
-          "audio/L16"
-        ],
-        "normalized_result_path": "resources",
-        "resource_kind": "audio",
-        "source_path": "/data/audio_url",
-        "resource_decoders": [
-          {
-            "source_path": "/data/audio_url",
-            "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
-            "resource_kind": "audio",
-            "mime_type_request_path": "/output_format",
-            "mime_types_by_request_value": {
-              "mp3": "audio/mpeg",
-              "wav": "audio/wav",
-              "pcm": "audio/L16"
-            },
-            "optional": false,
-            "output_id_prefix": "music"
-          }
-        ]
-      },
-      "service_entry_id": "cn",
-      "target_id": "cn.music-2.6-free",
-      "tool_id": "music_generate",
-      "upstream_target_id": "music-2.6-free"
-    },
-    {
-      "capability": "music_generate",
-      "credential_profile_ids": [
-        "payg-api-key",
-        "token-plan-key",
-        "token-plan-oauth"
-      ],
-      "description": "Generate one music audio resource with the selected MiniMax music model.",
-      "display_name": "MiniMax Music 2.5 Plus",
-      "execution": {
-        "adapter": "generic_json",
-        "authentication": "bearer_authorization",
-        "endpoint_path": "/v1/music_generation",
-        "execution_kind": "http_json_sync"
-      },
-      "input_schema": {
-        "additionalProperties": false,
-        "oneOf": [
-          {
-            "properties": {
-              "instrumental": {"const": true},
-              "lyrics_optimizer": {"const": false},
-              "lyrics": {"maxLength": 0},
-              "prompt": {"minLength": 1}
-            },
-            "required": ["instrumental", "prompt"]
-          },
-          {
-            "properties": {
-              "instrumental": {"const": false},
-              "lyrics_optimizer": {"const": true},
-              "lyrics": {"maxLength": 0},
-              "prompt": {"minLength": 1}
-            },
-            "required": ["lyrics_optimizer", "prompt"]
-          },
-          {
-            "properties": {
-              "instrumental": {"const": false},
-              "lyrics_optimizer": {"const": false},
-              "lyrics": {"minLength": 1}
-            },
-            "required": ["lyrics"]
-          }
-        ],
-        "properties": {
-          "bitrate": {
-            "default": 256000,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "channels": {
-            "maximum": 2,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "instrumental": {
-            "default": false,
-            "description": "Generate instrumental music without lyrics.",
-            "type": "boolean"
-          },
-          "lyrics": {
-            "description": "Exact lyrics; omit for instrumental or optimized lyric generation.",
-            "maxLength": 3500,
-            "type": "string"
-          },
-          "lyrics_optimizer": {
-            "default": false,
-            "description": "Let MiniMax generate optimized lyrics from the prompt.",
-            "type": "boolean"
-          },
-          "output_format": {
-            "default": "mp3",
-            "enum": [
-              "mp3",
-              "wav",
-              "pcm"
-            ],
-            "type": "string"
-          },
-          "prompt": {
-            "description": "Style, mood, and scenario guidance.",
-            "maxLength": 2000,
-            "type": "string"
-          },
-          "sample_rate": {
-            "default": 44100,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "seed": {
-            "type": "integer"
-          },
-          "watermark": {
-            "default": false,
-            "type": "boolean"
-          }
-        },
-        "type": "object"
-      },
-      "output": {
-        "kind": "resources",
-        "mime_types": [
-          "audio/mpeg",
-          "audio/wav",
-          "audio/L16"
-        ],
-        "normalized_result_path": "resources",
-        "resource_kind": "audio",
-        "source_path": "/data/audio_url",
-        "resource_decoders": [
-          {
-            "source_path": "/data/audio_url",
-            "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
-            "resource_kind": "audio",
-            "mime_type_request_path": "/output_format",
-            "mime_types_by_request_value": {
-              "mp3": "audio/mpeg",
-              "wav": "audio/wav",
-              "pcm": "audio/L16"
-            },
-            "optional": false,
-            "output_id_prefix": "music"
-          }
-        ]
-      },
-      "service_entry_id": "cn",
-      "target_id": "cn.music-2.5+",
-      "tool_id": "music_generate",
-      "upstream_target_id": "music-2.5+"
-    },
-    {
-      "capability": "music_generate",
-      "credential_profile_ids": [
-        "payg-api-key",
-        "token-plan-key",
-        "token-plan-oauth"
-      ],
-      "description": "Generate one music audio resource with the selected MiniMax music model.",
-      "display_name": "MiniMax Music 2.5",
-      "execution": {
-        "adapter": "generic_json",
-        "authentication": "bearer_authorization",
-        "endpoint_path": "/v1/music_generation",
-        "execution_kind": "http_json_sync"
-      },
-      "input_schema": {
-        "additionalProperties": false,
-        "oneOf": [
-          {
-            "properties": {
-              "instrumental": {"const": true},
-              "lyrics_optimizer": {"const": false},
-              "lyrics": {"maxLength": 0},
-              "prompt": {"minLength": 1}
-            },
-            "required": ["instrumental", "prompt"]
-          },
-          {
-            "properties": {
-              "instrumental": {"const": false},
-              "lyrics_optimizer": {"const": true},
-              "lyrics": {"maxLength": 0},
-              "prompt": {"minLength": 1}
-            },
-            "required": ["lyrics_optimizer", "prompt"]
-          },
-          {
-            "properties": {
-              "instrumental": {"const": false},
-              "lyrics_optimizer": {"const": false},
-              "lyrics": {"minLength": 1}
-            },
-            "required": ["lyrics"]
-          }
-        ],
-        "properties": {
-          "bitrate": {
-            "default": 256000,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "channels": {
-            "maximum": 2,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "instrumental": {
-            "default": false,
-            "description": "Generate instrumental music without lyrics.",
-            "type": "boolean"
-          },
-          "lyrics": {
-            "description": "Exact lyrics; omit for instrumental or optimized lyric generation.",
-            "maxLength": 3500,
-            "type": "string"
-          },
-          "lyrics_optimizer": {
-            "default": false,
-            "description": "Let MiniMax generate optimized lyrics from the prompt.",
-            "type": "boolean"
-          },
-          "output_format": {
-            "default": "mp3",
-            "enum": [
-              "mp3",
-              "wav",
-              "pcm"
-            ],
-            "type": "string"
-          },
-          "prompt": {
-            "description": "Style, mood, and scenario guidance.",
-            "maxLength": 2000,
-            "type": "string"
-          },
-          "sample_rate": {
-            "default": 44100,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "seed": {
-            "type": "integer"
-          },
-          "watermark": {
-            "default": false,
-            "type": "boolean"
-          }
-        },
-        "type": "object"
-      },
-      "output": {
-        "kind": "resources",
-        "mime_types": [
-          "audio/mpeg",
-          "audio/wav",
-          "audio/L16"
-        ],
-        "normalized_result_path": "resources",
-        "resource_kind": "audio",
-        "source_path": "/data/audio_url",
-        "resource_decoders": [
-          {
-            "source_path": "/data/audio_url",
-            "encoding": "public_http_url",
-            "download_host_suffixes": ["api.minimax.io", "api.minimaxi.com", ".minimax.chat", ".hailuoai.com"],
-            "resource_kind": "audio",
-            "mime_type_request_path": "/output_format",
-            "mime_types_by_request_value": {
-              "mp3": "audio/mpeg",
-              "wav": "audio/wav",
-              "pcm": "audio/L16"
-            },
-            "optional": false,
-            "output_id_prefix": "music"
-          }
-        ]
-      },
-      "service_entry_id": "cn",
-      "target_id": "cn.music-2.5",
-      "tool_id": "music_generate",
-      "upstream_target_id": "music-2.5"
     },
     {
       "capability": "video_generate",
@@ -6032,6 +4602,18 @@
       {
         "url": "https://github.com/MiniMax-AI/cli/commit/2576f4656211e6d296bb1fe885da141080b70f23",
         "note": "MiniMax CLI image generation defaults to response_format=url with a 300-second request timeout; video generation verifies the V1 task, retrieves file metadata by file_id, and downloads file.download_url, while a live CN retrieval returned the exact authorized OSS host recorded by the video output contract."
+      },
+      {
+        "url": "https://github.com/MiniMax-AI/cli/blob/main/src/commands/vision/describe.ts",
+        "note": "MiniMax CLI vision describe accepts exactly one image or pre-uploaded file ID and projects the image branch to image_url for the Coding Plan VLM endpoint."
+      },
+      {
+        "url": "https://github.com/MiniMax-AI/cli/blob/main/src/utils/image.ts",
+        "note": "MiniMax CLI maps JPEG, PNG, WebP, HEIC, and HEIF local images to Data URLs and enforces a 50 MiB limit while downloading remote images."
+      },
+      {
+        "url": "https://platform.minimax.io/docs/api-reference/speech-t2a-http",
+        "note": "MiniMax synchronous speech supports output_format=url for non-streaming requests; the returned audio URL remains valid for 24 hours and avoids embedding large hex audio in the JSON response."
       },
       {
         "url": "https://platform.minimax.io/docs/api-reference/text-post",

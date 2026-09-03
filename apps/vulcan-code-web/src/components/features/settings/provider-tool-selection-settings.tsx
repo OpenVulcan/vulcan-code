@@ -2,6 +2,7 @@ import * as React from "react";
 import { FlaskConical } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { ProviderToolExtensionModelCard } from "@/components/shared/provider-tool-extension-model-card";
 import {
   Select,
   SelectContent,
@@ -306,65 +307,71 @@ export function ProviderToolSelectionSettingsArea(props: {
               // profile 是为当前原生模型显示的已审核清单元数据。
               const profile = model.target.contract.extension_profile;
               return (
-                <article className="settings-provider-tool-extension-row" key={`${model.target.provider_id}/${model.target.upstream_target_id}`}>
-                  <input
-                    checked={Boolean(selectedExtension)}
-                    disabled={pending || !profile}
-                    onChange={(event) => {
-                      const retained = extensionSelections.filter((selection) => !modelTargets.some((target) => (
-                        target.connectionId === selection.connection_id
-                        && target.target.target_id === selection.target_id
-                      )));
-                      if (event.currentTarget.checked && selectedExtensionTarget) {
+                <ProviderToolExtensionModelCard
+                  accountControl={(
+                    <Select
+                      disabled={pending || !selectedExtension}
+                      onValueChange={(connectionId) => {
+                        const replacement = modelTargets.find((target) => target.connectionId === connectionId);
+                        if (!replacement) return;
+                        const retained = extensionSelections.filter((selection) => !modelTargets.some((target) => (
+                          target.connectionId === selection.connection_id
+                          && target.target.target_id === selection.target_id
+                        )));
                         retained.push({
-                          connection_id: selectedExtensionTarget.connectionId,
-                          target_id: selectedExtensionTarget.target.target_id,
+                          connection_id: replacement.connectionId,
+                          target_id: replacement.target.target_id,
                         });
-                      }
-                      void saveExtensionSelections(retained);
-                    }}
-                    type="checkbox"
-                  />
-                  <span className="settings-provider-tool-extension-copy">
-                    <strong>{model.target.display_name}</strong>
-                    <small>{profile?.summary ?? "缺少已审核模型扩展说明，当前不可选择。"}</small>
-                    {profile?.characteristics?.length ? (
-                      <small>{profile.characteristics.join(" · ")}</small>
-                    ) : null}
-                    {profile?.constraints?.length ? (
-                      <small>约束：{profile.constraints.join("；")}</small>
-                    ) : null}
-                    {profile?.limitations?.length ? (
-                      <small>限制：{profile.limitations.join("；")}</small>
-                    ) : null}
-                  </span>
-                  <Select
-                    disabled={pending || !selectedExtension}
-                    onValueChange={(connectionId) => {
-                      const replacement = modelTargets.find((target) => target.connectionId === connectionId);
-                      if (!replacement) return;
-                      const retained = extensionSelections.filter((selection) => !modelTargets.some((target) => (
-                        target.connectionId === selection.connection_id
-                        && target.target.target_id === selection.target_id
-                      )));
+                        void saveExtensionSelections(retained);
+                      }}
+                      value={selectedExtensionTarget?.connectionId ?? ""}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {modelTargets.map((target) => (
+                          <SelectItem key={target.connectionId} value={target.connectionId}>
+                            {target.connectionDisplayName}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  characteristics={profile?.characteristics?.length
+                    ? profile.characteristics.join(" · ")
+                    : null}
+                  checked={Boolean(selectedExtension)}
+                  checkboxDisabled={pending || !profile}
+                  constraints={t("composer.capability.extensionConstraints").replace(
+                    "{value}",
+                    profile?.constraints?.length
+                      ? profile.constraints.join(t("global.listDelimiter"))
+                      : "—",
+                  )}
+                  key={`${model.target.provider_id}/${model.target.upstream_target_id}`}
+                  limitations={t("composer.capability.extensionLimitations").replace(
+                    "{value}",
+                    profile?.limitations?.length
+                      ? profile.limitations.join(t("global.listDelimiter"))
+                      : "—",
+                  )}
+                  modelId={model.target.upstream_target_id}
+                  onCheckedChange={(checked) => {
+                    const retained = extensionSelections.filter((selection) => !modelTargets.some((target) => (
+                      target.connectionId === selection.connection_id
+                      && target.target.target_id === selection.target_id
+                    )));
+                    if (checked && selectedExtensionTarget) {
                       retained.push({
-                        connection_id: replacement.connectionId,
-                        target_id: replacement.target.target_id,
+                        connection_id: selectedExtensionTarget.connectionId,
+                        target_id: selectedExtensionTarget.target.target_id,
                       });
-                      void saveExtensionSelections(retained);
-                    }}
-                    value={selectedExtensionTarget?.connectionId ?? ""}
-                  >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {modelTargets.map((target) => (
-                        <SelectItem key={target.connectionId} value={target.connectionId}>
-                          {target.connectionDisplayName}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </article>
+                    }
+                    void saveExtensionSelections(retained);
+                  }}
+                  providerId={model.target.provider_id}
+                  summary={profile?.summary ?? t("composer.capability.extensionProfileMissing")}
+                  title={model.target.display_name}
+                />
               );
             })}
           </div>
@@ -769,11 +776,11 @@ export function MediaUnderstandingDefaults(props: {
                       <SelectItem value="__default__">
                         {t("settings.providerTools.modelDefaultReasoning")}
                       </SelectItem>
-                      {reasoningEfforts.map((effort) => (
-                        <SelectItem key={effort} value={effort}>
-                          {t(PUBLIC_AI_REASONING_EFFORT_LABEL_KEYS[effort])} ({effort})
-                        </SelectItem>
-                      ))}
+                          {reasoningEfforts.map((effort) => (
+                            <SelectItem key={effort} value={effort}>
+                              {t(PUBLIC_AI_REASONING_EFFORT_LABEL_KEYS[effort])}
+                            </SelectItem>
+                          ))}
                     </SelectContent>
                   </Select>
                 </label>

@@ -178,7 +178,12 @@ impl ProviderExecutionClient {
                 .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
             let url = responses_websocket_url(&route, handshake_encoded.path.as_str())
                 .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
-            let mut headers = execution_headers(&route, &handshake_encoded.headers, &secret)
+            let mut headers = execution_headers(
+                &route,
+                &handshake_encoded.headers,
+                &secret,
+                handshake_request.cache_scope_id.as_deref(),
+            )
                 .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
             headers.insert(
                 HeaderName::from_static("openai-beta"),

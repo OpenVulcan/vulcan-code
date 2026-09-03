@@ -62,7 +62,7 @@ export function useConversationSessionResourcesV1(
   }, [resourceIds]);
   // requestIdentity changes only when owner or the exact unique ordered set changes.
   // requestIdentity 仅在所有者或精确唯一有序集合变化时变化。
-  const requestIdentity = `${sessionId ?? ""}|${uniqueResourceIds.join(",")}`;
+  const requestIdentity = JSON.stringify([sessionId, uniqueResourceIds]);
   const [state, setState] = React.useState<{
     identity: string;
     status: ConversationSessionResourceCatalogV1["status"];
@@ -125,7 +125,9 @@ export function useConversationSessionResourcesV1(
     return () => {
       active = false;
     };
-  }, [client, requestIdentity, sessionId, uniqueResourceIds]);
+  // requestIdentity fully represents sessionId and the ordered unique resource values.
+  // requestIdentity 完整表示 sessionId 与有序唯一资源值，避免仅数组引用变化时重复加载。
+  }, [client, requestIdentity]);
 
   // effectiveState hides the previous owner synchronously during React render before its effect runs.
   // effectiveState 在 effect 运行前的 React 渲染阶段同步隐藏上一所有者。

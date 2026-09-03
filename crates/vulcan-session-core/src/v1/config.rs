@@ -2,11 +2,11 @@
 //! V1 元数据文档：会话模式、配置、输入区状态与分片映射。
 //!
 //! `metadata.json` stays lightweight: mode switches, the latest user
-//! selections, request configuration for the current/next safe API boundary,
+//! selections, request configuration for the active node and next admitted user boundary,
 //! input drafts and queues, and the physical split map. It never stores the
 //! main event stream, transcripts, recovery copies, or statistics ledgers.
-//! `metadata.json` 保持轻量：模式开关、用户最新选择、当前/下一个安全 API
-//! 边界使用的请求配置、输入草稿与队列、物理分片映射。它绝不保存主事件流、
+//! `metadata.json` 保持轻量：模式开关、用户最新选择、活动节点及下一个已准入用户边界
+//! 使用的请求配置、输入草稿与队列、物理分片映射。它绝不保存主事件流、
 //! 转录、恢复副本或统计账本。
 
 use serde::{Deserialize, Serialize};
@@ -144,8 +144,8 @@ pub struct ModeConfig {
     pub access: AccessConfig,
 }
 
-/// Request configuration already effective at the last safe API boundary.
-/// 已在最近一次安全 API 边界生效的请求配置。
+/// Request configuration effective for the active execution node.
+/// 对当前活动执行节点生效的请求配置。
 ///
 /// This is the default for the next physical request; it is never a copy of
 /// the execution scene of an in-flight request. Actual per-request usage is
@@ -191,8 +191,8 @@ pub fn canonical_request_thinking_level(level: Option<&str>) -> Option<&str> {
     }
 }
 
-/// Pending request-configuration change applied at the next safe API boundary.
-/// 将在下一个安全 API 边界生效的请求配置变更。
+/// Pending request-configuration change applied only at the next admitted user or Continue boundary.
+/// 仅在下一个已准入用户输入或 Continue 边界生效的请求配置变更。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PendingRequestConfig {
@@ -560,11 +560,11 @@ pub struct SelectionConfig {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionConfig {
-    /// Request configuration effective at the last safe API boundary.
-    /// 已在最近一次安全 API 边界生效的请求配置。
+    /// Request configuration effective for the active execution node.
+    /// 对当前活动执行节点生效的请求配置。
     pub active_request: ActiveRequestConfig,
-    /// Pending request change applied at the next safe boundary.
-    /// 将在下一个安全边界生效的请求变更。
+    /// Pending request change applied at the next admitted user or Continue boundary.
+    /// 将在下一个已准入用户输入或 Continue 边界生效的请求变更。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_request: Option<PendingRequestConfig>,
     /// Latest user selections.
@@ -621,13 +621,17 @@ pub struct DraftState {
 
 /// One in-turn supplementary input bound to the open turn.
 /// 一条绑定开放回合的过程内补充输入。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PendingInTurnInput {
     /// Prompt-owned preparation captured at admission, never recomputed from the later active model.
     /// 准入时捕获的提示词所有准备，绝不根据后续活动模型重算。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parameters: Option<crate::v1::UserPromptParameters>,
+    /// Exact request configuration bound when this user input was accepted for interjection.
+    /// 本用户输入被接纳插队时绑定的精确请求配置。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bound_request_config: Option<ActiveRequestConfig>,
     /// Stable external idempotency identity of the client action.
     /// 客户端动作的稳定外部幂等身份。
     pub client_action_id: ClientActionId,
@@ -651,13 +655,17 @@ pub struct PendingInTurnInput {
 
 /// One queued future-turn input.
 /// 一条排队中的未来回合输入。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QueuedInput {
     /// Prompt-owned preparation captured before queueing; missing legacy data stays unknown.
     /// 排队之前捕获的提示词所有准备；缺失旧数据保持未知。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parameters: Option<crate::v1::UserPromptParameters>,
+    /// Exact request configuration bound when this future user Turn entered the queue.
+    /// 本未来用户回合进入队列时绑定的精确请求配置。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bound_request_config: Option<ActiveRequestConfig>,
     /// Stable external idempotency identity of the client action.
     /// 客户端动作的稳定外部幂等身份。
     pub client_action_id: ClientActionId,
@@ -678,7 +686,7 @@ pub struct QueuedInput {
 
 /// Input area state persisted inside `metadata.input_state`.
 /// 保存在 `metadata.input_state` 内的输入区状态。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InputState {
     /// Input draft text and ordered resources.

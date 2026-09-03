@@ -76,7 +76,12 @@ impl ProviderExecutionClient {
                 .map_err(llm_core_protocol_failure)
                 .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
             let url = route.request_url(encoded.path.as_str());
-            let headers = execution_headers(&route, &encoded.headers, &secret)
+            let headers = execution_headers(
+                &route,
+                &encoded.headers,
+                &secret,
+                request.cache_scope_id.as_deref(),
+            )
                 .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
             // The capture contains the exact body and the final headers after transport projection.
             // 捕获内容包含精确正文以及完成传输投影后的最终请求头。

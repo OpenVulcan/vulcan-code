@@ -152,7 +152,6 @@ pub(crate) async fn service_select_public_ai_model(
                     provider: runtime_state.active_provider_id.clone(),
                     connection_id: runtime_state.active_connection_id.clone(),
                     model: runtime_state.active_model_id.clone(),
-                    thinking_level: runtime_state.active_reasoning_effort,
                     temperature: runtime_state.active_temperature,
                 },
             )
@@ -252,6 +251,38 @@ pub(crate) async fn service_select_public_ai_model(
             ));
         }
     }
+    // A model-picker action is the only model-change boundary allowed to replace an incompatible
+    // reasoning level. Supported levels remain byte-for-byte session authority.
+    // 模型选择器动作是模型变化时唯一允许替换不兼容思考档位的边界；受支持档位逐字保持会话权威。
+    let reasoning_override = session_handle
+        .as_ref()
+        .map(|handle| -> Result<_, String> {
+            let next_request =
+                crate::session_request_config_v1::capture_next_request_config_v1(handle.as_ref())?;
+            let Some(current_reasoning) = next_request
+                .thinking_level
+                .as_deref()
+                .map(|level| {
+                    crate::workspace_persistence_versions::parse_reasoning_effort(level)
+                        .ok_or_else(|| format!("Invalid V1 reasoning level: {level}"))
+                })
+                .transpose()?
+            else {
+                return Ok(None);
+            };
+            if current_reasoning
+                == vulcan_agent_runtime::provider_config::ReasoningEffortLevel::Off
+            {
+                return Ok(None);
+            }
+            let resolved_reasoning = vulcan_agent_runtime::agent_runtime::provider_reasoning::resolve_effective_reasoning_effort(
+                &selected_model.model.capabilities,
+                Some(current_reasoning),
+            );
+            Ok((resolved_reasoning != current_reasoning).then_some(resolved_reasoning))
+        })
+        .transpose()?
+        .flatten();
     // selectedTarget is the exact future session tuple or process-wide active tuple.
     // selectedTarget 是精确的未来会话三元组或进程级活动三元组。
     let selected_target = ActiveAiModelSelection {
@@ -273,6 +304,7 @@ pub(crate) async fn service_select_public_ai_model(
             request.provider_id.clone(),
             request.connection_id.clone(),
             request.model_id.clone(),
+            reasoning_override,
             session_request_fallback,
             pending_requested_at_ms,
         )
@@ -329,6 +361,7 @@ pub(crate) async fn service_select_public_ai_model(
                             provider_id,
                             connection_id,
                             model_id,
+                            reasoning_override,
                             fallback,
                             now_ms,
                         )) = v1_pending_target
@@ -338,6 +371,7 @@ pub(crate) async fn service_select_public_ai_model(
                                 provider_id,
                                 connection_id,
                                 model_id,
+                                reasoning_override,
                                 fallback,
                                 now_ms,
                             )?;
@@ -798,9 +832,9 @@ where
                 continue;
             }
             // The exact V1 route is user-owned and may only change through an explicit pending
-            // request selection at a safe Provider boundary. Revocation removes only the
+            // request selection at an admitted user-input or Continue boundary. Revocation removes only the
             // process-local lease so projection becomes unavailable and requires reselection.
-            // 精确 V1 路由由用户持有，只能通过显式待生效请求在安全 Provider 边界修改。
+            // 精确 V1 路由由用户持有，只能通过显式待生效请求在已准入用户输入或 Continue 边界修改。
             // 撤销仅移除进程内租约，使投影变为不可用并要求用户重新选择。
             runtime_state.provider_route_lease = None;
             changed_session_ids.insert(*session_id);

@@ -187,6 +187,81 @@ pub const FORBIDDEN_MANIFEST_HEADERS: &[&str] = &[
     "keep-alive",
 ];
 
+/// Maximum bytes accepted for one dynamic session-header name.
+/// 单个动态会话请求头名称允许的最大字节数。
+pub(crate) const MAX_SESSION_HEADER_NAME_BYTES: usize = 64;
+
+/// Returns whether a session-header name satisfies the host's bounded ASCII name contract.
+/// 判断会话请求头名称是否满足宿主有界 ASCII 名称契约。
+///
+/// # Parameters
+/// 参数
+/// `name` is the candidate session-header name before HTTP header parsing.
+/// `name` 是进入 HTTP 请求头解析前的候选会话请求头名称。
+///
+/// # Returns
+/// 返回值
+/// `true` when the name is non-empty, bounded, and contains only accepted ASCII characters.
+/// 当名称非空、长度受限且只包含允许的 ASCII 字符时返回 `true`。
+pub(crate) fn is_valid_session_header_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= MAX_SESSION_HEADER_NAME_BYTES
+        && name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        })
+}
+
+/// Header names owned by the host's final session, authentication, transport, or identity projection.
+/// 由宿主最终会话、鉴权、传输或身份投影持有的请求头名称。
+const HOST_OWNED_SESSION_HEADERS: &[&str] = &[
+    "authorization",
+    "api-key",
+    "x-api-key",
+    "x-auth-token",
+    "x-goog-api-key",
+    "chatgpt-account-id",
+    "x-goog-user-project",
+    "cookie",
+    "set-cookie",
+    "host",
+    "content-length",
+    "transfer-encoding",
+    "connection",
+    "proxy-authorization",
+    "proxy-authenticate",
+    "www-authenticate",
+    "accept-encoding",
+    "content-type",
+    "te",
+    "trailer",
+    "upgrade",
+    "keep-alive",
+    "user-agent",
+    "openai-beta",
+    "origin",
+    "expect",
+];
+
+/// Returns whether a session-header name is owned by a later host projection and must be skipped.
+/// 判断会话请求头名称是否由后续宿主投影持有，并因此必须跳过。
+///
+/// # Parameters
+/// 参数
+/// `name` is the case-insensitive candidate request-header name.
+/// `name` 是不区分大小写的候选请求头名称。
+///
+/// # Returns
+/// 返回值
+/// `true` when the host owns the name or one of its reserved identity namespaces.
+/// 当宿主持有该名称或其保留身份命名空间时返回 `true`。
+pub(crate) fn is_host_owned_session_header(name: &str) -> bool {
+    let normalized = name.to_ascii_lowercase();
+    HOST_OWNED_SESSION_HEADERS.contains(&normalized.as_str())
+        || normalized.starts_with("x-msh-")
+        || normalized.starts_with("x-vulcan-")
+        || normalized.starts_with("sec-websocket-")
+}
+
 /// Wire-body roots owned exclusively by the host protocol encoder; manifest projection steps
 /// may never overwrite them (plan §R8.3). This is the single fact source shared by the
 /// validator and the execution-time projection guard.

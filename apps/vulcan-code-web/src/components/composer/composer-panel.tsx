@@ -399,6 +399,12 @@ export function ComposerPanel(props: {
         connectionId: activeModelChoice.connectionId,
       }
     : null, [activeModelChoice]);
+  // Existing sessions persist picker changes through dedicated RPCs, so submissions must not echo
+  // rendered model or reasoning values back into Meta. Drafts still carry their initial selection.
+  // 已有会话通过专用 RPC 持久化选择器变更，因此提交不得把渲染出的模型或思考值回写 Meta；
+  // 草稿仍携带首次选择。
+  const submittedModelSelection = props.conversationId ? null : activeModelSelection;
+  const submittedSessionReasoningEffort = props.conversationId ? null : submittedReasoningEffort;
   // pendingModelSelectionRef retains the latest model/account persistence request until submission.
   // pendingModelSelectionRef 将最新模型或账号持久化请求保留到提交边界。
   const pendingModelSelectionRef = React.useRef<Promise<boolean> | null>(null);
@@ -558,8 +564,8 @@ export function ComposerPanel(props: {
     attachments,
     projectAttachmentsForSubmission: attachmentPreparation.projectForSubmission,
     executionMode,
-    reasoningEffort: submittedReasoningEffort,
-    modelSelection: activeModelSelection,
+    reasoningEffort: submittedSessionReasoningEffort,
+    modelSelection: submittedModelSelection,
     captureSessionSettings: draftSessionSettings.captureSubmissionSettings,
     clearSessionSettings: draftSessionSettings.clearSubmissionSettings,
     beforeSubmit: flushComposerRouteSelections,

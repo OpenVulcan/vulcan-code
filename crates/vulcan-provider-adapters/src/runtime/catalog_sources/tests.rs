@@ -33,6 +33,7 @@ fn mixed_custom_protocol_discovery_aggregates_every_verified_route() {
             request_headers: BTreeMap::new(),
         }],
         request_headers: BTreeMap::new(),
+        session_header: None,
     }
     .into_descriptor()
     .expect("mixed custom provider should project");
@@ -139,6 +140,7 @@ async fn custom_manual_only_refresh_performs_no_credential_or_remote_discovery()
         model_discovery_path: None,
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
+        session_header: None,
     }
     .into_descriptor()
     .expect("manual-only custom provider must project");

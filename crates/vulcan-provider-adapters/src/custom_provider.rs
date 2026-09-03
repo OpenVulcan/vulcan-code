@@ -178,6 +178,10 @@ pub struct CustomProviderDefinition {
     /// 全部路由共享的有界非敏感固定请求头。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub request_headers: BTreeMap<String, String>,
+    /// Optional header name that receives the current regular-conversation session identifier.
+    /// 可选的请求头名称；配置后接收当前常规会话标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_header: Option<String>,
 }
 
 /// Validates one exact user-owned provider identifier against the shared manifest contract.
@@ -259,6 +263,13 @@ impl CustomProviderDefinition {
                 ));
             }
         }
+        let session_header = self
+            .session_header
+            .as_deref()
+            .map(str::trim)
+            .filter(|header| !header.is_empty())
+            .map(str::to_owned);
+        validate_custom_provider_session_header(session_header.as_deref())?;
         // route_overrides indexes route declarations by protocol; duplicates are rejected below.
         // route_overrides 按协议索引路由声明；重复项在下面拒绝。
         let mut route_overrides = BTreeMap::new();
@@ -370,6 +381,7 @@ impl CustomProviderDefinition {
                 }],
                 authentication: self.authentication.projection(),
                 request_headers: self.request_headers,
+                session_header,
                 service_origin_override_policy: None,
                 native_inference_bindings: Vec::new(),
                 model_discovery: model_discovery.1,
@@ -546,6 +558,21 @@ pub(crate) fn validate_custom_provider_fixed_headers(
     Ok(())
 }
 
+/// Validates one optional regular-conversation session-header name.
+/// 校验一个可选的常规会话请求头名称。
+fn validate_custom_provider_session_header(header: Option<&str>) -> Result<(), String> {
+    let Some(header) = header else {
+        return Ok(());
+    };
+    if !crate::provider_manifest::is_valid_session_header_name(header) {
+        return Err(format!(
+            "Custom provider session header name must use ASCII letters, digits, hyphens, underscores, or dots within {} bytes.",
+            crate::provider_manifest::MAX_SESSION_HEADER_NAME_BYTES,
+        ));
+    }
+    Ok(())
+}
+
 /// Validates one user-declared compatible endpoint path.
 /// 校验一个用户声明的兼容端点路径。
 ///
@@ -621,6 +648,7 @@ fn validate_persisted_custom_provider_service_entry(
     }
     validate_custom_provider_base_url(entry.base_url.as_str())?;
     validate_custom_provider_fixed_headers(&entry.request_headers)?;
+    validate_custom_provider_session_header(entry.session_header.as_deref())?;
     if !matches!(
         entry.authentication,
         AuthenticationProjection::BearerAuthorization
@@ -897,6 +925,7 @@ mod tests {
             model_discovery_path: None,
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
+            session_header: None,
         }
         .into_descriptor()
         .expect("custom provider should be valid");
@@ -904,6 +933,33 @@ mod tests {
         assert_eq!(entry.base_url, "https://example.com/v1");
         assert_eq!(entry.protocol_routes.len(), 1);
         assert_eq!(descriptor.kind, ProviderKind::Custom);
+    }
+
+    /// Verifies a provider-level session header is trimmed and projected to the conversation entry.
+    /// 验证供应商级 Session Header 会去除首尾空白并投影到会话入口。
+    #[test]
+    fn custom_provider_projects_regular_conversation_session_header() {
+        let descriptor = CustomProviderDefinition {
+            id: String::from("custom:session-example"),
+            display_name: String::from("Session example"),
+            base_url: String::from("https://example.com/v1"),
+            protocols: vec![CustomProviderProtocol::OpenAiChat],
+            authentication: CustomProviderAuthentication::BearerAuthorization,
+            model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
+            model_discovery_path: None,
+            protocol_routes: Vec::new(),
+            request_headers: BTreeMap::new(),
+            session_header: Some(String::from("  x-custom-session  ")),
+        }
+        .into_descriptor()
+        .expect("custom provider session header should be valid");
+
+        assert_eq!(
+            descriptor.service_entries[0].session_header.as_deref(),
+            Some("x-custom-session")
+        );
+        validate_persisted_custom_provider_descriptor(&descriptor)
+            .expect("custom provider session header should remain valid after projection");
     }
 
     /// Verifies a custom Gemini provider owns native discovery, authentication, and dynamic model paths.
@@ -922,6 +978,7 @@ mod tests {
             model_discovery_path: None,
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
+            session_header: None,
         }
         .into_descriptor()
         .expect("custom Gemini provider should be valid");
@@ -957,6 +1014,7 @@ mod tests {
             model_discovery_path: None,
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
+            session_header: None,
         }
         .into_descriptor()
         .expect("Codex custom provider should be valid");
@@ -1018,6 +1076,7 @@ mod tests {
             model_discovery_path: None,
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
+            session_header: None,
         }
         .into_descriptor()
         .expect_err("invalid custom provider should fail");
@@ -1044,6 +1103,7 @@ mod tests {
                 model_discovery_path: None,
                 protocol_routes: Vec::new(),
                 request_headers: BTreeMap::new(),
+                session_header: None,
             }
             .into_descriptor()
             .expect_err("unsafe custom provider URL must fail");
@@ -1066,6 +1126,7 @@ mod tests {
             model_discovery_path: Some(String::from("/catalog/models")),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
+            session_header: None,
         }
         .into_descriptor()
         .expect("same-origin model path should be valid");
@@ -1086,6 +1147,7 @@ mod tests {
             model_discovery_path: Some(String::from("/../models")),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
+            session_header: None,
         }
         .into_descriptor()
         .expect_err("parent traversal must be rejected");
@@ -1109,6 +1171,7 @@ mod tests {
                 model_discovery_path: Some(String::from(unsafe_path)),
                 protocol_routes: Vec::new(),
                 request_headers: BTreeMap::new(),
+                session_header: None,
             }
             .into_descriptor()
             .expect_err("unsafe model-discovery path must fail");
@@ -1132,6 +1195,7 @@ mod tests {
             model_discovery_path: Some(String::from("/catalog/models")),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
+            session_header: None,
         }
         .into_descriptor()
         .expect("fixture custom provider should be valid");

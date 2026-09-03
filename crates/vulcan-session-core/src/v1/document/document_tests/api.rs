@@ -192,16 +192,28 @@ fn interruption_atomically_promotes_pending_in_turn_inputs() -> Result<(), Domai
         ApiRequestSnapshot::new("openai", "gpt-5"),
         T0,
     )?;
+    let bound_request_config = ActiveRequestConfig {
+        provider: Some(String::from("openai")),
+        connection_id: None,
+        model: Some(String::from("gpt-5.1")),
+        thinking_level: Some(String::from("low")),
+        temperature: None,
+    };
     let pending_input_id = document
         .add_pending_in_turn_input(
             ClientInputSubmission::new(
                 ClientActionId::try_new("interrupt-pending-input")?,
                 "supplement",
                 Vec::new(),
-            ),
+            )
+            .with_bound_request_config(bound_request_config.clone()),
             T0 + 1,
         )?
         .into_value();
+    assert_eq!(
+        document.metadata.config.active_request.model.as_deref(),
+        Some("gpt-5")
+    );
     let revision_before_interruption = document.memory_revision();
 
     let stats_seq = document.interrupt_active_api(T0 + 2)?;
@@ -221,11 +233,21 @@ fn interruption_atomically_promotes_pending_in_turn_inputs() -> Result<(), Domai
             .pending_in_turn_inputs
             .is_empty()
     );
+    assert_eq!(
+        document.metadata.config.active_request,
+        bound_request_config
+    );
     let promoted_event = document
         .events()
         .iter()
-        .find(|event| event.seq.value() == stats_seq.value() + 1)
-        .expect("promoted input immediately after interrupted ApiStats");
+        .find(|event| {
+            matches!(
+                &event.event,
+                EventBody::UserInput(input) if input.input_id == pending_input_id
+            )
+        })
+        .expect("promoted input after interrupted ApiStats");
+    assert!(promoted_event.seq.value() > stats_seq.value());
     assert_eq!(promoted_event.turn_id, Some(turn_id));
     assert!(matches!(
         &promoted_event.event,
@@ -897,10 +919,11 @@ fn latest_provider_usage_anchor_uses_matching_v1_api_facts() -> Result<(), Domai
     Ok(())
 }
 
-/// Initialized requests must match active config and cannot bypass an unpromoted pending config.
-/// 已初始化请求必须匹配活动配置，且不能绕过尚未提升的待生效配置。
+/// Initialized requests must match active config while pending picker intent remains deferred.
+/// 已初始化请求必须匹配活动配置，而待生效的选择器意图继续延后。
 #[test]
-fn provider_prepare_requires_the_promoted_active_request() -> Result<(), DomainError> {
+fn provider_prepare_uses_active_request_and_ignores_pending_picker_intent()
+-> Result<(), DomainError> {
     let mut doc = new_document();
     doc.submit_root_input_fixture("hello", Vec::new(), T0)?;
     let api = doc.start_api(
@@ -946,8 +969,7 @@ fn provider_prepare_requires_the_promoted_active_request() -> Result<(), DomainE
         },
         T0 + 4,
     )?;
-    let before_pending = doc.clone();
-    let blocked = PrepareAndStartApiInput {
+    let prepared_with_pending = PrepareAndStartApiInput {
         purpose: ApiPurposeKind::MainGeneration,
         request: ApiRequestSnapshot::new("openai", "gpt-5"),
         request_budget_evidence: test_provider_request_budget_evidence(),
@@ -962,13 +984,16 @@ fn provider_prepare_requires_the_promoted_active_request() -> Result<(), DomainE
         continuation_action_id: None,
         now_ms: T0 + 5,
     };
-    assert!(matches!(
-        doc.prepare_and_start_api(blocked),
-        Err(DomainError::InvalidRequestConfiguration {
-            field: "pending_request_not_promoted"
-        })
-    ));
-    assert_eq!(doc, before_pending);
+    let prepared = doc.prepare_and_start_api(prepared_with_pending)?;
+    assert!(prepared.changed());
+    assert_eq!(
+        doc.metadata
+            .config
+            .pending_request
+            .as_ref()
+            .and_then(|pending| pending.model.as_deref()),
+        Some("gpt-5.1")
+    );
     Ok(())
 }
 
@@ -986,13 +1011,24 @@ fn continue_api_binding_and_transport_observation_are_restart_idempotent() -> Re
     )?;
     complete_user_interrupted(&mut doc, first_api, T0 + 2)?;
     let action_id = ClientActionId::try_new("continue-action-1")?;
-    let continuation_request = ContinuationRequest::new(action_id.clone(), "", Vec::new())
+    let continued_request_config = ActiveRequestConfig {
+        provider: Some(String::from("openai")),
+        connection_id: None,
+        model: Some(String::from("gpt-5.1")),
+        thinking_level: Some(String::from("max")),
+        temperature: None,
+    };
+    let mut continuation_request = ContinuationRequest::new(action_id.clone(), "", Vec::new())
         .with_hidden_model_guidance(Some(String::from("Continue the active plan.")));
+    continuation_request.submission = continuation_request
+        .submission
+        .with_bound_request_config(continued_request_config.clone());
     let continued = doc.continue_open_turn(continuation_request.clone(), T0 + 3)?;
     assert!(continued.changed());
     let continued = continued.into_value();
     assert_eq!(continued.turn_id, turn_id);
     assert!(continued.guidance_seq.is_some());
+    assert_eq!(doc.metadata.config.active_request, continued_request_config);
     let revision_after_continue = doc.memory_revision();
     let repeated = doc.continue_open_turn(continuation_request.clone(), T0 + 3)?;
     assert!(!repeated.changed());
@@ -1009,7 +1045,8 @@ fn continue_api_binding_and_transport_observation_are_restart_idempotent() -> Re
     ));
     assert_eq!(doc, before_guidance_drift);
 
-    let request = ApiRequestSnapshot::new("openai", "gpt-5");
+    let mut request = ApiRequestSnapshot::new("openai", "gpt-5.1");
+    request.thinking_level = Some(String::from("max"));
     let projection = ProviderProjectionProof {
         segment_generation: doc.segment_generation(),
         document_revision: doc.memory_revision(),

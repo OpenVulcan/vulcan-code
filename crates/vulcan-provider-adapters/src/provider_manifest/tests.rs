@@ -505,6 +505,7 @@ fn rust_service_entry_fields() -> BTreeSet<&'static str> {
         "credential_profiles",
         "default_authentication",
         "request_headers",
+        "session_header",
         "service_origin_override_policy",
         "native_inference_bindings",
         "request_projector",
@@ -654,6 +655,34 @@ fn manifest_schema_service_contract_is_consistent() {
         credential_fields,
         rust_credential_profile_fields(),
         "credential-profile JSON Schema fields must exactly match the Rust DTO"
+    );
+}
+
+/// Verifies the committed JSON Schema keeps session headers exclusive to conversation entries.
+/// 验证已提交 JSON Schema 将会话请求头限制在常规会话入口。
+#[test]
+fn manifest_schema_rejects_session_header_on_provider_tools() {
+    let schema = load_schema("provider-manifest-v2.schema.json");
+    let validator =
+        jsonschema::draft202012::new(&schema).expect("provider manifest schema must compile");
+    let manifest_path = schema_resource("provider-manifest-v2.schema.json")
+        .parent()
+        .expect("schema path must have a parent")
+        .parent()
+        .expect("schema directory must have a parent")
+        .join("manifests")
+        .join("tavily.json");
+    let manifest_text = std::fs::read_to_string(&manifest_path)
+        .unwrap_or_else(|_| panic!("missing Tavily manifest at {}", manifest_path.display()));
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&manifest_text).expect("Tavily manifest must be valid JSON");
+    // The fixture already contains a provider-tools entry, so this mutation isolates the schema rule.
+    // 该 fixture 已包含 Provider Tools 入口，因此本变更只验证 Schema 规则本身。
+    manifest["services"][0]["session_header"] =
+        serde_json::Value::String(String::from("x-provider-session"));
+    assert!(
+        !validator.is_valid(&manifest),
+        "provider-tools entries must not accept session_header"
     );
 }
 

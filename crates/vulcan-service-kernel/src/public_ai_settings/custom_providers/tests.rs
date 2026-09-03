@@ -47,6 +47,7 @@ fn custom_codex_provider_candidate_preserves_explicit_responses_capabilities() {
         model_discovery_path: None,
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
+        session_header: Some(String::from("x-custom-session")),
         allow_manual_fallback: false,
         allow_pending_validation: false,
         confirm_inactive_protocol_override_deletion: false,
@@ -70,6 +71,12 @@ fn custom_codex_provider_candidate_preserves_explicit_responses_capabilities() {
         features.websocket,
         ResponsesWebsocketPolicy::UnverifiedOverride
     );
+    assert_eq!(
+        candidate.descriptor.service_entries[0]
+            .session_header
+            .as_deref(),
+        Some("x-custom-session")
+    );
 }
 
 /// Verifies execution-only Codex capability switches do not trigger credential revalidation.
@@ -91,6 +98,7 @@ fn custom_codex_capability_switch_is_not_a_connection_contract_change() {
         model_discovery_path: None,
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
+        session_header: None,
     }
     .into_descriptor()
     .expect("default Codex provider should compile");
@@ -117,6 +125,7 @@ fn custom_codex_capability_switch_is_not_a_connection_contract_change() {
         model_discovery_path: None,
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
+        session_header: None,
         allow_manual_fallback: false,
         allow_pending_validation: false,
         confirm_inactive_protocol_override_deletion: false,
@@ -151,6 +160,7 @@ fn custom_provider_edit_atomically_migrates_every_existing_credential() {
         model_discovery_path: None,
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
+        session_header: None,
     }
     .into_descriptor()
     .expect("custom provider fixture should compile");
@@ -203,6 +213,7 @@ fn custom_provider_edit_atomically_migrates_every_existing_credential() {
         model_discovery_path: None,
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
+        session_header: None,
         allow_manual_fallback: false,
         allow_pending_validation: false,
         confirm_inactive_protocol_override_deletion: false,
@@ -250,6 +261,7 @@ fn custom_provider_edit_atomically_migrates_every_existing_credential() {
         model_discovery_path: None,
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
+        session_header: None,
         allow_manual_fallback: false,
         allow_pending_validation: false,
         confirm_inactive_protocol_override_deletion: false,
@@ -635,6 +647,7 @@ fn multi_protocol_custom_provider_projects_one_route_per_protocol() {
         ],
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
+        session_header: None,
         allow_manual_fallback: false,
         allow_pending_validation: false,
         confirm_inactive_protocol_override_deletion: false,
@@ -678,6 +691,7 @@ fn removed_protocols_reports_only_the_deleted_protocol() {
         ],
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
+        session_header: None,
         allow_manual_fallback: false,
         allow_pending_validation: false,
         confirm_inactive_protocol_override_deletion: false,
@@ -701,6 +715,7 @@ fn removed_protocols_reports_only_the_deleted_protocol() {
         model_discovery_path: None,
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
+        session_header: None,
     }
     .into_descriptor()
     .expect("existing descriptor should compile");
@@ -743,6 +758,7 @@ fn connection_contract_comparison_normalizes_every_route() {
         model_discovery_path: None,
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
+        session_header: None,
     }
     .into_descriptor()
     .expect("existing descriptor should compile");
@@ -811,6 +827,7 @@ fn bounded_fixed_headers_survive_prepare_and_registry_revalidation() {
             (String::from("accept"), String::from("application/json")),
             (String::from("x-provider-version"), String::from("2026-08")),
         ]),
+        session_header: None,
         allow_manual_fallback: false,
         allow_pending_validation: false,
         confirm_inactive_protocol_override_deletion: false,
@@ -847,6 +864,7 @@ fn secret_fixed_headers_are_rejected_at_service_save_boundary() {
             protocols: vec![CustomProviderProtocol::OpenAiChat],
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::from([(String::from(forbidden), String::from("private"))]),
+            session_header: None,
             allow_manual_fallback: false,
             allow_pending_validation: false,
             confirm_inactive_protocol_override_deletion: false,

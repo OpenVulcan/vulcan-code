@@ -35,6 +35,8 @@ const MAX_UPLOAD_ITEM_COUNT: u64 = 1_024;
 /// Hard maximum fixed form fields attached to one upload request.
 /// 单次上传请求可附加的固定表单字段硬上限。
 const MAX_UPLOAD_FIXED_FIELDS: usize = 32;
+/// Hard maximum bytes accepted by one dynamic session-header name.
+/// 单个动态会话请求头名称允许接受的最大字节数硬上限。
 /// Hard maximum process-local reuse lifetime for one provider upload reference.
 /// 单个供应商上传引用在进程内复用的最长硬期限。
 const MAX_UPLOAD_CACHE_DURATION_MS: u64 = 24 * 60 * 60 * 1_000;
@@ -948,6 +950,20 @@ fn validate_service_entry(
         &path(".request_headers"),
         errors,
         "service",
+    );
+    if entry.session_header.is_some()
+        && entry.kind != crate::provider_manifest::schema::ManifestEntryKind::Conversation
+    {
+        errors.push(ManifestValidationError::new(
+            "session_header_requires_conversation",
+            path(".session_header"),
+            "session header is only supported by conversation service entries",
+        ));
+    }
+    validate_session_header(
+        entry.session_header.as_deref(),
+        &path(".session_header"),
+        errors,
     );
 
     if let Some(policy) = entry.service_origin_override_policy.as_ref() {
@@ -6814,6 +6830,34 @@ fn validate_fixed_headers(
     }
 }
 
+/// Validates one optional dynamic session-header name against host-owned boundaries.
+/// 对照宿主所有权边界验证一个可选动态会话请求头名称。
+///
+/// # Parameters
+/// 参数
+/// `header` is the configured header name, `path` owns stable diagnostics, and `errors` collects
+/// validation failures.
+/// `header` 是配置的请求头名称，`path` 负责稳定诊断位置，`errors` 收集校验失败。
+fn validate_session_header(
+    header: Option<&str>,
+    path: &str,
+    errors: &mut Vec<ManifestValidationError>,
+) {
+    let Some(header) = header else {
+        return;
+    };
+    if !crate::provider_manifest::is_valid_session_header_name(header) {
+        errors.push(ManifestValidationError::new(
+            "invalid_session_header",
+            path,
+            format!(
+                "session header name must use ASCII letters, digits, hyphens, underscores, or dots within {} bytes",
+                crate::provider_manifest::MAX_SESSION_HEADER_NAME_BYTES
+            ),
+        ));
+    }
+}
+
 /// Validates response-header names that may be copied into provider request-id telemetry.
 /// 验证可复制到供应商请求标识遥测中的响应头名称。
 ///
@@ -7067,6 +7111,7 @@ mod tests {
                 ],
                 default_authentication: None,
                 request_headers: Default::default(),
+                session_header: None,
                 service_origin_override_policy: None,
                 native_inference_bindings: Vec::new(),
                 request_projector: None,
@@ -7497,6 +7542,46 @@ mod tests {
         assert!(errors.iter().any(|e| e.code == "revision_must_be_positive"));
     }
 
+    /// Verifies session-header names accept valid names while runtime projection handles conflicts.
+    /// 验证会话请求头名称接受合法名称，并由运行时投影处理冲突。
+    #[test]
+    fn session_header_name_contract_is_validated() {
+        let mut manifest = minimal_manifest();
+        manifest.services[0].session_header = Some(String::from("x-opencode-session"));
+        validate_manifest(&manifest, ManifestOwnership::System, &registry())
+            .expect("safe session header name should compile");
+
+        manifest.services[0].session_header = Some(String::from("authorization"));
+        validate_manifest(&manifest, ManifestOwnership::System, &registry())
+            .expect("host-owned session header may be ignored by runtime projection");
+
+        manifest.services[0].session_header = Some(String::from("x invalid"));
+        let errors = validate_manifest(&manifest, ManifestOwnership::System, &registry())
+            .expect_err("invalid session header name must fail");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.code == "invalid_session_header")
+        );
+    }
+
+    /// Verifies provider-tool entries cannot declare a regular-conversation session header.
+    /// 验证供应商工具入口不能声明常规会话请求头。
+    #[test]
+    fn provider_tool_entry_rejects_session_header() {
+        let mut manifest = minimal_manifest();
+        manifest.services[0].kind = ManifestEntryKind::ProviderTools;
+        manifest.services[0].model_catalog = None;
+        manifest.services[0].session_header = Some(String::from("x-provider-session"));
+        let errors = validate_manifest(&manifest, ManifestOwnership::System, &registry())
+            .expect_err("provider-tool session headers must be rejected");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.code == "session_header_requires_conversation")
+        );
+    }
+
     /// Verifies system manifests cannot use the custom prefix.
     /// 验证系统清单不能使用 custom 前缀。
     #[test]
@@ -7738,6 +7823,7 @@ mod tests {
                 ],
                 default_authentication: None,
                 request_headers: Default::default(),
+                session_header: None,
                 service_origin_override_policy: None,
                 native_inference_bindings: Vec::new(),
                 request_projector: None,

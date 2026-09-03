@@ -306,20 +306,40 @@ fn turn_completion_selects_one_queued_successor_before_goal() -> Result<(), Doma
     doc.create_goal("finish", None, "Keep working.", T0 + 1)?;
     let queued_first_action = ClientActionId::try_new("queued-first")?;
     let queued_second_action = ClientActionId::try_new("queued-second")?;
+    let queued_first_request = ActiveRequestConfig {
+        provider: Some(String::from("openai")),
+        connection_id: None,
+        model: Some(String::from("gpt-5.1")),
+        thinking_level: Some(String::from("high")),
+        temperature: None,
+    };
+    let queued_second_request = ActiveRequestConfig {
+        provider: Some(String::from("openai")),
+        connection_id: None,
+        model: Some(String::from("gpt-5.2")),
+        thinking_level: Some(String::from("low")),
+        temperature: None,
+    };
     let queued_first = doc
         .enqueue_input(
-            ClientInputSubmission::new(queued_first_action.clone(), "first queued", Vec::new()),
+            ClientInputSubmission::new(queued_first_action.clone(), "first queued", Vec::new())
+                .with_bound_request_config(queued_first_request.clone()),
             T0 + 2,
         )?
         .into_value()
         .input_id;
     let queued_second = doc
         .enqueue_input(
-            ClientInputSubmission::new(queued_second_action.clone(), "second queued", Vec::new()),
+            ClientInputSubmission::new(queued_second_action.clone(), "second queued", Vec::new())
+                .with_bound_request_config(queued_second_request.clone()),
             T0 + 3,
         )?
         .into_value()
         .input_id;
+    assert_eq!(
+        doc.metadata.config.active_request,
+        ActiveRequestConfig::default()
+    );
     let api = doc.start_api(
         ApiPurposeKind::MainGeneration,
         ApiRequestSnapshot::new("openai", "gpt-5"),
@@ -339,6 +359,7 @@ fn turn_completion_selects_one_queued_successor_before_goal() -> Result<(), Doma
     };
     assert_eq!(input_id, queued_first);
     assert_eq!(client_action_id, queued_first_action);
+    assert_eq!(doc.metadata.config.active_request, queued_first_request);
     assert_eq!(doc.metadata.input_state.queued_inputs.len(), 1);
     assert_eq!(
         doc.metadata.input_state.queued_inputs[0].input_id,
@@ -369,13 +390,21 @@ fn turn_completion_selects_one_queued_successor_before_goal() -> Result<(), Doma
         Some(first_queued_turn)
     );
     assert_eq!(restored.metadata.input_state.queued_inputs.len(), 1);
+    let mut first_queued_request_snapshot = ApiRequestSnapshot::new("openai", "gpt-5.1");
+    first_queued_request_snapshot.thinking_level = Some(String::from("high"));
     let api = restored.start_api(
         ApiPurposeKind::MainGeneration,
-        ApiRequestSnapshot::new("openai", "gpt-5"),
+        first_queued_request_snapshot.clone(),
         T0 + 8,
     )?;
     restored.append_assistant_text(api, "done", AssistantSemanticStatus::Completed, T0 + 9)?;
-    complete_ok(&mut restored, api, None, T0 + 10)?;
+    complete_ok_for_request(
+        &mut restored,
+        api,
+        first_queued_request_snapshot,
+        None,
+        T0 + 10,
+    )?;
     let second = restored.complete_turn_and_select_successor(first_queued_turn, T0 + 11)?;
     let TurnSuccessor::QueuedUser {
         turn_id: second_queued_turn,
@@ -388,15 +417,27 @@ fn turn_completion_selects_one_queued_successor_before_goal() -> Result<(), Doma
     };
     assert_eq!(input_id, queued_second);
     assert_eq!(client_action_id, queued_second_action);
+    assert_eq!(
+        restored.metadata.config.active_request,
+        queued_second_request
+    );
     assert!(restored.metadata.input_state.queued_inputs.is_empty());
 
+    let mut second_queued_request_snapshot = ApiRequestSnapshot::new("openai", "gpt-5.2");
+    second_queued_request_snapshot.thinking_level = Some(String::from("low"));
     let api = restored.start_api(
         ApiPurposeKind::MainGeneration,
-        ApiRequestSnapshot::new("openai", "gpt-5"),
+        second_queued_request_snapshot.clone(),
         T0 + 12,
     )?;
     restored.append_assistant_text(api, "done", AssistantSemanticStatus::Completed, T0 + 13)?;
-    complete_ok(&mut restored, api, None, T0 + 14)?;
+    complete_ok_for_request(
+        &mut restored,
+        api,
+        second_queued_request_snapshot,
+        None,
+        T0 + 14,
+    )?;
     let after_queue = restored.complete_turn_and_select_successor(second_queued_turn, T0 + 15)?;
     assert!(matches!(
         after_queue.successor,

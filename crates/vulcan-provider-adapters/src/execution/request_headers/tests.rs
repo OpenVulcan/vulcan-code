@@ -28,7 +28,7 @@ fn execution_headers_merge_protocol_headers_and_reject_credential_overrides() {
         .expect("test key should validate")
         .execution_secret()
         .expect("test key should resolve");
-    let headers = execution_headers(&route, &encoded.headers, &secret)
+    let headers = execution_headers(&route, &encoded.headers, &secret, None)
         .expect("non-secret protocol headers should merge");
     assert_eq!(
         headers
@@ -76,7 +76,135 @@ fn execution_headers_merge_protocol_headers_and_reject_credential_overrides() {
     assert!(!encoded.headers.contains_key("user-agent"));
 
     let forbidden = BTreeMap::from([(String::from("authorization"), String::from("Bearer other"))]);
-    assert!(execution_headers(&route, &forbidden, &secret).is_err());
+    assert!(execution_headers(&route, &forbidden, &secret, None).is_err());
+}
+
+/// Verifies a configured session header receives only the current request session scope.
+/// 验证已配置的会话请求头只接收当前请求的会话作用域。
+#[test]
+fn configured_session_header_projects_current_session_scope() {
+    let route = bundled_manifest_route("opencode-go", "go-api", ANTHROPIC_MESSAGES_PROFILE_ID);
+    let mut request = minimal_request();
+    request.cache_scope_id = Some(String::from("session-123"));
+    let client = ProviderExecutionClient::new(
+        reqwest::Client::new(),
+        Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+    );
+    let encoded = client
+        .encode_request(&route, &request)
+        .expect("session-header request should encode");
+    let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("secret"))
+        .expect("test key should validate")
+        .execution_secret()
+        .expect("test key should resolve");
+
+    let headers = execution_headers(
+        &route,
+        &encoded.headers,
+        &secret,
+        request.cache_scope_id.as_deref(),
+    )
+    .expect("configured session header should resolve");
+    assert_eq!(
+        headers
+            .get("x-opencode-session")
+            .and_then(|value| value.to_str().ok()),
+        Some("session-123")
+    );
+
+    let without_session = execution_headers(&route, &encoded.headers, &secret, None)
+        .expect("missing optional session scope should remain valid");
+    assert!(!without_session.contains_key("x-opencode-session"));
+
+    let mut unconfigured_route = route;
+    unconfigured_route.entry.session_header = None;
+    let without_configuration = execution_headers(
+        &unconfigured_route,
+        &encoded.headers,
+        &secret,
+        request.cache_scope_id.as_deref(),
+    )
+    .expect("unconfigured session header should remain absent");
+    assert!(!without_configuration.contains_key("x-opencode-session"));
+}
+
+/// Verifies session-header projection never replaces an existing or host-owned header.
+/// 验证会话请求头投影绝不会替换已有请求头或宿主持有的请求头。
+#[test]
+fn session_header_never_overrides_existing_or_host_owned_headers() {
+    // fixed_route contains a provider-owned header with the same name as the session projection.
+    // fixed_route 包含与会话投影同名的供应商固定请求头。
+    let mut fixed_route =
+        bundled_manifest_route("opencode-go", "go-api", ANTHROPIC_MESSAGES_PROFILE_ID);
+    fixed_route.entry.request_headers.insert(
+        String::from("x-opencode-session"),
+        String::from("fixed-session"),
+    );
+    let mut request = minimal_request();
+    request.cache_scope_id = Some(String::from("session-123"));
+    let client = ProviderExecutionClient::new(
+        reqwest::Client::new(),
+        Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+    );
+    let encoded = client
+        .encode_request(&fixed_route, &request)
+        .expect("fixed-header request should encode");
+    let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("secret"))
+        .expect("test key should validate")
+        .execution_secret()
+        .expect("test key should resolve");
+    let headers = execution_headers(
+        &fixed_route,
+        &encoded.headers,
+        &secret,
+        request.cache_scope_id.as_deref(),
+    )
+    .expect("existing fixed header should remain valid");
+    assert_eq!(
+        headers
+            .get("x-opencode-session")
+            .and_then(|value| value.to_str().ok()),
+        Some("fixed-session")
+    );
+
+    // host_owned_route proves host-owned identity remains authoritative even without a fixed entry header.
+    // host_owned_route 证明即使没有固定入口请求头，宿主持有的身份请求头仍然权威。
+    let mut host_owned_route =
+        bundled_manifest_route("opencode-go", "go-api", ANTHROPIC_MESSAGES_PROFILE_ID);
+    host_owned_route.entry.session_header = Some(String::from("user-agent"));
+    let host_owned_encoded = client
+        .encode_request(&host_owned_route, &request)
+        .expect("host-owned session-header request should encode");
+    let host_owned_headers = execution_headers(
+        &host_owned_route,
+        &host_owned_encoded.headers,
+        &secret,
+        request.cache_scope_id.as_deref(),
+    )
+    .expect("host-owned header should remain valid");
+    assert_eq!(
+        host_owned_headers
+            .get(reqwest::header::USER_AGENT)
+            .and_then(|value| value.to_str().ok()),
+        Some(VULCAN_CODE_USER_AGENT)
+    );
+
+    // A defensive runtime route-kind check keeps malformed provider-tool routes from receiving session scope.
+    // 防御性运行时入口类型校验可避免异常 Provider Tools 路由接收会话作用域。
+    let mut provider_tools_route =
+        bundled_manifest_route("opencode-go", "go-api", ANTHROPIC_MESSAGES_PROFILE_ID);
+    provider_tools_route.entry.kind = crate::ServiceEntryKind::ProviderTools;
+    let provider_tools_encoded = client
+        .encode_request(&provider_tools_route, &request)
+        .expect("provider-tools route should still encode for the runtime guard test");
+    let provider_tools_headers = execution_headers(
+        &provider_tools_route,
+        &provider_tools_encoded.headers,
+        &secret,
+        request.cache_scope_id.as_deref(),
+    )
+    .expect("provider-tools route should remain valid without session projection");
+    assert!(!provider_tools_headers.contains_key("x-opencode-session"));
 }
 
 /// Verifies only the native Codex protocol preserves the exact adopted Codex user agent.
@@ -122,7 +250,7 @@ fn native_codex_protocol_owns_exact_codex_user_agent() {
         .expect("Codex credential should resolve");
     // headers are the final HTTP headers used by both HTTP and WebSocket transports.
     // headers 是 HTTP 与 WebSocket 传输共同使用的最终 HTTP 请求头。
-    let headers = execution_headers(&route, &encoded.headers, &secret)
+    let headers = execution_headers(&route, &encoded.headers, &secret, None)
         .expect("native Codex headers should resolve");
 
     assert_eq!(

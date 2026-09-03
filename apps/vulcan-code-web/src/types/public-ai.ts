@@ -120,6 +120,9 @@ export interface PublicAiServiceEntry {
   base_url: string;
   credential_profiles: PublicAiCredentialProfile[];
   authentication: string;
+  // Optional header name that receives the current public session identifier.
+  // 可选的请求头名称；配置后接收当前公共会话标识。
+  session_header?: string;
   service_origin_override_policy?: PublicAiServiceOriginOverridePolicy;
   model_discovery: PublicAiModelDiscoveryKind;
   protocol_routes: PublicAiProtocolRoute[];
@@ -245,6 +248,9 @@ export interface PublicAiCustomProviderSaveRequest {
   // Bounded non-sensitive fixed request headers shared by every protocol route.
   // 全部协议路由共享的有界非敏感固定请求头。
   requestHeaders?: Record<string, string>;
+  // Optional regular-conversation session-header name for this provider.
+  // 此供应商可选的常规会话请求头名称。
+  sessionHeader?: string;
   remoteCompactionPolicy: PublicAiResponsesRemoteCompactionPolicy;
   websocketPolicy: PublicAiResponsesWebsocketPolicy;
   authentication: "bearer_authorization" | "google_api_key" | "x_api_key";

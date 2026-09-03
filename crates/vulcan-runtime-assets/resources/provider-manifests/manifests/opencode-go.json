@@ -1,7 +1,7 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "opencode-go",
-  "revision": 3,
+  "revision": 4,
   "published_at": "2026-08-25T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
@@ -45,6 +45,7 @@
         }
       ],
       "default_authentication": "bearer_authorization",
+      "session_header": "x-opencode-session",
       "request_projector": "compatible",
       "model_catalog": {
         "source_policy": "manifest_only",

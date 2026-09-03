@@ -299,6 +299,7 @@ fn convert_service_entry(entry: &ServiceEntry) -> ManifestServiceEntry {
             .collect(),
         default_authentication: Some(entry.authentication),
         request_headers: entry.request_headers.clone(),
+        session_header: entry.session_header.clone(),
         service_origin_override_policy: entry.service_origin_override_policy.clone(),
         native_inference_bindings: entry.native_inference_bindings.clone(),
         request_projector: Some(entry.request_projector),

@@ -28,6 +28,7 @@ fn custom_model_route_status_exposes_model_specific_protocol_block() {
         ],
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
+        session_header: None,
     }
     .into_descriptor()
     .expect("multi-protocol custom provider should compile");
@@ -185,6 +186,7 @@ fn multi_protocol_directory_kind_aggregates_route_discovery() {
             request_headers: BTreeMap::new(),
         }],
         request_headers: BTreeMap::new(),
+        session_header: None,
     }
     .into_descriptor()
     .expect("mixed directory provider should project");

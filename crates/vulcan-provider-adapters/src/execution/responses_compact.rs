@@ -173,7 +173,12 @@ impl ProviderExecutionClient {
             );
             encoded.path = String::from("/responses/compact");
             let url = route.request_url(encoded.path.as_str());
-            let headers = execution_headers(&route, &encoded.headers, &secret)?;
+            let headers = execution_headers(
+                &route,
+                &encoded.headers,
+                &secret,
+                request.cache_scope_id.as_deref(),
+            )?;
             emit_provider_transport_trace(
                 trace_id.as_str(),
                 "responses_compact",

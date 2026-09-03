@@ -164,6 +164,7 @@ fn custom_openai_fixture(
         model_discovery_path: None,
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
+        session_header: None,
     }
     .into_descriptor()
     .expect("custom provider fixture should project");
@@ -214,6 +215,7 @@ fn custom_anthropic_fixture(
         model_discovery_path: model_discovery_path.map(str::to_string),
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
+        session_header: None,
     }
     .into_descriptor()
     .expect("custom Anthropic provider fixture should project");
@@ -1191,7 +1193,7 @@ fn minimax_model_discovery_uses_generic_manifest_contracts() {
     let manifest = catalog
         .manifest_arc("minimax")
         .expect("MiniMax manifest must exist");
-    assert_eq!(manifest.revision, 23);
+    assert_eq!(manifest.revision, 26);
     // expectations bind each region to its exact reviewed discovery origins.
     // expectations 把每个地区绑定到其精确已审核发现来源。
     let expectations = [

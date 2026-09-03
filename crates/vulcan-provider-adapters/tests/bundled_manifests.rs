@@ -336,6 +336,204 @@ fn minimax_manifest_reasoning_contracts_are_exact() {
     );
 }
 
+/// Verifies MiniMax image understanding mirrors the official mmx CLI image-delivery contract.
+/// 验证 MiniMax 图片理解与官方 mmx CLI 图片投递契约保持一致。
+///
+/// # Returns
+/// 返回值
+/// Returns normally only when the bundled operation declares image input and every supported MIME mapping.
+/// 仅当内置操作声明图片输入并包含全部受支持 MIME 映射时正常返回。
+#[test]
+fn minimax_image_understanding_matches_official_mmx_cli_contract() {
+    // path identifies the single authoritative MiniMax bundled manifest.
+    // path 标识唯一权威的 MiniMax 内置清单。
+    let path = bundled_manifests_directory().join("minimax.json");
+    // text preserves the exact published document for production compiler validation.
+    // text 保留用于生产编译器校验的精确发布文档。
+    let text = std::fs::read_to_string(&path).expect("read MiniMax bundled manifest");
+    // compiled exposes the same resolved operation and upload channel used at runtime.
+    // compiled 公开运行时使用的同一已解析操作与上传通道。
+    let compiled =
+        vulcan_provider_adapters::compile_manifest_text(&text, ManifestOwnership::System)
+            .expect("MiniMax bundled manifest must compile");
+    // operation owns the fixed single-image understanding facade.
+    // operation 持有固定的单图理解外壳。
+    let operation = compiled
+        .operations
+        .iter()
+        .find(|operation| operation.operation_id == "minimax.mini_max_coding_plan_vision")
+        .expect("MiniMax Coding Plan vision operation must exist");
+    assert_eq!(
+        operation.input_resources,
+        [vulcan_ai_contract::ResourceKind::Image],
+        "MiniMax image understanding must declare its consumed modality"
+    );
+    // channel is the exact Data-URI materialization route used by image_path.
+    // channel 是 image_path 使用的精确 Data URI 物化路由。
+    let channel = compiled
+        .upload_channels
+        .iter()
+        .find(|channel| channel.upload_channel_id == "inline.image-data-url")
+        .expect("MiniMax image Data-URI channel must exist");
+    // expected_mime_types mirrors the image extension map in current mmx CLI source.
+    // expected_mime_types 对齐当前 mmx CLI 源码中的图片扩展名映射。
+    let expected_mime_types = [
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "image/heic",
+        "image/heif",
+    ];
+    assert_eq!(channel.accepted_mime_types, expected_mime_types);
+    assert_eq!(channel.max_bytes, Some(50 * 1024 * 1024));
+    // binding proves canonical image_path is removed only after it becomes upstream image_url.
+    // binding 证明规范 image_path 仅在转为上游 image_url 后才会移除。
+    let binding = operation
+        .upload_bindings
+        .first()
+        .expect("MiniMax Coding Plan vision upload binding must exist");
+    assert_eq!(binding.source_path, "/image_path");
+    assert_eq!(binding.target_path, "/image_url");
+    for (extension, mime_type) in [
+        ("jpg", "image/jpeg"),
+        ("jpeg", "image/jpeg"),
+        ("png", "image/png"),
+        ("webp", "image/webp"),
+        ("heic", "image/heic"),
+        ("heif", "image/heif"),
+    ] {
+        assert_eq!(
+            binding
+                .mime_types_by_extension
+                .get(extension)
+                .map(String::as_str),
+            Some(mime_type),
+            "MiniMax image MIME mapping drifted for `{extension}`"
+        );
+    }
+}
+
+/// Verifies MiniMax synchronous speech uses bounded URL delivery instead of embedding hex audio.
+/// 验证 MiniMax 同步语音使用有界 URL 交付，而不是在响应中嵌入十六进制音频。
+///
+/// # Returns
+/// 返回值
+/// Returns normally only when every bundled MiniMax speech target requests and decodes URL audio.
+/// 仅当全部 MiniMax 内置语音目标都请求并解码 URL 音频时正常返回。
+#[test]
+fn minimax_speech_uses_url_delivery_for_long_synchronous_output() {
+    // path identifies the single authoritative MiniMax bundled manifest.
+    // path 标识唯一权威的 MiniMax 内置清单。
+    let path = bundled_manifests_directory().join("minimax.json");
+    // text preserves the exact document for both raw profile and compiled target assertions.
+    // text 保留精确文档，供原始 Profile 与已编译目标共同断言。
+    let text = std::fs::read_to_string(&path).expect("read MiniMax bundled manifest");
+    // document exposes the literal provider wire format selected by the request profile.
+    // document 公开请求 Profile 选择的供应商线格式字面量。
+    let document: Value = serde_json::from_str(&text).expect("parse MiniMax bundled manifest");
+    // request_profile owns the fixed non-streaming MiniMax speech request projection.
+    // request_profile 持有固定的 MiniMax 非流式语音请求投影。
+    let request_profile = document["request_profiles"]
+        .as_array()
+        .expect("MiniMax request profiles")
+        .iter()
+        .find(|profile| profile["profile_id"] == "minimax.speech.request.v1")
+        .expect("MiniMax speech request profile must exist");
+    assert_eq!(request_profile["payload"]["revision"], 2);
+    assert_eq!(
+        request_profile["payload"]["steps"][0]["template"]["output_format"], "url",
+        "MiniMax speech must not return size-amplified hex audio in JSON"
+    );
+    // compiled exposes the exact target contracts consumed by the production executor.
+    // compiled 公开生产执行器消费的精确目标契约。
+    let compiled =
+        vulcan_provider_adapters::compile_manifest_text(&text, ManifestOwnership::System)
+            .expect("MiniMax bundled manifest must compile");
+    // expected_target_ids freezes the complete global and China speech target inventory.
+    // expected_target_ids 冻结全球与中国区完整语音目标清单。
+    let expected_target_ids = [
+        "global.speech-2.8-hd",
+        "global.speech-2.8-turbo",
+        "global.speech-2.6",
+        "global.speech-02",
+        "cn.speech-2.8-hd",
+        "cn.speech-2.8-turbo",
+        "cn.speech-2.6",
+        "cn.speech-02",
+    ];
+    // expected_host_suffixes reuses the reviewed MiniMax and provider-storage authorities.
+    // expected_host_suffixes 复用已审查的 MiniMax 与供应商存储域名权限。
+    let expected_host_suffixes = [
+        "api.minimax.io",
+        "api.minimaxi.com",
+        ".minimax.chat",
+        ".hailuoai.com",
+        ".aliyuncs.com",
+    ];
+    for target_id in expected_target_ids {
+        // target is one production speech contract selected by the shared operation.
+        // target 是共享操作选择的一份生产语音契约。
+        let target = compiled
+            .tool_targets
+            .iter()
+            .find(|candidate| candidate.target_id == target_id)
+            .unwrap_or_else(|| panic!("missing MiniMax speech target `{target_id}`"));
+        // decoder is the primary generated-audio carrier; subtitles remain a separate optional resource.
+        // decoder 是主要生成音频载体；字幕继续作为独立可选资源。
+        let decoder = target
+            .contract
+            .output
+            .resource_decoders
+            .first()
+            .expect("MiniMax speech target must declare an audio decoder");
+        assert_eq!(decoder.source_path, "/data/audio");
+        assert_eq!(
+            decoder.encoding,
+            vulcan_provider_adapters::ProviderToolResourceEncoding::PublicHttpUrl
+        );
+        assert_eq!(
+            decoder
+                .download_host_suffixes
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            expected_host_suffixes
+        );
+        assert_eq!(
+            decoder.max_bytes, None,
+            "URL resources are bounded by the host downloader instead of an inline decoder"
+        );
+    }
+}
+
+/// Verifies MiniMax no longer publishes any music capability after the feature moved providers.
+/// 验证音乐能力迁移到其他供应商后，MiniMax 不再发布任何音乐能力。
+#[test]
+fn minimax_manifest_excludes_music_capability() {
+    // path identifies the single authoritative MiniMax bundled manifest.
+    // path 标识唯一权威的 MiniMax 内置清单。
+    let path = bundled_manifests_directory().join("minimax.json");
+    // text is the exact published document whose removed music surface must stay absent.
+    // text 是必须持续排除已删除音乐能力面的精确发布文档。
+    let text = std::fs::read_to_string(&path).expect("read MiniMax bundled manifest");
+    assert!(
+        !text.contains("music_generate") && !text.contains("minimax.music"),
+        "MiniMax must not retain music operations or profiles"
+    );
+    // compiled is the same runtime authority and prevents a hidden music target from surviving compilation.
+    // compiled 是运行时使用的同一权威，防止隐藏音乐目标在编译后继续存在。
+    let compiled =
+        vulcan_provider_adapters::compile_manifest_text(&text, ManifestOwnership::System)
+            .expect("MiniMax bundled manifest must compile");
+    assert!(
+        compiled
+            .operations
+            .iter()
+            .all(|operation| operation.operation != "music_generate"),
+        "compiled MiniMax operations must not expose music generation"
+    );
+}
+
 /// Verifies DeepSeek exposes only the two current official identities with exact protocol scopes.
 /// 验证 DeepSeek 仅公开当前两款官方模型身份及其精确协议作用域。
 #[test]
@@ -661,12 +859,26 @@ fn opencode_go_manifest_matches_source_derived_model_contracts() {
         "x_api_key"
     );
     assert_eq!(route("openai-responses.v1")["endpoint_path"], "/responses");
+    assert_eq!(
+        document.pointer("/services/0/session_header"),
+        Some(&serde_json::json!("x-opencode-session")),
+        "OpenCode Go must project the current session through its configured header"
+    );
 
     // compiled is the same resolved authority used by discovery and execution.
     // compiled 是发现与执行共同使用的同一份解析权威。
     let compiled =
         vulcan_provider_adapters::compile_manifest_text(&text, ManifestOwnership::System)
             .expect("bundled OpenCode Go manifest must compile");
+    assert_eq!(
+        compiled
+            .provider()
+            .service_entries
+            .first()
+            .and_then(|entry| entry.session_header.as_deref()),
+        Some("x-opencode-session"),
+        "compiled OpenCode Go service entry must retain its session header"
+    );
     assert_eq!(
         compiled
             .model_source_policy("go-api")
@@ -1877,7 +2089,7 @@ fn migrated_tool_target_inventories_are_complete_and_unique() {
     for (provider_id, target_count) in [
         ("tavily", 2_usize),
         ("alibaba", 55_usize),
-        ("minimax", 34_usize),
+        ("minimax", 24_usize),
     ] {
         let path = directory.join(format!("{provider_id}.json"));
         let text = std::fs::read_to_string(&path)
@@ -1943,7 +2155,7 @@ fn bundled_system_tool_targets_use_only_generic_execution() {
         }
     }
     assert_eq!(
-        target_count, 101,
+        target_count, 91,
         "the complete production target inventory must remain covered"
     );
 }

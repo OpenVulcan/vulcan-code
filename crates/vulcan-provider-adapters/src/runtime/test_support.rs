@@ -330,6 +330,7 @@ pub(super) fn custom_definition_with_discovery_mode(
         model_discovery_path: None,
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
+        session_header: None,
     }
     .into_descriptor()
     .expect("multi-protocol fixture should project")

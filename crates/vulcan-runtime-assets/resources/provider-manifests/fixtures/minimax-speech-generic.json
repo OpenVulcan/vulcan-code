@@ -66,7 +66,8 @@
       "resource_decoders": [
         {
           "source_path": "/data/audio",
-          "encoding": "hex",
+          "encoding": "public_http_url",
+          "download_host_suffixes": ["example.com"],
           "resource_kind": "audio",
           "mime_type_request_path": "/output_format",
           "mime_types_by_request_value": {
@@ -79,7 +80,6 @@
             "opus": "audio/opus"
           },
           "optional": false,
-          "max_bytes": 10000000,
           "output_id_prefix": "audio"
         },
         {
@@ -121,7 +121,7 @@
       "description": "Build the MiniMax speech wire body.",
       "payload": {
         "profile_id": "fixture.minimax.speech.request.v1",
-        "revision": 1,
+        "revision": 2,
         "steps": [
           {
             "op": "rebuild_json_template",
@@ -129,7 +129,7 @@
               "model": {"$vulcan_model_id": true},
               "text": {"$vulcan_ref": {"path": "/text"}},
               "stream": false,
-              "output_format": "hex",
+              "output_format": "url",
               "voice_setting": {
                 "voice_id": {"$vulcan_ref": {"path": "/voice_id"}},
                 "speed": {"$vulcan_ref": {"path": "/speed"}},
@@ -207,13 +207,13 @@
         "model": "speech-2.8-hd",
         "text": "hello",
         "stream": false,
-        "output_format": "hex",
+        "output_format": "url",
         "voice_setting": {"voice_id": "voice-1", "speed": 1.0, "vol": 1.0, "pitch": 0},
         "audio_setting": {"sample_rate": 32000, "format": "mp3", "channel": 1, "bitrate": 128000}
       },
       "response_status": 200,
       "response_json_body": {
-        "data": {"audio": "6869", "status": 2, "subtitle_file": ""},
+        "data": {"audio": "https://example.com/audio.mp3", "status": 2, "subtitle_file": ""},
         "base_resp": {"status_code": 0, "status_msg": "ok"}
       }
     }

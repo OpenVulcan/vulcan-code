@@ -2125,6 +2125,9 @@ export type TranslationKey =
   | "settings.customProviders.routeDiscoveryPath"
   | "settings.customProviders.routeHeaders"
   | "settings.customProviders.routeInherit"
+  | "settings.customProviders.advancedOptions"
+  | "settings.customProviders.sessionHeader"
+  | "settings.customProviders.sessionHeaderHint"
   | "settings.customProviders.codexCapabilities"
   | "settings.customProviders.codexRemoteCompaction"
   | "settings.customProviders.codexRemoteCompactionHint"
@@ -5038,6 +5041,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customProviders.routeDiscoveryPath": "路由模型目录路径",
     "settings.customProviders.routeHeaders": "固定请求头（每行 key: value）",
     "settings.customProviders.routeInherit": "继承共享设置",
+    "settings.customProviders.advancedOptions": "高级选项",
+    "settings.customProviders.sessionHeader": "常规会话 Session Header",
+    "settings.customProviders.sessionHeaderHint": "可选。仅用于常规会话，例如 x-opencode-session；如果与已有或宿主请求头冲突，将忽略该配置。",
     "settings.customProviders.codexCapabilities": "Codex Responses 能力",
     "settings.customProviders.codexRemoteCompaction": "启用远端上下文压缩",
     "settings.customProviders.codexRemoteCompactionHint": "调用 /responses/compact；仅在未产生语义输出或副作用且可安全重试时回退到本地压缩。",
@@ -7966,6 +7972,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.customProviders.routeDiscoveryPath": "Route model catalog path",
     "settings.customProviders.routeHeaders": "Fixed request headers (one key: value per line)",
     "settings.customProviders.routeInherit": "Inherit shared settings",
+    "settings.customProviders.advancedOptions": "Advanced options",
+    "settings.customProviders.sessionHeader": "Regular-conversation Session Header",
+    "settings.customProviders.sessionHeaderHint": "Optional. Used only for regular conversations, for example x-opencode-session; conflicting existing or host-owned headers are ignored.",
     "settings.customProviders.codexCapabilities": "Codex Responses capabilities",
     "settings.customProviders.codexRemoteCompaction": "Enable remote context compaction",
     "settings.customProviders.codexRemoteCompactionHint": "Uses /responses/compact and falls back to local compaction on safe failures.",

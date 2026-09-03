@@ -2101,7 +2101,8 @@ mod tests {
                         client_action_id: accepted.client_action_id.clone(),
                         text: accepted.text.clone(),
                         resource_ids: retry_resources,
-                        parameters: retry_parameters
+                        parameters: retry_parameters,
+                        bound_request_config: None,
                     },
                     1_787_788_800_002
                 )

@@ -193,6 +193,7 @@ Schema v2 将凭据档的用途字段固定为 `default_usage_scopes`。它只�
 一个 `service_entry_id` 表示一个真实产品入口，例如公开 API、Coding Plan 或 Provider Tools。入口可拥有：
 
 - 独立 `base_url`、固定非秘密请求头和请求 projector；
+- 可选 `session_header`，其值为接收当前公共会话 ID 的请求头名称；缺省时不注入会话请求头；
 - 一个或多个 `credential_profiles`；
 - `model_catalog`；
 - 一个或多个已验证 `protocol_routes`；
@@ -206,6 +207,11 @@ Schema v2 将凭据档的用途字段固定为 `default_usage_scopes`。它只�
 
 不得新增以供应商命名的 projector。新增字段差异应使用已注册 Mapping Transformer；新增 wire 协议
 或新的二级路由握手才属于需要升级宿主的引擎能力。
+
+`session_header` 是服务入口级的动态请求头声明，不是固定请求头值，也不能通过 Request Profile 写入。
+宿主在最终 HTTP 与 WebSocket 请求头投影阶段，将当前公共会话 ID 写入该名称；没有会话 ID 时不发送，
+未声明该字段时保持原有行为。若该名称已经存在于请求头，或属于宿主持有的鉴权、传输、身份请求头，
+运行时忽略 `session_header`，绝不覆盖既有值；其他请求头名称仍受宿主边界保护。
 
 ### 3.1 User-Agent 与应用归因头边界
 

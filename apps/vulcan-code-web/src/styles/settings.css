@@ -729,27 +729,6 @@
   gap: 8px;
 }
 
-.settings-provider-tool-extension-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) minmax(150px, 220px);
-  align-items: center;
-  gap: 12px;
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-
-.settings-provider-tool-extension-copy {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-}
-
-.settings-provider-tool-extension-copy small {
-  color: var(--muted-foreground);
-  line-height: 1.45;
-}
-
 .settings-capability-route-row.dragging {
   opacity: 0.68;
   cursor: grabbing;

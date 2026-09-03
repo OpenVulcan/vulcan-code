@@ -471,6 +471,34 @@ where
     let mut mirror = PendingPromptProcessMirror::default();
     for queued_input in queued_inputs {
         let attachments = resolve_attachments(queued_input)?;
+        // Durable V1 queue entries own the exact route and reasoning snapshot; the process mirror only projects it.
+        // 可靠 V1 队列项拥有精确路由与思考级别快照；进程镜像只负责投影。
+        let model_reference = queued_input
+            .bound_request_config
+            .as_ref()
+            .and_then(|config| {
+                Some(PendingPromptModelReference {
+                    connection_id: config.connection_id.clone()?,
+                    provider_id: config.provider.clone()?,
+                    model_id: config.model.clone()?,
+                    provider_label: config.provider.clone()?,
+                    model_name: config.model.clone()?,
+                })
+            });
+        let runtime_options = PendingPromptRuntimeOptions {
+            reasoning_effort: queued_input
+                .bound_request_config
+                .as_ref()
+                .and_then(|config| config.thinking_level.as_deref())
+                .and_then(parse_reasoning_effort)
+                .unwrap_or(ReasoningEffortLevel::Off),
+            temperature: queued_input
+                .bound_request_config
+                .as_ref()
+                .and_then(|config| config.temperature.map(|value| value as f32)),
+            web_search_override: Default::default(),
+            web_search_provider_id: None,
+        };
         mirror
             .ui_state
             .pending_prompt_panel_queue
@@ -480,8 +508,8 @@ where
                 prompt: queued_input.text.clone(),
                 hidden_model_guidance: None,
                 attachments,
-                model_reference: None,
-                runtime_options: PendingPromptRuntimeOptions::default(),
+                model_reference,
+                runtime_options,
                 state: PendingPromptPanelEntryState::Ready,
                 created_at: queued_input.created_at_ms.to_string(),
             });
@@ -640,6 +668,7 @@ mod tests {
         let queued_inputs = vec![
             QueuedInput {
                 parameters: None,
+                bound_request_config: None,
                 client_action_id: ClientActionId::try_new("client-action-1")
                     .expect("first client action should be valid"),
                 input_id: PendingInputId::try_new(11).expect("first pending input should be valid"),
@@ -652,6 +681,7 @@ mod tests {
             },
             QueuedInput {
                 parameters: None,
+                bound_request_config: None,
                 client_action_id: ClientActionId::try_new("client-action-2")
                     .expect("second client action should be valid"),
                 input_id: PendingInputId::try_new(12)

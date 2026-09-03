@@ -1810,6 +1810,7 @@ fn compile_service_entry(
             .default_authentication
             .unwrap_or(AuthenticationProjection::BearerAuthorization),
         request_headers: entry.request_headers.clone(),
+        session_header: entry.session_header.clone(),
         service_origin_override_policy: entry.service_origin_override_policy.clone(),
         native_inference_bindings: entry.native_inference_bindings.clone(),
         model_discovery,

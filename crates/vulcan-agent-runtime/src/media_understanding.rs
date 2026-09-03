@@ -421,8 +421,10 @@ async fn execute_model_replacement_media_understanding(
         "Act as a media-understanding backend. Answer the user instruction directly from the attached media. Return only the answer text without a JSON or Markdown wrapper.\n\nUser instruction: {}",
         prompt.trim()
     );
-    // request contains one actual media input and never exposes backend controls to the caller.
-    // request 包含一个真实媒体输入，绝不向调用方暴露后端控件。
+    // request contains one actual media input and keeps the owning session scope so a configured
+    // provider session header also applies to image, video, and audio understanding requests.
+    // request 包含一个真实媒体输入，并保留所属会话作用域，使已配置的供应商会话请求头同样
+    // 应用于图片、视频与音频理解请求。
     let request = AiExecutionRequest {
         operation: AiOperation::ConversationRespond,
         model_id: resolved_selection.model.id.clone(),

@@ -133,7 +133,7 @@ fn kimi_coding_projection_uses_thinking_and_device_identity() {
     .expect("Kimi material")
     .execution_secret()
     .expect("Kimi execution secret");
-    let headers = execution_headers(&route, &encoded.headers, &secret).expect("Kimi headers");
+    let headers = execution_headers(&route, &encoded.headers, &secret, None).expect("Kimi headers");
     assert_eq!(
         headers
             .get("x-msh-device-id")
@@ -560,7 +560,7 @@ fn minimax_protocol_selection_controls_wire_route_and_authentication() {
     let anthropic = client
         .encode_request(&anthropic_route, &anthropic_request)
         .expect("Anthropic request should encode");
-    let anthropic_headers = execution_headers(&anthropic_route, &anthropic.headers, &secret)
+    let anthropic_headers = execution_headers(&anthropic_route, &anthropic.headers, &secret, None)
         .expect("Anthropic headers should project");
     assert_eq!(anthropic.path, "/anthropic/v1/messages");
     assert_eq!(
@@ -580,7 +580,7 @@ fn minimax_protocol_selection_controls_wire_route_and_authentication() {
     let openai = client
         .encode_request(&openai_route, &openai_request)
         .expect("OpenAI request should encode");
-    let openai_headers = execution_headers(&openai_route, &openai.headers, &secret)
+    let openai_headers = execution_headers(&openai_route, &openai.headers, &secret, None)
         .expect("OpenAI headers should project");
     assert_eq!(openai.path, "/v1/chat/completions");
     assert_eq!(openai.body["reasoning_split"], true);

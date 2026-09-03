@@ -57,6 +57,7 @@ pub(in crate::runtime) fn apply_model_catalog_overlays(
             model_discovery_path: None,
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
+            session_header: None,
         }
         .into_descriptor()?;
         fixture_configuration

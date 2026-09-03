@@ -102,6 +102,53 @@ pub fn resolve_effective_wire_reasoning_effort(
     reasoning_effort_from_level(effective_effort)
 }
 
+/// Validates and converts an already selected reasoning level without choosing another level.
+/// 校验并转换已经选定的思考档位，绝不选择其他档位。
+///
+/// # Parameters / 参数
+/// `capabilities` is the exact frozen model contract and `requested_effort` is session authority.
+/// `capabilities` 是精确冻结的模型契约，`requested_effort` 是会话权威值。
+///
+/// # Returns / 返回值
+/// Returns the exact wire value, omission for the provider-default sentinel, or an explicit
+/// incompatibility error. This function never falls back to a nearby level.
+/// 返回精确 Wire 值、供应商默认哨兵对应的省略值，或明确的不兼容错误；本函数绝不回退到邻近档位。
+pub fn validate_exact_wire_reasoning_effort(
+    capabilities: &ModelCapabilities,
+    requested_effort: ReasoningEffortLevel,
+) -> Result<Option<ReasoningEffort>, String> {
+    let mut effective_capabilities = capabilities.clone();
+    vulcan_provider_adapters::apply_host_default_reasoning_policy(&mut effective_capabilities);
+    if requested_effort == ReasoningEffortLevel::Off {
+        return Ok(None);
+    }
+    if effective_capabilities.reasoning == vulcan_ai_contract::CapabilitySupport::Unsupported
+        || effective_capabilities.reasoning_control
+            == vulcan_ai_contract::ReasoningControlMode::FixedOff
+    {
+        return (requested_effort == ReasoningEffortLevel::None)
+            .then_some(None)
+            .ok_or_else(|| {
+                format!(
+                    "Selected reasoning effort `{}` is not supported by this model.",
+                    requested_effort.compact_label()
+                )
+            });
+    }
+    let requested_public = public_reasoning_effort_from_level(requested_effort)
+        .ok_or_else(|| String::from("Provider-default reasoning has no explicit wire value."))?;
+    if !effective_capabilities
+        .reasoning_efforts
+        .contains(&requested_public)
+    {
+        return Err(format!(
+            "Selected reasoning effort `{}` is not supported by this model.",
+            requested_effort.compact_label()
+        ));
+    }
+    Ok(Some(requested_public))
+}
+
 /// Resolves a restricted request that already stores a public reasoning effort.
 /// 解析已经保存公共思考档位的受限请求。
 ///

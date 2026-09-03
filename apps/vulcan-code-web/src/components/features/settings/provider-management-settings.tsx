@@ -1041,6 +1041,7 @@ function CustomProviderDialog(props: {
   const { t } = useI18n()
   const [displayName, setDisplayName] = React.useState("")
   const [baseUrl, setBaseUrl] = React.useState("")
+  const [sessionHeader, setSessionHeader] = React.useState("")
   // protocols is the authoritative enabled protocol collection (at least one element) and
   // routeDrafts keeps one independent draft per enabled protocol (plan §R6.4/§R6.5).
   // protocols 是权威启用协议集合（至少一个元素），routeDrafts 为每个启用协议保留独立草稿
@@ -1088,6 +1089,7 @@ function CustomProviderDialog(props: {
     const entry = props.provider?.service_entries[0]
     setDisplayName(props.provider?.display_name ?? "")
     setBaseUrl(entry?.base_url ?? "")
+    setSessionHeader(entry?.session_header ?? "")
     setAuthentication(entry?.authentication === "google_api_key"
       ? "google_api_key"
       : entry?.authentication === "x_api_key" ? "x_api_key" : "bearer_authorization")
@@ -1161,6 +1163,7 @@ function CustomProviderDialog(props: {
     providerId: props.provider?.id,
     displayName: displayName.trim(),
     baseUrl: baseUrl.trim(),
+    sessionHeader: sessionHeader.trim() || undefined,
     // The enabled protocol collection is authoritative and never empty.
     // 启用协议集合是权威事实且绝不为空。
     protocols,
@@ -1184,7 +1187,7 @@ function CustomProviderDialog(props: {
     allowManualFallback: acceptance === "manual",
     allowPendingValidation: acceptance === "pending",
     confirmInactiveProtocolOverrideDeletion,
-  }), [authentication, baseUrl, credentialDisplayName, displayName, modelDiscoveryMode, modelDiscoveryPath, protocols, remoteCompactionPolicy, routeDrafts, secret, validationConnectionId, websocketPolicy])
+  }), [authentication, baseUrl, credentialDisplayName, displayName, modelDiscoveryMode, modelDiscoveryPath, protocols, remoteCompactionPolicy, routeDrafts, secret, sessionHeader, validationConnectionId, websocketPolicy])
 
   // probe verifies authentication and model discovery without persisting the provider or secret.
   // probe 在不持久化供应商或秘密的情况下验证鉴权与模型发现。
@@ -1284,6 +1287,7 @@ function CustomProviderDialog(props: {
   const connectionContractChanged = Boolean(props.provider) && (
     !originalEntry
     || baseUrl.trim().replace(/\/+$/, "") !== originalEntry.base_url.replace(/\/+$/, "")
+    || sessionHeader.trim() !== (originalEntry.session_header ?? "")
     || protocolCollectionChanged(originalEntry, { protocols, drafts: routeDrafts })
     || authentication !== customProviderAuthentication(originalEntry)
     || modelDiscoveryMode !== customProviderDiscoveryMode(originalEntry)
@@ -1438,6 +1442,24 @@ function CustomProviderDialog(props: {
                 <Input onChange={(event) => setModelDiscoveryPath(event.target.value)} placeholder="/models" value={modelDiscoveryPath} />
               </label>
             ) : null}
+            <details className="rounded-lg border bg-muted/30 p-3 text-sm">
+              <summary className="cursor-pointer font-medium text-foreground">
+                {t("settings.customProviders.advancedOptions")}
+              </summary>
+              <div className="mt-3 grid gap-3">
+                <label className="settings-form-field">
+                  <span>{t("settings.customProviders.sessionHeader")}</span>
+                  <Input
+                    onChange={(event) => setSessionHeader(event.target.value)}
+                    placeholder="x-opencode-session"
+                    value={sessionHeader}
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    {t("settings.customProviders.sessionHeaderHint")}
+                  </span>
+                </label>
+              </div>
+            </details>
             {protocols.includes("open_ai_codex_responses") ? (
               <div className="grid gap-3 rounded-xl border bg-muted/30 p-3 text-sm">
                 <p className="font-medium text-foreground">{t("settings.customProviders.codexCapabilities")}</p>

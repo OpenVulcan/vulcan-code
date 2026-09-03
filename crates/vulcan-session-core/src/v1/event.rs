@@ -185,8 +185,8 @@ pub enum EventBody {
     /// Permanent UI timeline fact: errors, interruptions, retries, resume.
     /// 永久 UI 时间线事实：错误、中断、重试、恢复等。
     DisplayNote(DisplayNoteEvent),
-    /// Exact non-secret request configuration transition at one safe API boundary.
-    /// 在一个安全 API 边界发生的精确非秘密请求配置转换。
+    /// Exact non-secret request transition at one admitted user or Continue boundary.
+    /// 一次已准入用户输入或 Continue 边界上的精确非秘密请求配置转换。
     RequestConfigChanged(RequestConfigChangedEvent),
     /// Provider-invisible execution control fact.
     /// Provider 不可见的执行控制事实。

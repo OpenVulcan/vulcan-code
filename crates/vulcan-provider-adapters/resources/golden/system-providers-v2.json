@@ -5064,6 +5064,7 @@
           }
         ],
         "authentication": "bearer_authorization",
+        "session_header": "x-opencode-session",
         "model_discovery": "manifest_static",
         "request_projector": "compatible",
         "protocol_routes": [

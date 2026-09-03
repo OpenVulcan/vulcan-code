@@ -1709,6 +1709,7 @@ mod tests {
                 }],
                 authentication: AuthenticationProjection::BearerAuthorization,
                 request_headers: BTreeMap::new(),
+                session_header: None,
                 service_origin_override_policy: None,
                 native_inference_bindings: Vec::new(),
                 model_discovery: ModelDiscoveryKind::OpenAi,

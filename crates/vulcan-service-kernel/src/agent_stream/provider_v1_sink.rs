@@ -46,6 +46,8 @@ use vulcan_session_core::v1::context::{
     LockedBaselineProjection, LockedPromptTarget, LockedSource,
 };
 #[cfg(test)]
+use vulcan_session_core::v1::context::{LockedBaselineSegmentInput, LockedSourceKind};
+#[cfg(test)]
 use vulcan_session_core::v1::document::TurnSuccessor;
 use vulcan_session_core::v1::document::{
     ApiCompletion, ApiGroupCompletionReceipt, ToolCompletion, ToolPreparation,
@@ -879,6 +881,15 @@ fn rebuild_provider_transport_candidate(
 {
     validate_provider_transport_candidate(facts, &candidate)?;
     validate_prompt_media_preparation_frontier(&snapshot)?;
+    // effectiveLockedBaseline reuses the persisted initialized generation exactly. Only a fresh
+    // or refresh-pending generation may establish the candidate baseline assembled for this call.
+    // effectiveLockedBaseline 精确复用已持久化的初始化 generation。只有全新或待刷新 generation
+    // 才允许建立本次调用组装的候选基线。
+    let effective_locked_baseline = snapshot
+        .initialized_locked_baseline
+        .clone()
+        .unwrap_or_else(|| candidate.locked_baseline.clone());
+    candidate.locked_baseline = effective_locked_baseline.clone();
     // controller_state is the shared logical V1 projection and therefore cannot contain physical delivery choices.
     // controller_state 是共享逻辑 V1 投影，因此不能包含物理投递选择。
     let controller_state = provider_projection_controller_state(&snapshot)
@@ -1329,7 +1340,7 @@ impl ProviderV1StreamSink {
             .prepare_physical_api_durable(
                 purpose,
                 request,
-                locked_baseline.clone(),
+                locked_baseline,
                 continuation_action_id,
                 prepared_at_ms,
                 move |snapshot, preparation| async move {
@@ -1368,6 +1379,7 @@ impl ProviderV1StreamSink {
         };
         let prepared = receipt.value;
         let core_start = prepared.core_start;
+        let locked_baseline = prepared.locked_baseline;
         let transport = prepared.transport;
         // A newly prepared API supersedes the previous physical terminal as the stream's final API.
         // 新准备的 API 会取代上一物理终态，成为当前流的最终物理 API。
@@ -2244,6 +2256,7 @@ mod tests {
             sourced_items: Vec::new(),
             project_directory: PathBuf::new(),
             provider_usage_budget_anchor: None,
+            initialized_locked_baseline: None,
         };
 
         // state must represent the whole V1 window even when that window currently has one item.
@@ -2332,6 +2345,7 @@ mod tests {
             sourced_items: Vec::new(),
             project_directory: project.path().to_path_buf(),
             provider_usage_budget_anchor: None,
+            initialized_locked_baseline: None,
         };
         // state resolves only the declared resource occurrence and never adds a delivery decision.
         // state 仅解析已声明的资源出现，绝不添加投递决策。
@@ -2406,6 +2420,7 @@ mod tests {
             }],
             project_directory: PathBuf::new(),
             provider_usage_budget_anchor: None,
+            initialized_locked_baseline: None,
         };
         validate_prompt_media_preparation_frontier(&snapshot)?;
         snapshot.sourced_items[0].source_to_seq = Seq::try_new(3)?;
@@ -2470,6 +2485,26 @@ mod tests {
     fn provider_transport_rebuild_replaces_pre_gate_conversation() {
         let facts = request_facts();
         let legacy_message = text_ai_message(MessageRole::User, String::from("legacy-message"));
+        let candidate_locked_baseline =
+            LockedBaselineProjection::project(vec![LockedBaselineSegmentInput {
+                kind: LockedSourceKind::AgentsMd,
+                node_id: String::from("candidate-baseline"),
+                target: LockedPromptTarget::Developer,
+                source_label: None,
+                source_id: None,
+                content: String::from("candidate-baseline-content"),
+            }])
+            .expect("candidate baseline");
+        let initialized_locked_baseline =
+            LockedBaselineProjection::project(vec![LockedBaselineSegmentInput {
+                kind: LockedSourceKind::AgentsMd,
+                node_id: String::from("persisted-baseline"),
+                target: LockedPromptTarget::Developer,
+                source_label: None,
+                source_id: None,
+                content: String::from("persisted-baseline-content"),
+            }])
+            .expect("persisted initialized baseline");
         let candidate = ProviderRequestPreparationCandidate {
             media_context: None,
             exact_request: AiExecutionRequest {
@@ -2540,7 +2575,7 @@ mod tests {
                 tool_guidance: String::from("dynamic-tool-guidance"),
                 runtime_context: String::from("dynamic-runtime-context"),
             },
-            locked_baseline: LockedBaselineProjection::empty(),
+            locked_baseline: candidate_locked_baseline,
         };
         // project owns the immutable resource identity shared by physical reconstruction and logical projection.
         // project 持有物理重建与逻辑投影共享的不可变资源身份。
@@ -2577,6 +2612,7 @@ mod tests {
             sourced_items: Vec::new(),
             project_directory: project.path().to_path_buf(),
             provider_usage_budget_anchor: None,
+            initialized_locked_baseline: Some(initialized_locked_baseline.clone()),
         };
         // prepared_media carries one request-local delivery decision that must not enter controller history.
         // prepared_media 携带一个不得进入控制器历史的请求局部投递决策。
@@ -2615,7 +2651,13 @@ mod tests {
         assert!(serialized.contains("dynamic-developer"));
         assert!(serialized.contains("dynamic-tool-guidance"));
         assert!(serialized.contains("dynamic-runtime-context"));
+        assert!(serialized.contains("persisted-baseline-content"));
+        assert!(!serialized.contains("candidate-baseline-content"));
         assert!(!serialized.contains("legacy-message"));
+        assert_eq!(
+            rebuilt.transport.locked_baseline,
+            initialized_locked_baseline
+        );
         assert_eq!(
             rebuilt.transport.request_snapshot.prompt_layers,
             ProviderPromptLayers {

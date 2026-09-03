@@ -93,10 +93,28 @@ fn complete_ok(
     provider_source: Option<ProviderSourceInput>,
     now_ms: i64,
 ) -> Result<Seq, DomainError> {
+    complete_ok_for_request(
+        doc,
+        api_call_id,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        provider_source,
+        now_ms,
+    )
+}
+
+/// Completes one physical API successfully with its exact frozen request snapshot.
+/// 使用物理 API 精确冻结的请求快照成功完成该调用。
+fn complete_ok_for_request(
+    doc: &mut SessionDocument,
+    api_call_id: ApiCallId,
+    request: ApiRequestSnapshot,
+    provider_source: Option<ProviderSourceInput>,
+    now_ms: i64,
+) -> Result<Seq, DomainError> {
     doc.complete_api_group(
         api_call_id,
         ApiCompletion {
-            request: ApiRequestSnapshot::new("openai", "gpt-5"),
+            request,
             usage: usage(10, 20),
             status: ApiCallStatus::Completed,
             end_reason: Some(ApiEndReason::CompletedSuccessfully),

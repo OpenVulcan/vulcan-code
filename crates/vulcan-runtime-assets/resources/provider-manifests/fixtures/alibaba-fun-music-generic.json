@@ -1,0 +1,153 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "alibaba-fun-music-generic",
+  "base_manifest": "alibaba.json",
+  "production_target_refs": [
+    "alibaba::model-studio-cn.fun-music-v1",
+    "alibaba::model-studio-cn.fun-music-preview"
+  ],
+  "tool_target": {
+    "target_id": "model-studio-cn:fixture-fun-music-generic",
+    "description": "Generic Alibaba Fun-Music wire-contract fixture.",
+    "service_entry_id": "model-studio-cn",
+    "credential_profile_ids": ["api-key"],
+    "upstream_target_id": "fun-music-v1",
+    "display_name": "Fun-Music Generic Fixture",
+    "tool_id": "fixture_alibaba_fun_music_generic",
+    "capability": "music_generate",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prompt"],
+      "properties": {
+        "prompt": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "lyrics": {"type": "string", "minLength": 5, "maxLength": 2000},
+        "is_instrumental": {"type": "boolean"},
+        "gender": {"type": "string", "enum": ["male", "female"]},
+        "enable_aigc_watermark": {"type": "boolean"},
+        "output_format": {"type": "string", "enum": ["mp3", "wav"], "default": "mp3"}
+      }
+    },
+    "output": {
+      "kind": "resources",
+      "source_path": "/audio_url",
+      "normalized_result_path": "resources",
+      "resource_kind": "audio",
+      "mime_types": ["audio/mpeg", "audio/wav"],
+      "resource_decoders": [
+        {
+          "source_path": "/audio_url",
+          "encoding": "public_http_url",
+          "download_host_suffixes": ["example.com"],
+          "resource_kind": "audio",
+          "mime_type_request_path": "/output_format",
+          "mime_types_by_request_value": {"mp3": "audio/mpeg", "wav": "audio/wav"},
+          "optional": false,
+          "output_id_prefix": "audio"
+        }
+      ]
+    },
+    "execution": {
+      "endpoint_path": "/api/v1/services/audio/music/generation",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_sync"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.alibaba-fun-music-generic",
+    "operation": "music_generate",
+    "carrier": "provider_tool",
+    "input_resources": [],
+    "output_resources": ["audio"],
+    "tool_target_refs": ["model-studio-cn:fixture-fun-music-generic"],
+    "request_profile_refs": ["fixture.alibaba.fun-music.request.v1"],
+    "response_profile_refs": ["fixture.alibaba.fun-music.response.v1"],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "request_profiles": [
+    {
+      "profile_id": "fixture.alibaba.fun-music.request.v1",
+      "description": "Build the Alibaba Fun-Music wire body.",
+      "payload": {
+        "profile_id": "fixture.alibaba.fun-music.request.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "model": {"$vulcan_model_id": true},
+              "input": {
+                "prompt": {"$vulcan_ref": {"path": "/prompt", "optional": true, "omit_if_empty": true}},
+                "lyrics": {"$vulcan_ref": {"path": "/lyrics", "optional": true, "omit_if_empty": true}},
+                "is_instrumental": {"$vulcan_if_equals": {"path": "/is_instrumental", "equals": true, "then": true}},
+                "gender": {"$vulcan_ref": {"path": "/gender", "optional": true, "omit_if_empty": true}},
+                "format": {"$vulcan_ref": {"path": "/output_format"}},
+                "enable_aigc_watermark": {"$vulcan_if_equals": {"path": "/enable_aigc_watermark", "equals": true, "then": true}}
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "response_profiles": [
+    {
+      "profile_id": "fixture.alibaba.fun-music.response.v1",
+      "description": "Normalize Alibaba Fun-Music application status.",
+      "payload": {
+        "profile_id": "fixture.alibaba.fun-music.response.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "$vulcan_if_equals": {
+                "path": "/output/finish_reason",
+                "equals": "stop",
+                "then": {
+                  "$vulcan_if_present": {
+                    "path": "/output/audio/id",
+                    "non_empty": true,
+                    "then": {
+                      "request_id": {"$vulcan_ref": {"path": "/request_id"}},
+                      "audio_url": {"$vulcan_ref": {"path": "/output/audio/url"}}
+                    }
+                  }
+                },
+                "otherwise": {"error": {"message": "Alibaba Fun-Music response is not terminal."}}
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "required_execution_primitives": ["http_json_sync"],
+  "required_upload_primitives": [],
+  "required_transformers": ["rebuild_json_template"],
+  "arguments": {"prompt": "hello world", "output_format": "mp3"},
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/api/v1/services/audio/music/generation",
+      "expected_json_body": {
+        "model": "fun-music-v1",
+        "input": {"prompt": "hello world", "format": "mp3"}
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "output": {
+          "finish_reason": "stop",
+          "audio": {"id": "audio-id-1", "url": "https://example.com/music.mp3"}
+        },
+        "request_id": "music-request-1"
+      }
+    }
+  ],
+  "expected_output_kind": "resources"
+}

@@ -1751,4 +1751,38 @@ mod tests {
             "unexpected validation error: {error}"
         );
     }
+
+    /// Executes the MiniMax speech fixture in isolation to prove URL audio survives projection.
+    /// 独立执行 MiniMax 语音 fixture，证明 URL 音频能够通过响应投影。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Completes normally only when the generic executor produces one resources result.
+    /// 仅当通用执行器生成一份资源结果时正常完成。
+    #[tokio::test]
+    async fn minimax_speech_fixture_executes_with_url_audio() {
+        // assets_root is the checked-in provider-manifest resource root.
+        // assets_root 是签入仓库的供应商清单资源根目录。
+        let assets_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("vulcan-runtime-assets")
+            .join("resources")
+            .join("provider-manifests");
+        // fixture_path identifies only the MiniMax synchronous speech executable contract.
+        // fixture_path 仅标识 MiniMax 同步语音可执行契约。
+        let fixture_path = assets_root
+            .join("fixtures")
+            .join("minimax-speech-generic.json");
+        // result proves request projection, response projection, and URL resource decoding together.
+        // result 联合证明请求投影、响应投影与 URL 资源解码。
+        let result = execute_fixture_document(
+            fixture_path.as_path(),
+            assets_root.join("manifests").as_path(),
+        )
+        .await
+        .expect("MiniMax speech fixture must execute");
+        assert_eq!(result.fixture_id, "minimax-speech-generic");
+        assert_eq!(result.output_kind, "resources");
+        assert_eq!(result.interaction_count, 1);
+    }
 }

@@ -539,7 +539,7 @@ function normalizeMarkdownImageSource(src: string | undefined, workspacePath?: s
   if (/^file:/i.test(unwrapped)) {
     return mediaSourceUrl(unwrapped);
   }
-  if (looksLikeLocalFilesystemPath(unwrapped)) {
+  if (looksLikeAbsoluteLocalFilesystemPath(unwrapped)) {
     return mediaSourceUrl(unwrapped);
   }
   const relativeSource = resolveWorkspaceRelativeMarkdownImageSource(unwrapped, workspacePath);
@@ -690,16 +690,13 @@ function clampMarkdownImageWidth(width: number): number {
   return Math.min(Math.max(Math.round(width), 1), 800);
 }
 
-// looksLikeLocalFilesystemPath detects Windows and Unix filesystem paths carried in Markdown.
-// looksLikeLocalFilesystemPath 检测 Markdown 中携带的 Windows 与 Unix 文件系统路径。
-function looksLikeLocalFilesystemPath(value: string): boolean {
-  const normalized = value.replace(/\\/g, "/");
+// looksLikeAbsoluteLocalFilesystemPath detects absolute Windows and Unix filesystem paths carried in Markdown.
+// looksLikeAbsoluteLocalFilesystemPath 检测 Markdown 中携带的 Windows 与 Unix 绝对文件系统路径。
+function looksLikeAbsoluteLocalFilesystemPath(value: string): boolean {
   return (
     /^[a-zA-Z]:[\\/]/.test(value)
     || value.startsWith("\\\\")
     || value.startsWith("/")
-    || normalized.startsWith(".vulcan/code/attachments/")
-    || normalized.startsWith("./.vulcan/code/attachments/")
   );
 }
 
@@ -722,7 +719,7 @@ function resolveWorkspaceRelativeMarkdownImageSource(value: string, workspacePat
 // looksLikeRelativeMarkdownImagePath 检测可从工作区根目录解析的图片型相对链接。
 function looksLikeRelativeMarkdownImagePath(value: string): boolean {
   const { path } = splitMarkdownImagePathSuffix(value.trim());
-  if (!path || looksLikeLocalFilesystemPath(path) || path.startsWith("//")) {
+  if (!path || looksLikeAbsoluteLocalFilesystemPath(path) || path.startsWith("//")) {
     return false;
   }
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/u.test(path)) {

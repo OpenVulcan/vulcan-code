@@ -3,7 +3,10 @@
 
 use super::failure::{ProviderExecutionFailure, pre_dispatch_failure};
 use super::route::{ProviderExecutionRoute, route_uses_native_codex_responses};
-use crate::{AuthenticationProjection, CredentialExecutionSecret};
+use crate::{
+    AuthenticationProjection, CredentialExecutionSecret,
+    provider_manifest::is_host_owned_session_header,
+};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::collections::BTreeMap;
 use vulcan_ai_protocols::CODEX_RESPONSES_USER_AGENT;
@@ -18,9 +21,10 @@ pub(super) const VULCAN_CODE_USER_AGENT: &str = "vulcan-code/0.1";
 /// # Parameters
 /// 参数
 /// `route` identifies the exact provider, `protocol_headers` contains non-secret Profile
-/// requirements, and `secret` is the selected credential material.
+/// requirements, `secret` is the selected credential material, and `session_id` is the current
+/// public session identifier when one is available.
 /// `route` 标识精确供应商，`protocol_headers` 包含非秘密 Profile 要求，
-/// `secret` 是选中的凭据材料。
+/// `secret` 是选中的凭据材料，`session_id` 是当前可用的公共会话标识。
 ///
 /// # Returns
 /// 返回值
@@ -30,6 +34,7 @@ pub(crate) fn execution_headers(
     route: &ProviderExecutionRoute,
     protocol_headers: &std::collections::BTreeMap<String, String>,
     secret: &CredentialExecutionSecret,
+    session_id: Option<&str>,
 ) -> Result<HeaderMap, ProviderExecutionFailure> {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -241,7 +246,56 @@ pub(crate) fn execution_headers(
             VULCAN_CODE_USER_AGENT
         }),
     );
+    // Session projection is last so every already materialized host or provider header can win.
+    // 会话投影最后执行，确保所有已经生成的宿主或供应商请求头优先保留。
+    inject_session_header(&mut headers, route, session_id)?;
     Ok(headers)
+}
+
+/// Injects the configured session identifier into the final provider header map.
+/// 将已配置的会话标识注入最终供应商请求头映射。
+///
+/// # Parameters
+/// 参数
+/// `headers` is the common final header map, `route` supplies the optional header declaration,
+/// and `session_id` supplies the current public session scope.
+/// `headers` 是公共最终请求头映射，`route` 提供可选请求头声明，`session_id` 提供当前公共会话作用域。
+///
+/// # Returns
+/// 返回值
+/// Success when the declaration is absent or the session header is safely projected.
+/// 当未声明配置，或会话请求头已安全投影时返回成功。
+fn inject_session_header(
+    headers: &mut HeaderMap,
+    route: &ProviderExecutionRoute,
+    session_id: Option<&str>,
+) -> Result<(), ProviderExecutionFailure> {
+    // Session headers are a conversation-only contract; keep the runtime guard even if a malformed route bypasses manifest validation.
+    // 会话请求头只属于常规会话契约；即使异常路由绕过 Manifest 校验，也保留运行时防线。
+    if route.entry.kind != crate::ServiceEntryKind::Conversation {
+        return Ok(());
+    }
+    let Some(header_name) = route.entry.session_header.as_deref() else {
+        return Ok(());
+    };
+    let name = HeaderName::from_bytes(header_name.as_bytes()).map_err(|_| {
+        pre_dispatch_failure(format!(
+            "Service entry produced invalid session header name `{header_name}`."
+        ))
+    })?;
+    let Some(session_id) = session_id else {
+        return Ok(());
+    };
+    // A session declaration never replaces an existing or host-owned header.
+    // 会话声明绝不替换已经存在或由宿主持有的请求头。
+    if headers.contains_key(&name) || is_host_owned_session_header(name.as_str()) {
+        return Ok(());
+    }
+    let value = HeaderValue::from_str(session_id).map_err(|_| {
+        pre_dispatch_failure("Session identifier contains invalid header characters.")
+    })?;
+    headers.insert(name, value);
+    Ok(())
 }
 
 /// Inserts the registered Kimi Coding device identity shared by conversation, tool, and upload requests.

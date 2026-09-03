@@ -597,7 +597,7 @@ impl ProviderExecutionClient {
                     "Native inference transport profile is unavailable: {error}"
                 ))
             })?;
-        let headers = execution_headers(route, &BTreeMap::new(), secret)?;
+        let headers = execution_headers(route, &BTreeMap::new(), secret, None)?;
         let base_url = crate::connection_endpoint::resolved_connection_protocol_base_url(
             &route.connection,
             &route.entry,
