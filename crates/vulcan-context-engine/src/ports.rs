@@ -139,8 +139,8 @@ impl VceIndexBinding {
     }
 }
 
-/// Describe one fixed host AI registration shared by VCE, VMM, and knowledge retrieval.
-/// 描述由 VCE、VMM 和知识库检索共同使用的一次固定宿主 AI 注册。
+/// Describe one VCE-owned registration that follows the common host AI contract.
+/// 描述一项遵循公共宿主 AI 契约、但由 VCE 独立持有的注册。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VceAiBinding {
     /// Stable registration identity allocated by the host.
@@ -207,8 +207,8 @@ pub struct VceAiCapabilitySnapshot {
     pub rerank_available: bool,
 }
 
-/// Identify the semantic purpose of one call on the shared AI registration.
-/// 标识共享 AI 注册上的一次调用的语义用途。
+/// Identify the semantic purpose of one call on the VCE-owned AI registration.
+/// 标识 VCE 独立持有的 AI 注册上的一次调用语义用途。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum VceAiPurpose {
     /// Embed a source code chunk.
@@ -256,8 +256,8 @@ pub struct VceAiRequestContext {
     /// Fixed host registration identity selected for all VCE AI operations.
     /// 为全部 VCE AI 操作选择的固定宿主注册身份。
     pub registration_id: String,
-    /// Semantic purpose used within the shared registration.
-    /// 共享注册内部使用的语义用途。
+    /// Semantic purpose used within the VCE registration.
+    /// VCE 注册内部使用的语义用途。
     pub purpose: VceAiPurpose,
     /// Consumer profile that must match the registered capability.
     /// 必须与已注册能力匹配的消费配置。
@@ -312,8 +312,8 @@ pub struct VceEmbeddingResponse {
     pub space: EmbeddingSpace,
 }
 
-/// Request an optional LLM query rewrite through the shared registration.
-/// 通过共享注册请求可选的 LLM 查询改写。
+/// Request an optional LLM query rewrite through the same VCE registration.
+/// 通过同一项 VCE 注册请求可选的 LLM 查询改写。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VceQueryRewriteRequest {
     /// Common host routing and correlation context.
@@ -339,8 +339,8 @@ pub struct VceQueryRewriteResponse {
     pub rewrites: Vec<String>,
 }
 
-/// Request optional candidate Rerank through the shared registration.
-/// 通过共享注册请求可选的候选结果重排。
+/// Request optional candidate Rerank through the same VCE registration.
+/// 通过同一项 VCE 注册请求可选的候选结果重排。
 #[derive(Debug, Clone, PartialEq)]
 pub struct VceRerankRequest {
     /// Common host routing and correlation context.

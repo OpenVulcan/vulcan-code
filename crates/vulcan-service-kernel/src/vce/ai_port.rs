@@ -467,8 +467,8 @@ impl VceAiPort for VceHostAiAdapter {
         }
     }
 
-    /// Executes document or query embedding through the shared HostAI registration.
-    /// 通过共享 HostAI 注册执行文档或查询向量化。
+    /// Executes document or query embedding through this project's VCE HostAI registration.
+    /// 通过当前项目的 VCE HostAI 注册执行文档或查询向量化。
     fn embed(
         &self,
         request: VceEmbeddingRequest,
@@ -537,8 +537,8 @@ impl VceAiPort for VceHostAiAdapter {
         })
     }
 
-    /// Executes optional bounded LLM query rewriting through the same registration.
-    /// 通过同一注册执行可选且有界的 LLM 查询改写。
+    /// Executes optional bounded LLM query rewriting through the same project VCE registration.
+    /// 通过同一个项目 VCE 注册执行可选且有界的 LLM 查询改写。
     fn rewrite_query(
         &self,
         request: VceQueryRewriteRequest,
@@ -612,8 +612,8 @@ impl VceAiPort for VceHostAiAdapter {
         })
     }
 
-    /// Executes optional candidate reranking through the shared HostAI registration.
-    /// 通过共享 HostAI 注册执行可选候选重排。
+    /// Executes optional candidate reranking through this project's VCE HostAI registration.
+    /// 通过当前项目的 VCE HostAI 注册执行可选候选重排。
     fn rerank(
         &self,
         request: VceRerankRequest,
