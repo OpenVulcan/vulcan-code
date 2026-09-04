@@ -286,6 +286,15 @@ pub struct ServiceBridgeState {
     /// Host-owned native VMM project maintenance facade.
     /// 宿主持有的原生 VMM 项目维护门面。
     pub(crate) native_vmm_maintenance: Option<crate::native_vmm::NativeVmmMaintenance>,
+    /// Host-native VCE project lifecycle and retrieval manager.
+    /// 宿主原生 VCE 项目生命周期与检索管理器。
+    pub(crate) vce_runtime: Option<crate::vce::VceRuntimeManager>,
+    /// VCE subscriber over the shared workspace watcher.
+    /// 共享工作区监听器之上的 VCE 订阅器。
+    pub(crate) vce_watcher: Option<crate::vce::VceWatcherService>,
+    /// Service-owned physical filesystem watcher shared by independent consumers.
+    /// 由服务持有并供独立消费者共享的物理文件系统监听器。
+    pub(crate) workspace_watcher: Option<crate::workspace_watcher::WorkspaceWatcherCenter>,
     /// Process-wide registry owning one serialized VMM controller per session.
     /// 进程级注册表，为每个会话拥有一个串行化 VMM 控制器。
     pub(crate) vmm_controller_registry: crate::vmm_session_controller::SessionVmmControllerRegistry,

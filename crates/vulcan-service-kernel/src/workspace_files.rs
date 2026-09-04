@@ -34,7 +34,7 @@ mod read_response;
 use entry_summary::*;
 use file_kind::*;
 use path_metadata::*;
-use path_security::*;
+pub(crate) use path_security::*;
 use read_response::*;
 
 /// Builds a workspace file walker with the shared ignore and symlink policy.
@@ -53,7 +53,7 @@ use read_response::*;
 /// 返回值
 /// A configured walker builder shared by listing and descendant-preview scans.
 /// 返回由列表和后代预览扫描共享的已配置遍历器构建器。
-fn workspace_file_walk_builder(
+pub(crate) fn workspace_file_walk_builder(
     directory: &Path,
     filters: &WorkspaceFileFilterOptions,
     max_depth: Option<usize>,

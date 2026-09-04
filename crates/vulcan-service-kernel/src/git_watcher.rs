@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use vulcan_file_watcher::live::{
-    LiveFileWatcher, LiveFileWatcherSubscriber, LiveWatchRegistration, ThrottledLiveWatchReceiver,
+    LiveFileWatcherSubscriber, LiveWatchRegistration, ThrottledLiveWatchReceiver,
 };
 
 /// Process-lifetime ownership for the shared Git watcher backend.
@@ -31,9 +31,6 @@ struct GitWatchTarget {
 /// Owns registrations and the event task for all active WebUI Git repositories.
 /// 持有所有活跃 WebUI Git 仓库的监听注册与事件任务。
 struct WebuiGitWatcherManager {
-    /// Shared notify-backed watcher used by every project subscription.
-    /// 所有项目订阅共用的 notify 文件监听器。
-    _watcher: Arc<LiveFileWatcher>,
     /// One logical subscriber owning the manager registrations.
     /// 持有管理器全部注册项的逻辑订阅者。
     _subscriber: LiveFileWatcherSubscriber,
@@ -68,13 +65,20 @@ struct WebuiGitWatcherManager {
 /// 当共享文件监听器无法初始化或仓库根目录无法解析时返回错误。
 pub(crate) fn reconcile_webui_git_repository_watches(
     event_emitter: ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
     project_id: Option<&str>,
     workspace_path: &str,
     catalog: &WebuiGitRepositoryCatalog,
 ) -> Result<(), String> {
     let workspace_path = std::fs::canonicalize(workspace_path)
         .map_err(|error| format!("无法规范化 Git 监听工作区 `{workspace_path}`：{error}"))?;
-    let manager = shared_webui_git_watcher(event_emitter)?;
+    let watcher_center = state
+        .lock()
+        .map_err(|_| String::from("读取共享工作区监听器时服务状态已锁定。"))?
+        .workspace_watcher
+        .clone()
+        .ok_or_else(|| String::from("共享工作区监听器尚未初始化。"))?;
+    let manager = shared_webui_git_watcher(event_emitter, &watcher_center)?;
     let owner_project_id = project_id.map(str::to_owned);
     let mut desired_targets: BTreeMap<PathBuf, BTreeSet<GitWatchTarget>> = BTreeMap::new();
     for repository in catalog
@@ -104,16 +108,13 @@ pub(crate) fn reconcile_webui_git_repository_watches(
 /// 创建或返回进程级 notify 监听器及其事件任务。
 fn shared_webui_git_watcher(
     event_emitter: ServiceEventEmitter,
+    watcher_center: &crate::workspace_watcher::WorkspaceWatcherCenter,
 ) -> Result<Arc<WebuiGitWatcherManager>, String> {
     if let Some(manager) = WEBUI_GIT_WATCHER.get() {
         return Ok(Arc::clone(manager));
     }
 
-    let watcher = Arc::new(
-        LiveFileWatcher::new()
-            .map_err(|error| format!("无法初始化 WebUI Git 文件监听器：{error}"))?,
-    );
-    let (subscriber, receiver) = watcher.add_subscriber();
+    let (subscriber, receiver) = watcher_center.subscribe();
     let targets = Arc::new(RwLock::new(BTreeMap::new()));
     let event_targets = Arc::clone(&targets);
     let task = spawn_service_task(async move {
@@ -132,7 +133,6 @@ fn shared_webui_git_watcher(
         }
     });
     let manager = Arc::new(WebuiGitWatcherManager {
-        _watcher: watcher,
         _subscriber: subscriber,
         registrations: std::sync::Mutex::new(HashMap::new()),
         targets,

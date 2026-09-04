@@ -110,7 +110,7 @@ pub(crate) async fn service_workspace_git_catalog_with_watcher(
         workspace_path.as_deref(),
     )?;
     let catalog = service_workspace_git_catalog(
-        state,
+        state.clone(),
         Some(resolved_workspace_path.clone()),
         project_id,
         conversation_id,
@@ -118,6 +118,7 @@ pub(crate) async fn service_workspace_git_catalog_with_watcher(
     .await?;
     reconcile_webui_git_repository_watches(
         app,
+        &state,
         preference_project_id.as_deref(),
         &resolved_workspace_path,
         &catalog,

@@ -1039,10 +1039,10 @@ impl Default for PersistedAiConfiguration {
             provider_context_window_policy_overrides: BTreeMap::new(),
             model_context_window_policy_overrides: BTreeMap::new(),
             internal_model_enabled_overrides: BTreeMap::new(),
-            inference_profiles: BTreeMap::from([(
-                String::from("vmm"),
-                InferenceProfile::default(),
-            )]),
+            inference_profiles: BTreeMap::from([
+                (String::from("vce"), InferenceProfile::default()),
+                (String::from("vmm"), InferenceProfile::default()),
+            ]),
             internal_model_overrides: BTreeMap::new(),
             secondary_routes: BTreeMap::new(),
             provider_tool_selections: BTreeMap::new(),
@@ -1473,6 +1473,18 @@ impl PersistedAiConfiguration {
             self.provider_tool_enabled_capabilities
                 .remove(&ProviderToolCapabilityKind::AudioUnderstand);
         }
+        // insertedVceProfile ensures every supported schema exposes the system VCE consumer
+        // without copying or guessing another consumer's user-owned routes.
+        // insertedVceProfile 确保每个受支持 Schema 都暴露系统 VCE consumer，且不会复制或猜测
+        // 其他 consumer 的用户自有路由。
+        let inserted_vce_profile = if self.inference_profiles.contains_key("vce") {
+            false
+        } else {
+            self.inference_profiles
+                .insert(String::from("vce"), InferenceProfile::default());
+            true
+        };
+        changed |= inserted_vce_profile;
         // normalizedMediaBackends preserves the active legacy selection while creating the
         // independent mode slot required by session-level backend selection.
         // normalizedMediaBackends 在保留旧活动选择的同时，创建会话级后端选择所需的独立模式槽位。
@@ -4251,6 +4263,46 @@ mod tests {
             PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
         );
         assert!(historical.inference_profiles.contains_key("vmm"));
+        assert!(historical.inference_profiles.contains_key("vce"));
+    }
+
+    /// Verifies a current-schema file repairs the system VCE profile without copying VMM routes.
+    /// 验证当前 Schema 文件会修复系统 VCE 配置档，且不会复制 VMM 路由。
+    #[test]
+    fn current_schema_repairs_missing_vce_profile_without_copying_vmm_routes() {
+        let mut configuration = PersistedAiConfiguration::default();
+        let vmm_profile = InferenceProfile {
+            embedding: Some(InferenceRouteConfiguration {
+                provider_id: String::from("custom:vmm-provider"),
+                service_entry_id: String::from("vmm-entry"),
+                connection_id: String::from("vmm-account"),
+                model_id: String::from("vmm-model"),
+                binding: InferenceRouteBinding::Action {
+                    action_binding_id: String::from("vmm-embedding-action"),
+                },
+                operation: AiOperation::EmbeddingCreate,
+                usage_scope: InferenceUsageScope::InternalBackground,
+            }),
+            ..InferenceProfile::default()
+        };
+        configuration
+            .inference_profiles
+            .insert(String::from("vmm"), vmm_profile.clone());
+        configuration.inference_profiles.remove("vce");
+
+        assert!(
+            configuration
+                .migrate_to_current_schema()
+                .expect("current schema must repair VCE")
+        );
+        assert_eq!(
+            configuration.inference_profiles.get("vmm"),
+            Some(&vmm_profile)
+        );
+        assert_eq!(
+            configuration.inference_profiles.get("vce"),
+            Some(&InferenceProfile::default())
+        );
     }
 
     /// Verifies schema-seven protocol limits become one conservative direct model setting.
@@ -5395,6 +5447,7 @@ mod tests {
         assert!(configuration.provider_tool_disabled_targets.is_empty());
         assert!(configuration.provider_extension_target_sets.is_empty());
         assert!(configuration.inference_profiles.contains_key("vmm"));
+        assert!(configuration.inference_profiles.contains_key("vce"));
     }
 
     /// Verifies schema one discards every incompatible provider-tool activation field.

@@ -217,6 +217,7 @@ mod state;
 mod subagent_event_ingest;
 mod subagent_panels;
 mod subagent_workspace_mutation;
+pub(crate) mod vce;
 mod vmm;
 mod vmm_hooks;
 mod vmm_session_controller;
@@ -231,6 +232,7 @@ mod workbench_surface_projection;
 mod workspace_files;
 mod workspace_persistence_versions;
 mod workspace_session_queries;
+mod workspace_watcher;
 use agent_stream::*;
 use attachments::{
     composer_attachment_capabilities, composer_attachment_draft_scope,
@@ -426,6 +428,9 @@ pub fn create_service_bridge_state(
         agent_runtime: None,
         codebase_memory_controller: Default::default(),
         native_vmm_maintenance: None,
+        vce_runtime: None,
+        vce_watcher: None,
+        workspace_watcher: None,
         vmm_controller_registry: Default::default(),
         service_runtime: None,
         webui_service_discovery: None,
