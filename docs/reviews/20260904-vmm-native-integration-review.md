@@ -11,6 +11,7 @@
 - 已纳入提交：`4f89908bb9633bd56fa909b9f0126b5d5bf9c8a7`
 - 已纳入提交：`fe6d5338bce6ce11901a3de0baffcd294cfc6b86`（公共 Rerank 契约校验）
 - 并行提交：`ea21aa8364e23bfd1bfd958ecc96ac77fb00c619`；仅审核其与 VMM/HostAI 的公共交界，不审核 VCE 私有实现。
+- 已纳入提交：`1bb5e9bb20b5dd84b0a8e5422ae7ce16100ac0db`、`7301c32`、`adafa7c`、`13e0ab8`、`a0494285`，覆盖后续 Native 维护、配置物化、秘密遮罩、默认绑定与资料库取消修复。
 - 最终边界：任务完成时的最终 `HEAD`，以及本任务尚未提交的改动。
 - 本地提交不会缩小审核范围；每轮均以任务基线到最终状态的累计差异为准。
 - 并行 VCE 任务独占的 `crates/vulcan-context-engine/` 与 `docs/reviews/20260904-vce-workspace-import-review.md` 不属于本任务修复范围；共享 `Cargo.toml`、`Cargo.lock` 只审核和提交能够明确归属于本任务的部分。
@@ -19,16 +20,16 @@
 
 | 领域 | 必审内容 | 当前状态 |
 | --- | --- | --- |
-| Core 源码内建 | contracts、config、storage、engine、facade、资源、上游测试与来源声明 | 待最终复核 |
-| 统一宿主 AI | `HostAiPort`、ConfiguredInference 适配、能力注册/刷新、LLM/Embedding/Rerank 契约与遥测 | 待最终复核 |
-| 知识库调用链 | 只替换 AI 调用边界，不替换知识库业务与存储；注册、刷新、错误映射和测试 | 待最终复核 |
-| 原生运行时 | Core Effect 映射、项目访问、会话钩子、存储恢复、SQLite/LanceDB 隔离 | 审核中 |
-| 原生项目维护 | default ID 1、稳定 ID 绑定、额外召回、迁移、清空、删除、重试和冲突处理 | 审核中 |
-| 外置 gRPC | 独立后端、固定前缀、固定/独立绑定、远端项目管理和远端迁移委托 | 待最终复核 |
-| 配置与生命周期 | 全局二选一、启用补绑、新建项目自动绑定、失败提示、快照/事件刷新 | 审核中 |
-| WebUI | 后端专属字段隔离、启用列表、项目设置、维护确认、创建成功提示与 i18n | 审核中 |
-| 旧托管路径移除 | vmm-local、托管进程、打包脚本、资源声明、文档和测试残留 | 待最终复核 |
-| 验证门禁 | fmt、check、clippy、Rust 测试、Web lint/测试、累计静态审查 | 待执行 |
+| Core 源码内建 | contracts、config、storage、engine、facade、资源、上游测试与来源声明 | 已完成 |
+| 统一宿主 AI | `HostAiPort`、ConfiguredInference 适配、能力注册/刷新、LLM/Embedding/Rerank 契约与遥测 | 已完成 |
+| 知识库调用链 | 只替换 AI 调用边界，不替换知识库业务与存储；注册、刷新、错误映射和测试 | 已完成 |
+| 原生运行时 | Core Effect 映射、项目访问、会话钩子、存储恢复、SQLite/LanceDB 隔离 | 已完成 |
+| 原生项目维护 | default ID 1、稳定 ID 绑定、额外召回、迁移、清空、删除、重试和冲突处理 | 已完成 |
+| 外置 gRPC | 独立后端、固定前缀、固定/独立绑定、远端项目管理和远端迁移委托 | 已完成 |
+| 配置与生命周期 | 全局二选一、启用补绑、新建项目自动绑定、失败提示、快照/事件刷新 | 已完成 |
+| WebUI | 后端专属字段隔离、启用列表、项目设置、维护确认、创建成功提示与 i18n | 已完成 |
+| 旧托管路径移除 | vmm-local、托管进程、打包脚本、资源声明、文档和测试残留 | 已完成 |
+| 验证门禁 | fmt、check、clippy、Rust 测试、Web lint/测试、累计静态审查 | 已完成 |
 
 ## 实现期发现与修复
 
@@ -253,19 +254,19 @@
 - `cargo check --workspace --all-targets`：通过，26 个 crate 完成编译。
 - 任务涉及的 HostAI、Core、VMM 和 service-kernel 生产库严格 `clippy --lib -- -D warnings`：通过。
 - HostAI 契约与 VCE 全特性严格 `clippy --all-targets --no-deps -- -D warnings`：通过。
-- Core、VMM、workspace-store 和 service-kernel：36 个测试套件共 1330 项通过，5 项按既有标记忽略。
+- 14 个相关 Rust crate（HostAI、Core、VMM、workspace-store、agent/service/runtime/assets）：48 个测试套件共 2280 项通过，8 项按既有标记忽略。
 - HostAI 契约与 VCE 全特性：7 个测试套件共 225 项通过。
-- WebUI：TypeScript 类型检查通过，136 个测试文件共 845 项通过。
+- WebUI：TypeScript lint 通过，137 个测试文件共 849 项通过。
 - 全工作区 all-targets 严格 Clippy 仍受 571 项既有非本任务 lint 阻断，主要位于 service-api、workspace-store 与 provider-adapters 的历史测试代码；输出中无 HostAI、VCE、Core、VMM 及本次 service-kernel 路径。本任务通过上述生产库与 HostAI/VCE 独立严格门禁确认无新增告警。
 
 ## 连续无新增问题轮次
 
-当前累计 0 轮。F-035 修复后从头重新开始；任一后续轮次发现新问题仍立即清零。
+当前累计 5 轮。F-035 修复后从头重新开始；五轮均覆盖起始基线后的全部中间本地提交，最终轮次还覆盖执行总结、归档与审核文档。
 
 | 轮次 | 累计边界 | 审核重点 | 验证证据 | 结论 |
 | --- | --- | --- | --- | --- |
-| 1 | 待定 | 待定 | 待定 | 待执行 |
-| 2 | 待定 | 待定 | 待定 | 待执行 |
-| 3 | 待定 | 待定 | 待定 | 待执行 |
-| 4 | 待定 | 待定 | 待定 | 待执行 |
-| 5 | 待定 | 待定 | 待定 | 待执行 |
+| 1 | `52650f94989ded9f1f8d7a525b2f2bc0f37ce646..a0494285`，含全部中间本地提交 | 架构与依赖方向、旧托管/FFI/Go 清理、Native/ExternalGrpc 分流、统一 Host AI 组合根及 F-035 取消接线 | 累计文件与提交清单、活动源码残留搜索、Core 两层依赖树、三处 gRPC 客户端分支、service-kernel 单点 Host AI 构造、资料库 LLM/Embedding 取消上下文调用点复核 | 无新增问题，累计 1/5 |
+| 2 | `52650f94989ded9f1f8d7a525b2f2bc0f37ce646..a0494285` 加当前审核文档改动 | ID 1 保护、稳定 tag/ID 绑定、原子访问配置、迁移预检与冲突改名、画像/会话/向量迁移、清空/删除和中断恢复 | Schema 保护与作用域身份校验、项目变更/功能读写双门、预检版本与指纹、幂等载荷、完整快照变换、向量原值 upsert/陈旧向量删除、恢复账本顺序复核；data-plane 6 项及维护迁移/清空 4 项测试通过 | 无新增问题，累计 2/5 |
+| 3 | `52650f94989ded9f1f8d7a525b2f2bc0f37ce646..a0494285` 加当前审核文档改动 | 全局 Native/ExternalGrpc 互斥配置、默认固定项目、启用时未绑定项目计划、后端专属界面、外置前缀与稳定 ID、新建项目自动绑定和结果提示 | `should_prepare_project_binding_plan` 触发边界、两类 exact-coverage 计划校验、固定目标/逐行创建或绑定、外置显式覆盖与前缀自动创建、非致命项目绑定通知调用链复核；`vulcan-vmm` 48 项、service-kernel VMM 46 项、WebUI 137 个文件共 849 项测试及完整 TypeScript lint 通过 | 无新增问题，累计 3/5 |
+| 4 | `52650f94989ded9f1f8d7a525b2f2bc0f37ce646..a0494285` 加当前审核文档改动 | HostAI 公共契约、ConfiguredInference 私有宿主适配器、资料库 LLM/Embedding、VMM Core HostEffect 映射与 VCE 消费端 | 能力注册/刷新与 owner/profile 校验、`InternalBackground` 作用域、宿主鉴权/预算/最早截止时间/取消竞态/错误映射、资料库持久取消投影、VMM LLM/Embedding/Rerank 强类型响应验证复核；HostAI+VCE 全特性 225 项测试、service-kernel internal_ai 2 项、native driver 3 项、knowledge 16 项测试通过，HostAI/VCE 全目标与 service-kernel 生产库严格 Clippy 均通过 | 无新增问题，累计 4/5 |
+| 5 | `52650f94989ded9f1f8d7a525b2f2bc0f37ce646..最终 HEAD`，含全部中间提交及最终归档文档 | 外部秘密与后端字段隔离、Native 数据目录和符号链接防护、权威资源清单、恢复账本/待分析队列、计划执行总结与最终全量门禁 | 双外部秘密遮罩调用链及目标源码密钥形态扫描；`.vulcan/code/vmm/{sqlite,lancedb}` 逐级可信目录校验；49 文件资源 manifest 精确校验；单未完成 mutation/分析队列与恢复顺序复核；资源契约 17 项、data-plane 6 项、秘密遮罩 1 项通过，最终格式检查、workspace all-targets check、14 个相关 Rust crate 48 套件 2280 项测试、WebUI 137 文件 849 项测试与 lint 通过 | 无新增问题，累计 5/5 |
