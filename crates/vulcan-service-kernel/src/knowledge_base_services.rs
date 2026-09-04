@@ -7,8 +7,13 @@ use crate::session_request_config_v1::set_knowledge_library_selection_v1;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    future::Future,
     path::PathBuf,
-    sync::Arc,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 use vulcan_ai_contract::ExecutionRouteSnapshot;
@@ -215,6 +220,104 @@ struct KnowledgeOperationReporterState {
     last_persisted: Option<std::time::Instant>,
 }
 
+/// Carries one process-local cancellation edge from a durable knowledge operation into Host AI.
+/// 将一个持久化资料库操作的取消边沿传递到进程内宿主 AI。
+#[derive(Default)]
+struct KnowledgeHostAiCancellation {
+    /// Monotonic cancellation state shared by synchronous probes and asynchronous waiters.
+    /// 由同步探测与异步等待方共享的单调取消状态。
+    cancelled: AtomicBool,
+    /// Wakes every active Host AI call after durable cancellation is observed.
+    /// 观察到持久化取消后唤醒全部活动宿主 AI 调用。
+    changed: tokio::sync::Notify,
+}
+
+impl KnowledgeHostAiCancellation {
+    /// Publishes cancellation exactly once and wakes all current waiters.
+    /// 仅发布一次取消状态并唤醒全部当前等待方。
+    fn cancel(&self) {
+        if !self.cancelled.swap(true, Ordering::AcqRel) {
+            self.changed.notify_waiters();
+        }
+    }
+}
+
+impl vulcan_ai_contract::HostAiCancellation for KnowledgeHostAiCancellation {
+    /// Returns the cached monotonic cancellation state without performing storage I/O.
+    /// 返回缓存的单调取消状态，且不执行存储 I/O。
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+
+    /// Resolves after cancellation is published without missing a check-to-wait race.
+    /// 在取消发布后完成，并避免遗漏检查到等待之间的竞态。
+    fn cancelled<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            loop {
+                let notified = self.changed.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if self.is_cancelled() {
+                    return;
+                }
+                notified.await;
+            }
+        })
+    }
+}
+
+/// Owns the bounded poller that projects durable cancellation into one Host AI call.
+/// 持有有界轮询器，将持久化取消投影到一次宿主 AI 调用。
+struct KnowledgeHostAiCancellationMonitor {
+    /// Polling task aborted automatically when the physical Host AI call leaves scope.
+    /// 真实宿主 AI 调用离开作用域时自动中止的轮询任务。
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl KnowledgeHostAiCancellationMonitor {
+    /// Starts one request-scoped durable cancellation monitor.
+    /// 启动一个请求作用域的持久化取消监视器。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `runtime` reads the authoritative operation state, `job_id` selects the exact job, and
+    /// `cancellation` publishes the monotonic process-local signal.
+    /// `runtime` 读取权威操作状态，`job_id` 选择准确作业，`cancellation` 发布单调进程内信号。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A guard that keeps the poller alive for exactly one physical Host AI call.
+    /// 返回一个仅在一次真实宿主 AI 调用期间保持轮询器存活的守卫。
+    fn start(
+        runtime: KnowledgeBaseRuntime,
+        job_id: String,
+        cancellation: Arc<KnowledgeHostAiCancellation>,
+    ) -> Self {
+        let task = tokio::spawn(async move {
+            loop {
+                if runtime
+                    .operation_is_cancelled(job_id.as_str())
+                    .await
+                    .unwrap_or(false)
+                {
+                    cancellation.cancel();
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+        });
+        Self { task }
+    }
+}
+
+impl Drop for KnowledgeHostAiCancellationMonitor {
+    /// Stops the request-scoped poller when the associated Host AI call completes.
+    /// 关联宿主 AI 调用完成时停止请求作用域轮询器。
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
 impl KnowledgeOperationReporter {
     /// Creates one reporter with a zeroed cumulative usage snapshot.
     /// 创建一个累计用量归零的报告器。
@@ -227,6 +330,31 @@ impl KnowledgeOperationReporter {
                 last_persisted: None,
             })),
         }
+    }
+
+    /// Attaches durable operation cancellation to one Host AI call context.
+    /// 将持久化操作取消附加到一次宿主 AI 调用上下文。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `context` already contains the stable operation, request-attempt, and optional deadline data.
+    /// `context` 已包含稳定操作、请求尝试次数和可选截止时间数据。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The enriched context plus a guard that must remain alive for the physical call.
+    /// 返回增强后的上下文，以及必须在真实调用期间保持存活的守卫。
+    fn cancellable_ai_context(
+        &self,
+        context: HostAiCallContext,
+    ) -> (HostAiCallContext, KnowledgeHostAiCancellationMonitor) {
+        let cancellation = Arc::new(KnowledgeHostAiCancellation::default());
+        let monitor = KnowledgeHostAiCancellationMonitor::start(
+            self.runtime.clone(),
+            self.job_id.clone(),
+            Arc::clone(&cancellation),
+        );
+        (context.with_cancellation(cancellation), monitor)
     }
 
     /// Starts one LLM or embedding request and resets the active preview.
@@ -545,15 +673,6 @@ impl KnowledgeOperationReporter {
         {
             eprintln!("[knowledge-base] update operation observability failed: {error}");
         }
-    }
-
-    /// Returns whether the durable operation has received a cooperative cancellation request.
-    /// 返回持久化操作是否已经收到协作取消请求。
-    async fn is_cancelled(&self) -> bool {
-        self.runtime
-            .operation_is_cancelled(&self.job_id)
-            .await
-            .unwrap_or(false)
     }
 }
 
@@ -1234,28 +1353,6 @@ async fn observe_knowledge_llm_stream(
     Ok(())
 }
 
-/// Waits for one LLM response while translating durable cancellation into provider cancellation.
-/// 等待 LLM 响应，并将持久化取消请求转换为供应商执行取消。
-async fn wait_knowledge_llm_with_cancel(
-    port: &dyn HostAiPort,
-    execution: &vulcan_ai_contract::HostAiExecutionHandle,
-    reporter: &KnowledgeOperationReporter,
-) -> Result<ResponsesExecutionResult, HostAiError> {
-    let response = port.wait_response(execution);
-    tokio::pin!(response);
-    let mut cancellation_poll = tokio::time::interval(std::time::Duration::from_millis(200));
-    loop {
-        tokio::select! {
-            result = &mut response => return result,
-            _ = cancellation_poll.tick() => {
-                if reporter.is_cancelled().await {
-                    let _ = port.cancel_execution(execution);
-                }
-            }
-        }
-    }
-}
-
 /// Executes one curation attempt through the existing streaming inference registry.
 /// 通过现有流式推理注册表执行一次资料库整理尝试。
 async fn execute_knowledge_display_attempt(
@@ -1267,6 +1364,7 @@ async fn execute_knowledge_display_attempt(
     reporter: &KnowledgeOperationReporter,
     is_retry: bool,
 ) -> Result<ResponsesExecutionResult, String> {
+    let (context, _cancellation_monitor) = reporter.cancellable_ai_context(context);
     let execution = port
         .start_response_execution(capability, context, request.clone())
         .await
@@ -1299,7 +1397,7 @@ async fn execute_knowledge_display_attempt(
         }
     };
     let observer = observe_knowledge_llm_stream(reporter, event_stream);
-    let response = wait_knowledge_llm_with_cancel(port, &execution, reporter);
+    let response = port.wait_response(&execution);
     let (response, observation) = tokio::join!(response, observer);
     if let Err(error) = observation {
         reporter.finish_request_error("failed").await;
@@ -2186,10 +2284,13 @@ async fn run_knowledge_vector_index(
                         route,
                     )
                     .await;
+                let (context, _cancellation_monitor) = reporter.cancellable_ai_context(
+                    knowledge_ai_call_context(&job_id, request.request_id.as_str()),
+                );
                 let response = match port
                     .create_embeddings(
                         &capability,
-                        knowledge_ai_call_context(&job_id, request.request_id.as_str()),
+                        context,
                         HostAiEmbeddingRequest {
                             vector_space_id: format!("knowledge_base:{library_id}"),
                             request: request.clone(),
@@ -4139,5 +4240,31 @@ mod tests {
             assert!(knowledge_request_status_is_terminal(status));
         }
         assert!(!knowledge_request_status_is_terminal("running"));
+    }
+
+    /// Verifies the request-scoped cancellation signal wakes an active waiter and stays monotonic.
+    /// 验证请求作用域取消信号会唤醒活动等待方并保持单调状态。
+    #[tokio::test]
+    async fn knowledge_host_ai_cancellation_wakes_active_waiter() {
+        let cancellation = Arc::new(KnowledgeHostAiCancellation::default());
+        let observed = Arc::clone(&cancellation);
+        let waiter = tokio::spawn(async move {
+            vulcan_ai_contract::HostAiCancellation::cancelled(observed.as_ref()).await;
+        });
+        tokio::task::yield_now().await;
+
+        cancellation.cancel();
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+            .await
+            .expect("cancellation waiter should wake")
+            .expect("cancellation waiter should not panic");
+        assert!(vulcan_ai_contract::HostAiCancellation::is_cancelled(
+            cancellation.as_ref()
+        ));
+        cancellation.cancel();
+        assert!(vulcan_ai_contract::HostAiCancellation::is_cancelled(
+            cancellation.as_ref()
+        ));
     }
 }
