@@ -49,6 +49,9 @@ const NATIVE_VMM_OWNER_ID: &str = "vmm-native";
 /// Configured inference profile selected for all native VMM AI roles.
 /// 全部原生 VMM AI 角色选择的已配置推理 Profile。
 const NATIVE_VMM_CONSUMER_PROFILE_ID: &str = "vmm";
+/// Native VMM uses one symmetric provider-default embedding space for both stored memories and queries.
+/// 原生 VMM 对已存记忆与查询统一使用同一个供应商默认对称向量空间。
+const NATIVE_VMM_EMBEDDING_TASK: EmbeddingTask = EmbeddingTask::ProviderDefault;
 /// Maximum LLM output budget accepted from one Core effect.
 /// 单个 Core Effect 接受的最大 LLM 输出预算。
 const NATIVE_VMM_LLM_OUTPUT_TOKENS: u64 = 8_192;
@@ -770,7 +773,7 @@ impl NativeVmmHostDriver {
             idempotency_key: None,
             consumer_profile_id: String::from(NATIVE_VMM_CONSUMER_PROFILE_ID),
             inputs,
-            task: EmbeddingTask::SemanticSimilarity,
+            task: NATIVE_VMM_EMBEDDING_TASK,
             dimensions: Some(effect.expected_dimension),
             output_kind: EmbeddingOutputKind::Dense,
             encoding: EmbeddingEncoding::Float,
@@ -1644,6 +1647,30 @@ fn embedding_config_from_capability(
             "native VMM embedding capability omitted its typed limits",
         )
     })?;
+    if !capabilities.tasks.contains(&NATIVE_VMM_EMBEDDING_TASK) {
+        return Err(CoreError::new(
+            ErrorCode::InvalidConfiguration,
+            ErrorStage::Configuration,
+            "native VMM embedding route does not support the required provider-default task",
+        ));
+    }
+    if !capabilities
+        .output_kinds
+        .contains(&EmbeddingOutputKind::Dense)
+    {
+        return Err(CoreError::new(
+            ErrorCode::InvalidConfiguration,
+            ErrorStage::Configuration,
+            "native VMM embedding route does not support dense output",
+        ));
+    }
+    if !capabilities.encodings.contains(&EmbeddingEncoding::Float) {
+        return Err(CoreError::new(
+            ErrorCode::InvalidConfiguration,
+            ErrorStage::Configuration,
+            "native VMM embedding route does not support float encoding",
+        ));
+    }
     let dimension = capabilities
         .default_dimensions
         .or_else(|| {
@@ -1973,7 +2000,39 @@ fn storage_uncertain_error(message: impl Into<String>) -> CoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vulcan_ai_contract::{InferenceCapabilitySnapshot, InferenceOperationCapability};
+    use vulcan_ai_contract::{
+        DistanceMetric, EmbeddingCapabilities, EmbeddingNormalization, InferenceCapabilitySnapshot,
+        InferenceOperationCapability,
+    };
+
+    /// Verifies the native Core never requests an unsupported inferred embedding role.
+    /// 验证原生 Core 不会请求未经能力契约支持的推断型向量角色。
+    #[test]
+    fn native_vmm_embedding_task_is_provider_default() {
+        assert_eq!(NATIVE_VMM_EMBEDDING_TASK, EmbeddingTask::ProviderDefault);
+    }
+
+    /// Verifies native VMM rejects a configured embedding route before runtime effects can fail.
+    /// 验证原生 VMM 会在运行时 Effect 失败前拒绝不兼容的已配置向量路由。
+    #[test]
+    fn native_vmm_embedding_activation_requires_the_frozen_request_shape() {
+        // compatibleHandle represents the exact dense-float provider-default route used in production.
+        // compatibleHandle 表示生产环境使用的准确稠密浮点供应商默认路由。
+        let compatible_handle =
+            embedding_capability_handle(BTreeSet::from([EmbeddingTask::ProviderDefault]));
+        let (dimension, fingerprint) = embedding_config_from_capability(&compatible_handle)
+            .expect("provider-default dense float route should activate");
+        assert_eq!(dimension, 1_536);
+        assert!(fingerprint.starts_with("host-ai-capability-fp256:"));
+
+        // incompatibleHandle proves task semantics are validated during activation, not first use.
+        // incompatibleHandle 证明任务语义在激活阶段校验，而不是等到首次使用。
+        let incompatible_handle =
+            embedding_capability_handle(BTreeSet::from([EmbeddingTask::SemanticSimilarity]));
+        let error = embedding_config_from_capability(&incompatible_handle)
+            .expect_err("semantic-similarity-only route must not activate native VMM");
+        assert!(error.diagnostic.contains("provider-default task"));
+    }
 
     /// Builds one fully available native VMM capability handle for status contract tests.
     /// 为状态契约测试构造一份全部可用的原生 VMM 能力句柄。
@@ -2016,6 +2075,47 @@ mod tests {
             snapshot,
         )
         .expect("complete native VMM capability handle should be valid")
+    }
+
+    /// Builds one native VMM capability handle with an exact embedding task set.
+    /// 使用准确的向量任务集合构造一份原生 VMM 能力句柄。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `tasks` contains the embedding semantics declared by the selected model route.
+    /// `tasks` 包含所选模型路由声明的向量语义。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A complete handle whose embedding operation carries deterministic dense-float dimensions.
+    /// 返回向量操作带有确定性稠密浮点维度的完整句柄。
+    fn embedding_capability_handle(tasks: BTreeSet<EmbeddingTask>) -> HostAiCapabilityHandle {
+        // handle starts from the exact production registration and required operation set.
+        // handle 从准确的生产注册及必需操作集合开始构造。
+        let mut handle = complete_capability_handle();
+        // embeddingOperation is the unique required route whose typed contract is under test.
+        // embeddingOperation 是本测试中校验强类型契约的唯一必需路由。
+        let embedding_operation = handle
+            .snapshot
+            .operations
+            .iter_mut()
+            .find(|operation| operation.operation == AiOperation::EmbeddingCreate)
+            .expect("embedding capability should exist");
+        embedding_operation.embedding = Some(EmbeddingCapabilities {
+            tasks,
+            input_resources: BTreeSet::new(),
+            output_kinds: BTreeSet::from([EmbeddingOutputKind::Dense]),
+            encodings: BTreeSet::from([EmbeddingEncoding::Float]),
+            dimensions: BTreeSet::from([1_536]),
+            minimum_dimensions: Some(1_536),
+            maximum_dimensions: Some(1_536),
+            default_dimensions: Some(1_536),
+            maximum_inputs: Some(10),
+            maximum_tokens_per_input: Some(8_192),
+            normalization: EmbeddingNormalization::Unknown,
+            distance_metric: DistanceMetric::Unknown,
+        });
+        handle
     }
 
     /// Verifies optional capability loss degrades only its own readiness flag.

@@ -146,6 +146,7 @@ async fn bind_new_external_fixed_project(
         layer.clone(),
         String::new(),
         String::new(),
+        String::new(),
     )
     .await;
     let remote_projects = match outcome {
@@ -214,6 +215,7 @@ async fn bind_new_external_project(
             confirm_create: true,
         },
         layer.clone(),
+        String::new(),
         String::new(),
         String::new(),
     )

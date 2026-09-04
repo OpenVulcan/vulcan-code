@@ -450,6 +450,9 @@ fn vmm_config_layer_from_draft_omits_transport_fields_for_project_layer() {
         profile_refresh_turns: String::from("13"),
         profile_node_limit: String::from("17"),
         precheck_enabled: true,
+        precheck_mode: String::from("disabled"),
+        memory_writeback_enabled: true,
+        memory_writeback_mode: String::from("enabled"),
         ai_tools_enabled: true,
         injection_tag: String::from("PROJECT_TAG"),
         injection_description: String::from("Project memories"),
@@ -466,8 +469,15 @@ fn vmm_config_layer_from_draft_omits_transport_fields_for_project_layer() {
     assert_eq!(layer.grpc_keepalive_time_ms, None);
     assert_eq!(layer.grpc_keepalive_timeout_ms, None);
     assert_eq!(layer.grpc_keepalive_permit_without_calls, None);
+    assert_eq!(layer.enabled, Some(true));
     assert_eq!(layer.user_id, Some(7));
     assert_eq!(layer.project_id, Some(11));
+    assert_eq!(layer.implicit_memory_turns, Some(9));
+    assert_eq!(layer.profile_refresh_turns, Some(13));
+    assert_eq!(layer.profile_node_limit, Some(17));
+    assert_eq!(layer.precheck_enabled, Some(false));
+    assert_eq!(layer.memory_writeback_enabled, Some(true));
+    assert_eq!(layer.ai_tools_enabled, Some(true));
     assert_eq!(layer.injection_tag.as_deref(), Some("PROJECT_TAG"));
 }
 

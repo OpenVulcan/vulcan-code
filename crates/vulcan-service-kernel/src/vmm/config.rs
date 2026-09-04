@@ -619,6 +619,7 @@ async fn load_external_vmm_projects(
         layer,
         String::new(),
         String::new(),
+        String::new(),
     )
     .await?
     {
@@ -642,6 +643,7 @@ async fn ensure_external_vmm_project(
             confirm_create: true,
         },
         layer,
+        String::new(),
         String::new(),
         String::new(),
     )

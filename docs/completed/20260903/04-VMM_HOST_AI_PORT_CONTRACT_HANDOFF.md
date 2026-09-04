@@ -444,6 +444,11 @@ StorageMutation}`。内核直接 Rust 集成时：
 - `effect_id`、`command_id`、deadline、attempt 和 cancellation 进入 `HostAiCallContext`。
 - Core 的 effect/command 生命周期由 Core 自己维护；AI Provider、usage、route 和权限由宿主维护。
 - Storage effect 仍走宿主提供的 storage port；本契约不把 VLDB 写入混入 AI Port。
+- VMM 的写入内容与查询必须处于同一个对称向量空间，因此 VMM Embedding 固定使用
+  `EmbeddingTask::ProviderDefault`、`EmbeddingOutputKind::Dense`、`EmbeddingEncoding::Float` 和路由声明的
+  确定默认维度；不得改成 `SemanticSimilarity`，也不得借用 VCE 的 `Document`/`Query` 非对称任务语义。
+- VMM 启用与能力刷新阶段必须验证上述完整请求形态；不能只验证存在 `EmbeddingCreate` 操作后等到首次
+  搜索或写入才暴露模型路由不兼容。
 - Core 已复制为工作区内独立的 contracts/config/engine/storage/core crate；具体 HostEffect、
   StorageQuery、StorageMutation 与项目级数据表均以这些本地源码及
   `vulcan-service-kernel::native_vmm`、`vulcan-workspace-store::vmm_data_plane` 为权威。
@@ -461,7 +466,8 @@ StorageMutation}`。内核直接 Rust 集成时：
 - `ConfiguredInferenceHostAiPort` 已作为 `ConfiguredInferenceService` 的私有宿主适配器实现，
   `AgentRuntimeBridge` 已持有 `Arc<dyn HostAiPort>`。
 - Native VMM 已使用稳定注册 ID `vmm-native:runtime` 和 consumer profile `vmm` 注册四项必需 LLM、
-  一项必需 Embedding 及可选画像指令/Rerank，并在启用和调用前刷新能力快照。
+  一项必需 Embedding 及可选画像指令/Rerank，并在启用和调用前刷新能力快照；Embedding 激活门禁
+  同时验证 `ProviderDefault + Dense + Float + 确定维度`。
 - `RerankResponse::validate_for_request` 已统一校验请求身份、候选 ID/下标、连续排名、结果上限、
   有限分数、声明的分数方向和 `return_content` 约束；配置推理、宿主 Port 与 mock 共用该门禁。
 
@@ -542,7 +548,8 @@ Native VMM 已用相同规则注册 `vmm` consumer profile，把 Core 的 LLM、
   通过私有 `KnowledgeHostAiCancellation` 投影到每次 LLM 启动/流/等待和每个 Embedding 批次；该修复
   复用了既有公共取消接口，没有扩展公共契约。
 - Native VMM 的必需 LLM/Embedding 与可选画像指令/Rerank 在启用和调用前刷新；Effect 失败显式
-  转换为 Core 可降级失败，Storage Effect 独立走宿主 VLDB，不混入 AI Port。
+  转换为 Core 可降级失败，Storage Effect 独立走宿主 VLDB，不混入 AI Port。VMM Embedding 固定为
+  对称 `ProviderDefault` 任务并在激活阶段校验完整请求形态；VCE 的 `Document`/`Query` 任务保持独立。
 
 ### 12.4 遗留问题与注意事项
 

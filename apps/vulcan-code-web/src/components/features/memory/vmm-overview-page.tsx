@@ -43,6 +43,20 @@ interface VmmOverviewPageProps {
   onControl: (action: string) => Promise<void>
 }
 
+// vmmNativeBindingModeKey maps the native new-project policy to one user-facing status value.
+// vmmNativeBindingModeKey 将原生新增项目策略映射为面向用户的状态值。
+// bindingMode is the authoritative persisted native binding policy.
+// bindingMode 是权威持久化的原生绑定策略。
+// The return value is the exact translation key rendered by the overview.
+// 返回值是总览页渲染的准确翻译键。
+export function vmmNativeBindingModeKey(
+  bindingMode: VmmMemorySnapshot["globalDraft"]["nativeProjectBindingMode"],
+): TranslationKey {
+  return bindingMode === "fixed"
+    ? "vmm.experience.nativeBindingFixed"
+    : "vmm.experience.nativeBindingPerProject"
+}
+
 // VmmOverviewPage renders a human-oriented VMM status dashboard without internal identifiers.
 // VmmOverviewPage 渲染面向用户的 VMM 状态总览，并隐藏内部标识。
 function VmmOverviewPage({
@@ -55,6 +69,9 @@ function VmmOverviewPage({
   const { locale, t } = useI18n()
   const state = snapshot.experienceState
   const configured = state.deployment !== "disabled"
+  // externalIdentity controls the external-only default project and user rows.
+  // externalIdentity 控制仅适用于外置后端的默认项目与用户行。
+  const externalIdentity = state.deployment === "external"
 
   if (!configured) {
     return (
@@ -113,16 +130,26 @@ function VmmOverviewPage({
               label={t("vmm.experience.health")}
               value={t(vmmHealthKey(state.health))}
             />
-            <VmmStateRow
-              icon={<FolderKanban className="size-4" aria-hidden="true" />}
-              label={t("vmm.experience.currentProject")}
-              value={snapshot.displayIdentity.projectPath ?? t("vmm.experience.noProject")}
-            />
-            <VmmStateRow
-              icon={<UserRound className="size-4" aria-hidden="true" />}
-              label={t("vmm.experience.currentUser")}
-              value={snapshot.displayIdentity.userName ?? t("vmm.experience.noUser")}
-            />
+            {externalIdentity ? (
+              <>
+                <VmmStateRow
+                  icon={<FolderKanban className="size-4" aria-hidden="true" />}
+                  label={t("vmm.experience.currentProject")}
+                  value={snapshot.displayIdentity.projectPath ?? t("vmm.experience.noProject")}
+                />
+                <VmmStateRow
+                  icon={<UserRound className="size-4" aria-hidden="true" />}
+                  label={t("vmm.experience.currentUser")}
+                  value={snapshot.displayIdentity.userName ?? t("vmm.experience.noUser")}
+                />
+              </>
+            ) : (
+              <VmmStateRow
+                icon={<Database className="size-4" aria-hidden="true" />}
+                label={t("vmm.experience.defaultMemoryMode")}
+                value={t(vmmNativeBindingModeKey(snapshot.globalDraft.nativeProjectBindingMode))}
+              />
+            )}
           </CardContent>
         </Card>
 

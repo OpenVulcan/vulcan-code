@@ -7,7 +7,9 @@ import {
   materializeExternalFixedBindingPlan,
   shouldRequestVmmManagementCatalog,
   shouldRouteAdvancedSaveToSetup,
+  vmmUsesNativeMemoryMaintenance,
 } from "./MemoryArea"
+import { vmmNativeBindingModeKey } from "./vmm-overview-page"
 
 // emptyCatalog returns one unloaded management directory for first-run gate tests.
 // emptyCatalog 返回一份尚未加载的管理目录，用于首次运行门控测试。
@@ -23,6 +25,7 @@ describe("VMM management catalog readiness gate", () => {
   it("does not contact VMM before the selected backend is ready", () => {
     expect(shouldRequestVmmManagementCatalog({
       activeSection: "overview",
+      deployment: "external",
       operationBusy: false,
       processReady: false,
       requestIssued: false,
@@ -33,6 +36,7 @@ describe("VMM management catalog readiness gate", () => {
   it("loads once after readiness and skips busy, repeated, populated, or unrelated states", () => {
     expect(shouldRequestVmmManagementCatalog({
       activeSection: "overview",
+      deployment: "external",
       operationBusy: false,
       processReady: true,
       requestIssued: false,
@@ -40,6 +44,7 @@ describe("VMM management catalog readiness gate", () => {
     })).toBe(true)
     expect(shouldRequestVmmManagementCatalog({
       activeSection: "profile",
+      deployment: "external",
       operationBusy: false,
       processReady: true,
       requestIssued: false,
@@ -47,6 +52,7 @@ describe("VMM management catalog readiness gate", () => {
     })).toBe(true)
     expect(shouldRequestVmmManagementCatalog({
       activeSection: "overview",
+      deployment: "external",
       operationBusy: true,
       processReady: true,
       requestIssued: false,
@@ -54,6 +60,7 @@ describe("VMM management catalog readiness gate", () => {
     })).toBe(false)
     expect(shouldRequestVmmManagementCatalog({
       activeSection: "overview",
+      deployment: "external",
       operationBusy: false,
       processReady: true,
       requestIssued: true,
@@ -61,6 +68,7 @@ describe("VMM management catalog readiness gate", () => {
     })).toBe(false)
     expect(shouldRequestVmmManagementCatalog({
       activeSection: "rules",
+      deployment: "external",
       operationBusy: false,
       processReady: true,
       requestIssued: false,
@@ -68,6 +76,7 @@ describe("VMM management catalog readiness gate", () => {
     })).toBe(false)
     expect(shouldRequestVmmManagementCatalog({
       activeSection: "overview",
+      deployment: "external",
       operationBusy: false,
       processReady: true,
       requestIssued: false,
@@ -81,6 +90,31 @@ describe("VMM management catalog readiness gate", () => {
         }],
       },
     })).toBe(false)
+  })
+
+  it("never loads the external identity catalog for the native backend", () => {
+    expect(shouldRequestVmmManagementCatalog({
+      activeSection: "overview",
+      deployment: "native",
+      operationBusy: false,
+      processReady: true,
+      requestIssued: false,
+      catalog: emptyCatalog(),
+    })).toBe(false)
+  })
+})
+
+describe("VMM native overview identity", () => {
+  it("shows exactly the configured native project binding policy", () => {
+    expect(vmmNativeBindingModeKey("fixed")).toBe("vmm.experience.nativeBindingFixed")
+    expect(vmmNativeBindingModeKey("per_project")).toBe("vmm.experience.nativeBindingPerProject")
+  })
+})
+
+describe("VMM content maintenance backend", () => {
+  it("uses internal maintenance only for the native backend", () => {
+    expect(vmmUsesNativeMemoryMaintenance("native")).toBe(true)
+    expect(vmmUsesNativeMemoryMaintenance("external")).toBe(false)
   })
 })
 

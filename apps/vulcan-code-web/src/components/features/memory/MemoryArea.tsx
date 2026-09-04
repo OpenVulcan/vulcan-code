@@ -7,6 +7,7 @@ import {
   type MemoryActionProps,
 } from "./use-memory-area-controller"
 import { VmmInferenceSettings } from "./vmm-inference-settings"
+import { VmmContentPage } from "./vmm-content-page"
 import { VmmDataPage } from "./vmm-data-page"
 import { VmmAdvancedPage } from "./vmm-advanced-page"
 import { VmmIdentityProjectPage } from "./vmm-identity-project-page"
@@ -28,12 +29,23 @@ export type { MemoryActionProps } from "./use-memory-area-controller"
 // MemorySubAreaId 标识当前选中的 VMM 记忆管理页面。
 export type MemorySubAreaId = string
 
+// vmmUsesNativeMemoryMaintenance selects the process-local content workbench without management HTTP.
+// vmmUsesNativeMemoryMaintenance 选择不经过管理 HTTP 的进程内记忆内容工作台。
+export function vmmUsesNativeMemoryMaintenance(
+  deployment: VmmMemorySnapshot["experienceState"]["deployment"],
+): boolean {
+  return deployment === "native"
+}
+
 // shouldRequestVmmManagementCatalog decides whether the live VMM directory can be loaded safely.
 // shouldRequestVmmManagementCatalog 判断当前是否可以安全加载实时 VMM 管理目录。
 export function shouldRequestVmmManagementCatalog(input: {
   // Current visible memory section.
   // 当前可见的记忆分区。
   activeSection: MemorySubAreaId
+  // Authoritative configured backend deployment.
+  // 权威的已配置后端部署方式。
+  deployment: VmmMemorySnapshot["experienceState"]["deployment"]
   // Whether another memory operation owns the exclusive request channel.
   // 是否已有其他记忆操作占用独占请求通道。
   operationBusy: boolean
@@ -48,7 +60,8 @@ export function shouldRequestVmmManagementCatalog(input: {
   catalog: VmmMemorySnapshot["managementCatalog"]
 }): boolean {
   return (
-    (
+    input.deployment === "external"
+    && (
       input.activeSection === "overview"
       || input.activeSection === "identity_projects"
       || input.activeSection === "profile"
@@ -167,6 +180,7 @@ export function MemoryArea(props: {
     }
     if (!shouldRequestVmmManagementCatalog({
       activeSection,
+      deployment: props.snapshot.experienceState.deployment,
       operationBusy,
       processReady: props.snapshot.runtime.processReady,
       requestIssued: catalogLoadRequested.current,
@@ -182,6 +196,7 @@ export function MemoryArea(props: {
   }, [
     activeSection,
     operationBusy,
+    props.snapshot.experienceState.deployment,
     props.snapshot.managementCatalog,
     props.snapshot.runtime.processReady,
     runAction,
@@ -404,12 +419,21 @@ export function MemoryArea(props: {
       <section className="vmm-memory-page">
         <div className="vmm-memory-shell status-only">
           <main className="vmm-memory-main vmm-status-page">
-            <VmmDataPage
-              busy={operationBusy}
-              onRunAction={runAction}
-              result={result}
-              snapshot={props.snapshot}
-            />
+            {vmmUsesNativeMemoryMaintenance(props.snapshot.experienceState.deployment) ? (
+              <VmmContentPage
+                busy={operationBusy}
+                onRunAction={runAction}
+                result={result}
+                snapshot={props.snapshot}
+              />
+            ) : (
+              <VmmDataPage
+                busy={operationBusy}
+                onRunAction={runAction}
+                result={result}
+                snapshot={props.snapshot}
+              />
+            )}
           </main>
         </div>
       </section>

@@ -31,6 +31,7 @@ import { useI18n } from "@/i18n"
 import type {
   VmmMemoryActionResult,
   VmmMemorySnapshot,
+  VmmNativeProjectCatalogSummary,
   VmmProfileNodeActionValue,
 } from "@/types"
 
@@ -55,6 +56,33 @@ interface VmmProfilePageProps {
   ) => Promise<VmmMemoryActionResult | null>
 }
 
+// vmmProfileUsesNativeProjectCatalog identifies the one-level host-owned profile directory.
+// vmmProfileUsesNativeProjectCatalog 标识宿主持有的单层原生画像目录。
+export function vmmProfileUsesNativeProjectCatalog(
+  deployment: VmmMemorySnapshot["experienceState"]["deployment"],
+): boolean {
+  return deployment === "native"
+}
+
+// vmmProfileCatalogAction returns the only catalog action valid for the selected backend.
+// vmmProfileCatalogAction 返回当前后端唯一有效的画像目录动作。
+export function vmmProfileCatalogAction(
+  deployment: VmmMemorySnapshot["experienceState"]["deployment"],
+): "native_project_catalog" | "load_users_projects" {
+  return vmmProfileUsesNativeProjectCatalog(deployment)
+    ? "native_project_catalog"
+    : "load_users_projects"
+}
+
+// vmmProfileEffectiveTarget removes the nonexistent user selector from native mode.
+// vmmProfileEffectiveTarget 从原生模式移除不存在的用户选择目标。
+export function vmmProfileEffectiveTarget(
+  deployment: VmmMemorySnapshot["experienceState"]["deployment"],
+  requestedTarget: "user" | "project",
+): "user" | "project" {
+  return vmmProfileUsesNativeProjectCatalog(deployment) ? "project" : requestedTarget
+}
+
 // VmmProfilePage renders current profile content without internal node identifiers.
 // VmmProfilePage 渲染不含内部节点标识的当前画像内容。
 function VmmProfilePage({
@@ -64,7 +92,10 @@ function VmmProfilePage({
   onRunAction,
 }: VmmProfilePageProps) {
   const { t } = useI18n()
-  const [target, setTarget] = React.useState<"user" | "project">("user")
+  const isNative = vmmProfileUsesNativeProjectCatalog(snapshot.experienceState.deployment)
+  const [target, setTarget] = React.useState<"user" | "project">(
+    isNative ? "project" : "user",
+  )
   // selectedUserRef is the explicit VMM catalog user being inspected.
   // selectedUserRef 是当前明确查看的 VMM 目录用户。
   const [selectedUserRef, setSelectedUserRef] = React.useState(snapshot.globalDraft.userId)
@@ -74,9 +105,15 @@ function VmmProfilePage({
   const [nodes, setNodes] = React.useState<ProfileNodeView[]>([])
   const [instruction, setInstruction] = React.useState("")
   const [bundlePreview, setBundlePreview] = React.useState(snapshot.runtime.profilePreview)
+  // nativeCatalog contains the host-owned one-level project identities available to native profiles.
+  // nativeCatalog 包含原生画像可选的宿主持有单层项目身份。
+  const [nativeCatalog, setNativeCatalog] = React.useState<VmmNativeProjectCatalogSummary | null>(null)
   // automaticLoadKey prevents one completed profile request from retriggering on busy-state changes.
   // automaticLoadKey 防止一次已完成画像请求因忙碌状态变化而重复触发。
   const automaticLoadKey = React.useRef("")
+  // nativeCatalogLoadIssued prevents duplicate native project catalog requests during one mount.
+  // nativeCatalogLoadIssued 防止一次挂载期间重复请求原生项目目录。
+  const nativeCatalogLoadIssued = React.useRef(false)
 
   // userOptions exposes human-readable VMM users without leaking their numeric transport ids.
   // userOptions 暴露人类可读的 VMM 用户，同时不显示数字传输标识。
@@ -86,17 +123,53 @@ function VmmProfilePage({
   })), [snapshot.managementCatalog.users])
   // projectOptions exposes canonical VMM paths so projects with the same leaf name remain distinct.
   // projectOptions 暴露规范 VMM 路径，确保同名末级项目仍可区分。
-  const projectOptions = React.useMemo(() => snapshot.managementCatalog.projects.map((project) => ({
-    value: project.stableKey,
-    label: project.displayName,
-    description: project.displayPath,
-    keywords: [project.displayPath],
-  })), [snapshot.managementCatalog.projects])
+  const projectOptions = React.useMemo(() => isNative
+    ? (nativeCatalog?.projects ?? []).map((project) => ({
+      value: String(project.projectId),
+      label: project.name,
+      description: project.tag,
+      keywords: [project.tag],
+    }))
+    : snapshot.managementCatalog.projects.map((project) => ({
+      value: project.stableKey,
+      label: project.displayName,
+      description: project.displayPath,
+      keywords: [project.displayPath],
+    })), [isNative, nativeCatalog?.projects, snapshot.managementCatalog.projects])
   // profileCatalogReady prevents profile calls from racing the first user/project directory load.
   // profileCatalogReady 防止画像调用与首次用户/项目目录加载发生竞争。
-  const profileCatalogReady = userOptions.length > 0 && projectOptions.length > 0
+  const profileCatalogReady = isNative
+    ? projectOptions.length > 0
+    : userOptions.length > 0 && projectOptions.length > 0
 
   React.useEffect(() => {
+    if (isNative) {
+      setTarget("project")
+    } else {
+      setNativeCatalog(null)
+    }
+    setNodes([])
+    setBundlePreview("")
+    automaticLoadKey.current = ""
+    nativeCatalogLoadIssued.current = false
+  }, [isNative])
+
+  React.useEffect(() => {
+    if (!isNative || busy || nativeCatalog || nativeCatalogLoadIssued.current) {
+      return
+    }
+    nativeCatalogLoadIssued.current = true
+    void onRunAction("native_project_catalog").then((catalogResult) => {
+      if (!catalogResult) {
+        nativeCatalogLoadIssued.current = false
+      }
+    })
+  }, [busy, isNative, nativeCatalog, onRunAction])
+
+  React.useEffect(() => {
+    if (isNative) {
+      return
+    }
     setSelectedUserRef((current) => {
       if (snapshot.managementCatalog.users.some((user) => user.stableKey === current)) {
         return current
@@ -105,25 +178,35 @@ function VmmProfilePage({
         (user) => user.stableKey === snapshot.globalDraft.userId,
       )?.stableKey ?? snapshot.managementCatalog.users[0]?.stableKey ?? ""
     })
-  }, [snapshot.globalDraft.userId, snapshot.managementCatalog.users])
+  }, [isNative, snapshot.globalDraft.userId, snapshot.managementCatalog.users])
 
   React.useEffect(() => {
     setSelectedProjectRef((current) => {
-      if (snapshot.managementCatalog.projects.some((project) => project.stableKey === current)) {
+      if (projectOptions.some((project) => project.value === current)) {
         return current
       }
-      return snapshot.managementCatalog.projects.find(
-        (project) => project.stableKey === snapshot.globalDraft.projectId,
-      )?.stableKey ?? snapshot.managementCatalog.projects[0]?.stableKey ?? ""
+      const configuredProjectRef = isNative
+        ? String(snapshot.globalDraft.nativeFixedProjectId)
+        : snapshot.globalDraft.projectId
+      return projectOptions.find((project) => project.value === configuredProjectRef)?.value
+        ?? projectOptions[0]?.value
+        ?? ""
     })
-  }, [snapshot.globalDraft.projectId, snapshot.managementCatalog.projects])
+  }, [
+    isNative,
+    projectOptions,
+    snapshot.globalDraft.nativeFixedProjectId,
+    snapshot.globalDraft.projectId,
+  ])
 
-  const selectedTargetRef = target === "user" ? selectedUserRef : selectedProjectRef
-  const selectedTargetDescription = target === "user"
+  const effectiveTarget = vmmProfileEffectiveTarget(snapshot.experienceState.deployment, target)
+  const profileDescription = t(isNative
+    ? "memory.profile.nativeDescription"
+    : "memory.profile.description")
+  const selectedTargetRef = effectiveTarget === "user" ? selectedUserRef : selectedProjectRef
+  const selectedTargetDescription = effectiveTarget === "user"
     ? snapshot.managementCatalog.users.find((user) => user.stableKey === selectedUserRef)?.displayName
-    : snapshot.managementCatalog.projects.find(
-      (project) => project.stableKey === selectedProjectRef,
-    )?.displayPath
+    : projectOptions.find((project) => project.value === selectedProjectRef)?.description
 
   React.useEffect(() => {
     if (result?.data.kind === "profile_nodes") {
@@ -135,37 +218,41 @@ function VmmProfilePage({
     if (result?.data.kind === "profile_instruction") {
       setNodes(projectProfileNodes(result.data.value.accepted_nodes))
     }
+    if (result?.data.kind === "native_project_catalog") {
+      setNativeCatalog(result.data.value)
+    }
   }, [result])
 
   // refreshProfile loads both atomic entries and the final profile preview.
   // refreshProfile 同时加载原子条目与最终画像预览。
   const refreshProfile = React.useCallback(async () => {
     if (!profileCatalogReady) {
-      await onRunAction("load_users_projects")
+      await onRunAction(vmmProfileCatalogAction(snapshot.experienceState.deployment))
       return
     }
     if (!selectedTargetRef) {
       return
     }
-    const identityPayload = {
-      userRef: selectedUserRef,
-      projectRef: selectedProjectRef,
-    }
+    const identityPayload = isNative
+      ? { projectRef: selectedProjectRef }
+      : { userRef: selectedUserRef, projectRef: selectedProjectRef }
     const nodesResult = await onRunAction("load_profile_nodes", {
       ...identityPayload,
-      target,
+      target: effectiveTarget,
     })
     if (!nodesResult) {
       return
     }
     await onRunAction("load_profile_bundle", identityPayload)
   }, [
+    effectiveTarget,
+    isNative,
     onRunAction,
     profileCatalogReady,
     selectedProjectRef,
     selectedTargetRef,
     selectedUserRef,
-    target,
+    snapshot.experienceState.deployment,
   ])
 
   React.useEffect(() => {
@@ -173,7 +260,7 @@ function VmmProfilePage({
       return
     }
     const nextAutomaticLoadKey = [
-      target,
+      effectiveTarget,
       selectedUserRef,
       selectedProjectRef,
     ].join("\u0000")
@@ -186,12 +273,12 @@ function VmmProfilePage({
     void refreshProfile()
   }, [
     busy,
+    effectiveTarget,
     profileCatalogReady,
     refreshProfile,
     selectedProjectRef,
     selectedTargetRef,
     selectedUserRef,
-    target,
   ])
 
   // applyInstruction submits one natural-language correction and refreshes the final preview.
@@ -201,13 +288,12 @@ function VmmProfilePage({
     if (!normalizedInstruction || !profileCatalogReady || !selectedTargetRef) {
       return
     }
-    const identityPayload = {
-      userRef: selectedUserRef,
-      projectRef: selectedProjectRef,
-    }
+    const identityPayload = isNative
+      ? { projectRef: selectedProjectRef }
+      : { userRef: selectedUserRef, projectRef: selectedProjectRef }
     const applied = await onRunAction("apply_profile_instruction", {
       ...identityPayload,
-      target,
+      target: effectiveTarget,
       instruction: normalizedInstruction,
     })
     if (!applied) {
@@ -216,13 +302,14 @@ function VmmProfilePage({
     setInstruction("")
     await onRunAction("load_profile_bundle", identityPayload)
   }, [
+    effectiveTarget,
+    isNative,
     instruction,
     onRunAction,
     profileCatalogReady,
     selectedProjectRef,
     selectedTargetRef,
     selectedUserRef,
-    target,
   ])
 
   return (
@@ -231,7 +318,7 @@ function VmmProfilePage({
         <div>
           <h2 className="text-lg font-semibold">{t("memory.profile.title")}</h2>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            {t("memory.profile.description")}
+            {profileDescription}
           </p>
         </div>
         <Button
@@ -250,59 +337,61 @@ function VmmProfilePage({
           <CardTitle>{t("memory.profile.target")}</CardTitle>
           <CardDescription>
             {selectedTargetDescription
-              ?? (target === "user"
+              ?? (effectiveTarget === "user"
                 ? t("memory.profile.noUser")
                 : t("memory.profile.noProject"))}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <RadioGroup
-            className="grid gap-3 sm:grid-cols-2"
-            disabled={busy || !profileCatalogReady}
-            onValueChange={(value) => {
-              setTarget(value as "user" | "project")
-              setNodes([])
-              setBundlePreview("")
-            }}
-            value={target}
-          >
-            <label className="flex cursor-pointer items-center gap-3 rounded-lg border p-3">
-              <RadioGroupItem value="user" />
-              <span className="text-sm font-medium">{t("memory.profile.user")}</span>
-            </label>
-            <label className="flex cursor-pointer items-center gap-3 rounded-lg border p-3">
-              <RadioGroupItem value="project" />
-              <span className="text-sm font-medium">{t("memory.profile.project")}</span>
-            </label>
-          </RadioGroup>
+          {!isNative ? (
+            <RadioGroup
+              className="grid gap-3 sm:grid-cols-2"
+              disabled={busy || !profileCatalogReady}
+              onValueChange={(value) => {
+                setTarget(value as "user" | "project")
+                setNodes([])
+                setBundlePreview("")
+              }}
+              value={target}
+            >
+              <label className="flex cursor-pointer items-center gap-3 rounded-lg border p-3">
+                <RadioGroupItem value="user" />
+                <span className="text-sm font-medium">{t("memory.profile.user")}</span>
+              </label>
+              <label className="flex cursor-pointer items-center gap-3 rounded-lg border p-3">
+                <RadioGroupItem value="project" />
+                <span className="text-sm font-medium">{t("memory.profile.project")}</span>
+              </label>
+            </RadioGroup>
+          ) : null}
           <div className="space-y-2">
             <Label>
-              {target === "user"
+              {effectiveTarget === "user"
                 ? t("memory.profile.selectUser")
                 : t("memory.profile.selectProject")}
             </Label>
             <Combobox
-              ariaLabel={target === "user"
+              ariaLabel={effectiveTarget === "user"
                 ? t("memory.profile.selectUser")
                 : t("memory.profile.selectProject")}
               disabled={busy || !profileCatalogReady}
-              emptyText={target === "user"
+              emptyText={effectiveTarget === "user"
                 ? t("memory.profile.noUser")
                 : t("memory.profile.noProject")}
               onValueChange={(value) => {
                 setNodes([])
                 setBundlePreview("")
-                if (target === "user") {
+                if (effectiveTarget === "user") {
                   setSelectedUserRef(value)
                 } else {
                   setSelectedProjectRef(value)
                 }
               }}
-              options={target === "user" ? userOptions : projectOptions}
-              placeholder={target === "user"
+              options={effectiveTarget === "user" ? userOptions : projectOptions}
+              placeholder={effectiveTarget === "user"
                 ? t("memory.profile.selectUser")
                 : t("memory.profile.selectProject")}
-              searchPlaceholder={target === "user"
+              searchPlaceholder={effectiveTarget === "user"
                 ? t("memory.profile.searchUser")
                 : t("memory.profile.searchProject")}
               value={selectedTargetRef}
@@ -347,7 +436,7 @@ function VmmProfilePage({
       <Card>
         <CardHeader>
           <CardTitle>{t("memory.profile.instruction")}</CardTitle>
-          <CardDescription>{t("memory.profile.description")}</CardDescription>
+          <CardDescription>{profileDescription}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <Label htmlFor="vmm-profile-instruction">{t("memory.profile.instruction")}</Label>
@@ -383,7 +472,9 @@ function VmmProfilePage({
             <AccordionTrigger>{t("memory.profile.preview")}</AccordionTrigger>
             <AccordionContent>
               <p className="mb-3 text-sm text-muted-foreground">
-                {t("memory.profile.previewDescription")}
+                {t(isNative
+                  ? "memory.profile.nativePreviewDescription"
+                  : "memory.profile.previewDescription")}
               </p>
             <p className="whitespace-pre-wrap rounded-lg border bg-muted/30 p-3 text-sm">
               {bundlePreview}

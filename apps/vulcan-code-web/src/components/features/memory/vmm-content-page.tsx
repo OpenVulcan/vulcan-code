@@ -185,7 +185,9 @@ function VmmContentPage({
         <div>
           <h2 className="text-lg font-semibold">{t("memory.content.title")}</h2>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            {t("memory.content.description")}
+            {t(snapshot.experienceState.deployment === "native"
+              ? "memory.content.nativeDescription"
+              : "memory.content.description")}
           </p>
         </div>
         <Button

@@ -548,7 +548,9 @@ export function ProjectVmmSection(props: {
         <BrainCircuit size={18} />
         <div>
           <strong>{t("projectSettings.vmmTitle")}</strong>
-          <span>{t("projectSettings.vmmDescription")}</span>
+          <span>{t(props.vmmDraft?.backendMode === "native"
+            ? "projectSettings.vmmNativeDescription"
+            : "projectSettings.vmmDescription")}</span>
         </div>
       </header>
       {props.vmmBusy === "loading" || !props.vmmDraft ? (
@@ -678,7 +680,11 @@ export function ProjectVmmSection(props: {
               {t("projectSettings.vmmCreateAndBind")}
             </Button>
           </div>
-          <p className="project-settings-muted">{t("projectSettings.vmmTransportHint")}</p>
+          <p className="project-settings-muted">
+            {t(props.vmmDraft.backendMode === "native"
+              ? "projectSettings.vmmNativeHostHint"
+              : "projectSettings.vmmTransportHint")}
+          </p>
           <div className="project-settings-actions">
             <Button disabled={props.vmmBusy === "saving"} onClick={() => void props.onSaveDraft()} type="button">
               <Save size={15} />

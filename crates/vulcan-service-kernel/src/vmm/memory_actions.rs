@@ -62,32 +62,51 @@ pub(crate) async fn service_run_vmm_memory_action(
         return super::management_http::service_run_vmm_management_http_action(state, request)
             .await;
     }
-    let (layer, management_user_ref, management_project_ref) =
+    let (layer, management_user_ref, management_project_ref, host_project_id) =
         vmm_action_context(&state, &request)?;
     let action = parse_vmm_memory_action(&request)?;
     let request_preview = vmm_action_request_preview(&action)?;
+    let effective = vulcan_vmm::VmmEffectiveConfig::resolve(&layer, None, None);
+    if matches!(
+        &action,
+        vulcan_service_runtime::vmm_management::VmmWorkbenchAction::LoadUsersAndProjects
+            | vulcan_service_runtime::vmm_management::VmmWorkbenchAction::ResolveUserAndProject
+            | vulcan_service_runtime::vmm_management::VmmWorkbenchAction::EnsureProjectPreview
+            | vulcan_service_runtime::vmm_management::VmmWorkbenchAction::ResolveUser { .. }
+            | vulcan_service_runtime::vmm_management::VmmWorkbenchAction::DeleteUser { .. }
+            | vulcan_service_runtime::vmm_management::VmmWorkbenchAction::EnsureProject { .. }
+            | vulcan_service_runtime::vmm_management::VmmWorkbenchAction::DeleteProject { .. }
+            | vulcan_service_runtime::vmm_management::VmmWorkbenchAction::MigrateProject { .. }
+    ) {
+        ensure_external_action_backend(effective.backend_mode)?;
+    }
     let is_health_probe = matches!(
         &action,
         vulcan_service_runtime::vmm_management::VmmWorkbenchAction::Healthz
     );
-    let grpc_target = layer.grpc_target.clone().unwrap_or_default();
+    let tracks_external_health =
+        is_health_probe && effective.backend_mode == vulcan_vmm::VmmBackendMode::ExternalGrpc;
+    let grpc_target = effective.grpc_target.clone();
     let outcome = match vulcan_service_runtime::vmm_management::run_vmm_workbench_action(
         action,
         layer,
         management_user_ref,
         management_project_ref,
+        host_project_id,
     )
     .await
     {
         Ok(outcome) => {
-            if is_health_probe {
+            if tracks_external_health {
                 record_external_vmm_health_success(&grpc_target);
             }
             outcome
         }
         Err(error) => {
-            if is_health_probe {
+            if tracks_external_health {
                 record_external_vmm_health_failure(&grpc_target, &error);
+            }
+            if is_health_probe {
                 refresh_vmm_health_workbench(&app, &state).await;
             }
             return Err(error);
@@ -1162,18 +1181,23 @@ pub(super) fn vmm_external_action_layer_override(
 ///
 /// # Returns
 /// 返回值
-/// The resolved VMM layer plus user and project references for the management call.
-/// 返回管理调用使用的 VMM 配置层，以及用户和项目引用。
+/// The resolved VMM layer, catalog references, and native host-project identity for the call.
+/// 返回调用使用的 VMM 配置层、目录引用与原生宿主项目身份。
 pub(crate) fn vmm_action_context(
     state: &SharedServiceBridgeState,
     request: &VmmMemoryActionRequest,
-) -> Result<(vulcan_vmm::VmmConfigLayer, String, String), String> {
+) -> Result<(vulcan_vmm::VmmConfigLayer, String, String, String), String> {
     if let Some(layer) = vmm_external_action_layer_override(request)? {
         validate_transient_external_action(request.action.trim())?;
         let management_user_ref = vmm_payload_text(&request.payload, "userRef").unwrap_or_default();
         let management_project_ref =
             vmm_payload_text(&request.payload, "projectRef").unwrap_or_default();
-        return Ok((layer, management_user_ref, management_project_ref));
+        return Ok((
+            layer,
+            management_user_ref,
+            management_project_ref,
+            String::new(),
+        ));
     }
     let (provider_configuration, workspace_snapshot) = {
         let guard = state
@@ -1192,7 +1216,8 @@ pub(crate) fn vmm_action_context(
     };
     let global_effective =
         vulcan_vmm::VmmEffectiveConfig::resolve(&provider_configuration.vmm, None, None);
-    ensure_external_action_backend(global_effective.backend_mode)?;
+    let payload_user_ref = vmm_payload_text(&request.payload, "userRef");
+    let payload_project_ref = vmm_payload_text(&request.payload, "projectRef");
     let scope = request.scope.trim().to_ascii_lowercase();
     if scope == "project" {
         let project = vmm_request_project_scope(&workspace_snapshot, request.project_id.as_deref())
@@ -1204,24 +1229,52 @@ pub(crate) fn vmm_action_context(
             None,
         );
         let layer = vmm_action_layer_from_effective(&effective);
-        let management_user_ref = vmm_payload_text(&request.payload, "userRef")
+        let management_user_ref = payload_user_ref
             .or_else(|| project_layer.user_id.map(|value| value.to_string()))
             .or_else(|| layer.user_id.map(|value| value.to_string()))
             .unwrap_or_default();
-        let management_project_ref = vmm_payload_text(&request.payload, "projectRef")
+        let management_project_ref = payload_project_ref
+            .clone()
             .or_else(|| project_layer.project_id.map(|value| value.to_string()))
             .or_else(|| layer.project_id.map(|value| value.to_string()))
             .unwrap_or_default();
-        return Ok((layer, management_user_ref, management_project_ref));
+        let host_project_id = if effective.backend_mode == vulcan_vmm::VmmBackendMode::Native
+            && payload_project_ref.is_none()
+        {
+            project.id.clone()
+        } else {
+            String::new()
+        };
+        return Ok((
+            layer,
+            management_user_ref,
+            management_project_ref,
+            host_project_id,
+        ));
     }
-    let layer = provider_configuration.vmm;
-    let management_user_ref = vmm_payload_text(&request.payload, "userRef")
+    let layer = vmm_action_layer_from_effective(&global_effective);
+    let management_user_ref = payload_user_ref
         .or_else(|| layer.user_id.map(|value| value.to_string()))
         .unwrap_or_default();
-    let management_project_ref = vmm_payload_text(&request.payload, "projectRef")
+    let management_project_ref = payload_project_ref
+        .clone()
         .or_else(|| layer.project_id.map(|value| value.to_string()))
         .unwrap_or_default();
-    Ok((layer, management_user_ref, management_project_ref))
+    let host_project_id = if global_effective.backend_mode == vulcan_vmm::VmmBackendMode::Native
+        && payload_project_ref.is_none()
+    {
+        vmm_request_project_scope(&workspace_snapshot, request.project_id.as_deref())
+            .map(|project| project.id.clone())
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    Ok((
+        layer,
+        management_user_ref,
+        management_project_ref,
+        host_project_id,
+    ))
 }
 
 /// Restricts request-scoped external connections to non-destructive setup operations.

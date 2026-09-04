@@ -1,6 +1,8 @@
 //! VMM management RPC helpers used by settings surfaces.
 //! 设置界面使用的 VMM 管理 RPC 辅助逻辑。
 
+use std::sync::Arc;
+
 use vulcan_vmm::{
     ApplyProfileInstructionRequest, ApplyProfileInstructionResponse, DeleteMemoriesRequest,
     DeleteMemoriesResponse, DeleteProjectRequest, DeleteProjectResponse, DeleteUserRequest,
@@ -221,25 +223,55 @@ pub enum VmmManagementOutcome {
 
 /// Executes one dedicated VMM workbench management action.
 /// 执行一次专用 VMM 工作台管理动作。
+///
+/// # Parameters
+/// 参数
+/// `action` is the exact typed workbench operation selected by the caller.
+/// `action` 是调用方选择的准确强类型工作台操作。
+/// `layer` contains the already resolved backend and behavior configuration.
+/// `layer` 包含已经解析的后端与行为配置。
+/// `management_user_ref` and `management_project_ref` contain explicit catalog identities.
+/// `management_user_ref` 与 `management_project_ref` 包含明确的目录身份。
+/// `host_project_id` contains the VulcanCode project identity used only by native binding resolution.
+/// `host_project_id` 包含仅供原生绑定解析使用的 VulcanCode 项目标识。
+///
+/// # Returns
+/// 返回值
+/// The typed action outcome returned by the selected native or external client.
+/// 返回所选原生或外置客户端产生的强类型动作结果。
 pub async fn run_vmm_workbench_action(
     action: VmmWorkbenchAction,
     layer: VmmConfigLayer,
     management_user_ref: String,
     management_project_ref: String,
+    host_project_id: String,
 ) -> Result<VmmManagementOutcome, String> {
     let effective = VmmEffectiveConfig::resolve(&layer, None, None);
-    if effective.grpc_target.trim().is_empty() {
-        return Err(String::from("VMM gRPC 地址为空，无法执行管理调用。"));
-    }
-    let client = TonicVmmClient::connect(VmmTransportConfig::from_effective(&effective))
-        .await
-        .map_err(|error| error.to_string())?;
+    // client selects exactly the globally configured backend without leaking transport choices to callers.
+    // client 严格选择全局配置的后端，不向调用方泄漏传输选择。
+    let client: Arc<dyn VmmClient> = match effective.backend_mode {
+        vulcan_vmm::VmmBackendMode::Native => {
+            vulcan_vmm::process_native_vmm_client().map_err(|error| error.to_string())?
+        }
+        vulcan_vmm::VmmBackendMode::ExternalGrpc => {
+            if effective.grpc_target.trim().is_empty() {
+                return Err(String::from("VMM gRPC 地址为空，无法执行管理调用。"));
+            }
+            Arc::new(
+                TonicVmmClient::connect(VmmTransportConfig::from_effective(&effective))
+                    .await
+                    .map_err(|error| error.to_string())?,
+            )
+        }
+    };
     match action {
-        VmmWorkbenchAction::Healthz => run_vmm_healthz(&client).await,
-        VmmWorkbenchAction::LoadUsersAndProjects => run_vmm_list_users_and_projects(&client).await,
+        VmmWorkbenchAction::Healthz => run_vmm_healthz(client.as_ref()).await,
+        VmmWorkbenchAction::LoadUsersAndProjects => {
+            run_vmm_list_users_and_projects(client.as_ref()).await
+        }
         VmmWorkbenchAction::ResolveUserAndProject => {
             run_vmm_resolve_user_and_project(
-                &client,
+                client.as_ref(),
                 &effective,
                 &management_user_ref,
                 &management_project_ref,
@@ -247,29 +279,36 @@ pub async fn run_vmm_workbench_action(
             .await
         }
         VmmWorkbenchAction::EnsureProjectPreview => {
-            run_vmm_ensure_project_preview(&client, &management_project_ref).await
+            run_vmm_ensure_project_preview(client.as_ref(), &management_project_ref).await
         }
         VmmWorkbenchAction::LoadProfileNodes { target } => {
             run_vmm_profile_nodes(
-                &client,
+                client.as_ref(),
                 &management_user_ref,
                 &management_project_ref,
+                &host_project_id,
                 target,
             )
             .await
         }
         VmmWorkbenchAction::LoadProfileBundle => {
-            run_vmm_profile_bundle_preview(&client, &management_user_ref, &management_project_ref)
-                .await
+            run_vmm_profile_bundle_preview(
+                client.as_ref(),
+                &management_user_ref,
+                &management_project_ref,
+                &host_project_id,
+            )
+            .await
         }
         VmmWorkbenchAction::ApplyProfileInstruction {
             target,
             instruction,
         } => {
             run_vmm_apply_profile_instruction(
-                &client,
+                client.as_ref(),
                 &management_user_ref,
                 &management_project_ref,
+                &host_project_id,
                 target,
                 instruction,
             )
@@ -278,26 +317,26 @@ pub async fn run_vmm_workbench_action(
         VmmWorkbenchAction::ResolveUser {
             user_ref,
             confirm_create,
-        } => run_vmm_resolve_user(&client, user_ref, confirm_create).await,
+        } => run_vmm_resolve_user(client.as_ref(), user_ref, confirm_create).await,
         VmmWorkbenchAction::DeleteUser {
             user_ref,
             confirmation_code,
-        } => run_vmm_delete_user(&client, user_ref, confirmation_code).await,
+        } => run_vmm_delete_user(client.as_ref(), user_ref, confirmation_code).await,
         VmmWorkbenchAction::EnsureProject {
             project_path,
             confirm_create,
-        } => run_vmm_ensure_project(&client, project_path, confirm_create).await,
+        } => run_vmm_ensure_project(client.as_ref(), project_path, confirm_create).await,
         VmmWorkbenchAction::DeleteProject {
             project_path,
             confirm_delete,
-        } => run_vmm_delete_project(&client, project_path, confirm_delete).await,
+        } => run_vmm_delete_project(client.as_ref(), project_path, confirm_delete).await,
         VmmWorkbenchAction::MigrateProject {
             source_project_path,
             target_project_path,
             confirm_migrate,
         } => {
             run_vmm_migrate_project(
-                &client,
+                client.as_ref(),
                 source_project_path,
                 target_project_path,
                 confirm_migrate,
@@ -305,23 +344,44 @@ pub async fn run_vmm_workbench_action(
             .await
         }
         VmmWorkbenchAction::SearchMemoryEvents { queries, top_k } => {
-            run_vmm_search_memory_events(&client, &effective, queries, top_k).await
+            run_vmm_search_memory_events(
+                client.as_ref(),
+                &effective,
+                &host_project_id,
+                queries,
+                top_k,
+            )
+            .await
         }
         VmmWorkbenchAction::GetTurnDetails { turn_ids } => {
-            run_vmm_get_turn_details(&client, turn_ids).await
+            run_vmm_get_turn_details(client.as_ref(), &effective, &host_project_id, turn_ids).await
         }
         VmmWorkbenchAction::WriteMemories { session_id, item } => {
-            run_vmm_write_memories(&client, &effective, session_id, item).await
+            run_vmm_write_memories(
+                client.as_ref(),
+                &effective,
+                &host_project_id,
+                session_id,
+                item,
+            )
+            .await
         }
         VmmWorkbenchAction::DeleteMemories { memory_ids, reason } => {
-            run_vmm_delete_memories(&client, &effective, memory_ids, reason).await
+            run_vmm_delete_memories(
+                client.as_ref(),
+                &effective,
+                &host_project_id,
+                memory_ids,
+                reason,
+            )
+            .await
         }
     }
 }
 
 /// Runs the VMM health check management call.
 /// 执行 VMM 健康检查管理调用。
-async fn run_vmm_healthz(client: &TonicVmmClient) -> Result<VmmManagementOutcome, String> {
+async fn run_vmm_healthz(client: &dyn VmmClient) -> Result<VmmManagementOutcome, String> {
     let response = client.healthz().await.map_err(|error| error.to_string())?;
     Ok(VmmManagementOutcome::Healthz(response.status))
 }
@@ -329,7 +389,7 @@ async fn run_vmm_healthz(client: &TonicVmmClient) -> Result<VmmManagementOutcome
 /// Lists users and projects in a compact settings notice.
 /// 以紧凑设置提示列出用户与项目。
 async fn run_vmm_list_users_and_projects(
-    client: &TonicVmmClient,
+    client: &dyn VmmClient,
 ) -> Result<VmmManagementOutcome, String> {
     let users = client
         .list_users()
@@ -345,7 +405,7 @@ async fn run_vmm_list_users_and_projects(
 /// Resolves configured user and project references.
 /// 解析当前配置中的用户与项目引用。
 async fn run_vmm_resolve_user_and_project(
-    client: &TonicVmmClient,
+    client: &dyn VmmClient,
     effective: &VmmEffectiveConfig,
     management_user_ref: &str,
     management_project_ref: &str,
@@ -385,7 +445,7 @@ async fn run_vmm_resolve_user_and_project(
 /// Ensures the configured project path without allowing creation.
 /// 在不允许创建的前提下确认当前项目路径。
 async fn run_vmm_ensure_project_preview(
-    client: &TonicVmmClient,
+    client: &dyn VmmClient,
     management_project_ref: &str,
 ) -> Result<VmmManagementOutcome, String> {
     let project_path = management_project_ref.trim();
@@ -407,7 +467,7 @@ async fn run_vmm_ensure_project_preview(
 /// Resolves one user reference with an explicit creation flag.
 /// 使用显式创建标记解析一个用户引用。
 async fn run_vmm_resolve_user(
-    client: &TonicVmmClient,
+    client: &dyn VmmClient,
     user_ref: String,
     confirm_create: bool,
 ) -> Result<VmmManagementOutcome, String> {
@@ -428,7 +488,7 @@ async fn run_vmm_resolve_user(
 /// Deletes one user with the confirmation code supplied by VMM.
 /// 使用 VMM 提供的确认码删除一个用户。
 async fn run_vmm_delete_user(
-    client: &TonicVmmClient,
+    client: &dyn VmmClient,
     user_ref: String,
     confirmation_code: String,
 ) -> Result<VmmManagementOutcome, String> {
@@ -449,7 +509,7 @@ async fn run_vmm_delete_user(
 /// Ensures one project path with an explicit creation flag.
 /// 使用显式创建标记确认一个项目路径。
 async fn run_vmm_ensure_project(
-    client: &TonicVmmClient,
+    client: &dyn VmmClient,
     project_path: String,
     confirm_create: bool,
 ) -> Result<VmmManagementOutcome, String> {
@@ -470,7 +530,7 @@ async fn run_vmm_ensure_project(
 /// Deletes one project path with an explicit confirmation flag.
 /// 使用显式确认标记删除一个项目路径。
 async fn run_vmm_delete_project(
-    client: &TonicVmmClient,
+    client: &dyn VmmClient,
     project_path: String,
     confirm_delete: bool,
 ) -> Result<VmmManagementOutcome, String> {
@@ -491,7 +551,7 @@ async fn run_vmm_delete_project(
 /// Migrates one project path into another path with an explicit confirmation flag.
 /// 使用显式确认标记将一个项目路径迁移到另一个路径。
 async fn run_vmm_migrate_project(
-    client: &TonicVmmClient,
+    client: &dyn VmmClient,
     source_project_path: String,
     target_project_path: String,
     confirm_migrate: bool,
@@ -523,15 +583,18 @@ async fn run_vmm_migrate_project(
 /// `management_user_ref` 是操作人员明确选择的数字目录用户键。
 /// `management_project_ref` is the exact numeric catalog project key selected by the operator.
 /// `management_project_ref` 是操作人员明确选择的数字目录项目键。
+/// `host_project_id` identifies the VulcanCode project when native binding resolution is required.
+/// `host_project_id` 在需要原生绑定解析时标识 VulcanCode 项目。
 ///
 /// # Returns
 /// 返回值
 /// The complete profile bundle for the selected user and project pair.
 /// 返回所选用户与项目组合的完整画像 bundle。
 async fn run_vmm_profile_bundle_preview(
-    client: &TonicVmmClient,
+    client: &dyn VmmClient,
     management_user_ref: &str,
     management_project_ref: &str,
+    host_project_id: &str,
 ) -> Result<VmmManagementOutcome, String> {
     let (user_id, project_id) =
         parse_vmm_profile_identity_ids(management_user_ref, management_project_ref)?;
@@ -539,7 +602,7 @@ async fn run_vmm_profile_bundle_preview(
         .get_profile_bundle(GetProfileBundleRequest {
             user_id,
             project_id,
-            host_project_id: String::new(),
+            host_project_id: host_project_id.to_owned(),
             mode: ProfileBundleMode::ProfileBundleModeFull,
             include_explanation: Some(true),
         })
@@ -559,6 +622,8 @@ async fn run_vmm_profile_bundle_preview(
 /// `management_user_ref` 是操作人员明确选择的数字目录用户键。
 /// `management_project_ref` is the exact numeric catalog project key selected by the operator.
 /// `management_project_ref` 是操作人员明确选择的数字目录项目键。
+/// `host_project_id` identifies the VulcanCode project when native binding resolution is required.
+/// `host_project_id` 在需要原生绑定解析时标识 VulcanCode 项目。
 /// `target` selects whether VMM returns user or project profile nodes.
 /// `target` 选择 VMM 返回用户画像节点还是项目画像节点。
 ///
@@ -567,9 +632,10 @@ async fn run_vmm_profile_bundle_preview(
 /// Active nodes for the selected profile target.
 /// 返回所选画像目标的 active 节点。
 async fn run_vmm_profile_nodes(
-    client: &TonicVmmClient,
+    client: &dyn VmmClient,
     management_user_ref: &str,
     management_project_ref: &str,
+    host_project_id: &str,
     target: ProfileTarget,
 ) -> Result<VmmManagementOutcome, String> {
     let (user_id, project_id) =
@@ -579,7 +645,7 @@ async fn run_vmm_profile_nodes(
             target,
             user_id,
             project_id,
-            host_project_id: String::new(),
+            host_project_id: host_project_id.to_owned(),
             limit: 200,
         })
         .await
@@ -598,6 +664,8 @@ async fn run_vmm_profile_nodes(
 /// `management_user_ref` 是操作人员明确选择的数字目录用户键。
 /// `management_project_ref` is the exact numeric catalog project key selected by the operator.
 /// `management_project_ref` 是操作人员明确选择的数字目录项目键。
+/// `host_project_id` identifies the VulcanCode project when native binding resolution is required.
+/// `host_project_id` 在需要原生绑定解析时标识 VulcanCode 项目。
 /// `target` selects the user or project profile namespace.
 /// `target` 选择用户或项目画像命名空间。
 /// `instruction` is the natural-language correction to apply.
@@ -608,9 +676,10 @@ async fn run_vmm_profile_nodes(
 /// The durable instruction result returned by VMM.
 /// 返回 VMM 生成的长期指令结果。
 async fn run_vmm_apply_profile_instruction(
-    client: &TonicVmmClient,
+    client: &dyn VmmClient,
     management_user_ref: &str,
     management_project_ref: &str,
+    host_project_id: &str,
     target: ProfileTarget,
     instruction: String,
 ) -> Result<VmmManagementOutcome, String> {
@@ -625,7 +694,7 @@ async fn run_vmm_apply_profile_instruction(
             target,
             user_id,
             project_id,
-            host_project_id: String::new(),
+            host_project_id: host_project_id.to_owned(),
             instruction,
         })
         .await
@@ -668,9 +737,12 @@ fn parse_vmm_profile_identity_ids(
 
 /// Runs the memory-search AI-tool equivalent against the configured user/project.
 /// 针对当前配置的用户与项目执行记忆检索 AI 工具等价调用。
+/// `host_project_id` selects the native write owner and recall links; it is empty for external gRPC.
+/// `host_project_id` 选择原生写入归属与连带召回项目；外置 gRPC 下为空。
 async fn run_vmm_search_memory_events(
-    client: &TonicVmmClient,
+    client: &dyn VmmClient,
     effective: &VmmEffectiveConfig,
+    host_project_id: &str,
     queries: Vec<String>,
     top_k: u32,
 ) -> Result<VmmManagementOutcome, String> {
@@ -692,7 +764,7 @@ async fn run_vmm_search_memory_events(
         .search_memory_events(SearchMemoryEventsRequest {
             user_id,
             project_id,
-            host_project_id: String::new(),
+            host_project_id: host_project_id.to_owned(),
             queries,
             top_k: top_k.max(1),
         })
@@ -703,18 +775,38 @@ async fn run_vmm_search_memory_events(
 
 /// Runs the turn-detail AI-tool equivalent.
 /// 执行 Turn 详情 AI 工具等价调用。
+/// `host_project_id` selects the native project binding; external gRPC retains its legacy request identity.
+/// `host_project_id` 选择原生项目绑定；外置 gRPC 保留既有请求身份语义。
 async fn run_vmm_get_turn_details(
-    client: &TonicVmmClient,
+    client: &dyn VmmClient,
+    effective: &VmmEffectiveConfig,
+    host_project_id: &str,
     turn_ids: Vec<u64>,
 ) -> Result<VmmManagementOutcome, String> {
     if turn_ids.is_empty() {
         return Err(String::from("Turn ID 列表不能为空。"));
     }
-    let response = client
-        .get_turn_details(GetTurnDetailsRequest {
+    // request carries native ownership only for the in-process backend; external gRPC keeps its legacy zero identity.
+    // request 仅在进程内后端携带原生归属；外置 gRPC 保持原有零身份语义。
+    let request = if effective.backend_mode == vulcan_vmm::VmmBackendMode::Native {
+        GetTurnDetailsRequest {
+            user_id: effective
+                .user_id
+                .ok_or_else(|| String::from("原生 VMM 用户身份未初始化。"))?,
+            project_id: effective
+                .project_id
+                .ok_or_else(|| String::from("原生 VMM 项目身份未初始化。"))?,
+            host_project_id: host_project_id.to_owned(),
+            turn_ids,
+        }
+    } else {
+        GetTurnDetailsRequest {
             turn_ids,
             ..GetTurnDetailsRequest::default()
-        })
+        }
+    };
+    let response = client
+        .get_turn_details(request)
         .await
         .map_err(|error| error.to_string())?;
     Ok(VmmManagementOutcome::GetTurnDetails(response))
@@ -722,9 +814,12 @@ async fn run_vmm_get_turn_details(
 
 /// Runs the direct-write AI-tool equivalent against the configured user/project.
 /// 针对当前配置的用户与项目执行主动写入 AI 工具等价调用。
+/// `host_project_id` selects the sole native write owner; it is empty for external gRPC.
+/// `host_project_id` 选择唯一的原生写入归属；外置 gRPC 下为空。
 async fn run_vmm_write_memories(
-    client: &TonicVmmClient,
+    client: &dyn VmmClient,
     effective: &VmmEffectiveConfig,
+    host_project_id: &str,
     session_id: String,
     item: WriteMemoryItem,
 ) -> Result<VmmManagementOutcome, String> {
@@ -742,7 +837,7 @@ async fn run_vmm_write_memories(
             session_id,
             user_id,
             project_id,
-            host_project_id: String::new(),
+            host_project_id: host_project_id.to_owned(),
             items: vec![item],
         })
         .await
@@ -752,9 +847,12 @@ async fn run_vmm_write_memories(
 
 /// Runs the memory-delete AI-tool equivalent against the configured user/project.
 /// 针对当前配置的用户与项目执行记忆删除 AI 工具等价调用。
+/// `host_project_id` selects the native project binding; it is empty for external gRPC.
+/// `host_project_id` 选择原生项目绑定；外置 gRPC 下为空。
 async fn run_vmm_delete_memories(
-    client: &TonicVmmClient,
+    client: &dyn VmmClient,
     effective: &VmmEffectiveConfig,
+    host_project_id: &str,
     memory_ids: Vec<u64>,
     reason: String,
 ) -> Result<VmmManagementOutcome, String> {
@@ -770,7 +868,7 @@ async fn run_vmm_delete_memories(
         .delete_memories(DeleteMemoriesRequest {
             user_id,
             project_id,
-            host_project_id: String::new(),
+            host_project_id: host_project_id.to_owned(),
             memory_ids,
             reason,
         })

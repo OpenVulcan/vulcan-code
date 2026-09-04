@@ -882,11 +882,13 @@ export type TranslationKey =
   | "projectSettings.codebaseMemory.updateAccepted"
   | "projectSettings.codebaseMemory.rebuildAccepted"
   | "projectSettings.vmmDescription"
+  | "projectSettings.vmmNativeDescription"
   | "projectSettings.vmmLoading"
   | "projectSettings.enableProjectOverride"
   | "projectSettings.overrideEnabledHint"
   | "projectSettings.overrideDisabledHint"
   | "projectSettings.vmmTransportHint"
+  | "projectSettings.vmmNativeHostHint"
   | "projectSettings.saveVmm"
   | "projectSettings.vmmNativeBinding"
   | "projectSettings.vmmNativeOwner"
@@ -1377,6 +1379,9 @@ export type TranslationKey =
   | "vmm.experience.currentUser"
   | "vmm.experience.noProject"
   | "vmm.experience.noUser"
+  | "vmm.experience.defaultMemoryMode"
+  | "vmm.experience.nativeBindingFixed"
+  | "vmm.experience.nativeBindingPerProject"
   | "vmm.experience.refresh"
   | "vmm.experience.start"
   | "vmm.experience.restart"
@@ -1441,6 +1446,7 @@ export type TranslationKey =
   | "memory.rules.applied"
   | "memory.content.title"
   | "memory.content.description"
+  | "memory.content.nativeDescription"
   | "memory.content.sessionRequiredTitle"
   | "memory.content.sessionRequired"
   | "memory.content.search"
@@ -1527,6 +1533,7 @@ export type TranslationKey =
   | "memory.data.updatedAt"
   | "memory.profile.title"
   | "memory.profile.description"
+  | "memory.profile.nativeDescription"
   | "memory.profile.target"
   | "memory.profile.user"
   | "memory.profile.project"
@@ -1543,6 +1550,7 @@ export type TranslationKey =
   | "memory.profile.applyInstruction"
   | "memory.profile.preview"
   | "memory.profile.previewDescription"
+  | "memory.profile.nativePreviewDescription"
   | "memory.profile.priority"
   | "memory.profile.level"
   | "memory.advanced.title"
@@ -3753,11 +3761,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "projectSettings.codebaseMemory.updateAccepted": "索引同步任务已提交。",
     "projectSettings.codebaseMemory.rebuildAccepted": "完整重建任务已提交。",
     "projectSettings.vmmDescription": "覆盖当前项目的记忆开关、用户/项目映射与召回注入参数。",
+    "projectSettings.vmmNativeDescription": "覆盖当前项目的记忆开关、原生项目绑定与召回注入参数。",
     "projectSettings.vmmLoading": "正在加载项目 VMM 设置...",
     "projectSettings.enableProjectOverride": "启用项目覆盖",
     "projectSettings.overrideEnabledHint": "保存后当前项目使用下方设置。",
     "projectSettings.overrideDisabledHint": "保存后清空项目覆盖并继承全局设置。",
     "projectSettings.vmmTransportHint": "项目级设置继承全局 gRPC 连接与 API Key；连接参数请在 VMM 记忆的全局配置中调整。",
+    "projectSettings.vmmNativeHostHint": "原生 VMM 使用 VulcanCode 宿主的 AI 能力与本地数据目录；外置连接参数不适用。",
     "projectSettings.saveVmm": "保存 VMM 设置",
     "projectSettings.vmmNativeBinding": "原生记忆项目绑定",
     "projectSettings.vmmNativeOwner": "写入归属项目",
@@ -4248,6 +4258,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "vmm.experience.currentUser": "默认记忆用户",
     "vmm.experience.noProject": "尚未选择默认记忆项目",
     "vmm.experience.noUser": "尚未选择默认记忆用户",
+    "vmm.experience.defaultMemoryMode": "默认记忆模式",
+    "vmm.experience.nativeBindingFixed": "绑定固定记忆空间",
+    "vmm.experience.nativeBindingPerProject": "按项目独立创建",
     "vmm.experience.refresh": "刷新状态",
     "vmm.experience.start": "启动服务",
     "vmm.experience.restart": "重新启动",
@@ -4312,6 +4325,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.rules.applied": "设置已应用。",
     "memory.content.title": "记忆内容",
     "memory.content.description": "使用自然语言搜索、查看和维护当前用户与项目的长期记忆。",
+    "memory.content.nativeDescription": "使用自然语言搜索、查看和维护当前绑定原生记忆项目中的长期记忆。",
     "memory.content.sessionRequiredTitle": "新增记忆需要关联会话",
     "memory.content.sessionRequired": "请先在工作台打开一个具体会话，再返回此处新增记忆。检索和查看现有记忆不受影响。",
     "memory.content.search": "搜索记忆",
@@ -4398,6 +4412,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.data.updatedAt": "更新于 {time}",
     "memory.profile.title": "画像",
     "memory.profile.description": "选择一个记忆用户或记忆项目，查看 VMM 整理的长期偏好与约束，并通过自然语言进行修正。",
+    "memory.profile.nativeDescription": "选择一个原生记忆项目，查看内核整理的项目长期偏好与约束，并通过自然语言进行修正。",
     "memory.profile.target": "画像目标",
     "memory.profile.user": "用户画像",
     "memory.profile.project": "项目画像",
@@ -4414,6 +4429,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.profile.applyInstruction": "应用指令",
     "memory.profile.preview": "最终画像预览",
     "memory.profile.previewDescription": "这是提供给记忆服务的完整画像文本，仅在排查或核对时需要查看。",
+    "memory.profile.nativePreviewDescription": "这是原生记忆内核为所选项目整理的完整画像文本，仅在排查或核对时需要查看。",
     "memory.profile.priority": "优先级",
     "memory.profile.level": "层级",
     "memory.advanced.title": "高级设置",
@@ -6639,11 +6655,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "projectSettings.codebaseMemory.updateAccepted": "Index sync job submitted.",
     "projectSettings.codebaseMemory.rebuildAccepted": "Full rebuild job submitted.",
     "projectSettings.vmmDescription": "Override memory enablement, user/project mapping, and recall injection parameters for this project.",
+    "projectSettings.vmmNativeDescription": "Override memory enablement, native project binding, and recall injection parameters for this project.",
     "projectSettings.vmmLoading": "Loading project VMM settings...",
     "projectSettings.enableProjectOverride": "Enable project override",
     "projectSettings.overrideEnabledHint": "After saving, this project uses the settings below.",
     "projectSettings.overrideDisabledHint": "After saving, project overrides are cleared and global settings are inherited.",
     "projectSettings.vmmTransportHint": "Project-level settings inherit the global gRPC connection and API Key; adjust connection parameters in global VMM memory settings.",
+    "projectSettings.vmmNativeHostHint": "Native VMM uses VulcanCode host AI capabilities and its local data directory; external connection settings do not apply.",
     "projectSettings.saveVmm": "Save VMM settings",
     "projectSettings.vmmNativeBinding": "Native memory project binding",
     "projectSettings.vmmNativeOwner": "Write owner project",
@@ -7134,6 +7152,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "vmm.experience.currentUser": "Default memory user",
     "vmm.experience.noProject": "No default memory project selected",
     "vmm.experience.noUser": "No default memory user selected",
+    "vmm.experience.defaultMemoryMode": "Default memory mode",
+    "vmm.experience.nativeBindingFixed": "Bind to a fixed memory space",
+    "vmm.experience.nativeBindingPerProject": "Create one per project",
     "vmm.experience.refresh": "Refresh status",
     "vmm.experience.start": "Start service",
     "vmm.experience.restart": "Restart",
@@ -7198,6 +7219,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.rules.applied": "Settings applied.",
     "memory.content.title": "Memory content",
     "memory.content.description": "Use natural language to search, inspect, and maintain durable memory for the current user and project.",
+    "memory.content.nativeDescription": "Use natural language to search, inspect, and maintain durable memory in the currently bound native memory project.",
     "memory.content.sessionRequiredTitle": "A conversation is required to add memory",
     "memory.content.sessionRequired": "Open a specific conversation in the workbench before adding memory here. Searching and inspecting existing memory remain available.",
     "memory.content.search": "Search memory",
@@ -7284,6 +7306,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.data.updatedAt": "Updated {time}",
     "memory.profile.title": "Profile",
     "memory.profile.description": "Choose a memory user or memory project, review the durable preferences and constraints organized by VMM, and correct them with natural language.",
+    "memory.profile.nativeDescription": "Choose a native memory project, review its durable preferences and constraints, and correct them with natural language.",
     "memory.profile.target": "Profile target",
     "memory.profile.user": "User profile",
     "memory.profile.project": "Project profile",
@@ -7300,6 +7323,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.profile.applyInstruction": "Apply instruction",
     "memory.profile.preview": "Final profile preview",
     "memory.profile.previewDescription": "This is the complete profile text supplied to the memory service. Open it only for review or troubleshooting.",
+    "memory.profile.nativePreviewDescription": "This is the complete profile text prepared by the native memory core for the selected project. Open it only for review or troubleshooting.",
     "memory.profile.priority": "Priority",
     "memory.profile.level": "Level",
     "memory.advanced.title": "Advanced settings",
