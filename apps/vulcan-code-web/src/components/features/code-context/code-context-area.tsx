@@ -12,6 +12,7 @@ import {
   listVceIntegrityIssues,
   listVceOperations,
   loadVceBlobDetail,
+  loadVceProjectOverview,
   planVceMaintenance,
   retryVceOperation,
 } from "@/service/vce-service";
@@ -33,6 +34,24 @@ import {
   type VceManagementPageRequest,
   type VceManagementPageState,
 } from "./code-context-pagination";
+
+// loadAuthoritativeVceOverview reads and validates the current host-owned project snapshot.
+// loadAuthoritativeVceOverview 读取并校验当前由宿主持有的项目快照。
+//
+// Parameters: projectId is the exact mounted project and loader performs the service read.
+// 参数：projectId 是精确的已挂载项目，loader 执行服务读取。
+// Returns: the validated current overview for the requested project.
+// 返回值：请求项目经过校验的当前概览。
+export async function loadAuthoritativeVceOverview(
+  projectId: string,
+  loader: (projectId: string) => Promise<VceProjectOverviewResponse> = loadVceProjectOverview,
+): Promise<VceProjectOverviewResponse> {
+  const overview = await loader(projectId);
+  if (overview.status.projectId !== projectId) {
+    throw new Error("VCE overview recovery returned a mismatched project identity.");
+  }
+  return overview;
+}
 
 // CodeContextArea renders project settings and paged VCE management data.
 // CodeContextArea 渲染项目设置与分页 VCE 管理数据。
@@ -263,17 +282,40 @@ export function CodeContextArea(props: {
     }
   };
 
-  // saveDraft preserves the authoritative settings when a host save is rejected.
-  // saveDraft 在宿主拒绝保存时保留权威设置。
+  // saveDraft reloads authoritative settings when a stale revision or another host error rejects the save.
+  // saveDraft 在陈旧修订或其他宿主错误拒绝保存时重新加载权威设置。
   const saveDraft = async (next: VceProjectSettingsInput) => {
     setManagementError(null);
     try {
       await props.onSave(next);
     } catch (error) {
-      setManagementError(error instanceof Error ? error.message : String(error));
-      const settings = props.overview?.settings;
-      if (settings) {
-        setDraft(editableSettings(settings));
+      // saveError preserves the original mutation failure even when recovery also fails.
+      // saveError 保留原始修改失败，即使恢复读取也失败。
+      const saveError = error instanceof Error ? error.message : String(error);
+      // projectId binds the recovery read to the panel that initiated the rejected mutation.
+      // projectId 将恢复读取绑定到发起被拒修改的面板。
+      const projectId = props.projectId;
+      try {
+        // overview is a fresh host read; stale props must never restore a rejected revision.
+        // overview 是新的宿主读取；不得用陈旧 props 恢复被拒绝的修订。
+        const overview = await loadAuthoritativeVceOverview(projectId);
+        if (mountedProjectRef.current === projectId) {
+          props.onOverviewChanged(overview);
+          setDraft(editableSettings(overview.settings));
+          setManagementError(saveError);
+        }
+      } catch (recoveryError) {
+        if (mountedProjectRef.current === projectId) {
+          // recoveryMessage makes both the rejected write and failed authoritative reload visible.
+          // recoveryMessage 同时呈现被拒写入与权威重载失败。
+          const recoveryMessage = recoveryError instanceof Error
+            ? recoveryError.message
+            : String(recoveryError);
+          setManagementError(`${saveError} ${copy(
+            `重新加载权威设置失败：${recoveryMessage}`,
+            `Reloading authoritative settings failed: ${recoveryMessage}`,
+          )}`);
+        }
       }
     }
   };

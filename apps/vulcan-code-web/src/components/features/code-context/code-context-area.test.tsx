@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
 import type { VceProjectOverviewResponse } from "@/types";
-import { CodeContextArea } from "./code-context-area";
+import { CodeContextArea, loadAuthoritativeVceOverview } from "./code-context-area";
 
 // overviewFixture builds one complete management-safe project projection.
 // overviewFixture 构建一份完整且管理安全的项目投影。
@@ -80,6 +80,28 @@ function renderArea(overview: VceProjectOverviewResponse, busy = false, locale =
 }
 
 describe("CodeContextArea", () => {
+  // Rejected saves must recover from a fresh host snapshot instead of reusing stale component props.
+  // 被拒绝的保存必须从新的宿主快照恢复，而不是复用陈旧组件 props。
+  it("loads the authoritative project revision after a rejected save", async () => {
+    const authoritative = overviewFixture(true);
+    authoritative.settings.revision = 5;
+    authoritative.status.settingsRevision = 5;
+    const loader = vi.fn(async () => authoritative);
+
+    await expect(loadAuthoritativeVceOverview("project-a", loader)).resolves.toBe(authoritative);
+    expect(loader).toHaveBeenCalledExactlyOnceWith("project-a");
+  });
+
+  // Recovery rejects a cross-project response before it can replace the mounted project's draft.
+  // 恢复流程会在跨项目响应替换当前项目草稿前拒绝该响应。
+  it("rejects a mismatched project during authoritative recovery", async () => {
+    const mismatched = overviewFixture(true);
+    mismatched.status.projectId = "project-b";
+
+    await expect(loadAuthoritativeVceOverview("project-a", async () => mismatched))
+      .rejects.toThrow("mismatched project identity");
+  });
+
   // Ready projections render bounded semantic statistics without exposing provider internals.
   // 就绪投影会渲染有界语义统计，且不暴露 Provider 内部信息。
   it("renders the ready Chinese management surface", () => {
