@@ -31,6 +31,119 @@ pub struct PiiScrubResult {
     pub redactions: Vec<PiiRedaction>,
 }
 
+/// Reports one regex candidate and the exact PII condition decision produced by the Core evaluator.
+/// 报告一个正则候选及 Core 求值器产生的准确 PII 条件判定。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PiiRuleTestMatch {
+    /// Byte offset at which the complete regex match begins.
+    /// 完整正则匹配开始处的字节偏移。
+    pub start_byte: usize,
+    /// Exclusive byte offset at which the complete regex match ends.
+    /// 完整正则匹配结束处的排他字节偏移。
+    pub end_byte: usize,
+    /// Complete `$0` match text shown only in this explicit local tester.
+    /// 仅在此显式本地测试器中展示的完整 `$0` 匹配文本。
+    pub matched_text: String,
+    /// Ordered `$0..$n` captures; an unmatched optional group is represented by `None`.
+    /// 有序的 `$0..$n` 捕获；未命中的可选分组以 `None` 表示。
+    pub captures: Vec<Option<String>>,
+    /// Whether the compiled condition accepted this regex candidate for replacement.
+    /// 已编译条件是否接受该正则候选并执行替换。
+    pub condition_accepted: bool,
+}
+
+/// Reports the deterministic output and full local trace for one ad-hoc PII rule.
+/// 报告一条临时 PII 规则的确定性输出与完整本地轨迹。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PiiRuleTestResult {
+    /// Text produced after applying the same bounded replacement semantics as the active scrubber.
+    /// 使用与生效清洗器相同的有界替换语义后产生的文本。
+    pub output_text: String,
+    /// Every regex candidate in source order, including candidates rejected by the condition.
+    /// 按来源顺序排列的全部正则候选，包括被条件拒绝的候选。
+    pub matches: Vec<PiiRuleTestMatch>,
+}
+
+/// Compiles and executes one in-memory PII rule without changing any active resource or snapshot.
+/// 编译并执行一条内存 PII 规则，不修改任何生效资源或快照。
+///
+/// # Parameters
+/// 参数
+/// `text` is the local sample, `pattern` is the Rust-compatible VMM regex, `condition` uses the
+/// bounded VMM condition DSL, and `replacement` uses validated numeric capture references.
+/// `text` 是本地样本，`pattern` 是兼容 Rust 的 VMM 正则，`condition` 使用有界 VMM 条件 DSL，
+/// `replacement` 使用已校验的数字捕获引用。
+///
+/// # Returns
+/// 返回值
+/// The transformed text and one trace row for every regex candidate.
+/// 返回转换后的文本，以及每个正则候选对应的一条轨迹。
+///
+/// # Errors
+/// Returns an error for oversized text, invalid regex, invalid condition syntax, invalid capture
+/// references, or output expansion beyond the domain bound.
+/// 文本超限、正则无效、条件语法无效、捕获引用无效或输出扩展越过领域边界时返回错误。
+pub fn test_pii_rule(
+    text: &str,
+    pattern: &str,
+    condition: Option<&str>,
+    replacement: &str,
+) -> Result<PiiRuleTestResult, CoreError> {
+    if text.len() > MAX_DOMAIN_TEXT_BYTES {
+        return Err(CoreError::new(
+            ErrorCode::InvalidArgument,
+            ErrorStage::Validation,
+            "PII input exceeds domain text capacity",
+        ));
+    }
+    let pattern = compile_source_regex(pattern, false)
+        .map_err(|error| pii_error(format!("invalid ad-hoc PII regex: {error}")))?;
+    let condition = Condition::parse(condition, pattern.captures_len())?;
+    let replacement = compile_replacement(replacement, pattern.captures_len())?;
+    if text.is_empty() {
+        return Ok(PiiRuleTestResult {
+            output_text: String::new(),
+            matches: Vec::new(),
+        });
+    }
+
+    let mut output = String::with_capacity(text.len());
+    let mut cursor = 0;
+    let mut matches = Vec::new();
+    for captures in pattern.captures_iter(text) {
+        let matched = captures.get(0).ok_or_else(|| {
+            CoreError::new(
+                ErrorCode::Internal,
+                ErrorStage::Command,
+                "PII matcher omitted its complete capture",
+            )
+        })?;
+        append_bounded(&mut output, &text[cursor..matched.start()])?;
+        let condition_accepted = condition.evaluate(&captures);
+        if condition_accepted {
+            append_compiled_replacement(&mut output, &replacement, &captures)?;
+        } else {
+            append_bounded(&mut output, matched.as_str())?;
+        }
+        matches.push(PiiRuleTestMatch {
+            start_byte: matched.start(),
+            end_byte: matched.end(),
+            matched_text: matched.as_str().to_owned(),
+            captures: captures
+                .iter()
+                .map(|capture| capture.map(|value| value.as_str().to_owned()))
+                .collect(),
+            condition_accepted,
+        });
+        cursor = matched.end();
+    }
+    append_bounded(&mut output, &text[cursor..])?;
+    Ok(PiiRuleTestResult {
+        output_text: output,
+        matches,
+    })
+}
+
 /// Applies compiled common and locale-specific PII rules.
 /// 应用已编译的 common 与特定区域 PII 规则。
 #[derive(Clone)]
@@ -180,16 +293,7 @@ impl PiiScrubber {
                 append_bounded(&mut replaced, &output[cursor..matched.start()])?;
                 if rule.condition.evaluate(&captures) {
                     match_count = match_count.saturating_add(1);
-                    for part in &rule.replacement {
-                        match part {
-                            ReplacementPart::Literal(text) => append_bounded(&mut replaced, text)?,
-                            ReplacementPart::Capture(index) => {
-                                if let Some(group) = captures.get(*index) {
-                                    append_bounded(&mut replaced, group.as_str())?;
-                                }
-                            }
-                        }
-                    }
+                    append_compiled_replacement(&mut replaced, &rule.replacement, &captures)?;
                 } else {
                     append_bounded(&mut replaced, matched.as_str())?;
                 }
@@ -223,6 +327,41 @@ impl PiiScrubber {
     pub fn rule_count(&self) -> usize {
         self.rules.len()
     }
+}
+
+/// Appends one validated replacement using the supplied regex captures and domain-size bound.
+/// 使用给定正则捕获与领域大小边界追加一份已校验替换。
+///
+/// # Parameters
+/// 参数
+/// `output` is the bounded destination, `replacement` is the compiled literal/capture sequence,
+/// and `captures` comes from the exact regex used during compilation.
+/// `output` 是有界目标，`replacement` 是已编译的字面量/捕获序列，`captures` 来自编译时的准确正则。
+///
+/// # Returns
+/// 返回值
+/// Success after every replacement segment has been appended.
+/// 每个替换片段都已追加后返回成功。
+///
+/// # Errors
+/// Returns an error when replacement expansion would exceed the domain text bound.
+/// 替换扩展将越过领域文本边界时返回错误。
+fn append_compiled_replacement(
+    output: &mut String,
+    replacement: &[ReplacementPart],
+    captures: &regex::Captures<'_>,
+) -> Result<(), CoreError> {
+    for part in replacement {
+        match part {
+            ReplacementPart::Literal(text) => append_bounded(output, text)?,
+            ReplacementPart::Capture(index) => {
+                if let Some(group) = captures.get(*index) {
+                    append_bounded(output, group.as_str())?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Checks each literal/capture segment before allocating expanded output; never returns raw fallback text.
@@ -359,4 +498,40 @@ fn pii_error(diagnostic: impl Into<String>) -> CoreError {
         ErrorStage::Configuration,
         diagnostic,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies the ad-hoc tester exposes accepted and rejected condition decisions with captures.
+    /// 验证临时测试器会连同捕获组暴露条件接受与拒绝判定。
+    #[test]
+    fn ad_hoc_rule_tester_uses_the_authoritative_condition_evaluator() {
+        let result = test_pii_rule(
+            "codes 1234 and 12345",
+            r"\b(\d+)\b",
+            Some("len($1) == 4"),
+            "[MASKED:$1]",
+        )
+        .expect("ad-hoc condition should compile and execute");
+
+        assert_eq!(result.output_text, "codes [MASKED:1234] and 12345");
+        assert_eq!(result.matches.len(), 2);
+        assert!(result.matches[0].condition_accepted);
+        assert_eq!(result.matches[0].captures[1].as_deref(), Some("1234"));
+        assert!(!result.matches[1].condition_accepted);
+        assert_eq!(result.matches[1].captures[1].as_deref(), Some("12345"));
+    }
+
+    /// Verifies invalid condition functions fail during the same compile phase used by resources.
+    /// 验证无效条件函数会在与资源相同的编译阶段失败。
+    #[test]
+    fn ad_hoc_rule_tester_rejects_unknown_condition_functions() {
+        let error = test_pii_rule("1234", r"\d+", Some("unknown_func($0)"), "[MASKED]")
+            .expect_err("unknown condition functions must fail closed");
+
+        assert_eq!(error.code, ErrorCode::InvalidConfiguration);
+        assert_eq!(error.stage, ErrorStage::Configuration);
+    }
 }

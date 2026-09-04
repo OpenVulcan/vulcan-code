@@ -6,11 +6,13 @@ mod driver;
 mod llm_contract;
 mod maintenance;
 mod prompt;
+mod resources;
 
 pub(crate) use client::NativeVmmClient;
 pub(crate) use driver::{NativeVmmCoreRuntime, NativeVmmHostAiStatus};
 pub(crate) use maintenance::{
-    NativeVmmClearPreview, NativeVmmClearResult, NativeVmmMaintenance, NativeVmmMigrationPreview,
-    NativeVmmMigrationRecordSummary, NativeVmmMigrationResult, NativeVmmProjectCatalog,
-    NativeVmmProjectContentCounts, NativeVmmProjectDeletePreview, NativeVmmSessionRename,
+    NativeVmmClearPreview, NativeVmmClearResult, NativeVmmMaintenance, NativeVmmMemoryLevelCounts,
+    NativeVmmMemoryRecords, NativeVmmMigrationPreview, NativeVmmMigrationRecordSummary,
+    NativeVmmMigrationResult, NativeVmmProjectCatalog, NativeVmmProjectContentCounts,
+    NativeVmmProjectDeletePreview, NativeVmmSessionRename, NativeVmmTurnStatusCounts,
 };

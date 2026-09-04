@@ -765,6 +765,235 @@ pub struct VmmNativeProjectContentCounts {
     pub vector_rows: u64,
 }
 
+/// Counts native memories by their four authoritative lifecycle levels.
+/// 按四个权威生命周期等级统计原生记忆。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeMemoryLevelCounts {
+    /// Number of session-level memories.
+    /// 会话级记忆数量。
+    pub session: u64,
+    /// Number of phase-level memories.
+    /// 阶段级记忆数量。
+    pub phase: u64,
+    /// Number of stable-level memories.
+    /// 稳定级记忆数量。
+    pub stable: u64,
+    /// Number of persistent-level memories.
+    /// 持久级记忆数量。
+    pub persistent: u64,
+}
+
+/// Counts native turns by their authoritative extraction-processing state.
+/// 按权威提取处理状态统计原生回合。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeTurnStatusCounts {
+    /// Number of pending turns.
+    /// 待分析回合数量。
+    pub pending: u64,
+    /// Number of atomically completed turns.
+    /// 已原子完成分析的回合数量。
+    pub completed: u64,
+    /// Number of historical turns with unknown successful-analysis metadata.
+    /// 成功分析元数据未知的历史回合数量。
+    pub processed_unknown: u64,
+    /// Number of explicitly bypassed turns.
+    /// 被明确跳过分析的回合数量。
+    pub analysis_bypassed: u64,
+    /// Number of corrupted and isolated turns.
+    /// 已损坏并隔离的回合数量。
+    pub corrupted: u64,
+}
+
+/// Summarizes native memory activity attributable to one host session.
+/// 汇总可归属于一个宿主会话的原生记忆活动。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeMemorySessionSummary {
+    /// Stable host session identity persisted by Core.
+    /// Core 持久化的稳定宿主会话标识。
+    pub session_source_id: String,
+    /// Current VulcanCode session title when the host still retains that session.
+    /// 宿主仍保留该会话时的当前 VulcanCode 会话标题。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_title: Option<String>,
+    /// Number of canonical turns in the session.
+    /// 会话中的规范回合数量。
+    pub turn_count: u64,
+    /// Turn counts split by authoritative processing state.
+    /// 按权威处理状态拆分的回合统计。
+    pub turn_statuses: VmmNativeTurnStatusCounts,
+    /// Number of memories attributed to the session.
+    /// 归属于会话的记忆数量。
+    pub memory_count: u64,
+    /// Number of explicit direct writes without one source turn.
+    /// 不含来源回合的显式主动写入数量。
+    pub direct_memory_count: u64,
+    /// Memory counts split by authoritative lifecycle level.
+    /// 按权威生命周期等级拆分的记忆统计。
+    pub memory_levels: VmmNativeMemoryLevelCounts,
+    /// Earliest attributable event time in Unix milliseconds.
+    /// 最早可归属事件的 Unix 毫秒时间。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_activity_at_unix_ms: Option<i64>,
+    /// Latest attributable event time in Unix milliseconds.
+    /// 最近可归属事件的 Unix 毫秒时间。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_activity_at_unix_ms: Option<i64>,
+}
+
+/// One complete persisted timeline item within a native canonical turn.
+/// 原生规范回合中的一条完整持久化时间线项目。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeTimelineItemSummary {
+    /// Stable author-role token.
+    /// 稳定的作者角色标记。
+    pub role: String,
+    /// Full normalized timeline content.
+    /// 完整的规范化时间线内容。
+    pub content: String,
+    /// Event time in Unix milliseconds.
+    /// 事件时间的 Unix 毫秒值。
+    pub occurred_at_unix_ms: i64,
+}
+
+/// Projects one canonical native turn with extraction and generated-memory status.
+/// 投影一个规范原生回合的提取及生成记忆状态。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeTurnRecordSummary {
+    /// Stable native numeric turn identity.
+    /// 稳定的原生数字回合标识。
+    pub turn_id: u64,
+    /// Stable host session identity owning the turn.
+    /// 拥有该回合的稳定宿主会话标识。
+    pub session_source_id: String,
+    /// Canonical creation time in Unix milliseconds.
+    /// 规范创建时间的 Unix 毫秒值。
+    pub created_at_unix_ms: i64,
+    /// Stable authoritative turn-status token.
+    /// 权威回合状态的稳定标记。
+    pub status: String,
+    /// Whether extraction is known complete; null preserves historical uncertainty.
+    /// 是否已知完成提取；空值用于保留历史不确定性。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extracted: Option<bool>,
+    /// Compact first user message preview.
+    /// 首条用户消息的紧凑预览。
+    pub user_preview: String,
+    /// Compact last assistant message preview.
+    /// 最后一条助手消息的紧凑预览。
+    pub assistant_preview: String,
+    /// Complete canonical timeline in persisted order.
+    /// 按持久化顺序排列的完整规范时间线。
+    pub timeline: Vec<VmmNativeTimelineItemSummary>,
+    /// Durable compact analysis detail when available.
+    /// 可用时的持久紧凑分析详情。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_details: Option<String>,
+    /// Stable identities of memories extracted from this exact turn.
+    /// 从该准确回合提取出的记忆稳定标识集合。
+    pub generated_memory_ids: Vec<u64>,
+    /// Generated memories split by authoritative lifecycle level.
+    /// 生成记忆按权威生命周期等级拆分的统计。
+    pub memory_levels: VmmNativeMemoryLevelCounts,
+    /// Active host queue state while analysis remains pending.
+    /// 分析仍待处理时的活动宿主队列状态。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_job_state: Option<String>,
+    /// Number of failed background analysis attempts.
+    /// 后台分析失败尝试次数。
+    pub analysis_attempt_count: u32,
+    /// Latest bounded background analysis error.
+    /// 最近一次有界后台分析错误。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_last_error: Option<String>,
+}
+
+/// Projects one durable native memory with exact provenance and lifecycle metadata.
+/// 投影一条持久原生记忆的准确来源与生命周期元数据。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeMemoryRecordSummary {
+    /// Stable native numeric memory identity.
+    /// 稳定的原生数字记忆标识。
+    pub memory_id: u64,
+    /// Originating turn identity for extracted memories.
+    /// 提取型记忆的来源回合标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_turn_id: Option<u64>,
+    /// Originating host session when present.
+    /// 存在时的来源宿主会话。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_source_id: Option<String>,
+    /// Compact caller-facing summary.
+    /// 面向调用方的紧凑摘要。
+    pub summary: String,
+    /// Full normalized memory statement.
+    /// 完整的规范化记忆陈述。
+    pub content: String,
+    /// Stable authoritative category token.
+    /// 权威分类的稳定标记。
+    pub category: String,
+    /// Stable authoritative source-kind token.
+    /// 权威来源类型的稳定标记。
+    pub source_kind: String,
+    /// Stable authoritative lifecycle-state token.
+    /// 权威生命周期状态的稳定标记。
+    pub state: String,
+    /// Stable authoritative memory-level token.
+    /// 权威记忆等级的稳定标记。
+    pub memory_level: String,
+    /// Host-normalized priority from zero through one hundred.
+    /// 宿主规范化的零到一百优先级。
+    pub priority: u32,
+    /// Searchable labels persisted with the memory.
+    /// 与记忆一起持久化的可搜索标签。
+    pub tags: Vec<String>,
+    /// Creation time in Unix milliseconds.
+    /// 创建时间的 Unix 毫秒值。
+    pub created_at_unix_ms: i64,
+    /// Last update time in Unix milliseconds.
+    /// 最后更新时间的 Unix 毫秒值。
+    pub updated_at_unix_ms: i64,
+    /// Optional absolute expiration time in Unix milliseconds.
+    /// 可选的绝对过期 Unix 毫秒时间。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at_unix_ms: Option<i64>,
+    /// Stable lifecycle reason when present.
+    /// 存在时的稳定生命周期原因。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_reason: Option<String>,
+}
+
+/// Complete native project/session/turn/memory provenance response.
+/// 完整的原生项目/会话/回合/记忆来源响应。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeMemoryRecordsSummary {
+    /// Core storage version used to build this coherent response.
+    /// 构建该一致响应所使用的 Core 存储版本。
+    pub storage_version: u64,
+    /// Selected one-level native VMM project identity.
+    /// 已选择的一级原生 VMM 项目标识。
+    pub project_id: u64,
+    /// Every session attributable to the selected project.
+    /// 可归属于所选项目的全部会话。
+    pub sessions: Vec<VmmNativeMemorySessionSummary>,
+    /// Exact selected session when detailed records were requested.
+    /// 请求详细记录时的准确所选会话。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_session_source_id: Option<String>,
+    /// Canonical turns for the selected session, or every project turn when no session is selected.
+    /// 所选会话的规范回合集合；未选择会话时为项目全部回合。
+    pub turns: Vec<VmmNativeTurnRecordSummary>,
+    /// Durable memories for the selected session, or every project memory when no session is selected.
+    /// 所选会话的持久记忆；未选择会话时为项目全部记忆。
+    pub memories: Vec<VmmNativeMemoryRecordSummary>,
+}
+
 /// Describes one mandatory automatic session rename in a native migration.
 /// 描述原生迁移中的一次必须自动会话改名。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -876,6 +1105,191 @@ pub struct VmmNativeClearResult {
     pub removed: VmmNativeProjectContentCounts,
 }
 
+/// Native Core resource selections persisted under the host-owned VMM configuration directory.
+/// 持久化在宿主持有 VMM 配置目录下的原生 Core 资源选择。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeResourceSettingsSummary {
+    /// Selected complete prompt bundle.
+    /// 当前选择的完整提示词 Bundle。
+    pub prompt_bundle: String,
+    /// Selected PII locale combined after common rules.
+    /// 在公共规则后组合的 PII 区域。
+    pub pii_language: String,
+    /// Selected Noise locale combined after common rules.
+    /// 在公共规则后组合的噪音区域。
+    pub noise_language: String,
+    /// Whether Noise filtering is active.
+    /// 是否启用噪音过滤。
+    pub noise_enabled: bool,
+    /// Whether semantic Noise phrase matching is active.
+    /// 是否启用语义噪音短语匹配。
+    pub noise_semantic_enabled: bool,
+    /// Default semantic Noise threshold.
+    /// 默认语义噪音阈值。
+    pub noise_semantic_threshold: f64,
+}
+
+/// Describes one independently selectable native Core resource file.
+/// 描述一份可独立选择的原生 Core 资源文件。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeResourceFileSummary {
+    /// Exact slash-separated path used by Core layering.
+    /// Core 分层使用的准确斜杠路径。
+    pub path: String,
+    /// Resource group: prompt, pii, or noise.
+    /// 资源分组：prompt、pii 或 noise。
+    pub group: String,
+    /// Bundle, locale, or common selector owning the file.
+    /// 拥有该文件的 Bundle、区域或 common 选择器。
+    pub selector: String,
+    /// File name within the selected group.
+    /// 所选分组中的文件名。
+    pub file_name: String,
+    /// Whether editing this file requires the two-step high-risk confirmation.
+    /// 编辑该文件是否需要两步高风险确认。
+    pub high_risk: bool,
+    /// Whether an effective user-layer override currently exists.
+    /// 当前是否存在有效用户层覆盖。
+    pub has_user_override: bool,
+}
+
+/// Catalog of native Core resource files and active composition settings.
+/// 原生 Core 资源文件与当前组合设置的目录。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeResourceCatalogSummary {
+    /// Absolute user-owned override directory used without modifying embedded resources.
+    /// 不修改内置资源时使用的用户自有覆盖目录绝对路径。
+    pub override_root: String,
+    /// Current persisted or default resource selections.
+    /// 当前持久化或默认资源选择。
+    pub settings: VmmNativeResourceSettingsSummary,
+    /// Available complete prompt bundles.
+    /// 可用的完整提示词 Bundle。
+    pub prompt_bundles: Vec<String>,
+    /// Required prompt scene file names.
+    /// 必需的提示词场景文件名。
+    pub prompt_scenes: Vec<String>,
+    /// Available PII locale selectors excluding common.
+    /// 可用的 PII 区域选择，不含 common。
+    pub pii_languages: Vec<String>,
+    /// Available Noise locale selectors excluding common.
+    /// 可用的噪音区域选择，不含 common。
+    pub noise_languages: Vec<String>,
+    /// Every independently selectable resource file.
+    /// 每份可独立选择的资源文件。
+    pub files: Vec<VmmNativeResourceFileSummary>,
+}
+
+/// Exact built-in and effective text for one native Core resource file.
+/// 一份原生 Core 资源文件的准确内置与生效文本。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeResourceFileContent {
+    /// Exact catalog path.
+    /// 准确目录路径。
+    pub path: String,
+    /// Immutable source compiled into the application.
+    /// 编译进应用程序的不可变原文。
+    pub built_in_text: String,
+    /// Effective text selected by user-over-built-in precedence.
+    /// 按用户层优先于内置层规则选择的生效文本。
+    pub effective_text: String,
+    /// User override text when a physical override exists.
+    /// 存在物理覆盖文件时的用户覆盖文本。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_override_text: Option<String>,
+    /// Whether the effective text comes from the user layer.
+    /// 生效文本是否来自用户层。
+    pub has_user_override: bool,
+    /// Whether editing requires the two-step high-risk confirmation.
+    /// 编辑是否需要两步高风险确认。
+    pub high_risk: bool,
+}
+
+/// Result of applying active common-plus-locale PII rules to sample text.
+/// 使用当前 common 加区域 PII 规则处理示例文本的结果。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativePiiTestResult {
+    /// Scrubbed output text.
+    /// 脱敏后的输出文本。
+    pub output_text: String,
+    /// Applied rule names and replacement counts in execution order.
+    /// 按执行顺序排列的命中规则名与替换数量。
+    pub redactions: Vec<VmmNativePiiRedactionSummary>,
+}
+
+/// One PII tester rule match summary.
+/// 一条 PII 测试规则命中摘要。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativePiiRedactionSummary {
+    /// Stable rule name.
+    /// 稳定规则名。
+    pub rule_name: String,
+    /// Number of replacements made by the rule.
+    /// 该规则执行的替换数量。
+    pub match_count: u32,
+}
+
+/// Result of compiling and executing one ad-hoc PII regex plus condition formula.
+/// 编译并执行一条临时 PII 正则及条件公式的结果。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativePiiFormulaTestResult {
+    /// Text after accepted candidates have been replaced.
+    /// 接受的候选被替换后的文本。
+    pub output_text: String,
+    /// Full local trace for every regex candidate, including rejected candidates.
+    /// 每个正则候选的完整本地轨迹，包括被拒绝的候选。
+    pub matches: Vec<VmmNativePiiFormulaMatchSummary>,
+}
+
+/// One candidate trace produced by the authoritative PII condition evaluator.
+/// 权威 PII 条件求值器产生的一条候选轨迹。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativePiiFormulaMatchSummary {
+    /// Byte offset at which the complete match begins.
+    /// 完整匹配开始处的字节偏移。
+    pub start_byte: usize,
+    /// Exclusive byte offset at which the complete match ends.
+    /// 完整匹配结束处的排他字节偏移。
+    pub end_byte: usize,
+    /// Complete `$0` match text shown in this explicit local tester.
+    /// 此显式本地测试器展示的完整 `$0` 匹配文本。
+    pub matched_text: String,
+    /// Ordered `$0..$n` capture values.
+    /// 有序的 `$0..$n` 捕获值。
+    pub captures: Vec<Option<String>>,
+    /// Whether the condition formula accepted this regex candidate.
+    /// 条件公式是否接受该正则候选。
+    pub condition_accepted: bool,
+}
+
+/// Deterministic result of testing active common-plus-locale Noise rules.
+/// 测试当前 common 加区域噪音规则的确定性结果。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeNoiseTestResult {
+    /// Whether a deterministic regex rule classified the text as noise.
+    /// 是否有确定性正则规则将文本判定为噪音。
+    pub is_noise: bool,
+    /// Matched category when present.
+    /// 存在时的命中类别。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    /// Deterministic confidence reported by Core.
+    /// Core 报告的确定性置信度。
+    pub confidence: f64,
+    /// Explicit tester mode; semantic matching remains part of live intake.
+    /// 明确的测试器模式；语义匹配仍属于实时录入链路。
+    pub mode: String,
+}
+
 /// Typed payload returned by one VMM management action.
 /// VMM 单次管理动作返回的强类型载荷。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -953,6 +1367,9 @@ pub enum VmmMemoryActionResponse {
     /// Native one-level project and binding catalog.
     /// 原生一级项目与绑定目录。
     NativeProjectCatalog(VmmNativeProjectCatalogSummary),
+    /// Native project/session/turn/memory provenance records.
+    /// 原生项目/会话/回合/记忆来源记录。
+    NativeMemoryRecords(VmmNativeMemoryRecordsSummary),
     /// Native project deletion impact preview.
     /// 原生项目删除影响预检。
     NativeProjectDeletePreview(VmmNativeProjectDeletePreview),
@@ -968,6 +1385,21 @@ pub enum VmmMemoryActionResponse {
     /// Committed native project clear result.
     /// 已提交的原生项目清空结果。
     NativeClear(VmmNativeClearResult),
+    /// Native Core resource catalog and current selections.
+    /// 原生 Core 资源目录与当前选择。
+    NativeResourceCatalog(VmmNativeResourceCatalogSummary),
+    /// One native Core resource file's built-in and effective text.
+    /// 一份原生 Core 资源文件的内置与生效文本。
+    NativeResourceFile(VmmNativeResourceFileContent),
+    /// Active PII-rule tester result.
+    /// 当前 PII 规则测试结果。
+    NativePiiTest(VmmNativePiiTestResult),
+    /// Ad-hoc PII regex and condition-formula tester result.
+    /// 临时 PII 正则与条件公式测试结果。
+    NativePiiFormulaTest(VmmNativePiiFormulaTestResult),
+    /// Active deterministic Noise-rule tester result.
+    /// 当前确定性噪音规则测试结果。
+    NativeNoiseTest(VmmNativeNoiseTestResult),
     /// Structured response returned by the isolated VMM management HTTP API.
     /// 独立 VMM 管理 HTTP API 返回的结构化响应。
     Management(serde_json::Value),

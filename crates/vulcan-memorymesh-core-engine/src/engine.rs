@@ -2414,6 +2414,18 @@ fn degrade(
                 )),
             }
         }
+        // PostAction L1 is mandatory. Preserve its exact continuation so a durable host queue can
+        // retry the command, and expose the provider failure instead of misclassifying it as a
+        // missing degradation path.
+        // PostAction L1 是必需阶段。保留准确续体供宿主持久队列重试，并暴露提供方失败，
+        // 而不是将其误分类为缺少降级路径。
+        FlowState::AnalyzeAnalysis { command, turn } => {
+            record.state = FlowState::AnalyzeAnalysis { command, turn };
+            Err(command_error(
+                ErrorCode::EffectDegraded,
+                format!("post-action analysis is mandatory: {}", failure.diagnostic),
+            ))
+        }
         // PostAction L2 review transport/provider failure falls back to the L1 admitted
         // candidates, exactly as VMM does; structured-contract failures never degrade.
         // PostAction L2 审核传输/提供方失败回退到 L1 已准入候选，与 VMM 一致；
@@ -2564,6 +2576,7 @@ fn ensure_failure_kind(state: &FlowState, kind: EffectFailureKind) -> Result<(),
     let expected = match state {
         FlowState::PreCheckIntent { .. }
         | FlowState::PreCheckReview { .. }
+        | FlowState::AnalyzeAnalysis { .. }
         | FlowState::AnalyzeReview(_)
         | FlowState::MemoryWriteReview(_) => EffectFailureKind::Llm,
         FlowState::PreCheckEmbedding { .. }

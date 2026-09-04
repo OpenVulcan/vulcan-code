@@ -6,9 +6,10 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, RwLock};
 
 pub use vulcan_memorymesh_core_config::{
-    ConfigBundle, ConfigImpact, ConfigSnapshot, MEMORY_POLICY_SCHEMA_VERSION, MemoryPolicy,
-    NoiseDecision, NoisePolicy, PiiScrubResult, ResourceIdentity, ResourceLayer,
-    embedded_resource_identity,
+    ConfigBundle, ConfigImpact, ConfigSnapshot, MAX_RESOURCE_FILE_BYTES,
+    MEMORY_POLICY_SCHEMA_VERSION, MemoryPolicy, NoiseDecision, NoisePolicy, PiiRuleTestMatch,
+    PiiRuleTestResult, PiiScrubResult, ResourceIdentity, ResourceLayer, embedded_resource_identity,
+    embedded_resource_paths, embedded_resource_text, test_pii_rule,
 };
 pub use vulcan_memorymesh_core_contracts::*;
 pub use vulcan_memorymesh_core_engine::{

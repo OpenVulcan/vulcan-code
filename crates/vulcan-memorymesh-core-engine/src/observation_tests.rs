@@ -534,3 +534,107 @@ fn analyze_fallback_checkpoint_rejects_partial_review() -> Result<(), Box<dyn st
     }
     Ok(())
 }
+
+/// Verifies a mandatory PostAction L1 provider failure retains its exact continuation for the host retry queue.
+/// 验证必需的 PostAction L1 提供方失败会为宿主重试队列保留精确续体。
+#[test]
+fn postaction_l1_failure_retains_analysis_continuation() -> Result<(), Box<dyn std::error::Error>> {
+    // pipeline supplies compact, already validated domain identities for the retained command and turn.
+    // pipeline 为保留的命令与回合提供精简且已验证的领域身份。
+    let (pipeline, snapshot, _) = waiting()?;
+    let turn_id = TurnId::new("retry-turn")?;
+    let session_id = vulcan_memorymesh_core_contracts::SessionSourceId::new("retry-session")?;
+    let turn = Turn {
+        id: turn_id.clone(),
+        subject_id: pipeline.work.subject_id.clone(),
+        scope_id: pipeline.work.scope_access.write_scope.clone(),
+        session_source_id: session_id.clone(),
+        timeline: vec![TimelineItem {
+            role: Role::User,
+            content: "remember grapes".to_owned(),
+            occurred_at_ns: 1,
+        }],
+        previous_turn_ids: Vec::new(),
+        next_turn_ids: Vec::new(),
+        created_at_ns: 1,
+        status: TurnStatus::Pending,
+        user_input_kind: None,
+        analysis_details: None,
+    };
+    let command = PostActionAnalyzePendingTurnCommand {
+        subject_id: pipeline.work.subject_id,
+        scope_access: pipeline.work.scope_access.clone(),
+        replacement_scope: vulcan_memorymesh_core_contracts::MemoryReplacementScope {
+            candidates: vulcan_memorymesh_core_contracts::MemoryCandidateScope {
+                scope_ids: pipeline.work.scope_access.visible_scopes.clone(),
+                origin_session_source_id: None,
+            },
+            authorized_supersede_scopes: Vec::new(),
+        },
+        profile_sections: vec![ProfileViewSection {
+            scope_id: pipeline.work.scope_access.write_scope,
+            role: SectionRole::Subject,
+            display_label: "Subject".to_owned(),
+        }],
+        session_source_id: session_id,
+        vector_space_id: pipeline.work.vector_space_id,
+        turn_id,
+        analysis_generation: 1,
+        analysis_cutoff_ns: 10,
+        direct_write_observed_after_ns: 0,
+        mutation_identity: MutationIdentity {
+            operation_id: OperationId::new("retry-operation")?,
+            idempotency_key: IdempotencyKey::new("retry-key")?,
+            request_fingerprint: format!("fp256:{}", "0".repeat(64)),
+            source_kind: vulcan_memorymesh_core_contracts::MutationSourceKind::HostRpc,
+            request_source_id: "test".to_owned(),
+            observed_at_ns: 10,
+        },
+    };
+    let mut record = CommandRecord {
+        handle: CommandHandle {
+            command_id: CommandId::new("retry-command")?,
+            config_snapshot_id: snapshot.id.clone(),
+        },
+        snapshot,
+        status: CommandStatus::Waiting,
+        state: FlowState::AnalyzeAnalysis {
+            command: command.clone(),
+            turn: turn.clone(),
+        },
+        pending_effect_id: None,
+        pending_effect: None,
+        pending_mutation_idempotency_key: None,
+        next_effect_sequence: 0,
+        last_error: None,
+        mutation_identity: None,
+        received_effects: Vec::new(),
+        checkpoint_command_input: None,
+        degraded: false,
+    };
+    let failure = HostEffectResult::Failure(vulcan_memorymesh_core_contracts::EffectFailure {
+        kind: EffectFailureKind::Llm,
+        class: FailureClass::Provider,
+        retryable: true,
+        allow_degrade: true,
+        diagnostic: "provider temporarily rejected output".to_owned(),
+    });
+
+    let error = degrade(&mut record, &failure)
+        .expect_err("mandatory PostAction L1 failure must remain retryable instead of completing");
+    assert_eq!(error.code, ErrorCode::EffectDegraded);
+    assert!(
+        error
+            .diagnostic
+            .contains("post-action analysis is mandatory")
+    );
+    assert!(matches!(
+        &record.state,
+        FlowState::AnalyzeAnalysis {
+            command: retained_command,
+            turn: retained_turn,
+        } if retained_command == &command && retained_turn == &turn
+    ));
+    assert!(record.degraded);
+    Ok(())
+}

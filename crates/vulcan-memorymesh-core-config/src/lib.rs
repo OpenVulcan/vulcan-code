@@ -10,7 +10,7 @@ pub use noise::{
     DEFAULT_SEMANTIC_THRESHOLD, NOISE_RULE_SCHEMA_VERSION, NoiseDecision, NoiseDetector,
     NoisePhraseTarget, NoisePolicy, NoisePrototypeRow,
 };
-pub use pii::{PiiScrubResult, PiiScrubber};
+pub use pii::{PiiRuleTestMatch, PiiRuleTestResult, PiiScrubResult, PiiScrubber, test_pii_rule};
 
 use include_dir::{Dir, include_dir};
 use serde::Deserialize;
@@ -916,6 +916,59 @@ pub fn embedded_resource_identity() -> Result<ResourceIdentity, CoreError> {
     // 为每次显式身份请求解析并校验清单。
     let manifest = load_manifest()?;
     identity_from_manifest(&manifest)
+}
+
+/// Lists every validated built-in text resource path declared by the authoritative manifest.
+/// 列出权威清单声明的每个已校验内置文本资源路径。
+///
+/// # Returns
+/// 返回值
+/// Paths in manifest order after the complete embedded package passes integrity validation.
+/// 完整嵌入资源包通过完整性校验后，按清单顺序返回路径。
+///
+/// # Errors
+/// 错误
+/// Returns an error when the manifest or any declared embedded resource has drifted.
+/// 清单或任一声明的嵌入资源发生漂移时返回错误。
+pub fn embedded_resource_paths() -> Result<Vec<String>, CoreError> {
+    let manifest = load_manifest()?;
+    identity_from_manifest(&manifest)?;
+    Ok(manifest.files.into_iter().map(|file| file.path).collect())
+}
+
+/// Reads one validated built-in text resource without exposing the embedded directory implementation.
+/// 读取一份已校验内置文本资源，且不暴露嵌入目录实现。
+///
+/// # Parameters
+/// 参数
+/// `path` must exactly match a path declared by the authoritative resource manifest.
+/// `path` 必须准确匹配权威资源清单声明的路径。
+///
+/// # Returns
+/// 返回值
+/// The exact UTF-8 source text compiled into the Core artifact.
+/// 返回编译进 Core 工件的准确 UTF-8 原文。
+///
+/// # Errors
+/// 错误
+/// Returns an error for package drift, undeclared paths, missing files, or invalid UTF-8.
+/// 资源包漂移、路径未声明、文件缺失或 UTF-8 无效时返回错误。
+pub fn embedded_resource_text(path: &str) -> Result<String, CoreError> {
+    let manifest = load_manifest()?;
+    identity_from_manifest(&manifest)?;
+    if !manifest.files.iter().any(|file| file.path == path) {
+        return Err(config_error(
+            ErrorCode::MissingResource,
+            format!("embedded resource path is not declared: {path}"),
+        ));
+    }
+    let bytes = embedded_bytes(path)?;
+    String::from_utf8(bytes).map_err(|error| {
+        config_error(
+            ErrorCode::InvalidConfiguration,
+            format!("embedded resource is not UTF-8: {path}: {error}"),
+        )
+    })
 }
 
 /// Resolves one whole prompt bundle using built-in, product, and user precedence.

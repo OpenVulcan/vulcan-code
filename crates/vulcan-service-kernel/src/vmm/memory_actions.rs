@@ -7,12 +7,16 @@ use crate::{
     emit_context_injection_changed_delta_for_session, emit_workbench_event,
     mutate_project_configuration,
 };
+use std::collections::BTreeMap;
 use vulcan_service_api::{
     ProjectSettingsDomain, ServiceEventEmitter, VmmMemoryActionResponse, VmmNativeClearPreview,
-    VmmNativeClearResult, VmmNativeMigrationPreview, VmmNativeMigrationRecordSummary,
-    VmmNativeMigrationResult, VmmNativeProjectBindingSummary, VmmNativeProjectCatalogSummary,
-    VmmNativeProjectContentCounts, VmmNativeProjectDeletePreview, VmmNativeProjectSummary,
-    VmmNativeSessionRename, VmmProjectDisplaySummary, VmmUserDisplaySummary,
+    VmmNativeClearResult, VmmNativeMemoryLevelCounts, VmmNativeMemoryRecordSummary,
+    VmmNativeMemoryRecordsSummary, VmmNativeMemorySessionSummary, VmmNativeMigrationPreview,
+    VmmNativeMigrationRecordSummary, VmmNativeMigrationResult, VmmNativeProjectBindingSummary,
+    VmmNativeProjectCatalogSummary, VmmNativeProjectContentCounts, VmmNativeProjectDeletePreview,
+    VmmNativeProjectSummary, VmmNativeResourceSettingsSummary, VmmNativeSessionRename,
+    VmmNativeTimelineItemSummary, VmmNativeTurnRecordSummary, VmmNativeTurnStatusCounts,
+    VmmProjectDisplaySummary, VmmUserDisplaySummary,
 };
 
 /// Runs one VMM memory management action and returns its structured result.
@@ -43,6 +47,7 @@ pub(crate) async fn service_run_vmm_memory_action(
     if matches!(
         request.action.trim(),
         "native_project_catalog"
+            | "native_memory_records"
             | "native_project_create_and_bind"
             | "native_project_bind_existing"
             | "native_project_set_access"
@@ -55,6 +60,14 @@ pub(crate) async fn service_run_vmm_memory_action(
             | "native_project_migrate"
             | "native_project_clear_preview"
             | "native_project_clear"
+            | "native_resource_catalog"
+            | "native_resource_read"
+            | "native_resource_write"
+            | "native_resource_reset"
+            | "native_resource_settings_update"
+            | "native_pii_test"
+            | "native_pii_formula_test"
+            | "native_noise_test"
     ) {
         return service_run_native_vmm_maintenance_action(state, request).await;
     }
@@ -159,6 +172,146 @@ async fn service_run_native_vmm_maintenance_action(
     let action = request.action.trim();
     let request_preview = request.payload.clone();
     match action {
+        "native_resource_catalog" => {
+            let catalog = maintenance.resource_catalog().await?;
+            native_action_result(
+                action,
+                format!("已加载 {} 份原生 VMM 资源文件。", catalog.files.len()),
+                "native_resource_catalog",
+                request_preview,
+                &catalog,
+                VmmMemoryActionResponse::NativeResourceCatalog(catalog.clone()),
+            )
+        }
+        "native_resource_read" => {
+            let path = required_native_text(&request.payload, "path")?;
+            let file = maintenance.resource_file(&path).await?;
+            native_action_result(
+                action,
+                format!("已加载原生 VMM 资源 `{path}`。"),
+                "native_resource_file",
+                request_preview,
+                &file,
+                VmmMemoryActionResponse::NativeResourceFile(file.clone()),
+            )
+        }
+        "native_resource_write" => {
+            let path = required_native_text(&request.payload, "path")?;
+            let content = required_native_text_verbatim(&request.payload, "content")?;
+            let file = maintenance
+                .write_resource_file(
+                    &path,
+                    content,
+                    required_native_bool(&request.payload, "confirmedPurpose")?,
+                    required_native_bool(&request.payload, "confirmedModification")?,
+                )
+                .await?;
+            native_action_result(
+                action,
+                format!("原生 VMM 用户覆盖 `{path}` 已保存并立即激活。"),
+                "native_resource_file",
+                request_preview,
+                &file,
+                VmmMemoryActionResponse::NativeResourceFile(file.clone()),
+            )
+        }
+        "native_resource_reset" => {
+            let path = required_native_text(&request.payload, "path")?;
+            let file = maintenance.reset_resource_file(&path).await?;
+            native_action_result(
+                action,
+                format!("原生 VMM 资源 `{path}` 已恢复内置内容并立即激活。"),
+                "native_resource_file",
+                request_preview,
+                &file,
+                VmmMemoryActionResponse::NativeResourceFile(file.clone()),
+            )
+        }
+        "native_resource_settings_update" => {
+            let settings = VmmNativeResourceSettingsSummary {
+                prompt_bundle: required_native_text(&request.payload, "promptBundle")?,
+                pii_language: required_native_text(&request.payload, "piiLanguage")?,
+                noise_language: required_native_text(&request.payload, "noiseLanguage")?,
+                noise_enabled: required_native_bool(&request.payload, "noiseEnabled")?,
+                noise_semantic_enabled: required_native_bool(
+                    &request.payload,
+                    "noiseSemanticEnabled",
+                )?,
+                noise_semantic_threshold: required_native_f64(
+                    &request.payload,
+                    "noiseSemanticThreshold",
+                )?,
+            };
+            let catalog = maintenance.update_resource_settings(settings).await?;
+            native_action_result(
+                action,
+                String::from("原生 VMM 资源组合设置已保存并立即激活。"),
+                "native_resource_catalog",
+                request_preview,
+                &catalog,
+                VmmMemoryActionResponse::NativeResourceCatalog(catalog.clone()),
+            )
+        }
+        "native_pii_test" => {
+            let text = required_native_text_verbatim(&request.payload, "text")?;
+            let result = maintenance.test_pii(&text).await?;
+            native_action_result(
+                action,
+                format!("PII 测试完成：命中 {} 条规则。", result.redactions.len()),
+                "native_pii_test",
+                request_preview,
+                &result,
+                VmmMemoryActionResponse::NativePiiTest(result.clone()),
+            )
+        }
+        "native_pii_formula_test" => {
+            let text = required_native_text_verbatim(&request.payload, "text")?;
+            let pattern = required_native_text_verbatim(&request.payload, "pattern")?;
+            let condition = optional_native_text_verbatim(&request.payload, "condition")?;
+            let replacement = required_native_string_verbatim(&request.payload, "replacement")?;
+            let result = maintenance.test_pii_formula(
+                &text,
+                &pattern,
+                condition.as_deref(),
+                &replacement,
+            )?;
+            let accepted_count = result
+                .matches
+                .iter()
+                .filter(|entry| entry.condition_accepted)
+                .count();
+            native_action_result(
+                action,
+                format!(
+                    "PII 临时规则测试完成：{} 个正则候选，{accepted_count} 个通过条件公式。",
+                    result.matches.len()
+                ),
+                "native_pii_formula_test",
+                request_preview,
+                &result,
+                VmmMemoryActionResponse::NativePiiFormulaTest(result.clone()),
+            )
+        }
+        "native_noise_test" => {
+            let role = required_native_text(&request.payload, "role")?;
+            let text = required_native_text_verbatim(&request.payload, "text")?;
+            let result = maintenance.test_noise(&role, &text).await?;
+            native_action_result(
+                action,
+                if result.is_noise {
+                    format!(
+                        "确定性噪音测试命中类别 `{}`。",
+                        result.category.as_deref().unwrap_or("unknown")
+                    )
+                } else {
+                    String::from("确定性噪音测试未命中正则规则。")
+                },
+                "native_noise_test",
+                request_preview,
+                &result,
+                VmmMemoryActionResponse::NativeNoiseTest(result.clone()),
+            )
+        }
         "native_project_catalog" => {
             let catalog = native_project_catalog(maintenance.project_catalog().await?);
             native_action_result(
@@ -172,6 +325,38 @@ async fn service_run_native_vmm_maintenance_action(
                 request_preview,
                 &catalog,
                 VmmMemoryActionResponse::NativeProjectCatalog(catalog.clone()),
+            )
+        }
+        "native_memory_records" => {
+            let project_id = required_native_project_id(&request.payload, "vmmProjectId")?;
+            let session_source_id = vmm_payload_text(&request.payload, "sessionSourceId")
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty());
+            let records = native_memory_records(
+                maintenance
+                    .memory_records(project_id, session_source_id.as_deref())
+                    .await?,
+                &native_session_titles(&state)?,
+            );
+            native_action_result(
+                action,
+                match records.selected_session_source_id.as_deref() {
+                    Some(session_id) => format!(
+                        "已加载原生 VMM 项目 {project_id} 的会话 `{session_id}`：{} 个回合、{} 条记忆。",
+                        records.turns.len(),
+                        records.memories.len()
+                    ),
+                    None => format!(
+                        "已加载原生 VMM 项目 {project_id}：{} 个会话、{} 个回合、{} 条记忆。",
+                        records.sessions.len(),
+                        records.turns.len(),
+                        records.memories.len()
+                    ),
+                },
+                "native_memory_records",
+                request_preview,
+                &records,
+                VmmMemoryActionResponse::NativeMemoryRecords(records.clone()),
             )
         }
         "native_project_create_and_bind" => {
@@ -465,6 +650,62 @@ fn required_native_text(payload: &Value, key: &str) -> Result<String, String> {
         .ok_or_else(|| format!("原生 VMM 动作缺少有效字段 `{key}`。"))
 }
 
+/// Requires one non-empty native VMM action text field without trimming its content.
+/// 读取一个必需的非空原生 VMM 动作文本字段，同时不裁剪其内容。
+fn required_native_text_verbatim(payload: &Value, key: &str) -> Result<String, String> {
+    payload
+        .as_object()
+        .and_then(|object| object.get(key))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| format!("原生 VMM 动作缺少有效字段 `{key}`。"))
+}
+
+/// Requires one native VMM string field verbatim while allowing an intentional empty value.
+/// 逐字读取一个必需的原生 VMM 字符串字段，同时允许有意传入空值。
+fn required_native_string_verbatim(payload: &Value, key: &str) -> Result<String, String> {
+    payload
+        .as_object()
+        .and_then(|object| object.get(key))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| format!("原生 VMM 动作缺少字符串字段 `{key}`。"))
+}
+
+/// Reads one optional native VMM string field verbatim and normalizes blank content to absence.
+/// 逐字读取一个可选的原生 VMM 字符串字段，并将空白内容归一化为缺失。
+fn optional_native_text_verbatim(payload: &Value, key: &str) -> Result<Option<String>, String> {
+    let Some(value) = payload.as_object().and_then(|object| object.get(key)) else {
+        return Ok(None);
+    };
+    let value = value
+        .as_str()
+        .ok_or_else(|| format!("原生 VMM 动作字段 `{key}` 必须是字符串。"))?;
+    Ok((!value.trim().is_empty()).then(|| value.to_owned()))
+}
+
+/// Requires one explicit native VMM boolean field and preserves false distinctly from absence.
+/// 读取一个明确的原生 VMM 布尔字段，并区分 false 与缺失。
+fn required_native_bool(payload: &Value, key: &str) -> Result<bool, String> {
+    payload
+        .as_object()
+        .and_then(|object| object.get(key))
+        .and_then(Value::as_bool)
+        .ok_or_else(|| format!("原生 VMM 动作缺少有效布尔字段 `{key}`。"))
+}
+
+/// Requires one finite native VMM floating-point field.
+/// 读取一个必需的有限原生 VMM 浮点字段。
+fn required_native_f64(payload: &Value, key: &str) -> Result<f64, String> {
+    payload
+        .as_object()
+        .and_then(|object| object.get(key))
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| format!("原生 VMM 动作缺少有效数值字段 `{key}`。"))
+}
+
 /// Requires one native VMM storage version, including the valid initial version zero.
 /// 读取一个必需的原生 VMM 存储版本，包含合法的初始版本零。
 fn required_native_storage_version(payload: &Value, key: &str) -> Result<u64, String> {
@@ -512,6 +753,145 @@ fn native_project_catalog(
                 linked_project_ids: binding.linked_project_ids,
             })
             .collect(),
+    }
+}
+
+/// Loads current and archived VulcanCode session titles without requiring them for provenance.
+/// 加载当前及已归档 VulcanCode 会话标题，但不将标题作为来源关联条件。
+///
+/// # Parameters
+/// 参数
+/// `state` is the loaded service state containing the optional host workspace snapshot.
+/// `state` 是包含可选宿主工作区快照的已加载服务状态。
+///
+/// # Returns
+/// 返回值
+/// A map keyed only by stable session identity; active-session titles take precedence.
+/// 返回仅以稳定会话身份为键的映射；活动会话标题优先。
+fn native_session_titles(
+    state: &SharedServiceBridgeState,
+) -> Result<BTreeMap<String, String>, String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("锁定原生 VMM 会话标题目录失败：{error}"))?;
+    let Some(workspace) = guard.workspace_snapshot.as_ref() else {
+        return Ok(BTreeMap::new());
+    };
+    let mut titles = BTreeMap::new();
+    for session in &workspace.sessions {
+        titles.insert(session.id.to_string(), session.title.clone());
+    }
+    for session in &workspace.archived_sessions {
+        // Active metadata is authoritative when a transition temporarily exposes the same id twice.
+        // 状态切换暂时同时暴露同一标识时，活动元数据保持权威。
+        titles
+            .entry(session.id.to_string())
+            .or_insert_with(|| session.title.clone());
+    }
+    Ok(titles)
+}
+
+/// Maps internal native provenance records into the stable service API.
+/// 将内部原生来源记录映射为稳定服务 API。
+fn native_memory_records(
+    records: crate::native_vmm::NativeVmmMemoryRecords,
+    session_titles: &BTreeMap<String, String>,
+) -> VmmNativeMemoryRecordsSummary {
+    VmmNativeMemoryRecordsSummary {
+        storage_version: records.storage_version,
+        project_id: records.project_id,
+        sessions: records
+            .sessions
+            .into_iter()
+            .map(|session| VmmNativeMemorySessionSummary {
+                display_title: session_titles.get(&session.session_source_id).cloned(),
+                session_source_id: session.session_source_id,
+                turn_count: session.turn_count,
+                turn_statuses: native_turn_status_counts(session.turn_statuses),
+                memory_count: session.memory_count,
+                direct_memory_count: session.direct_memory_count,
+                memory_levels: native_memory_level_counts(session.memory_levels),
+                first_activity_at_unix_ms: session.first_activity_at_unix_ms,
+                last_activity_at_unix_ms: session.last_activity_at_unix_ms,
+            })
+            .collect(),
+        selected_session_source_id: records.selected_session_source_id,
+        turns: records
+            .turns
+            .into_iter()
+            .map(|turn| VmmNativeTurnRecordSummary {
+                turn_id: turn.turn_id,
+                session_source_id: turn.session_source_id,
+                created_at_unix_ms: turn.created_at_unix_ms,
+                status: turn.status,
+                extracted: turn.extracted,
+                user_preview: turn.user_preview,
+                assistant_preview: turn.assistant_preview,
+                timeline: turn
+                    .timeline
+                    .into_iter()
+                    .map(|item| VmmNativeTimelineItemSummary {
+                        role: item.role,
+                        content: item.content,
+                        occurred_at_unix_ms: item.occurred_at_unix_ms,
+                    })
+                    .collect(),
+                analysis_details: turn.analysis_details,
+                generated_memory_ids: turn.generated_memory_ids,
+                memory_levels: native_memory_level_counts(turn.memory_levels),
+                analysis_job_state: turn.analysis_job_state,
+                analysis_attempt_count: turn.analysis_attempt_count,
+                analysis_last_error: turn.analysis_last_error,
+            })
+            .collect(),
+        memories: records
+            .memories
+            .into_iter()
+            .map(|memory| VmmNativeMemoryRecordSummary {
+                memory_id: memory.memory_id,
+                source_turn_id: memory.source_turn_id,
+                session_source_id: memory.session_source_id,
+                summary: memory.summary,
+                content: memory.content,
+                category: memory.category,
+                source_kind: memory.source_kind,
+                state: memory.state,
+                memory_level: memory.memory_level,
+                priority: memory.priority,
+                tags: memory.tags,
+                created_at_unix_ms: memory.created_at_unix_ms,
+                updated_at_unix_ms: memory.updated_at_unix_ms,
+                expires_at_unix_ms: memory.expires_at_unix_ms,
+                status_reason: memory.status_reason,
+            })
+            .collect(),
+    }
+}
+
+/// Maps internal memory-level counts into the stable service API.
+/// 将内部记忆等级统计映射为稳定服务 API。
+fn native_memory_level_counts(
+    counts: crate::native_vmm::NativeVmmMemoryLevelCounts,
+) -> VmmNativeMemoryLevelCounts {
+    VmmNativeMemoryLevelCounts {
+        session: counts.session,
+        phase: counts.phase,
+        stable: counts.stable,
+        persistent: counts.persistent,
+    }
+}
+
+/// Maps internal turn-status counts into the stable service API.
+/// 将内部回合状态统计映射为稳定服务 API。
+fn native_turn_status_counts(
+    counts: crate::native_vmm::NativeVmmTurnStatusCounts,
+) -> VmmNativeTurnStatusCounts {
+    VmmNativeTurnStatusCounts {
+        pending: counts.pending,
+        completed: counts.completed,
+        processed_unknown: counts.processed_unknown,
+        analysis_bypassed: counts.analysis_bypassed,
+        corrupted: counts.corrupted,
     }
 }
 

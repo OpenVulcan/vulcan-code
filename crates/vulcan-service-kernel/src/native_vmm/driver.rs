@@ -8,7 +8,7 @@
     reason = "the native driver must preserve the frozen HostAiError boundary contract"
 )]
 
-use super::{llm_contract, prompt};
+use super::{llm_contract, prompt, resources::NativeVmmResourceStore};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -33,7 +33,12 @@ use vulcan_memorymesh_core::{
     FailureClass, HostEffect, HostEffectResult, InMemoryStorage, LlmEffect, LlmPurpose,
     MemoryAccessClass, MemoryMeshCore, MutationBatch, MutationOutcome, PhysicalCandidate,
     PhysicalCandidateChannel, PhysicalCandidateScore, RawScoreKind, RerankEffect, RerankEntry,
-    ScoreDirection, StoragePort, StorageQuery, StorageQueryResult, StorageSnapshot,
+    ScoreDirection, StoragePort, StorageQuery, StorageQueryResult, StorageSnapshot, test_pii_rule,
+};
+use vulcan_service_api::{
+    VmmNativeNoiseTestResult, VmmNativePiiFormulaMatchSummary, VmmNativePiiFormulaTestResult,
+    VmmNativePiiRedactionSummary, VmmNativePiiTestResult, VmmNativeResourceCatalogSummary,
+    VmmNativeResourceFileContent, VmmNativeResourceSettingsSummary,
 };
 use vulcan_workspace_store::vmm_data_plane::{
     NativeVmmCoreMutation, VMM_CORE_MUTATION_COMMITTED, VMM_CORE_MUTATION_COMPLETED,
@@ -66,6 +71,9 @@ pub(crate) struct NativeVmmCoreRuntime {
     /// Cloneable host effect executor used independently by concurrent commands.
     /// 并发命令分别使用的可克隆宿主 Effect 执行器。
     host: NativeVmmHostDriver,
+    /// Host-owned persisted resource settings and user-layer overrides.
+    /// 宿主持有的持久化资源设置与用户层覆盖。
+    resources: NativeVmmResourceStore,
     /// Serializes lazy host-derived Core configuration activation.
     /// 串行化延迟执行的宿主派生 Core 配置激活。
     config_gate: tokio::sync::Mutex<()>,
@@ -308,10 +316,12 @@ impl NativeVmmCoreRuntime {
     ) -> Result<Self, String> {
         let storage = hydrate_storage(&data_plane).await?;
         let core = Arc::new(MemoryMeshCore::new().map_err(|error| error.to_string())?);
+        let resources = NativeVmmResourceStore::new(&data_plane.data_root);
         // runtime is assembled before recovery so the same persistence code repairs interrupted maintenance.
         // runtime 在恢复前完成组装，使中断维护可复用同一持久化代码完成修复。
         let runtime = Self {
             core,
+            resources,
             host: NativeVmmHostDriver {
                 ai_port,
                 capability: Arc::new(RwLock::new(None)),
@@ -391,6 +401,208 @@ impl NativeVmmCoreRuntime {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
+    }
+
+    /// Lists the native embedded-resource catalog and exact user override state.
+    /// 列出原生内置资源目录与准确用户覆盖状态。
+    ///
+    /// # Errors
+    /// Returns an error when persisted settings or override files are invalid.
+    /// 持久化设置或覆盖文件无效时返回错误。
+    pub(crate) async fn resource_catalog(&self) -> Result<VmmNativeResourceCatalogSummary, String> {
+        let _gate = self.config_gate.lock().await;
+        self.resources.catalog()
+    }
+
+    /// Reads one exact native embedded resource and its effective user override.
+    /// 读取一份准确的原生内置资源及其生效用户覆盖。
+    ///
+    /// # Errors
+    /// Returns an error for an unknown, unsafe, or unreadable resource path.
+    /// 资源路径未知、不安全或不可读时返回错误。
+    pub(crate) async fn resource_file(
+        &self,
+        path: &str,
+    ) -> Result<VmmNativeResourceFileContent, String> {
+        let _gate = self.config_gate.lock().await;
+        self.resources.read_file(path)
+    }
+
+    /// Saves and immediately activates native resource composition settings.
+    /// 保存并立即激活原生资源组合设置。
+    ///
+    /// # Errors
+    /// Returns an error when the selection, compiled snapshot, or persistence operation fails.
+    /// 选择、编译快照或持久化操作失败时返回错误。
+    pub(crate) async fn update_resource_settings(
+        &self,
+        settings: VmmNativeResourceSettingsSummary,
+    ) -> Result<VmmNativeResourceCatalogSummary, String> {
+        let _gate = self.config_gate.lock().await;
+        self.resources.update_settings(&self.core, settings)
+    }
+
+    /// Saves one user override and immediately activates a new immutable Core snapshot.
+    /// 保存一份用户覆盖并立即激活新的 Core 不可变快照。
+    ///
+    /// # Errors
+    /// Returns an error for missing high-risk confirmation, invalid content, or persistence failure.
+    /// 高风险确认缺失、内容无效或持久化失败时返回错误。
+    pub(crate) async fn write_resource_file(
+        &self,
+        path: &str,
+        content: String,
+        confirmed_purpose: bool,
+        confirmed_modification: bool,
+    ) -> Result<VmmNativeResourceFileContent, String> {
+        let _gate = self.config_gate.lock().await;
+        self.resources.write_file(
+            &self.core,
+            path,
+            content,
+            confirmed_purpose,
+            confirmed_modification,
+        )
+    }
+
+    /// Restores one resource's built-in effective content and activates the result immediately.
+    /// 恢复一份资源的内置生效内容并立即激活结果。
+    ///
+    /// # Errors
+    /// Returns an error when validation, deletion, replacement, or activation fails.
+    /// 校验、删除、替换或激活失败时返回错误。
+    pub(crate) async fn reset_resource_file(
+        &self,
+        path: &str,
+    ) -> Result<VmmNativeResourceFileContent, String> {
+        let _gate = self.config_gate.lock().await;
+        self.resources.reset_file(&self.core, path)
+    }
+
+    /// Applies the active common-plus-locale PII rules to one sample text.
+    /// 将当前 common 加区域 PII 规则应用到一段测试文本。
+    ///
+    /// # Errors
+    /// Returns an error when the active resources or sample text violate Core bounds.
+    /// 当前资源或测试文本违反 Core 边界时返回错误。
+    pub(crate) async fn test_pii(&self, text: &str) -> Result<VmmNativePiiTestResult, String> {
+        let _gate = self.config_gate.lock().await;
+        self.activate_resource_config_from_active_vector()?;
+        let snapshot = self
+            .core
+            .active_snapshot()
+            .map_err(|error| error.to_string())?;
+        let result = snapshot
+            .pii_scrubber
+            .scrub(text)
+            .map_err(|error| error.to_string())?;
+        Ok(VmmNativePiiTestResult {
+            output_text: result.text,
+            redactions: result
+                .redactions
+                .into_iter()
+                .map(|redaction| VmmNativePiiRedactionSummary {
+                    rule_name: redaction.rule_name,
+                    match_count: redaction.match_count,
+                })
+                .collect(),
+        })
+    }
+
+    /// Compiles and executes one ad-hoc PII regex plus condition formula without changing resources.
+    /// 编译并执行一条临时 PII 正则及条件公式，不修改任何资源。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `text`, `pattern`, `condition`, and `replacement` are passed to the copied Core's exact PII
+    /// compiler and condition evaluator.
+    /// `text`、`pattern`、`condition` 与 `replacement` 会传给复制后 Core 的准确 PII 编译器与条件求值器。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The transformed text and a candidate-by-candidate local trace.
+    /// 返回转换后的文本与逐候选本地轨迹。
+    ///
+    /// # Errors
+    /// Returns an error when the ad-hoc rule does not satisfy the authoritative Core grammar.
+    /// 临时规则不符合权威 Core 语法时返回错误。
+    pub(crate) fn test_pii_formula(
+        &self,
+        text: &str,
+        pattern: &str,
+        condition: Option<&str>,
+        replacement: &str,
+    ) -> Result<VmmNativePiiFormulaTestResult, String> {
+        let result = test_pii_rule(text, pattern, condition, replacement)
+            .map_err(|error| error.to_string())?;
+        Ok(VmmNativePiiFormulaTestResult {
+            output_text: result.output_text,
+            matches: result
+                .matches
+                .into_iter()
+                .map(|entry| VmmNativePiiFormulaMatchSummary {
+                    start_byte: entry.start_byte,
+                    end_byte: entry.end_byte,
+                    matched_text: entry.matched_text,
+                    captures: entry.captures,
+                    condition_accepted: entry.condition_accepted,
+                })
+                .collect(),
+        })
+    }
+
+    /// Applies active deterministic common-plus-locale Noise regex rules to sample text.
+    /// 将当前确定性 common 加区域 Noise 正则规则应用到测试文本。
+    ///
+    /// # Errors
+    /// Returns an error for an invalid role or invalid active resource snapshot.
+    /// 角色无效或当前资源快照无效时返回错误。
+    pub(crate) async fn test_noise(
+        &self,
+        role: &str,
+        text: &str,
+    ) -> Result<VmmNativeNoiseTestResult, String> {
+        let role = match role {
+            "user" => vulcan_memorymesh_core::Role::User,
+            "assistant" => vulcan_memorymesh_core::Role::Assistant,
+            "system" => vulcan_memorymesh_core::Role::System,
+            "tool" => vulcan_memorymesh_core::Role::Tool,
+            _ => return Err(format!("不支持的噪音测试角色：{role}")),
+        };
+        let _gate = self.config_gate.lock().await;
+        self.activate_resource_config_from_active_vector()?;
+        let snapshot = self
+            .core
+            .active_snapshot()
+            .map_err(|error| error.to_string())?;
+        let decision = snapshot.noise_detector.detect(role, text);
+        Ok(VmmNativeNoiseTestResult {
+            is_noise: decision.is_noise,
+            category: decision.category,
+            confidence: decision.confidence,
+            mode: String::from("deterministic_regex"),
+        })
+    }
+
+    /// Rebuilds and activates persisted resources while preserving the active vector identity.
+    /// 在保留当前向量身份的同时重建并激活持久化资源。
+    fn activate_resource_config_from_active_vector(&self) -> Result<(), String> {
+        let active = self
+            .core
+            .active_snapshot()
+            .map_err(|error| error.to_string())?;
+        let bundle = self.resources.current_bundle(
+            active.vector_space_fingerprint.clone(),
+            active.embedding_dimension,
+        )?;
+        let snapshot = self
+            .core
+            .register_config(bundle)
+            .map_err(|error| error.to_string())?;
+        self.core
+            .activate_config(snapshot.name.as_str())
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }
 
     /// Captures the current complete native storage snapshot for a side-effect-free maintenance preview.
@@ -567,22 +779,24 @@ impl NativeVmmCoreRuntime {
     fn activate_host_ai_config(&self) -> Result<HostAiCapabilityHandle, CoreError> {
         let handle = self.host.capability().map_err(host_ai_core_error)?;
         let (dimension, fingerprint) = embedding_config_from_capability(&handle)?;
-        let active = self.core.active_snapshot()?;
-        if active.embedding_dimension == dimension && active.vector_space_fingerprint == fingerprint
-        {
-            return Ok(handle);
-        }
-        let digest = hex::encode(Sha256::digest(fingerprint.as_bytes()));
-        let bundle = vulcan_memorymesh_core::ConfigBundle {
-            name: format!("vmm-native-{digest}"),
-            vector_space_fingerprint: fingerprint,
-            embedding_dimension: dimension,
-            ..Default::default()
-        };
+        let bundle = self
+            .resources
+            .current_bundle(fingerprint, dimension)
+            .map_err(native_resource_core_error)?;
         let snapshot = self.core.register_config(bundle)?;
         self.core.activate_config(snapshot.name.as_str())?;
         Ok(handle)
     }
+}
+
+/// Converts a host resource-layer failure into the Core configuration boundary.
+/// 将宿主资源层失败转换到 Core 配置边界。
+fn native_resource_core_error(error: String) -> CoreError {
+    CoreError::new(
+        ErrorCode::InvalidConfiguration,
+        ErrorStage::Configuration,
+        error,
+    )
 }
 
 /// Executes every provider-independent Core effect against VulcanCode-owned services.
