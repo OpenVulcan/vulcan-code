@@ -97,12 +97,12 @@ export interface ProjectSettingsRevision {
   // Latest VMM settings invalidation revision.
   // 最新 VMM 设置失效版本。
   vmm: number;
+  // Latest native code-semantic settings invalidation revision.
+  // 最新原生代码语义设置失效版本。
+  vce: number;
   // Latest Agent Skill override invalidation revision.
   // 最新 Agent Skill 覆盖失效版本。
   agentSkills: number;
-  // Latest host-managed Codebase Memory settings invalidation revision.
-  // 最新宿主管理 Codebase Memory 设置失效版本。
-  codebaseMemory: number;
 }
 
 // ProjectSettingsRevisionSnapshot stores authoritative global and project-owned settings revisions.

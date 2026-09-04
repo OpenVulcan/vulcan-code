@@ -39,6 +39,7 @@ tokio = { workspace = true, features = ["rt", "sync", "time", "net", "io-util", 
 uuid.workspace = true
 vldb-controller-client.workspace = true
 vulcan-context.workspace = true
+vulcan-context-engine.workspace = true
 vulcan-ai-contract.workspace = true
 vulcan-llm-core.workspace = true
 vulcan-context-compaction.workspace = true

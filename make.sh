@@ -161,7 +161,6 @@ invoke_system_initialization() {
     invoke_powershell_route deps host
     invoke_bundled_tools_deps
     invoke_powershell_route deps lua
-    invoke_powershell_route deps cbm
     echo "==> System initialization completed."
 }
 
@@ -182,13 +181,12 @@ show_usage() {
     echo "  ./make.sh check-deps  # verify Rust dependency policy without changing manifests or the lockfile"
     echo "  ./make.sh run         # run Tauri/WebUI debug build; Vite is managed separately"
     echo "  ./make.sh run release # run Tauri/WebUI release build"
-    echo "  ./make.sh deps        # install host + LuaSkills + Codebase Memory dependencies"
+    echo "  ./make.sh deps        # install host, bundled tools, and LuaSkills dependencies"
     echo "  ./make.sh deps rust-tools # install cargo-hakari, cargo-nextest, and cargo-deny"
     echo "  ./make.sh init-system # bootstrap Rust tools and all repository dependencies"
     echo "  ./make.sh deps host   # install host native dependencies only"
     echo "  ./make.sh deps tools  # install the latest bundled sg and rg tools"
     echo "  ./make.sh deps lua    # install official LuaSkills runtime dependencies only"
-    echo "  ./make.sh deps cbm    # install the pinned native Codebase Memory runtime only"
 }
 
 # NormalizedMode stores the canonical top-level command token used by the dispatcher below.
@@ -291,7 +289,7 @@ case "$NormalizedMode" in
             rust-tools)
                 invoke_rust_dev_tools_deps
                 ;;
-            ""|all|host|lua|cbm)
+            ""|all|host|lua)
                 invoke_powershell_route deps "$NormalizedVariant"
                 ;;
             *)

@@ -42,7 +42,7 @@ define route-command
 endef
 endif
 
-.PHONY: help sync vite start stop status build build-release release run run-release br br-release licenses deps deps-all deps-host deps-vldb deps-rtk deps-tools deps-lua deps-cbm init-system deps-rust-tools host vldb rtk tools lua cbm rust-tools all
+.PHONY: help sync vite start stop status build build-release release run run-release br br-release licenses deps deps-all deps-host deps-vldb deps-rtk deps-tools deps-lua init-system deps-rust-tools host vldb rtk tools lua rust-tools all
 
 # VITE_ACTION captures the required lifecycle action from `make vite start`, `stop`, or `status`.
 # VITE_ACTION 从 `make vite start`、`stop` 或 `status` 中捕获必需的生命周期操作。
@@ -72,7 +72,7 @@ help:
 	@echo "  make br            # build and run Tauri/WebUI debug; Vite is managed separately"
 	@echo "  make br-release    # build and run Tauri/WebUI release"
 	@echo "  make licenses      # generate Rust third-party notices"
-	@echo "  make deps          # install host + Lua + Codebase Memory dependencies"
+	@echo "  make deps          # install host, bundled tools, and Lua dependencies"
 	@echo "  make init-system   # bootstrap Rust tools and all repository dependencies"
 	@echo "  make deps-host     # install host dependencies"
 	@echo "  make deps-vldb     # install vldb-controller host dependency"
@@ -80,7 +80,6 @@ help:
 	@echo "  make deps-tools    # install the latest bundled sg and rg tools"
 	@echo "  make deps-rust-tools # install cargo-hakari and cargo-nextest"
 	@echo "  make deps-lua      # install Lua dependencies"
-	@echo "  make deps-cbm      # install the pinned native Codebase Memory runtime"
 
 # sync routes the explicit runtime-resource synchronization command.
 # sync 路由显式运行时资源同步命令。
@@ -211,11 +210,6 @@ deps-rust-tools:
 deps-lua:
 	$(call route-command,deps lua)
 
-# deps-cbm routes native Codebase Memory runtime installation.
-# deps-cbm 路由原生 Codebase Memory 运行时安装步骤。
-deps-cbm:
-	$(call route-command,deps cbm)
-
 # all is a deps companion no-op when used as `make deps all`.
 # all 在 `make deps all` 形式中作为 deps 的伴随空目标。
 all:
@@ -280,11 +274,3 @@ else
 	$(call route-command,deps lua)
 endif
 
-# cbm is a deps companion no-op when used as `make deps cbm`.
-# cbm 在 `make deps cbm` 形式中作为 deps 的伴随空目标。
-cbm:
-ifneq ($(filter deps,$(MAKECMDGOALS)),)
-	@:
-else
-	$(call route-command,deps cbm)
-endif

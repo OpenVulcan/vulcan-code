@@ -358,7 +358,7 @@ mod tests {
         ExecutionPreparationRequest {
             session_id: Uuid::nil(),
             session_storage_directory: None,
-            managed_codebase_memory: None,
+            vce_retrieval_handler: None,
             execution_scope: vulcan_session_core::ExecutionScope::MainSession {
                 session_id: vulcan_session_core::SessionNodeId::from(Uuid::nil()),
             },

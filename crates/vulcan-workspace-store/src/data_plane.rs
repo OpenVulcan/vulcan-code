@@ -458,6 +458,7 @@ SELECT
     32000,
     strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 FROM projects
+WHERE 1 = 1
 ON CONFLICT(project_id) DO NOTHING;
 "#,
     )
@@ -1083,6 +1084,26 @@ CREATE TABLE IF NOT EXISTS ai_credential_secrets (
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
+    use uuid::Uuid;
+
+    /// One persisted VCE migration row used by the real-controller matrix test.
+    /// 真实控制器迁移矩阵测试使用的一条 VCE 持久化迁移记录。
+    #[derive(Debug, serde::Deserialize, PartialEq, Eq)]
+    struct VceMigrationRow {
+        /// Stable project identity.
+        /// 稳定项目身份。
+        project_id: String,
+        /// Migrated VCE enablement value.
+        /// 迁移后的 VCE 启用值。
+        enabled: i64,
+        /// Persisted optimistic-concurrency revision.
+        /// 已持久化的乐观并发修订号。
+        revision: i64,
+        /// One-time legacy migration marker.
+        /// 一次性旧设置迁移标记。
+        migrated_from_codebase_memory: i64,
+    }
 
     /// Verifies that the base schema no longer creates legacy SQLite transcript tables.
     /// 验证基础结构不再创建旧版 SQLite 转录表。
@@ -1199,6 +1220,210 @@ mod tests {
         assert!(
             schema.contains("FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE")
         );
+    }
+
+    /// Verifies empty, true, false, new-project, and repeated VCE migrations against SQLite.
+    /// 使用 SQLite 验证空库、真值、假值、新项目和重复 VCE 迁移。
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "requires the bundled output/bin/vldb-controller.exe"]
+    async fn real_controller_vce_project_migration_matrix_is_idempotent() {
+        let temporary = tempdir().expect("create VCE migration root");
+        let data_root = temporary.path().join("data");
+        let sqlite_root = data_root.join("sqlite");
+        fs::create_dir_all(&sqlite_root).expect("create VCE migration SQLite root");
+        let sqlite_path = sqlite_root.join("app-workspace.sqlite3");
+        let executable = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("output")
+            .join("bin")
+            .join("vldb-controller.exe");
+        assert!(executable.is_file(), "bundled controller must exist");
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("reserve VCE migration port");
+        let port = listener
+            .local_addr()
+            .expect("read VCE migration port")
+            .port();
+        drop(listener);
+        let endpoint = format!("http://127.0.0.1:{port}");
+        let binding_id = format!("vce-migration-{}", Uuid::new_v4());
+        let client = ControllerClient::new(
+            ControllerClientConfig {
+                endpoint,
+                auto_spawn: true,
+                spawn_executable: Some(executable.display().to_string()),
+                spawn_process_mode: ControllerProcessMode::Managed,
+                minimum_uptime_secs: 0,
+                idle_timeout_secs: 1,
+                default_lease_ttl_secs: 30,
+                connect_timeout_secs: 30,
+                startup_timeout_secs: 15,
+                startup_retry_interval_ms: 100,
+                lease_renew_interval_secs: 10,
+            },
+            ClientRegistration {
+                client_name: format!("vce-migration-{}", Uuid::new_v4()),
+                host_kind: String::from("test"),
+                process_id: std::process::id(),
+                process_name: String::from("vulcan-workspace-store-test"),
+                lease_ttl_secs: Some(30),
+            },
+        );
+        client
+            .connect()
+            .await
+            .expect("connect VCE migration controller");
+        client
+            .attach_space(SpaceRegistration {
+                space_id: String::from(APP_SPACE_ID),
+                space_label: String::from("APP"),
+                space_kind: SpaceKind::User,
+                space_root: runtime_assets::native_host_path_text_from_path(&data_root),
+            })
+            .await
+            .expect("attach VCE migration app space");
+        client
+            .enable_sqlite(ControllerSqliteEnableRequest {
+                space_id: String::from(APP_SPACE_ID),
+                binding_id: binding_id.clone(),
+                db_path: runtime_assets::native_host_path_text_from_path(&sqlite_path),
+                ..ControllerSqliteEnableRequest::default()
+            })
+            .await
+            .expect("enable VCE migration app database");
+        client
+            .execute_sqlite_script_typed(
+                APP_SPACE_ID,
+                &binding_id,
+                &format!(
+                    "{}\nDROP TABLE project_vce_settings;",
+                    build_application_schema_script()
+                ),
+                Vec::new(),
+            )
+            .await
+            .expect("initialize legacy application schema");
+
+        ensure_application_schema_migrations(&client, &binding_id)
+            .await
+            .expect("migrate empty project set");
+        let empty_result = client
+            .query_sqlite_json_typed(
+                APP_SPACE_ID,
+                &binding_id,
+                "SELECT project_id, enabled, revision, migrated_from_codebase_memory FROM project_vce_settings ORDER BY project_id;",
+                Vec::new(),
+            )
+            .await
+            .expect("query empty VCE migration result");
+        let empty_rows: Vec<VceMigrationRow> = serde_json::from_str(&empty_result.json_data)
+            .expect("decode empty VCE migration result");
+        assert!(empty_rows.is_empty());
+
+        client
+            .execute_sqlite_script_typed(
+                APP_SPACE_ID,
+                &binding_id,
+                r#"
+INSERT INTO projects (id, name, root_path, codebase_memory_enabled, created_at, updated_at)
+VALUES
+    ('legacy-false', 'Legacy False', 'D:/fixtures/legacy-false', 0, '2026-09-04T00:00:00Z', '2026-09-04T00:00:00Z'),
+    ('legacy-true', 'Legacy True', 'D:/fixtures/legacy-true', 1, '2026-09-04T00:00:00Z', '2026-09-04T00:00:00Z');
+"#,
+                Vec::new(),
+            )
+            .await
+            .expect("seed legacy CBM project switches");
+        ensure_application_schema_migrations(&client, &binding_id)
+            .await
+            .expect("migrate true and false legacy switches");
+        let migrated_rows = load_vce_migration_rows(&client, &binding_id).await;
+        assert_eq!(
+            migrated_rows,
+            vec![
+                VceMigrationRow {
+                    project_id: String::from("legacy-false"),
+                    enabled: 0,
+                    revision: 1,
+                    migrated_from_codebase_memory: 1,
+                },
+                VceMigrationRow {
+                    project_id: String::from("legacy-true"),
+                    enabled: 1,
+                    revision: 1,
+                    migrated_from_codebase_memory: 1,
+                },
+            ]
+        );
+
+        client
+            .execute_sqlite_script_typed(
+                APP_SPACE_ID,
+                &binding_id,
+                r#"
+UPDATE project_vce_settings SET enabled = 0, revision = 9 WHERE project_id = 'legacy-true';
+INSERT INTO projects (id, name, root_path, codebase_memory_enabled, created_at, updated_at)
+VALUES ('new-project', 'New Project', 'D:/fixtures/new-project', 1, '2026-09-04T00:00:01Z', '2026-09-04T00:00:01Z');
+"#,
+                Vec::new(),
+            )
+            .await
+            .expect("seed post-migration project and authoritative VCE edit");
+        ensure_application_schema_migrations(&client, &binding_id)
+            .await
+            .expect("repeat VCE project migration");
+        ensure_application_schema_migrations(&client, &binding_id)
+            .await
+            .expect("repeat VCE project migration twice");
+        let repeated_rows = load_vce_migration_rows(&client, &binding_id).await;
+        assert_eq!(repeated_rows.len(), 3);
+        assert_eq!(
+            repeated_rows
+                .iter()
+                .find(|row| row.project_id == "legacy-true")
+                .expect("legacy true VCE row remains present"),
+            &VceMigrationRow {
+                project_id: String::from("legacy-true"),
+                enabled: 0,
+                revision: 9,
+                migrated_from_codebase_memory: 1,
+            }
+        );
+        assert_eq!(
+            repeated_rows
+                .iter()
+                .find(|row| row.project_id == "new-project")
+                .expect("new project VCE row is created"),
+            &VceMigrationRow {
+                project_id: String::from("new-project"),
+                enabled: 1,
+                revision: 1,
+                migrated_from_codebase_memory: 1,
+            }
+        );
+        client
+            .shutdown()
+            .await
+            .expect("shutdown VCE migration controller");
+    }
+
+    /// Loads every VCE migration row in stable project order.
+    /// 按稳定项目顺序加载全部 VCE 迁移记录。
+    async fn load_vce_migration_rows(
+        client: &ControllerClient,
+        binding_id: &str,
+    ) -> Vec<VceMigrationRow> {
+        let result = client
+            .query_sqlite_json_typed(
+                APP_SPACE_ID,
+                binding_id,
+                "SELECT project_id, enabled, revision, migrated_from_codebase_memory FROM project_vce_settings ORDER BY project_id;",
+                Vec::new(),
+            )
+            .await
+            .expect("query VCE migration rows");
+        serde_json::from_str(&result.json_data).expect("decode VCE migration rows")
     }
 
     /// Verifies that each bootstrap receives one distinct SQLite binding id while preserving the stable diagnostic tag prefix.

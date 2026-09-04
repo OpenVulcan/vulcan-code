@@ -1228,7 +1228,8 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 pinned: project.pinned,
                 icon_pack: project.icon_pack.clone(),
                 icon_key: project.icon_key.clone(),
-                codebase_memory_enabled: project.codebase_memory_enabled,
+                vce_enabled: project.vce.enabled,
+                vce_settings_revision: project.vce.revision,
             })
             .collect(),
         expanded_project_ids: workspace.expanded_task_projects.iter().cloned().collect(),
@@ -1289,7 +1290,8 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 pinned: project.pinned,
                 icon_pack: project.icon_pack.clone(),
                 icon_key: project.icon_key.clone(),
-                codebase_memory_enabled: project.codebase_memory_enabled,
+                vce_enabled: project.vce.enabled,
+                vce_settings_revision: project.vce.revision,
             })
             .collect(),
         archived_conversations: workspace

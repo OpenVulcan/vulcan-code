@@ -590,16 +590,6 @@ pub(crate) async fn service_remove_project(
     // workbench 是子会话归档与项目移除后的权威保留投影。
     let workbench = refresh_workbench_snapshot(state.clone()).await?;
     vmm_lifecycle_fence.release()?;
-    // Project removal synchronizes the remaining enabled set without deleting the removed project's index.
-    // 项目移除只同步剩余启用集合，不删除已移除项目的索引。
-    if let Err(error) = reconcile_codebase_memory_runtime(&state).await {
-        if let Ok(guard) = state.lock() {
-            guard
-                .codebase_memory_controller
-                .mark_runtime_unsynchronized(&error);
-        }
-        eprintln!("[webui-service] managed Codebase Memory removal sync degraded: {error}");
-    }
     let plugin_cleanup_failures =
         drain_vulcan_plugin_sessions_for_owners(&state, &archived_session_ids).await;
     if !plugin_cleanup_failures.is_empty() {

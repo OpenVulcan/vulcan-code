@@ -71,10 +71,6 @@ $BundledToolsDepsScriptPath = Join-Path $ScriptDir "scripts\install_bundled_tool
 # LuaDepsScriptPath 用于指向专用的 PowerShell Lua 依赖初始化脚本。
 $LuaDepsScriptPath = Join-Path $ScriptDir "scripts\install_lua_deps.ps1"
 
-# CodebaseMemoryDepsScriptPath points at the pinned native CBM runtime installer.
-# CodebaseMemoryDepsScriptPath 用于指向固定版本的原生 CBM 运行时安装器。
-$CodebaseMemoryDepsScriptPath = Join-Path $ScriptDir "scripts\install_codebase_memory_runtime.ps1"
-
 # RustDevToolsScriptPath points at the Rust workspace maintenance-tool installer.
 # RustDevToolsScriptPath 用于指向 Rust 工作区维护工具安装器。
 $RustDevToolsScriptPath = Join-Path $ScriptDir "scripts\install_rust_dev_tools.ps1"
@@ -206,7 +202,7 @@ function Invoke-TauriBuildAndRun {
 # DependencyKind 用于选择要初始化的依赖域。
 function Invoke-DependencyInstall {
     param(
-        [ValidateSet("rust-tools", "host", "vldb", "rtk", "tools", "lua", "cbm")]
+        [ValidateSet("rust-tools", "host", "vldb", "rtk", "tools", "lua")]
         [string]$DependencyKind
     )
 
@@ -217,7 +213,6 @@ function Invoke-DependencyInstall {
         "rtk"  { $HostDepsScriptPath }
         "tools" { $BundledToolsDepsScriptPath }
         "lua"  { $LuaDepsScriptPath }
-        "cbm"  { $CodebaseMemoryDepsScriptPath }
         default { throw "Unsupported dependency kind: $DependencyKind" }
     }
 
@@ -259,7 +254,6 @@ function Invoke-SystemInitialization {
     Invoke-DependencyInstall -DependencyKind "host"
     Invoke-DependencyInstall -DependencyKind "tools"
     Invoke-DependencyInstall -DependencyKind "lua"
-    Invoke-DependencyInstall -DependencyKind "cbm"
 
     Write-Host "==> System initialization completed."
 }
@@ -307,7 +301,7 @@ function Show-Usage {
     Write-Host "  ./make check-deps  # verify Rust dependency policy without changing manifests or the lockfile"
     Write-Host "  ./make run         # run Tauri/WebUI debug build; Vite is managed separately"
     Write-Host "  ./make run release # run Tauri/WebUI release build"
-    Write-Host "  ./make deps        # install host + LuaSkills + Codebase Memory dependencies"
+    Write-Host "  ./make deps        # install host, bundled tools, and LuaSkills dependencies"
     Write-Host "  ./make deps rust-tools # install cargo-hakari, cargo-nextest, and cargo-deny"
     Write-Host "  ./make init-system # bootstrap Rust tools and all repository dependencies"
     Write-Host "  ./make deps host   # install host native dependencies only"
@@ -315,7 +309,6 @@ function Show-Usage {
     Write-Host "  ./make deps rtk    # install RTK host dependency only"
     Write-Host "  ./make deps tools  # install the latest bundled sg and rg tools"
     Write-Host "  ./make deps lua    # install official LuaSkills runtime dependencies only"
-    Write-Host "  ./make deps cbm    # install the pinned native Codebase Memory runtime only"
 }
 
 # NormalizedMode stores the canonical top-level command token used by the dispatcher below.
@@ -412,13 +405,11 @@ switch ($NormalizedMode) {
                 Invoke-DependencyInstall -DependencyKind "host"
                 Invoke-DependencyInstall -DependencyKind "tools"
                 Invoke-DependencyInstall -DependencyKind "lua"
-                Invoke-DependencyInstall -DependencyKind "cbm"
             }
             "all" {
                 Invoke-DependencyInstall -DependencyKind "host"
                 Invoke-DependencyInstall -DependencyKind "tools"
                 Invoke-DependencyInstall -DependencyKind "lua"
-                Invoke-DependencyInstall -DependencyKind "cbm"
             }
             "host" {
                 Invoke-DependencyInstall -DependencyKind "host"
@@ -437,9 +428,6 @@ switch ($NormalizedMode) {
             }
             "lua" {
                 Invoke-DependencyInstall -DependencyKind "lua"
-            }
-            "cbm" {
-                Invoke-DependencyInstall -DependencyKind "cbm"
             }
             default {
                 Write-Error "Unsupported deps command: '$CommandVariant'"

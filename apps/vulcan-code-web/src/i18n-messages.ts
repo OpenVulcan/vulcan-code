@@ -828,59 +828,9 @@ export type TranslationKey =
   | "projectSettings.agentOverrideCount"
   | "projectSettings.agentInheritsGlobal"
   | "projectSettings.vmmTitle"
-  | "projectSettings.codebaseMemory.title"
-  | "projectSettings.codebaseMemory.description"
-  | "projectSettings.codebaseMemory.enabled"
-  | "projectSettings.codebaseMemory.disabled"
-  | "projectSettings.codebaseMemory.loading"
-  | "projectSettings.codebaseMemory.enable"
-  | "projectSettings.codebaseMemory.enableHint"
-  | "projectSettings.codebaseMemory.disableHint"
-  | "projectSettings.codebaseMemory.serviceStatus"
-  | "projectSettings.codebaseMemory.indexStatus"
-  | "projectSettings.codebaseMemory.availability"
-  | "projectSettings.codebaseMemory.availability.ready"
-  | "projectSettings.codebaseMemory.availability.degraded"
-  | "projectSettings.codebaseMemory.availability.unavailable"
-  | "projectSettings.codebaseMemory.availability.offline"
-  | "projectSettings.codebaseMemory.availability.unknown"
-  | "projectSettings.codebaseMemory.lastIndexed"
-  | "projectSettings.codebaseMemory.revision"
-  | "projectSettings.codebaseMemory.watcher"
-  | "projectSettings.codebaseMemory.registered"
-  | "projectSettings.codebaseMemory.notRegistered"
-  | "projectSettings.codebaseMemory.graphSize"
-  | "projectSettings.codebaseMemory.graphSizeValue"
-  | "projectSettings.codebaseMemory.unavailable"
-  | "projectSettings.codebaseMemory.reindex"
-  | "projectSettings.codebaseMemory.refresh"
-  | "projectSettings.codebaseMemory.update"
-  | "projectSettings.codebaseMemory.rebuild"
-  | "projectSettings.codebaseMemory.rebuildTitle"
-  | "projectSettings.codebaseMemory.rebuildDescription"
-  | "projectSettings.codebaseMemory.confirmRebuild"
-  | "projectSettings.codebaseMemory.cancel"
-  | "projectSettings.codebaseMemory.lastJob"
-  | "projectSettings.codebaseMemory.job.availableDuringUpdate"
-  | "projectSettings.codebaseMemory.job.mode.update"
-  | "projectSettings.codebaseMemory.job.mode.rebuild"
-  | "projectSettings.codebaseMemory.job.phase.queued"
-  | "projectSettings.codebaseMemory.job.phase.discovering"
-  | "projectSettings.codebaseMemory.job.phase.extracting"
-  | "projectSettings.codebaseMemory.job.phase.resolving"
-  | "projectSettings.codebaseMemory.job.phase.persisting"
-  | "projectSettings.codebaseMemory.job.phase.publishing"
-  | "projectSettings.codebaseMemory.job.phase.finalizing"
-  | "projectSettings.codebaseMemory.job.state.queued"
-  | "projectSettings.codebaseMemory.job.state.running"
-  | "projectSettings.codebaseMemory.job.state.succeeded"
-  | "projectSettings.codebaseMemory.job.state.failed"
-  | "projectSettings.codebaseMemory.job.state.cancelled"
-  | "projectSettings.codebaseMemory.enabledSaved"
-  | "projectSettings.codebaseMemory.disabledSaved"
-  | "projectSettings.codebaseMemory.reindexAccepted"
-  | "projectSettings.codebaseMemory.updateAccepted"
-  | "projectSettings.codebaseMemory.rebuildAccepted"
+  | "projectSettings.codeContext.title"
+  | "projectSettings.codeContext.enabled"
+  | "projectSettings.codeContext.disabled"
   | "projectSettings.vmmDescription"
   | "projectSettings.vmmNativeDescription"
   | "projectSettings.vmmLoading"
@@ -1467,6 +1417,79 @@ export type TranslationKey =
   | "memory.content.fullDetails"
   | "memory.content.write"
   | "memory.content.sourceConversation"
+  | "memory.nativeRecords.title"
+  | "memory.nativeRecords.description"
+  | "memory.nativeRecords.project"
+  | "memory.nativeRecords.session"
+  | "memory.nativeRecords.selectProject"
+  | "memory.nativeRecords.selectSession"
+  | "memory.nativeRecords.sessionOverview"
+  | "memory.nativeRecords.refresh"
+  | "memory.nativeRecords.noProjects"
+  | "memory.nativeRecords.noSessions"
+  | "memory.nativeRecords.noProjectRecords"
+  | "memory.nativeRecords.sessions"
+  | "memory.nativeRecords.turns"
+  | "memory.nativeRecords.memories"
+  | "memory.nativeRecords.completed"
+  | "memory.nativeRecords.pending"
+  | "memory.nativeRecords.processedUnknown"
+  | "memory.nativeRecords.bypassed"
+  | "memory.nativeRecords.corrupted"
+  | "memory.nativeRecords.lastActivity"
+  | "memory.nativeRecords.projectSummary"
+  | "memory.nativeRecords.turnRecords"
+  | "memory.nativeRecords.projectTurnRecords"
+  | "memory.nativeRecords.sessionMemories"
+  | "memory.nativeRecords.projectMemories"
+  | "memory.nativeRecords.projectOnly"
+  | "memory.nativeRecords.noTurns"
+  | "memory.nativeRecords.noMemories"
+  | "memory.nativeRecords.generated"
+  | "memory.nativeRecords.generatedMemories"
+  | "memory.nativeRecords.noGeneratedMemories"
+  | "memory.nativeRecords.noUserPreview"
+  | "memory.nativeRecords.retryCount"
+  | "memory.nativeRecords.sourceTurn"
+  | "memory.nativeRecords.priority"
+  | "memory.nativeRecords.tags"
+  | "memory.nativeRecords.statusReason"
+  | "memory.nativeRecords.expiresAt"
+  | "memory.nativeRecords.turn"
+  | "memory.nativeRecords.timeline"
+  | "memory.nativeRecords.analysisDetails"
+  | "memory.nativeRecords.lastError"
+  | "memory.nativeRecords.statusPending"
+  | "memory.nativeRecords.statusCompleted"
+  | "memory.nativeRecords.statusProcessedUnknown"
+  | "memory.nativeRecords.statusBypassed"
+  | "memory.nativeRecords.statusCorrupted"
+  | "memory.nativeRecords.levelSession"
+  | "memory.nativeRecords.levelPhase"
+  | "memory.nativeRecords.levelStable"
+  | "memory.nativeRecords.levelPersistent"
+  | "memory.nativeRecords.stateActive"
+  | "memory.nativeRecords.stateSuperseded"
+  | "memory.nativeRecords.stateDeleted"
+  | "memory.nativeRecords.stateExpired"
+  | "memory.nativeRecords.stateRecycled"
+  | "memory.nativeRecords.sourceTurnExtracted"
+  | "memory.nativeRecords.sourceDirect"
+  | "memory.nativeRecords.sourceImport"
+  | "memory.nativeRecords.sourceSystemSeed"
+  | "memory.nativeRecords.sourceLegacy"
+  | "memory.nativeRecords.categoryGeneral"
+  | "memory.nativeRecords.categoryArchitecture"
+  | "memory.nativeRecords.categoryTechSpec"
+  | "memory.nativeRecords.categoryBusiness"
+  | "memory.nativeRecords.categoryRequirement"
+  | "memory.nativeRecords.categoryProject"
+  | "memory.nativeRecords.categoryBugDebt"
+  | "memory.nativeRecords.categorySecurity"
+  | "memory.nativeRecords.roleUser"
+  | "memory.nativeRecords.roleAssistant"
+  | "memory.nativeRecords.roleSystem"
+  | "memory.nativeRecords.roleTool"
   | "memory.data.title"
   | "memory.data.description"
   | "memory.data.managementReady"
@@ -3709,59 +3732,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "projectSettings.agentOverrideCount": "当前项目有 {count} 条覆盖。",
     "projectSettings.agentInheritsGlobal": "未设置项目级覆盖，继承全局规则。",
     "projectSettings.vmmTitle": "项目级 VMM 记忆",
-    "projectSettings.codebaseMemory.title": "代码库记忆",
-    "projectSettings.codebaseMemory.description": "为当前项目启用宿主管理的多项目代码图谱、检索与变更感知能力。",
-    "projectSettings.codebaseMemory.enabled": "已启用托管服务",
-    "projectSettings.codebaseMemory.disabled": "默认关闭",
-    "projectSettings.codebaseMemory.loading": "正在加载 Codebase Memory 状态...",
-    "projectSettings.codebaseMemory.enable": "为此项目启用 Codebase Memory",
-    "projectSettings.codebaseMemory.enableHint": "项目会加入共享托管服务；会话只获得本项目的只读工具。",
-    "projectSettings.codebaseMemory.disableHint": "不会注册 AI 工具，也不会删除已有索引。",
-    "projectSettings.codebaseMemory.serviceStatus": "托管服务状态",
-    "projectSettings.codebaseMemory.indexStatus": "项目索引状态",
-    "projectSettings.codebaseMemory.availability": "已发布索引",
-    "projectSettings.codebaseMemory.availability.ready": "可用",
-    "projectSettings.codebaseMemory.availability.degraded": "降级可用",
-    "projectSettings.codebaseMemory.availability.unavailable": "尚不可用",
-    "projectSettings.codebaseMemory.availability.offline": "离线缓存",
-    "projectSettings.codebaseMemory.availability.unknown": "尚未检查",
-    "projectSettings.codebaseMemory.lastIndexed": "最近成功索引",
-    "projectSettings.codebaseMemory.revision": "索引修订",
-    "projectSettings.codebaseMemory.watcher": "增量监视",
-    "projectSettings.codebaseMemory.registered": "已注册",
-    "projectSettings.codebaseMemory.notRegistered": "未注册",
-    "projectSettings.codebaseMemory.graphSize": "当前图谱",
-    "projectSettings.codebaseMemory.graphSizeValue": "{nodes} 个节点 · {edges} 条边",
-    "projectSettings.codebaseMemory.unavailable": "暂不可用",
-    "projectSettings.codebaseMemory.reindex": "重建项目索引",
-    "projectSettings.codebaseMemory.refresh": "刷新索引状态",
-    "projectSettings.codebaseMemory.update": "同步索引",
-    "projectSettings.codebaseMemory.rebuild": "完整重建",
-    "projectSettings.codebaseMemory.rebuildTitle": "完整重建项目索引？",
-    "projectSettings.codebaseMemory.rebuildDescription": "完整重建会在隔离数据库中重新扫描项目，成功后再原子替换现有索引。重建期间当前可用索引仍可继续查询。",
-    "projectSettings.codebaseMemory.confirmRebuild": "确认完整重建",
-    "projectSettings.codebaseMemory.cancel": "取消",
-    "projectSettings.codebaseMemory.lastJob": "最近任务",
-    "projectSettings.codebaseMemory.job.availableDuringUpdate": "后台任务不会让已经发布的索引进入不可用状态。",
-    "projectSettings.codebaseMemory.job.mode.update": "同步索引",
-    "projectSettings.codebaseMemory.job.mode.rebuild": "完整重建",
-    "projectSettings.codebaseMemory.job.phase.queued": "等待调度",
-    "projectSettings.codebaseMemory.job.phase.discovering": "扫描文件",
-    "projectSettings.codebaseMemory.job.phase.extracting": "提取结构",
-    "projectSettings.codebaseMemory.job.phase.resolving": "解析关系",
-    "projectSettings.codebaseMemory.job.phase.persisting": "写入索引",
-    "projectSettings.codebaseMemory.job.phase.publishing": "发布索引",
-    "projectSettings.codebaseMemory.job.phase.finalizing": "完成收尾",
-    "projectSettings.codebaseMemory.job.state.queued": "等待中",
-    "projectSettings.codebaseMemory.job.state.running": "运行中",
-    "projectSettings.codebaseMemory.job.state.succeeded": "已完成",
-    "projectSettings.codebaseMemory.job.state.failed": "失败",
-    "projectSettings.codebaseMemory.job.state.cancelled": "已取消",
-    "projectSettings.codebaseMemory.enabledSaved": "已启用项目 Codebase Memory。",
-    "projectSettings.codebaseMemory.disabledSaved": "已停用项目 Codebase Memory，已有索引仍保留。",
-    "projectSettings.codebaseMemory.reindexAccepted": "项目索引重建请求已提交。",
-    "projectSettings.codebaseMemory.updateAccepted": "索引同步任务已提交。",
-    "projectSettings.codebaseMemory.rebuildAccepted": "完整重建任务已提交。",
+    "projectSettings.codeContext.title": "代码上下文",
+    "projectSettings.codeContext.enabled": "已启用原生语义索引",
+    "projectSettings.codeContext.disabled": "当前未启用",
     "projectSettings.vmmDescription": "覆盖当前项目的记忆开关、用户/项目映射与召回注入参数。",
     "projectSettings.vmmNativeDescription": "覆盖当前项目的记忆开关、原生项目绑定与召回注入参数。",
     "projectSettings.vmmLoading": "正在加载项目 VMM 设置...",
@@ -4348,6 +4321,79 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.content.fullDetails": "详细内容",
     "memory.content.write": "保存记忆",
     "memory.content.sourceConversation": "来源会话",
+    "memory.nativeRecords.title": "原生记忆来源",
+    "memory.nativeRecords.description": "按原生记忆项目和宿主会话查看回合提取状态、各级记忆数量及每条记忆的准确来源。",
+    "memory.nativeRecords.project": "记忆项目",
+    "memory.nativeRecords.session": "宿主会话",
+    "memory.nativeRecords.selectProject": "选择记忆项目",
+    "memory.nativeRecords.selectSession": "选择宿主会话",
+    "memory.nativeRecords.sessionOverview": "会话概览",
+    "memory.nativeRecords.refresh": "刷新记录",
+    "memory.nativeRecords.noProjects": "当前没有可查看的原生记忆项目。",
+    "memory.nativeRecords.noSessions": "该记忆项目尚未产生会话记录。",
+    "memory.nativeRecords.noProjectRecords": "该记忆项目尚未产生任何回合或记忆记录。",
+    "memory.nativeRecords.sessions": "会话记录",
+    "memory.nativeRecords.turns": "回合",
+    "memory.nativeRecords.memories": "记忆",
+    "memory.nativeRecords.completed": "已提取",
+    "memory.nativeRecords.pending": "待提取",
+    "memory.nativeRecords.processedUnknown": "已处理，结果未知",
+    "memory.nativeRecords.bypassed": "已跳过",
+    "memory.nativeRecords.corrupted": "已损坏",
+    "memory.nativeRecords.lastActivity": "最近活动",
+    "memory.nativeRecords.projectSummary": "整个记忆项目的回合状态与记忆等级汇总",
+    "memory.nativeRecords.turnRecords": "回合提取记录",
+    "memory.nativeRecords.projectTurnRecords": "项目全部回合提取记录",
+    "memory.nativeRecords.sessionMemories": "本会话生成或写入的记忆",
+    "memory.nativeRecords.projectMemories": "项目全部记忆",
+    "memory.nativeRecords.projectOnly": "仅归属项目，无来源会话",
+    "memory.nativeRecords.noTurns": "该会话没有规范回合记录。",
+    "memory.nativeRecords.noMemories": "该会话尚未生成或写入持久记忆。",
+    "memory.nativeRecords.generated": "生成记忆",
+    "memory.nativeRecords.generatedMemories": "本回合生成的记忆",
+    "memory.nativeRecords.noGeneratedMemories": "本回合未生成持久记忆。",
+    "memory.nativeRecords.noUserPreview": "该回合没有可显示的用户内容。",
+    "memory.nativeRecords.retryCount": "失败重试次数",
+    "memory.nativeRecords.sourceTurn": "来源回合",
+    "memory.nativeRecords.priority": "优先级",
+    "memory.nativeRecords.tags": "标签",
+    "memory.nativeRecords.statusReason": "状态原因",
+    "memory.nativeRecords.expiresAt": "过期时间",
+    "memory.nativeRecords.turn": "回合",
+    "memory.nativeRecords.timeline": "完整会话内容",
+    "memory.nativeRecords.analysisDetails": "提取详情",
+    "memory.nativeRecords.lastError": "最近提取错误",
+    "memory.nativeRecords.statusPending": "待提取",
+    "memory.nativeRecords.statusCompleted": "已提取",
+    "memory.nativeRecords.statusProcessedUnknown": "已处理，提取结果未知",
+    "memory.nativeRecords.statusBypassed": "分析失败后已跳过",
+    "memory.nativeRecords.statusCorrupted": "载荷损坏，已隔离",
+    "memory.nativeRecords.levelSession": "会话级",
+    "memory.nativeRecords.levelPhase": "阶段级",
+    "memory.nativeRecords.levelStable": "稳定级",
+    "memory.nativeRecords.levelPersistent": "持久级",
+    "memory.nativeRecords.stateActive": "活跃",
+    "memory.nativeRecords.stateSuperseded": "已替代",
+    "memory.nativeRecords.stateDeleted": "已删除",
+    "memory.nativeRecords.stateExpired": "已过期",
+    "memory.nativeRecords.stateRecycled": "回收站中",
+    "memory.nativeRecords.sourceTurnExtracted": "回合提取",
+    "memory.nativeRecords.sourceDirect": "主动写入",
+    "memory.nativeRecords.sourceImport": "导入",
+    "memory.nativeRecords.sourceSystemSeed": "系统种子",
+    "memory.nativeRecords.sourceLegacy": "旧版迁入",
+    "memory.nativeRecords.categoryGeneral": "通用事实",
+    "memory.nativeRecords.categoryArchitecture": "架构决策",
+    "memory.nativeRecords.categoryTechSpec": "技术规格/API",
+    "memory.nativeRecords.categoryBusiness": "业务逻辑",
+    "memory.nativeRecords.categoryRequirement": "需求/待办",
+    "memory.nativeRecords.categoryProject": "项目上下文",
+    "memory.nativeRecords.categoryBugDebt": "缺陷/技术债",
+    "memory.nativeRecords.categorySecurity": "安全策略",
+    "memory.nativeRecords.roleUser": "用户",
+    "memory.nativeRecords.roleAssistant": "助手",
+    "memory.nativeRecords.roleSystem": "系统",
+    "memory.nativeRecords.roleTool": "工具",
     "memory.data.title": "记忆数据",
     "memory.data.description": "按会话和回合查看长期记忆来源，并通过影响预览安全归档、回收或恢复数据。",
     "memory.data.managementReady": "管理服务正常",
@@ -6605,59 +6651,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "projectSettings.agentOverrideCount": "This project has {count} overrides.",
     "projectSettings.agentInheritsGlobal": "No project-level override is set; global rules are inherited.",
     "projectSettings.vmmTitle": "Project VMM memory",
-    "projectSettings.codebaseMemory.title": "Codebase Memory",
-    "projectSettings.codebaseMemory.description": "Enable host-managed multi-project code graph, search, and change awareness for this project.",
-    "projectSettings.codebaseMemory.enabled": "Managed service enabled",
-    "projectSettings.codebaseMemory.disabled": "Disabled by default",
-    "projectSettings.codebaseMemory.loading": "Loading Codebase Memory status...",
-    "projectSettings.codebaseMemory.enable": "Enable Codebase Memory for this project",
-    "projectSettings.codebaseMemory.enableHint": "The project joins the shared managed service; sessions receive read-only tools scoped to this project.",
-    "projectSettings.codebaseMemory.disableHint": "AI tools are not registered and existing indexes are retained.",
-    "projectSettings.codebaseMemory.serviceStatus": "Managed service status",
-    "projectSettings.codebaseMemory.indexStatus": "Project index status",
-    "projectSettings.codebaseMemory.availability": "Published index",
-    "projectSettings.codebaseMemory.availability.ready": "Available",
-    "projectSettings.codebaseMemory.availability.degraded": "Available with warnings",
-    "projectSettings.codebaseMemory.availability.unavailable": "Not available yet",
-    "projectSettings.codebaseMemory.availability.offline": "Offline cache",
-    "projectSettings.codebaseMemory.availability.unknown": "Not checked",
-    "projectSettings.codebaseMemory.lastIndexed": "Last successful index",
-    "projectSettings.codebaseMemory.revision": "Index revision",
-    "projectSettings.codebaseMemory.watcher": "Incremental watcher",
-    "projectSettings.codebaseMemory.registered": "Registered",
-    "projectSettings.codebaseMemory.notRegistered": "Not registered",
-    "projectSettings.codebaseMemory.graphSize": "Current graph",
-    "projectSettings.codebaseMemory.graphSizeValue": "{nodes} nodes · {edges} edges",
-    "projectSettings.codebaseMemory.unavailable": "Unavailable",
-    "projectSettings.codebaseMemory.reindex": "Reindex project",
-    "projectSettings.codebaseMemory.refresh": "Refresh index status",
-    "projectSettings.codebaseMemory.update": "Sync index",
-    "projectSettings.codebaseMemory.rebuild": "Full rebuild",
-    "projectSettings.codebaseMemory.rebuildTitle": "Fully rebuild the project index?",
-    "projectSettings.codebaseMemory.rebuildDescription": "A full rebuild rescans the project in an isolated database and atomically replaces the current index only after success. The currently published index remains queryable during the rebuild.",
-    "projectSettings.codebaseMemory.confirmRebuild": "Confirm full rebuild",
-    "projectSettings.codebaseMemory.cancel": "Cancel",
-    "projectSettings.codebaseMemory.lastJob": "Latest job",
-    "projectSettings.codebaseMemory.job.availableDuringUpdate": "A background job does not make the already published index unavailable.",
-    "projectSettings.codebaseMemory.job.mode.update": "Index sync",
-    "projectSettings.codebaseMemory.job.mode.rebuild": "Full rebuild",
-    "projectSettings.codebaseMemory.job.phase.queued": "Waiting to start",
-    "projectSettings.codebaseMemory.job.phase.discovering": "Scanning files",
-    "projectSettings.codebaseMemory.job.phase.extracting": "Extracting structure",
-    "projectSettings.codebaseMemory.job.phase.resolving": "Resolving relationships",
-    "projectSettings.codebaseMemory.job.phase.persisting": "Writing index",
-    "projectSettings.codebaseMemory.job.phase.publishing": "Publishing index",
-    "projectSettings.codebaseMemory.job.phase.finalizing": "Finalizing",
-    "projectSettings.codebaseMemory.job.state.queued": "Queued",
-    "projectSettings.codebaseMemory.job.state.running": "Running",
-    "projectSettings.codebaseMemory.job.state.succeeded": "Completed",
-    "projectSettings.codebaseMemory.job.state.failed": "Failed",
-    "projectSettings.codebaseMemory.job.state.cancelled": "Cancelled",
-    "projectSettings.codebaseMemory.enabledSaved": "Project Codebase Memory enabled.",
-    "projectSettings.codebaseMemory.disabledSaved": "Project Codebase Memory disabled; existing indexes were retained.",
-    "projectSettings.codebaseMemory.reindexAccepted": "Project reindex request submitted.",
-    "projectSettings.codebaseMemory.updateAccepted": "Index sync job submitted.",
-    "projectSettings.codebaseMemory.rebuildAccepted": "Full rebuild job submitted.",
+    "projectSettings.codeContext.title": "Code context",
+    "projectSettings.codeContext.enabled": "Native semantic index enabled",
+    "projectSettings.codeContext.disabled": "Currently disabled",
     "projectSettings.vmmDescription": "Override memory enablement, user/project mapping, and recall injection parameters for this project.",
     "projectSettings.vmmNativeDescription": "Override memory enablement, native project binding, and recall injection parameters for this project.",
     "projectSettings.vmmLoading": "Loading project VMM settings...",
@@ -7244,6 +7240,79 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.content.fullDetails": "Full details",
     "memory.content.write": "Save memory",
     "memory.content.sourceConversation": "Source conversation",
+    "memory.nativeRecords.title": "Native memory provenance",
+    "memory.nativeRecords.description": "Inspect turn extraction state, memory levels, and exact provenance by native memory project and host conversation.",
+    "memory.nativeRecords.project": "Memory project",
+    "memory.nativeRecords.session": "Host conversation",
+    "memory.nativeRecords.selectProject": "Select a memory project",
+    "memory.nativeRecords.selectSession": "Select a host conversation",
+    "memory.nativeRecords.sessionOverview": "Conversation overview",
+    "memory.nativeRecords.refresh": "Refresh records",
+    "memory.nativeRecords.noProjects": "No native memory project is available to inspect.",
+    "memory.nativeRecords.noSessions": "This memory project has not produced any conversation records.",
+    "memory.nativeRecords.noProjectRecords": "This memory project has no turn or memory records yet.",
+    "memory.nativeRecords.sessions": "Conversation records",
+    "memory.nativeRecords.turns": "Turns",
+    "memory.nativeRecords.memories": "Memories",
+    "memory.nativeRecords.completed": "Extracted",
+    "memory.nativeRecords.pending": "Pending extraction",
+    "memory.nativeRecords.processedUnknown": "Processed, result unknown",
+    "memory.nativeRecords.bypassed": "Bypassed",
+    "memory.nativeRecords.corrupted": "Corrupted",
+    "memory.nativeRecords.lastActivity": "Last activity",
+    "memory.nativeRecords.projectSummary": "Turn statuses and memory levels across the entire memory project",
+    "memory.nativeRecords.turnRecords": "Turn extraction records",
+    "memory.nativeRecords.projectTurnRecords": "All project turn extraction records",
+    "memory.nativeRecords.sessionMemories": "Memories generated or written by this conversation",
+    "memory.nativeRecords.projectMemories": "All project memories",
+    "memory.nativeRecords.projectOnly": "Project-owned without a source conversation",
+    "memory.nativeRecords.noTurns": "This conversation has no canonical turn records.",
+    "memory.nativeRecords.noMemories": "This conversation has not generated or written durable memory.",
+    "memory.nativeRecords.generated": "Generated memories",
+    "memory.nativeRecords.generatedMemories": "Memories generated by this turn",
+    "memory.nativeRecords.noGeneratedMemories": "This turn did not generate durable memory.",
+    "memory.nativeRecords.noUserPreview": "This turn has no user content to display.",
+    "memory.nativeRecords.retryCount": "Failed retry count",
+    "memory.nativeRecords.sourceTurn": "Source turn",
+    "memory.nativeRecords.priority": "Priority",
+    "memory.nativeRecords.tags": "Tags",
+    "memory.nativeRecords.statusReason": "Status reason",
+    "memory.nativeRecords.expiresAt": "Expires",
+    "memory.nativeRecords.turn": "Turn",
+    "memory.nativeRecords.timeline": "Complete conversation content",
+    "memory.nativeRecords.analysisDetails": "Extraction details",
+    "memory.nativeRecords.lastError": "Latest extraction error",
+    "memory.nativeRecords.statusPending": "Pending extraction",
+    "memory.nativeRecords.statusCompleted": "Extracted",
+    "memory.nativeRecords.statusProcessedUnknown": "Processed; extraction result unknown",
+    "memory.nativeRecords.statusBypassed": "Bypassed after analysis failures",
+    "memory.nativeRecords.statusCorrupted": "Payload corrupted and isolated",
+    "memory.nativeRecords.levelSession": "Session level",
+    "memory.nativeRecords.levelPhase": "Phase level",
+    "memory.nativeRecords.levelStable": "Stable level",
+    "memory.nativeRecords.levelPersistent": "Persistent level",
+    "memory.nativeRecords.stateActive": "Active",
+    "memory.nativeRecords.stateSuperseded": "Superseded",
+    "memory.nativeRecords.stateDeleted": "Deleted",
+    "memory.nativeRecords.stateExpired": "Expired",
+    "memory.nativeRecords.stateRecycled": "Recycled",
+    "memory.nativeRecords.sourceTurnExtracted": "Turn extraction",
+    "memory.nativeRecords.sourceDirect": "Direct write",
+    "memory.nativeRecords.sourceImport": "Import",
+    "memory.nativeRecords.sourceSystemSeed": "System seed",
+    "memory.nativeRecords.sourceLegacy": "Legacy migration",
+    "memory.nativeRecords.categoryGeneral": "General fact",
+    "memory.nativeRecords.categoryArchitecture": "Architecture decision",
+    "memory.nativeRecords.categoryTechSpec": "Technical specification/API",
+    "memory.nativeRecords.categoryBusiness": "Business logic",
+    "memory.nativeRecords.categoryRequirement": "Requirement/TODO",
+    "memory.nativeRecords.categoryProject": "Project context",
+    "memory.nativeRecords.categoryBugDebt": "Defect/technical debt",
+    "memory.nativeRecords.categorySecurity": "Security policy",
+    "memory.nativeRecords.roleUser": "User",
+    "memory.nativeRecords.roleAssistant": "Assistant",
+    "memory.nativeRecords.roleSystem": "System",
+    "memory.nativeRecords.roleTool": "Tool",
     "memory.data.title": "Memory data",
     "memory.data.description": "Inspect long-term memory sources by session and turn, then archive, recycle, or restore data through an impact preview.",
     "memory.data.managementReady": "Management service ready",

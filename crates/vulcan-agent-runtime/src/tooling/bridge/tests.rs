@@ -174,11 +174,11 @@ fn native_file_public_ids_are_reserved_and_deduplicated() {
         None,
         None,
         None,
+        None,
         vec![String::from("file"), String::from("file")],
         Vec::new(),
         Vec::new(),
         Vec::new(),
-        None,
         Vec::new(),
         Vec::new(),
         None,
@@ -196,6 +196,86 @@ fn native_file_public_ids_are_reserved_and_deduplicated() {
         .collect::<Vec<_>>();
     assert_eq!(file_tools.len(), 1);
     assert_eq!(file_tools[0].source, VulcanToolSourceKind::Native);
+}
+
+/// Verifies the canonical VCE public id cannot be replaced by a provider tool collision.
+/// 验正规范 VCE 公开标识不能被同名 Provider 工具碰撞替换。
+#[test]
+fn native_vce_public_id_is_reserved_from_provider_collisions() {
+    let runtime_config = crate::agent_runtime::config::AgentRuntimeConfig {
+        active_model: None,
+        active_agent_id: String::from("agent-a"),
+        agents: Vec::new(),
+        skills: Vec::new(),
+        tool_policies: Default::default(),
+        configured_mcp_server_ids: Vec::new(),
+        enabled_mcp_server_ids: Vec::new(),
+    };
+    let native_catalog = build_native_tool_catalog(
+        &runtime_config,
+        None,
+        Arc::new(crate::tooling::CommandSessionRuntime::new()),
+        VmmConfigLayer::default(),
+        None,
+        None,
+    );
+    let provider_candidate = VulcanToolCandidate {
+        descriptor: VulcanToolDescriptor {
+            id: String::from(vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID),
+            name: String::from(vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID),
+            description: String::from("Provider collision."),
+            help_text: None,
+            source: VulcanToolSourceKind::AiHostBinding,
+        },
+        parameters_schema: json!({"type": "object"}),
+        ai_visible: true,
+        plan_policy: VulcanPlanToolPolicy::Visible,
+        request_streaming: None,
+        invoke: Arc::new(|_, _| {
+            Box::pin(async {
+                Ok(VulcanToolInvocationResult::from_model_output(json!(
+                    "provider"
+                )))
+            })
+        }),
+    };
+    let manager = build_vulcan_tools_manager(
+        Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
+        Arc::new(crate::agent_runtime::question_runtime::QuestionRuntime::new()),
+        native_catalog,
+        None,
+        Vec::new(),
+        vec![provider_candidate],
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        vec![String::from(
+            vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID,
+        )],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        None,
+        Vec::new(),
+        VmmConfigLayer::default(),
+        VmmConfigLayer::default(),
+        false,
+    );
+
+    let resolved = manager.resolve_for_execution_mode("Build");
+    let vce_tools = resolved
+        .descriptors
+        .iter()
+        .filter(|descriptor| descriptor.id == vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID)
+        .collect::<Vec<_>>();
+    assert_eq!(vce_tools.len(), 1);
+    assert_eq!(vce_tools[0].source, VulcanToolSourceKind::Native);
 }
 
 /// Verifies VMM memory tools require ready configuration, enabled AI tools, and one live runtime.
@@ -247,11 +327,11 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
         None,
         None,
         None,
+        None,
         base_ids.clone(),
         Vec::new(),
         Vec::new(),
         Vec::new(),
-        None,
         Default::default(),
         Vec::new(),
         None,
@@ -284,11 +364,11 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
         None,
         None,
         None,
+        None,
         base_ids.clone(),
         Vec::new(),
         Vec::new(),
         Vec::new(),
-        None,
         Default::default(),
         Vec::new(),
         None,
@@ -322,11 +402,11 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
         None,
         None,
         None,
+        None,
         base_ids,
         Vec::new(),
         Vec::new(),
         Vec::new(),
-        None,
         Default::default(),
         Vec::new(),
         None,

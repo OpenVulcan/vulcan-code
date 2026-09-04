@@ -279,10 +279,6 @@ pub struct ServiceBridgeState {
     /// Long-lived shared agent runtime bridge.
     /// 长生命周期共享 Agent 运行时桥接。
     pub(crate) agent_runtime: Option<AgentRuntimeBridge>,
-    /// Long-lived controller for the host-managed Codebase Memory sidecar.
-    /// 宿主管理 Codebase Memory Sidecar 的长生命周期控制器。
-    pub(crate) codebase_memory_controller:
-        crate::codebase_memory_controller::CodebaseMemoryController,
     /// Host-owned native VMM project maintenance facade.
     /// 宿主持有的原生 VMM 项目维护门面。
     pub(crate) native_vmm_maintenance: Option<crate::native_vmm::NativeVmmMaintenance>,

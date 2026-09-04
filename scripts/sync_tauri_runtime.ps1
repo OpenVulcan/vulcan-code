@@ -80,10 +80,6 @@ else {
 # SourceBundledToolsDir 指向已校验的当前目标 sg 与 rg 载荷。
 $SourceBundledToolsDir = Join-Path $ProjectDir "third_party\tools\$BundledToolsTarget"
 
-# CodebaseMemoryRuntimeSyncScriptPath points at the verified dependency-to-output synchronizer.
-# CodebaseMemoryRuntimeSyncScriptPath 指向经过校验的依赖到输出目录同步器。
-$CodebaseMemoryRuntimeSyncScriptPath = Join-Path $ProjectDir "scripts\sync_codebase_memory_runtime.ps1"
-
 # SourceVulcanPluginsDir contains every manifest-driven plugin bundled with Vulcan Code.
 # SourceVulcanPluginsDir 包含随 Vulcan Code 打包的所有清单驱动插件。
 $SourceVulcanPluginsDir = Join-Path $ProjectDir "plugins"
@@ -300,12 +296,6 @@ foreach ($BundledToolName in @("sg", "rg")) {
 }
 Write-Host "==> Syncing bundled sg and rg tools..."
 Copy-DirectoryContents -SourceDirectory $SourceBundledToolsDir -DestinationDirectory $OutputBundledToolsDir -Clean
-
-if (-not (Test-Path -LiteralPath $CodebaseMemoryRuntimeSyncScriptPath -PathType Leaf)) {
-    throw "Missing Codebase Memory runtime synchronization script: $CodebaseMemoryRuntimeSyncScriptPath"
-}
-Write-Host "==> Syncing Codebase Memory runtime dependency..."
-& $CodebaseMemoryRuntimeSyncScriptPath
 
 if (Test-Path -LiteralPath $LegacyManagedRuntimeDistributionDir) {
     Write-Host "==> Removing obsolete LuaSkills-private managed runtimes..."

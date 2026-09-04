@@ -26,7 +26,7 @@ make init-system
 
 1. 以 Cargo 并发度 2 安装缺失的 `cargo-hakari`、`cargo-nextest`、`cargo-deny` 与 `cargo-about`，并将低于仓库最低要求的工具更新到兼容版本。
 2. 安装宿主依赖与内建工具。
-3. 安装 LuaSkills 和 Codebase Memory 运行时依赖；原生 VMM 不需要独立运行时安装。
+3. 安装 LuaSkills 运行时依赖；原生 VMM 与原生代码语义索引都在 VulcanCode 进程内运行，不需要独立运行时安装。
 
 已满足版本要求的工具会被保留，不会重复安装。
 

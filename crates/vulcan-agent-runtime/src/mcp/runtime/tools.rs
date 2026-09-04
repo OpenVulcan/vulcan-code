@@ -291,51 +291,6 @@ impl McpRuntimeAccess {
         )
     }
 
-    /// Builds a new access generation by replacing only the host-managed Codebase Memory partition.
-    /// 仅替换宿主管理的 Codebase Memory 分区并构建新的访问代次。
-    pub(super) fn with_replaced_managed_codebase_memory_partition(
-        &self,
-        managed_overview: McpRuntimeOverview,
-        managed_runtime: McpRuntimeHandle,
-    ) -> Self {
-        let partition_key = crate::mcp::config::HOST_MANAGED_CODEBASE_MEMORY_PARTITION_KEY;
-        let mut live_partitions = self.live_partitions.clone();
-        live_partitions.insert(
-            String::from(partition_key),
-            Arc::new(McpRuntimePartitionLease::new(managed_runtime)),
-        );
-        let configured_overview = merge_mcp_runtime_overviews(
-            std::iter::once(managed_overview).chain(
-                live_partitions
-                    .iter()
-                    .filter(|(key, _)| key.as_str() != partition_key)
-                    .map(|(_, lease)| lease.runtime.overview()),
-            ),
-        );
-        Self::from_shared_partitions(
-            configured_overview,
-            live_partitions,
-            Arc::clone(&self.retired_plugin_partitions),
-        )
-    }
-
-    /// Builds a new access generation without the host-managed Codebase Memory partition.
-    /// 构建不包含宿主管理 Codebase Memory 分区的新访问代次。
-    pub fn without_managed_codebase_memory_partition(&self) -> Self {
-        let mut live_partitions = self.live_partitions.clone();
-        live_partitions.remove(crate::mcp::config::HOST_MANAGED_CODEBASE_MEMORY_PARTITION_KEY);
-        let configured_overview = merge_mcp_runtime_overviews(
-            live_partitions
-                .values()
-                .map(|lease| lease.runtime.overview()),
-        );
-        Self::from_shared_partitions(
-            configured_overview,
-            live_partitions,
-            Arc::clone(&self.retired_plugin_partitions),
-        )
-    }
-
     /// Builds a new access generation by replacing every prior generation of one plugin partition.
     /// 通过替换单个插件分区的全部旧代次来构建新的访问代次。
     pub(super) fn with_replaced_plugin_partition(
@@ -443,17 +398,6 @@ impl McpRuntimeAccess {
     /// 仅请求稳定的用户配置运行时分区停止。
     pub fn shutdown_user_partition(&self) {
         if let Some(lease) = self.live_partitions.get("user") {
-            lease.runtime.shutdown();
-        }
-    }
-
-    /// Requests only the host-managed Codebase Memory runtime partition to stop.
-    /// 仅请求宿主管理的 Codebase Memory 运行时分区停止。
-    pub fn shutdown_managed_codebase_memory_partition(&self) {
-        if let Some(lease) = self
-            .live_partitions
-            .get(crate::mcp::config::HOST_MANAGED_CODEBASE_MEMORY_PARTITION_KEY)
-        {
             lease.runtime.shutdown();
         }
     }

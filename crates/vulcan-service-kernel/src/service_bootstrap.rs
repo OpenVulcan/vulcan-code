@@ -962,6 +962,7 @@ fn run_service_bootstrap(
         Ok(data_plane) => Some(crate::vce::VceRuntimeManager::new(
             Arc::clone(&internal_ai_port),
             data_plane,
+            event_emitter.clone(),
         )),
         Err(error) => {
             eprintln!("[webui-service] optional native VCE bootstrap unavailable: {error}");
@@ -973,7 +974,11 @@ fn run_service_bootstrap(
     let vce_watcher = match (workspace_watcher.as_ref(), vce_runtime.as_ref()) {
         (Some(watcher), Some(manager)) => {
             let _runtime_guard = runtime.enter();
-            Some(crate::vce::VceWatcherService::new(watcher, manager.clone()))
+            Some(crate::vce::VceWatcherService::new(
+                watcher,
+                manager.clone(),
+                event_emitter.clone(),
+            ))
         }
         _ => None,
     };
@@ -1358,31 +1363,36 @@ fn run_service_bootstrap(
         initial_projection_started_at,
         format!("selected={selected_session_id}"),
     );
-    // Managed Codebase Memory enablement survives restart; unavailable packaged assets degrade only that integration.
-    // 托管 Codebase Memory 启用意图会跨重启保留；打包资产不可用时仅降级该集成。
-    // codebase_memory_started_at measures managed Codebase Memory reconciliation independently.
-    // codebase_memory_started_at 单独测量托管 Codebase Memory 协调。
-    let codebase_memory_started_at = start_bootstrap_stage("codebase_memory");
-    // codebase_memory_result reports whether reconciliation completed or degraded.
-    // codebase_memory_result 报告协调过程是完成还是降级。
-    let codebase_memory_result =
-        match runtime.block_on(crate::reconcile_codebase_memory_runtime(state)) {
-            Ok(()) => "ready",
-            Err(error) => {
-                if let Ok(guard) = state.lock() {
-                    guard
-                        .codebase_memory_controller
-                        .mark_runtime_unsynchronized(&error);
-                }
-                eprintln!("[webui-service] managed Codebase Memory bootstrap degraded: {error}");
-                "degraded"
+    // VCE enablement survives restart and each project failure remains isolated from service readiness.
+    // VCE 启用意图会跨重启保留，且每个项目失败均与服务就绪状态隔离。
+    let vce_started_at = start_bootstrap_stage("vce");
+    let vce_result = match runtime.block_on(crate::vce::reconcile_vce_projects(state)) {
+        Ok(report) if report.failures.is_empty() => {
+            logs.push(format!(
+                "代码语义索引已协调 {} 个项目。",
+                report.reconciled_projects.len()
+            ));
+            "ready"
+        }
+        Ok(report) => {
+            for (project_id, error) in &report.failures {
+                eprintln!(
+                    "[webui-service] VCE project bootstrap degraded for `{project_id}`: {error}"
+                );
             }
-        };
-    trace_bootstrap_stage(
-        "codebase_memory",
-        codebase_memory_started_at,
-        format!("result={codebase_memory_result}"),
-    );
+            logs.push(format!(
+                "代码语义索引已协调 {} 个项目，{} 个项目降级。",
+                report.reconciled_projects.len(),
+                report.failures.len()
+            ));
+            "degraded"
+        }
+        Err(error) => {
+            eprintln!("[webui-service] VCE bootstrap degraded: {error}");
+            "degraded"
+        }
+    };
+    trace_bootstrap_stage("vce", vce_started_at, format!("result={vce_result}"));
     // runtime_guard makes the retained service runtime current while the notify loop is spawned.
     // runtime_guard 在生成 notify 循环期间使保留的服务运行时成为当前运行时。
     let _runtime_guard = runtime.enter();
@@ -1397,7 +1407,6 @@ fn run_service_bootstrap(
             "供应商清单远端 URL 或受信密钥未配置；未启动自动同步任务。",
         )),
     }
-    crate::start_codebase_memory_recovery_monitor(state.clone(), event_emitter.clone());
     crate::agent_skills_watcher::start_agent_skills_catalog_watcher(
         state.clone(),
         event_emitter.clone(),

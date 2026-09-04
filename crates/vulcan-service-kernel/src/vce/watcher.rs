@@ -346,19 +346,19 @@ impl VceWatcherService {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
         if let Some(mut task) = event_task {
-            if tokio::time::timeout(Duration::from_secs(5), &mut task)
+            let timed_out = tokio::time::timeout(Duration::from_secs(5), &mut task)
                 .await
-                .is_err()
-            {
+                .is_err();
+            if timed_out {
                 task.abort();
                 let _ = task.await;
             }
         }
         if let Some(mut task) = refresh_task {
-            if tokio::time::timeout(Duration::from_secs(15), &mut task)
+            let timed_out = tokio::time::timeout(Duration::from_secs(15), &mut task)
                 .await
-                .is_err()
-            {
+                .is_err();
+            if timed_out {
                 // The manager shutdown immediately following this call joins the project gate and
                 // converts any abandoned generation into an idempotent cleanup request.
                 // 紧随其后的管理器关闭会汇合项目闸门，并把任何遗留代次转换为幂等清理请求。
@@ -495,5 +495,38 @@ mod tests {
         let grouped = group_vce_watch_events(&targets, &[PathBuf::from("/workspace/project-a")]);
 
         assert!(grouped["project-a"].force_full);
+    }
+
+    /// A watcher storm is deduplicated per project and ignores paths outside registered roots.
+    /// 监听事件风暴会按项目去重，并忽略已注册根目录之外的路径。
+    #[test]
+    fn watcher_storm_is_project_scoped_and_deduplicated() {
+        let targets = RwLock::new(BTreeMap::from([
+            (
+                String::from("project-a"),
+                PathBuf::from("/workspace/project-a"),
+            ),
+            (
+                String::from("project-b"),
+                PathBuf::from("/workspace/project-b"),
+            ),
+        ]));
+        let changed_paths = (0..1_000)
+            .flat_map(|index| {
+                [
+                    PathBuf::from(format!("/workspace/project-a/src/file-{}.rs", index % 10)),
+                    PathBuf::from(format!("/workspace/project-b/src/file-{}.rs", index % 5)),
+                    PathBuf::from("/workspace/outside/ignored.rs"),
+                ]
+            })
+            .collect::<Vec<_>>();
+
+        let grouped = group_vce_watch_events(&targets, &changed_paths);
+
+        assert_eq!(grouped.len(), 2);
+        assert_eq!(grouped["project-a"].paths.len(), 10);
+        assert_eq!(grouped["project-b"].paths.len(), 5);
+        assert!(!grouped["project-a"].force_full);
+        assert!(!grouped["project-b"].force_full);
     }
 }

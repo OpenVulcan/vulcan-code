@@ -171,8 +171,8 @@ pub struct TaskProjectSummary {
     /// Optional project icon key selected by the user.
     /// 用户选择的可选项目图标键。
     pub icon_key: Option<String>,
-    /// Whether the host-managed Codebase Memory integration is enabled for this project.
-    /// 此项目是否启用了宿主管理的 Codebase Memory 集成。
+    /// Legacy Codebase Memory enablement retained only as one-time VCE migration input.
+    /// 仅作为 VCE 一次性迁移输入保留的旧 Codebase Memory 启用状态。
     pub codebase_memory_enabled: bool,
     /// Native code-semantic settings owned by this project.
     /// 此项目持有的原生代码语义设置。
@@ -213,8 +213,8 @@ impl TaskProjectSummary {
         }
     }
 
-    /// Applies the persisted host-managed Codebase Memory enablement state.
-    /// 应用持久化的宿主管理 Codebase Memory 启用状态。
+    /// Applies the persisted legacy Codebase Memory flag used by VCE migration.
+    /// 应用供 VCE 迁移使用的持久化旧 Codebase Memory 标记。
     ///
     /// # Parameters
     /// 参数

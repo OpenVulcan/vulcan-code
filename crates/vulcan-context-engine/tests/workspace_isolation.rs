@@ -1,5 +1,5 @@
-//! Dependency-graph guardrails for the pre-integration VCE workspace member.
-//! VCE 接入前工作区成员的依赖图护栏。
+//! Dependency-graph guardrails for the integrated VCE workspace member.
+//! 已接入 VCE 工作区成员的依赖图护栏。
 
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -85,10 +85,10 @@ fn vce_has_no_runtime_memory_or_storage_dependency() {
     }));
 }
 
-/// Prove that no runtime crate consumes VCE before the explicit integration task begins.
-/// 证明显式集成任务开始前没有运行时 crate 消费 VCE。
+/// Prove that only the frozen host layers consume VCE directly.
+/// 证明只有冻结的宿主层直接消费 VCE。
 #[test]
-fn vce_has_no_workspace_consumer() {
+fn vce_has_only_intended_workspace_consumers() {
     // The package dependency declarations reveal every direct workspace consumer.
     // 包依赖声明会暴露每个直接工作区消费者。
     let metadata = workspace_metadata();
@@ -110,9 +110,11 @@ fn vce_has_no_workspace_consumer() {
                 .any(|dependency| dependency["name"] == "vulcan-context-engine");
             depends_on_vce.then_some(package_name)
         })
-        .collect::<Vec<_>>();
-    assert!(
-        consumers.is_empty(),
-        "VCE must remain unconsumed before runtime integration; consumers: {consumers:?}"
-    );
+        .collect::<BTreeSet<_>>();
+    let expected = BTreeSet::from([
+        "vulcan-agent-runtime",
+        "vulcan-service-kernel",
+        "vulcan-workspace-store",
+    ]);
+    assert_eq!(consumers, expected);
 }

@@ -1034,7 +1034,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
     }
     let request = ExecutionPreparationRequest {
         session_id,
-        managed_codebase_memory: None,
+        vce_retrieval_handler: None,
         execution_scope: vulcan_session_core::ExecutionScope::MainSession {
             session_id: vulcan_session_core::SessionNodeId::from(session_id),
         },

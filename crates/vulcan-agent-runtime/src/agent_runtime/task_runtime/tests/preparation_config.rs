@@ -23,7 +23,7 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
     ExecutionPreparationRequest {
         session_id,
         session_storage_directory: None,
-        managed_codebase_memory: None,
+        vce_retrieval_handler: None,
         execution_scope: ExecutionScope::MainSession {
             session_id: SessionNodeId::from(session_id),
         },

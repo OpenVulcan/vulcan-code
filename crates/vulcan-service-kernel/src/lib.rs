@@ -155,7 +155,6 @@ mod agent_skills_watcher;
 mod agent_stream;
 mod ai_credential_secret_store;
 mod attachments;
-mod codebase_memory_controller;
 mod command_sessions;
 pub mod configured_inference;
 mod context_compaction;
@@ -244,7 +243,6 @@ use attachments::{
     service_reconcile_composer_attachment_draft, service_stage_composer_attachment_bytes,
     service_stage_composer_attachment_paths, service_stage_composer_attachment_preview_bytes,
 };
-use codebase_memory_controller::*;
 use command_sessions::*;
 use context_compaction::{
     MANUAL_CONTEXT_COMPACTION_TRIGGER, append_webui_context_compaction_status_message_to_workspace,
@@ -354,6 +352,7 @@ use state::*;
 use subagent_event_ingest::*;
 use subagent_panels::*;
 use subagent_workspace_mutation::*;
+use vce::*;
 use vmm::{
     service_load_project_vmm_config, service_run_vmm_memory_action, service_save_vmm_memory_config,
     static_vmm_profile_snapshot, vmm_memory_snapshot,
@@ -426,7 +425,6 @@ pub fn create_service_bridge_state(
         workspace_snapshot: None,
         pending_prompt_process_mirrors: BTreeMap::new(),
         agent_runtime: None,
-        codebase_memory_controller: Default::default(),
         native_vmm_maintenance: None,
         vce_runtime: None,
         vce_watcher: None,
@@ -477,7 +475,15 @@ pub fn service_prepare_for_app_shutdown(
     // Runtime handles and the provider sync service are cloned under one state observation,
     // then stopped outside the service lock.
     // 运行时句柄与供应商同步服务在同一次状态观察中完成克隆，随后在服务锁外停止。
-    let (task_runtime, mcp_runtime, provider_manifest_sync, session_v1_handles) = {
+    let (
+        task_runtime,
+        mcp_runtime,
+        provider_manifest_sync,
+        session_v1_handles,
+        service_runtime,
+        vce_runtime,
+        vce_watcher,
+    ) = {
         // guard provides the single authoritative shutdown snapshot of runtime handles.
         // guard 提供运行时句柄的单次权威关闭快照。
         let guard = state
@@ -489,12 +495,18 @@ pub fn service_prepare_for_app_shutdown(
                 Some(agent_runtime.extension_generation.mcp_runtime()),
                 guard.provider_manifest_sync.clone(),
                 Arc::clone(&guard.session_runtime_registry),
+                guard.service_runtime.clone(),
+                guard.vce_runtime.clone(),
+                guard.vce_watcher.clone(),
             ),
             None => (
                 None,
                 None,
                 guard.provider_manifest_sync.clone(),
                 Arc::clone(&guard.session_runtime_registry),
+                guard.service_runtime.clone(),
+                guard.vce_runtime.clone(),
+                guard.vce_watcher.clone(),
             ),
         }
     };
@@ -503,6 +515,12 @@ pub fn service_prepare_for_app_shutdown(
         .map_err(|error| error.to_string())?;
     if let Some(provider_manifest_sync) = provider_manifest_sync {
         provider_manifest_sync.stop_periodic_task()?;
+    }
+    if let Some(vce_runtime) = vce_runtime.as_ref() {
+        // VCE rejects new semantic operations now, while active tool Futures remain cancellable by
+        // the task-runtime shutdown immediately below.
+        // VCE 此时拒绝新的语义操作，同时让活动工具 Future 可被紧随其后的任务运行时关闭取消。
+        vce_runtime.begin_shutdown();
     }
     let project_terminal_shutdown = cancel_all_project_terminal_displays()
         .and_then(|_| project_terminal_runtime().request_all_terminal_stops_for_shutdown());
@@ -531,14 +549,38 @@ pub fn service_prepare_for_app_shutdown(
             Ok(())
         },
     );
-    match (runtime_shutdown, project_terminal_shutdown) {
-        (Ok(stopped_task_ids), Ok(_)) => Ok(stopped_task_ids),
-        (Err(runtime_error), Ok(_)) => Err(runtime_error),
-        (Ok(_), Err(terminal_error)) => Err(terminal_error),
-        (Err(runtime_error), Err(terminal_error)) => Err(format!(
-            "{runtime_error} Project terminal shutdown also failed: {terminal_error}"
-        )),
+    let (stopped_task_ids, runtime_error) = match runtime_shutdown {
+        Ok(stopped_task_ids) => (stopped_task_ids, None),
+        Err(error) => (Vec::new(), Some(error)),
+    };
+    let terminal_error = project_terminal_shutdown.err();
+    if runtime_error.is_none() && terminal_error.is_none() {
+        let vce_shutdown = match service_runtime.as_ref() {
+            Some(service_runtime) => service_runtime.block_on(async {
+                if let Some(vce_runtime) = vce_runtime.as_ref() {
+                    vce_runtime.shutdown().await?;
+                }
+                if let Some(vce_watcher) = vce_watcher.as_ref() {
+                    vce_watcher.shutdown().await;
+                }
+                Ok::<(), String>(())
+            }),
+            None if vce_runtime.is_none() && vce_watcher.is_none() => Ok(()),
+            None => Err(String::from(
+                "VCE shutdown requires the retained service runtime.",
+            )),
+        };
+        vce_shutdown?;
+        return Ok(stopped_task_ids);
     }
+    let mut errors = Vec::new();
+    if let Some(error) = runtime_error {
+        errors.push(error);
+    }
+    if let Some(error) = terminal_error {
+        errors.push(format!("Project terminal shutdown failed: {error}"));
+    }
+    Err(errors.join(" "))
 }
 
 /// Reopens V1 session mutation admission after the host keeps the window open following a failed shutdown.
@@ -551,14 +593,40 @@ pub fn service_prepare_for_app_shutdown(
 pub fn service_resume_after_failed_app_shutdown(
     state: &SharedServiceBridgeState,
 ) -> Result<(), String> {
-    let guard = state.lock().map_err(|_| {
-        String::from("The service bridge state is locked during shutdown recovery.")
-    })?;
-    let session_runtime_registry = Arc::clone(&guard.session_runtime_registry);
-    drop(guard);
+    let (session_runtime_registry, vce_runtime, service_runtime) = {
+        let guard = state.lock().map_err(|_| {
+            String::from("The service bridge state is locked during shutdown recovery.")
+        })?;
+        (
+            Arc::clone(&guard.session_runtime_registry),
+            guard.vce_runtime.clone(),
+            guard.service_runtime.clone(),
+        )
+    };
     session_runtime_registry
         .resume_after_failed_shutdown()
         .map_err(|error| error.to_string())?;
+    let needs_vce_reconcile = vce_runtime
+        .as_ref()
+        .is_some_and(crate::vce::VceRuntimeManager::resume_after_failed_shutdown);
+    if needs_vce_reconcile {
+        let service_runtime = service_runtime.ok_or_else(|| {
+            String::from("VCE shutdown recovery requires the retained service runtime.")
+        })?;
+        let report = service_runtime.block_on(crate::vce::reconcile_vce_projects(state))?;
+        if !report.failures.is_empty() {
+            return Err(format!(
+                "VCE shutdown recovery failed for {} project(s): {}",
+                report.failures.len(),
+                report
+                    .failures
+                    .into_iter()
+                    .map(|(project_id, error)| format!("{project_id}: {error}"))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ));
+        }
+    }
     Ok(())
 }
 

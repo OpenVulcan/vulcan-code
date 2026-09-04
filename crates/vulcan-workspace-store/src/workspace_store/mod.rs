@@ -37,9 +37,9 @@ pub use git_preferences::{
 };
 pub use persistence::{
     delete_active_project_row_v1, persist_collapsed_task_project_ids, persist_new_project,
-    persist_project_codebase_memory_enabled, persist_project_icon_update,
-    persist_project_order_update, persist_project_pinned_and_order_update,
-    persist_project_vce_settings, rename_project, restore_archived_project_row_v1,
+    persist_project_icon_update, persist_project_order_update,
+    persist_project_pinned_and_order_update, persist_project_vce_settings, rename_project,
+    restore_archived_project_row_v1,
 };
 pub use provider_api_trace::{
     PROVIDER_API_TRACE_LIMIT, ProviderApiTraceAttemptReservation, ProviderApiTraceDiagnostic,

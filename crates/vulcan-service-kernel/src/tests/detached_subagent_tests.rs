@@ -144,7 +144,6 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
         workspace_snapshot: Some(workspace_snapshot),
         pending_prompt_process_mirrors: BTreeMap::new(),
         agent_runtime: None,
-        codebase_memory_controller: Default::default(),
         native_vmm_maintenance: None,
         vce_runtime: None,
         vce_watcher: None,

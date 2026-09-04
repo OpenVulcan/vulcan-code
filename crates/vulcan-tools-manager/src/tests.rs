@@ -103,14 +103,14 @@ fn manager_allocates_mcp_names_with_prefix_and_suffixes() {
 #[test]
 fn manager_preserves_vulcan_managed_public_name() {
     let manager = VulcanToolsManager::new(vec![test_candidate(
-        "vulcan_codebase_memory_search_graph",
+        "vulcan_managed_status",
         VulcanToolSourceKind::VulcanManaged,
         VulcanPlanToolPolicy::Visible,
     )]);
 
     assert_eq!(
         resolved_names(manager.resolve_for_execution_mode("Build")),
-        vec!["vulcan_codebase_memory_search_graph"]
+        vec!["vulcan_managed_status"]
     );
 }
 

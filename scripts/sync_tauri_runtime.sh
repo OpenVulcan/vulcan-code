@@ -56,10 +56,6 @@ esac
 # SourceBundledToolsDir 指向已校验的当前目标 sg 与 rg 载荷。
 SourceBundledToolsDir="$ProjectDir/third_party/tools/$BundledToolsTarget"
 
-# CodebaseMemoryRuntimeSyncScriptPath points at the verified dependency-to-output synchronizer.
-# CodebaseMemoryRuntimeSyncScriptPath 指向经过校验的依赖到输出目录同步器。
-CodebaseMemoryRuntimeSyncScriptPath="$ProjectDir/scripts/sync_codebase_memory_runtime.ps1"
-
 # SourceVulcanPluginsDir contains every manifest-driven plugin bundled with Vulcan Code.
 # SourceVulcanPluginsDir 包含随 Vulcan Code 打包的所有清单驱动 Vulcan 插件。
 SourceVulcanPluginsDir="$ProjectDir/plugins"
@@ -182,20 +178,6 @@ for BundledToolName in sg rg; do
 done
 echo "==> Syncing bundled sg and rg tools..."
 copy_directory_contents "$SourceBundledToolsDir" "$OutputBundledToolsDir" 1
-
-if [ ! -f "$CodebaseMemoryRuntimeSyncScriptPath" ]; then
-    echo "Missing Codebase Memory runtime synchronization script: $CodebaseMemoryRuntimeSyncScriptPath" >&2
-    exit 1
-fi
-echo "==> Syncing Codebase Memory runtime dependency..."
-if command -v pwsh >/dev/null 2>&1; then
-    pwsh -NoProfile -ExecutionPolicy Bypass -File "$CodebaseMemoryRuntimeSyncScriptPath"
-elif command -v powershell.exe >/dev/null 2>&1; then
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$CodebaseMemoryRuntimeSyncScriptPath"
-else
-    echo "PowerShell is required to synchronize the Codebase Memory runtime dependency." >&2
-    exit 127
-fi
 
 if [ -d "$LegacyManagedRuntimeDistributionDir" ]; then
     echo "==> Removing obsolete LuaSkills-private managed runtimes..."

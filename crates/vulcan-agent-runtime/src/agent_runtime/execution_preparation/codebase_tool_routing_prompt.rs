@@ -1,271 +1,172 @@
-//! Conditional Codebase Memory and CodeKit tool-routing prompt contribution.
-//! Codebase Memory 与 CodeKit 工具路由提示词的条件化贡献逻辑。
-
-use std::collections::BTreeSet;
+//! Conditional VCE and CodeKit tool-routing prompt contribution.
+//! VCE 与 CodeKit 工具路由提示词的条件化贡献逻辑。
 
 use vulcan_tools_manager::{VulcanToolDescriptor, VulcanToolSourceKind};
 
-/// Complete host-visible read-only Codebase Memory tool contract required by the routing prompt.
-/// 路由提示词要求完整可见的宿主侧 Codebase Memory 只读工具契约。
-const CODEBASE_MEMORY_TOOL_IDS: [&str; 10] = [
-    "vulcan_codebase_memory_get_graph_schema",
-    "vulcan_codebase_memory_search_graph",
-    "vulcan_codebase_memory_query_graph",
-    "vulcan_codebase_memory_index_status",
-    "vulcan_codebase_memory_check_index_coverage",
-    "vulcan_codebase_memory_trace_path",
-    "vulcan_codebase_memory_get_architecture",
-    "vulcan_codebase_memory_get_code_snippet",
-    "vulcan_codebase_memory_search_code",
-    "vulcan_codebase_memory_detect_changes",
-];
+use crate::tooling::native::CODEBASE_RETRIEVAL_TOOL_ID;
 
-/// Host-visible CodeKit discovery tools required by the cross-family routing prompt.
-/// 跨工具家族路由提示词要求可见的宿主侧 CodeKit 发现工具。
+/// Host-visible CodeKit discovery tools referenced by the cross-family guidance.
+/// 跨工具家族说明中引用的宿主可见 CodeKit 发现工具。
 const CODEKIT_DISCOVERY_TOOL_IDS: [&str; 3] = [
     "vulcan_codekit_rg",
     "vulcan_codekit_ast_tree",
     "vulcan_codekit_ast_detail",
 ];
 
-/// Graph-only routing guidance used when Codebase Memory is visible without CodeKit.
-/// Codebase Memory 可见而 CodeKit 不可见时使用的纯图谱路由说明。
-const CODEBASE_MEMORY_ROUTING_PROMPT: &str = r#"## Codebase Memory Tool Selection
+/// VCE-only routing guidance used when CodeKit is not completely visible.
+/// CodeKit 未完整可见时使用的纯 VCE 路由说明。
+const VCE_ROUTING_PROMPT: &str = r#"## Codebase Semantic Retrieval
 
-Use the registered Codebase Memory tools for graph-backed code intelligence:
+Use `codebase_retrieval` when the request is expressed by intent, behavior, architecture, responsibility, or an unfamiliar concept rather than an exact text token. Describe the information needed in one focused natural-language request and use the returned evidence to choose the next source inspection.
 
-### Discovery and Source
-- Natural-language or conceptual symbol discovery → `vulcan_codebase_memory_search_graph`
-- Literal text enriched into containing indexed symbols and structural ranking → `vulcan_codebase_memory_search_code`
-- Exact indexed symbol source by qualified name → `vulcan_codebase_memory_get_code_snippet`
-- Complex multi-hop, aggregation, or cross-service analysis → `vulcan_codebase_memory_query_graph`
+- Prefer it for conceptual discovery, likely owners, related symbols, implementation context, and cross-file semantic evidence.
+- Treat returned paths, spans, and source excerpts as evidence, not as a substitute for inspecting exact source before editing.
+- Refine the information request when the first result reveals the project's vocabulary.
+- Do not submit project identity, storage parameters, embedding settings, or retrieval tuning; those remain host-owned."#;
 
-### Relationships, Impact, and Architecture
-- Callers, callees, data flow, or cross-service paths → `vulcan_codebase_memory_trace_path`
-- Git diff blast radius → `vulcan_codebase_memory_detect_changes`
-- Project architecture, dependencies, clusters, hotspots, layers, or broad file tree → `vulcan_codebase_memory_get_architecture`
-- Graph labels and edge types needed for Cypher → `vulcan_codebase_memory_get_graph_schema`
+/// Cross-family routing guidance used when VCE and the complete CodeKit discovery set are visible.
+/// VCE 与完整 CodeKit 发现工具集同时可见时使用的跨工具家族路由说明。
+const VCE_CODEKIT_ROUTING_PROMPT: &str = r#"## Codebase Tool Selection
 
-### Index Ground Truth
-- Index readiness and project-wide diagnostics → `vulcan_codebase_memory_index_status`
-- Exact file or bounded-scope coverage verification → `vulcan_codebase_memory_check_index_coverage`
-- Treat exact source as ground truth. Before exhaustive or negative claims, or when graph results are unexpectedly empty, check index coverage and fall back to direct source inspection for uncovered paths.
-- Do not reconstruct callers or blast radius with repeated text searches when `vulcan_codebase_memory_trace_path` or `vulcan_codebase_memory_detect_changes` is available."#;
+Choose the tool by the kind of evidence required:
 
-/// Cross-family routing guidance used when both Codebase Memory and CodeKit are visible.
-/// Codebase Memory 与 CodeKit 同时可见时使用的跨工具家族路由说明。
-const CODEBASE_MEMORY_CODEKIT_ROUTING_PROMPT: &str = r#"## Codebase Tool Selection
+- Intent, behavior, architecture, responsibility, unfamiliar concepts, or semantically related code -> `codebase_retrieval`.
+- Exact text, regex, filename, log text, symbol spelling, or a clue that must be mapped to its owning function or class -> `vulcan_codekit_rg`.
+- Directory-level symbol inventory and structural overview -> `vulcan_codekit_ast_tree`.
+- Detailed structure of already selected exact files -> `vulcan_codekit_ast_detail`.
 
-Select tools by the information required:
+Start with one focused discovery call. Use VCE to learn the project's vocabulary, then use CodeKit or direct source inspection for exact structure and edit locations. Treat returned paths, spans, and excerpts as evidence. Do not send project identity, storage parameters, embedding settings, or retrieval tuning to `codebase_retrieval`; those remain host-owned."#;
 
-### Search and Discovery
-- Literal text plus its owning function or class → `vulcan_codekit_rg`
-- Natural-language or conceptual symbol discovery → `vulcan_codebase_memory_search_graph`
-- Literal text enriched into containing indexed symbols and structural ranking → `vulcan_codebase_memory_search_code`
-- Complex multi-hop, aggregation, or cross-service analysis → `vulcan_codebase_memory_query_graph`
-
-### Trace and Impact
-- Callers, callees, data flow, or cross-service paths → `vulcan_codebase_memory_trace_path`
-- Git diff blast radius → `vulcan_codebase_memory_detect_changes`
-
-### Architecture and Structure
-- Project architecture, dependencies, clusters, hotspots, layers, or broad file tree → `vulcan_codebase_memory_get_architecture`
-- Directory-level symbol inventory → `vulcan_codekit_ast_tree`
-- Detailed structure of exact files → `vulcan_codekit_ast_detail`
-- Graph labels and edge types needed for Cypher → `vulcan_codebase_memory_get_graph_schema`
-
-### Source and Coverage
-- Exact indexed symbol source by qualified name → `vulcan_codebase_memory_get_code_snippet`
-- Index readiness and project-wide diagnostics → `vulcan_codebase_memory_index_status`
-- Exact file or bounded-scope coverage verification → `vulcan_codebase_memory_check_index_coverage`
-- Treat exact source as ground truth. Before exhaustive or negative claims, or when graph results are unexpectedly empty, check index coverage and use CodeKit or direct source inspection for uncovered paths.
-
-### Anti-patterns
-- Do not reconstruct callers or blast radius with repeated text searches when `vulcan_codebase_memory_trace_path` or `vulcan_codebase_memory_detect_changes` is available.
-- Do not use sequential text searches to explore related concepts when `vulcan_codebase_memory_search_graph` is available.
-- Do not use AST directory trees as a substitute for project architecture analysis."#;
-
-/// Builds request-scoped codebase tool-selection guidance only for a complete visible CBM contract.
-/// 仅在完整 CBM 契约真实可见时构建请求级 Codebase 工具选择说明。
+/// Builds request-scoped codebase tool-selection guidance from the final visible tool set.
+/// 根据最终可见工具集合构建请求级代码库工具选择说明。
 ///
 /// # Parameters
 /// 参数
-/// - `visible_tools`: Final provider-visible tool descriptors after every host and model filter.
-/// - `visible_tools`：经过全部宿主与模型过滤后的最终 Provider 可见工具描述。
+/// - `visible_tools`: Tool descriptors remaining after all host and model filters.
+/// - `visible_tools`：经过全部宿主与模型过滤后保留的工具描述。
 ///
 /// # Returns
 /// 返回值
-/// Request-dynamic routing guidance, or `None` when the complete contract is unavailable.
-/// 请求动态路由说明；完整工具契约不可用时返回 `None`。
+/// VCE-aware routing guidance, or `None` when the canonical native retrieval tool is unavailable.
+/// 包含 VCE 的路由说明；规范原生检索工具不可用时返回 `None`。
 pub(super) fn codebase_tool_routing_prompt(
     visible_tools: &[VulcanToolDescriptor],
 ) -> Option<String> {
-    // visibleManagedIds is the exact post-filter Vulcan-managed public tool-name set sent to the provider.
-    // visibleManagedIds 是发送给 Provider 的精确过滤后 Vulcan 托管公开工具名集合。
-    let visible_managed_ids = visible_tools
-        .iter()
-        .filter(|descriptor| descriptor.source == VulcanToolSourceKind::VulcanManaged)
-        .map(|descriptor| descriptor.id.as_str())
-        .collect::<BTreeSet<_>>();
-    if !CODEBASE_MEMORY_TOOL_IDS
-        .iter()
-        .all(|tool_id| visible_managed_ids.contains(tool_id))
-    {
+    let vce_visible = visible_tools.iter().any(|descriptor| {
+        descriptor.id == CODEBASE_RETRIEVAL_TOOL_ID
+            && descriptor.source == VulcanToolSourceKind::Native
+    });
+    if !vce_visible {
         return None;
     }
 
-    // visibleLuaSkillsIds is the exact post-filter LuaSkills public tool-name set sent to the provider.
-    // visibleLuaSkillsIds 是发送给 Provider 的精确过滤后 LuaSkills 公开工具名集合。
-    let visible_luaskills_ids = visible_tools
-        .iter()
-        .filter(|descriptor| descriptor.source == VulcanToolSourceKind::LuaSkills)
-        .map(|descriptor| descriptor.id.as_str())
-        .collect::<BTreeSet<_>>();
-    // routingPrompt includes CodeKit comparisons only when every referenced CodeKit tool is visible.
-    // routingPrompt 仅在引用的 CodeKit 工具全部可见时包含 CodeKit 对比说明。
-    let routing_prompt = if CODEKIT_DISCOVERY_TOOL_IDS
-        .iter()
-        .all(|tool_id| visible_luaskills_ids.contains(tool_id))
-    {
-        CODEBASE_MEMORY_CODEKIT_ROUTING_PROMPT
+    let complete_codekit_visible = CODEKIT_DISCOVERY_TOOL_IDS.iter().all(|tool_id| {
+        visible_tools.iter().any(|descriptor| {
+            descriptor.id == *tool_id && descriptor.source == VulcanToolSourceKind::LuaSkills
+        })
+    });
+    let routing_prompt = if complete_codekit_visible {
+        VCE_CODEKIT_ROUTING_PROMPT
     } else {
-        CODEBASE_MEMORY_ROUTING_PROMPT
+        VCE_ROUTING_PROMPT
     };
-
     Some(routing_prompt.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp::{
-        MANAGED_CODEBASE_MEMORY_READ_ONLY_TOOLS, managed_codebase_memory_public_tool_id,
-    };
 
     /// Builds one minimal visible tool descriptor for routing-prompt tests.
     /// 为路由提示词测试构建一条最小可见工具描述。
     ///
     /// # Parameters
     /// 参数
-    /// - `id`: Exact host-visible public tool identifier.
-    /// - `id`：宿主侧精确可见的公开工具标识。
+    /// - `id`: Exact host-visible tool identifier.
+    /// - `id`：宿主侧精确可见工具标识。
+    /// - `source`: Authoritative tool source family.
+    /// - `source`：权威工具来源家族。
     ///
     /// # Returns
     /// 返回值
-    /// A descriptor carrying the requested public identifier.
-    /// 一条携带指定公开标识的工具描述。
-    fn test_tool_descriptor(id: &str) -> VulcanToolDescriptor {
+    /// A descriptor carrying the requested identifier and source.
+    /// 一条携带指定标识与来源的工具描述。
+    fn test_tool_descriptor(id: &str, source: VulcanToolSourceKind) -> VulcanToolDescriptor {
         VulcanToolDescriptor {
             id: id.to_string(),
             name: id.to_string(),
             description: String::from("test tool"),
             help_text: None,
-            source: if id.starts_with("vulcan_codebase_memory_") {
-                VulcanToolSourceKind::VulcanManaged
-            } else {
-                VulcanToolSourceKind::LuaSkills
-            },
+            source,
         }
     }
 
-    /// Builds the complete visible CBM descriptor contract.
-    /// 构建完整可见的 CBM 工具描述契约。
+    /// Builds the canonical native VCE descriptor.
+    /// 构建规范原生 VCE 工具描述。
     ///
     /// # Returns
     /// 返回值
-    /// All host-visible read-only CBM tool descriptors.
-    /// 全部宿主侧可见的 CBM 只读工具描述。
-    fn codebase_memory_tool_descriptors() -> Vec<VulcanToolDescriptor> {
-        CODEBASE_MEMORY_TOOL_IDS
-            .iter()
-            .map(|tool_id| test_tool_descriptor(tool_id))
-            .collect()
+    /// The authoritative descriptor used by routing tests.
+    /// 路由测试使用的权威工具描述。
+    fn vce_tool_descriptor() -> VulcanToolDescriptor {
+        test_tool_descriptor(CODEBASE_RETRIEVAL_TOOL_ID, VulcanToolSourceKind::Native)
     }
 
-    /// Verifies the routing contract stays synchronized with the managed read-only tool allowlist.
-    /// 验证路由契约始终与托管只读工具白名单保持同步。
+    /// Verifies cross-family guidance appears when VCE and CodeKit are completely visible.
+    /// 验证 VCE 与 CodeKit 完整可见时生成跨工具家族说明。
     #[test]
-    fn codebase_memory_routing_contract_matches_managed_allowlist() {
-        let managed_contract = MANAGED_CODEBASE_MEMORY_READ_ONLY_TOOLS
-            .iter()
-            .map(|tool_name| {
-                managed_codebase_memory_public_tool_id(tool_name)
-                    .expect("managed read-only tools must have public identifiers")
-            })
-            .collect::<BTreeSet<_>>();
-        let routing_contract = CODEBASE_MEMORY_TOOL_IDS
-            .iter()
-            .map(|tool_id| (*tool_id).to_string())
-            .collect::<BTreeSet<_>>();
-
-        assert_eq!(routing_contract, managed_contract);
-    }
-
-    /// Verifies the cross-family prompt is selected when CBM and CodeKit are both complete.
-    /// 验证 CBM 与 CodeKit 均完整可见时选择跨工具家族提示词。
-    #[test]
-    fn appends_cross_family_prompt_for_complete_cbm_and_codekit_tools() {
-        // visibleTools models the final provider tool set for an enabled CBM project with CodeKit.
-        // visibleTools 模拟启用 CBM 且具备 CodeKit 的项目最终 Provider 工具集合。
-        let mut visible_tools = codebase_memory_tool_descriptors();
+    fn appends_cross_family_prompt_for_complete_vce_and_codekit_tools() {
+        let mut visible_tools = vec![vce_tool_descriptor()];
         visible_tools.extend(
             CODEKIT_DISCOVERY_TOOL_IDS
                 .iter()
-                .map(|tool_id| test_tool_descriptor(tool_id)),
+                .map(|tool_id| test_tool_descriptor(tool_id, VulcanToolSourceKind::LuaSkills)),
         );
-        // prompt is the final cross-family Developer Prompt contribution.
-        // prompt 是最终的跨工具家族 Developer Prompt 贡献。
+
         let prompt = codebase_tool_routing_prompt(&visible_tools)
             .expect("routing prompt should be produced");
         assert!(prompt.contains("## Codebase Tool Selection"));
+        assert!(prompt.contains("`codebase_retrieval`"));
         assert!(prompt.contains("`vulcan_codekit_rg`"));
-        assert!(prompt.contains("`vulcan_codebase_memory_search_graph`"));
     }
 
-    /// Verifies the graph-only prompt never references absent CodeKit tools.
-    /// 验证纯图谱提示词绝不引用缺失的 CodeKit 工具。
+    /// Verifies VCE-only guidance never references unavailable CodeKit tools.
+    /// 验证纯 VCE 说明不会引用不可用的 CodeKit 工具。
     #[test]
-    fn appends_cbm_only_prompt_when_codekit_tools_are_absent() {
-        // prompt is the final CBM-only Developer Prompt contribution.
-        // prompt 是最终仅包含 CBM 的 Developer Prompt 贡献。
-        let prompt = codebase_tool_routing_prompt(&codebase_memory_tool_descriptors())
-            .expect("CBM-only routing prompt should be produced");
-        assert!(prompt.contains("## Codebase Memory Tool Selection"));
+    fn appends_vce_only_prompt_when_codekit_tools_are_absent() {
+        let prompt = codebase_tool_routing_prompt(&[vce_tool_descriptor()])
+            .expect("VCE-only routing prompt should be produced");
+        assert!(prompt.contains("## Codebase Semantic Retrieval"));
         assert!(!prompt.contains("vulcan_codekit"));
     }
 
-    /// Verifies one missing CBM tool suppresses the complete routing contribution.
-    /// 验证缺少任意一个 CBM 工具时抑制完整路由提示贡献。
+    /// Verifies a partial CodeKit contract falls back to VCE-only guidance.
+    /// 验证不完整的 CodeKit 契约回退到纯 VCE 说明。
     #[test]
-    fn skips_prompt_when_cbm_tool_contract_is_incomplete() {
-        // visibleTools intentionally omits detect_changes from the required CBM contract.
-        // visibleTools 故意从必需 CBM 契约中省略 detect_changes。
-        let mut visible_tools = codebase_memory_tool_descriptors();
-        visible_tools.retain(|tool| tool.id != "vulcan_codebase_memory_detect_changes");
-        assert!(codebase_tool_routing_prompt(&visible_tools).is_none());
+    fn uses_vce_only_prompt_when_codekit_contract_is_incomplete() {
+        let visible_tools = vec![
+            vce_tool_descriptor(),
+            test_tool_descriptor("vulcan_codekit_rg", VulcanToolSourceKind::LuaSkills),
+        ];
+        let prompt = codebase_tool_routing_prompt(&visible_tools)
+            .expect("VCE-only routing prompt should be produced");
+        assert!(prompt.contains("## Codebase Semantic Retrieval"));
+        assert!(!prompt.contains("vulcan_codekit"));
     }
 
-    /// Verifies non-MCP tools cannot impersonate the CBM contract by occupying its public identifiers.
-    /// 验证非 MCP 工具无法通过占用 CBM 公开标识冒充其工具契约。
+    /// Verifies another source family cannot impersonate the native VCE tool.
+    /// 验证其他来源家族不能冒充原生 VCE 工具。
     #[test]
-    fn skips_prompt_when_cbm_public_ids_are_owned_by_another_source() {
-        // visibleTools uses the complete CBM names but intentionally assigns the wrong source family.
-        // visibleTools 使用完整 CBM 名称，但故意分配错误的来源家族。
-        let visible_tools = CODEBASE_MEMORY_TOOL_IDS
-            .iter()
-            .map(|tool_id| {
-                // descriptor intentionally carries a non-managed source for collision-hardening coverage.
-                // descriptor 故意携带非托管来源，用于覆盖名称冲突加固逻辑。
-                let mut descriptor = test_tool_descriptor(tool_id);
-                descriptor.source = VulcanToolSourceKind::LuaSkills;
-                descriptor
-            })
-            .collect::<Vec<_>>();
+    fn rejects_non_native_vce_identifier_collision() {
+        let visible_tools = vec![test_tool_descriptor(
+            CODEBASE_RETRIEVAL_TOOL_ID,
+            VulcanToolSourceKind::Mcp,
+        )];
         assert!(codebase_tool_routing_prompt(&visible_tools).is_none());
     }
 
     /// Verifies an empty final tool set never produces routing guidance.
-    /// 验证最终工具集合为空时绝不产生路由说明。
+    /// 验证最终工具集合为空时不会生成路由说明。
     #[test]
     fn skips_prompt_for_empty_final_tool_set() {
         assert!(codebase_tool_routing_prompt(&[]).is_none());

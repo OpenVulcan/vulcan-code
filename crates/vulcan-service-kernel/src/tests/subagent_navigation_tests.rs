@@ -218,7 +218,6 @@ fn registry_terminal_status_remains_visible_after_stale_listener_is_suppressed()
         workspace_snapshot: None,
         pending_prompt_process_mirrors: BTreeMap::new(),
         agent_runtime: None,
-        codebase_memory_controller: Default::default(),
         native_vmm_maintenance: None,
         vce_runtime: None,
         vce_watcher: None,

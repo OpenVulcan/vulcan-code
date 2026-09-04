@@ -3507,6 +3507,9 @@ mod tests {
         /// Whether path retrieval should add one uncovered first-Chunk fallback.
         /// 路径检索是否应添加一个未覆盖文件的首代码块回填。
         return_path_fallback: bool,
+        /// Canonical source path recorded for every staged Blob identity.
+        /// 为每个已暂存 Blob 身份记录的规范源码路径。
+        blob_paths: Arc<Mutex<BTreeMap<String, String>>>,
     }
 
     impl VceIndexPort for FakeIndex {
@@ -3536,6 +3539,12 @@ mod tests {
             request: IndexStageBatch,
         ) -> crate::ports::VceFuture<Result<IndexStageReceipt, VcePortError>> {
             *self.stage_call_count.lock().unwrap() += 1;
+            self.blob_paths.lock().unwrap().extend(
+                request
+                    .blobs
+                    .iter()
+                    .map(|blob| (blob.blob_name.clone(), blob.path.clone())),
+            );
             self.staged
                 .lock()
                 .unwrap()
@@ -3618,6 +3627,13 @@ mod tests {
         ) -> crate::ports::VceFuture<Result<VceSearchResponse, VcePortError>> {
             let mut hit = self.hit.clone();
             hit.blob_name = request.allowed_blobs.iter().next().cloned().unwrap();
+            hit.path = self
+                .blob_paths
+                .lock()
+                .unwrap()
+                .get(&hit.blob_name)
+                .cloned()
+                .expect("every searchable fake Blob must have a staged source path");
             if self.vary_dense_hit_by_query {
                 hit.content = format!("fn candidate_{}() {{}}", request.query_index);
                 hit.content_hash = crate::identity::content_hash(&hit.content);
@@ -3874,6 +3890,7 @@ mod tests {
                 hit: SearchHit::from_chunk(&chunk, 1.0, SearchSource::Dense, HitKind::Content),
                 vary_dense_hit_by_query: false,
                 return_path_fallback: false,
+                blob_paths: Arc::new(Mutex::new(BTreeMap::new())),
             },
             FakeSource,
             commits,
@@ -3923,6 +3940,123 @@ mod tests {
         assert_eq!(committed.len(), 1);
         assert_eq!(committed[0].state_snapshot, engine.state_snapshot());
         assert_eq!(engine.status().state, VceEngineState::Ready);
+    }
+
+    /// Measure a deterministic offline baseline without asserting machine-specific latency.
+    /// 测量确定性离线基线，但不对机器相关延迟作断言。
+    #[test]
+    #[ignore = "run explicitly when recording the VCE performance baseline"]
+    fn records_offline_performance_baseline() {
+        let mut engine = test_engine();
+        let (ai, index, source, _) = fake_host();
+        let embedding_operation_ids = Arc::clone(&ai.embedding_operation_ids);
+        let rewrite_call_count = Arc::clone(&ai.rewrite_call_count);
+        let rerank_candidate_counts = Arc::clone(&ai.rerank_candidate_counts);
+        let observations = (0..128)
+            .map(|index| {
+                let path = format!("src/module_{index:03}.rs");
+                let content = (0..12)
+                    .map(|function| {
+                        format!(
+                            "pub fn module_{index:03}_function_{function:02}() -> usize {{ {function} }}\n"
+                        )
+                    })
+                    .collect::<String>();
+                crate::workspace::FileObservation::present(
+                    path,
+                    content,
+                    Some(index as u128 + 1),
+                    crate::model::FileSource::Filesystem,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let initial_started = std::time::Instant::now();
+        let initial = block_on(engine.refresh(
+            RefreshRequest::full(
+                "performance-initial",
+                RefreshReason::Initial,
+                observations,
+                Some("baseline-1".to_owned()),
+            ),
+            &index,
+            &ai,
+            &source,
+        ))
+        .unwrap();
+        let initial_elapsed = initial_started.elapsed();
+        let initial_embedding_calls = embedding_operation_ids.lock().unwrap().len();
+        let retained_source_bytes = engine
+            .workspace_snapshot()
+            .records
+            .iter()
+            .filter_map(|record| record.content.as_ref())
+            .map(String::len)
+            .sum::<usize>();
+        let state_snapshot_bytes = serde_json::to_vec(&engine.state_snapshot()).unwrap().len();
+
+        let changed_content = (0..12)
+            .map(|function| {
+                format!(
+                    "pub fn module_000_function_{function:02}() -> usize {{ {} }}\n",
+                    function + 1
+                )
+            })
+            .collect::<String>();
+        let incremental_started = std::time::Instant::now();
+        let incremental = block_on(engine.refresh(
+            RefreshRequest::paths(
+                "performance-incremental",
+                RefreshReason::FileWatcher,
+                vec![crate::workspace::FileObservation::present(
+                    "src/module_000.rs",
+                    changed_content,
+                    Some(10_000),
+                    crate::model::FileSource::Filesystem,
+                )],
+                Vec::new(),
+                Some("baseline-2".to_owned()),
+            ),
+            &index,
+            &ai,
+            &source,
+        ))
+        .unwrap();
+        let incremental_elapsed = incremental_started.elapsed();
+        let incremental_embedding_calls = embedding_operation_ids
+            .lock()
+            .unwrap()
+            .len()
+            .saturating_sub(initial_embedding_calls);
+
+        let retrieval_started = std::time::Instant::now();
+        let retrieval = block_on(engine.retrieve(
+            RetrieveRequest::current_checkpoint("performance-retrieval", "find module function"),
+            &index,
+            &ai,
+        ))
+        .unwrap();
+        let retrieval_elapsed = retrieval_started.elapsed();
+
+        assert_eq!(initial.indexed_blobs.len(), 128);
+        assert_eq!(incremental.indexed_blobs.len(), 1);
+        assert_eq!(incremental.deleted_blobs.len(), 1);
+        assert!(incremental_embedding_calls < initial_embedding_calls);
+        assert_eq!(retained_source_bytes, 0);
+        assert_eq!(*rewrite_call_count.lock().unwrap(), 0);
+        assert_eq!(rerank_candidate_counts.lock().unwrap().len(), 1);
+        assert!(!retrieval.hits.is_empty());
+
+        println!(
+            "VCE_PERF initial_ms={} incremental_ms={} retrieval_us={} initial_embedding_calls={} incremental_embedding_calls={} query_rewrite_calls=0 rerank_calls=1 state_snapshot_bytes={} retained_source_bytes={}",
+            initial_elapsed.as_millis(),
+            incremental_elapsed.as_millis(),
+            retrieval_elapsed.as_micros(),
+            initial_embedding_calls,
+            incremental_embedding_calls,
+            state_snapshot_bytes,
+            retained_source_bytes,
+        );
     }
 
     /// Verify one refresh freezes AI capabilities once across content and path Embeddings.

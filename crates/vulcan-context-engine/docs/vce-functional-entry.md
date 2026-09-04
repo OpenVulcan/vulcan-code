@@ -202,9 +202,9 @@ RetrieveRequest
 
 `management_query` 只接受类型化查询，不接受 SQL、LanceDB 表名或任意谓词。VCE 会重新校验公开字段、分页上限、响应变体、过滤条件、游标、文件/Chunk/Blob 身份、作业阶段、完整性问题和维护动作。维护计划只读；真正删除、修复和重建必须通过 VulcanCode 独立授权命令执行。
 
-## 9. 融入 VulcanCode 前后的边界
+## 9. VulcanCode 原生集成边界
 
-仓外已经完成：
+VCE 领域内核已经完成：
 
 - OCE/OCE-client 领域流程、数据模型和失败语义提取；
 - 工作区、结构/回退、Symbol、Embedding、刷新、检索、管理和状态恢复逻辑；
@@ -212,17 +212,17 @@ RetrieveRequest
 - OCE 工具名称的静态目录映射；
 - 单元测试、格式化和严格 Clippy 验证。
 
-必须等待 VulcanCode 仓内统一契约后完成：
+VulcanCode 宿主已经完成：
 
-- 将 VMM-Core、知识库和 VCE 统一到同一套 LLM/Embedding/Rerank 注册接口；
-- 实现 `VceAiPort` 的实际适配与用途/额度/取消/deadline 投影；
-- 在 VLDB/SQLite 上实现 VCE 独立 namespace、staging、CAS commit、查询和管理端口；
-- 将现有文件/Git watcher 与刷新任务单飞、合并、重试和持久化接通；
-- 将 `codebase_retrieval` 接入原生工具完整暴露链；
-- 将类型化管理数据接入 VulcanCode 页面，并为破坏性维护建立独立确认链；
-- 选择并实现具体语言的完整 cAST parser/window analyzer，然后通过现有结构入口注册。
+- VMM-Core、知识库和 VCE 共用 `HostAiPort` 注册、用途、额度、deadline、错误和取消规则；
+- `VceHostAiAdapter` 为每个项目注册 `InternalBackground` capability，并在调用时刷新快照、冻结向量指纹、传播 Future 取消；
+- `vulcan-workspace-store` 通过 VLDB Controller 持有独立 SQLite namespace、精确符号索引与两张 LanceDB 向量表，并实现 stage、事务内 CAS commit、abort、恢复和派生清理；
+- service-owned 共享 watcher 同时服务 Git 与 VCE，VCE subscriber 独立完成路径归并、节流、失败重排和关闭收敛；
+- `codebase_retrieval` 已进入 Native Tool Catalog、策略过滤、执行上下文、结果投影和 VCE/CodeKit 路由说明；
+- 服务 API 与项目管理页已接入设置、状态、统计、分页数据、Blob/Chunk、作业、完整性和带 revision/checkpoint 的维护确认链；
+- 原生 CBM Controller、managed MCP、工具入口和运行时安装/同步链已经退出，历史数据只保留不删除。
 
-这些事项都涉及宿主事实、统一协议或实际资源，不能在仓外猜测实现。
+具体语言的完整 cAST parser/window analyzer 仍是可插拔增强项，不是当前索引可用性的前置条件。默认 `RecursiveStructureAnalyzer` 已提供确定性分块、保守符号抽取与失败回退；后续 parser 必须通过 `VceStructureAnalyzer` 注册并提升 `chunker_version`，不能绕过既有兼容性与回退边界。
 
 ## 10. 许可路线
 

@@ -279,7 +279,6 @@ pub(crate) fn test_service_state_with_parent_session(
         }),
         pending_prompt_process_mirrors: BTreeMap::new(),
         agent_runtime: None,
-        codebase_memory_controller: Default::default(),
         native_vmm_maintenance: None,
         vce_runtime: None,
         vce_watcher: None,

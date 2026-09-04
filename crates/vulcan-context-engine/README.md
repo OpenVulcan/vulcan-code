@@ -101,7 +101,7 @@ VCE 不执行维护计划；删除或重建必须由 VulcanCode 的独立命令�
 - [`docs/oce-code-semantic-logic-extraction.md`](docs/oce-code-semantic-logic-extraction.md)
 - [`docs/vce-functional-entry.md`](docs/vce-functional-entry.md)
 - [`docs/vce-tool-surface.md`](docs/vce-tool-surface.md)
-- [`docs/vulcancode-preintegration.md`](docs/vulcancode-preintegration.md)
+- [`docs/vulcancode-native-integration.md`](docs/vulcancode-native-integration.md)
 
 ## 验证
 

@@ -72,33 +72,6 @@ pub(super) fn mcp_tool_binding_to_vulcan(tool: &McpRuntimeToolBinding) -> Vulcan
     }
 }
 
-/// Builds one Vulcan-owned public descriptor for a host-managed Codebase Memory tool.
-/// 为单个宿主托管 Codebase Memory 工具构建 Vulcan 自有的公开描述。
-///
-/// # Parameters
-/// 参数
-/// `public_tool_id` is the validated model-visible Vulcan identifier.
-/// `public_tool_id` 是已经校验的模型可见 Vulcan 标识。
-/// `description` is the tool description discovered through the internal MCP transport.
-/// `description` 是通过内部 MCP 传输发现的工具描述。
-///
-/// # Returns
-/// 返回值
-/// Returns a descriptor classified as a Vulcan-managed tool instead of a direct MCP tool.
-/// 返回归类为 Vulcan 托管工具而非直连 MCP 工具的描述。
-pub(super) fn managed_codebase_memory_tool_descriptor(
-    public_tool_id: String,
-    description: &str,
-) -> VulcanToolDescriptor {
-    VulcanToolDescriptor {
-        id: public_tool_id.clone(),
-        name: public_tool_id,
-        description: description.to_string(),
-        help_text: None,
-        source: VulcanToolSourceKind::VulcanManaged,
-    }
-}
-
 /// Converts one native-tool Plan execution flag into the standalone manager Plan policy.
 /// 将单条原生工具的 Plan 执行许可标记转换为独立管理器的 Plan 策略。
 pub(super) fn native_plan_policy(descriptor: &NativeToolDescriptor) -> VulcanPlanToolPolicy {
@@ -147,21 +120,6 @@ fn entry_declares_reserved_parameter(entry: &RuntimeEntryDescriptor, parameter_n
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Verifies managed Codebase Memory descriptors expose Vulcan identity while preserving description.
-    /// 验证托管 Codebase Memory 描述公开 Vulcan 身份并保留工具描述。
-    #[test]
-    fn managed_codebase_memory_descriptor_uses_vulcan_managed_source() {
-        let descriptor = managed_codebase_memory_tool_descriptor(
-            String::from("vulcan_codebase_memory_search_graph"),
-            "Search indexed graph.",
-        );
-
-        assert_eq!(descriptor.id, "vulcan_codebase_memory_search_graph");
-        assert_eq!(descriptor.name, "vulcan_codebase_memory_search_graph");
-        assert_eq!(descriptor.description, "Search indexed graph.");
-        assert_eq!(descriptor.source, VulcanToolSourceKind::VulcanManaged);
-    }
 
     /// Verifies the mixed native file tool keeps only its read-only actions executable in Plan mode.
     /// 验证混合型原生文件工具在计划模式中只允许执行只读 action。

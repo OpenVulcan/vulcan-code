@@ -111,16 +111,15 @@ VceToolDefinition
 - AI 调用上下文固定携带 registration/profile/vector-space/purpose，宿主索引固定携带 namespace/schema/checkpoint binding；
 - VCE 功能入口已经实现源码端口、有界暂存、CAS 发布、严格回执和版本化状态恢复。
 
-仍需上层完成：
+VulcanCode 上层已经完成：
 
-- 将定义投影为 `VulcanToolCandidate` 并接入当前 `NativeToolCatalog`/工具准备链；
-- 将当前工作区、项目和会话授权绑定到执行上下文；
-- 将现有文件/Git watcher 和任务调度映射到 `RefreshRequest` 与状态持久化；
+- 将唯一 AI 可见定义投影到 `NativeToolCatalog`、工具策略、请求准备和执行链；
+- 从当前执行上下文注入权威项目身份，模型 Schema 只接受 `information_request`；
+- 将 service-owned 共享 watcher、项目运行管理器和状态持久化映射到 `RefreshRequest`；
 - 在 VLDB/SQLite 代码专属 namespace 上实现 `VceIndexPort` 与 `VceSourcePort`；
 - 将 VCE 检索编排连接到 VulcanCode 统一注册的 LLM、Embedding 和 Rerank 调用；
-- 把类型化管理查询投影到现有页面管理器，并为真正的修复/重建命令建立独立授权；
-- 将模型可见结果投影到 Vulcan 的工具回执和上下文显示；
-- 在真实 VulcanCode 运行时执行一次首个检索调用验收。
+- 把类型化管理查询投影到项目管理页，并为修复/重建建立预览、确认、revision 和 checkpoint 保护；
+- 将模型可见结果投影为有界结构化工具回执，同时保留生命周期错误；
+- 以真实 VLDB Controller 测试覆盖初建、提交重放、恢复和检索。
 
-这些未完成项是宿主接入工作，不应通过在 VCE 内创建第二套 Provider、存储或 MCP 运行时来
-填补。
+宿主集成仍保持单向依赖：VCE 不反向创建 Provider、存储、watcher、工具注册器、页面管理器或 MCP 运行时。

@@ -3,14 +3,15 @@
 
 mod ai_port;
 mod manager;
+mod services;
 mod source_port;
 mod watcher;
 
-pub(crate) use ai_port::{
-    VCE_QUERY_REWRITE_PURPOSE_ID, VceHostAiAdapter, VceHostAiRegistrationConfig,
+pub(crate) use ai_port::{VceHostAiAdapter, VceHostAiRegistrationConfig};
+pub(crate) use manager::{
+    VCE_REFRESH_CANCELLED_ERROR, VceProjectLifecycle, VceRuntimeManager, VceRuntimeProjectStatus,
+    VceRuntimeRetrieveResult,
 };
-pub(crate) use manager::{VceProjectLifecycle, VceRuntimeManager, VceRuntimeProjectStatus};
-pub(crate) use source_port::{
-    VcePathRefresh, VceProjectSourceAdapter, VceSourceLimits, VceSourceManifest,
-};
+pub(crate) use services::*;
+pub(crate) use source_port::{VceProjectSourceAdapter, VceSourceLimits};
 pub(crate) use watcher::VceWatcherService;

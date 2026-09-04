@@ -26,12 +26,12 @@ export function projectSettingsSections(project: ProjectSummary, workbench: Work
       detail: workbench.vmmMemory.projectDraft.hasOverride ? t("projectSettings.projectOverride") : t("projectSettings.inheritGlobal"),
     },
     {
-      id: "codebase-memory",
+      id: "code-context",
       icon: <Network size={16} />,
-      label: t("projectSettings.codebaseMemory.title"),
-      detail: project.codebaseMemoryEnabled
-        ? t("projectSettings.codebaseMemory.enabled")
-        : t("projectSettings.codebaseMemory.disabled"),
+      label: t("projectSettings.codeContext.title"),
+      detail: project.vceEnabled
+        ? t("projectSettings.codeContext.enabled")
+        : t("projectSettings.codeContext.disabled"),
     },
     {
       id: "knowledge-bases",

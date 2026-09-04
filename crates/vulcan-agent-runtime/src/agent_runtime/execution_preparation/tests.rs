@@ -1,7 +1,7 @@
 use super::tool_exposure::{
     ExecutionToolExposureSelection, ToolExposureSelectorState, filter_luaskill_prompt_entries,
     filter_luaskills_entries, filter_native_tool_ids, filter_resolved_tool_set_by_tool_exposure,
-    managed_codebase_memory_tool_is_visible, vulcan_tool_descriptor_is_visible,
+    vulcan_tool_descriptor_is_visible,
 };
 use super::{append_vulcan_plugin_prompt_contributions, prepare_execution_with_tool_snapshot};
 use crate::agent_profile::AgentProfileCatalog;
@@ -399,60 +399,6 @@ fn execution_tool_exposure_filters_luaskill_prompt_entries_with_family_overrides
     assert_eq!(filtered[0].name, "vulcan-codekit-rg");
 }
 
-/// Verifies managed Codebase Memory visibility uses global Vulcan selectors and ignores MCP overrides.
-/// 验证托管 Codebase Memory 可见性使用全局 Vulcan 选择器并忽略 MCP 覆盖。
-#[test]
-fn execution_tool_exposure_isolates_managed_codebase_memory_from_mcp_overrides() {
-    let mcp_disabled_snapshot = ToolExposureSnapshot {
-        mcp_server_overrides: json!({
-            "disabled": ["search_graph"],
-            "disabled_servers": ["vulcan-codebase-memory"]
-        }),
-        ..ToolExposureSnapshot::default()
-    };
-    let mcp_disabled_selectors = ToolExposureSelectorState::from_snapshot(&mcp_disabled_snapshot);
-    assert!(managed_codebase_memory_tool_is_visible(
-        "search_graph",
-        "Search indexed code graph.",
-        &mcp_disabled_selectors
-    ));
-
-    let globally_disabled_snapshot = ToolExposureSnapshot {
-        disabled_tools: vec![String::from("vulcan_codebase_memory_search_graph")],
-        ..ToolExposureSnapshot::default()
-    };
-    let globally_disabled_selectors =
-        ToolExposureSelectorState::from_snapshot(&globally_disabled_snapshot);
-    assert!(!managed_codebase_memory_tool_is_visible(
-        "search_graph",
-        "Search indexed code graph.",
-        &globally_disabled_selectors
-    ));
-
-    let new_public_id_snapshot = ToolExposureSnapshot {
-        allowed_tools: vec![String::from("vulcan_codebase_memory_search_graph")],
-        ..ToolExposureSnapshot::default()
-    };
-    let new_public_id_selectors = ToolExposureSelectorState::from_snapshot(&new_public_id_snapshot);
-    assert!(managed_codebase_memory_tool_is_visible(
-        "search_graph",
-        "Search indexed code graph.",
-        &new_public_id_selectors
-    ));
-
-    let retired_public_id_snapshot = ToolExposureSnapshot {
-        allowed_tools: vec![String::from("mcp_vulcan_codebase_memory_search_graph")],
-        ..ToolExposureSnapshot::default()
-    };
-    let retired_public_id_selectors =
-        ToolExposureSelectorState::from_snapshot(&retired_public_id_snapshot);
-    assert!(!managed_codebase_memory_tool_is_visible(
-        "search_graph",
-        "Search indexed code graph.",
-        &retired_public_id_selectors
-    ));
-}
-
 /// Verifies legacy global tool allow-lists do not hide configured AI fallback tools.
 /// 验证旧版全局工具白名单不会隐藏已配置的 AI 回退工具。
 #[test]
@@ -836,7 +782,7 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
     ExecutionPreparationRequest {
         session_id,
         session_storage_directory: None,
-        managed_codebase_memory: None,
+        vce_retrieval_handler: None,
         execution_scope: ExecutionScope::MainSession {
             session_id: SessionNodeId::from(session_id),
         },

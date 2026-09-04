@@ -513,6 +513,7 @@ export function WorkbenchLayout(props: {
   if (!projectSettingsRevisionInitializedRef.current) {
     for (const [projectId, revisions] of Object.entries(workbenchState.projectSettingsRevisions.byProject)) {
       acceptedProjectSettingsRevisionByKeyRef.current.set(`${projectId}:vmm`, revisions.vmm);
+      acceptedProjectSettingsRevisionByKeyRef.current.set(`${projectId}:vce`, revisions.vce);
       acceptedProjectSettingsRevisionByKeyRef.current.set(`${projectId}:agentSkills`, revisions.agentSkills);
     }
     projectSettingsRevisionInitializedRef.current = true;
@@ -601,8 +602,8 @@ export function WorkbenchLayout(props: {
     acceptedProjectSettingsRevisionByKeyRef.current.clear();
     acceptedGlobalProjectSettingsRevisionByDomainRef.current = {
       vmm: 0,
+      vce: 0,
       agentSkills: 0,
-      codebaseMemory: 0,
     };
     return true;
   }, []);
@@ -1519,13 +1520,13 @@ export function WorkbenchLayout(props: {
         acceptedGlobalProjectSettingsRevisionByDomainRef.current.vmm,
         props.workbench.projectSettingsRevisions.global.vmm,
       ),
+      vce: Math.max(
+        acceptedGlobalProjectSettingsRevisionByDomainRef.current.vce,
+        props.workbench.projectSettingsRevisions.global.vce,
+      ),
       agentSkills: Math.max(
         acceptedGlobalProjectSettingsRevisionByDomainRef.current.agentSkills,
         props.workbench.projectSettingsRevisions.global.agentSkills,
-      ),
-      codebaseMemory: Math.max(
-        acceptedGlobalProjectSettingsRevisionByDomainRef.current.codebaseMemory,
-        props.workbench.projectSettingsRevisions.global.codebaseMemory,
       ),
     };
     acceptedGlobalProjectSettingsRevisionByDomainRef.current = acceptedGlobalSettings;
@@ -1541,23 +1542,20 @@ export function WorkbenchLayout(props: {
           acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:vmm`) ?? 0,
           revisions.vmm,
         ),
+        vce: Math.max(
+          acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:vce`) ?? 0,
+          revisions.vce,
+        ),
         agentSkills: Math.max(
           acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:agentSkills`) ?? 0,
           revisions.agentSkills,
         ),
-        codebaseMemory: Math.max(
-          acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:codebaseMemory`) ?? 0,
-          revisions.codebaseMemory,
-        ),
       };
       acceptedProjectSettingsRevisionByKeyRef.current.set(`${projectId}:vmm`, acceptedRevisions.vmm);
+      acceptedProjectSettingsRevisionByKeyRef.current.set(`${projectId}:vce`, acceptedRevisions.vce);
       acceptedProjectSettingsRevisionByKeyRef.current.set(
         `${projectId}:agentSkills`,
         acceptedRevisions.agentSkills,
-      );
-      acceptedProjectSettingsRevisionByKeyRef.current.set(
-        `${projectId}:codebaseMemory`,
-        acceptedRevisions.codebaseMemory,
       );
       acceptedProjectSettings[projectId] = acceptedRevisions;
     }
@@ -1784,8 +1782,8 @@ export function WorkbenchLayout(props: {
         const acceptedDomains = acceptedProjectSettingsRevisions.get(projectId)
           ?? {
             vmm: acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:vmm`) ?? 0,
+            vce: acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:vce`) ?? 0,
             agentSkills: acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:agentSkills`) ?? 0,
-            codebaseMemory: acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:codebaseMemory`) ?? 0,
           };
         acceptedProjectSettingsRevisions.set(projectId, {
           ...acceptedDomains,
@@ -2073,16 +2071,16 @@ export function WorkbenchLayout(props: {
               globalProjectSettingsRevision.vmm,
               projectSettingsRevisionById[projectSettingsTarget.project.id]?.vmm ?? 0,
             ),
+            vce: Math.max(
+              globalProjectSettingsRevision.vce,
+              projectSettingsRevisionById[projectSettingsTarget.project.id]?.vce ?? 0,
+            ),
             agentSkills: Math.max(
               globalProjectSettingsRevision.agentSkills,
               projectSettingsRevisionById[projectSettingsTarget.project.id]?.agentSkills ?? 0,
             ),
-            codebaseMemory: Math.max(
-              globalProjectSettingsRevision.codebaseMemory,
-              projectSettingsRevisionById[projectSettingsTarget.project.id]?.codebaseMemory ?? 0,
-            ),
           }
-          : { vmm: 0, agentSkills: 0, codebaseMemory: 0 }}
+          : { vmm: 0, vce: 0, agentSkills: 0 }}
         projectSettingsTarget={projectSettingsTarget}
         removeProjectSubmitting={removeProjectSubmitting}
         removeProjectTarget={removeProjectTarget}

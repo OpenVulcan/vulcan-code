@@ -656,7 +656,7 @@ function applyWorkbenchDeltaPayload(
       // currentProjectRevisions provides the complete initial pair for a project's first focused delta.
       // currentProjectRevisions 为项目首次聚焦增量提供完整的初始版本对。
       const currentProjectRevisions = workbench.projectSettingsRevisions.byProject[changedProjectId]
-        ?? { vmm: 0, agentSkills: 0, codebaseMemory: 0 };
+      ?? { vmm: 0, vce: 0, agentSkills: 0 };
       return {
         ...workbench,
         projectSettingsRevisions: {

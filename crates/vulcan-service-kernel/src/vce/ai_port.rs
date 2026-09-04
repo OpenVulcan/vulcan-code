@@ -272,23 +272,38 @@ impl VceHostAiAdapter {
         let mut handle = port
             .register_capability(registration)
             .map_err(|error| format!("register VCE HostAI capability: {error}"))?;
-        handle.snapshot = port
-            .capability_snapshot(&handle)
-            .map_err(|error| format!("refresh VCE HostAI capability: {error}"))?;
-        let dimension = resolve_embedding_dimension(&handle.snapshot, config.dimension)?;
-        let embedding_contract = embedding_contract(&handle.snapshot, dimension)?;
-        let binding = VceAiBinding::new(
-            handle.registration_id.clone(),
-            handle.consumer_profile_id.clone(),
-            config.vector_space_id.clone(),
-        )
-        .map_err(|error| error.to_string())?;
-        let embedding_space = EmbeddingSpace {
-            vector_space_id: config.vector_space_id,
-            physical_fingerprint: Some(embedding_contract.physical_fingerprint.clone()),
-            dimension: dimension as usize,
-            preprocessing_version: config.preprocessing_version,
-            chunker_version: config.chunker_version,
+        let registration_id = handle.registration_id.clone();
+        let activation = (|| {
+            handle.snapshot = port
+                .capability_snapshot(&handle)
+                .map_err(|error| format!("refresh VCE HostAI capability: {error}"))?;
+            let dimension = resolve_embedding_dimension(&handle.snapshot, config.dimension)?;
+            let embedding_contract = embedding_contract(&handle.snapshot, dimension)?;
+            let binding = VceAiBinding::new(
+                handle.registration_id.clone(),
+                handle.consumer_profile_id.clone(),
+                config.vector_space_id.clone(),
+            )
+            .map_err(|error| error.to_string())?;
+            let embedding_space = EmbeddingSpace {
+                vector_space_id: config.vector_space_id,
+                physical_fingerprint: Some(embedding_contract.physical_fingerprint.clone()),
+                dimension: dimension as usize,
+                preprocessing_version: config.preprocessing_version,
+                chunker_version: config.chunker_version,
+            };
+            Ok::<_, String>((handle, binding, embedding_space, embedding_contract))
+        })();
+        let (handle, binding, embedding_space, embedding_contract) = match activation {
+            Ok(activated) => activated,
+            Err(error) => {
+                return match port.unregister_capability(&registration_id) {
+                    Ok(()) => Err(error),
+                    Err(cleanup_error) => Err(format!(
+                        "{error}; unregister failed VCE HostAI activation: {cleanup_error}"
+                    )),
+                };
+            }
         };
         Ok(Self {
             port,
@@ -1128,5 +1143,66 @@ mod tests {
                 ..
             }
         ));
+
+        let timeout = map_host_error(
+            VcePortOperation::Embedding,
+            HostAiError::new(HostAiErrorCode::Timeout, "deadline exceeded"),
+        );
+        assert!(matches!(
+            timeout,
+            VcePortError::Failed {
+                operation: VcePortOperation::Embedding,
+                ..
+            }
+        ));
+
+        let rate_limited = map_host_error(
+            VcePortOperation::Rerank,
+            HostAiError::new(HostAiErrorCode::RateLimited, "retry later"),
+        );
+        assert!(matches!(
+            rate_limited,
+            VcePortError::Failed {
+                operation: VcePortOperation::Rerank,
+                ..
+            }
+        ));
+    }
+
+    /// Verifies a post-registration contract failure unregisters the partial capability.
+    /// 验证注册后的契约失败会注销部分建立的能力。
+    #[test]
+    fn failed_activation_unregisters_partial_capability() {
+        let mock = MockHostAiPort::new();
+        mock.set_capability_snapshot(InferenceCapabilitySnapshot {
+            contract_version: INFERENCE_CONTRACT_VERSION,
+            consumer_profile_id: String::from("vce"),
+            operations: vec![vulcan_ai_contract::InferenceOperationCapability {
+                operation: AiOperation::EmbeddingCreate,
+                purpose_id: None,
+                available: true,
+                unavailable_reason: None,
+                route: None,
+                embedding: None,
+                rerank: None,
+            }],
+        })
+        .expect("configure malformed post-registration snapshot");
+        let port: Arc<dyn HostAiPort> = Arc::new(mock.clone());
+
+        let error = VceHostAiAdapter::activate(port, registration_config())
+            .expect_err("missing strong embedding contract should reject activation");
+
+        assert!(
+            error.contains("Embedding route snapshot is missing"),
+            "unexpected activation error: {error}"
+        );
+        let mut replacement = vce_capability_registration(&registration_config());
+        replacement.owner_id = String::from("replacement-owner");
+        let replacement_handle = mock
+            .register_capability(replacement)
+            .expect("failed activation must not retain the old owner registration");
+        mock.unregister_capability(&replacement_handle.registration_id)
+            .expect("clean replacement registration");
     }
 }

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use sha2::{Digest, Sha256};
-use tokio::sync::{Mutex, Notify, RwLock};
+use tokio::sync::{Mutex, Notify, RwLock, RwLockReadGuard};
 use uuid::Uuid;
 use vulcan_ai_contract::HostAiPort;
 use vulcan_context_engine::{
@@ -20,6 +20,8 @@ use vulcan_workbench_model::ProjectVceSettings;
 use vulcan_workspace_store::vce_data_plane::{
     VceDataPlaneHandle, VceProjectIndex, VceProjectIndexConfig,
 };
+
+use crate::ServiceEventEmitter;
 
 use super::{
     VceHostAiAdapter, VceHostAiRegistrationConfig, VceProjectSourceAdapter, VceSourceLimits,
@@ -123,12 +125,27 @@ pub(crate) struct VceRuntimeManager {
     /// Host-owned shared VCE SQLite and LanceDB data plane.
     /// 宿主持有的共享 VCE SQLite 与 LanceDB 数据面。
     data_plane: VceDataPlaneHandle,
+    /// Service event boundary used to publish lifecycle transitions as they occur.
+    /// 用于在生命周期转换发生时发布事件的服务事件边界。
+    event_emitter: ServiceEventEmitter,
     /// Successfully activated project runtimes keyed by workbench project ID.
     /// 按工作台项目 ID 索引的已成功激活项目运行时。
     projects: Arc<RwLock<BTreeMap<String, Arc<VceProjectRuntime>>>>,
     /// Failed activation records retained for management and retry.
     /// 为管理与重试保留的激活失败记录。
     activation_failures: Arc<RwLock<BTreeMap<String, VceActivationFailure>>>,
+    /// Manager-wide lifecycle gate that lets shutdown exclude project activation atomically.
+    /// 使关闭流程能够原子排斥项目激活的管理器级生命周期闸门。
+    lifecycle_gate: Arc<RwLock<()>>,
+    /// Stable per-project gates serializing runtime replacement and removal.
+    /// 串行化运行时替换与移除的稳定项目级闸门。
+    project_lifecycle_gates: Arc<Mutex<BTreeMap<String, Arc<Mutex<()>>>>>,
+    /// Sticky shutdown state preventing project activation after teardown begins.
+    /// 防止拆卸开始后再次激活项目的粘性关闭状态。
+    shutting_down: Arc<AtomicBool>,
+    /// Whether runtime teardown has removed project handles and requires reconciliation on resume.
+    /// 运行时拆卸是否已移除项目句柄并要求恢复时重新协调。
+    teardown_started: Arc<AtomicBool>,
 }
 
 /// One activated project runtime with atomic committed-engine replacement.
@@ -167,6 +184,9 @@ struct VceProjectRuntime {
     /// Currently running refresh cancellation handle, if any.
     /// 当前正在运行的刷新取消句柄（如果有）。
     active_refresh: Mutex<Option<VceActiveRefresh>>,
+    /// Admission and drain boundary for every runtime operation.
+    /// 每项运行时操作的接纳与排空边界。
+    operation_admission: VceOperationAdmission,
 }
 
 /// One host-cancellable refresh identity retained only while its future is running.
@@ -191,6 +211,63 @@ struct VceRefreshCancellation {
     /// Async notification wakes the active refresh future.
     /// 异步通知唤醒活动刷新 Future。
     notify: Arc<Notify>,
+}
+
+/// Race-safe admission boundary that drains active operations before runtime teardown.
+/// 在运行时拆卸前排空活动操作的竞态安全接纳边界。
+#[derive(Default)]
+struct VceOperationAdmission {
+    /// Sticky state rejecting every operation after stop begins.
+    /// 在停止开始后拒绝全部操作的粘性状态。
+    accepting: AtomicBool,
+    /// Read leases held by operations and acquired exclusively by teardown.
+    /// 由操作持有读租约、由拆卸流程独占获取的闸门。
+    gate: RwLock<()>,
+}
+
+impl VceOperationAdmission {
+    /// Creates an admission boundary that initially accepts operations.
+    /// 创建一开始接纳操作的边界。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A fresh accepting boundary.
+    /// 返回全新的接纳边界。
+    fn accepting() -> Self {
+        Self {
+            accepting: AtomicBool::new(true),
+            gate: RwLock::new(()),
+        }
+    }
+
+    /// Stops new admissions before teardown waits for existing read leases.
+    /// 在拆卸等待现有读租约前停止新的操作接纳。
+    fn stop(&self) {
+        self.accepting.store(false, Ordering::Release);
+    }
+
+    /// Admits one operation while closing the check-versus-lock race with teardown.
+    /// 接纳一项操作，并消除检查与加锁之间的拆卸竞态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `project_id` identifies the runtime in rejection diagnostics.
+    /// `project_id` 在拒绝诊断中标识运行时。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A read lease held until completion, or an explicit stopping error.
+    /// 返回持有到完成的读租约，或明确的停止错误。
+    async fn begin(&self, project_id: &str) -> Result<RwLockReadGuard<'_, ()>, String> {
+        if !self.accepting.load(Ordering::Acquire) {
+            return Err(format!("VCE project `{project_id}` is stopping"));
+        }
+        let lease = self.gate.read().await;
+        if !self.accepting.load(Ordering::Acquire) {
+            return Err(format!("VCE project `{project_id}` is stopping"));
+        }
+        Ok(lease)
+    }
 }
 
 impl VceRefreshCancellation {
@@ -239,6 +316,57 @@ struct VceActivationFailure {
     error: String,
 }
 
+/// Typed activation error separating host AI configuration from runtime failures.
+/// 将宿主 AI 配置问题与运行时失败分离的类型化激活错误。
+struct VceActivationError {
+    /// Whether user or system AI configuration must change before retry.
+    /// 重试前是否必须修改用户或系统 AI 配置。
+    blocked_configuration: bool,
+    /// Exact bounded-ready diagnostic retained by the manager.
+    /// 由管理器保留且可限制长度的精确诊断。
+    error: String,
+}
+
+impl VceActivationError {
+    /// Builds one deterministic configuration-blocked activation error.
+    /// 构建一项确定性的配置阻塞激活错误。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `error` is the exact configuration diagnostic.
+    /// `error` 是精确配置诊断。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A typed blocked-configuration error.
+    /// 返回类型化配置阻塞错误。
+    fn configuration(error: impl ToString) -> Self {
+        Self {
+            blocked_configuration: true,
+            error: error.to_string(),
+        }
+    }
+
+    /// Builds one runtime activation failure that does not imply AI reconfiguration.
+    /// 构建一项不表示需要重新配置 AI 的运行时激活失败。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `error` is the exact runtime diagnostic.
+    /// `error` 是精确运行时诊断。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A typed non-configuration activation error.
+    /// 返回类型化非配置激活错误。
+    fn runtime(error: impl ToString) -> Self {
+        Self {
+            blocked_configuration: false,
+            error: error.to_string(),
+        }
+    }
+}
+
 impl VceRuntimeManager {
     /// Create one manager over the already bootstrapped host AI and data-plane services.
     /// 在已完成引导的宿主 AI 与数据面服务上创建一个管理器。
@@ -249,18 +377,47 @@ impl VceRuntimeManager {
     /// `ai_port` 是进程级统一 HostAI 边界。
     /// `data_plane` is the host-owned VCE storage handle.
     /// `data_plane` 是宿主持有的 VCE 存储句柄。
+    /// `event_emitter` publishes project lifecycle transitions to connected surfaces.
+    /// `event_emitter` 向已连接界面发布项目生命周期转换。
     ///
     /// # Returns
     /// 返回值
     /// An empty manager ready for lazy project activation.
     /// 返回可延迟激活项目的空管理器。
-    pub(crate) fn new(ai_port: Arc<dyn HostAiPort>, data_plane: VceDataPlaneHandle) -> Self {
+    pub(crate) fn new(
+        ai_port: Arc<dyn HostAiPort>,
+        data_plane: VceDataPlaneHandle,
+        event_emitter: ServiceEventEmitter,
+    ) -> Self {
         Self {
             ai_port,
             data_plane,
+            event_emitter,
             projects: Arc::new(RwLock::new(BTreeMap::new())),
             activation_failures: Arc::new(RwLock::new(BTreeMap::new())),
+            lifecycle_gate: Arc::new(RwLock::new(())),
+            project_lifecycle_gates: Arc::new(Mutex::new(BTreeMap::new())),
+            shutting_down: Arc::new(AtomicBool::new(false)),
+            teardown_started: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Closes admission synchronously before the host cancels active agent tasks.
+    /// 在宿主取消活动智能体任务前同步关闭接纳。
+    pub(crate) fn begin_shutdown(&self) {
+        self.shutting_down.store(true, Ordering::Release);
+    }
+
+    /// Reopens admission after a failed application shutdown attempt.
+    /// 在应用关闭尝试失败后重新开放接纳。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when teardown had started and persisted projects must be reconciled again.
+    /// 当拆卸已经开始且必须重新协调持久化项目时返回 `true`。
+    pub(crate) fn resume_after_failed_shutdown(&self) -> bool {
+        self.shutting_down.store(false, Ordering::Release);
+        self.teardown_started.swap(false, Ordering::AcqRel)
     }
 
     /// Enable one project, restore compatible state, and perform an authoritative full refresh.
@@ -285,9 +442,17 @@ impl VceRuntimeManager {
         project_root: &Path,
         settings: ProjectVceSettings,
     ) -> Result<RefreshResult, String> {
-        settings.validate()?;
         if !settings.enabled {
             return Err(String::from("VCE project settings are disabled"));
+        }
+        let _manager_lifecycle = self.lifecycle_gate.read().await;
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(String::from("VCE runtime manager is shutting down"));
+        }
+        let project_lifecycle = self.project_lifecycle_gate(project_id).await;
+        let _project_lifecycle = project_lifecycle.lock().await;
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(String::from("VCE runtime manager is shutting down"));
         }
         if let Some(previous) = self.projects.write().await.remove(project_id) {
             self.stop_runtime(&previous).await?;
@@ -303,21 +468,25 @@ impl VceRuntimeManager {
                     .write()
                     .await
                     .insert(project_id.to_owned(), Arc::clone(&runtime));
+                // Initial indexing is cancellable by a later disable or replacement command, so
+                // lifecycle serialization ends immediately after the new runtime is published.
+                // 初始索引可被后续禁用或替换命令取消，因此新运行时发布后立即结束生命周期串行化。
+                drop(_project_lifecycle);
+                drop(_manager_lifecycle);
                 self.refresh_full_runtime(&runtime, RefreshReason::Initial)
                     .await
             }
             Err(error) => {
-                let blocked_configuration = is_configuration_error(&error);
                 self.projects.write().await.remove(project_id);
                 self.activation_failures.write().await.insert(
                     project_id.to_owned(),
                     VceActivationFailure {
                         config_revision,
-                        blocked_configuration,
-                        error: bounded_error(error.clone()),
+                        blocked_configuration: error.blocked_configuration,
+                        error: bounded_error(error.error.clone()),
                     },
                 );
-                Err(error)
+                Err(error.error)
             }
         }
     }
@@ -336,6 +505,9 @@ impl VceRuntimeManager {
     /// 移除运行时与激活失败记录后返回成功。
     pub(crate) async fn disable_project(&self, project_id: &str) -> Result<(), String> {
         validate_project_identity(project_id, 1)?;
+        let _manager_lifecycle = self.lifecycle_gate.read().await;
+        let project_lifecycle = self.project_lifecycle_gate(project_id).await;
+        let _project_lifecycle = project_lifecycle.lock().await;
         let runtime = self.projects.write().await.remove(project_id);
         self.activation_failures.write().await.remove(project_id);
         if let Some(runtime) = runtime {
@@ -387,8 +559,13 @@ impl VceRuntimeManager {
         reason: RefreshReason,
     ) -> Result<RefreshResult, String> {
         let runtime = self.require_project(project_id).await?;
+        let _operation = runtime.begin_operation().await?;
         let _refresh_guard = runtime.refresh_gate.lock().await;
-        let manifest = runtime.source.scan_full().await?;
+        self.begin_refresh(&runtime).await;
+        let manifest = match runtime.source.scan_full().await {
+            Ok(manifest) => manifest,
+            Err(error) => return Err(self.fail_runtime(&runtime, error).await),
+        };
         let request = RefreshRequest::full_rebuild(
             request_id(project_id, "rebuild"),
             reason,
@@ -412,6 +589,7 @@ impl VceRuntimeManager {
     /// 返回存储持有的清理队列收敛后的成功结果。
     pub(crate) async fn cleanup_staging(&self, project_id: &str) -> Result<(), String> {
         let runtime = self.require_project(project_id).await?;
+        let _operation = runtime.begin_operation().await?;
         let _refresh_guard = runtime.refresh_gate.lock().await;
         runtime.index.cleanup_abandoned_staging().await
     }
@@ -480,7 +658,9 @@ impl VceRuntimeManager {
         reason: RefreshReason,
     ) -> Result<Option<RefreshResult>, String> {
         let runtime = self.require_project(project_id).await?;
+        let _operation = runtime.begin_operation().await?;
         let _refresh_guard = runtime.refresh_gate.lock().await;
+        self.begin_refresh(&runtime).await;
         let current_handle = runtime.current_engine.read().await.clone();
         let current_snapshot = current_handle.lock().await.workspace_snapshot();
         let removed_directory_requires_full = relative_paths.iter().any(|path| {
@@ -490,9 +670,15 @@ impl VceRuntimeManager {
                     .iter()
                     .any(|record| record.path.starts_with(format!("{path}/").as_str()))
         });
-        let delta = runtime.source.scan_paths(relative_paths).await?;
+        let delta = match runtime.source.scan_paths(relative_paths).await {
+            Ok(delta) => delta,
+            Err(error) => return Err(self.fail_runtime(&runtime, error).await),
+        };
         if delta.requires_full_refresh || removed_directory_requires_full {
-            let manifest = runtime.source.scan_full().await?;
+            let manifest = match runtime.source.scan_full().await {
+                Ok(manifest) => manifest,
+                Err(error) => return Err(self.fail_runtime(&runtime, error).await),
+            };
             let request = RefreshRequest::full(
                 request_id(project_id, "full"),
                 reason,
@@ -505,6 +691,13 @@ impl VceRuntimeManager {
                 .map(Some);
         }
         if delta.observations.is_empty() && delta.removed_paths.is_empty() {
+            runtime.set_ready().await;
+            super::services::emit_vce_runtime_changed(
+                &self.event_emitter,
+                self,
+                &runtime.project_id,
+            )
+            .await;
             return Ok(None);
         }
         let request = RefreshRequest::paths(
@@ -541,6 +734,7 @@ impl VceRuntimeManager {
             return Err(String::from("VCE information_request must not be empty"));
         }
         let runtime = self.require_project(project_id).await?;
+        let _operation = runtime.begin_operation().await?;
         let engine_handle = runtime.current_engine.read().await.clone();
         let mut engine = engine_handle.lock().await;
         let checkpoint_version = engine.status().checkpoint_version.ok_or_else(|| {
@@ -580,6 +774,7 @@ impl VceRuntimeManager {
         project_id: &str,
     ) -> Result<VceManagementSnapshot, String> {
         let runtime = self.require_project(project_id).await?;
+        let _operation = runtime.begin_operation().await?;
         let engine_handle = runtime.current_engine.read().await.clone();
         let engine = engine_handle.lock().await;
         engine
@@ -614,6 +809,7 @@ impl VceRuntimeManager {
         request: VceManagementQueryRequest,
     ) -> Result<VceManagementQueryResponse, String> {
         let runtime = self.require_project(project_id).await?;
+        let _operation = runtime.begin_operation().await?;
         let engine_handle = runtime.current_engine.read().await.clone();
         let engine = engine_handle.lock().await;
         engine
@@ -664,6 +860,9 @@ impl VceRuntimeManager {
     /// Success when every registered project was removed.
     /// 所有已注册项目均移除后返回成功。
     pub(crate) async fn shutdown(&self) -> Result<(), String> {
+        self.begin_shutdown();
+        let _manager_lifecycle = self.lifecycle_gate.write().await;
+        self.teardown_started.store(true, Ordering::Release);
         let runtimes = std::mem::take(&mut *self.projects.write().await)
             .into_values()
             .collect::<Vec<_>>();
@@ -688,125 +887,160 @@ impl VceRuntimeManager {
         project_id: &str,
         project_root: &Path,
         settings: ProjectVceSettings,
-    ) -> Result<Arc<VceProjectRuntime>, String> {
-        validate_project_identity(project_id, settings.revision)?;
-        settings.validate()?;
+    ) -> Result<Arc<VceProjectRuntime>, VceActivationError> {
+        validate_project_identity(project_id, settings.revision)
+            .map_err(VceActivationError::runtime)?;
+        settings
+            .validate()
+            .map_err(VceActivationError::configuration)?;
         let preliminary_stage_bytes = (4 * 1_048_576_u64).max(settings.max_file_bytes);
         let preliminary_limits =
-            VceSourceLimits::new(settings.max_file_bytes, 8, preliminary_stage_bytes)?;
-        let source = Arc::new(VceProjectSourceAdapter::activate(
-            project_root,
-            preliminary_limits,
-            &settings.extra_ignore_patterns,
-        )?);
+            VceSourceLimits::new(settings.max_file_bytes, 8, preliminary_stage_bytes)
+                .map_err(VceActivationError::runtime)?;
+        let source = Arc::new(
+            VceProjectSourceAdapter::activate(
+                project_root,
+                preliminary_limits,
+                &settings.extra_ignore_patterns,
+            )
+            .map_err(VceActivationError::runtime)?,
+        );
         let project_root = crate::normalized_workspace_path_text_from_path(source.project_root());
         let root_hash = hex::encode(Sha256::digest(project_root.as_bytes()));
         let checkpoint_chain_id = format!("project:{project_id}:root:{root_hash}");
         let vector_space_id = format!("code-semantic:{project_id}:{root_hash}");
-        let ai = Arc::new(VceHostAiAdapter::activate(
-            Arc::clone(&self.ai_port),
-            VceHostAiRegistrationConfig {
-                project_id: project_id.to_owned(),
-                consumer_profile_id: String::from(VCE_CONSUMER_PROFILE_ID),
-                vector_space_id: vector_space_id.clone(),
-                dimension: None,
-                preprocessing_version: String::from(VCE_PREPROCESSING_VERSION),
-                chunker_version: String::from(VCE_CHUNKER_VERSION),
-            },
-        )?);
-        let mut config = vulcan_context_engine::VceConfig::new(
-            checkpoint_chain_id.clone(),
-            ai.embedding_space().clone(),
-        )
-        .map_err(|error| error.to_string())?;
-        config.indexing.max_file_bytes = settings.max_file_bytes;
-        config.index_stage_max_bytes = config.index_stage_max_bytes.max(settings.max_file_bytes);
-        config.embedding_max_concurrency = settings.embedding_max_concurrency;
-        config.query_max_concurrency = settings.query_max_concurrency;
-        config.retrieval.coverage.max_results = settings.max_results;
-        config.retrieval.coverage.max_chars = settings.max_context_chars;
-        config.validate().map_err(|error| error.to_string())?;
-        let source_limits = VceSourceLimits::new(
-            config.indexing.max_file_bytes,
-            config.index_stage_blob_limit,
-            config.index_stage_max_bytes,
-        )?;
-        let source = Arc::new(VceProjectSourceAdapter::activate(
-            source.project_root(),
-            source_limits,
-            &settings.extra_ignore_patterns,
-        )?);
-        let binding = VceIndexBinding::new(
-            config.index_namespace_id.clone(),
-            checkpoint_chain_id,
-            config.index_schema_version,
-            ai.embedding_space().clone(),
-        )
-        .map_err(|error| error.to_string())?;
-        let dimension = u32::try_from(ai.embedding_space().dimension)
-            .map_err(|error| format!("VCE embedding dimension exceeds u32: {error}"))?;
-        let physical_fingerprint = ai
-            .embedding_space()
-            .physical_fingerprint
-            .clone()
-            .ok_or_else(|| String::from("VCE physical embedding fingerprint is missing"))?;
-        let index = Arc::new(
-            self.data_plane
-                .open_project_index(VceProjectIndexConfig {
+        let ai = Arc::new(
+            VceHostAiAdapter::activate(
+                Arc::clone(&self.ai_port),
+                VceHostAiRegistrationConfig {
                     project_id: project_id.to_owned(),
-                    root_path: project_root.clone(),
-                    root_hash,
-                    binding,
-                    vector_space_id,
-                    physical_fingerprint,
+                    consumer_profile_id: String::from(VCE_CONSUMER_PROFILE_ID),
+                    vector_space_id: vector_space_id.clone(),
+                    dimension: None,
                     preprocessing_version: String::from(VCE_PREPROCESSING_VERSION),
                     chunker_version: String::from(VCE_CHUNKER_VERSION),
-                    dimension,
-                    config_revision: settings.revision,
-                })
-                .await?,
+                },
+            )
+            .map_err(VceActivationError::configuration)?,
         );
-        let expected_identity = VceStateIdentity::new(
-            config.index_namespace_id.clone(),
-            config.checkpoint_chain_id.clone(),
-            config.index_schema_version,
-            config.embedding_space.clone(),
-        );
-        let (engine, initial_lifecycle) = match self
-            .data_plane
-            .load_state_snapshot(&config.index_namespace_id)
-            .await?
-        {
-            Some(snapshot) if snapshot.identity == expected_identity => (
-                VceEngine::from_state_snapshot(config.clone(), snapshot)
-                    .map_err(|error| error.to_string())?,
-                VceProjectLifecycle::Restoring,
-            ),
-            Some(_) => (
-                VceEngine::new(config.clone()).map_err(|error| error.to_string())?,
-                VceProjectLifecycle::RebuildRequired,
-            ),
-            None => (
-                VceEngine::new(config.clone()).map_err(|error| error.to_string())?,
-                VceProjectLifecycle::Activating,
-            ),
-        };
-        Ok(Arc::new(VceProjectRuntime {
-            project_id: project_id.to_owned(),
-            config,
-            config_revision: settings.revision,
-            settings,
-            ai,
-            index,
-            source,
-            current_engine: RwLock::new(Arc::new(Mutex::new(engine))),
-            refresh_gate: Mutex::new(()),
-            host_status: RwLock::new(VceHostStatus {
-                lifecycle: initial_lifecycle,
-                last_error: None,
-            }),
-            active_refresh: Mutex::new(None),
-        }))
+        let activation = async {
+            let mut config = vulcan_context_engine::VceConfig::new(
+                checkpoint_chain_id.clone(),
+                ai.embedding_space().clone(),
+            )
+            .map_err(|error| error.to_string())?;
+            config.indexing.max_file_bytes = settings.max_file_bytes;
+            config.index_stage_max_bytes =
+                config.index_stage_max_bytes.max(settings.max_file_bytes);
+            config.embedding_max_concurrency = settings.embedding_max_concurrency;
+            config.query_max_concurrency = settings.query_max_concurrency;
+            config.retrieval.coverage.max_results = settings.max_results;
+            config.retrieval.coverage.max_chars = settings.max_context_chars;
+            config.validate().map_err(|error| error.to_string())?;
+            let source_limits = VceSourceLimits::new(
+                config.indexing.max_file_bytes,
+                config.index_stage_blob_limit,
+                config.index_stage_max_bytes,
+            )?;
+            let source = Arc::new(VceProjectSourceAdapter::activate(
+                source.project_root(),
+                source_limits,
+                &settings.extra_ignore_patterns,
+            )?);
+            let binding = VceIndexBinding::new(
+                config.index_namespace_id.clone(),
+                checkpoint_chain_id,
+                config.index_schema_version,
+                ai.embedding_space().clone(),
+            )
+            .map_err(|error| error.to_string())?;
+            let dimension = u32::try_from(ai.embedding_space().dimension)
+                .map_err(|error| format!("VCE embedding dimension exceeds u32: {error}"))?;
+            let physical_fingerprint = ai
+                .embedding_space()
+                .physical_fingerprint
+                .clone()
+                .ok_or_else(|| String::from("VCE physical embedding fingerprint is missing"))?;
+            let index = Arc::new(
+                self.data_plane
+                    .open_project_index(VceProjectIndexConfig {
+                        project_id: project_id.to_owned(),
+                        root_path: project_root.clone(),
+                        root_hash,
+                        binding,
+                        vector_space_id,
+                        physical_fingerprint,
+                        preprocessing_version: String::from(VCE_PREPROCESSING_VERSION),
+                        chunker_version: String::from(VCE_CHUNKER_VERSION),
+                        dimension,
+                        config_revision: settings.revision,
+                    })
+                    .await?,
+            );
+            let expected_identity = VceStateIdentity::new(
+                config.index_namespace_id.clone(),
+                config.checkpoint_chain_id.clone(),
+                config.index_schema_version,
+                config.embedding_space.clone(),
+            );
+            let (engine, initial_lifecycle) = match self
+                .data_plane
+                .load_state_snapshot(&config.index_namespace_id)
+                .await?
+            {
+                Some(snapshot) if snapshot.identity == expected_identity => {
+                    match VceEngine::from_state_snapshot(config.clone(), snapshot) {
+                        Ok(engine) => (engine, VceProjectLifecycle::Restoring),
+                        Err(_) => {
+                            index.reset_incompatible_state().await?;
+                            (
+                                VceEngine::new(config.clone())
+                                    .map_err(|error| error.to_string())?,
+                                VceProjectLifecycle::RebuildRequired,
+                            )
+                        }
+                    }
+                }
+                Some(_) => {
+                    index.reset_incompatible_state().await?;
+                    (
+                        VceEngine::new(config.clone()).map_err(|error| error.to_string())?,
+                        VceProjectLifecycle::RebuildRequired,
+                    )
+                }
+                None => (
+                    VceEngine::new(config.clone()).map_err(|error| error.to_string())?,
+                    VceProjectLifecycle::Activating,
+                ),
+            };
+            Ok::<_, String>(Arc::new(VceProjectRuntime {
+                project_id: project_id.to_owned(),
+                config,
+                config_revision: settings.revision,
+                settings,
+                ai: Arc::clone(&ai),
+                index,
+                source,
+                current_engine: RwLock::new(Arc::new(Mutex::new(engine))),
+                refresh_gate: Mutex::new(()),
+                host_status: RwLock::new(VceHostStatus {
+                    lifecycle: initial_lifecycle,
+                    last_error: None,
+                }),
+                active_refresh: Mutex::new(None),
+                operation_admission: VceOperationAdmission::accepting(),
+            }))
+        }
+        .await;
+        match activation {
+            Ok(runtime) => Ok(runtime),
+            Err(error) => match ai.deactivate() {
+                Ok(()) => Err(VceActivationError::runtime(error)),
+                Err(cleanup_error) => Err(VceActivationError::runtime(format!(
+                    "{error}; cleanup failed VCE HostAI activation: {cleanup_error}"
+                ))),
+            },
+        }
     }
 
     /// Refresh one project from a complete filesystem manifest under its serial gate.
@@ -816,20 +1050,24 @@ impl VceRuntimeManager {
         runtime: &Arc<VceProjectRuntime>,
         reason: RefreshReason,
     ) -> Result<RefreshResult, String> {
+        let _operation = runtime.begin_operation().await?;
         let _refresh_guard = runtime.refresh_gate.lock().await;
+        self.begin_refresh(runtime).await;
         let manifest = match runtime.source.scan_full().await {
             Ok(manifest) => manifest,
-            Err(error) => {
-                runtime.set_failure(bounded_error(error.clone())).await;
-                return Err(error);
-            }
+            Err(error) => return Err(self.fail_runtime(runtime, error).await),
         };
-        let request = RefreshRequest::full(
-            request_id(&runtime.project_id, "full"),
-            reason,
-            manifest.observations,
-            None,
+        let requires_rebuild =
+            runtime.host_status.read().await.lifecycle == VceProjectLifecycle::RebuildRequired;
+        let refresh_id = request_id(
+            &runtime.project_id,
+            if requires_rebuild { "rebuild" } else { "full" },
         );
+        let request = if requires_rebuild {
+            RefreshRequest::full_rebuild(refresh_id, reason, manifest.observations, None)
+        } else {
+            RefreshRequest::full(refresh_id, reason, manifest.observations, None)
+        };
         self.refresh_runtime_locked(runtime, request).await
     }
 
@@ -840,13 +1078,15 @@ impl VceRuntimeManager {
         runtime: &Arc<VceProjectRuntime>,
         request: RefreshRequest,
     ) -> Result<RefreshResult, String> {
-        runtime.set_refreshing().await;
         let current_handle = runtime.current_engine.read().await.clone();
         let base_snapshot = current_handle.lock().await.state_snapshot();
         let base_generation = base_snapshot.workspace.generation;
         let base_has_checkpoint = base_snapshot.workspace.checkpoint.is_some();
-        let mut working = VceEngine::from_state_snapshot(runtime.config.clone(), base_snapshot)
-            .map_err(|error| error.to_string())?;
+        let mut working =
+            match VceEngine::from_state_snapshot(runtime.config.clone(), base_snapshot) {
+                Ok(working) => working,
+                Err(error) => return Err(self.fail_runtime(runtime, error.to_string()).await),
+            };
         let request_id = request.request_id.clone();
         let cancellation = VceRefreshCancellation::default();
         {
@@ -895,17 +1135,23 @@ impl VceRuntimeManager {
                     })
                     .await;
                 if let Err(error) = abort_result {
-                    runtime
-                        .set_failure(bounded_error(format!(
-                            "{VCE_REFRESH_CANCELLED_ERROR}; staging cleanup failed: {error}"
-                        )))
-                        .await;
-                    return Err(format!(
-                        "{VCE_REFRESH_CANCELLED_ERROR}; staging cleanup failed: {error}"
-                    ));
+                    return Err(self
+                        .fail_runtime(
+                            runtime,
+                            format!(
+                                "{VCE_REFRESH_CANCELLED_ERROR}; staging cleanup failed: {error}"
+                            ),
+                        )
+                        .await);
                 }
             }
             runtime.set_cancelled(base_has_checkpoint).await;
+            super::services::emit_vce_runtime_changed(
+                &self.event_emitter,
+                self,
+                &runtime.project_id,
+            )
+            .await;
             return Err(String::from(VCE_REFRESH_CANCELLED_ERROR));
         };
         match result {
@@ -915,20 +1161,61 @@ impl VceRuntimeManager {
                 // 改变检查点的刷新已在提交事务内原子持久化状态；无提交的刷新则在此持久化计数与摘要。
                 if result.commit_receipt.is_none() {
                     let snapshot = working.state_snapshot();
-                    self.data_plane
+                    if let Err(error) = self
+                        .data_plane
                         .persist_state_snapshot(&runtime.config.index_namespace_id, &snapshot)
-                        .await?;
+                        .await
+                    {
+                        return Err(self.fail_runtime(runtime, error).await);
+                    }
                 }
                 *runtime.current_engine.write().await = Arc::new(Mutex::new(working));
                 runtime.set_ready().await;
+                super::services::emit_vce_runtime_changed(
+                    &self.event_emitter,
+                    self,
+                    &runtime.project_id,
+                )
+                .await;
                 Ok(result)
             }
-            Err(error) => {
-                let message = bounded_error(error.to_string());
-                runtime.set_failure(message.clone()).await;
-                Err(message)
-            }
+            Err(error) => Err(self.fail_runtime(runtime, error.to_string()).await),
         }
+    }
+
+    /// Publish the beginning of one serialized refresh before source scanning starts.
+    /// 在源码扫描开始前发布一次串行刷新已启动状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `runtime` is the exact admitted project runtime.
+    /// `runtime` 是已接纳的精确项目运行时。
+    async fn begin_refresh(&self, runtime: &Arc<VceProjectRuntime>) {
+        runtime.set_refreshing().await;
+        super::services::emit_vce_runtime_changed(&self.event_emitter, self, &runtime.project_id)
+            .await;
+    }
+
+    /// Retain and publish one bounded project failure before returning it to the caller.
+    /// 在向调用方返回前保留并发布一条有界项目失败。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `runtime` is the exact project whose operation failed.
+    /// `runtime` 是操作失败的精确项目。
+    /// `error` is the unbounded source diagnostic.
+    /// `error` 是未限制长度的来源诊断。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The same bounded diagnostic retained in runtime state.
+    /// 返回与运行时状态中保留内容相同的有界诊断。
+    async fn fail_runtime(&self, runtime: &Arc<VceProjectRuntime>, error: String) -> String {
+        let error = bounded_error(error);
+        runtime.set_failure(error.clone()).await;
+        super::services::emit_vce_runtime_changed(&self.event_emitter, self, &runtime.project_id)
+            .await;
+        error
     }
 
     /// Stop one runtime after cancelling and joining its serialized refresh boundary.
@@ -944,18 +1231,44 @@ impl VceRuntimeManager {
     /// Success after no refresh can use the deactivated HostAI registration.
     /// 在没有刷新可再使用已注销 HostAI 注册后返回成功。
     async fn stop_runtime(&self, runtime: &Arc<VceProjectRuntime>) -> Result<(), String> {
+        runtime.operation_admission.stop();
         runtime.set_stopping().await;
         if let Some(active) = runtime.active_refresh.lock().await.clone() {
             active.cancellation.cancel();
         }
+        let _operation_drain = runtime.operation_admission.gate.write().await;
         let _refresh_guard = runtime.refresh_gate.lock().await;
         runtime.index.cleanup_abandoned_staging().await?;
         runtime.ai.deactivate()
     }
 
+    /// Return the stable serialization gate for one project lifecycle.
+    /// 返回单个项目生命周期的稳定串行化闸门。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `project_id` is the authoritative project identity.
+    /// `project_id` 是权威项目身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A process-lifetime gate shared by every enable and disable command for the project.
+    /// 返回该项目全部启用与禁用命令共享的进程生命周期闸门。
+    async fn project_lifecycle_gate(&self, project_id: &str) -> Arc<Mutex<()>> {
+        let mut gates = self.project_lifecycle_gates.lock().await;
+        Arc::clone(
+            gates
+                .entry(project_id.to_owned())
+                .or_insert_with(|| Arc::new(Mutex::new(()))),
+        )
+    }
+
     /// Resolve one active project or preserve its blocked activation diagnostic.
     /// 解析一个活动项目，或保留其受阻激活诊断。
     async fn require_project(&self, project_id: &str) -> Result<Arc<VceProjectRuntime>, String> {
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(String::from("VCE runtime manager is shutting down"));
+        }
         if let Some(runtime) = self.projects.read().await.get(project_id).cloned() {
             return Ok(runtime);
         }
@@ -975,6 +1288,17 @@ impl VceRuntimeManager {
 }
 
 impl VceProjectRuntime {
+    /// Admit one runtime operation while rejecting stale references after stop begins.
+    /// 在停止开始后拒绝陈旧引用，并接纳一项运行时操作。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A read lease held until the operation ends, or an explicit stopping diagnostic.
+    /// 返回持有到操作结束的读租约，或明确的停止诊断。
+    async fn begin_operation(&self) -> Result<RwLockReadGuard<'_, ()>, String> {
+        self.operation_admission.begin(&self.project_id).await
+    }
+
     /// Build one current management-safe project status.
     /// 构建一份当前管理安全项目状态。
     async fn status(&self) -> VceRuntimeProjectStatus {
@@ -1121,25 +1445,6 @@ fn bounded_error(error: String) -> String {
     error.chars().take(2_048).collect()
 }
 
-/// Classify activation failures that require public AI or vector configuration.
-/// 分类需要公共 AI 或向量配置的激活失败。
-///
-/// # Parameters
-/// 参数
-/// `error` is one normalized activation diagnostic.
-/// `error` 是一条规范化激活诊断。
-///
-/// # Returns
-/// 返回值
-/// `true` only for exact HostAI capability/configuration diagnostics.
-/// 仅对明确 HostAI 能力或配置诊断返回 `true`。
-fn is_configuration_error(error: &str) -> bool {
-    error.contains("HostAI")
-        || error.contains("Inference consumer profile")
-        || error.contains("embedding dimension")
-        || error.contains("Embedding route")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1162,13 +1467,53 @@ mod tests {
         );
     }
 
-    /// Configuration failures are classified without treating filesystem errors as blocked AI.
-    /// 配置失败分类不会把文件系统错误误判为 AI 配置阻塞。
+    /// Typed activation failures never infer configuration ownership from message text.
+    /// 类型化激活失败绝不根据消息文本推断配置归属。
     #[test]
-    fn activation_failure_classification_is_narrow() {
-        assert!(is_configuration_error(
-            "VCE HostAI Embedding route is unavailable"
-        ));
-        assert!(!is_configuration_error("canonicalize project path failed"));
+    fn activation_failure_classification_is_explicit() {
+        let configuration = VceActivationError::configuration("route unavailable");
+        let runtime = VceActivationError::runtime("HostAI text inside filesystem failure");
+
+        assert!(configuration.blocked_configuration);
+        assert!(!runtime.blocked_configuration);
+    }
+
+    /// Verifies teardown rejects new work and cannot drain until every active lease ends.
+    /// 验证拆卸会拒绝新工作，并且只有全部活动租约结束后才能完成排空。
+    #[tokio::test]
+    async fn operation_admission_rejects_stale_work_and_drains_existing_work() {
+        let admission = VceOperationAdmission::accepting();
+        let active_lease = admission
+            .begin("project-a")
+            .await
+            .expect("active runtime should admit work");
+
+        admission.stop();
+
+        assert_eq!(
+            admission
+                .begin("project-a")
+                .await
+                .expect_err("stopping runtime should reject new work"),
+            "VCE project `project-a` is stopping"
+        );
+        assert!(admission.gate.try_write().is_err());
+        drop(active_lease);
+        assert!(admission.gate.try_write().is_ok());
+    }
+
+    /// Verifies a cancellation requested before awaiting remains observable.
+    /// 验证等待前发出的取消请求仍然可观察。
+    #[tokio::test]
+    async fn refresh_cancellation_is_sticky() {
+        let cancellation = VceRefreshCancellation::default();
+        cancellation.cancel();
+
+        tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            cancellation.cancelled(),
+        )
+        .await
+        .expect("an early cancellation should resolve immediately");
     }
 }

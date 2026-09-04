@@ -9,15 +9,16 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import type {
-  CodebaseMemoryProjectSettingsSummary,
+  VceProjectOverviewResponse,
+  VceProjectSettingsInput,
   VmmConfigDraftSummary,
   WorkbenchSnapshot,
 } from "@/types";
+import { CodeContextArea } from "@/components/features/code-context/code-context-area";
 import { useI18n } from "@/i18n";
 import {
   ProjectAgentSkillsSection,
   ProjectAttachmentCleanupSection,
-  ProjectCodebaseMemorySection,
   ProjectOverviewSection,
   ProjectVmmSection,
 } from "./project-settings-sections";
@@ -55,11 +56,11 @@ export {
   projectConversationCount,
 } from "./project-settings-utils";
 import {
-  loadProjectCodebaseMemorySettings,
-  refreshProjectCodebaseMemorySettings,
-  setProjectCodebaseMemoryEnabled,
-  updateProjectCodebaseMemoryIndex as requestProjectCodebaseMemoryIndex,
-} from "@/service/codebase-memory-service";
+  loadVceProjectOverview,
+  refreshVceProject,
+  subscribeVceProjectChanged,
+  updateVceProjectSettings,
+} from "@/service/vce-service";
 
 // PROJECT_SETTINGS_RETRY_BASE_DELAY_MS is the first reconnect recovery delay.
 // PROJECT_SETTINGS_RETRY_BASE_DELAY_MS 是首次连接恢复重试的等待时间。
@@ -179,15 +180,18 @@ export function ProjectSettingsDialog(props: {
   // cleanupReport stores the latest successful cleanup execution report.
   // cleanupReport 保存最近一次成功的清理执行报告。
   const [cleanupReport, setCleanupReport] = React.useState<ProjectAttachmentCleanupReportSummary | null>(null);
-  // codebaseMemorySettings stores the authoritative managed MCP state for this project.
-  // codebaseMemorySettings 保存当前项目的权威托管 MCP 状态。
-  const [codebaseMemorySettings, setCodebaseMemorySettings] = React.useState<CodebaseMemoryProjectSettingsSummary | null>(null);
-  // codebaseMemoryLoading tracks the latest authoritative settings read.
-  // codebaseMemoryLoading 跟踪最近一次权威设置读取。
-  const [codebaseMemoryLoading, setCodebaseMemoryLoading] = React.useState(false);
-  // codebaseMemoryMutationBusy tracks one user-initiated save or reindex request.
-  // codebaseMemoryMutationBusy 跟踪一次用户发起的保存或重建请求。
-  const [codebaseMemoryMutationBusy, setCodebaseMemoryMutationBusy] = React.useState(false);
+  // vceOverview stores the authoritative native code-context state for this project.
+  // vceOverview 保存当前项目的权威原生代码上下文状态。
+  const [vceOverview, setVceOverview] = React.useState<VceProjectOverviewResponse | null>(null);
+  // vceLoading tracks the latest authoritative overview read.
+  // vceLoading 跟踪最近一次权威概览读取。
+  const [vceLoading, setVceLoading] = React.useState(false);
+  // vceMutationBusy tracks one user-initiated settings save or refresh.
+  // vceMutationBusy 跟踪一次用户发起的设置保存或刷新。
+  const [vceMutationBusy, setVceMutationBusy] = React.useState(false);
+  // vceEventNonce reloads authoritative status after watcher-driven lifecycle events.
+  // vceEventNonce 在监听驱动的生命周期事件后重新加载权威状态。
+  const [vceEventNonce, setVceEventNonce] = React.useState(0);
   // loadedVmmRevisionByProjectRef advances only after one VMM read succeeds.
   // loadedVmmRevisionByProjectRef 仅在一次 VMM 读取成功后推进。
   const loadedVmmRevisionByProjectRef = React.useRef<Map<string, number>>(new Map());
@@ -233,12 +237,12 @@ export function ProjectSettingsDialog(props: {
   // cleanupOperationInFlightRef synchronously rejects duplicate preview or execute requests.
   // cleanupOperationInFlightRef 同步拒绝重复的预览或执行请求。
   const cleanupOperationInFlightRef = React.useRef(false);
-  // codebaseMemoryRequestSequenceRef prevents an older project response from overwriting a newer read.
-  // codebaseMemoryRequestSequenceRef 防止较旧项目响应覆盖较新的读取。
-  const codebaseMemoryRequestSequenceRef = React.useRef(0);
-  // codebaseMemoryMutationInFlightRef synchronously rejects duplicate save or reindex actions.
-  // codebaseMemoryMutationInFlightRef 同步拒绝重复的保存或重建操作。
-  const codebaseMemoryMutationInFlightRef = React.useRef(false);
+  // vceRequestSequenceRef prevents an older project response from overwriting a newer read.
+  // vceRequestSequenceRef 防止较旧项目响应覆盖较新的读取。
+  const vceRequestSequenceRef = React.useRef(0);
+  // vceMutationInFlightRef synchronously rejects duplicate settings or refresh actions.
+  // vceMutationInFlightRef 同步拒绝重复的设置或刷新操作。
+  const vceMutationInFlightRef = React.useRef(false);
 
   React.useLayoutEffect(() => {
     // A fresh object distinguishes closing and reopening the same project from the previous dialog lifetime.
@@ -250,8 +254,8 @@ export function ProjectSettingsDialog(props: {
     agentSaveInFlightRef.current = false;
     cleanupOperationSequenceRef.current += 1;
     cleanupOperationInFlightRef.current = false;
-    codebaseMemoryRequestSequenceRef.current += 1;
-    codebaseMemoryMutationInFlightRef.current = false;
+    vceRequestSequenceRef.current += 1;
+    vceMutationInFlightRef.current = false;
   }, [projectId]);
 
   React.useLayoutEffect(() => {
@@ -284,9 +288,37 @@ export function ProjectSettingsDialog(props: {
     setCleanupBusy("idle");
     setCleanupPreview(null);
     setCleanupReport(null);
-    setCodebaseMemorySettings(null);
-    setCodebaseMemoryLoading(false);
-    setCodebaseMemoryMutationBusy(false);
+    setVceOverview(null);
+    setVceLoading(false);
+    setVceMutationBusy(false);
+    setVceEventNonce(0);
+  }, [projectId]);
+
+  React.useEffect(() => {
+    if (projectId === null) {
+      return;
+    }
+    let cancelled = false;
+    let unsubscribe: (() => void) | null = null;
+    void subscribeVceProjectChanged((event) => {
+      if (!cancelled && event.projectId === projectId) {
+        setVceEventNonce((current) => current + 1);
+      }
+    }).then((stop) => {
+      if (cancelled) {
+        stop();
+      } else {
+        unsubscribe = stop;
+      }
+    }).catch((error) => {
+      if (!cancelled) {
+        toast.error(error instanceof Error ? error.message : String(error));
+      }
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }, [projectId]);
 
   React.useEffect(() => {
@@ -295,28 +327,28 @@ export function ProjectSettingsDialog(props: {
     }
     const targetProjectId = projectId;
     const requestOwner = projectActionOwnerRef.current;
-    const requestSequence = codebaseMemoryRequestSequenceRef.current + 1;
-    codebaseMemoryRequestSequenceRef.current = requestSequence;
+    const requestSequence = vceRequestSequenceRef.current + 1;
+    vceRequestSequenceRef.current = requestSequence;
     let cancelled = false;
-    setCodebaseMemoryLoading(true);
-    void loadProjectCodebaseMemorySettings(targetProjectId)
-      .then((settings) => {
-        if (settings.projectId !== targetProjectId) {
-          throw new Error("Codebase Memory settings returned a mismatched project identity.");
+    setVceLoading(true);
+    void loadVceProjectOverview(targetProjectId)
+      .then((overview) => {
+        if (overview.status.projectId !== targetProjectId) {
+          throw new Error("VCE overview returned a mismatched project identity.");
         }
         if (
           !cancelled
           && projectActionOwnerRef.current === requestOwner
-          && codebaseMemoryRequestSequenceRef.current === requestSequence
+          && vceRequestSequenceRef.current === requestSequence
         ) {
-          setCodebaseMemorySettings(settings);
+          setVceOverview(overview);
         }
       })
       .catch((error) => {
         if (
           !cancelled
           && projectActionOwnerRef.current === requestOwner
-          && codebaseMemoryRequestSequenceRef.current === requestSequence
+          && vceRequestSequenceRef.current === requestSequence
         ) {
           toast.error(error instanceof Error ? error.message : String(error));
         }
@@ -325,15 +357,15 @@ export function ProjectSettingsDialog(props: {
         if (
           !cancelled
           && projectActionOwnerRef.current === requestOwner
-          && codebaseMemoryRequestSequenceRef.current === requestSequence
+          && vceRequestSequenceRef.current === requestSequence
         ) {
-          setCodebaseMemoryLoading(false);
+          setVceLoading(false);
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [projectId, props.settingsRevision.codebaseMemory]);
+  }, [projectId, props.settingsRevision.vce, vceEventNonce]);
 
   React.useEffect(() => {
     if (projectId === null || vmmDirty || vmmSaveInFlight) {
@@ -458,8 +490,7 @@ export function ProjectSettingsDialog(props: {
   // effectiveProject 在下一份工作台投影到达前镜像刚保存的设置。
   const effectiveProject = {
     ...project,
-    codebaseMemoryEnabled:
-      codebaseMemorySettings?.enabled ?? project.codebaseMemoryEnabled,
+    vceEnabled: vceOverview?.settings.enabled ?? project.vceEnabled,
   };
   const sections = projectSettingsSections(effectiveProject, props.workbench, t);
   const attachmentRoot = projectAttachmentRoot(project);
@@ -668,121 +699,94 @@ export function ProjectSettingsDialog(props: {
   const cleanupPreviewMatchesCurrent = cleanupPreview
     && cleanupPreview.cutoffDate === cleanupCutoffDate
     && cleanupPreview.matchedAssetCount > 0;
-  // codebaseMemoryBusy disables actions while either the authoritative read or one mutation is active.
-  // codebaseMemoryBusy 在权威读取或一次变更进行期间禁用操作。
-  const codebaseMemoryBusy = codebaseMemoryLoading || codebaseMemoryMutationBusy;
+  // vceBusy disables actions while either the authoritative read or one mutation is active.
+  // vceBusy 在权威读取或一次变更进行期间禁用操作。
+  const vceBusy = vceLoading || vceMutationBusy;
 
-  // updateCodebaseMemoryEnabled persists one exact project setting and keeps returned diagnostics authoritative.
-  // updateCodebaseMemoryEnabled 持久化一个精确项目设置，并以返回诊断为权威。
-  const updateCodebaseMemoryEnabled = async (enabled: boolean) => {
-    if (!projectId || codebaseMemoryBusy || codebaseMemoryMutationInFlightRef.current) {
+  // saveVceSettings persists one complete settings document and reloads authoritative diagnostics.
+  // saveVceSettings 持久化一份完整设置文档，并重新加载权威诊断。
+  const saveVceSettings = async (settings: VceProjectSettingsInput): Promise<void> => {
+    if (!projectId || !vceOverview || vceBusy || vceMutationInFlightRef.current) {
       return;
     }
     const targetProjectId = projectId;
     const requestOwner = projectActionOwnerRef.current;
-    const requestSequence = codebaseMemoryRequestSequenceRef.current + 1;
-    codebaseMemoryRequestSequenceRef.current = requestSequence;
-    codebaseMemoryMutationInFlightRef.current = true;
-    setCodebaseMemoryMutationBusy(true);
+    const requestSequence = vceRequestSequenceRef.current + 1;
+    vceRequestSequenceRef.current = requestSequence;
+    vceMutationInFlightRef.current = true;
+    setVceMutationBusy(true);
     try {
-      const settings = await setProjectCodebaseMemoryEnabled(targetProjectId, enabled);
-      if (settings.projectId !== targetProjectId) {
-        throw new Error("Codebase Memory settings returned a mismatched project identity.");
+      const saved = await updateVceProjectSettings(
+        targetProjectId,
+        vceOverview.settings.revision,
+        settings,
+      );
+      const overview = await loadVceProjectOverview(targetProjectId);
+      if (overview.status.projectId !== targetProjectId || overview.settings.revision !== saved.revision) {
+        throw new Error("VCE settings reload returned an inconsistent project revision.");
       }
       if (
         projectActionOwnerRef.current === requestOwner
-        && codebaseMemoryRequestSequenceRef.current === requestSequence
+        && vceRequestSequenceRef.current === requestSequence
       ) {
-        setCodebaseMemorySettings(settings);
-      }
-      if (projectActionOwnerRef.current === requestOwner) {
-        toast.success(enabled
-          ? t("projectSettings.codebaseMemory.enabledSaved")
-          : t("projectSettings.codebaseMemory.disabledSaved"));
+        setVceOverview(overview);
+        toast.success("代码上下文设置已保存。");
       }
     } catch (error) {
-      if (projectActionOwnerRef.current === requestOwner) {
+      if (
+        projectActionOwnerRef.current === requestOwner
+        && vceRequestSequenceRef.current === requestSequence
+      ) {
         toast.error(error instanceof Error ? error.message : String(error));
       }
+      throw error;
     } finally {
       if (projectActionOwnerRef.current === requestOwner) {
-        codebaseMemoryMutationInFlightRef.current = false;
-        setCodebaseMemoryMutationBusy(false);
+        vceMutationInFlightRef.current = false;
+        setVceMutationBusy(false);
       }
     }
   };
 
-  // refreshCodebaseMemory queries one authoritative live Sidecar snapshot.
-  // refreshCodebaseMemory 查询一份权威的实时 Sidecar 快照。
-  const refreshCodebaseMemory = async () => {
-    if (!projectId || codebaseMemoryBusy || codebaseMemoryMutationInFlightRef.current) {
+  // refreshVceIndex requests one guarded full refresh and keeps the returned overview authoritative.
+  // refreshVceIndex 请求一次受保护的全量刷新，并以返回概览为权威。
+  const refreshVceIndex = async (): Promise<void> => {
+    if (!projectId || !vceOverview || vceBusy || vceMutationInFlightRef.current) {
       return;
     }
     const targetProjectId = projectId;
     const requestOwner = projectActionOwnerRef.current;
-    const requestSequence = codebaseMemoryRequestSequenceRef.current + 1;
-    codebaseMemoryRequestSequenceRef.current = requestSequence;
-    codebaseMemoryMutationInFlightRef.current = true;
-    setCodebaseMemoryMutationBusy(true);
+    const requestSequence = vceRequestSequenceRef.current + 1;
+    vceRequestSequenceRef.current = requestSequence;
+    vceMutationInFlightRef.current = true;
+    setVceMutationBusy(true);
     try {
-      const settings = await refreshProjectCodebaseMemorySettings(targetProjectId);
-      if (settings.projectId !== targetProjectId) {
-        throw new Error("Codebase Memory settings returned a mismatched project identity.");
+      const overview = await refreshVceProject(
+        targetProjectId,
+        vceOverview.settings.revision,
+      );
+      if (overview.status.projectId !== targetProjectId) {
+        throw new Error("VCE refresh returned a mismatched project identity.");
       }
       if (
         projectActionOwnerRef.current === requestOwner
-        && codebaseMemoryRequestSequenceRef.current === requestSequence
+        && vceRequestSequenceRef.current === requestSequence
       ) {
-        setCodebaseMemorySettings(settings);
+        setVceOverview(overview);
+        toast.success("代码上下文索引已刷新。");
       }
     } catch (error) {
-      if (projectActionOwnerRef.current === requestOwner) {
-        toast.error(error instanceof Error ? error.message : String(error));
-      }
-    } finally {
-      if (projectActionOwnerRef.current === requestOwner) {
-        codebaseMemoryMutationInFlightRef.current = false;
-        setCodebaseMemoryMutationBusy(false);
-      }
-    }
-  };
-
-  // updateCodebaseMemoryIndex requests one exact incremental update or isolated full rebuild.
-  // updateCodebaseMemoryIndex 请求一次精确的增量更新或隔离完整重建。
-  const updateCodebaseMemoryIndex = async (mode: "update" | "rebuild") => {
-    if (!projectId || codebaseMemoryBusy || codebaseMemoryMutationInFlightRef.current) {
-      return;
-    }
-    const targetProjectId = projectId;
-    const requestOwner = projectActionOwnerRef.current;
-    const requestSequence = codebaseMemoryRequestSequenceRef.current + 1;
-    codebaseMemoryRequestSequenceRef.current = requestSequence;
-    codebaseMemoryMutationInFlightRef.current = true;
-    setCodebaseMemoryMutationBusy(true);
-    try {
-      const settings = await requestProjectCodebaseMemoryIndex(targetProjectId, mode);
-      if (settings.projectId !== targetProjectId) {
-        throw new Error("Codebase Memory settings returned a mismatched project identity.");
-      }
       if (
         projectActionOwnerRef.current === requestOwner
-        && codebaseMemoryRequestSequenceRef.current === requestSequence
+        && vceRequestSequenceRef.current === requestSequence
       ) {
-        setCodebaseMemorySettings(settings);
-      }
-      if (projectActionOwnerRef.current === requestOwner) {
-        toast.success(t(mode === "update"
-          ? "projectSettings.codebaseMemory.updateAccepted"
-          : "projectSettings.codebaseMemory.rebuildAccepted"));
-      }
-    } catch (error) {
-      if (projectActionOwnerRef.current === requestOwner) {
         toast.error(error instanceof Error ? error.message : String(error));
       }
+      throw error;
     } finally {
       if (projectActionOwnerRef.current === requestOwner) {
-        codebaseMemoryMutationInFlightRef.current = false;
-        setCodebaseMemoryMutationBusy(false);
+        vceMutationInFlightRef.current = false;
+        setVceMutationBusy(false);
       }
     }
   };
@@ -842,14 +846,15 @@ export function ProjectSettingsDialog(props: {
               />
             ) : null}
 
-            {activeSection === "codebase-memory" ? (
-              <ProjectCodebaseMemorySection
-                busy={codebaseMemoryBusy}
-                onRebuild={() => void updateCodebaseMemoryIndex("rebuild")}
-                onRefresh={() => void refreshCodebaseMemory()}
-                onSetEnabled={(enabled) => void updateCodebaseMemoryEnabled(enabled)}
-                onUpdate={() => void updateCodebaseMemoryIndex("update")}
-                settings={codebaseMemorySettings}
+            {activeSection === "code-context" ? (
+              <CodeContextArea
+                busy={vceBusy}
+                key={project.id}
+                onOverviewChanged={setVceOverview}
+                onRefresh={refreshVceIndex}
+                onSave={saveVceSettings}
+                overview={vceOverview}
+                projectId={project.id}
               />
             ) : null}
 

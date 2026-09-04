@@ -1216,4 +1216,101 @@ mod tests {
         assert!(error.contains("parent traversal"));
         fs::remove_dir_all(root).expect("remove source fixture");
     }
+
+    /// Full scans preserve explicit skipped records for oversized and binary source-like files.
+    /// 全量扫描会为超大与二进制源码样式文件保留明确的跳过记录。
+    #[tokio::test]
+    async fn full_scan_records_oversized_and_binary_sources_as_skipped() {
+        let root = temp_project("skipped-sources");
+        fs::write(root.join("oversized.rs"), vec![b'x'; 129])
+            .expect("write oversized source fixture");
+        fs::write(root.join("binary.rs"), [b'f', b'n', 0, b'x'])
+            .expect("write binary source fixture");
+        let adapter = VceProjectSourceAdapter::activate(&root, test_limits(), &[])
+            .expect("activate source adapter");
+
+        let manifest = adapter.scan_full().await.expect("scan skipped sources");
+
+        assert_eq!(manifest.admitted_files, 0);
+        assert_eq!(manifest.skipped_files, 2);
+        assert_eq!(manifest.observations.len(), 2);
+        assert!(
+            manifest
+                .observations
+                .iter()
+                .all(|item| item.content.is_none())
+        );
+        assert!(
+            manifest
+                .observations
+                .iter()
+                .all(|item| item.skip_reason.is_some())
+        );
+        fs::remove_dir_all(root).expect("remove source fixture");
+    }
+
+    /// Path scans model a filesystem rename as one removal plus one identified observation.
+    /// 路径扫描将文件系统重命名建模为一项删除与一项已识别观察。
+    #[tokio::test]
+    async fn path_scan_models_rename_without_retaining_the_old_path() {
+        let root = temp_project("rename");
+        fs::write(root.join("old.rs"), "fn renamed() {}\n").expect("write old source fixture");
+        let adapter = VceProjectSourceAdapter::activate(&root, test_limits(), &[])
+            .expect("activate source adapter");
+        fs::rename(root.join("old.rs"), root.join("new.rs")).expect("rename source fixture");
+
+        let delta = adapter
+            .scan_paths(BTreeSet::from([
+                String::from("new.rs"),
+                String::from("old.rs"),
+            ]))
+            .await
+            .expect("scan rename delta");
+
+        assert_eq!(delta.removed_paths, vec![String::from("old.rs")]);
+        assert_eq!(delta.observations.len(), 1);
+        assert_eq!(delta.observations[0].path, "new.rs");
+        fs::remove_dir_all(root).expect("remove source fixture");
+    }
+
+    /// Explicit watcher paths reject a linked directory whose canonical target escapes the project.
+    /// 显式监听路径会拒绝规范目标逃逸项目根目录的链接目录。
+    #[tokio::test]
+    async fn path_scan_rejects_external_file_symlink() {
+        let root = temp_project("symlink-root");
+        let outside = temp_project("symlink-outside");
+        let outside_file = outside.join("outside.rs");
+        fs::write(&outside_file, "fn outside() {}\n").expect("write external source fixture");
+        let link = root.join("linked");
+        #[cfg(windows)]
+        {
+            // Directory junctions exercise canonical escape handling without requiring symlink privileges.
+            // 目录联接无需符号链接特权即可验证规范路径逃逸处理。
+            let status = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&link)
+                .arg(&outside)
+                .status()
+                .expect("launch junction creation");
+            assert!(
+                status.success(),
+                "create external source directory junction"
+            );
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &link)
+            .expect("create external source directory symlink");
+        let adapter = VceProjectSourceAdapter::activate(&root, test_limits(), &[])
+            .expect("activate source adapter");
+
+        let error = adapter
+            .scan_paths(BTreeSet::from([String::from("linked/outside.rs")]))
+            .await
+            .expect_err("external file symlink must be rejected");
+
+        assert!(error.contains("escapes the project root"));
+        fs::remove_dir(&link).expect("remove external source link");
+        fs::remove_dir_all(root).expect("remove source fixture");
+        fs::remove_dir_all(outside).expect("remove external fixture");
+    }
 }

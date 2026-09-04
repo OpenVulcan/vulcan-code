@@ -77,7 +77,7 @@ pub use events::{ExecutionStreamEvent, TransientReasoningStatus, TransientReason
 pub use execution_models::{
     ExecutionKnowledgeAccessContext, ExecutionPreparation, ExecutionPreparationRequest,
     ExecutionPromptPurpose, ExecutionProviderVisibleAgentMessage, ExecutionRunReport,
-    ExecutionSessionGoalContext, KnowledgeSearchHandler,
+    ExecutionSessionGoalContext, KnowledgeSearchHandler, VceRetrievalHandler,
 };
 pub use extension_generation::ExtensionGeneration;
 pub use runtime::RuntimeFoundation;

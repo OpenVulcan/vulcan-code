@@ -1673,11 +1673,118 @@ mod tests {
     };
     use vulcan_context_engine::{
         AuxiliaryIndexStatus, Checkpoint, Chunk, ChunkKind, DenseSearchRequest, EmbeddingSpace,
-        EmbeddingVector, FileRecord, FileSource, FileStatus, IndexAbortRequest, IndexCommit,
-        IndexStageBatch, IndexedBlob, IndexedBlobStatus, RefreshMode, RefreshReason,
-        VceIndexBinding, VceIndexPort, VceQueryStatistics, VceRefreshSummary, VceStateIdentity,
-        VceStateSnapshot, WorkspaceSnapshot, blob_name,
+        EmbeddingVector, FileObservation, FileRecord, FileSource, FileStatus, IndexAbortRequest,
+        IndexCommit, IndexStageBatch, IndexedBlob, IndexedBlobStatus, RefreshMode, RefreshReason,
+        RefreshRequest, RetrieveRequest, SegmentVector, VceAiBinding, VceAiCapabilitySnapshot,
+        VceAiPort, VceConfig, VceEmbeddingRequest, VceEmbeddingResponse, VceEngine, VceFuture,
+        VceIndexBinding, VceIndexPort, VcePortError, VcePortOperation, VceQueryRewriteRequest,
+        VceQueryRewriteResponse, VceQueryStatistics, VceRefreshSummary, VceRerankRequest,
+        VceRerankResponse, VceSourcePort, VceSourceReadRequest, VceSourceReadResponse,
+        VceStateIdentity, VceStateSnapshot, WorkspaceSnapshot, blob_name,
     };
+
+    /// Deterministic shared-AI boundary used by the real VCE data-plane test.
+    /// 真实 VCE 数据面测试使用的确定性共享 AI 边界。
+    struct DeterministicAi {
+        /// Frozen registration identity.
+        /// 冻结的注册身份。
+        binding: VceAiBinding,
+        /// Physical vector-space contract returned by every Embedding call.
+        /// 每次向量调用返回的物理向量空间契约。
+        space: EmbeddingSpace,
+    }
+
+    impl VceAiPort for DeterministicAi {
+        /// Returns the fixed test registration.
+        /// 返回固定测试注册。
+        fn binding(&self) -> &VceAiBinding {
+            &self.binding
+        }
+
+        /// Returns the complete fixed capability snapshot.
+        /// 返回完整固定能力快照。
+        fn capability_snapshot(&self) -> VceAiCapabilitySnapshot {
+            VceAiCapabilitySnapshot {
+                registration_id: self.binding.registration_id.clone(),
+                consumer_profile_id: self.binding.consumer_profile_id.clone(),
+                vector_space_id: self.binding.vector_space_id.clone(),
+                registered: true,
+                embedding_available: true,
+                query_rewrite_available: true,
+                rerank_available: true,
+            }
+        }
+
+        /// Returns deterministic normalized vectors for every requested segment.
+        /// 为每个请求分段返回确定性归一化向量。
+        fn embed(
+            &self,
+            request: VceEmbeddingRequest,
+        ) -> VceFuture<Result<VceEmbeddingResponse, VcePortError>> {
+            let vectors = request
+                .batch
+                .segments
+                .iter()
+                .map(|segment| SegmentVector {
+                    input_id: segment.request_input_id(),
+                    values: vec![1.0, 0.0, 0.0],
+                })
+                .collect();
+            ready(Ok(VceEmbeddingResponse {
+                operation_id: request.context.operation_id,
+                vectors,
+                space: self.space.clone(),
+            }))
+        }
+
+        /// Returns no optional query rewrites in the deterministic fixture.
+        /// 在确定性夹具中不返回可选查询改写。
+        fn rewrite_query(
+            &self,
+            request: VceQueryRewriteRequest,
+        ) -> VceFuture<Result<VceQueryRewriteResponse, VcePortError>> {
+            ready(Ok(VceQueryRewriteResponse {
+                operation_id: request.context.operation_id,
+                rewrites: Vec::new(),
+            }))
+        }
+
+        /// Preserves the candidate order during deterministic Rerank.
+        /// 在确定性重排中保留候选顺序。
+        fn rerank(
+            &self,
+            request: VceRerankRequest,
+        ) -> VceFuture<Result<VceRerankResponse, VcePortError>> {
+            ready(Ok(VceRerankResponse {
+                operation_id: request.context.operation_id,
+                ordered_candidate_indexes: (0..request.candidates.len()).collect(),
+            }))
+        }
+    }
+
+    /// Source boundary that rejects reads because the fixture supplies immutable text observations.
+    /// 拒绝源码读取的边界，因为夹具会直接提供不可变正文观察。
+    struct NoReadSource;
+
+    impl VceSourcePort for NoReadSource {
+        /// Rejects every unexpected source read.
+        /// 拒绝每一次非预期源码读取。
+        fn read_sources(
+            &self,
+            _request: VceSourceReadRequest,
+        ) -> VceFuture<Result<VceSourceReadResponse, VcePortError>> {
+            ready(Err(VcePortError::Failed {
+                operation: VcePortOperation::SourceRead,
+                message: String::from("unexpected real-data-plane fixture source read"),
+            }))
+        }
+    }
+
+    /// Returns one immediately ready asynchronous test result.
+    /// 返回一个立即就绪的异步测试结果。
+    fn ready<T: Send + 'static>(value: T) -> VceFuture<T> {
+        Box::pin(async move { value })
+    }
 
     /// Verifies the VCE schema remains isolated and contains atomic-publication tables.
     /// 验证 VCE Schema 保持隔离并包含原子发布表。
@@ -1954,6 +2061,12 @@ mod tests {
             .await
             .expect("search committed VCE vector");
         assert_eq!(search.hits.len(), 1);
+        println!(
+            "VCE_STORAGE sqlite_bytes={} lancedb_bytes={} total_bytes={}",
+            file_or_directory_size(&data_plane.sqlite_path),
+            file_or_directory_size(&data_plane.lancedb_path),
+            file_or_directory_size(&data_plane.data_root),
+        );
         let mut aborted_blob = indexed_blob;
         aborted_blob.generation = 2;
         second_index
@@ -2003,8 +2116,391 @@ mod tests {
         assert_eq!(active[0].count, 1);
         assert_eq!(orphaned[0].count, 1);
         assert_eq!(pending_cleanup[0].count, 0);
+        second_index
+            .reset_incompatible_state()
+            .await
+            .expect("reset incompatible VCE checkpoint and vectors");
+        assert!(
+            data_plane
+                .load_state_snapshot(&second_index.binding().namespace_id)
+                .await
+                .expect("load reset VCE state")
+                .is_none()
+        );
+        second_index
+            .search_dense(DenseSearchRequest {
+                request_id: String::from("search-after-reset"),
+                query_index: 0,
+                query_vector: EmbeddingVector {
+                    input_id: String::from("query-after-reset"),
+                    values: vec![1.0, 0.0, 0.0],
+                },
+                allowed_blobs: BTreeSet::from([blob_name]),
+                limit: 4,
+            })
+            .await
+            .expect_err("reset VCE binding must remain unsearchable until rebuild commit");
+        let pending_cleanup_after_reset: Vec<BindingCountRow> = data_plane
+            .query_rows(
+                "SELECT COUNT(*) AS count FROM vce_vector_cleanup WHERE namespace_id = ? AND state = 'pending';",
+                vec![super::sqlite_text(&second_index.binding().namespace_id)],
+            )
+            .await
+            .expect("count reset VCE cleanup rows");
+        assert_eq!(pending_cleanup_after_reset[0].count, 0);
         client.shutdown().await.expect("shutdown VCE controller");
         assert_eq!(VCE_SPACE_ID, "vce");
+    }
+
+    /// Exercises engine publication, retrieval, mutations, restart, and project isolation on real storage.
+    /// 在真实存储上验证引擎发布、检索、变更、重启与项目隔离。
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "requires the bundled output/bin/vldb-controller.exe"]
+    async fn real_controller_engine_end_to_end_preserves_checkpoint_isolation() {
+        let temporary = tempdir().expect("create VCE engine integration root");
+        let data_root = temporary.path().join("data");
+        let first_root = temporary.path().join("project-one");
+        let second_root = temporary.path().join("project-two");
+        fs::create_dir_all(&first_root).expect("create first VCE engine project root");
+        fs::create_dir_all(&second_root).expect("create second VCE engine project root");
+        let executable = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("output")
+            .join("bin")
+            .join("vldb-controller.exe");
+        assert!(executable.is_file(), "bundled controller must exist");
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("reserve VCE engine test port");
+        let port = listener
+            .local_addr()
+            .expect("read VCE engine test port")
+            .port();
+        drop(listener);
+        let endpoint = format!("http://127.0.0.1:{port}");
+        let client = ControllerClient::new(
+            ControllerClientConfig {
+                endpoint: endpoint.clone(),
+                auto_spawn: true,
+                spawn_executable: Some(executable.display().to_string()),
+                spawn_process_mode: ControllerProcessMode::Managed,
+                minimum_uptime_secs: 0,
+                idle_timeout_secs: 1,
+                default_lease_ttl_secs: 30,
+                connect_timeout_secs: 30,
+                startup_timeout_secs: 15,
+                startup_retry_interval_ms: 100,
+                lease_renew_interval_secs: 10,
+            },
+            ClientRegistration {
+                client_name: format!("vce-engine-e2e-{}", Uuid::new_v4()),
+                host_kind: String::from("test"),
+                process_id: std::process::id(),
+                process_name: String::from("vulcan-workspace-store-test"),
+                lease_ttl_secs: Some(30),
+            },
+        );
+        client
+            .connect()
+            .await
+            .expect("connect VCE engine controller");
+        let metadata_path = data_root.join("controller-placeholder.sqlite3");
+        let controller = ControllerRuntimeHandle::new(
+            client.clone(),
+            ControllerRuntimeMetadata {
+                endpoint,
+                executable: executable.display().to_string(),
+                data_root: data_root.clone(),
+                sqlite_path: metadata_path.clone(),
+                sqlite_binding_id: format!("vce-engine-app-{}", Uuid::new_v4()),
+                system_statistics_sqlite_path: metadata_path,
+                system_statistics_sqlite_binding_id: format!(
+                    "vce-engine-statistics-{}",
+                    Uuid::new_v4()
+                ),
+            },
+        );
+        let data_plane = bootstrap_vce_data_plane(&controller)
+            .await
+            .expect("bootstrap VCE engine data plane");
+        let first_index = data_plane
+            .open_project_index(test_project_config("project-1", &first_root, 1))
+            .await
+            .expect("open first VCE engine project index");
+        let first_ai = deterministic_ai_for(&first_index);
+        let first_config = VceConfig::new(
+            first_index.binding().checkpoint_chain_id.clone(),
+            first_index.binding().embedding_space.clone(),
+        )
+        .expect("build first VCE engine configuration");
+        let mut first_engine =
+            VceEngine::new(first_config.clone()).expect("create first VCE engine");
+        let initial_lib = "pub fn semantic_entry() -> usize { 1 }\n";
+        let initial_other = "pub fn secondary_entry() -> usize { 2 }\n";
+        let initial_result = first_engine
+            .refresh(
+                RefreshRequest::full(
+                    "e2e-initial",
+                    RefreshReason::Initial,
+                    vec![
+                        FileObservation::present(
+                            "src/lib.rs",
+                            initial_lib,
+                            Some(1),
+                            FileSource::Filesystem,
+                        ),
+                        FileObservation::present(
+                            "src/other.rs",
+                            initial_other,
+                            Some(1),
+                            FileSource::Filesystem,
+                        ),
+                    ],
+                    Some(String::from("source-1")),
+                ),
+                &first_index,
+                &first_ai,
+                &NoReadSource,
+            )
+            .await
+            .expect("publish initial VCE engine checkpoint");
+        assert_eq!(initial_result.indexed_blobs.len(), 2);
+        let initial_retrieval = first_engine
+            .retrieve(
+                RetrieveRequest::current_checkpoint("e2e-query-1", "find semantic entry"),
+                &first_index,
+                &first_ai,
+            )
+            .await
+            .expect("retrieve initial VCE context");
+        assert!(!initial_retrieval.hits.is_empty());
+
+        let old_lib_blob = blob_name("src/lib.rs", initial_lib).expect("build old lib Blob");
+        let changed_lib = "pub fn semantic_entry() -> usize { 3 }\n";
+        let changed_result = first_engine
+            .refresh(
+                RefreshRequest::paths(
+                    "e2e-change",
+                    RefreshReason::FileWatcher,
+                    vec![FileObservation::present(
+                        "src/lib.rs",
+                        changed_lib,
+                        Some(2),
+                        FileSource::Filesystem,
+                    )],
+                    Vec::new(),
+                    Some(String::from("source-2")),
+                ),
+                &first_index,
+                &first_ai,
+                &NoReadSource,
+            )
+            .await
+            .expect("publish changed VCE Blob");
+        assert_eq!(changed_result.indexed_blobs.len(), 1);
+        assert_eq!(
+            changed_result.deleted_blobs,
+            BTreeSet::from([old_lib_blob.clone()])
+        );
+        assert!(
+            first_index
+                .search_dense(DenseSearchRequest {
+                    request_id: String::from("e2e-search-old-lib"),
+                    query_index: 0,
+                    query_vector: EmbeddingVector {
+                        input_id: String::from("e2e-old-lib-vector"),
+                        values: vec![1.0, 0.0, 0.0],
+                    },
+                    allowed_blobs: BTreeSet::from([old_lib_blob]),
+                    limit: 4,
+                })
+                .await
+                .expect("search removed lib Blob")
+                .hits
+                .is_empty()
+        );
+
+        let old_other_blob =
+            blob_name("src/other.rs", initial_other).expect("build old other Blob");
+        let renamed_blob = blob_name("src/renamed.rs", initial_other).expect("build renamed Blob");
+        let rename_result = first_engine
+            .refresh(
+                RefreshRequest::paths(
+                    "e2e-rename",
+                    RefreshReason::FileWatcher,
+                    vec![FileObservation::present(
+                        "src/renamed.rs",
+                        initial_other,
+                        Some(3),
+                        FileSource::Filesystem,
+                    )],
+                    vec![String::from("src/other.rs")],
+                    Some(String::from("source-3")),
+                ),
+                &first_index,
+                &first_ai,
+                &NoReadSource,
+            )
+            .await
+            .expect("publish renamed VCE Blob");
+        assert_eq!(rename_result.indexed_blobs, vec![renamed_blob.clone()]);
+        assert_eq!(
+            rename_result.deleted_blobs,
+            BTreeSet::from([old_other_blob])
+        );
+        let delete_result = first_engine
+            .refresh(
+                RefreshRequest::paths(
+                    "e2e-delete",
+                    RefreshReason::FileWatcher,
+                    Vec::new(),
+                    vec![String::from("src/renamed.rs")],
+                    Some(String::from("source-4")),
+                ),
+                &first_index,
+                &first_ai,
+                &NoReadSource,
+            )
+            .await
+            .expect("publish deleted VCE path");
+        assert!(delete_result.indexed_blobs.is_empty());
+        assert_eq!(delete_result.deleted_blobs, BTreeSet::from([renamed_blob]));
+
+        let persisted = data_plane
+            .load_state_snapshot(&first_index.binding().namespace_id)
+            .await
+            .expect("load VCE restart state")
+            .expect("VCE restart state exists");
+        let mut restored_engine = VceEngine::from_state_snapshot(first_config, persisted)
+            .expect("restore VCE engine from checkpoint state");
+        let restored_retrieval = restored_engine
+            .retrieve(
+                RetrieveRequest::current_checkpoint("e2e-query-restored", "semantic entry"),
+                &first_index,
+                &first_ai,
+            )
+            .await
+            .expect("retrieve VCE context after restart");
+        assert!(!restored_retrieval.hits.is_empty());
+
+        let second_index = data_plane
+            .open_project_index(test_project_config("project-2", &second_root, 1))
+            .await
+            .expect("open second VCE engine project index");
+        let second_ai = deterministic_ai_for(&second_index);
+        let mut second_engine = VceEngine::new(
+            VceConfig::new(
+                second_index.binding().checkpoint_chain_id.clone(),
+                second_index.binding().embedding_space.clone(),
+            )
+            .expect("build second VCE engine configuration"),
+        )
+        .expect("create second VCE engine");
+        let second_content = "pub fn project_two_only() -> usize { 20 }\n";
+        let second_blob = blob_name("src/two.rs", second_content).expect("build project-two Blob");
+        second_engine
+            .refresh(
+                RefreshRequest::full(
+                    "e2e-project-two",
+                    RefreshReason::Initial,
+                    vec![FileObservation::present(
+                        "src/two.rs",
+                        second_content,
+                        Some(1),
+                        FileSource::Filesystem,
+                    )],
+                    Some(String::from("source-project-two")),
+                ),
+                &second_index,
+                &second_ai,
+                &NoReadSource,
+            )
+            .await
+            .expect("publish second project checkpoint");
+        let current_first_blob =
+            blob_name("src/lib.rs", changed_lib).expect("build current first-project Blob");
+        assert!(
+            first_index
+                .search_dense(DenseSearchRequest {
+                    request_id: String::from("e2e-cross-search-first"),
+                    query_index: 0,
+                    query_vector: EmbeddingVector {
+                        input_id: String::from("e2e-cross-first-vector"),
+                        values: vec![1.0, 0.0, 0.0],
+                    },
+                    allowed_blobs: BTreeSet::from([second_blob.clone()]),
+                    limit: 4,
+                })
+                .await
+                .expect("search project-two Blob in project-one namespace")
+                .hits
+                .is_empty()
+        );
+        assert!(
+            second_index
+                .search_dense(DenseSearchRequest {
+                    request_id: String::from("e2e-cross-search-second"),
+                    query_index: 0,
+                    query_vector: EmbeddingVector {
+                        input_id: String::from("e2e-cross-second-vector"),
+                        values: vec![1.0, 0.0, 0.0],
+                    },
+                    allowed_blobs: BTreeSet::from([current_first_blob]),
+                    limit: 4,
+                })
+                .await
+                .expect("search project-one Blob in project-two namespace")
+                .hits
+                .is_empty()
+        );
+        let second_retrieval = second_engine
+            .retrieve(
+                RetrieveRequest::current_checkpoint("e2e-query-project-two", "project two only"),
+                &second_index,
+                &second_ai,
+            )
+            .await
+            .expect("retrieve isolated second-project context");
+        assert!(
+            second_retrieval
+                .hits
+                .iter()
+                .all(|hit| hit.path == "src/two.rs")
+        );
+        client
+            .shutdown()
+            .await
+            .expect("shutdown VCE engine controller");
+    }
+
+    /// Builds a deterministic AI registration for one project index.
+    /// 为一个项目索引构建确定性 AI 注册。
+    fn deterministic_ai_for(index: &super::VceProjectIndex) -> DeterministicAi {
+        DeterministicAi {
+            binding: VceAiBinding::new(
+                format!("registration:{}", index.binding().namespace_id),
+                "vce-code-retrieval",
+                index.binding().embedding_space.vector_space_id.clone(),
+            )
+            .expect("build deterministic VCE AI binding"),
+            space: index.binding().embedding_space.clone(),
+        }
+    }
+
+    /// Returns the recursive on-disk byte size of one test artifact path.
+    /// 返回一个测试产物路径在磁盘上的递归字节大小。
+    fn file_or_directory_size(path: &std::path::Path) -> u64 {
+        let metadata = fs::metadata(path).expect("read VCE performance artifact metadata");
+        if metadata.is_file() {
+            return metadata.len();
+        }
+        fs::read_dir(path)
+            .expect("read VCE performance artifact directory")
+            .map(|entry| {
+                let entry = entry.expect("read VCE performance artifact entry");
+                file_or_directory_size(&entry.path())
+            })
+            .sum()
     }
 
     /// Builds one exact test configuration from a canonical project root.
@@ -2897,8 +3393,8 @@ impl VceIndexPort for VceProjectIndex {
         Box::pin(async move { index.abort_stage_inner(request).await })
     }
 
-    /// Publishes one staged checkpoint with process-local CAS serialization.
-    /// 使用进程内 CAS 串行化发布一个已暂存检查点。
+    /// Publishes one staged checkpoint with transaction-enforced CAS and process-local serialization.
+    /// 使用事务强制 CAS 与进程内串行化发布一个已暂存检查点。
     fn commit(&self, request: IndexCommit) -> VceFuture<Result<CommitReceipt, VcePortError>> {
         let index = self.clone();
         Box::pin(async move { index.commit_inner(request).await })
@@ -2956,6 +3452,95 @@ impl VceIndexPort for VceProjectIndex {
 }
 
 impl VceProjectIndex {
+    /// Clears one incompatible committed state before an authoritative full rebuild.
+    /// 在权威全量重建前清除一份不兼容的已提交状态。
+    ///
+    /// This host-only recovery entry first converges older cleanup requests, then makes the
+    /// incompatible checkpoint unsearchable in one SQLite transaction and durably queues removal
+    /// of its derived vectors. It never touches another namespace.
+    /// 此宿主专用恢复入口先收敛旧清理请求，再通过单个 SQLite 事务使不兼容检查点不可检索，
+    /// 并持久排队清理其派生向量；它绝不会触碰其他命名空间。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success after relational reset and derived-vector cleanup converge.
+    /// 在关系状态重置与派生向量清理均收敛后返回成功。
+    pub async fn reset_incompatible_state(&self) -> Result<(), String> {
+        let _guard = self.mutation_lock.lock().await;
+        self.require_active_binding(VcePortOperation::ManagementSnapshot, false)
+            .await
+            .map_err(|error| error.to_string())?;
+        self.enqueue_abandoned_generation_cleanup().await?;
+        self.recover_pending_vector_cleanup().await?;
+
+        let blob_rows: Vec<BlobNameRow> = self
+            .data_plane
+            .query_rows(
+                "SELECT blob_name FROM vce_blobs WHERE namespace_id = ? ORDER BY blob_name;",
+                vec![sqlite_text(&self.binding.namespace_id)],
+            )
+            .await?;
+        let blob_names = blob_rows
+            .into_iter()
+            .map(|row| row.blob_name)
+            .collect::<BTreeSet<_>>();
+        let checkpoint = self
+            .current_checkpoint_row()
+            .await
+            .map_err(|error| error.to_string())?;
+        let cleanup_clause = if blob_names.is_empty() {
+            String::new()
+        } else {
+            let checkpoint_identity = checkpoint
+                .as_ref()
+                .map(|row| format!("{}:{}", row.checkpoint_version, row.generation))
+                .unwrap_or_else(|| String::from("missing"));
+            let cleanup_id = vector_cleanup_id(
+                &self.binding.namespace_id,
+                "deleted_blobs",
+                &format!("incompatible-state:{checkpoint_identity}"),
+            );
+            let blob_names_json = serde_json::to_string(&blob_names)
+                .map_err(|error| format!("encode incompatible VCE Blob set: {error}"))?;
+            format!(
+                r#"INSERT INTO vce_vector_cleanup(
+                       namespace_id, cleanup_id, cleanup_kind, refresh_id, generation,
+                       blob_names_json, keep_generation, physical_fingerprint,
+                       content_table, path_table, state, attempt, error,
+                       created_at_unix_ms, updated_at_unix_ms
+                   ) VALUES ('{namespace}', '{cleanup_id}', 'deleted_blobs', NULL, NULL,
+                       '{blob_names_json}', NULL, '{physical_fingerprint}', '{content_table}',
+                       '{path_table}', 'pending', 0, NULL, {now}, {now})
+                   ON CONFLICT(namespace_id, cleanup_id) DO NOTHING;"#,
+                namespace = sqlite_string_literal(&self.binding.namespace_id),
+                cleanup_id = sqlite_string_literal(&cleanup_id),
+                blob_names_json = sqlite_string_literal(&blob_names_json),
+                physical_fingerprint = sqlite_string_literal(&self.physical_fingerprint),
+                content_table = sqlite_string_literal(&self.content_table),
+                path_table = sqlite_string_literal(&self.path_table),
+                now = current_unix_epoch_millis_i64()?,
+            )
+        };
+        let namespace = sqlite_string_literal(&self.binding.namespace_id);
+        let now = current_unix_epoch_millis_i64()?;
+        let reset_script = format!(
+            r#"BEGIN IMMEDIATE;
+               {cleanup_clause}
+               DELETE FROM vce_state_snapshots WHERE namespace_id = '{namespace}';
+               DELETE FROM vce_checkpoints WHERE namespace_id = '{namespace}';
+               DELETE FROM vce_blobs WHERE namespace_id = '{namespace}';
+               DELETE FROM vce_commit_guards WHERE namespace_id = '{namespace}';
+               UPDATE vce_project_bindings
+               SET lifecycle_state = 'rebuild_required', updated_at_unix_ms = {now}
+               WHERE namespace_id = '{namespace}';
+               COMMIT;"#,
+        );
+        self.data_plane
+            .execute(&reset_script, Vec::new(), "重置不兼容 VCE 状态失败")
+            .await?;
+        self.recover_pending_vector_cleanup().await
+    }
+
     /// Clean every unpublished generation and retry its derived vector cleanup queue.
     /// 清理全部未发布代次，并重试其派生向量清理队列。
     ///

@@ -9,12 +9,7 @@ use crate::luaskills_runtime::{
     call_luaskills_tool_entry, luaskills_entry_args_schema,
     render_luaskills_invocation_result_text,
 };
-use crate::mcp::{
-    HOST_MANAGED_CODEBASE_MEMORY_PARTITION_KEY, MANAGED_CODEBASE_MEMORY_SERVER_ID,
-    ManagedCodebaseMemoryExecutionContext, McpRuntimeToolBinding,
-    inject_managed_codebase_memory_context, managed_codebase_memory_public_tool_id,
-    model_visible_managed_codebase_memory_schema,
-};
+use crate::mcp::McpRuntimeToolBinding;
 use crate::tooling::{
     NativeToolCatalog, NativeToolDescriptor, NativeToolExecutionRequest,
     allocate_unique_public_tool_name, build_direct_public_tool_name,
@@ -49,9 +44,8 @@ mod luaskills_dispatch;
 
 use descriptors::{
     entry_declares_luaskill_sid, entry_declares_pwd, luaskills_descriptor_to_vulcan,
-    managed_codebase_memory_tool_descriptor, mcp_tool_binding_to_vulcan,
-    native_descriptor_to_vulcan, native_plan_policy, native_tool_id_is_knowledge_tool,
-    native_tool_id_is_vmm_memory_tool,
+    mcp_tool_binding_to_vulcan, native_descriptor_to_vulcan, native_plan_policy,
+    native_tool_id_is_knowledge_tool, native_tool_id_is_vmm_memory_tool,
 };
 #[cfg(test)]
 use luaskills_dispatch::luaskills_entry_to_call_view;
@@ -78,11 +72,11 @@ pub fn build_vulcan_tools_manager(
     controller_runtime: Option<ControllerRuntimeHandle>,
     native_goal_runtime: Option<Arc<dyn crate::tooling::native::NativeGoalRuntime>>,
     knowledge_access: Option<crate::agent_runtime::ExecutionKnowledgeAccessContext>,
+    vce_retrieval_handler: Option<crate::agent_runtime::VceRetrievalHandler>,
     candidate_native_tool_ids: Vec<String>,
     candidate_luaskills_tools: Vec<RuntimeEntryDescriptor>,
     candidate_luaskills_dispatch_tools: Vec<RuntimeEntryDescriptor>,
     candidate_mcp_tools: Vec<McpRuntimeToolBinding>,
-    managed_codebase_memory: Option<ManagedCodebaseMemoryExecutionContext>,
     enabled_prompt_skill_names: Vec<String>,
     prepared_prompt_skills: Vec<vulcan_prompt_skills::PromptSkill>,
     prompt_skill_user_root: Option<PathBuf>,
@@ -135,6 +129,7 @@ pub fn build_vulcan_tools_manager(
         let controller_runtime_for_context = controller_runtime.clone();
         let native_goal_runtime_for_context = native_goal_runtime.clone();
         let knowledge_access_for_context = knowledge_access.clone();
+        let vce_retrieval_handler_for_context = vce_retrieval_handler.clone();
         let enabled_prompt_skill_names_for_context = enabled_prompt_skill_names.clone();
         let prepared_prompt_skills_for_context = prepared_prompt_skills.clone();
         let prompt_skill_user_root_for_context = prompt_skill_user_root.clone();
@@ -154,6 +149,7 @@ pub fn build_vulcan_tools_manager(
                 let controller_runtime = controller_runtime_for_context.clone();
                 let goal_runtime = native_goal_runtime_for_context.clone();
                 let knowledge_access = knowledge_access_for_context.clone();
+                let vce_retrieval_handler = vce_retrieval_handler_for_context.clone();
                 let prompt_skill_user_root = prompt_skill_user_root_for_context.clone();
                 let enabled_prompt_skill_names = enabled_prompt_skill_names_for_context.clone();
                 let prepared_prompt_skills = prepared_prompt_skills_for_context.clone();
@@ -172,6 +168,7 @@ pub fn build_vulcan_tools_manager(
                                 controller_runtime,
                                 goal_runtime,
                                 knowledge_access,
+                                vce_retrieval_handler,
                                 enabled_prompt_skill_names,
                                 prepared_prompt_skills,
                                 prompt_skill_user_root,
@@ -377,79 +374,19 @@ pub fn build_vulcan_tools_manager(
     candidate_mcp_tools.sort_by(|left, right| left.id().cmp(right.id()));
 
     for tool in candidate_mcp_tools {
-        let is_managed_codebase_memory =
-            tool.partition_key() == HOST_MANAGED_CODEBASE_MEMORY_PARTITION_KEY;
-        let managed_public_tool_id = if is_managed_codebase_memory {
-            let Some(context) = managed_codebase_memory.as_ref() else {
-                continue;
-            };
-            if tool.server_id() != Some(MANAGED_CODEBASE_MEMORY_SERVER_ID)
-                || context.authorization.resolve(context.session_id).is_err()
-            {
-                continue;
-            }
-            let Some(public_tool_id) = tool
-                .origin_tool_name()
-                .and_then(managed_codebase_memory_public_tool_id)
-            else {
-                continue;
-            };
-            Some(public_tool_id)
-        } else {
-            None
-        };
-        let descriptor = if let Some(public_tool_id) = managed_public_tool_id {
-            managed_codebase_memory_tool_descriptor(public_tool_id, tool.description())
-        } else {
-            mcp_tool_binding_to_vulcan(&tool)
-        };
+        let descriptor = mcp_tool_binding_to_vulcan(&tool);
         occupied_public_tool_ids.insert(descriptor.id.clone());
-        let parameters_schema = if is_managed_codebase_memory {
-            model_visible_managed_codebase_memory_schema(tool.args_schema().clone())
-        } else {
-            tool.args_schema().clone()
-        };
+        let parameters_schema = tool.args_schema().clone();
         let tool_name = tool.name().to_string();
-        let managed_context = managed_codebase_memory.clone();
         candidates.push(VulcanToolCandidate {
             descriptor,
             parameters_schema,
             ai_visible: true,
             plan_policy: VulcanPlanToolPolicy::HeuristicText(tool_name.clone()),
             request_streaming: None,
-            invoke: std::sync::Arc::new(move |args, invocation_context| {
+            invoke: std::sync::Arc::new(move |args, _invocation_context| {
                 let tool = tool.clone();
-                let managed_context = managed_context.clone();
                 Box::pin(async move {
-                    let args = if is_managed_codebase_memory {
-                        let context = managed_context.ok_or_else(|| {
-                            String::from(
-                                "Codebase Memory authorization is unavailable for this execution.",
-                            )
-                        })?;
-                        let session_id = invocation_context
-                            .session_id
-                            .parse()
-                            .map_err(|error| {
-                                format!(
-                                    "Codebase Memory received an invalid host execution session identifier: {error}"
-                                )
-                            })?;
-                        // The root-session route is re-resolved on every invocation so disablement, removal, or reassignment invalidates old bindings.
-                        // 每次调用都会重新解析根会话路由，使停用、移除或重新归属立即使旧绑定失效。
-                        let root_route = context.authorization.resolve(context.session_id)?;
-                        if root_route.project_id != context.project_id {
-                            return Err(String::from(
-                                "Codebase Memory rejected the call because the session project route changed.",
-                            ));
-                        }
-                        let route = context
-                            .authorization
-                            .resolve_project(&context.project_id)?;
-                        inject_managed_codebase_memory_context(args, &route, session_id)?
-                    } else {
-                        args
-                    };
                     tool.invoke(args)
                         .await
                         .map(VulcanToolInvocationResult::from_model_output)

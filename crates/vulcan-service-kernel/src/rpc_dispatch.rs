@@ -10,6 +10,7 @@ mod extensibility;
 mod knowledge_base;
 mod project_conversation;
 mod session_resources_v1;
+mod vce;
 mod workspace_io;
 
 /// Typed ownership result returned by one domain RPC router.
@@ -61,6 +62,10 @@ async fn dispatch_known_service_rpc(
         return Ok(outcome);
     }
     let outcome = knowledge_base::dispatch(app.clone(), state.clone(), method, params).await?;
+    if outcome.is_handled() {
+        return Ok(outcome);
+    }
+    let outcome = vce::dispatch(app.clone(), state.clone(), method, params).await?;
     if outcome.is_handled() {
         return Ok(outcome);
     }
@@ -205,6 +210,7 @@ pub(crate) fn service_rpc_method_names() -> BTreeSet<&'static str> {
         configuration::RPC_METHODS,
         project_conversation::RPC_METHODS,
         knowledge_base::RPC_METHODS,
+        vce::RPC_METHODS,
     ]
     .into_iter()
     .flatten()
@@ -231,7 +237,8 @@ mod tests {
             + conversation_runtime::RPC_METHODS.len()
             + configuration::RPC_METHODS.len()
             + project_conversation::RPC_METHODS.len();
-        let declared_method_count = declared_method_count + knowledge_base::RPC_METHODS.len();
+        let declared_method_count =
+            declared_method_count + knowledge_base::RPC_METHODS.len() + vce::RPC_METHODS.len();
         assert_eq!(methods.len(), declared_method_count);
         assert!(methods.contains("service_submit_conversation_prompt"));
         assert!(methods.contains("service_continue_conversation"));
@@ -254,6 +261,9 @@ mod tests {
         assert!(methods.contains("service_set_session_knowledge_libraries"));
         assert!(methods.contains("service_save_public_ai_media_delivery_policy"));
         assert!(methods.contains("service_reset_public_ai_media_delivery_policy"));
+        assert!(methods.contains("service_get_vce_project_overview"));
+        assert!(methods.contains("service_update_vce_project_settings"));
+        assert!(methods.contains("service_list_vce_files"));
     }
 
     /// Verifies unknown methods retain the browser bridge's canonical diagnostic.
