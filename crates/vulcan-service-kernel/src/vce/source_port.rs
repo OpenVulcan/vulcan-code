@@ -6,6 +6,8 @@ use std::fs::{self, File, Metadata};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::time::UNIX_EPOCH;
 
 use vulcan_context_engine::{
@@ -145,6 +147,9 @@ pub(crate) struct VceProjectSourceAdapter {
     /// Source admission and deferred-read limits.
     /// 源码准入与延迟读取限制。
     limits: VceSourceLimits,
+    /// Compiled project-owned ignore rules applied after mandatory hard exclusions.
+    /// 在必需硬排除规则之后应用的已编译项目自有忽略规则。
+    extra_ignore: Arc<Gitignore>,
 }
 
 impl VceProjectSourceAdapter {
@@ -165,13 +170,16 @@ impl VceProjectSourceAdapter {
     pub(crate) fn activate(
         project_root: impl AsRef<Path>,
         limits: VceSourceLimits,
+        extra_ignore_patterns: &[String],
     ) -> Result<Self, String> {
         limits.validate()?;
         let root_text = project_root.as_ref().to_string_lossy();
         let project_root = workspace_file_canonical_root(&root_text)?;
+        let extra_ignore = compile_extra_ignore(&project_root, extra_ignore_patterns)?;
         Ok(Self {
             project_root: Arc::new(project_root),
             limits,
+            extra_ignore: Arc::new(extra_ignore),
         })
     }
 
@@ -234,7 +242,22 @@ impl VceProjectSourceAdapter {
         let mut walker = workspace_file_walk_builder(self.project_root(), &filters, None);
         walker.add_custom_ignore_filename(".oceignore");
         let root = Arc::clone(&self.project_root);
-        walker.filter_entry(move |entry| !is_hard_ignored_entry(root.as_path(), entry.path()));
+        let extra_ignore = Arc::clone(&self.extra_ignore);
+        walker.filter_entry(move |entry| {
+            !is_hard_ignored_entry(root.as_path(), entry.path())
+                && !entry
+                    .path()
+                    .strip_prefix(root.as_path())
+                    .ok()
+                    .is_some_and(|relative| {
+                        extra_ignore
+                            .matched_path_or_any_parents(
+                                relative,
+                                entry.file_type().is_some_and(|kind| kind.is_dir()),
+                            )
+                            .is_ignore()
+                    })
+        });
 
         let mut observations = Vec::new();
         let mut admitted_files = 0usize;
@@ -350,7 +373,13 @@ impl VceProjectSourceAdapter {
         if metadata.is_dir() {
             return Ok(ObservedPath::RequiresFullRefresh);
         }
-        if !metadata.is_file() || is_hard_ignored_relative_path(relative_path) {
+        if !metadata.is_file()
+            || is_hard_ignored_relative_path(relative_path)
+            || self
+                .extra_ignore
+                .matched_path_or_any_parents(Path::new(relative_path), false)
+                .is_ignore()
+        {
             return Ok(ObservedPath::Removed);
         }
         let size = metadata.len();
@@ -569,6 +598,30 @@ enum SourcePathError {
     /// The requested path violates the workspace security boundary.
     /// 请求路径违反工作区安全边界。
     Rejected(String),
+}
+
+/// Compiles bounded project-owned gitignore-style rules against one canonical root.
+/// 针对一个规范根目录编译有界的项目自有 gitignore 风格规则。
+///
+/// # Parameters
+/// 参数
+/// `project_root` is the canonical matching root; `patterns` are already validated persisted rules.
+/// `project_root` 是规范匹配根；`patterns` 是已经校验的持久化规则。
+///
+/// # Returns
+/// 返回值
+/// A compiled matcher or the exact invalid pattern diagnostic.
+/// 返回已编译匹配器或精确的无效规则诊断。
+fn compile_extra_ignore(project_root: &Path, patterns: &[String]) -> Result<Gitignore, String> {
+    let mut builder = GitignoreBuilder::new(project_root);
+    for pattern in patterns {
+        builder
+            .add_line(None, pattern)
+            .map_err(|error| format!("invalid VCE ignore pattern `{pattern}`: {error}"))?;
+    }
+    builder
+        .build()
+        .map_err(|error| format!("compile VCE ignore patterns: {error}"))
 }
 
 /// Read one source while proving stable metadata and UTF-8 admission.
@@ -1050,7 +1103,7 @@ mod tests {
         fs::write(root.join("target/generated.rs"), "generated").expect("write ignored fixture");
         fs::write(root.join("image.bin"), [0, 1, 2]).expect("write binary fixture");
 
-        let adapter = VceProjectSourceAdapter::activate(&root, test_limits())
+        let adapter = VceProjectSourceAdapter::activate(&root, test_limits(), &[])
             .expect("activate source adapter");
         let manifest = adapter.scan_full().await.expect("scan source manifest");
 
@@ -1063,13 +1116,41 @@ mod tests {
         fs::remove_dir_all(root).expect("remove source fixture");
     }
 
+    /// Project ignore rules filter matching source paths without weakening mandatory exclusions.
+    /// 项目忽略规则会过滤匹配源码路径，且不会削弱必需排除规则。
+    #[tokio::test]
+    async fn full_scan_applies_project_ignore_rules_after_hard_exclusions() {
+        let root = temp_project("project-ignore");
+        fs::create_dir_all(root.join("src/generated")).expect("create generated directory");
+        fs::create_dir_all(root.join("target")).expect("create mandatory ignored directory");
+        fs::write(root.join("src/lib.rs"), "pub fn retained() {}\n")
+            .expect("write retained source fixture");
+        fs::write(
+            root.join("src/generated/bindings.rs"),
+            "pub fn generated() {}\n",
+        )
+        .expect("write project ignored fixture");
+        fs::write(root.join("target/attempt.rs"), "pub fn excluded() {}\n")
+            .expect("write hard ignored fixture");
+
+        let patterns = vec![String::from("src/generated/**"), String::from("!target/**")];
+        let adapter = VceProjectSourceAdapter::activate(&root, test_limits(), &patterns)
+            .expect("activate source adapter with project ignore rules");
+        let manifest = adapter.scan_full().await.expect("scan source manifest");
+
+        assert_eq!(manifest.admitted_files, 1);
+        assert_eq!(manifest.observations.len(), 1);
+        assert_eq!(manifest.observations[0].path, "src/lib.rs");
+        fs::remove_dir_all(root).expect("remove source fixture");
+    }
+
     /// Deferred reads return exactly the manifest version requested by VCE.
     /// 延迟读取精确返回 VCE 请求的清单版本。
     #[tokio::test]
     async fn deferred_read_returns_exact_manifest_version() {
         let root = temp_project("read");
         fs::write(root.join("lib.rs"), "fn main() {}\n").expect("write source fixture");
-        let adapter = VceProjectSourceAdapter::activate(&root, test_limits())
+        let adapter = VceProjectSourceAdapter::activate(&root, test_limits(), &[])
             .expect("activate source adapter");
         let manifest = adapter.scan_full().await.expect("scan source manifest");
         let observation = &manifest.observations[0];
@@ -1097,7 +1178,7 @@ mod tests {
     async fn deferred_read_rejects_stale_manifest() {
         let root = temp_project("stale");
         fs::write(root.join("lib.rs"), "fn old() {}\n").expect("write source fixture");
-        let adapter = VceProjectSourceAdapter::activate(&root, test_limits())
+        let adapter = VceProjectSourceAdapter::activate(&root, test_limits(), &[])
             .expect("activate source adapter");
         let manifest = adapter.scan_full().await.expect("scan source manifest");
         let observation = &manifest.observations[0];
@@ -1125,7 +1206,7 @@ mod tests {
     #[tokio::test]
     async fn path_scan_rejects_parent_traversal() {
         let root = temp_project("traversal");
-        let adapter = VceProjectSourceAdapter::activate(&root, test_limits())
+        let adapter = VceProjectSourceAdapter::activate(&root, test_limits(), &[])
             .expect("activate source adapter");
         let error = adapter
             .scan_paths(BTreeSet::from([String::from("../outside.rs")]))

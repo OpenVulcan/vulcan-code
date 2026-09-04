@@ -41,7 +41,7 @@ static SYSTEM_STATISTICS_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Shared schema version stored in the application metadata table.
 /// 存储在应用元数据表中的共享结构版本号。
-pub const APP_SCHEMA_VERSION: i64 = 17;
+pub const APP_SCHEMA_VERSION: i64 = 18;
 
 /// Long-lived controller handle kept by the host runtime after startup succeeds.
 /// 启动成功后由宿主运行时持有的长生命周期控制器句柄。
@@ -404,6 +404,62 @@ pub(crate) async fn ensure_application_schema_migrations(
         client,
         sqlite_binding_id,
         ADD_CODEBASE_MEMORY_ENABLED_COLUMN_SQL,
+    )
+    .await?;
+    ensure_optional_schema_statement(
+        client,
+        sqlite_binding_id,
+        r#"
+CREATE TABLE IF NOT EXISTS project_vce_settings (
+    project_id TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)),
+    revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
+    migrated_from_codebase_memory INTEGER NOT NULL DEFAULT 0
+        CHECK(migrated_from_codebase_memory IN (0, 1)),
+    max_file_bytes INTEGER NOT NULL DEFAULT 1048576 CHECK(max_file_bytes > 0),
+    extra_ignore_patterns_json TEXT NOT NULL DEFAULT '[]',
+    allow_query_rewrite INTEGER NOT NULL DEFAULT 0 CHECK(allow_query_rewrite IN (0, 1)),
+    allow_rerank INTEGER NOT NULL DEFAULT 1 CHECK(allow_rerank IN (0, 1)),
+    embedding_max_concurrency INTEGER NOT NULL DEFAULT 4 CHECK(embedding_max_concurrency > 0),
+    query_max_concurrency INTEGER NOT NULL DEFAULT 3 CHECK(query_max_concurrency > 0),
+    max_results INTEGER NOT NULL DEFAULT 10 CHECK(max_results > 0),
+    max_context_chars INTEGER NOT NULL DEFAULT 32000 CHECK(max_context_chars > 0),
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+INSERT INTO project_vce_settings (
+    project_id,
+    enabled,
+    revision,
+    migrated_from_codebase_memory,
+    max_file_bytes,
+    extra_ignore_patterns_json,
+    allow_query_rewrite,
+    allow_rerank,
+    embedding_max_concurrency,
+    query_max_concurrency,
+    max_results,
+    max_context_chars,
+    updated_at
+)
+SELECT
+    id,
+    codebase_memory_enabled,
+    1,
+    1,
+    1048576,
+    '[]',
+    0,
+    1,
+    4,
+    3,
+    10,
+    32000,
+    strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+FROM projects
+ON CONFLICT(project_id) DO NOTHING;
+"#,
     )
     .await?;
     ensure_optional_schema_statement(
@@ -879,6 +935,24 @@ CREATE TABLE IF NOT EXISTS projects (
 CREATE INDEX IF NOT EXISTS idx_projects_sort
 ON projects(pinned DESC, sort_order ASC, updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS project_vce_settings (
+    project_id TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)),
+    revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
+    migrated_from_codebase_memory INTEGER NOT NULL DEFAULT 0
+        CHECK(migrated_from_codebase_memory IN (0, 1)),
+    max_file_bytes INTEGER NOT NULL DEFAULT 1048576 CHECK(max_file_bytes > 0),
+    extra_ignore_patterns_json TEXT NOT NULL DEFAULT '[]',
+    allow_query_rewrite INTEGER NOT NULL DEFAULT 0 CHECK(allow_query_rewrite IN (0, 1)),
+    allow_rerank INTEGER NOT NULL DEFAULT 1 CHECK(allow_rerank IN (0, 1)),
+    embedding_max_concurrency INTEGER NOT NULL DEFAULT 4 CHECK(embedding_max_concurrency > 0),
+    query_max_concurrency INTEGER NOT NULL DEFAULT 3 CHECK(query_max_concurrency > 0),
+    max_results INTEGER NOT NULL DEFAULT 10 CHECK(max_results > 0),
+    max_context_chars INTEGER NOT NULL DEFAULT 32000 CHECK(max_context_chars > 0),
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS workspace_session_index (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
@@ -1086,7 +1160,7 @@ mod tests {
     fn base_schema_includes_relational_ai_credential_storage() {
         let schema = build_application_schema_script();
 
-        assert_eq!(APP_SCHEMA_VERSION, 17);
+        assert_eq!(APP_SCHEMA_VERSION, 18);
         assert!(schema.contains("CREATE TABLE IF NOT EXISTS ai_credential_secrets"));
         assert!(schema.contains("provider_device_id TEXT"));
         assert!(
@@ -1110,6 +1184,20 @@ mod tests {
         assert_eq!(
             ADD_CODEBASE_MEMORY_ENABLED_COLUMN_SQL,
             "ALTER TABLE projects ADD COLUMN codebase_memory_enabled INTEGER NOT NULL DEFAULT 0;"
+        );
+    }
+
+    /// Verifies new databases own typed VCE settings separately from the legacy CBM switch.
+    /// 验证新数据库在旧 CBM 开关之外独立持有类型化 VCE 设置。
+    #[test]
+    fn project_schema_includes_independent_vce_settings_and_migration_marker() {
+        let schema = build_application_schema_script();
+
+        assert!(schema.contains("CREATE TABLE IF NOT EXISTS project_vce_settings"));
+        assert!(schema.contains("migrated_from_codebase_memory INTEGER NOT NULL DEFAULT 0"));
+        assert!(schema.contains("extra_ignore_patterns_json TEXT NOT NULL DEFAULT '[]'"));
+        assert!(
+            schema.contains("FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE")
         );
     }
 

@@ -208,6 +208,10 @@ impl VceHostAiAdapter {
 
     /// Refreshes the registered capability without retaining a stale snapshot across calls.
     /// 刷新已注册能力，避免跨调用保留陈旧快照。
+    #[allow(
+        clippy::result_large_err,
+        reason = "HostAiError is the fixed shared host contract and must remain lossless at this adapter boundary."
+    )]
     fn refreshed_handle(&self) -> Result<HostAiCapabilityHandle, HostAiError> {
         let current = self
             .handle
@@ -618,20 +622,20 @@ fn resolve_embedding_dimension(
         .ok_or_else(|| String::from("VCE HostAI Embedding capabilities are missing"))?;
     let dimension = capabilities
         .default_dimensions
-        .or_else(|| {
+        .or({
             (capabilities.dimensions.len() == 1)
-                .then(|| capabilities.dimensions.iter().next().copied())
+                .then_some(capabilities.dimensions.iter().next().copied())
                 .flatten()
         })
-        .or_else(|| {
+        .or(
             match (
                 capabilities.minimum_dimensions,
                 capabilities.maximum_dimensions,
             ) {
                 (Some(minimum), Some(maximum)) if minimum == maximum => Some(minimum),
                 _ => None,
-            }
-        })
+            },
+        )
         .ok_or_else(|| {
             String::from(
                 "VCE HostAI Embedding route does not declare a deterministic default dimension",

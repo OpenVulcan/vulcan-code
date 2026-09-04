@@ -25,6 +25,10 @@ async fn upsert_active_project(
     // sort_order 使用受检查转换，避免项目顺序在宽 usize 宿主上发生截断。
     let sort_order = i64::try_from(project.order)
         .map_err(|_| String::from("写入活动项目失败：项目顺序超出 SQLite 整数范围。"))?;
+    project
+        .vce
+        .validate()
+        .map_err(|error| format!("写入活动项目失败：{error}"))?;
     controller
         .client
         .execute_sqlite_batch_typed(
@@ -70,7 +74,74 @@ ON CONFLICT(id) DO UPDATE SET
         .await
         .map_err(|error| format!("写入活动项目失败：{error}"))?;
 
+    controller
+        .client
+        .execute_sqlite_script_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            r#"
+INSERT INTO project_vce_settings (
+    project_id,
+    enabled,
+    revision,
+    migrated_from_codebase_memory,
+    max_file_bytes,
+    extra_ignore_patterns_json,
+    allow_query_rewrite,
+    allow_rerank,
+    embedding_max_concurrency,
+    query_max_concurrency,
+    max_results,
+    max_context_chars,
+    updated_at
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+ON CONFLICT(project_id) DO NOTHING;
+"#,
+            project_vce_settings_params(&project.id, &project.vce, current_unix_millis_text())?,
+        )
+        .await
+        .map_err(|error| format!("写入活动项目 VCE 设置失败：{error}"))?;
+
     Ok(())
+}
+
+/// Encodes one validated project VCE settings row into stable SQLite parameters.
+/// 将一条经过校验的项目 VCE 设置记录编码为稳定 SQLite 参数。
+fn project_vce_settings_params(
+    project_id: &str,
+    settings: &ProjectVceSettings,
+    updated_at: String,
+) -> Result<Vec<ControllerSqliteValue>, String> {
+    settings.validate()?;
+    let revision = i64::try_from(settings.revision)
+        .map_err(|_| String::from("VCE 设置修订号超出 SQLite 整数范围。"))?;
+    let max_file_bytes = i64::try_from(settings.max_file_bytes)
+        .map_err(|_| String::from("VCE 最大文件字节数超出 SQLite 整数范围。"))?;
+    let embedding_max_concurrency = i64::try_from(settings.embedding_max_concurrency)
+        .map_err(|_| String::from("VCE 向量并发数超出 SQLite 整数范围。"))?;
+    let query_max_concurrency = i64::try_from(settings.query_max_concurrency)
+        .map_err(|_| String::from("VCE 查询并发数超出 SQLite 整数范围。"))?;
+    let max_results = i64::try_from(settings.max_results)
+        .map_err(|_| String::from("VCE 结果数量超出 SQLite 整数范围。"))?;
+    let max_context_chars = i64::try_from(settings.max_context_chars)
+        .map_err(|_| String::from("VCE 上下文字符数超出 SQLite 整数范围。"))?;
+    let ignore_patterns = serde_json::to_string(&settings.extra_ignore_patterns)
+        .map_err(|error| format!("序列化 VCE 忽略规则失败：{error}"))?;
+    Ok(vec![
+        ControllerSqliteValue::String(project_id.to_owned()),
+        ControllerSqliteValue::Int64(i64::from(settings.enabled)),
+        ControllerSqliteValue::Int64(revision),
+        ControllerSqliteValue::Int64(i64::from(settings.migrated_from_codebase_memory)),
+        ControllerSqliteValue::Int64(max_file_bytes),
+        ControllerSqliteValue::String(ignore_patterns),
+        ControllerSqliteValue::Int64(i64::from(settings.allow_query_rewrite)),
+        ControllerSqliteValue::Int64(i64::from(settings.allow_rerank)),
+        ControllerSqliteValue::Int64(embedding_max_concurrency),
+        ControllerSqliteValue::Int64(query_max_concurrency),
+        ControllerSqliteValue::Int64(max_results),
+        ControllerSqliteValue::Int64(max_context_chars),
+        ControllerSqliteValue::String(updated_at),
+    ])
 }
 
 /// Identity row returned by one guarded project mutation.
@@ -805,6 +876,79 @@ RETURNING id;
     validate_project_mutation_identity_rows(project_id, &rows, "更新 Codebase Memory 启用状态")
 }
 
+/// Replaces one active project's VCE settings under an exact optimistic revision.
+/// 在精确乐观修订号保护下替换一个活动项目的 VCE 设置。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the authoritative application SQLite binding.
+/// `controller` 持有权威应用 SQLite 绑定。
+/// `project_id` is the exact active project identity.
+/// `project_id` 是精确的活动项目身份。
+/// `expected_revision` is the currently observed project settings revision.
+/// `expected_revision` 是当前观察到的项目设置修订号。
+/// `settings` contains the complete next settings revision.
+/// `settings` 包含完整的下一版设置。
+///
+/// # Returns
+/// 返回值
+/// Success only after one exact active project row is updated.
+/// 仅在一个精确活动项目记录完成更新后返回成功。
+pub async fn persist_project_vce_settings(
+    controller: ControllerRuntimeHandle,
+    project_id: &str,
+    expected_revision: u64,
+    settings: &ProjectVceSettings,
+) -> Result<(), String> {
+    validate_project_mutation_id(project_id, "更新 VCE 项目设置")?;
+    settings.validate()?;
+    let expected_next = expected_revision
+        .checked_add(1)
+        .ok_or_else(|| String::from("VCE 设置修订号已耗尽。"))?;
+    if settings.revision != expected_next {
+        return Err(String::from("VCE 设置必须精确递增一个修订号。"));
+    }
+    let mut parameters =
+        project_vce_settings_params(project_id, settings, current_unix_millis_text())?;
+    parameters.push(ControllerSqliteValue::Int64(
+        i64::try_from(expected_revision)
+            .map_err(|_| String::from("VCE 预期修订号超出 SQLite 整数范围。"))?,
+    ));
+    let result = controller
+        .client
+        .query_sqlite_json_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(&controller),
+            r#"
+UPDATE project_vce_settings
+SET enabled = ?2,
+    revision = ?3,
+    migrated_from_codebase_memory = ?4,
+    max_file_bytes = ?5,
+    extra_ignore_patterns_json = ?6,
+    allow_query_rewrite = ?7,
+    allow_rerank = ?8,
+    embedding_max_concurrency = ?9,
+    query_max_concurrency = ?10,
+    max_results = ?11,
+    max_context_chars = ?12,
+    updated_at = ?13
+WHERE project_id = ?1
+  AND revision = ?14
+  AND EXISTS (
+      SELECT 1 FROM projects
+      WHERE projects.id = project_vce_settings.project_id AND projects.archived = 0
+  )
+RETURNING project_id AS id;
+"#,
+            parameters,
+        )
+        .await
+        .map_err(|error| format!("更新 VCE 项目设置失败：{error}"))?;
+    let rows = decode_query_rows::<ProjectMutationIdentityRow>(&result.json_data)?;
+    validate_project_mutation_identity_rows(project_id, &rows, "更新 VCE 项目设置")
+}
+
 /// Persists one active project's complete icon override pair.
 /// 持久化单个活动项目的完整图标覆盖对。
 ///
@@ -1039,6 +1183,52 @@ mod tests {
             .iter()
             .map(|project_id| (*project_id).to_string())
             .collect()
+    }
+
+    /// Verifies VCE settings encode every persisted field in the SQL placeholder order.
+    /// 验证 VCE 设置会按 SQL 占位符顺序编码全部持久化字段。
+    #[test]
+    fn project_vce_settings_parameters_preserve_typed_contract() {
+        let settings = ProjectVceSettings {
+            enabled: true,
+            revision: 7,
+            migrated_from_codebase_memory: true,
+            max_file_bytes: 2_097_152,
+            extra_ignore_patterns: vec![String::from("generated/**")],
+            allow_query_rewrite: true,
+            allow_rerank: false,
+            embedding_max_concurrency: 6,
+            query_max_concurrency: 2,
+            max_results: 12,
+            max_context_chars: 48_000,
+        };
+
+        let parameters = project_vce_settings_params(
+            "project-a",
+            &settings,
+            String::from("2026-09-04T00:00:00Z"),
+        )
+        .expect("encode valid VCE settings");
+
+        assert_eq!(parameters.len(), 13);
+        assert_eq!(
+            parameters,
+            vec![
+                ControllerSqliteValue::String(String::from("project-a")),
+                ControllerSqliteValue::Int64(1),
+                ControllerSqliteValue::Int64(7),
+                ControllerSqliteValue::Int64(1),
+                ControllerSqliteValue::Int64(2_097_152),
+                ControllerSqliteValue::String(String::from("[\"generated/**\"]")),
+                ControllerSqliteValue::Int64(1),
+                ControllerSqliteValue::Int64(0),
+                ControllerSqliteValue::Int64(6),
+                ControllerSqliteValue::Int64(2),
+                ControllerSqliteValue::Int64(12),
+                ControllerSqliteValue::Int64(48_000),
+                ControllerSqliteValue::String(String::from("2026-09-04T00:00:00Z")),
+            ]
+        );
     }
 
     /// Verifies guarded single-row mutations require one exact returned identity.

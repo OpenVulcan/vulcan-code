@@ -14,6 +14,7 @@ use vulcan_context_engine::{
     VceEngineSnapshot, VceIndexBinding, VceManagementQueryRequest, VceManagementQueryResponse,
     VceManagementRequest, VceManagementSnapshot, VceStateIdentity, VceWorkspaceStatistics,
 };
+use vulcan_workbench_model::ProjectVceSettings;
 use vulcan_workspace_store::vce_data_plane::{
     VceDataPlaneHandle, VceProjectIndex, VceProjectIndexConfig,
 };
@@ -90,6 +91,9 @@ pub(crate) struct VceRuntimeProjectStatus {
     /// Project configuration revision represented by the runtime.
     /// 运行时表示的项目配置修订号。
     pub(crate) config_revision: u64,
+    /// Complete validated project-owned VCE settings represented by this status.
+    /// 此状态表示的完整已验证项目自有 VCE 设置。
+    pub(crate) settings: ProjectVceSettings,
     /// Active code-semantic namespace when activation succeeded.
     /// 激活成功时的活动代码语义命名空间。
     pub(crate) namespace_id: Option<String>,
@@ -140,6 +144,9 @@ struct VceProjectRuntime {
     /// Project configuration revision.
     /// 项目配置修订号。
     config_revision: u64,
+    /// Validated project-owned behavior and resource budgets.
+    /// 经过校验的项目自有行为与资源预算。
+    settings: ProjectVceSettings,
     /// Project-scoped HostAI registration.
     /// 项目作用域 HostAI 注册。
     ai: Arc<VceHostAiAdapter>,
@@ -181,6 +188,9 @@ struct VceActivationFailure {
     /// Project configuration revision that failed.
     /// 失败的项目配置修订号。
     config_revision: u64,
+    /// Complete settings revision that failed activation.
+    /// 激活失败的完整设置修订版。
+    settings: ProjectVceSettings,
     /// Whether the failure is caused by required configuration.
     /// 失败是否由必需配置导致。
     blocked_configuration: bool,
@@ -222,8 +232,8 @@ impl VceRuntimeManager {
     /// `project_id` 是权威工作台身份。
     /// `project_root` is the authoritative absolute project path.
     /// `project_root` 是权威绝对项目路径。
-    /// `config_revision` is the persisted optimistic settings revision.
-    /// `config_revision` 是持久化的乐观设置修订号。
+    /// `settings` is the complete validated persisted project settings revision.
+    /// `settings` 是完整且经过校验的持久化项目设置修订版。
     ///
     /// # Returns
     /// 返回值
@@ -233,11 +243,18 @@ impl VceRuntimeManager {
         &self,
         project_id: &str,
         project_root: &Path,
-        config_revision: u64,
+        settings: ProjectVceSettings,
     ) -> Result<RefreshResult, String> {
+        settings.validate()?;
+        if !settings.enabled {
+            return Err(String::from("VCE project settings are disabled"));
+        }
+        if let Some(previous) = self.projects.write().await.remove(project_id) {
+            previous.ai.deactivate()?;
+        }
         let requested_root = crate::normalized_workspace_path_text_from_path(project_root);
         match self
-            .activate_project(project_id, project_root, config_revision)
+            .activate_project(project_id, project_root, settings.clone())
             .await
         {
             Ok(runtime) => {
@@ -256,7 +273,8 @@ impl VceRuntimeManager {
                     project_id.to_owned(),
                     VceActivationFailure {
                         project_root: requested_root,
-                        config_revision,
+                        config_revision: settings.revision,
+                        settings,
                         blocked_configuration,
                         error: bounded_error(error.clone()),
                     },
@@ -382,11 +400,6 @@ impl VceRuntimeManager {
     /// `project_id` 来自权威执行上下文。
     /// `information_request` is the model-provided natural-language need.
     /// `information_request` 是模型提供的自然语言需求。
-    /// `allow_query_rewrite` explicitly enables the optional LLM stage.
-    /// `allow_query_rewrite` 显式启用可选 LLM 阶段。
-    /// `allow_rerank` explicitly enables the optional Rerank stage.
-    /// `allow_rerank` 显式启用可选 Rerank 阶段。
-    ///
     /// # Returns
     /// 返回值
     /// A bounded VCE retrieval result from the committed index.
@@ -395,8 +408,6 @@ impl VceRuntimeManager {
         &self,
         project_id: &str,
         information_request: &str,
-        allow_query_rewrite: bool,
-        allow_rerank: bool,
     ) -> Result<RetrieveResult, String> {
         if information_request.trim().is_empty() {
             return Err(String::from("VCE information_request must not be empty"));
@@ -408,8 +419,8 @@ impl VceRuntimeManager {
             request_id(project_id, "retrieve"),
             information_request,
         );
-        request.allow_query_rewrite = allow_query_rewrite;
-        request.allow_rerank = allow_rerank;
+        request.allow_query_rewrite = runtime.settings.allow_query_rewrite;
+        request.allow_rerank = runtime.settings.allow_rerank;
         engine
             .retrieve(request, runtime.index.as_ref(), runtime.ai.as_ref())
             .await
@@ -504,6 +515,7 @@ impl VceRuntimeManager {
                     VceProjectLifecycle::Failed
                 },
                 config_revision: failure.config_revision,
+                settings: failure.settings.clone(),
                 namespace_id: None,
                 vector_space_id: None,
                 engine: None,
@@ -568,13 +580,17 @@ impl VceRuntimeManager {
         &self,
         project_id: &str,
         project_root: &Path,
-        config_revision: u64,
+        settings: ProjectVceSettings,
     ) -> Result<Arc<VceProjectRuntime>, String> {
-        validate_project_identity(project_id, config_revision)?;
-        let preliminary_limits = VceSourceLimits::new(1_048_576, 8, 4 * 1_048_576)?;
+        validate_project_identity(project_id, settings.revision)?;
+        settings.validate()?;
+        let preliminary_stage_bytes = (4 * 1_048_576_u64).max(settings.max_file_bytes);
+        let preliminary_limits =
+            VceSourceLimits::new(settings.max_file_bytes, 8, preliminary_stage_bytes)?;
         let source = Arc::new(VceProjectSourceAdapter::activate(
             project_root,
             preliminary_limits,
+            &settings.extra_ignore_patterns,
         )?);
         let project_root = crate::normalized_workspace_path_text_from_path(source.project_root());
         let root_hash = hex::encode(Sha256::digest(project_root.as_bytes()));
@@ -591,11 +607,18 @@ impl VceRuntimeManager {
                 chunker_version: String::from(VCE_CHUNKER_VERSION),
             },
         )?);
-        let config = vulcan_context_engine::VceConfig::new(
+        let mut config = vulcan_context_engine::VceConfig::new(
             checkpoint_chain_id.clone(),
             ai.embedding_space().clone(),
         )
         .map_err(|error| error.to_string())?;
+        config.indexing.max_file_bytes = settings.max_file_bytes;
+        config.index_stage_max_bytes = config.index_stage_max_bytes.max(settings.max_file_bytes);
+        config.embedding_max_concurrency = settings.embedding_max_concurrency;
+        config.query_max_concurrency = settings.query_max_concurrency;
+        config.retrieval.coverage.max_results = settings.max_results;
+        config.retrieval.coverage.max_chars = settings.max_context_chars;
+        config.validate().map_err(|error| error.to_string())?;
         let source_limits = VceSourceLimits::new(
             config.indexing.max_file_bytes,
             config.index_stage_blob_limit,
@@ -604,6 +627,7 @@ impl VceRuntimeManager {
         let source = Arc::new(VceProjectSourceAdapter::activate(
             source.project_root(),
             source_limits,
+            &settings.extra_ignore_patterns,
         )?);
         let binding = VceIndexBinding::new(
             config.index_namespace_id.clone(),
@@ -631,7 +655,7 @@ impl VceRuntimeManager {
                     preprocessing_version: String::from(VCE_PREPROCESSING_VERSION),
                     chunker_version: String::from(VCE_CHUNKER_VERSION),
                     dimension,
-                    config_revision,
+                    config_revision: settings.revision,
                 })
                 .await?,
         );
@@ -656,7 +680,8 @@ impl VceRuntimeManager {
             project_id: project_id.to_owned(),
             project_root,
             config,
-            config_revision,
+            config_revision: settings.revision,
+            settings,
             ai,
             index,
             source,
@@ -764,6 +789,7 @@ impl VceProjectRuntime {
             project_root: self.project_root.clone(),
             lifecycle: host_status.lifecycle,
             config_revision: self.config_revision,
+            settings: self.settings.clone(),
             namespace_id: Some(self.config.index_namespace_id.clone()),
             vector_space_id: Some(self.config.embedding_space.vector_space_id.clone()),
             engine: Some(engine.status()),

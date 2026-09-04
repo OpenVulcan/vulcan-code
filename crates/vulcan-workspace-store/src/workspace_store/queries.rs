@@ -15,10 +15,22 @@ pub(super) async fn query_project_rows(
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
             r#"
-SELECT id, name, root_path, pinned, sort_order, icon_pack, icon_key,
-       codebase_memory_enabled, archived
-FROM projects
-ORDER BY pinned DESC, sort_order ASC, updated_at DESC;
+SELECT p.id, p.name, p.root_path, p.pinned, p.sort_order, p.icon_pack, p.icon_key,
+       p.codebase_memory_enabled, p.archived,
+       v.enabled AS vce_enabled,
+       v.revision AS vce_revision,
+       v.migrated_from_codebase_memory AS vce_migrated_from_codebase_memory,
+       v.max_file_bytes AS vce_max_file_bytes,
+       v.extra_ignore_patterns_json AS vce_extra_ignore_patterns_json,
+       v.allow_query_rewrite AS vce_allow_query_rewrite,
+       v.allow_rerank AS vce_allow_rerank,
+       v.embedding_max_concurrency AS vce_embedding_max_concurrency,
+       v.query_max_concurrency AS vce_query_max_concurrency,
+       v.max_results AS vce_max_results,
+       v.max_context_chars AS vce_max_context_chars
+FROM projects p
+JOIN project_vce_settings v ON v.project_id = p.id
+ORDER BY p.pinned DESC, p.sort_order ASC, p.updated_at DESC;
 "#,
             Vec::new(),
         )

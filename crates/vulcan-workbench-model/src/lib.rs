@@ -10,7 +10,7 @@ mod subagent;
 mod turn_stats;
 
 pub use activity::{ActivityEntry, ActivityLevel};
-pub use project::TaskProjectSummary;
+pub use project::{ProjectVceSettings, TaskProjectSummary};
 pub use runtime_state::{
     PENDING_PROMPT_QUEUE_LIMIT, PendingPromptBusyLaneContext, PendingPromptDispatchContext,
     PendingPromptModelReference, PendingPromptPanelEntry, PendingPromptPanelEntryState,

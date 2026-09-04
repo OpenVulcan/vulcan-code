@@ -59,6 +59,9 @@ struct ValidatedProjectRow {
     /// Exact Codebase Memory enablement decoded from the numeric protocol flag.
     /// 从数值协议标记解码出的精确 Codebase Memory 启用状态。
     codebase_memory_enabled: bool,
+    /// Validated project-owned native code-semantic settings.
+    /// 经过校验的项目自有原生代码语义设置。
+    vce: ProjectVceSettings,
     /// Exact archive state decoded from the numeric protocol flag.
     /// 从数值协议标记解码出的精确归档状态。
     archived: bool,
@@ -119,6 +122,52 @@ fn validate_project_row(row: StoredProjectRow) -> Result<ValidatedProjectRow, St
             ));
         }
     };
+    let vce_enabled = validate_project_boolean(&row.id, "VCE 启用", row.vce_enabled)?;
+    let vce_migrated_from_codebase_memory = validate_project_boolean(
+        &row.id,
+        "VCE CBM 迁移",
+        row.vce_migrated_from_codebase_memory,
+    )?;
+    let vce_revision = u64::try_from(row.vce_revision).map_err(|error| {
+        format!(
+            "项目索引 `{}` 包含无效 VCE 修订号 `{}`：{error}",
+            row.id, row.vce_revision
+        )
+    })?;
+    if vce_revision == 0 {
+        return Err(format!("项目索引 `{}` 的 VCE 修订号必须大于零。", row.id));
+    }
+    let vce_max_file_bytes =
+        positive_project_u64(&row.id, "VCE 最大文件字节数", row.vce_max_file_bytes)?;
+    let vce_embedding_max_concurrency =
+        positive_project_usize(&row.id, "VCE 向量并发数", row.vce_embedding_max_concurrency)?;
+    let vce_query_max_concurrency =
+        positive_project_usize(&row.id, "VCE 查询并发数", row.vce_query_max_concurrency)?;
+    let vce_max_results = positive_project_usize(&row.id, "VCE 结果数量", row.vce_max_results)?;
+    let vce_max_context_chars =
+        positive_project_usize(&row.id, "VCE 上下文字符数", row.vce_max_context_chars)?;
+    let vce_extra_ignore_patterns =
+        serde_json::from_str::<Vec<String>>(&row.vce_extra_ignore_patterns_json)
+            .map_err(|error| format!("项目索引 `{}` 的 VCE 忽略规则 JSON 无效：{error}", row.id))?;
+    let vce = ProjectVceSettings {
+        enabled: vce_enabled,
+        revision: vce_revision,
+        migrated_from_codebase_memory: vce_migrated_from_codebase_memory,
+        max_file_bytes: vce_max_file_bytes,
+        extra_ignore_patterns: vce_extra_ignore_patterns,
+        allow_query_rewrite: validate_project_boolean(
+            &row.id,
+            "VCE 查询改写",
+            row.vce_allow_query_rewrite,
+        )?,
+        allow_rerank: validate_project_boolean(&row.id, "VCE 重排", row.vce_allow_rerank)?,
+        embedding_max_concurrency: vce_embedding_max_concurrency,
+        query_max_concurrency: vce_query_max_concurrency,
+        max_results: vce_max_results,
+        max_context_chars: vce_max_context_chars,
+    };
+    vce.validate()
+        .map_err(|error| format!("项目索引 `{}` 的 VCE 设置无效：{error}", row.id))?;
     // archived must be exact before it can decide whether default-project seeding writes data.
     // archived 在决定默认项目播种是否写入数据前必须保持精确。
     let archived = match row.archived {
@@ -143,9 +192,64 @@ fn validate_project_row(row: StoredProjectRow) -> Result<ValidatedProjectRow, St
         stored: row,
         pinned,
         codebase_memory_enabled,
+        vce,
         archived,
         sort_order,
     })
+}
+
+/// Decodes one strict SQLite 0/1 project flag.
+/// 解码一个严格的 SQLite 0/1 项目标记。
+///
+/// # Parameters
+/// 参数
+/// `project_id` and `field_name` identify diagnostics; `value` is the raw SQLite integer.
+/// `project_id` 与 `field_name` 标识诊断；`value` 是原始 SQLite 整数。
+///
+/// # Returns
+/// 返回值
+/// The exact boolean value or an explicit corruption error.
+/// 返回精确布尔值或明确的损坏错误。
+fn validate_project_boolean(
+    project_id: &str,
+    field_name: &str,
+    value: i64,
+) -> Result<bool, String> {
+    match value {
+        0 => Ok(false),
+        1 => Ok(true),
+        value => Err(format!(
+            "项目索引 `{project_id}` 包含无效 {field_name} 标记 `{value}`。"
+        )),
+    }
+}
+
+/// Converts one positive SQLite integer into a project-owned `u64` setting.
+/// 将一个正数 SQLite 整数转换为项目自有 `u64` 设置。
+fn positive_project_u64(project_id: &str, field_name: &str, value: i64) -> Result<u64, String> {
+    let value = u64::try_from(value).map_err(|error| {
+        format!("项目索引 `{project_id}` 包含无效 {field_name} `{value}`：{error}")
+    })?;
+    if value == 0 {
+        return Err(format!(
+            "项目索引 `{project_id}` 的 {field_name} 必须大于零。"
+        ));
+    }
+    Ok(value)
+}
+
+/// Converts one positive SQLite integer into a platform-sized project setting.
+/// 将一个正数 SQLite 整数转换为平台宽度的项目设置。
+fn positive_project_usize(project_id: &str, field_name: &str, value: i64) -> Result<usize, String> {
+    let value = usize::try_from(value).map_err(|error| {
+        format!("项目索引 `{project_id}` 包含无效 {field_name} `{value}`：{error}")
+    })?;
+    if value == 0 {
+        return Err(format!(
+            "项目索引 `{project_id}` 的 {field_name} 必须大于零。"
+        ));
+    }
+    Ok(value)
 }
 
 /// Queries and validates every project row before any workspace-level decision uses it.
@@ -304,7 +408,8 @@ async fn load_workspace_snapshot_with_runtime_state(
             row.icon_key.clone(),
             Vec::new(),
         )
-        .with_codebase_memory_enabled(validated_row.codebase_memory_enabled);
+        .with_codebase_memory_enabled(validated_row.codebase_memory_enabled)
+        .with_vce_settings(validated_row.vce.clone());
 
         if validated_row.archived {
             archived_task_projects.push(project);
@@ -702,6 +807,17 @@ mod tests {
             icon_pack: None,
             icon_key: None,
             codebase_memory_enabled: 0,
+            vce_enabled: 0,
+            vce_revision: 1,
+            vce_migrated_from_codebase_memory: 1,
+            vce_max_file_bytes: 1_048_576,
+            vce_extra_ignore_patterns_json: String::from("[]"),
+            vce_allow_query_rewrite: 0,
+            vce_allow_rerank: 1,
+            vce_embedding_max_concurrency: 4,
+            vce_query_max_concurrency: 3,
+            vce_max_results: 10,
+            vce_max_context_chars: 32_000,
             archived: 0,
         }
     }
