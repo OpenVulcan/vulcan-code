@@ -67,6 +67,9 @@ vulcan-process-lifecycle.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# Exposes the deterministic HostAI Port for VCE adapter lifecycle tests only.
+# 仅为 VCE 适配器生命周期测试暴露确定性 HostAI Port。
+vulcan-ai-contract = { workspace = true, features = ["test-support"] }
 # Exposes exact V1 storage fixtures only while compiling service-kernel tests.
 # 仅在编译 service-kernel 测试时暴露精确 V1 存储夹具。
 vulcan-workspace-store = { workspace = true, features = ["test-support"] }

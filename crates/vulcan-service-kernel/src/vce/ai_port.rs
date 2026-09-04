@@ -5,16 +5,20 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use tokio::sync::Notify;
 use vulcan_ai_contract::{
     AiMessage, AiOperation, ContentItem, EmbeddingCapabilities, EmbeddingEncoding,
     EmbeddingOutputKind, EmbeddingTask, ExecutionRouteSnapshot, HostAiCallContext,
-    HostAiCapabilityHandle, HostAiCapabilityRegistration, HostAiCapabilityRequirement, HostAiError,
-    HostAiErrorCode, HostAiPort, INFERENCE_CONTRACT_VERSION, InferenceCallerBudget,
-    InferenceCallerContext, InferenceCapabilitySnapshot, InferencePermission, InferenceUsageScope,
-    MessageRole, ParallelToolCallPolicy, PromptCachePolicy, ReasoningOutputPolicy, RerankRequest,
-    RerankText, RerankTruncation, ResponsesExecutionRequest, StructuredOutputPolicy,
-    ToolChoicePolicy,
+    HostAiCancellation, HostAiCapabilityHandle, HostAiCapabilityRegistration,
+    HostAiCapabilityRequirement, HostAiError, HostAiErrorCode, HostAiExecutionHandle, HostAiPort,
+    INFERENCE_CONTRACT_VERSION, InferenceCallerBudget, InferenceCallerContext,
+    InferenceCapabilitySnapshot, InferencePermission, InferenceUsageScope, MessageRole,
+    ParallelToolCallPolicy, PromptCachePolicy, ReasoningOutputPolicy, RerankRequest, RerankText,
+    RerankTruncation, ResponsesExecutionRequest, StructuredOutputPolicy, ToolChoicePolicy,
 };
 use vulcan_context_engine::host_adapter::{
     HostEmbeddingRequestConfig, create_embedding_batch_with_response, rerank_documents,
@@ -102,6 +106,125 @@ struct VceEmbeddingContract {
     /// Task-neutral physical compatibility fingerprint.
     /// 与任务无关的物理兼容性指纹。
     physical_fingerprint: String,
+}
+
+/// Cooperative cancellation source whose lifetime follows one VCE HostAI Future.
+/// 生命周期跟随单次 VCE HostAI Future 的协作式取消源。
+#[derive(Default)]
+struct VceHostCallCancellation {
+    /// Monotonic cancellation state read by the shared HostAI runtime.
+    /// 由共享 HostAI 运行时读取的单调取消状态。
+    cancelled: AtomicBool,
+    /// Wake-up signal for asynchronous HostAI cancellation observers.
+    /// 用于异步 HostAI 取消观察者的唤醒信号。
+    notify: Notify,
+}
+
+impl VceHostCallCancellation {
+    /// Marks the call cancelled once and wakes all registered observers.
+    /// 将调用单调标记为已取消并唤醒全部已注册观察者。
+    fn cancel(&self) {
+        if !self.cancelled.swap(true, Ordering::AcqRel) {
+            self.notify.notify_waiters();
+        }
+    }
+}
+
+impl HostAiCancellation for VceHostCallCancellation {
+    /// Returns the monotonic cancellation state without blocking.
+    /// 无阻塞返回单调取消状态。
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+
+    /// Resolves after cancellation without losing a notification racing with registration.
+    /// 在取消后完成，且不会丢失与注册并发的通知。
+    fn cancelled<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            let notified = self.notify.notified();
+            if self.is_cancelled() {
+                return;
+            }
+            notified.await;
+        })
+    }
+}
+
+/// Drop guard that propagates VCE Future cancellation into the common HostAI lifecycle.
+/// 将 VCE Future 取消传播到公共 HostAI 生命周期的析构保护器。
+struct VceHostCallGuard {
+    /// Shared cancellation source attached to the typed HostAI call context.
+    /// 附加到强类型 HostAI 调用上下文的共享取消源。
+    cancellation: Arc<VceHostCallCancellation>,
+    /// Shared HostAI Port used to cancel a started LLM execution handle.
+    /// 用于取消已启动 LLM 执行句柄的共享 HostAI Port。
+    port: Arc<dyn HostAiPort>,
+    /// Host-owned LLM execution created before a wait Future can be dropped.
+    /// 等待 Future 可被丢弃前创建的宿主持有 LLM 执行。
+    execution: Option<HostAiExecutionHandle>,
+    /// Whether dropping the guard represents cancellation rather than normal completion.
+    /// 丢弃保护器是否表示取消而非正常完成。
+    armed: bool,
+}
+
+impl VceHostCallGuard {
+    /// Creates one HostAI call context and its armed cancellation guard.
+    /// 创建一项 HostAI 调用上下文及其已启用取消保护器。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `port` owns common HostAI execution and cancellation.
+    /// `port` 持有公共 HostAI 执行与取消。
+    /// `operation_id` is the stable VCE operation identity.
+    /// `operation_id` 是稳定 VCE 操作身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A context carrying the signal and a guard that cancels on premature drop.
+    /// 返回携带信号的上下文及在提前丢弃时取消的保护器。
+    fn new(port: Arc<dyn HostAiPort>, operation_id: String) -> (HostAiCallContext, Self) {
+        let cancellation = Arc::new(VceHostCallCancellation::default());
+        let context = HostAiCallContext::new(operation_id).with_cancellation(cancellation.clone());
+        let guard = Self {
+            cancellation,
+            port,
+            execution: None,
+            armed: true,
+        };
+        (context, guard)
+    }
+
+    /// Retains a started LLM execution so a dropped wait requests host cancellation.
+    /// 保留已启动 LLM 执行，使等待被丢弃时请求宿主取消。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `execution` is the exact host-issued execution handle.
+    /// `execution` 是宿主签发的精确执行句柄。
+    fn attach_execution(&mut self, execution: HostAiExecutionHandle) {
+        self.execution = Some(execution);
+    }
+
+    /// Disarms cancellation after the HostAI operation reached a normal result or error.
+    /// HostAI 操作正常返回结果或错误后解除取消保护。
+    fn disarm(&mut self) {
+        self.armed = false;
+        self.execution = None;
+    }
+}
+
+impl Drop for VceHostCallGuard {
+    /// Propagates premature Future drop to both call-context and started-execution cancellation.
+    /// 将 Future 提前丢弃同时传播到调用上下文与已启动执行的取消路径。
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.cancellation.cancel();
+        if let Some(execution) = self.execution.as_ref() {
+            let _ = self.port.cancel_execution(execution);
+        }
+    }
 }
 
 /// Project-scoped VCE adapter over the shared HostAI port.
@@ -376,14 +499,20 @@ impl VceAiPort for VceHostAiAdapter {
                 },
             )
             .map_err(|error| map_host_error(VcePortOperation::Embedding, error))?;
+            let (host_context, mut call_guard) = VceHostCallGuard::new(
+                Arc::clone(&adapter.port),
+                request.context.operation_id.clone(),
+            );
             let result = create_embedding_batch_with_response(
                 adapter.port.as_ref(),
                 &handle,
-                HostAiCallContext::new(request.context.operation_id.clone()),
+                host_context,
                 host_request,
             )
-            .await
-            .map_err(|error| map_host_error(VcePortOperation::Embedding, error))?;
+            .await;
+            call_guard.disarm();
+            let result =
+                result.map_err(|error| map_host_error(VcePortOperation::Embedding, error))?;
             adapter.validate_embedding_response(&result)?;
             Ok(VceEmbeddingResponse {
                 operation_id: request.context.operation_id,
@@ -418,17 +547,29 @@ impl VceAiPort for VceHostAiAdapter {
                 });
             }
             let execution_request = build_query_rewrite_request(&adapter.binding, &request)?;
+            let (host_context, mut call_guard) = VceHostCallGuard::new(
+                Arc::clone(&adapter.port),
+                request.context.operation_id.clone(),
+            );
             let execution = start_response_execution(
                 adapter.port.as_ref(),
                 &handle,
-                HostAiCallContext::new(request.context.operation_id.clone()),
+                host_context,
                 execution_request,
             )
-            .await
-            .map_err(|error| map_host_error(VcePortOperation::QueryRewrite, error))?;
-            let result = wait_response(adapter.port.as_ref(), &execution)
-                .await
-                .map_err(|error| map_host_error(VcePortOperation::QueryRewrite, error))?;
+            .await;
+            let execution = match execution {
+                Ok(execution) => execution,
+                Err(error) => {
+                    call_guard.disarm();
+                    return Err(map_host_error(VcePortOperation::QueryRewrite, error));
+                }
+            };
+            call_guard.attach_execution(execution.clone());
+            let result = wait_response(adapter.port.as_ref(), &execution).await;
+            call_guard.disarm();
+            let result =
+                result.map_err(|error| map_host_error(VcePortOperation::QueryRewrite, error))?;
             let structured =
                 result
                     .structured_output
@@ -509,14 +650,15 @@ impl VceAiPort for VceHostAiAdapter {
                 truncation: RerankTruncation::Disabled,
                 return_content: false,
             };
-            let response = rerank_documents(
-                adapter.port.as_ref(),
-                &handle,
-                HostAiCallContext::new(request.context.operation_id.clone()),
-                host_request,
-            )
-            .await
-            .map_err(|error| map_host_error(VcePortOperation::Rerank, error))?;
+            let (host_context, mut call_guard) = VceHostCallGuard::new(
+                Arc::clone(&adapter.port),
+                request.context.operation_id.clone(),
+            );
+            let response =
+                rerank_documents(adapter.port.as_ref(), &handle, host_context, host_request).await;
+            call_guard.disarm();
+            let response =
+                response.map_err(|error| map_host_error(VcePortOperation::Rerank, error))?;
             let ordered_candidate_indexes = response
                 .results
                 .into_iter()
@@ -845,5 +987,146 @@ fn map_host_error(operation: VcePortOperation, error: HostAiError) -> VcePortErr
             operation,
             message: error.to_string(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vulcan_ai_contract::test_support::MockHostAiPort;
+
+    /// Builds one complete project-scoped VCE HostAI registration fixture.
+    /// 构建一份完整的项目作用域 VCE HostAI 注册夹具。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Exact non-secret identities used by registration tests.
+    /// 返回注册测试使用的精确非敏感身份。
+    fn registration_config() -> VceHostAiRegistrationConfig {
+        VceHostAiRegistrationConfig {
+            project_id: String::from("project-a"),
+            consumer_profile_id: String::from("vce"),
+            vector_space_id: String::from("code-semantic:project-a:root"),
+            dimension: Some(3),
+            preprocessing_version: String::from("preprocess-v1"),
+            chunker_version: String::from("chunker-v1"),
+        }
+    }
+
+    /// Verifies VCE registers through the common internal-background capability contract.
+    /// 验证 VCE 通过公共内部后台能力契约进行注册。
+    #[test]
+    fn registration_uses_fixed_identity_permissions_and_optional_capabilities() {
+        let registration = vce_capability_registration(&registration_config());
+
+        assert_eq!(
+            registration.registration_id,
+            "vce-project:project-a:inference"
+        );
+        assert_eq!(registration.owner_id, "vce-project:project-a");
+        assert_eq!(registration.consumer_profile_id, "vce");
+        assert_eq!(
+            registration.caller.usage_scope,
+            InferenceUsageScope::InternalBackground
+        );
+        assert!(
+            registration
+                .caller
+                .permissions
+                .contains(&InferencePermission::Embedding)
+        );
+        assert!(
+            registration
+                .caller
+                .permissions
+                .contains(&InferencePermission::Llm)
+        );
+        assert!(
+            registration
+                .caller
+                .permissions
+                .contains(&InferencePermission::Rerank)
+        );
+        assert_eq!(
+            registration
+                .requirements
+                .iter()
+                .filter(|requirement| requirement.required)
+                .map(|requirement| requirement.operation)
+                .collect::<Vec<_>>(),
+            vec![AiOperation::EmbeddingCreate]
+        );
+    }
+
+    /// Verifies dropping an in-flight adapter Future wakes the common HostAI cancellation source.
+    /// 验证丢弃执行中的适配器 Future 会唤醒公共 HostAI 取消源。
+    #[tokio::test]
+    async fn dropped_call_guard_propagates_cooperative_cancellation() {
+        let port: Arc<dyn HostAiPort> = Arc::new(MockHostAiPort::new());
+        let (context, guard) = VceHostCallGuard::new(port, String::from("operation-a"));
+        let cancellation = Arc::clone(&context.cancellation);
+        let cancelled = cancellation.cancelled();
+        tokio::pin!(cancelled);
+
+        drop(guard);
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), &mut cancelled)
+            .await
+            .expect("cancellation observer should wake");
+        assert!(cancellation.is_cancelled());
+    }
+
+    /// Verifies normal HostAI completion disarms the guard without emitting cancellation.
+    /// 验证 HostAI 正常完成会解除保护且不发出取消。
+    #[test]
+    fn completed_call_guard_does_not_emit_cancellation() {
+        let port: Arc<dyn HostAiPort> = Arc::new(MockHostAiPort::new());
+        let (context, mut guard) = VceHostCallGuard::new(port, String::from("operation-a"));
+        let cancellation = Arc::clone(&context.cancellation);
+
+        guard.disarm();
+        drop(guard);
+
+        assert!(!cancellation.is_cancelled());
+    }
+
+    /// Verifies common HostAI failures retain the VCE operation and stable error class.
+    /// 验证公共 HostAI 失败会保留 VCE 操作与稳定错误类别。
+    #[test]
+    fn host_error_mapping_preserves_operation_and_failure_class() {
+        let unavailable = map_host_error(
+            VcePortOperation::Rerank,
+            HostAiError::new(HostAiErrorCode::CapabilityUnavailable, "not configured"),
+        );
+        assert!(matches!(
+            unavailable,
+            VcePortError::Unavailable {
+                operation: VcePortOperation::Rerank
+            }
+        ));
+
+        let mismatch = map_host_error(
+            VcePortOperation::Embedding,
+            HostAiError::new(HostAiErrorCode::FingerprintMismatch, "route changed"),
+        );
+        assert!(matches!(
+            mismatch,
+            VcePortError::InvalidResponse {
+                operation: VcePortOperation::Embedding,
+                ..
+            }
+        ));
+
+        let cancelled = map_host_error(
+            VcePortOperation::QueryRewrite,
+            HostAiError::new(HostAiErrorCode::Cancelled, "cancelled"),
+        );
+        assert!(matches!(
+            cancelled,
+            VcePortError::Failed {
+                operation: VcePortOperation::QueryRewrite,
+                ..
+            }
+        ));
     }
 }

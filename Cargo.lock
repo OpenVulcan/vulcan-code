@@ -6741,6 +6741,7 @@ dependencies = [
  "vulcan-change-set",
  "vulcan-context",
  "vulcan-context-compaction",
+ "vulcan-context-engine",
  "vulcan-context-injection",
  "vulcan-core",
  "vulcan-hooks",
