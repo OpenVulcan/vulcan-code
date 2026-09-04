@@ -170,6 +170,65 @@ fn visible_user_prompt_reuses_authoritative_canonical_message_id() {
     );
 }
 
+/// Verifies an edited durable user input reuses its projected canonical identity without appending a duplicate message.
+/// 验证编辑后的持久用户输入会复用其投影得到的规范身份，且不会追加重复消息。
+#[test]
+fn edited_user_prompt_reuses_existing_canonical_message_id() {
+    // runtime_state represents the rebuilt controller state for an existing V1 conversation.
+    // runtime_state 表示从既有 V1 会话重建得到的控制器状态。
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    append_user_text_message(
+        &mut runtime_state.conversation_state,
+        "v1-provider-message-1",
+        "编辑后的第一条消息",
+        Vec::new(),
+    )
+    .expect("rebuilt V1 user message should be valid");
+    // original_message_count proves prompt preparation never duplicates the durable edited row.
+    // original_message_count 用于证明提示词准备不会重复追加这条持久编辑记录。
+    let original_message_count = runtime_state.conversation_state.messages.len();
+    let mut hook_runtime = ConversationHookRuntime::new();
+
+    // start receives the exact identity resolved from the authoritative V1 source projection.
+    // start 接收从权威 V1 来源投影解析出的精确身份。
+    let start = begin_shared_prompt_turn_with_runtime_state(
+        &mut runtime_state,
+        &mut hook_runtime,
+        SharedPromptTurnRuntimeBeginInput {
+            session_id: SessionId::from_u128(903),
+            session_title: "既有会话",
+            workspace_path: "D:/workspace",
+            prompt_entry_id: String::from("edited-root-entry"),
+            continuation_action_id: None,
+            prompt: "编辑后的第一条消息",
+            hidden_model_guidance: None,
+            provider_visible_agent_messages: Vec::new(),
+            attachments: Vec::new(),
+            provider_attachments: None,
+            existing_canonical_user_message_id: Some(String::from("v1-provider-message-1")),
+            append_canonical_user_message: false,
+            append_visible_user_prompt_record: false,
+            source: PendingSessionPromptSource::UserFollowup,
+            vmm_runtime_ready: true,
+            vmm_precheck_ready: true,
+            execution_mode: String::from("Build"),
+            reasoning_effort: None,
+            owning_project_id: Some(String::from("project-a")),
+        },
+    )
+    .expect("edited durable user input should begin with its existing canonical identity");
+
+    assert_eq!(
+        start.canonical_user_message_id.as_deref(),
+        Some("v1-provider-message-1")
+    );
+    assert_eq!(
+        runtime_state.conversation_state.messages.len(),
+        original_message_count
+    );
+    assert!(start.visible_user_prompt_record_id.is_none());
+}
+
 /// Verifies typed VMM recall anchors target the exact visible canonical user message.
 /// 验证类型化 VMM 召回锚点会指向精确的可见规范用户消息。
 #[test]
@@ -284,6 +343,7 @@ fn stopped_vmm_service_bypasses_every_memory_path_without_canonical_user_id() {
             provider_visible_agent_messages: Vec::new(),
             attachments: Vec::new(),
             provider_attachments: None,
+            existing_canonical_user_message_id: None,
             append_canonical_user_message: false,
             append_visible_user_prompt_record: false,
             source: PendingSessionPromptSource::GoalContinuation,
@@ -355,6 +415,7 @@ fn begin_user_prompt(runtime_state: &mut SessionRuntimeStateEntry) -> SharedProm
             provider_visible_agent_messages: Vec::new(),
             attachments: Vec::new(),
             provider_attachments: None,
+            existing_canonical_user_message_id: None,
             append_canonical_user_message: true,
             append_visible_user_prompt_record: true,
             source: PendingSessionPromptSource::UserFollowup,
@@ -390,6 +451,7 @@ fn idle_dispatched_interrupt_produces_conversation_hook_turn_id() {
             provider_visible_agent_messages: Vec::new(),
             attachments: Vec::new(),
             provider_attachments: None,
+            existing_canonical_user_message_id: None,
             append_canonical_user_message: true,
             append_visible_user_prompt_record: true,
             source,
@@ -479,6 +541,7 @@ fn session_mailbox_begin_keeps_user_input_hidden_even_if_visibility_flag_is_true
             provider_visible_agent_messages: Vec::new(),
             attachments: Vec::new(),
             provider_attachments: None,
+            existing_canonical_user_message_id: None,
             append_canonical_user_message: true,
             append_visible_user_prompt_record: true,
             source: PendingSessionPromptSource::SessionMailbox,
@@ -527,6 +590,7 @@ fn goal_continuation_begin_never_persists_user_message() {
             provider_visible_agent_messages: Vec::new(),
             attachments: Vec::new(),
             provider_attachments: None,
+            existing_canonical_user_message_id: None,
             append_canonical_user_message: true,
             append_visible_user_prompt_record: true,
             source: PendingSessionPromptSource::GoalContinuation,
@@ -584,6 +648,7 @@ fn manual_continuation_preparation_preserves_exact_hook_correlation() {
             provider_visible_agent_messages: Vec::new(),
             attachments: Vec::new(),
             provider_attachments: None,
+            existing_canonical_user_message_id: None,
             append_canonical_user_message: false,
             append_visible_user_prompt_record: false,
             source: PendingSessionPromptSource::ExecutionRetry,
@@ -666,6 +731,7 @@ fn goal_continuation_reuses_persisted_vmm_profile_baseline() {
             provider_visible_agent_messages: Vec::new(),
             attachments: Vec::new(),
             provider_attachments: None,
+            existing_canonical_user_message_id: None,
             append_canonical_user_message: false,
             append_visible_user_prompt_record: false,
             source: PendingSessionPromptSource::GoalContinuation,
@@ -840,6 +906,7 @@ fn hidden_model_guidance_stays_out_of_visible_transcript() {
             provider_visible_agent_messages: Vec::new(),
             attachments: Vec::new(),
             provider_attachments: None,
+            existing_canonical_user_message_id: None,
             append_canonical_user_message: true,
             append_visible_user_prompt_record: true,
             source: PendingSessionPromptSource::UserFollowup,
@@ -1036,6 +1103,7 @@ fn begin_prompt_keeps_runtime_messages_when_records_are_empty() {
             provider_visible_agent_messages: Vec::new(),
             attachments: Vec::new(),
             provider_attachments: None,
+            existing_canonical_user_message_id: None,
             append_canonical_user_message: true,
             append_visible_user_prompt_record: true,
             source: PendingSessionPromptSource::UserFollowup,

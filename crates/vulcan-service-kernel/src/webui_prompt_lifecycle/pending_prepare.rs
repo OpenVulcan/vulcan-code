@@ -562,6 +562,16 @@ impl ExactPendingPromptDispatch {
             Self::SubagentReturn { .. } => PendingSessionPromptSource::SubagentReturnContinuation,
         }
     }
+
+    /// Returns the authoritative V1 user-input sequence that owns a new logical user turn.
+    /// 返回持有新逻辑用户回合的权威 V1 用户输入序号。
+    fn canonical_user_input_seq(&self) -> Option<Seq> {
+        match self {
+            Self::Queued { authority, .. } => Some(authority.input_seq),
+            Self::Root { authority, .. } => Some(authority.input_seq),
+            Self::Goal { .. } | Self::SubagentReturn { .. } | Self::PendingInTurn { .. } => None,
+        }
+    }
 }
 
 /// Starts one Goal continuation directly from its exact durable V1 authority.
@@ -932,7 +942,7 @@ async fn prepare_webui_pending_prompt(
     // vmmReadiness is the service-owned prerequisite captured before this process-local admission.
     // vmmReadiness 是在本次进程内准入前捕获的服务级权威前提事实。
     let vmm_readiness = webui_vmm_runtime_readiness(state)?;
-    let prompt_turn_begin_input = SharedPromptTurnBeginInput {
+    let mut prompt_turn_begin_input = SharedPromptTurnBeginInput {
         session_id,
         session_title: &session_title,
         workspace_path: &workspace_path,
@@ -943,6 +953,7 @@ async fn prepare_webui_pending_prompt(
         provider_visible_agent_messages: Vec::new(),
         attachments: canonical_attachments,
         provider_attachments: Some(provider_attachments),
+        existing_canonical_user_message_id: None,
         append_canonical_user_message: false,
         append_visible_user_prompt_record: false,
         source: entry.source,
@@ -1074,6 +1085,30 @@ async fn prepare_webui_pending_prompt(
                 ));
             }
         }
+        if let Some(canonical_user_input_seq) = exact_dispatch.canonical_user_input_seq() {
+            let handle = registered_session_v1_handle_from_state(state, session_id)?;
+            let projection = handle
+                .capture_controller_projection_snapshot()
+                .map_err(|error| error.to_string())?;
+            let canonical_user_message_id =
+                crate::agent_stream::provider_v1_sink::provider_projection_user_message_id_for_source(
+                    &projection,
+                    canonical_user_input_seq,
+                )?;
+            let projected_state =
+                crate::agent_stream::provider_v1_sink::provider_projection_controller_state(
+                    &projection,
+                )?;
+            let runtime_state = workspace_snapshot
+                .session_runtime_state
+                .entry(session_id)
+                .or_default();
+            // V1 owns the complete logical history for every newly admitted root or queued successor.
+            // V1 持有每个新准入根输入或排队后继的完整逻辑历史。
+            runtime_state.conversation_state = projected_state;
+            prompt_turn_begin_input.existing_canonical_user_message_id =
+                Some(canonical_user_message_id);
+        }
         // Service state always precedes the shared Hook runtime in the cross-runtime lock order.
         // 跨运行时锁顺序中，服务状态始终先于共享 Hook 运行时。
         let mut guard = state
@@ -1188,5 +1223,60 @@ mod tests {
             PendingSessionPromptSource::GoalContinuation
         );
         assert!(first_entry.panel_entry_id.is_none());
+    }
+
+    /// Verifies root and queued successor admissions both expose their authoritative canonical user input.
+    /// 验证根输入与排队后继准入都会暴露其权威规范用户输入。
+    #[test]
+    fn user_turn_dispatches_expose_canonical_user_input_sequence() {
+        // input_seq is the single durable source shared by both user-turn dispatch variants.
+        // input_seq 是两个用户回合分发变体共享的唯一可靠来源。
+        let input_seq = Seq::try_new(7).expect("input seq should be valid");
+        // entry supplies the process-local adapter that never owns canonical identity.
+        // entry 提供绝不持有规范身份的进程内适配对象。
+        let entry = PendingSessionPromptEntry {
+            id: String::from("queued-entry"),
+            prompt: String::from("queued prompt"),
+            hidden_model_guidance: None,
+            preview: String::from("queued prompt"),
+            attachments: Vec::new(),
+            model_reference: None,
+            runtime_options: PendingPromptRuntimeOptions::default(),
+            source: PendingSessionPromptSource::UserFollowup,
+            task_id: None,
+            panel_entry_id: None,
+            created_at: String::from("1000"),
+        };
+        // queued models a durable successor promoted after a prior turn becomes terminal.
+        // queued 模拟上一回合终态后提升的可靠后继输入。
+        let queued = ExactPendingPromptDispatch::Queued {
+            authority: SessionQueuedDispatchAuthority {
+                turn_id: TurnId::try_new(9).expect("queued Turn id should be valid"),
+                input_id: PendingInputId::try_new(3).expect("queued input id should be valid"),
+                client_action_id: ClientActionId::try_new("queued-action")
+                    .expect("queued action id should be valid"),
+                input_seq,
+                text: String::from("queued prompt"),
+                resource_ids: Vec::new(),
+            },
+            entry: entry.clone(),
+        };
+        // root models a newly submitted or edited authoritative root input.
+        // root 模拟新提交或编辑后的权威根输入。
+        let root = ExactPendingPromptDispatch::Root {
+            authority: SessionUserRootDispatchAuthority {
+                turn_id: TurnId::try_new(10).expect("root Turn id should be valid"),
+                input_id: PendingInputId::try_new(4).expect("root input id should be valid"),
+                client_action_id: ClientActionId::try_new("root-action")
+                    .expect("root action id should be valid"),
+                input_seq,
+                text: String::from("root prompt"),
+                resource_ids: Vec::new(),
+            },
+            entry,
+        };
+
+        assert_eq!(queued.canonical_user_input_seq(), Some(input_seq));
+        assert_eq!(root.canonical_user_input_seq(), Some(input_seq));
     }
 }

@@ -307,6 +307,62 @@ where
     Ok(state)
 }
 
+/// Resolves the deterministic canonical controller message id for one exact V1 user-input source.
+/// 为一条准确 V1 用户输入来源解析确定性的规范控制器消息标识。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` is the authoritative V1 projection and `input_seq` is the durable input event seq.
+/// `snapshot` 是权威 V1 投影，`input_seq` 是持久输入事件序号。
+///
+/// # Returns
+/// 返回值
+/// The exact position-derived user-message id, or an explicit ambiguity/type error.
+/// 返回由准确位置派生的用户消息标识；来源歧义或类型错误时返回明确错误。
+pub(crate) fn provider_projection_user_message_id_for_source(
+    snapshot: &SessionProviderProjectionSnapshot,
+    input_seq: Seq,
+) -> Result<String, String> {
+    if snapshot.items.len() != snapshot.sourced_items.len()
+        || snapshot
+            .items
+            .iter()
+            .zip(&snapshot.sourced_items)
+            .any(|(item, sourced)| item != &sourced.item)
+    {
+        return Err(String::from(
+            "V1 semantic items differ from their exact source projection.",
+        ));
+    }
+    let mut matches = snapshot
+        .sourced_items
+        .iter()
+        .enumerate()
+        .filter(|(_, sourced)| {
+            sourced.source_from_seq.value() <= input_seq.value()
+                && input_seq.value() <= sourced.source_to_seq.value()
+        });
+    let Some((index, sourced)) = matches.next() else {
+        return Err(format!(
+            "V1 user input seq {} is absent from the Provider projection.",
+            input_seq.value()
+        ));
+    };
+    if matches.next().is_some() {
+        return Err(format!(
+            "V1 user input seq {} maps to multiple Provider projection items.",
+            input_seq.value()
+        ));
+    }
+    if !matches!(sourced.item, ProjectedItem::UserInput { .. }) {
+        return Err(format!(
+            "V1 source seq {} does not project to a user input.",
+            input_seq.value()
+        ));
+    }
+    Ok(format!("v1-provider-message-{}", index + 1))
+}
+
 /// Rebuilds the complete canonical controller state from the durable V1 projection and resource catalog.
 /// 从可靠 V1 投影与资源目录重建完整规范控制器状态。
 ///
@@ -2434,6 +2490,56 @@ mod tests {
         assert!(validate_prompt_media_preparation_frontier(&snapshot).is_err());
         snapshot.preparing_user_prompt_media_seqs = vec![Seq::try_new(9)?];
         assert!(validate_prompt_media_preparation_frontier(&snapshot).is_err());
+        Ok(())
+    }
+
+    /// Verifies an exact durable user-input source resolves to the same position-derived controller identity used during projection.
+    /// 验证精确的持久用户输入来源会解析为投影阶段使用的同一位置派生控制器身份。
+    #[test]
+    fn user_input_source_resolves_exact_projected_controller_message_id()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // first and second preserve source order so the selected input must resolve to message position two.
+        // first 与 second 保留来源顺序，因此选中的输入必须解析为第二个消息位置。
+        let first_seq = Seq::try_new(1)?;
+        let second_seq = Seq::try_new(2)?;
+        let first = ProjectedItem::UserInput {
+            text: String::from("first"),
+            resource_ids: Vec::new(),
+        };
+        let second = ProjectedItem::UserInput {
+            text: String::from("edited second"),
+            resource_ids: Vec::new(),
+        };
+        let snapshot = SessionProviderProjectionSnapshot {
+            preparing_user_prompt_media_seqs: Vec::new(),
+            segment_generation: 1,
+            document_revision: 2,
+            retained_from_seq: first_seq,
+            through_seq: second_seq,
+            items: vec![first.clone(), second.clone()],
+            sourced_items: vec![
+                vulcan_session_core::v1::projection::SourcedProjectedItem {
+                    user_prompt_parameters: None,
+                    source_from_seq: first_seq,
+                    source_to_seq: first_seq,
+                    item: first,
+                },
+                vulcan_session_core::v1::projection::SourcedProjectedItem {
+                    user_prompt_parameters: None,
+                    source_from_seq: second_seq,
+                    source_to_seq: second_seq,
+                    item: second,
+                },
+            ],
+            project_directory: PathBuf::new(),
+            provider_usage_budget_anchor: None,
+            initialized_locked_baseline: None,
+        };
+
+        assert_eq!(
+            provider_projection_user_message_id_for_source(&snapshot, second_seq)?,
+            "v1-provider-message-2"
+        );
         Ok(())
     }
 

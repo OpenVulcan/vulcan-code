@@ -288,6 +288,9 @@ pub struct SharedPromptTurnBeginInput<'a> {
     /// Optional request-local attachment projection; absent input reuses canonical attachments.
     /// 可选的单次请求局部附件投影；缺省时复用规范附件。
     pub provider_attachments: Option<Vec<ConversationAttachment>>,
+    /// Existing canonical user-message id supplied by an authoritative durable projection.
+    /// 由权威持久投影提供的既有规范用户消息标识。
+    pub existing_canonical_user_message_id: Option<String>,
     /// Whether the shared reducer should append the canonical user message.
     /// 共享归约器是否需要追加规范用户消息。
     pub append_canonical_user_message: bool,
@@ -344,6 +347,9 @@ pub struct SharedPromptTurnRuntimeBeginInput<'a> {
     /// Optional request-local attachment projection; absent input reuses canonical attachments.
     /// 可选的单次请求局部附件投影；缺省时复用规范附件。
     pub provider_attachments: Option<Vec<ConversationAttachment>>,
+    /// Existing canonical user-message id supplied by an authoritative durable projection.
+    /// 由权威持久投影提供的既有规范用户消息标识。
+    pub existing_canonical_user_message_id: Option<String>,
     /// Whether the shared reducer should append the canonical user message.
     /// 共享归约器是否需要追加规范用户消息。
     pub append_canonical_user_message: bool,
@@ -447,6 +453,7 @@ pub fn begin_shared_prompt_turn(
                 provider_visible_agent_messages: input.provider_visible_agent_messages,
                 attachments: input.attachments,
                 provider_attachments: input.provider_attachments,
+                existing_canonical_user_message_id: input.existing_canonical_user_message_id,
                 append_canonical_user_message: input.append_canonical_user_message,
                 append_visible_user_prompt_record: input.append_visible_user_prompt_record,
                 source: input.source,
@@ -532,8 +539,36 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
         && input.source.appends_visible_user_prompt_record();
     // canonical_user_message_id must remain unique even when consecutive starts share one millisecond timestamp.
     // canonical_user_message_id 即使连续启动共享同一个毫秒时间戳也必须保持唯一。
-    let canonical_user_message_id =
-        append_canonical_user_message.then(|| new_canonical_user_message_id(input.session_id));
+    if append_canonical_user_message && input.existing_canonical_user_message_id.is_some() {
+        return Err(String::from(
+            "Prompt turn cannot append and reuse a canonical user message simultaneously.",
+        ));
+    }
+    let canonical_user_message_id = if append_canonical_user_message {
+        Some(new_canonical_user_message_id(input.session_id))
+    } else {
+        input.existing_canonical_user_message_id.clone()
+    };
+    if let Some(existing_message_id) = input.existing_canonical_user_message_id.as_deref() {
+        let existing_message = runtime_state
+            .conversation_state
+            .messages
+            .iter()
+            .find(|message| message.id == existing_message_id)
+            .ok_or_else(|| {
+                format!(
+                    "Authoritative canonical user message `{existing_message_id}` is absent from runtime state."
+                )
+            })?;
+        if !matches!(
+            existing_message.payload,
+            SessionConversationPayload::UserText { .. }
+        ) {
+            return Err(format!(
+                "Authoritative canonical message `{existing_message_id}` is not a user text message."
+            ));
+        }
+    }
     let mut visible_user_prompt_record_id = None;
     if append_canonical_user_message && append_visible_user_prompt_record {
         visible_user_prompt_record_id = Some(append_shared_user_prompt_record_with_attachments(

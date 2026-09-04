@@ -694,6 +694,7 @@ mod tests {
                 provider_visible_agent_messages: Vec::new(),
                 attachments: vec![attachment],
                 provider_attachments: None,
+                existing_canonical_user_message_id: None,
                 append_canonical_user_message: true,
                 append_visible_user_prompt_record: true,
                 source: PendingSessionPromptSource::UserFollowup,

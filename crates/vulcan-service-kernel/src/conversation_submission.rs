@@ -2924,6 +2924,7 @@ async fn service_start_conversation_execution(
                 provider_visible_agent_messages: Vec::new(),
                 attachments,
                 provider_attachments: Some(provider_attachments),
+                existing_canonical_user_message_id: None,
                 append_canonical_user_message: append_user_records,
                 append_visible_user_prompt_record: append_user_records,
                 source: prompt_source,
