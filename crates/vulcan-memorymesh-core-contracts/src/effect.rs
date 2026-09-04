@@ -6,8 +6,8 @@ use crate::{
     EntityRef, MemoryAccessClass, MemoryCategory, MemoryContextEvidence, MemoryId, MemoryRecord,
     MutationIdentity, PhysicalCandidate, PreCheckReviewCandidate, ProfileNode, ProfileNodeId,
     ProfileViewSection, Role, ScopeAccess, ScopeId, ScoreContractRef, SearchHit, SessionRecallMode,
-    SessionSourceId, StructuredOutputContractId, SubjectId, TimelineItem, Turn, TurnId,
-    TurnInputKind, TurnStatus, UnixNanos, VectorSpaceId,
+    SessionSourceId, StructuredOutputContractId, SubjectId, Turn, TurnId, TurnInputKind,
+    TurnStatus, UnixNanos, VectorSpaceId,
 };
 
 /// Carries storage-owned compact-boundary metadata before Core attaches the commit receipt.
@@ -156,9 +156,9 @@ pub enum LlmInput {
     /// Carries `PreCheck` intent input.
     /// 携带 `PreCheck` 意图输入。
     PreCheckIntent {
-        /// Carries recent timeline context.
-        /// 携带最近时间线上下文。
-        recent_timeline: Vec<TimelineItem>,
+        /// Carries recent same-session turns using VMM's details-or-raw contract.
+        /// 使用 VMM 的详情或原始内容契约携带最近同会话轮次。
+        recent_turns: Vec<crate::PreCheckTurnContext>,
         /// Carries current user content.
         /// 携带当前用户内容。
         user_content: String,
@@ -956,6 +956,9 @@ pub struct RetentionScanFacts {
     /// Echoes the exact write scope used to read this retention fact batch.
     /// 回显读取此保留事实批次时使用的精确写入作用域。
     pub scope_id: ScopeId,
+    /// Carries active visible profile nodes whose absolute expiry is due.
+    /// 携带绝对过期时间已到期的可见活跃画像节点。
+    pub expired_profile_nodes: Vec<ProfileNode>,
     /// Carries terminal write-scope memories eligible for relational recycle evaluation.
     /// 携带可进入关系回收评估的写入作用域终态记忆。
     pub terminal_memories: Vec<RetentionMemoryFact>,

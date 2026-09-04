@@ -11,10 +11,11 @@ use vulcan_memorymesh_core_contracts::{
     MutationBatch, MutationOutcome, MutationSourceKind, NoisePrototype,
     NoisePrototypeCacheIdentity, PhysicalCandidate, PhysicalCandidateScore, PostActionDirectWrite,
     PostActionReferenceTurn, ProfileNode, ProfileNodeId, ProfileNodeState, ProfileSourceKind,
-    ProfileViewSection, RawScoreKind, RetentionColdTurnCandidateFact, RetentionIdleSessionFact,
-    RetentionMemoryFact, RetentionScanFacts, ScopeAccess, ScoreContractRef, ScoreDirection,
-    SectionRole, SessionRecallBoundary, SessionRecallMode, SessionSourceId, StorageQuery,
-    StorageQueryResult, SubjectId, Turn, TurnId, TurnStatus, VectorSpaceId, VersionedEntity,
+    ProfileViewSection, RawScoreKind, RetentionColdTurnCandidateFact, RetentionColdTurnJobFact,
+    RetentionIdleSessionFact, RetentionMemoryFact, RetentionReasonCode, RetentionScanFacts,
+    RetentionTrashBatchFact, ScopeAccess, ScoreContractRef, ScoreDirection, SectionRole,
+    SessionRecallBoundary, SessionRecallMode, SessionSourceId, StorageQuery, StorageQueryResult,
+    SubjectId, Turn, TurnId, TurnStatus, VectorSpaceId, VersionedEntity,
     context_evidence_domain_id,
 };
 
@@ -83,6 +84,54 @@ pub struct StorageNoisePrototypeEntry {
     pub prototypes: Vec<NoisePrototype>,
 }
 
+/// Carries one durable recycle-bin batch owned by the host storage snapshot.
+/// 携带一个由宿主存储快照持有的耐久回收站批次。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StorageRetentionTrashBatch {
+    /// Identifies this exact atomic recycle operation.
+    /// 标识本次精确原子回收操作。
+    pub batch_id: String,
+    /// Identifies the subject that owned every recycled record.
+    /// 标识拥有全部已回收记录的主体。
+    pub subject_id: SubjectId,
+    /// Identifies the one owner scope represented by this batch.
+    /// 标识该批次代表的唯一归属作用域。
+    pub scope_id: vulcan_memorymesh_core_contracts::ScopeId,
+    /// Carries the time when the records entered the recycle bin.
+    /// 携带记录进入回收站的时间。
+    pub recycled_at_ns: i64,
+    /// Carries the stable retention reason for audit and restore presentation.
+    /// 携带用于审计与恢复展示的稳定保留原因。
+    pub reason: RetentionReasonCode,
+    /// Carries every domain record removed from active storage by this batch.
+    /// 携带本批次从活动存储移除的全部领域记录。
+    pub dataset: ExportDataset,
+    /// Carries analysis-attempt identities attached to recycled turns.
+    /// 携带关联到已回收轮次的分析尝试身份。
+    pub analysis_attempts: Vec<AnalysisAttemptIdentity>,
+}
+
+/// Carries one durable cold-turn maintenance job owned by the native host.
+/// 携带一个由原生宿主持有的耐久冷回合维护任务。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageRetentionColdTurnJob {
+    /// Identifies this exact durable job.
+    /// 标识该精确耐久任务。
+    pub job_id: String,
+    /// Identifies the subject authorized to maintain the session.
+    /// 标识获授权维护该会话的主体。
+    pub subject_id: SubjectId,
+    /// Identifies the exact owner scope.
+    /// 标识精确归属作用域。
+    pub scope_id: vulcan_memorymesh_core_contracts::ScopeId,
+    /// Identifies the host session containing old unreferenced turns.
+    /// 标识包含旧无引用回合的宿主会话。
+    pub session_source_id: SessionSourceId,
+    /// Carries the first time at which the job may execute.
+    /// 携带任务首次允许执行的时间。
+    pub next_run_at_ns: i64,
+}
+
 /// Carries all reference-storage state required for durable host restart recovery.
 /// 携带宿主重启恢复所需的全部参考存储状态。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -105,6 +154,14 @@ pub struct StorageSnapshot {
     /// Carries persisted semantic-noise prototype bundles.
     /// 携带已持久化的语义 Noise 原型束。
     pub noise_prototypes: Vec<StorageNoisePrototypeEntry>,
+    /// Carries durable recycle-bin batches retained for restore or expiry purge.
+    /// 携带为恢复或到期清除而保留的耐久回收站批次。
+    #[serde(default)]
+    pub retention_trash_batches: Vec<StorageRetentionTrashBatch>,
+    /// Carries durable cold-turn jobs awaiting or undergoing a retention pass.
+    /// 携带等待或正在执行保留轮次的耐久冷回合任务。
+    #[serde(default)]
+    pub retention_cold_turn_jobs: Vec<StorageRetentionColdTurnJob>,
 }
 
 impl StorageSnapshot {
@@ -116,6 +173,11 @@ impl StorageSnapshot {
         for memory in &mut snapshot.dataset.memories {
             memory.embedding = None;
         }
+        for batch in &mut snapshot.retention_trash_batches {
+            for memory in &mut batch.dataset.memories {
+                memory.embedding = None;
+            }
+        }
         snapshot
     }
 
@@ -126,6 +188,11 @@ impl StorageSnapshot {
         self.dataset
             .memories
             .iter()
+            .chain(
+                self.retention_trash_batches
+                    .iter()
+                    .flat_map(|batch| batch.dataset.memories.iter()),
+            )
             .filter_map(|memory| {
                 memory.embedding.clone().and_then(|embedding| {
                     memory
@@ -136,6 +203,92 @@ impl StorageSnapshot {
             })
             .collect()
     }
+}
+
+/// Validates one durable recycle-bin batch without interpreting host policy.
+/// 在不解释宿主策略的前提下校验一个耐久回收站批次。
+fn validate_retention_trash_batch(batch: &StorageRetentionTrashBatch) -> Result<(), String> {
+    if batch.batch_id.trim().is_empty() || batch.batch_id.len() > 512 {
+        return Err(
+            "storage snapshot contains an invalid retention trash batch identity".to_owned(),
+        );
+    }
+    if batch.recycled_at_ns < 0 {
+        return Err("storage snapshot contains a negative retention recycle timestamp".to_owned());
+    }
+    let mut turn_ids = BTreeSet::new();
+    for turn in &batch.dataset.turns {
+        if turn.subject_id != batch.subject_id || turn.scope_id != batch.scope_id {
+            return Err("storage retention trash turn violates batch ownership".to_owned());
+        }
+        if !turn_ids.insert(turn.id.clone()) {
+            return Err(
+                "storage retention trash batch contains duplicate turn identity".to_owned(),
+            );
+        }
+    }
+    let mut memory_ids = BTreeSet::new();
+    for memory in &batch.dataset.memories {
+        if memory.scope_id != batch.scope_id || !memory.is_visible_to_subject(&batch.subject_id) {
+            return Err("storage retention trash memory violates batch ownership".to_owned());
+        }
+        if !memory_ids.insert(memory.id.clone()) {
+            return Err(
+                "storage retention trash batch contains duplicate memory identity".to_owned(),
+            );
+        }
+    }
+    let mut profile_ids = BTreeSet::new();
+    for profile_node in &batch.dataset.profile_nodes {
+        if profile_node.scope_id != batch.scope_id {
+            return Err("storage retention trash profile violates batch ownership".to_owned());
+        }
+        if !profile_ids.insert(profile_node.id.clone()) {
+            return Err(
+                "storage retention trash batch contains duplicate profile identity".to_owned(),
+            );
+        }
+    }
+    if batch
+        .dataset
+        .context_evidence
+        .iter()
+        .any(|evidence| !memory_ids.contains(&evidence.memory_id))
+    {
+        return Err("storage retention trash evidence has no memory in its batch".to_owned());
+    }
+    if batch
+        .dataset
+        .chat_compact_boundaries
+        .iter()
+        .any(|boundary| {
+            boundary.subject_id != batch.subject_id || boundary.scope_id != batch.scope_id
+        })
+    {
+        return Err("storage retention trash compact boundary violates batch ownership".to_owned());
+    }
+    if batch
+        .analysis_attempts
+        .iter()
+        .any(|attempt| !turn_ids.contains(&attempt.turn_id))
+    {
+        return Err("storage retention trash analysis attempt has no turn in its batch".to_owned());
+    }
+    Ok(())
+}
+
+/// Validates one durable cold-turn job without applying scheduling policy.
+/// 在不应用调度策略的前提下校验一个耐久冷回合任务。
+fn validate_retention_cold_turn_job(job: &StorageRetentionColdTurnJob) -> Result<(), String> {
+    if job.job_id.trim().is_empty() || job.job_id.len() > 512 {
+        return Err(
+            "storage snapshot contains an invalid retention cold-turn job identity".to_owned(),
+        );
+    }
+    if job.next_run_at_ns < 0 {
+        return Err("storage snapshot contains a negative cold-turn job timestamp".to_owned());
+    }
+    Ok(())
 }
 
 /// Defines the host-facing semantic storage contract.
@@ -198,6 +351,12 @@ pub struct InMemoryStorage {
     /// Stores persisted semantic noise prototype bundles by an unambiguous typed tuple.
     /// 按无歧义强类型元组存储已持久化语义 Noise 原型束。
     noise_prototypes: BTreeMap<NoiseCacheKey, Vec<NoisePrototype>>,
+    /// Stores complete recycle-bin batches by stable batch identity.
+    /// 按稳定批次身份存储完整回收站批次。
+    retention_trash_batches: BTreeMap<String, StorageRetentionTrashBatch>,
+    /// Stores durable cold-turn jobs by stable job identity.
+    /// 按稳定任务身份存储耐久冷回合任务。
+    retention_cold_turn_jobs: BTreeMap<String, StorageRetentionColdTurnJob>,
     /// Carries the monotonic storage version.
     /// 携带单调递增存储版本。
     storage_version: u64,
@@ -299,6 +458,8 @@ impl InMemoryStorage {
                     prototypes: prototypes.clone(),
                 })
                 .collect(),
+            retention_trash_batches: self.retention_trash_batches.values().cloned().collect(),
+            retention_cold_turn_jobs: self.retention_cold_turn_jobs.values().cloned().collect(),
         }
     }
 
@@ -495,6 +656,137 @@ impl InMemoryStorage {
                 return Err("storage snapshot contains duplicate noise cache identity".to_owned());
             }
         }
+        // Recycle-bin records remain live durable identities until purge. Reserve active and
+        // previously loaded trash identities together so restore can never overwrite another row.
+        // 回收站记录在永久清除前仍是有效耐久身份；统一保留活动区与已加载回收数据身份，避免恢复覆盖其他记录。
+        let mut reserved_turn_ids = storage.turns.keys().cloned().collect::<BTreeSet<_>>();
+        let mut reserved_memory_ids = storage.memories.keys().cloned().collect::<BTreeSet<_>>();
+        let mut reserved_profile_ids = storage
+            .profile_nodes
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut reserved_evidence_ids = storage
+            .context_evidence
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut reserved_boundary_ids = storage
+            .chat_compact_boundaries
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut reserved_attempt_ids = storage
+            .analysis_attempts
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        for batch in snapshot.retention_trash_batches {
+            validate_retention_trash_batch(&batch)?;
+            if batch
+                .dataset
+                .turns
+                .iter()
+                .any(|turn| !reserved_turn_ids.insert(turn.id.clone()))
+            {
+                return Err(
+                    "storage snapshot contains an active-or-trash turn identity collision"
+                        .to_owned(),
+                );
+            }
+            if batch
+                .dataset
+                .memories
+                .iter()
+                .any(|memory| !reserved_memory_ids.insert(memory.id.clone()))
+            {
+                return Err(
+                    "storage snapshot contains an active-or-trash memory identity collision"
+                        .to_owned(),
+                );
+            }
+            if batch
+                .dataset
+                .profile_nodes
+                .iter()
+                .any(|node| !reserved_profile_ids.insert(node.id.clone()))
+            {
+                return Err(
+                    "storage snapshot contains an active-or-trash profile identity collision"
+                        .to_owned(),
+                );
+            }
+            if batch.dataset.context_evidence.iter().any(|evidence| {
+                !reserved_evidence_ids.insert((
+                    evidence.memory_id.clone(),
+                    evidence.context_key.clone(),
+                    evidence.context_value.clone(),
+                ))
+            }) {
+                return Err(
+                    "storage snapshot contains an active-or-trash context evidence collision"
+                        .to_owned(),
+                );
+            }
+            if batch
+                .dataset
+                .chat_compact_boundaries
+                .iter()
+                .any(|boundary| {
+                    !reserved_boundary_ids.insert((
+                        boundary.subject_id.clone(),
+                        boundary.scope_id.clone(),
+                        boundary.session_source_id.clone(),
+                    ))
+                })
+            {
+                return Err(
+                    "storage snapshot contains an active-or-trash compact boundary collision"
+                        .to_owned(),
+                );
+            }
+            if batch.analysis_attempts.iter().any(|attempt| {
+                !reserved_attempt_ids.insert((attempt.turn_id.clone(), attempt.analysis_generation))
+            }) {
+                return Err(
+                    "storage snapshot contains an active-or-trash analysis attempt collision"
+                        .to_owned(),
+                );
+            }
+            if storage
+                .retention_trash_batches
+                .insert(batch.batch_id.clone(), batch)
+                .is_some()
+            {
+                return Err(
+                    "storage snapshot contains duplicate retention trash batch identity".to_owned(),
+                );
+            }
+        }
+        let mut reserved_cold_sessions = BTreeSet::new();
+        for job in snapshot.retention_cold_turn_jobs {
+            validate_retention_cold_turn_job(&job)?;
+            if !reserved_cold_sessions.insert((
+                job.subject_id.clone(),
+                job.scope_id.clone(),
+                job.session_source_id.clone(),
+            )) {
+                return Err(
+                    "storage snapshot contains duplicate retention cold-turn session identity"
+                        .to_owned(),
+                );
+            }
+            if storage
+                .retention_cold_turn_jobs
+                .insert(job.job_id.clone(), job)
+                .is_some()
+            {
+                return Err(
+                    "storage snapshot contains duplicate retention cold-turn job identity"
+                        .to_owned(),
+                );
+            }
+        }
         Ok(storage)
     }
 
@@ -525,15 +817,39 @@ impl InMemoryStorage {
             // Imports do not synchronize this local counter; collision checks stay inside the transaction copy.
             // 导入不会同步此局部计数器；碰撞检查始终位于事务副本内部。
             let occupied = match kind {
-                EntityKind::Turn => self.turns.contains_key(
-                    &TurnId::new(domain_id.clone()).map_err(|error| error.to_string())?,
-                ),
-                EntityKind::Memory => self.memories.contains_key(
-                    &MemoryId::new(domain_id.clone()).map_err(|error| error.to_string())?,
-                ),
-                EntityKind::ProfileNode => self.profile_nodes.contains_key(
-                    &ProfileNodeId::new(domain_id.clone()).map_err(|error| error.to_string())?,
-                ),
+                EntityKind::Turn => {
+                    let identity =
+                        TurnId::new(domain_id.clone()).map_err(|error| error.to_string())?;
+                    self.turns.contains_key(&identity)
+                        || self
+                            .retention_trash_batches
+                            .values()
+                            .any(|batch| batch.dataset.turns.iter().any(|turn| turn.id == identity))
+                }
+                EntityKind::Memory => {
+                    let identity =
+                        MemoryId::new(domain_id.clone()).map_err(|error| error.to_string())?;
+                    self.memories.contains_key(&identity)
+                        || self.retention_trash_batches.values().any(|batch| {
+                            batch
+                                .dataset
+                                .memories
+                                .iter()
+                                .any(|memory| memory.id == identity)
+                        })
+                }
+                EntityKind::ProfileNode => {
+                    let identity =
+                        ProfileNodeId::new(domain_id.clone()).map_err(|error| error.to_string())?;
+                    self.profile_nodes.contains_key(&identity)
+                        || self.retention_trash_batches.values().any(|batch| {
+                            batch
+                                .dataset
+                                .profile_nodes
+                                .iter()
+                                .any(|node| node.id == identity)
+                        })
+                }
                 EntityKind::ContextEvidence => {
                     return Err("context evidence uses composite identities".to_owned());
                 }
@@ -2221,6 +2537,28 @@ impl StoragePort for InMemoryStorage {
                 policy,
             } => {
                 validate_scope(scope_access)?;
+                // Profile expiry spans the write project and the fixed subject-profile scope.
+                // 画像过期扫描覆盖写入项目与固定主体画像作用域。
+                let mut expired_profile_nodes = self
+                    .profile_nodes
+                    .values()
+                    .filter(|node| {
+                        node.state == ProfileNodeState::Active
+                            && node
+                                .expires_at_ns
+                                .is_some_and(|expires_at_ns| expires_at_ns <= *now_ns)
+                            && scope_access.visible_scopes.contains(&node.scope_id)
+                            && (node.scope_id == scope_access.write_scope
+                                || node.subject_id.as_ref() == Some(subject_id))
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                expired_profile_nodes.sort_by(|left, right| {
+                    left.expires_at_ns
+                        .cmp(&right.expires_at_ns)
+                        .then_with(|| left.id.cmp(&right.id))
+                });
+                expired_profile_nodes.truncate(policy.profile_expiry_limit as usize);
                 // Terminal memory facts are the only durable-memory rows eligible for the
                 // first VMM retention phase; active rows must never be recycled by age alone.
                 // 终态记忆事实是 VMM 第一阶段唯一可回收的持久记忆行；活跃行绝不能仅因年龄被回收。
@@ -2256,6 +2594,14 @@ impl StoragePort for InMemoryStorage {
                 // facts share the same deterministic physical snapshot.
                 // 对主体写入作用域时间线只分组一次，使冷 Turn 与闲置会话事实共享同一确定性物理快照。
                 let mut session_turns = BTreeMap::<SessionSourceId, Vec<&Turn>>::new();
+                // session_latest_activity_ns mirrors the external session updated timestamp by
+                // combining turn creation, analysis observation, and compaction activity.
+                // session_latest_activity_ns 通过组合回合创建、分析观察和压缩活动，
+                // 对齐外置 VMM 的 session 更新时间语义。
+                let mut session_latest_activity_ns = BTreeMap::<SessionSourceId, i64>::new();
+                // turn_sessions resolves durable analysis attempts back to their owning session.
+                // turn_sessions 把耐久分析尝试解析回其所属会话。
+                let mut turn_sessions = BTreeMap::<TurnId, SessionSourceId>::new();
                 for turn in self.turns.values() {
                     if turn.subject_id == *subject_id
                         && turn.scope_id == scope_access.write_scope
@@ -2265,13 +2611,88 @@ impl StoragePort for InMemoryStorage {
                             .entry(turn.session_source_id.clone())
                             .or_default()
                             .push(turn);
+                        session_latest_activity_ns
+                            .entry(turn.session_source_id.clone())
+                            .and_modify(|latest| *latest = (*latest).max(turn.created_at_ns))
+                            .or_insert(turn.created_at_ns);
+                        turn_sessions.insert(turn.id.clone(), turn.session_source_id.clone());
                     }
                 }
-                let referenced_turns = self
+                // Direct writes can establish a durable session without creating a canonical Turn.
+                // Seed those sessions from their visible write-scope memory so idle cleanup retains
+                // the external VMM session-table behavior instead of silently skipping them forever.
+                // 主动写入可以在不创建规范 Turn 的情况下建立耐久会话。这里从可见写入作用域
+                // 记忆补齐这些会话，使闲置清洗保持外置 VMM 的会话表语义，而不会永久漏扫。
+                for memory in self.memories.values().filter(|memory| {
+                    memory.is_visible_to_subject(subject_id)
+                        && memory.scope_id == scope_access.write_scope
+                        && memory.created_at_ns <= *now_ns
+                }) {
+                    let Some(session_source_id) = memory.origin_session_source_id.as_ref() else {
+                        continue;
+                    };
+                    session_turns.entry(session_source_id.clone()).or_default();
+                    session_latest_activity_ns
+                        .entry(session_source_id.clone())
+                        .and_modify(|latest| *latest = (*latest).max(memory.created_at_ns))
+                        .or_insert(memory.created_at_ns);
+                }
+                for boundary in self.chat_compact_boundaries.values().filter(|boundary| {
+                    boundary.subject_id == *subject_id
+                        && boundary.scope_id == scope_access.write_scope
+                        && boundary.compacted_at_ns <= *now_ns
+                }) {
+                    // A retained compact boundary is also an authoritative session anchor even when
+                    // every former hot Turn has already moved to the recycle bin.
+                    // 即使此前所有热 Turn 已进入回收站，保留的压缩边界仍是权威会话锚点。
+                    session_turns
+                        .entry(boundary.session_source_id.clone())
+                        .or_default();
+                    session_latest_activity_ns
+                        .entry(boundary.session_source_id.clone())
+                        .and_modify(|latest| *latest = (*latest).max(boundary.compacted_at_ns))
+                        .or_insert(boundary.compacted_at_ns);
+                }
+                for attempt in self
+                    .analysis_attempts
+                    .values()
+                    .filter(|attempt| attempt.mutation_identity.observed_at_ns <= *now_ns)
+                {
+                    let Some(session_source_id) = turn_sessions.get(&attempt.turn_id) else {
+                        continue;
+                    };
+                    if let Some(latest) = session_latest_activity_ns.get_mut(session_source_id) {
+                        *latest = (*latest).max(attempt.mutation_identity.observed_at_ns);
+                    }
+                }
+                let mut referenced_turns = self
                     .memories
                     .values()
                     .filter_map(|memory| memory.source_turn_id.clone())
                     .collect::<BTreeSet<_>>();
+                for profile_node in self.profile_nodes.values() {
+                    referenced_turns.extend(profile_node.source_turn_ids.iter().cloned());
+                }
+                let queued_cold_sessions = self
+                    .retention_cold_turn_jobs
+                    .values()
+                    .filter(|job| {
+                        job.subject_id == *subject_id && job.scope_id == scope_access.write_scope
+                    })
+                    .map(|job| job.session_source_id.clone())
+                    .collect::<BTreeSet<_>>();
+                let idle_duration_ns =
+                    i64::try_from(u128::from(policy.session_idle_ms).saturating_mul(1_000_000))
+                        .map_err(|error| {
+                            storage_error(
+                                ErrorCode::InvalidArgument,
+                                format!("retention session idle duration overflow: {error}"),
+                            )
+                        })?;
+                let idle_cutoff_ns = now_ns.saturating_sub(idle_duration_ns);
+                // Carry the latest activity beside each cold candidate until physical pagination
+                // is complete so the oldest sessions receive maintenance first, matching VMM.
+                // 在物理分页完成前为每个冷候选携带最近活动时间，使最久未活动会话优先维护并与 VMM 对齐。
                 let mut cold_turn_candidates = Vec::new();
                 let mut idle_sessions = Vec::new();
                 for (session_source_id, turns) in &mut session_turns {
@@ -2286,7 +2707,10 @@ impl StoragePort for InMemoryStorage {
                     let recyclable_turn_count = u32::try_from(
                         turns[..hot_start]
                             .iter()
-                            .filter(|turn| !referenced_turns.contains(&turn.id))
+                            .filter(|turn| {
+                                turn.status != TurnStatus::Pending
+                                    && !referenced_turns.contains(&turn.id)
+                            })
                             .count(),
                     )
                     .map_err(|error| {
@@ -2295,34 +2719,121 @@ impl StoragePort for InMemoryStorage {
                             format!("cold-turn candidate count overflow: {error}"),
                         )
                     })?;
-                    if recyclable_turn_count > 0 {
-                        cold_turn_candidates.push(RetentionColdTurnCandidateFact {
-                            session_source_id: session_source_id.clone(),
-                            recyclable_turn_count,
-                        });
+                    if recyclable_turn_count > 0
+                        && !queued_cold_sessions.contains(session_source_id)
+                    {
+                        let last_activity_ns = session_latest_activity_ns
+                            .get(session_source_id)
+                            .copied()
+                            .unwrap_or_default();
+                        cold_turn_candidates.push((
+                            last_activity_ns,
+                            RetentionColdTurnCandidateFact {
+                                session_source_id: session_source_id.clone(),
+                                recyclable_turn_count,
+                            },
+                        ));
                     }
-                    if let Some(last) = turns.last() {
+                    let has_idle_memory = self.memories.values().any(|memory| {
+                        memory.is_visible_to_subject(subject_id)
+                            && memory.scope_id == scope_access.write_scope
+                            && memory.scope_class
+                                == vulcan_memorymesh_core_contracts::MemoryScopeClass::Session
+                            && memory.state == MemoryState::Active
+                            && memory.origin_session_source_id.as_ref() == Some(session_source_id)
+                            && memory
+                                .expires_at_ns
+                                .is_some_and(|expires_at| expires_at <= idle_cutoff_ns)
+                            && [
+                                Some(memory.created_at_ns),
+                                Some(memory.updated_at_ns),
+                                memory.last_recalled_at_ns,
+                                memory.last_adopted_at_ns,
+                                memory.last_reinforced_at_ns,
+                            ]
+                            .into_iter()
+                            .flatten()
+                            .max()
+                            .is_some_and(|latest| latest <= idle_cutoff_ns)
+                    });
+                    if recyclable_turn_count > 0 || has_idle_memory {
                         idle_sessions.push(RetentionIdleSessionFact {
                             session_source_id: session_source_id.clone(),
-                            last_activity_ns: last.created_at_ns,
+                            last_activity_ns: session_latest_activity_ns
+                                .get(session_source_id)
+                                .copied()
+                                .unwrap_or_default(),
                             has_pending_turn: turns
                                 .iter()
                                 .any(|turn| turn.status == TurnStatus::Pending),
                         });
                     }
                 }
+                cold_turn_candidates.sort_by(|left, right| {
+                    left.0
+                        .cmp(&right.0)
+                        .then_with(|| left.1.session_source_id.cmp(&right.1.session_source_id))
+                });
                 cold_turn_candidates.truncate(policy.cold_turn_scan_limit as usize);
+                let cold_turn_candidates = cold_turn_candidates
+                    .into_iter()
+                    .map(|(_, candidate)| candidate)
+                    .collect();
+                idle_sessions.sort_by(|left, right| {
+                    left.last_activity_ns
+                        .cmp(&right.last_activity_ns)
+                        .then_with(|| left.session_source_id.cmp(&right.session_source_id))
+                });
                 idle_sessions.truncate(policy.idle_session_limit as usize);
+
+                let mut cold_turn_jobs = self
+                    .retention_cold_turn_jobs
+                    .values()
+                    .filter(|job| {
+                        job.subject_id == *subject_id && job.scope_id == scope_access.write_scope
+                    })
+                    .map(|job| RetentionColdTurnJobFact {
+                        job_id: job.job_id.clone(),
+                        session_source_id: job.session_source_id.clone(),
+                        next_run_at_ns: job.next_run_at_ns,
+                    })
+                    .collect::<Vec<_>>();
+                cold_turn_jobs.sort_by(|left, right| {
+                    left.next_run_at_ns
+                        .cmp(&right.next_run_at_ns)
+                        .then_with(|| left.job_id.cmp(&right.job_id))
+                });
+                cold_turn_jobs.truncate(policy.cold_turn_job_limit as usize);
+
+                let mut trash_batches = self
+                    .retention_trash_batches
+                    .values()
+                    .filter(|batch| {
+                        batch.subject_id == *subject_id
+                            && batch.scope_id == scope_access.write_scope
+                    })
+                    .map(|batch| RetentionTrashBatchFact {
+                        batch_id: batch.batch_id.clone(),
+                        recycled_at_ns: batch.recycled_at_ns,
+                    })
+                    .collect::<Vec<_>>();
+                trash_batches.sort_by(|left, right| {
+                    left.recycled_at_ns
+                        .cmp(&right.recycled_at_ns)
+                        .then_with(|| left.batch_id.cmp(&right.batch_id))
+                });
+                trash_batches.truncate(policy.trash_purge_limit as usize);
 
                 Ok(StorageQueryResult::RetentionScan(RetentionScanFacts {
                     subject_id: subject_id.clone(),
                     scope_id: scope_access.write_scope.clone(),
+                    expired_profile_nodes,
                     terminal_memories,
                     cold_turn_candidates,
-                    cold_turn_jobs: Vec::new(),
+                    cold_turn_jobs,
                     idle_sessions,
                     vector_gc_jobs: Vec::new(),
-                    trash_batches: Vec::new(),
+                    trash_batches,
                 }))
             }
             StorageQuery::MemoryDetails {

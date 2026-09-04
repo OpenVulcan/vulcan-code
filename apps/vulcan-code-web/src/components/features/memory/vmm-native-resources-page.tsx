@@ -1,5 +1,5 @@
 import * as React from "react"
-import { FileCode2, Play, RefreshCw, RotateCcw, Save, ShieldAlert } from "lucide-react"
+import { FileCode2, LockKeyhole, Play, RefreshCw, RotateCcw, Save, ShieldAlert, UnlockKeyhole } from "lucide-react"
 
 import {
   AlertDialog,
@@ -18,7 +18,14 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
+import {
+  highlightedDiffLineSpans,
+  useDiffShikiTheme,
+  useHighlightedCodeBlockRevision,
+} from "@/diff/diff-highlight"
+import { escapeHtml, tokenSpansToHtml } from "@/diff/diff-shiki-shared"
 import { useI18n } from "@/i18n"
 import type {
   VmmMemoryActionResult,
@@ -30,63 +37,59 @@ import type {
   VmmNativeResourceSettingsSummary,
 } from "@/types"
 
+// ResourceGroup identifies one user-facing resource category.
+// ResourceGroup 标识一个面向用户的资源分类。
+type ResourceGroup = "prompt" | "pii" | "noise"
+
 // VmmNativeResourcesPageProps binds the native-only resource editor to the shared action channel.
 // VmmNativeResourcesPageProps 将仅原生资源编辑器绑定到共享动作通道。
 interface VmmNativeResourcesPageProps {
+  // Whether another memory operation currently owns the shared action channel.
+  // 是否有其他记忆操作正在占用共享动作通道。
   busy: boolean
+  // Optional initial category used by tests and future category-aware navigation.
+  // 供测试及未来分类感知导航使用的可选初始分类。
+  initialGroup?: ResourceGroup
+  // Executes one native resource action through the host service.
+  // 通过宿主服务执行一个原生资源动作。
   onRunAction: (
     action: string,
     payload?: Record<string, unknown>,
   ) => Promise<VmmMemoryActionResult | null>
 }
 
-// PromptConfirmationStage identifies the two explicit high-risk acknowledgements.
-// PromptConfirmationStage 标识两次明确的高风险确认。
-type PromptConfirmationStage = "purpose" | "modification" | null
+// ResourceConfirmation identifies one explicit risky file operation awaiting confirmation.
+// ResourceConfirmation 标识一个等待明确确认的高风险文件操作。
+type ResourceConfirmation = "unlock" | "save" | "reset" | null
 
-// VmmNativeResourcesPage manages exact embedded files and user-owned overrides.
-// VmmNativeResourcesPage 管理准确内置文件与用户自有覆盖。
-export function VmmNativeResourcesPage({ busy, onRunAction }: VmmNativeResourcesPageProps) {
+// VmmNativeResourcesPage renders categorized effective resources with guarded user overrides.
+// VmmNativeResourcesPage 渲染分类后的当前生效资源，并保护用户覆盖操作。
+export function VmmNativeResourcesPage({ busy, initialGroup = "prompt", onRunAction }: VmmNativeResourcesPageProps) {
   const { t } = useI18n()
+  const [activeGroup, setActiveGroup] = React.useState<ResourceGroup>(initialGroup)
   const [catalog, setCatalog] = React.useState<VmmNativeResourceCatalogSummary | null>(null)
   const [settings, setSettings] = React.useState<VmmNativeResourceSettingsSummary | null>(null)
   const [selectedPath, setSelectedPath] = React.useState("")
   const [file, setFile] = React.useState<VmmNativeResourceFileContent | null>(null)
   const [editorText, setEditorText] = React.useState("")
   const [editUnlocked, setEditUnlocked] = React.useState(false)
-  const [confirmationStage, setConfirmationStage] = React.useState<PromptConfirmationStage>(null)
+  const [confirmation, setConfirmation] = React.useState<ResourceConfirmation>(null)
   const [piiInput, setPiiInput] = React.useState("")
   const [piiResult, setPiiResult] = React.useState<VmmNativePiiTestResult | null>(null)
-  // piiFormulaInput is the local sample for the non-persisting ad-hoc rule tester.
-  // piiFormulaInput 是不持久化临时规则测试器使用的本地样本。
   const [piiFormulaInput, setPiiFormulaInput] = React.useState("")
-  // piiFormulaPattern preserves the exact regex text submitted to the Core compiler.
-  // piiFormulaPattern 保留提交给 Core 编译器的准确正则文本。
   const [piiFormulaPattern, setPiiFormulaPattern] = React.useState(String.raw`\b(\d+)\b`)
-  // piiFormulaCondition preserves the exact optional bounded DSL expression.
-  // piiFormulaCondition 保留准确的可选有界 DSL 表达式。
   const [piiFormulaCondition, setPiiFormulaCondition] = React.useState("len($1) == 4")
-  // piiFormulaReplacement preserves the exact capture-aware replacement text.
-  // piiFormulaReplacement 保留准确的捕获感知替换文本。
   const [piiFormulaReplacement, setPiiFormulaReplacement] = React.useState("[TEST_MASKED]")
-  // piiFormulaResult contains the authoritative evaluator trace for the last local test.
-  // piiFormulaResult 包含最近一次本地测试的权威求值器轨迹。
   const [piiFormulaResult, setPiiFormulaResult] = React.useState<VmmNativePiiFormulaTestResult | null>(null)
-  const [noiseRole, setNoiseRole] = React.useState("user")
   const [noiseInput, setNoiseInput] = React.useState("")
   const [noiseResult, setNoiseResult] = React.useState<VmmNativeNoiseTestResult | null>(null)
   const [error, setError] = React.useState<string | null>(null)
 
-  // acceptCatalog publishes one authoritative catalog and preserves a still-valid selection.
-  // acceptCatalog 发布一份权威目录，并保留仍然有效的选择。
+  // acceptCatalog publishes one authoritative catalog and its effective composition settings.
+  // acceptCatalog 发布一份权威目录及其当前生效组合设置。
   const acceptCatalog = React.useCallback((next: VmmNativeResourceCatalogSummary) => {
     setCatalog(next)
     setSettings({ ...next.settings })
-    setSelectedPath((current) => (
-      next.files.some((entry) => entry.path === current)
-        ? current
-        : next.files[0]?.path ?? ""
-    ))
   }, [])
 
   // loadCatalog refreshes settings and exact physical override state.
@@ -105,13 +108,28 @@ export function VmmNativeResourcesPage({ busy, onRunAction }: VmmNativeResources
     void loadCatalog()
   }, [loadCatalog])
 
+  const visibleFiles = React.useMemo(
+    () => catalog?.files.filter((entry) => entry.group === activeGroup) ?? [],
+    [activeGroup, catalog],
+  )
+
+  React.useEffect(() => {
+    if (visibleFiles.some((entry) => entry.path === selectedPath)) return
+    setSelectedPath(visibleFiles[0]?.path ?? "")
+  }, [selectedPath, visibleFiles])
+
   React.useEffect(() => {
     if (!selectedPath) {
       setFile(null)
       setEditorText("")
+      setEditUnlocked(false)
       return
     }
     let active = true
+    setFile(null)
+    setEditorText("")
+    setEditUnlocked(false)
+    setConfirmation(null)
     void onRunAction("native_resource_read", { path: selectedPath }).then((result) => {
       if (!active) return
       if (result?.data.kind !== "native_resource_file") {
@@ -120,7 +138,6 @@ export function VmmNativeResourcesPage({ busy, onRunAction }: VmmNativeResources
       }
       setFile(result.data.value)
       setEditorText(result.data.value.effectiveText)
-      setEditUnlocked(!result.data.value.highRisk)
       setError(null)
     })
     return () => {
@@ -128,19 +145,8 @@ export function VmmNativeResourcesPage({ busy, onRunAction }: VmmNativeResources
     }
   }, [onRunAction, selectedPath, t])
 
-  // selectResourceFile clears the previous file authority before loading another exact path.
-  // selectResourceFile 在加载另一条准确路径前清除上一文件的操作权威。
-  const selectResourceFile = React.useCallback((nextPath: string) => {
-    if (nextPath === selectedPath) return
-    setSelectedPath(nextPath)
-    setFile(null)
-    setEditorText("")
-    setEditUnlocked(false)
-    setConfirmationStage(null)
-  }, [selectedPath])
-
-  // saveSettings validates and activates one complete common-plus-locale composition.
-  // saveSettings 校验并激活一份完整的 common 加区域组合。
+  // saveSettings validates and hot-activates one complete common-plus-locale composition.
+  // saveSettings 校验并热更新一份完整的 common 加区域组合。
   const saveSettings = React.useCallback(async () => {
     if (!settings) return
     const result = await onRunAction("native_resource_settings_update", { ...settings })
@@ -152,15 +158,15 @@ export function VmmNativeResourcesPage({ busy, onRunAction }: VmmNativeResources
     setError(null)
   }, [acceptCatalog, onRunAction, settings, t])
 
-  // saveFile persists only the selected exact path after any required two-step prompt confirmation.
-  // saveFile 仅在完成所需两步提示词确认后持久化选中的准确路径。
+  // saveFile writes the selected effective text only after the separate save confirmation.
+  // saveFile 仅在单独保存确认后写入所选当前生效文本。
   const saveFile = React.useCallback(async () => {
-    if (!file || (file.highRisk && !editUnlocked)) return
+    if (!file || !editUnlocked || editorText === file.effectiveText) return
     const result = await onRunAction("native_resource_write", {
       path: file.path,
       content: editorText,
-      confirmedPurpose: file.highRisk && editUnlocked,
-      confirmedModification: file.highRisk && editUnlocked,
+      confirmedPurpose: true,
+      confirmedModification: true,
     })
     if (result?.data.kind !== "native_resource_file") {
       setError(t("memory.resources.invalidResponse"))
@@ -168,12 +174,13 @@ export function VmmNativeResourcesPage({ busy, onRunAction }: VmmNativeResources
     }
     setFile(result.data.value)
     setEditorText(result.data.value.effectiveText)
+    setEditUnlocked(false)
     setError(null)
     await loadCatalog()
   }, [editUnlocked, editorText, file, loadCatalog, onRunAction, t])
 
-  // resetFile restores built-in effective content for only the selected resource.
-  // resetFile 仅为选中资源恢复内置生效内容。
+  // resetFile removes only the selected user override after explicit confirmation.
+  // resetFile 在明确确认后仅移除所选用户覆盖。
   const resetFile = React.useCallback(async () => {
     if (!file) return
     const result = await onRunAction("native_resource_reset", { path: file.path })
@@ -183,7 +190,7 @@ export function VmmNativeResourcesPage({ busy, onRunAction }: VmmNativeResources
     }
     setFile(result.data.value)
     setEditorText(result.data.value.effectiveText)
-    setEditUnlocked(!result.data.value.highRisk)
+    setEditUnlocked(false)
     setError(null)
     await loadCatalog()
   }, [file, loadCatalog, onRunAction, t])
@@ -200,8 +207,8 @@ export function VmmNativeResourcesPage({ busy, onRunAction }: VmmNativeResources
     setError(null)
   }, [onRunAction, piiInput, t])
 
-  // testPiiFormula compiles one temporary regex, condition, and replacement in the Core evaluator.
-  // testPiiFormula 在 Core 求值器中编译一条临时正则、条件与替换。
+  // testPiiFormula compiles one temporary regex, condition, and replacement in Core.
+  // testPiiFormula 在 Core 中编译一条临时正则、条件与替换。
   const testPiiFormula = React.useCallback(async () => {
     const result = await onRunAction("native_pii_formula_test", {
       text: piiFormulaInput,
@@ -217,157 +224,195 @@ export function VmmNativeResourcesPage({ busy, onRunAction }: VmmNativeResources
     setError(null)
   }, [onRunAction, piiFormulaCondition, piiFormulaInput, piiFormulaPattern, piiFormulaReplacement, t])
 
-  // testNoise executes deterministic regex rules; semantic prototypes remain in live intake.
-  // testNoise 执行确定性正则规则；语义原型仍保留在实时录入链路。
+  // testNoise evaluates only the current user prompt through active deterministic rules.
+  // testNoise 仅通过当前生效确定性规则评估当前用户提示词。
   const testNoise = React.useCallback(async () => {
-    const result = await onRunAction("native_noise_test", { role: noiseRole, text: noiseInput })
+    const result = await onRunAction("native_noise_test", { text: noiseInput })
     if (result?.data.kind !== "native_noise_test") {
       setError(t("memory.resources.invalidResponse"))
       return
     }
     setNoiseResult(result.data.value)
     setError(null)
-  }, [noiseInput, noiseRole, onRunAction, t])
+  }, [noiseInput, onRunAction, t])
 
-  const selectedSummary = catalog?.files.find((entry) => entry.path === selectedPath)
-  const promptPurpose = selectedSummary ? promptPurposeText(selectedSummary.fileName, t) : ""
+  const selectedSummary = visibleFiles.find((entry) => entry.path === selectedPath)
+  const resourcePurpose = selectedSummary
+    ? resourcePurposeText(selectedSummary.group, selectedSummary.fileName, t)
+    : ""
+  const changed = Boolean(file && editorText !== file.effectiveText)
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2"><FileCode2 className="size-4" aria-hidden="true" />{t("memory.resources.title")}</CardTitle>
-          <CardDescription>{t("memory.resources.description")}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/20 px-3 py-2 text-xs">
-            <span className="min-w-0 break-all font-mono text-muted-foreground">{catalog?.overrideRoot ?? t("memory.resources.loading")}</span>
-            <Button disabled={busy} onClick={() => void loadCatalog()} size="sm" type="button" variant="outline"><RefreshCw className="size-3.5" aria-hidden="true" />{t("memory.resources.refresh")}</Button>
-          </div>
-          {error ? <p className="settings-error-text text-sm">{error}</p> : null}
-          {catalog && settings ? (
-            <div className="grid gap-4 md:grid-cols-3">
-              <ResourceSelect label={t("memory.resources.promptBundle")} onChange={(promptBundle) => setSettings((current) => current ? { ...current, promptBundle } : current)} options={catalog.promptBundles} value={settings.promptBundle} />
-              <ResourceSelect label={t("memory.resources.piiLocale")} onChange={(piiLanguage) => setSettings((current) => current ? { ...current, piiLanguage } : current)} options={catalog.piiLanguages} value={settings.piiLanguage} />
-              <ResourceSelect label={t("memory.resources.noiseLocale")} onChange={(noiseLanguage) => setSettings((current) => current ? { ...current, noiseLanguage } : current)} options={catalog.noiseLanguages} value={settings.noiseLanguage} />
-              <BooleanSetting checked={settings.noiseEnabled} label={t("memory.resources.noiseEnabled")} onChange={(noiseEnabled) => setSettings((current) => current ? { ...current, noiseEnabled } : current)} />
-              <BooleanSetting checked={settings.noiseSemanticEnabled} label={t("memory.resources.noiseSemanticEnabled")} onChange={(noiseSemanticEnabled) => setSettings((current) => current ? { ...current, noiseSemanticEnabled } : current)} />
-              <div className="space-y-2"><Label htmlFor="vmm-noise-threshold">{t("memory.resources.noiseThreshold")}</Label><Input id="vmm-noise-threshold" max="1" min="0.01" onChange={(event) => setSettings((current) => current ? { ...current, noiseSemanticThreshold: Number(event.target.value) } : current)} step="0.01" type="number" value={settings.noiseSemanticThreshold} /></div>
-              <div className="md:col-span-3"><Button disabled={busy} onClick={() => void saveSettings()} type="button"><Save className="size-4" aria-hidden="true" />{t("memory.resources.saveComposition")}</Button></div>
-            </div>
-          ) : <p className="text-sm text-muted-foreground">{t("memory.resources.loading")}</p>}
-        </CardContent>
-      </Card>
-
-      {catalog ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("memory.resources.fileEditor")}</CardTitle>
-            <CardDescription>{t("memory.resources.fileEditorDescription")}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <ResourceSelect label={t("memory.resources.file")} onChange={selectResourceFile} options={catalog.files.map((entry) => entry.path)} value={selectedPath} />
-            {selectedSummary ? <div className="flex flex-wrap gap-2"><Badge variant="outline">{selectedSummary.group}</Badge><Badge variant="outline">{selectedSummary.selector}</Badge>{selectedSummary.hasUserOverride ? <Badge>{t("memory.resources.userOverride")}</Badge> : <Badge variant="secondary">{t("memory.resources.builtIn")}</Badge>}</div> : null}
-            {file ? (
-              <>
-                {file.highRisk ? (
-                  <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
-                    <div className="flex items-center gap-2 font-medium"><ShieldAlert className="size-4" aria-hidden="true" />{t("memory.resources.highRisk")}</div>
-                    <p className="mt-2 text-muted-foreground">{promptPurpose}</p>
-                    <p className="mt-1 text-muted-foreground">{t("memory.resources.promptHowTo")}</p>
-                    {!editUnlocked ? <Button className="mt-3" disabled={busy} onClick={() => setConfirmationStage("purpose")} type="button" variant="outline">{t("memory.resources.beginPromptEdit")}</Button> : null}
-                  </div>
-                ) : null}
-                <div className="grid gap-4 lg:grid-cols-2">
-                  <div className="space-y-2"><Label>{t("memory.resources.builtInSource")}</Label><Textarea className="min-h-72 font-mono text-xs" readOnly value={file.builtInText} /></div>
-                  <div className="space-y-2"><Label>{t("memory.resources.effectiveEditor")}</Label><Textarea className="min-h-72 font-mono text-xs" disabled={file.highRisk && !editUnlocked} onChange={(event) => setEditorText(event.target.value)} value={editorText} /></div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button disabled={busy || (file.highRisk && !editUnlocked) || !editorText} onClick={() => void saveFile()} type="button"><Save className="size-4" aria-hidden="true" />{t("memory.resources.saveFile")}</Button>
-                  <Button disabled={busy || !file.hasUserOverride} onClick={() => void resetFile()} type="button" variant="outline"><RotateCcw className="size-4" aria-hidden="true" />{t("memory.resources.restoreBuiltIn")}</Button>
-                </div>
-              </>
-            ) : null}
-          </CardContent>
-        </Card>
-      ) : null}
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader><CardTitle>{t("memory.resources.piiTester")}</CardTitle><CardDescription>{t("memory.resources.piiTesterDescription")}</CardDescription></CardHeader>
-          <CardContent className="space-y-5">
-            <div className="space-y-3">
-              <Label>{t("memory.resources.piiActiveBundleTest")}</Label>
-              <Textarea onChange={(event) => setPiiInput(event.target.value)} value={piiInput} />
-              <Button disabled={busy || !piiInput} onClick={() => void testPii()} type="button" variant="outline"><Play className="size-4" aria-hidden="true" />{t("memory.resources.runTest")}</Button>
-              {piiResult ? <div className="rounded-lg border bg-muted/20 p-3 text-sm"><pre className="whitespace-pre-wrap break-words">{piiResult.outputText}</pre><p className="mt-2 text-xs text-muted-foreground">{piiResult.redactions.map((entry) => `${entry.ruleName} × ${entry.matchCount}`).join(", ") || t("memory.resources.noMatch")}</p></div> : null}
-            </div>
-            <div className="space-y-3 border-t pt-4">
-              <div><Label>{t("memory.resources.piiFormulaTester")}</Label><p className="mt-1 text-xs text-muted-foreground">{t("memory.resources.piiFormulaTesterDescription")}</p></div>
-              <div className="space-y-2"><Label htmlFor="vmm-pii-formula-sample">{t("memory.resources.piiSampleText")}</Label><Textarea id="vmm-pii-formula-sample" onChange={(event) => setPiiFormulaInput(event.target.value)} value={piiFormulaInput} /></div>
-              <div className="space-y-2"><Label htmlFor="vmm-pii-formula-pattern">{t("memory.resources.piiPattern")}</Label><Input className="font-mono text-xs" id="vmm-pii-formula-pattern" onChange={(event) => setPiiFormulaPattern(event.target.value)} value={piiFormulaPattern} /></div>
-              <div className="space-y-2"><Label htmlFor="vmm-pii-formula-condition">{t("memory.resources.piiCondition")}</Label><Input className="font-mono text-xs" id="vmm-pii-formula-condition" onChange={(event) => setPiiFormulaCondition(event.target.value)} value={piiFormulaCondition} /></div>
-              <div className="space-y-2"><Label htmlFor="vmm-pii-formula-replacement">{t("memory.resources.piiReplacement")}</Label><Input className="font-mono text-xs" id="vmm-pii-formula-replacement" onChange={(event) => setPiiFormulaReplacement(event.target.value)} value={piiFormulaReplacement} /></div>
-              <Button disabled={busy || !piiFormulaInput || !piiFormulaPattern} onClick={() => void testPiiFormula()} type="button" variant="outline"><Play className="size-4" aria-hidden="true" />{t("memory.resources.runTest")}</Button>
-              {piiFormulaResult ? <div className="space-y-2 rounded-lg border bg-muted/20 p-3 text-sm"><pre className="whitespace-pre-wrap break-words">{piiFormulaResult.outputText}</pre><p className="text-xs text-muted-foreground">{t("memory.resources.piiCandidates").replace("{count}", String(piiFormulaResult.matches.length))}</p>{piiFormulaResult.matches.length > 0 ? <div className="space-y-2">{piiFormulaResult.matches.map((entry, index) => <div className="rounded border bg-background/70 p-2 text-xs" key={`${entry.startByte}:${entry.endByte}:${index}`}><div className="flex flex-wrap items-center gap-2"><Badge variant={entry.conditionAccepted ? "default" : "secondary"}>{entry.conditionAccepted ? t("memory.resources.piiAccepted") : t("memory.resources.piiRejected")}</Badge><code>{entry.matchedText}</code><span className="text-muted-foreground">{entry.startByte}..{entry.endByte}</span></div><p className="mt-2 break-all font-mono text-muted-foreground">{t("memory.resources.piiCaptures")}: {entry.captures.map((capture, captureIndex) => `$${captureIndex}=${capture ?? "<none>"}`).join(" · ")}</p></div>)}</div> : <p className="text-xs text-muted-foreground">{t("memory.resources.piiNoCandidates")}</p>}</div> : null}
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader><CardTitle>{t("memory.resources.noiseTester")}</CardTitle><CardDescription>{t("memory.resources.noiseTesterDescription")}</CardDescription></CardHeader>
-          <CardContent className="space-y-3"><ResourceSelect label={t("memory.resources.role")} onChange={setNoiseRole} options={["user", "assistant", "system", "tool"]} value={noiseRole} /><Textarea onChange={(event) => setNoiseInput(event.target.value)} value={noiseInput} /><Button disabled={busy || !noiseInput} onClick={() => void testNoise()} type="button" variant="outline"><Play className="size-4" aria-hidden="true" />{t("memory.resources.runTest")}</Button>{noiseResult ? <p className="rounded-lg border bg-muted/20 p-3 text-sm">{noiseResult.isNoise ? `${t("memory.resources.noiseMatched")}: ${noiseResult.category ?? "-"}` : t("memory.resources.noMatch")}</p> : null}</CardContent>
-        </Card>
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div><h2 className="text-lg font-semibold">{t("memory.resources.title")}</h2><p className="mt-1 max-w-3xl text-sm text-muted-foreground">{t("memory.resources.description")}</p></div>
+        <Button disabled={busy} onClick={() => void loadCatalog()} type="button" variant="outline"><RefreshCw className="size-4" aria-hidden="true" />{t("memory.resources.refresh")}</Button>
       </div>
+      <div className="rounded-lg border bg-muted/20 px-3 py-2 text-xs text-muted-foreground"><span>{t("memory.resources.overrideDirectory")}: </span><span className="break-all font-mono">{catalog?.overrideRoot ?? t("memory.resources.loading")}</span></div>
+      {error ? <p className="settings-error-text text-sm">{error}</p> : null}
 
-      <AlertDialog open={confirmationStage !== null} onOpenChange={(open) => !open && setConfirmationStage(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{confirmationStage === "purpose" ? t("memory.resources.confirmPurposeTitle") : t("memory.resources.confirmModificationTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>{confirmationStage === "purpose" ? promptPurpose : t("memory.resources.confirmModificationDescription")}</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("memory.common.cancel")}</AlertDialogCancel>
-            <AlertDialogAction onClick={(event) => {
-              if (confirmationStage === "purpose") {
-                event.preventDefault()
-                setConfirmationStage("modification")
-              } else {
-                setConfirmationStage(null)
-                setEditUnlocked(true)
-              }
-            }}>{confirmationStage === "purpose" ? t("memory.resources.confirmPurpose") : t("memory.resources.unlockEditor")}</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <Tabs onValueChange={(value) => setActiveGroup(value as ResourceGroup)} value={activeGroup}>
+        <TabsList className="grid w-full grid-cols-3"><TabsTrigger value="prompt">{t("memory.resources.promptTab")}</TabsTrigger><TabsTrigger value="pii">{t("memory.resources.piiTab")}</TabsTrigger><TabsTrigger value="noise">{t("memory.resources.noiseTab")}</TabsTrigger></TabsList>
+        {(["prompt", "pii", "noise"] as const).map((group) => (
+          <TabsContent className="space-y-4" key={group} value={group}>
+            {catalog && settings ? <ResourceCompositionSettings busy={busy} catalog={catalog} group={group} onChange={setSettings} onSave={saveSettings} settings={settings} /> : null}
+            <Card>
+              <CardHeader><CardTitle className="flex items-center gap-2"><FileCode2 className="size-4" aria-hidden="true" />{t("memory.resources.fileEditor")}</CardTitle><CardDescription>{t("memory.resources.fileEditorDescription")}</CardDescription></CardHeader>
+              <CardContent className="space-y-4">
+                <ResourceFileSelect files={visibleFiles} onChange={setSelectedPath} value={selectedPath} />
+                {selectedSummary ? <div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{selectedSummary.selector}</Badge><Badge variant={selectedSummary.hasUserOverride ? "default" : "secondary"}>{selectedSummary.hasUserOverride ? t("memory.resources.userOverride") : t("memory.resources.builtIn")}</Badge><Badge variant="outline"><LockKeyhole className="mr-1 size-3" aria-hidden="true" />{editUnlocked ? t("memory.resources.unlocked") : t("memory.resources.locked")}</Badge></div> : null}
+                {file ? <><div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm"><div className="flex items-center gap-2 font-medium"><ShieldAlert className="size-4" aria-hidden="true" />{file.highRisk ? t("memory.resources.highRisk") : t("memory.resources.guardedEdit")}</div><p className="mt-2 text-muted-foreground">{resourcePurpose}</p><p className="mt-1 text-muted-foreground">{t("memory.resources.promptHowTo")}</p></div><div className="space-y-2"><Label>{t("memory.resources.currentEffective")}</Label><ResourceCodeEditor disabled={!editUnlocked} language={resourceEditorLanguage(file.path)} onChange={setEditorText} value={editorText} /></div><div className="flex flex-wrap gap-2">{!editUnlocked ? <Button disabled={busy} onClick={() => setConfirmation("unlock")} type="button" variant="outline"><UnlockKeyhole className="size-4" aria-hidden="true" />{t("memory.resources.unlockEditor")}</Button> : null}<Button disabled={busy || !editUnlocked || !changed || !editorText} onClick={() => setConfirmation("save")} type="button"><Save className="size-4" aria-hidden="true" />{t("memory.resources.saveFile")}</Button><Button disabled={busy || !file.hasUserOverride} onClick={() => setConfirmation("reset")} type="button" variant="outline"><RotateCcw className="size-4" aria-hidden="true" />{t("memory.resources.restoreBuiltIn")}</Button></div></> : <p className="text-sm text-muted-foreground">{t("memory.resources.loading")}</p>}
+              </CardContent>
+            </Card>
+            {group === "pii" ? <PiiTesters busy={busy} input={piiInput} formulaCondition={piiFormulaCondition} formulaInput={piiFormulaInput} formulaPattern={piiFormulaPattern} formulaReplacement={piiFormulaReplacement} formulaResult={piiFormulaResult} onFormulaConditionChange={setPiiFormulaCondition} onFormulaInputChange={setPiiFormulaInput} onFormulaPatternChange={setPiiFormulaPattern} onFormulaReplacementChange={setPiiFormulaReplacement} onInputChange={setPiiInput} onTest={testPii} onTestFormula={testPiiFormula} result={piiResult} /> : null}
+            {group === "noise" ? <NoiseTester busy={busy} input={noiseInput} onInputChange={setNoiseInput} onTest={testNoise} result={noiseResult} /> : null}
+          </TabsContent>
+        ))}
+      </Tabs>
+
+      <AlertDialog open={confirmation !== null} onOpenChange={(open) => !open && setConfirmation(null)}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{confirmationTitle(confirmation, t)}</AlertDialogTitle><AlertDialogDescription>{confirmationDescription(confirmation, resourcePurpose, t)}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{t("memory.common.cancel")}</AlertDialogCancel><AlertDialogAction onClick={() => { const action = confirmation; setConfirmation(null); if (action === "unlock") setEditUnlocked(true); if (action === "save") void saveFile(); if (action === "reset") void resetFile() }}>{confirmationAction(confirmation, t)}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
     </div>
   )
 }
 
-// ResourceSelect renders one closed resource, locale, file, or role selector.
-// ResourceSelect 渲染一个封闭的资源、区域、文件或角色选择器。
-function ResourceSelect({ label, onChange, options, value }: {
-  label: string
+// ResourceCompositionSettings renders only settings belonging to the active category.
+// ResourceCompositionSettings 仅渲染属于当前分类的设置。
+function ResourceCompositionSettings({ busy, catalog, group, onChange, onSave, settings }: { busy: boolean; catalog: VmmNativeResourceCatalogSummary; group: ResourceGroup; onChange: React.Dispatch<React.SetStateAction<VmmNativeResourceSettingsSummary | null>>; onSave: () => Promise<void>; settings: VmmNativeResourceSettingsSummary }) {
+  const { t } = useI18n()
+  return <Card><CardHeader><CardTitle>{t("memory.resources.composition")}</CardTitle><CardDescription>{t("memory.resources.compositionDescription")}</CardDescription></CardHeader><CardContent className="space-y-4">{group === "prompt" ? <ResourceSelect label={t("memory.resources.promptBundle")} onChange={(promptBundle) => onChange((current) => current ? { ...current, promptBundle } : current)} options={catalog.promptBundles} value={settings.promptBundle} /> : null}{group === "pii" ? <ResourceSelect label={t("memory.resources.piiLocale")} onChange={(piiLanguage) => onChange((current) => current ? { ...current, piiLanguage } : current)} options={catalog.piiLanguages} value={settings.piiLanguage} /> : null}{group === "noise" ? <div className="grid gap-4 md:grid-cols-2"><ResourceSelect label={t("memory.resources.noiseLocale")} onChange={(noiseLanguage) => onChange((current) => current ? { ...current, noiseLanguage } : current)} options={catalog.noiseLanguages} value={settings.noiseLanguage} /><BooleanSetting checked={settings.noiseEnabled} label={t("memory.resources.noiseEnabled")} onChange={(noiseEnabled) => onChange((current) => current ? { ...current, noiseEnabled } : current)} /><BooleanSetting checked={settings.noiseSemanticEnabled} label={t("memory.resources.noiseSemanticEnabled")} onChange={(noiseSemanticEnabled) => onChange((current) => current ? { ...current, noiseSemanticEnabled } : current)} /><div className="space-y-2"><Label htmlFor="vmm-noise-threshold">{t("memory.resources.noiseThreshold")}</Label><Input id="vmm-noise-threshold" max="1" min="0.01" onChange={(event) => onChange((current) => current ? { ...current, noiseSemanticThreshold: Number(event.target.value) } : current)} step="0.01" type="number" value={settings.noiseSemanticThreshold} /></div></div> : null}<Button disabled={busy} onClick={() => void onSave()} type="button"><Save className="size-4" aria-hidden="true" />{t("memory.resources.saveComposition")}</Button></CardContent></Card>
+}
+
+// ResourceFileSelect renders file names for only the active resource category.
+// ResourceFileSelect 仅渲染当前资源分类中的文件名。
+function ResourceFileSelect({ files, onChange, value }: { files: VmmNativeResourceCatalogSummary["files"]; onChange: (value: string) => void; value: string }) {
+  const { t } = useI18n()
+  const inputId = React.useId()
+  return <div className="space-y-2"><Label htmlFor={inputId}>{t("memory.resources.file")}</Label><Select onValueChange={onChange} value={value}><SelectTrigger id={inputId}><SelectValue /></SelectTrigger><SelectContent>{files.map((entry) => <SelectItem key={entry.path} value={entry.path}><span>{entry.fileName}</span><span className="ml-2 text-xs text-muted-foreground">{entry.selector}</span></SelectItem>)}</SelectContent></Select></div>
+}
+
+// ResourceCodeEditorProps defines one syntax-rendered resource editor surface.
+// ResourceCodeEditorProps 定义一个带语法渲染的资源编辑器界面。
+interface ResourceCodeEditorProps {
+  // Whether text mutation is locked while selection and scrolling remain available.
+  // 文本修改是否锁定，同时仍允许选择与滚动。
+  disabled: boolean
+  // Canonical Shiki language selected from the authoritative resource path.
+  // 根据权威资源路径选出的规范 Shiki 语言。
+  language: "json" | "markdown"
+  // Publishes the exact edited resource text.
+  // 发布准确的已编辑资源文本。
   onChange: (value: string) => void
-  options: string[]
+  // Current effective or edited resource text.
+  // 当前生效或正在编辑的资源文本。
   value: string
-}) {
+}
+
+// ResourceCodeEditor renders a guarded syntax-highlighted editor with synchronized line numbers.
+// ResourceCodeEditor 渲染一个带同步行号的受保护语法高亮编辑器。
+function ResourceCodeEditor({ disabled, language, onChange, value }: ResourceCodeEditorProps) {
+  const previewRef = React.useRef<HTMLPreElement>(null)
+  const gutterRef = React.useRef<HTMLPreElement>(null)
+  const lines = React.useMemo(() => value.split(/\r\n|\r|\n/u), [value])
+  const shikiTheme = useDiffShikiTheme()
+  const highlightEnabled = lines.length <= 2_000 && value.length <= 262_144
+  const highlightRevision = useHighlightedCodeBlockRevision(lines, language, highlightEnabled)
+  const renderedLines = React.useMemo(
+    () => lines.map((line) => {
+      const spans = highlightEnabled ? highlightedDiffLineSpans(line, language) : null
+      return spans ? tokenSpansToHtml(spans) : escapeHtml(line)
+    }),
+    [highlightEnabled, highlightRevision, language, lines, shikiTheme],
+  )
+  const lineNumbers = React.useMemo(
+    () => Array.from({ length: Math.max(1, lines.length) }, (_, index) => index + 1).join("\n"),
+    [lines.length],
+  )
+
+  // synchronizeScroll keeps syntax tokens and line numbers aligned with the editable layer.
+  // synchronizeScroll 让语法 token 与行号始终和可编辑层保持对齐。
+  const synchronizeScroll = React.useCallback((element: HTMLTextAreaElement) => {
+    if (previewRef.current) {
+      previewRef.current.scrollLeft = element.scrollLeft
+      previewRef.current.scrollTop = element.scrollTop
+    }
+    if (gutterRef.current) {
+      gutterRef.current.scrollTop = element.scrollTop
+    }
+  }, [])
+
+  return (
+    <div className="overflow-hidden rounded-lg border bg-background shadow-sm" data-language={language}>
+      <div className="flex items-center border-b bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+        <span className="font-mono">{language}</span>
+      </div>
+      <div className="relative h-[28rem] min-h-[28rem] overflow-hidden bg-background font-mono text-xs leading-5 text-foreground">
+        <pre ref={previewRef} aria-hidden="true" className="pointer-events-none absolute inset-0 m-0 overflow-hidden whitespace-pre py-3 pl-[4.5rem] pr-3 font-mono text-xs leading-5">
+          <code>
+            {renderedLines.map((line, index) => (
+              <span
+                className="block min-h-5"
+                dangerouslySetInnerHTML={{ __html: line || "&#8203;" }}
+                key={`${index}:${line.length}`}
+              />
+            ))}
+          </code>
+        </pre>
+        <pre ref={gutterRef} aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 z-10 m-0 w-14 select-none overflow-hidden border-r bg-muted px-3 py-3 text-right font-mono text-xs leading-5 text-muted-foreground">{lineNumbers}</pre>
+        <textarea
+          aria-label="VMM resource code editor"
+          aria-readonly={disabled}
+          className="absolute inset-0 z-20 h-full w-full resize-none overflow-auto whitespace-pre border-0 bg-transparent py-3 pl-[4.5rem] pr-3 font-mono text-xs leading-5 text-transparent caret-foreground outline-none selection:bg-primary/25 focus:ring-2 focus:ring-ring focus:ring-inset read-only:cursor-default"
+          onChange={(event) => {
+            if (!disabled) onChange(event.target.value)
+          }}
+          onScroll={(event) => synchronizeScroll(event.currentTarget)}
+          readOnly={disabled}
+          spellCheck={false}
+          value={value}
+        />
+      </div>
+    </div>
+  )
+}
+
+// resourceEditorLanguage maps one native resource path to its exact editor grammar.
+// resourceEditorLanguage 将原生资源路径映射到准确的编辑器语法。
+function resourceEditorLanguage(path: string): "json" | "markdown" {
+  return path.toLowerCase().endsWith(".json") ? "json" : "markdown"
+}
+
+// PiiTesters renders active-bundle and ad-hoc formula validation inside the PII category.
+// PiiTesters 在 PII 分类内渲染当前组合与临时公式验证。
+function PiiTesters(props: { busy: boolean; input: string; result: VmmNativePiiTestResult | null; formulaInput: string; formulaPattern: string; formulaCondition: string; formulaReplacement: string; formulaResult: VmmNativePiiFormulaTestResult | null; onInputChange: (value: string) => void; onFormulaInputChange: (value: string) => void; onFormulaPatternChange: (value: string) => void; onFormulaConditionChange: (value: string) => void; onFormulaReplacementChange: (value: string) => void; onTest: () => Promise<void>; onTestFormula: () => Promise<void> }) {
+  const { t } = useI18n()
+  return <Card><CardHeader><CardTitle>{t("memory.resources.piiTester")}</CardTitle><CardDescription>{t("memory.resources.piiTesterDescription")}</CardDescription></CardHeader><CardContent className="space-y-5"><div className="space-y-3"><Label>{t("memory.resources.piiActiveBundleTest")}</Label><Textarea onChange={(event) => props.onInputChange(event.target.value)} value={props.input} /><Button disabled={props.busy || !props.input} onClick={() => void props.onTest()} type="button" variant="outline"><Play className="size-4" aria-hidden="true" />{t("memory.resources.runTest")}</Button>{props.result ? <div className="rounded-lg border bg-muted/20 p-3 text-sm"><pre className="whitespace-pre-wrap break-words">{props.result.outputText}</pre><p className="mt-2 text-xs text-muted-foreground">{props.result.redactions.map((entry) => `${entry.ruleName} × ${entry.matchCount}`).join(", ") || t("memory.resources.noMatch")}</p></div> : null}</div><div className="space-y-3 border-t pt-4"><div><Label>{t("memory.resources.piiFormulaTester")}</Label><p className="mt-1 text-xs text-muted-foreground">{t("memory.resources.piiFormulaTesterDescription")}</p></div><div className="space-y-2"><Label>{t("memory.resources.piiSampleText")}</Label><Textarea onChange={(event) => props.onFormulaInputChange(event.target.value)} value={props.formulaInput} /></div><div className="space-y-2"><Label>{t("memory.resources.piiPattern")}</Label><Input className="font-mono text-xs" onChange={(event) => props.onFormulaPatternChange(event.target.value)} value={props.formulaPattern} /></div><div className="space-y-2"><Label>{t("memory.resources.piiCondition")}</Label><Input className="font-mono text-xs" onChange={(event) => props.onFormulaConditionChange(event.target.value)} value={props.formulaCondition} /></div><div className="space-y-2"><Label>{t("memory.resources.piiReplacement")}</Label><Input className="font-mono text-xs" onChange={(event) => props.onFormulaReplacementChange(event.target.value)} value={props.formulaReplacement} /></div><Button disabled={props.busy || !props.formulaInput || !props.formulaPattern} onClick={() => void props.onTestFormula()} type="button" variant="outline"><Play className="size-4" aria-hidden="true" />{t("memory.resources.runTest")}</Button>{props.formulaResult ? <div className="space-y-2 rounded-lg border bg-muted/20 p-3 text-sm"><pre className="whitespace-pre-wrap break-words">{props.formulaResult.outputText}</pre><p className="text-xs text-muted-foreground">{t("memory.resources.piiCandidates").replace("{count}", String(props.formulaResult.matches.length))}</p>{props.formulaResult.matches.map((entry, index) => <div className="rounded border bg-background/70 p-2 text-xs" key={`${entry.startByte}:${entry.endByte}:${index}`}><div className="flex flex-wrap items-center gap-2"><Badge variant={entry.conditionAccepted ? "default" : "secondary"}>{entry.conditionAccepted ? t("memory.resources.piiAccepted") : t("memory.resources.piiRejected")}</Badge><code>{entry.matchedText}</code><span className="text-muted-foreground">{entry.startByte}..{entry.endByte}</span></div><p className="mt-2 break-all font-mono text-muted-foreground">{t("memory.resources.piiCaptures")}: {entry.captures.map((capture, captureIndex) => `$${captureIndex}=${capture ?? "<none>"}`).join(" · ")}</p></div>)}</div> : null}</div></CardContent></Card>
+}
+
+// NoiseTester renders a user-prompt-only deterministic noise validation surface.
+// NoiseTester 渲染仅针对用户提示词的确定性噪音验证界面。
+function NoiseTester({ busy, input, onInputChange, onTest, result }: { busy: boolean; input: string; onInputChange: (value: string) => void; onTest: () => Promise<void>; result: VmmNativeNoiseTestResult | null }) {
+  const { t } = useI18n()
+  return <Card><CardHeader><CardTitle>{t("memory.resources.noiseTester")}</CardTitle><CardDescription>{t("memory.resources.noiseTesterDescription")}</CardDescription></CardHeader><CardContent className="space-y-3"><Label>{t("memory.resources.userPromptOnly")}</Label><Textarea onChange={(event) => onInputChange(event.target.value)} value={input} /><Button disabled={busy || !input} onClick={() => void onTest()} type="button" variant="outline"><Play className="size-4" aria-hidden="true" />{t("memory.resources.runTest")}</Button>{result ? <p className="rounded-lg border bg-muted/20 p-3 text-sm">{result.isNoise ? `${t("memory.resources.noiseMatched")}: ${result.category ?? "-"}` : t("memory.resources.noMatch")}</p> : null}</CardContent></Card>
+}
+
+// ResourceSelect renders one closed composition selector.
+// ResourceSelect 渲染一个封闭的组合选择器。
+function ResourceSelect({ label, onChange, options, value }: { label: string; onChange: (value: string) => void; options: string[]; value: string }) {
   const inputId = React.useId()
   return <div className="space-y-2"><Label htmlFor={inputId}>{label}</Label><Select onValueChange={onChange} value={value}><SelectTrigger id={inputId}><SelectValue /></SelectTrigger><SelectContent>{options.map((option) => <SelectItem key={option} value={option}>{option}</SelectItem>)}</SelectContent></Select></div>
 }
 
 // BooleanSetting renders one explicit native resource-policy switch.
 // BooleanSetting 渲染一个明确的原生资源策略开关。
-function BooleanSetting({ checked, label, onChange }: {
-  checked: boolean
-  label: string
-  onChange: (checked: boolean) => void
-}) {
+function BooleanSetting({ checked, label, onChange }: { checked: boolean; label: string; onChange: (checked: boolean) => void }) {
   return <label className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm"><span>{label}</span><Switch checked={checked} onCheckedChange={onChange} /></label>
 }
 
-// promptPurposeText explains the exact semantic stage owned by one editable prompt file.
-// promptPurposeText 说明一份可编辑提示词文件所属的准确语义阶段。
-function promptPurposeText(fileName: string, t: ReturnType<typeof useI18n>["t"]): string {
+// resourcePurposeText explains the semantic responsibility of one editable resource.
+// resourcePurposeText 说明一份可编辑资源的语义职责。
+function resourcePurposeText(group: ResourceGroup, fileName: string, t: ReturnType<typeof useI18n>["t"]): string {
+  if (group === "pii") return t("memory.resources.piiPurpose")
+  if (group === "noise") return t("memory.resources.noisePurpose")
   const purposeByFile: Record<string, string> = {
     "precheck_l1_main.md": t("memory.resources.promptPurpose.precheckL1"),
     "precheck_l2_main.md": t("memory.resources.promptPurpose.precheckL2"),
@@ -376,4 +421,28 @@ function promptPurposeText(fileName: string, t: ReturnType<typeof useI18n>["t"])
     "profile_instruction_main.md": t("memory.resources.promptPurpose.profileInstruction"),
   }
   return purposeByFile[fileName] ?? t("memory.resources.promptPurpose.unknown")
+}
+
+// confirmationTitle returns the exact title for one guarded file action.
+// confirmationTitle 返回一个受保护文件动作的准确标题。
+function confirmationTitle(action: ResourceConfirmation, t: ReturnType<typeof useI18n>["t"]): string {
+  if (action === "save") return t("memory.resources.saveConfirmTitle")
+  if (action === "reset") return t("memory.resources.resetConfirmTitle")
+  return t("memory.resources.confirmPurposeTitle")
+}
+
+// confirmationDescription returns the exact risk explanation for one guarded file action.
+// confirmationDescription 返回一个受保护文件动作的准确风险说明。
+function confirmationDescription(action: ResourceConfirmation, purpose: string, t: ReturnType<typeof useI18n>["t"]): string {
+  if (action === "save") return t("memory.resources.saveConfirmDescription")
+  if (action === "reset") return t("memory.resources.resetConfirmDescription")
+  return `${purpose} ${t("memory.resources.confirmModificationDescription")}`
+}
+
+// confirmationAction returns the localized affirmative action label.
+// confirmationAction 返回本地化确认动作标签。
+function confirmationAction(action: ResourceConfirmation, t: ReturnType<typeof useI18n>["t"]): string {
+  if (action === "save") return t("memory.resources.saveConfirmAction")
+  if (action === "reset") return t("memory.resources.resetConfirmAction")
+  return t("memory.resources.unlockEditor")
 }

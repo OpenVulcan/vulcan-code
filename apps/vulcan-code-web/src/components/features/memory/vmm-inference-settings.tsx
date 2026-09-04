@@ -98,6 +98,7 @@ export function vmmRequiredInferenceReady(
       && llmCandidates.some((candidate) => (
         inferenceRouteKey(candidate.route) === inferenceRouteKey(route)
         && candidateSupportsDisabledReasoning(candidate)
+        && candidateSupportsVmmStructuredOutput(candidate)
       ))
       && !diagnostics.some((diagnostic) => (
         diagnostic.operation === "conversation_respond"
@@ -176,11 +177,12 @@ export function VmmInferenceSettings({
     candidate.enabled
     && candidate.route.usage_scope === "internal_background"
   )) ?? []
-  // llmCandidates retain only routes that explicitly support the proven disabled-reasoning mode.
-  // llmCandidates 仅保留明确支持已验证无思考模式的路由。
+  // llmCandidates retain only routes that preserve both disabled reasoning and structured JSON.
+  // llmCandidates 仅保留同时保持关闭思考与结构化 JSON 的路由。
   const llmCandidates = candidates.filter((candidate) => (
     candidate.route.operation === "conversation_respond"
     && candidateSupportsDisabledReasoning(candidate)
+    && candidateSupportsVmmStructuredOutput(candidate)
   ))
   const diagnostics = snapshot?.inferenceRouteDiagnostics.filter((diagnostic) => (
     diagnostic.consumerProfileId === "vmm"
@@ -1010,6 +1012,15 @@ function candidateSupportsDisabledReasoning(
     return false
   }
   return (candidate.capabilities.reasoning_efforts ?? []).includes("none")
+}
+
+// candidateSupportsVmmStructuredOutput consumes the backend-projected model/protocol intersection.
+// candidateSupportsVmmStructuredOutput 消费后端投影后的模型与协议能力交集。
+function candidateSupportsVmmStructuredOutput(
+  candidate: PublicAiInternalInferenceCandidate,
+): boolean {
+  return candidate.capabilities.structured_output === "json_object"
+    || candidate.capabilities.structured_output === "json_schema"
 }
 
 // errorMessage converts one rejected value into a visible diagnostic.

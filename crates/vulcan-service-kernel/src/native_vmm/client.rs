@@ -18,35 +18,33 @@ use vulcan_memorymesh_core::{
     MemoryReplacementScope, MemoryScopeClass, MemorySearchBatchCommand, MemoryWriteBatchCommand,
     MemoryWriteBatchItem, MutationIdentity, MutationSourceKind, OperationId,
     PostActionAnalyzePendingTurnCommand, PostActionInputKind, PostActionIntakeCommand,
-    PreCheckCommand, PreCheckPolicy, ProfileBundle, ProfileInstructionCommand, ProfileLevel,
-    ProfileNode, ProfileSourceKind, ProfileView, ProfileViewMode, ProfileViewSection, RecallMode,
-    RetrievalPolicy, Role, ScopeAccess, ScopeId, SectionRole, SessionRecallMode, SessionSourceId,
-    SubjectId, TimelineItem, Turn, TurnId, VectorSpaceId, derive_mutation_identity,
+    PreCheckCommand, PreCheckPolicy, PreCheckTurnContentType, PreCheckTurnContext, ProfileBundle,
+    ProfileInstructionCommand, ProfileLevel, ProfileNode, ProfileSourceKind, ProfileView,
+    ProfileViewMode, ProfileViewSection, RecallMode, RetrievalPolicy, Role, ScopeAccess, ScopeId,
+    SectionRole, SessionRecallMode, SessionSourceId, SubjectId, TimelineItem, Turn, TurnId,
+    TurnStatus, VectorSpaceId, derive_mutation_identity, estimate_text_tokens,
 };
 use vulcan_vmm::{
     ApplyProfileInstructionRequest, ApplyProfileInstructionResponse, ChatCompactRequest,
-    ChatCompactResponse, ContextItem, DeleteMemoriesRequest, DeleteMemoriesResponse,
-    DeleteProjectRequest, DeleteProjectResponse, DeleteUserRequest, DeleteUserResponse,
-    EnsureProjectRequest, EnsureProjectResponse, GetProfileBundleRequest, GetProfileBundleResponse,
-    GetProfileNodesRequest, GetProfileNodesResponse, GetTurnDetailsRequest, GetTurnDetailsResponse,
-    HealthzResponse, ListProjectsResponse, ListUsersResponse, MemorySearchGroupResult,
-    MemorySearchHit, MigrateProjectRequest, MigrateProjectResponse, PostActionRequest,
-    PostActionResponse, PostActionTimelineItem, PostActionTimelineType, PreCheckRecallMode,
-    PreCheckRequest, PreCheckResponse, ProfileBundleMode, ProfileNodeEntry, ProfileNodeSourceKind,
-    ProfileTarget, ResolveProjectRequest, ResolveProjectResponse, ResolveUserRequest,
-    ResolveUserResponse, RetiredProfileNodeEntry, SearchMemoryEventsRequest,
-    SearchMemoryEventsResponse, SessionMemoryStatus, TurnDetailEntry, VmmClient, VmmClientError,
-    WriteMemoriesRequest, WriteMemoriesResponse, WriteMemoryResultItem,
+    ChatCompactResponse, ContextItem, DEFAULT_NATIVE_USER_ID, DeleteMemoriesRequest,
+    DeleteMemoriesResponse, DeleteProjectRequest, DeleteProjectResponse, DeleteUserRequest,
+    DeleteUserResponse, EnsureProjectRequest, EnsureProjectResponse, GetProfileBundleRequest,
+    GetProfileBundleResponse, GetProfileNodesRequest, GetProfileNodesResponse,
+    GetTurnDetailsRequest, GetTurnDetailsResponse, HealthzResponse, ListProjectsResponse,
+    ListUsersResponse, MemorySearchGroupResult, MemorySearchHit, MigrateProjectRequest,
+    MigrateProjectResponse, PostActionRequest, PostActionResponse, PostActionTimelineItem,
+    PostActionTimelineType, PreCheckRecallMode, PreCheckRequest, PreCheckResponse,
+    ProfileBundleMode, ProfileNodeEntry, ProfileNodeSourceKind, ProfileTarget,
+    ResolveProjectRequest, ResolveProjectResponse, ResolveUserRequest, ResolveUserResponse,
+    RetiredProfileNodeEntry, SearchMemoryEventsRequest, SearchMemoryEventsResponse,
+    SessionMemoryStatus, TurnDetailEntry, VmmClient, VmmClientError, WriteMemoriesRequest,
+    WriteMemoriesResponse, WriteMemoryResultItem,
 };
 use vulcan_workspace_store::vmm_data_plane::{
-    NativeVmmPendingAnalysisJob, VMM_PENDING_ANALYSIS_COMPLETED,
-    VMM_PENDING_ANALYSIS_ERROR_CHAR_LIMIT, VMM_PENDING_ANALYSIS_INTAKING,
-    VMM_PENDING_ANALYSIS_READY, VmmDataPlaneHandle,
+    NativeVmmPendingAnalysisJob, VMM_PENDING_ANALYSIS_BYPASSED, VMM_PENDING_ANALYSIS_COMPLETED,
+    VMM_PENDING_ANALYSIS_CORRUPTED, VMM_PENDING_ANALYSIS_ERROR_CHAR_LIMIT,
+    VMM_PENDING_ANALYSIS_INTAKING, VMM_PENDING_ANALYSIS_READY, VmmDataPlaneHandle,
 };
-
-/// Stable logical vector-space identity shared by all native project scopes.
-/// 全部原生项目作用域共享的稳定逻辑向量空间标识。
-const NATIVE_MEMORY_VECTOR_SPACE_ID: &str = "vmm-native:memory";
 
 /// Periodic durable analysis queue scan interval.
 /// 耐久分析队列的周期扫描间隔。
@@ -54,11 +52,50 @@ const PENDING_ANALYSIS_SCAN_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Maximum jobs loaded by one queue drain pass.
 /// 单次队列排空最多加载的作业数。
-const PENDING_ANALYSIS_BATCH_LIMIT: u32 = 32;
+const PENDING_ANALYSIS_BATCH_LIMIT: u32 = 128;
 
 /// Maximum retry delay for one failed background analysis job.
 /// 单个后台分析作业失败后的最大重试延迟。
 const PENDING_ANALYSIS_MAX_RETRY_DELAY_MS: i64 = 5 * 60 * 1_000;
+
+/// Matches the external VMM policy that releases one turn after five failed analyses.
+/// 与外置 VMM 在五次分析失败后放行一个回合的策略保持一致。
+const PENDING_ANALYSIS_FAILURE_PASS_THRESHOLD: u32 = 5;
+
+/// Classifies a failed pending-analysis attempt without discarding its recovery semantics.
+/// 对失败的待分析尝试分类，同时保留其恢复语义。
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PendingAnalysisJobError {
+    /// The durable job payload or identity is unreadable and must be isolated.
+    /// 耐久作业载荷或身份不可读取，必须隔离。
+    Corrupted(String),
+    /// The provider or Core analysis failed and participates in the explicit failure-pass policy.
+    /// Provider 或 Core 分析失败，并参与显式失败放行策略。
+    Analysis {
+        /// Bounded-at-persistence diagnostic text.
+        /// 在持久化时才限制长度的诊断文本。
+        diagnostic: String,
+        /// Whether Core reports that semantic side effects may already exist.
+        /// Core 是否报告语义副作用可能已经存在。
+        outcome_uncertain: bool,
+    },
+    /// Infrastructure failed outside semantic analysis and should keep retrying without bypass.
+    /// 语义分析之外的基础设施失败，应持续重试而不触发放行。
+    Retryable(String),
+}
+
+impl PendingAnalysisJobError {
+    /// Returns the exact developer diagnostic carried by this failure.
+    /// 返回该失败携带的准确开发诊断。
+    #[must_use]
+    fn diagnostic(&self) -> &str {
+        match self {
+            Self::Corrupted(diagnostic)
+            | Self::Retryable(diagnostic)
+            | Self::Analysis { diagnostic, .. } => diagnostic,
+        }
+    }
+}
 
 /// Stores the exact replayable semantics of one accepted post-action request.
 /// 保存一条已接受 PostAction 请求的准确可重放语义。
@@ -182,9 +219,12 @@ pub(crate) struct NativeVmmClient {
     /// Shared reader side of the native project maintenance barrier.
     /// 原生项目维护屏障的共享读取侧。
     operation_gate: Arc<RwLock<()>>,
+    /// Enables durable analysis only while native VMM is the active global backend.
+    /// 仅在原生 VMM 是全局活动后端时启用耐久分析。
+    native_backend_enabled: Arc<AtomicBool>,
     /// Wakes the host worker after an intake atomically binds a pending turn.
     /// 在登记原子绑定待处理回合后唤醒宿主 Worker。
-    pending_analysis_notify: Notify,
+    pending_analysis_notify: Arc<Notify>,
     /// Prevents overlapping periodic and notification-driven queue drains.
     /// 防止周期扫描与通知驱动的队列排空重叠。
     pending_analysis_drain_gate: Mutex<()>,
@@ -201,12 +241,15 @@ impl NativeVmmClient {
         runtime: Arc<NativeVmmCoreRuntime>,
         data_plane: VmmDataPlaneHandle,
         operation_gate: Arc<RwLock<()>>,
+        native_backend_enabled: Arc<AtomicBool>,
+        pending_analysis_notify: Arc<Notify>,
     ) -> Self {
         Self {
             runtime,
             data_plane,
             operation_gate,
-            pending_analysis_notify: Notify::new(),
+            native_backend_enabled,
+            pending_analysis_notify,
             pending_analysis_drain_gate: Mutex::new(()),
             pending_analysis_worker_started: AtomicBool::new(false),
         }
@@ -276,8 +319,16 @@ impl NativeVmmClient {
     /// 在同步启动准备完成后持续排空已到期的耐久分析作业。
     async fn run_pending_analysis_worker(self: Arc<Self>) {
         loop {
-            if let Err(error) = self.drain_due_pending_analysis_jobs().await {
-                eprintln!("native VMM pending analysis drain failed: {error}");
+            if !self.native_backend_enabled.load(Ordering::Acquire) {
+                self.pending_analysis_notify.notified().await;
+                continue;
+            }
+            match self.drain_due_pending_analysis_jobs().await {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(error) => {
+                    eprintln!("native VMM pending analysis drain failed: {error}");
+                }
             }
             tokio::select! {
                 () = self.pending_analysis_notify.notified() => {}
@@ -308,34 +359,194 @@ impl NativeVmmClient {
     /// 在不与其他排空过程重叠的情况下处理一批有界的已到期分析作业。
     ///
     /// # Errors
-    /// Returns a data-plane clock or queue read failure; individual job failures are rescheduled.
-    /// 数据平面时钟或队列读取失败时返回错误；单个作业失败会被重新调度。
-    async fn drain_due_pending_analysis_jobs(&self) -> Result<(), String> {
+    /// Returns whether the bounded page was full; individual job failures are rescheduled.
+    /// 返回有界页面是否已满；单个作业失败会被重新调度。
+    ///
+    /// # Errors
+    /// 错误
+    /// Returns a data-plane clock, queue read, or retry-state persistence failure.
+    /// 数据平面时钟、队列读取或重试状态持久化失败时返回错误。
+    async fn drain_due_pending_analysis_jobs(&self) -> Result<bool, String> {
         let _gate = self.pending_analysis_drain_gate.lock().await;
         let jobs = self
             .data_plane
             .list_due_pending_analysis_jobs(now_unix_ms()?, PENDING_ANALYSIS_BATCH_LIMIT)
             .await?;
+        let page_was_full = jobs.len() == PENDING_ANALYSIS_BATCH_LIMIT as usize;
         for job in jobs {
-            if let Err(error) = self.execute_pending_analysis_job(&job).await {
-                let next_attempt_at_unix_ms = now_unix_ms()?.saturating_add(
-                    pending_analysis_retry_delay_ms(job.attempt_count.saturating_add(1)),
-                );
-                let diagnostic = bounded_diagnostic(&error);
-                self.data_plane
-                    .record_pending_analysis_failure(
-                        &job.operation_id,
-                        next_attempt_at_unix_ms,
-                        &diagnostic,
-                    )
-                    .await?;
+            let Err(error) = self.execute_pending_analysis_job(&job).await else {
+                continue;
+            };
+            let diagnostic = bounded_diagnostic(error.diagnostic());
+            let terminal_status = pending_analysis_terminal_status(&error, job.attempt_count);
+            if let Some(status) = terminal_status {
+                if let Err(finalize_error) = self
+                    .finalize_failed_pending_analysis_job(&job, status, &diagnostic)
+                    .await
+                {
+                    let combined = bounded_diagnostic(
+                        format!("{diagnostic}; terminalization failed: {finalize_error}").as_str(),
+                    );
+                    self.reschedule_pending_analysis_job(&job, &combined)
+                        .await?;
+                    eprintln!(
+                        "native VMM post-action failure terminalization failed for operation {}: {}",
+                        job.operation_id, combined
+                    );
+                    continue;
+                }
                 eprintln!(
-                    "native VMM post-action analysis failed for operation {}: {}",
-                    job.operation_id, diagnostic
+                    "native VMM post-action analysis reached {:?} for operation {}: {}",
+                    status, job.operation_id, diagnostic
                 );
+                continue;
             }
+            self.reschedule_pending_analysis_job(&job, &diagnostic)
+                .await?;
+            eprintln!(
+                "native VMM post-action analysis failed for operation {}: {}",
+                job.operation_id, diagnostic
+            );
         }
-        Ok(())
+        Ok(page_was_full)
+    }
+
+    /// Reschedules one non-terminal pending-analysis failure with bounded exponential backoff.
+    /// 使用有界指数退避重新调度一条非终态待分析失败。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `job` is the last durable row and `diagnostic` is already bounded for persistence.
+    /// `job` 是最近的耐久记录，`diagnostic` 已按持久化限制完成截断。
+    ///
+    /// # Errors
+    /// 错误
+    /// Returns the exact clock or data-plane update failure.
+    /// 返回准确时钟或数据平面更新失败。
+    async fn reschedule_pending_analysis_job(
+        &self,
+        job: &NativeVmmPendingAnalysisJob,
+        diagnostic: &str,
+    ) -> Result<(), String> {
+        let next_attempt_at_unix_ms = now_unix_ms()?.saturating_add(
+            pending_analysis_retry_delay_ms(job.attempt_count.saturating_add(1)),
+        );
+        self.data_plane
+            .record_pending_analysis_failure(&job.operation_id, next_attempt_at_unix_ms, diagnostic)
+            .await
+    }
+
+    /// Moves one failed pending turn and its queue job into a durable terminal state.
+    /// 将一个失败待处理回合及其队列作业迁移到耐久终态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `job` owns the exact turn, `requested_status` is bypassed or corrupted, and `diagnostic`
+    /// is the bounded reason retained after the original conversation payload is erased.
+    /// `job` 拥有准确回合，`requested_status` 为已放行或已损坏，`diagnostic`
+    /// 是擦除原始会话载荷后保留的有界原因。
+    ///
+    /// # Errors
+    /// 错误
+    /// Returns an identity, snapshot-transition, or queue-finalization failure.
+    /// 身份、快照迁移或队列终结失败时返回错误。
+    async fn finalize_failed_pending_analysis_job(
+        &self,
+        job: &NativeVmmPendingAnalysisJob,
+        requested_status: TurnStatus,
+        diagnostic: &str,
+    ) -> Result<(), String> {
+        if !matches!(
+            requested_status,
+            TurnStatus::AnalysisBypassed | TurnStatus::Corrupted
+        ) {
+            return Err(String::from("待分析作业请求了不受支持的失败终态"));
+        }
+        let turn_id = TurnId::new(
+            job.turn_id
+                .clone()
+                .ok_or_else(|| format!("待分析作业 `{}` 缺少回合身份", job.operation_id))?,
+        )
+        .map_err(|error| format!("待分析作业 `{}` 回合身份无效：{error}", job.operation_id))?;
+        // A write guard prevents normal Core commands and maintenance from changing the exact turn
+        // between the previewed version and the host-owned failure-policy transition.
+        // 写守卫防止普通 Core 命令与维护过程在预检版本和宿主持有失败策略迁移之间改变准确回合。
+        let _operation_guard = self.operation_gate.write().await;
+        let current_snapshot = self.runtime.storage_snapshot()?;
+        let current_status = current_snapshot
+            .dataset
+            .turns
+            .iter()
+            .find(|turn| turn.id == turn_id)
+            .map(|turn| turn.status)
+            .ok_or_else(|| {
+                format!(
+                    "待分析作业 `{}` 引用的回合 `{}` 不存在",
+                    job.operation_id, turn_id
+                )
+            })?;
+        if current_status == TurnStatus::Completed {
+            return self
+                .data_plane
+                .complete_pending_analysis_job(&job.operation_id, &job.request_fingerprint)
+                .await;
+        }
+        let storage_version = current_snapshot.storage_version;
+        let transition_operation = derived_operation_id(
+            &job.operation_id,
+            match requested_status {
+                TurnStatus::AnalysisBypassed => "analysis-bypassed",
+                TurnStatus::Corrupted => "analysis-corrupted",
+                _ => unreachable!("validated terminal status"),
+            },
+        );
+        let final_status = self
+            .runtime
+            .transform_storage_snapshot(
+                transition_operation.as_str(),
+                "pending-analysis-terminal",
+                storage_version,
+                |snapshot| {
+                    transition_pending_turn_status(
+                        snapshot,
+                        &turn_id,
+                        requested_status,
+                        &job.operation_id,
+                    )
+                },
+            )
+            .await?;
+        match final_status {
+            TurnStatus::Completed => {
+                self.data_plane
+                    .complete_pending_analysis_job(&job.operation_id, &job.request_fingerprint)
+                    .await
+            }
+            TurnStatus::AnalysisBypassed => {
+                self.data_plane
+                    .finalize_failed_pending_analysis_job(
+                        &job.operation_id,
+                        &job.request_fingerprint,
+                        VMM_PENDING_ANALYSIS_BYPASSED,
+                        diagnostic,
+                    )
+                    .await
+            }
+            TurnStatus::Corrupted => {
+                self.data_plane
+                    .finalize_failed_pending_analysis_job(
+                        &job.operation_id,
+                        &job.request_fingerprint,
+                        VMM_PENDING_ANALYSIS_CORRUPTED,
+                        diagnostic,
+                    )
+                    .await
+            }
+            TurnStatus::Pending | TurnStatus::ProcessedUnknown => Err(format!(
+                "待分析作业 `{}` 未收敛到可终结状态",
+                job.operation_id
+            )),
+        }
     }
 
     /// Executes and completes one exact durable pending analysis job.
@@ -352,41 +563,78 @@ impl NativeVmmClient {
     async fn execute_pending_analysis_job(
         &self,
         job: &NativeVmmPendingAnalysisJob,
-    ) -> Result<(), String> {
+    ) -> Result<(), PendingAnalysisJobError> {
         // The read guard keeps maintenance from moving or clearing the referenced turn until the
         // complete queued analysis and queue acknowledgement are durable.
         // 读取守卫保证完整队列分析及其确认耐久化前，维护操作不能迁移或清空所引用的回合。
         let _operation_guard = self.operation_gate.read().await;
         if job.state != VMM_PENDING_ANALYSIS_READY {
-            return Err(format!(
+            return Err(PendingAnalysisJobError::Corrupted(format!(
                 "待分析作业 `{}` 未处于 ready 状态",
                 job.operation_id
-            ));
+            )));
         }
-        let payload: NativePendingPostActionPayload = serde_json::from_str(&job.payload_json)
-            .map_err(|error| format!("解析待分析作业 `{}` 失败：{error}", job.operation_id))?;
-        let turn_id = TurnId::new(
-            job.turn_id
-                .clone()
-                .ok_or_else(|| format!("待分析作业 `{}` 缺少回合身份", job.operation_id))?,
-        )
-        .map_err(|error| format!("待分析作业 `{}` 回合身份无效：{error}", job.operation_id))?;
+        let mut payload: NativePendingPostActionPayload = serde_json::from_str(&job.payload_json)
+            .map_err(|error| {
+            PendingAnalysisJobError::Corrupted(format!(
+                "解析待分析作业 `{}` 失败：{error}",
+                job.operation_id
+            ))
+        })?;
+        if payload.intake.vector_space_id != payload.analysis.vector_space_id {
+            return Err(PendingAnalysisJobError::Corrupted(format!(
+                "待分析作业 `{}` 的登记与分析向量代次不一致",
+                job.operation_id
+            )));
+        }
+        // A pending turn owns semantic input, not a provider route. Retargeting at execution keeps
+        // durable retries valid after an explicit embedding-generation rebuild.
+        // 待处理回合持有语义输入而非供应商路由；执行时重新绑定可确保显式向量代次重建后耐久重试仍有效。
+        payload.analysis.vector_space_id =
+            self.runtime
+                .current_vector_space_id()
+                .await
+                .map_err(|error| {
+                    PendingAnalysisJobError::Retryable(format!(
+                        "待分析作业 `{}` 无法解析当前向量代次：{error}",
+                        job.operation_id
+                    ))
+                })?;
+        let turn_id = TurnId::new(job.turn_id.clone().ok_or_else(|| {
+            PendingAnalysisJobError::Corrupted(format!(
+                "待分析作业 `{}` 缺少回合身份",
+                job.operation_id
+            ))
+        })?)
+        .map_err(|error| {
+            PendingAnalysisJobError::Corrupted(format!(
+                "待分析作业 `{}` 回合身份无效：{error}",
+                job.operation_id
+            ))
+        })?;
         let result = self
             .runtime
             .run(CoreCommand::PostActionAnalyzePendingTurn(
                 payload.analysis.into_command(turn_id),
             ))
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| PendingAnalysisJobError::Analysis {
+                outcome_uncertain: error.side_effect_possible,
+                diagnostic: error.to_string(),
+            })?;
         if !matches!(
             result,
             vulcan_memorymesh_core::CommandResult::PostActionAnalysis(_)
         ) {
-            return Err(String::from("Core 未返回 PostActionAnalysis 结果"));
+            return Err(PendingAnalysisJobError::Analysis {
+                diagnostic: String::from("Core 未返回 PostActionAnalysis 结果"),
+                outcome_uncertain: false,
+            });
         }
         self.data_plane
             .complete_pending_analysis_job(&job.operation_id, &job.request_fingerprint)
             .await
+            .map_err(PendingAnalysisJobError::Retryable)
     }
 }
 
@@ -395,6 +643,11 @@ impl VmmClient for NativeVmmClient {
     /// Reports process-local readiness without probing a network endpoint.
     /// 在不探测网络端点的情况下报告进程内就绪状态。
     async fn healthz(&self) -> Result<HealthzResponse, VmmClientError> {
+        let _operation_guard = self.operation_gate.read().await;
+        self.runtime
+            .current_vector_space_id()
+            .await
+            .map_err(native_runtime_error)?;
         Ok(HealthzResponse {
             status: String::from("native-ready"),
         })
@@ -618,9 +871,23 @@ impl VmmClient for NativeVmmClient {
         // 读取守卫在本次完整召回期间保持归属与连带查询作用域稳定。
         let _operation_guard = self.operation_gate.read().await;
         let now = now_ns()?;
+        let subject_id = subject_id(request.user_id)?;
+        let session_source_id = session_source_id(&request.session_id)?;
         let access = self
             .project_access(request.host_project_id.as_str(), request.project_id)
             .await?;
+        let (memory_policy, vector_space_id) = self
+            .runtime
+            .active_memory_context()
+            .await
+            .map_err(native_runtime_error)?;
+        let recent_turns = self.recent_precheck_turns(
+            &subject_id,
+            &access.write_scope,
+            &session_source_id,
+            memory_policy.postaction_history_turn_limit,
+            memory_policy.postaction_max_input_tokens,
+        )?;
         let session_recall_mode = match request.recall_mode {
             PreCheckRecallMode::PreCheckRecallModeFull => SessionRecallMode::Full,
             PreCheckRecallMode::PreCheckRecallModeUnspecified
@@ -633,12 +900,12 @@ impl VmmClient for NativeVmmClient {
         let result = self
             .runtime
             .run(CoreCommand::PreCheck(PreCheckCommand {
-                subject_id: subject_id(request.user_id)?,
+                subject_id,
                 scope_access: access.clone(),
-                session_source_id: session_source_id(&request.session_id)?,
-                vector_space_id: vector_space_id()?,
+                session_source_id,
+                vector_space_id,
                 user_content: request.user_content,
-                recent_timeline: Vec::new(),
+                recent_turns,
                 recall_mode: RecallMode::Auto,
                 session_recall_mode,
                 candidate_scope: MemoryCandidateScope {
@@ -699,6 +966,11 @@ impl VmmClient for NativeVmmClient {
             .await?;
         let subject = subject_id(request.user_id)?;
         let session = session_source_id(&request.session_id)?;
+        let vector_space_id = self
+            .runtime
+            .current_vector_space_id()
+            .await
+            .map_err(native_runtime_error)?;
         let timeline = post_action_timeline(&request, now)?;
         let input_kind = if request.timeline.is_empty() {
             PostActionInputKind::SingleTurn
@@ -725,7 +997,7 @@ impl VmmClient for NativeVmmClient {
                 subject_id: subject.clone(),
                 scope_access: access,
                 session_source_id: session.clone(),
-                vector_space_id: vector_space_id()?,
+                vector_space_id: vector_space_id.clone(),
                 timeline,
                 completed_at_ns: now,
                 mutation_identity: intake_identity,
@@ -756,7 +1028,7 @@ impl VmmClient for NativeVmmClient {
                     },
                 ],
                 session_source_id: session,
-                vector_space_id: vector_space_id()?,
+                vector_space_id,
                 analysis_generation: 1,
                 analysis_cutoff_ns: now,
                 direct_write_observed_after_ns: 0,
@@ -789,9 +1061,7 @@ impl VmmClient for NativeVmmClient {
             })
             .await
             .map_err(|error| VmmClientError::new("native_analysis_queue", error))?;
-        if queued.state == VMM_PENDING_ANALYSIS_COMPLETED
-            || queued.state == VMM_PENDING_ANALYSIS_READY
-        {
+        if pending_analysis_job_is_accepted(&queued) {
             if queued.state == VMM_PENDING_ANALYSIS_READY {
                 self.pending_analysis_notify.notify_one();
             }
@@ -826,10 +1096,10 @@ impl VmmClient for NativeVmmClient {
                     .map_err(|recovery_error| {
                         VmmClientError::new("native_analysis_queue_recovery", recovery_error)
                     })?;
-                if recovered.as_ref().is_some_and(|job| {
-                    job.state == VMM_PENDING_ANALYSIS_READY
-                        || job.state == VMM_PENDING_ANALYSIS_COMPLETED
-                }) {
+                if recovered
+                    .as_ref()
+                    .is_some_and(pending_analysis_job_is_accepted)
+                {
                     self.pending_analysis_notify.notify_one();
                     return Ok(native_post_action_response());
                 }
@@ -930,6 +1200,11 @@ impl VmmClient for NativeVmmClient {
         let access = self
             .project_access(request.host_project_id.as_str(), request.project_id)
             .await?;
+        let vector_space_id = self
+            .runtime
+            .current_vector_space_id()
+            .await
+            .map_err(native_runtime_error)?;
         let result = self
             .runtime
             .run(CoreCommand::MemorySearchBatch(MemorySearchBatchCommand {
@@ -937,7 +1212,7 @@ impl VmmClient for NativeVmmClient {
                 scope_access: access.clone(),
                 queries: request.queries,
                 top_k: request.top_k,
-                vector_space_id: vector_space_id()?,
+                vector_space_id,
                 boundary: CandidateQueryBoundary {
                     candidate_scope: Some(MemoryCandidateScope {
                         scope_ids: access.visible_scopes,
@@ -1027,6 +1302,11 @@ impl VmmClient for NativeVmmClient {
             .await?;
         let project_scope = project_access.write_scope.clone();
         let visible_scopes = project_access.visible_scopes;
+        let vector_space_id = self
+            .runtime
+            .current_vector_space_id()
+            .await
+            .map_err(native_runtime_error)?;
         let items = request
             .items
             .into_iter()
@@ -1075,7 +1355,7 @@ impl VmmClient for NativeVmmClient {
                 },
                 authorized_write_scopes: vec![project_scope],
                 session_source_id: session_source_id(&request.session_id)?,
-                vector_space_id: vector_space_id()?,
+                vector_space_id,
                 occurred_at_ns: now,
                 items,
                 mutation_identity: invocation_identity("memory-write", now)?,
@@ -1166,6 +1446,76 @@ impl VmmClient for NativeVmmClient {
 }
 
 impl NativeVmmClient {
+    /// Loads the newest same-session turn window using the external VMM DETAILS/RAW_TURN rules.
+    /// 使用外部 VMM 的 DETAILS/RAW_TURN 规则加载同会话最新回合窗口。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `subject_id`, `scope_id`, and `session_source_id` form the exact session ownership tuple.
+    /// `subject_id`、`scope_id` 与 `session_source_id` 组成准确的会话归属元组。
+    /// `turn_limit` and `max_input_tokens` are the active bounded memory-policy limits.
+    /// `turn_limit` 与 `max_input_tokens` 是当前生效的有界记忆策略限制。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A chronological recent-turn window that always retains the newest non-empty turn even when it exceeds the budget.
+    /// 返回按时间正序排列的近期回合窗口；即便最新非空回合超出预算，也始终保留该回合。
+    ///
+    /// # Errors
+    /// 错误
+    /// Returns an error when storage cannot be read or a raw turn cannot be serialized exactly.
+    /// 当存储不可读取或原始回合无法准确序列化时返回错误。
+    fn recent_precheck_turns(
+        &self,
+        subject_id: &SubjectId,
+        scope_id: &ScopeId,
+        session_source_id: &SessionSourceId,
+        turn_limit: u32,
+        max_input_tokens: u32,
+    ) -> Result<Vec<PreCheckTurnContext>, VmmClientError> {
+        let snapshot = self
+            .runtime
+            .storage_snapshot()
+            .map_err(native_runtime_error)?;
+        let mut turns = snapshot
+            .dataset
+            .turns
+            .into_iter()
+            .filter(|turn| {
+                &turn.subject_id == subject_id
+                    && &turn.scope_id == scope_id
+                    && &turn.session_source_id == session_source_id
+            })
+            .collect::<Vec<_>>();
+        turns.sort_by(|left, right| {
+            left.created_at_ns
+                .cmp(&right.created_at_ns)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        let keep_from = turns.len().saturating_sub(turn_limit as usize);
+        let mut contexts = turns
+            .into_iter()
+            .skip(keep_from)
+            .map(precheck_turn_context)
+            .collect::<Result<Vec<_>, _>>()?;
+        contexts.retain(|context| !context.content.trim().is_empty());
+        if contexts.is_empty() || max_input_tokens == 0 {
+            return Ok(contexts);
+        }
+        let mut selected = Vec::new();
+        let mut total = 0_u32;
+        for context in contexts.into_iter().rev() {
+            let budget = estimate_text_tokens(context.content.as_str());
+            if !selected.is_empty() && total.saturating_add(budget) > max_input_tokens {
+                break;
+            }
+            total = total.saturating_add(budget);
+            selected.push(context);
+        }
+        selected.reverse();
+        Ok(selected)
+    }
+
     /// Runs one exact native profile query and returns its typed bundle.
     /// 运行一次精确的原生画像查询并返回其强类型画像包。
     async fn query_profile(
@@ -1222,6 +1572,12 @@ fn native_management_error() -> VmmClientError {
 /// 将 Core 失败转换为稳定的 VMM 客户端错误包络。
 fn core_client_error(error: vulcan_memorymesh_core::CoreError) -> VmmClientError {
     VmmClientError::new("native_core", error.to_string())
+}
+
+/// Converts one host-native runtime failure into the stable client error envelope.
+/// 将一条宿主原生运行时失败转换为稳定客户端错误包络。
+fn native_runtime_error(error: impl std::fmt::Display) -> VmmClientError {
+    VmmClientError::new("native_runtime", error.to_string())
 }
 
 /// Builds an explicit typed-result mismatch error.
@@ -1304,6 +1660,116 @@ fn pending_analysis_retry_delay_ms(attempt_count: u32) -> i64 {
         .min(PENDING_ANALYSIS_MAX_RETRY_DELAY_MS)
 }
 
+/// Reports whether one durable queue row proves that its PostAction intake was accepted.
+/// 判断一条耐久队列记录是否证明其 PostAction 登记已经被接受。
+///
+/// # Parameters
+/// 参数
+/// `job` is the authoritative row returned by the host data plane.
+/// `job` 是宿主数据平面返回的权威记录。
+///
+/// # Returns
+/// 返回值
+/// `true` for ready and every terminal state; an unfinished intake remains `false`.
+/// 对就绪态及全部终态返回 `true`；未完成登记仍返回 `false`。
+#[must_use]
+fn pending_analysis_job_is_accepted(job: &NativeVmmPendingAnalysisJob) -> bool {
+    matches!(
+        job.state.as_str(),
+        VMM_PENDING_ANALYSIS_READY
+            | VMM_PENDING_ANALYSIS_COMPLETED
+            | VMM_PENDING_ANALYSIS_BYPASSED
+            | VMM_PENDING_ANALYSIS_CORRUPTED
+    )
+}
+
+/// Resolves whether one failed attempt must leave the pending set immediately.
+/// 解析一次失败尝试是否必须立即离开待处理集合。
+///
+/// # Parameters
+/// 参数
+/// `error` preserves failure semantics and `previous_attempt_count` is the durable count before
+/// the current attempt.
+/// `error` 保留失败语义，`previous_attempt_count` 是当前尝试前的耐久计数。
+///
+/// # Returns
+/// 返回值
+/// Corrupted payloads are isolated, uncertain outcomes are bypassed, ordinary analysis failures
+/// are bypassed at the fifth attempt, and infrastructure retries have no terminal status.
+/// 损坏载荷会被隔离，结果不确定会被放行，普通分析失败在第五次时被放行，基础设施重试无终态。
+#[must_use]
+fn pending_analysis_terminal_status(
+    error: &PendingAnalysisJobError,
+    previous_attempt_count: u32,
+) -> Option<TurnStatus> {
+    match error {
+        PendingAnalysisJobError::Corrupted(_) => Some(TurnStatus::Corrupted),
+        PendingAnalysisJobError::Analysis {
+            outcome_uncertain, ..
+        } if *outcome_uncertain
+            || previous_attempt_count.saturating_add(1)
+                >= PENDING_ANALYSIS_FAILURE_PASS_THRESHOLD =>
+        {
+            Some(TurnStatus::AnalysisBypassed)
+        }
+        PendingAnalysisJobError::Analysis { .. } | PendingAnalysisJobError::Retryable(_) => None,
+    }
+}
+
+/// Applies one host failure-policy transition to an exact pending turn.
+/// 将一项宿主失败策略迁移应用到准确待处理回合。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` is the coherent Core state, `turn_id` identifies the owned turn,
+/// `requested_status` is bypassed or corrupted, and `job_operation_id` is diagnostic context.
+/// `snapshot` 是一致 Core 状态，`turn_id` 标识所属回合，`requested_status`
+/// 为已放行或已损坏，`job_operation_id` 用作诊断上下文。
+///
+/// # Returns
+/// 返回值
+/// The resulting terminal status, preserving a terminal state already committed by recovery.
+/// 返回迁移后的终态；若恢复过程已经提交终态则保留该状态。
+///
+/// # Errors
+/// 错误
+/// Returns an error for a missing turn, unsupported request, or incompatible existing state.
+/// 回合缺失、请求状态不受支持或既有状态不兼容时返回错误。
+fn transition_pending_turn_status(
+    snapshot: &mut vulcan_memorymesh_core::StorageSnapshot,
+    turn_id: &TurnId,
+    requested_status: TurnStatus,
+    job_operation_id: &str,
+) -> Result<TurnStatus, String> {
+    if !matches!(
+        requested_status,
+        TurnStatus::AnalysisBypassed | TurnStatus::Corrupted
+    ) {
+        return Err(String::from("待分析回合请求了不受支持的失败终态"));
+    }
+    let turn = snapshot
+        .dataset
+        .turns
+        .iter_mut()
+        .find(|turn| turn.id == *turn_id)
+        .ok_or_else(|| format!("待分析作业 `{job_operation_id}` 引用的回合 `{turn_id}` 不存在"))?;
+    match turn.status {
+        TurnStatus::Pending => {
+            turn.status = requested_status;
+            turn.user_input_kind = None;
+            turn.analysis_details = None;
+        }
+        TurnStatus::Completed | TurnStatus::AnalysisBypassed | TurnStatus::Corrupted => {}
+        TurnStatus::ProcessedUnknown => {
+            return Err(format!(
+                "待分析作业 `{job_operation_id}` 的回合已处于不可重写状态 {:?}",
+                turn.status
+            ));
+        }
+    }
+    Ok(turn.status)
+}
+
 /// Bounds one untrusted background failure diagnostic before persistence.
 /// 在持久化前限制一条不可信后台失败诊断。
 ///
@@ -1358,9 +1824,10 @@ fn native_trace_id(operation: &str) -> String {
     format!("native-vmm:{operation}")
 }
 
-/// Creates the exact Core subject identity for one VulcanCode user.
-/// 为一个 VulcanCode 用户创建精确 Core 主体标识。
+/// Creates the exact Core subject identity for the sole host-owned native user.
+/// 为宿主持有的唯一原生用户创建精确 Core 主体标识。
 fn subject_id(user_id: u64) -> Result<SubjectId, VmmClientError> {
+    ensure_native_user_id(user_id)?;
     SubjectId::new(format!("vmm-subject:{user_id}")).map_err(identifier_error)
 }
 
@@ -1370,22 +1837,31 @@ fn project_scope_id(project_id: u64) -> Result<ScopeId, VmmClientError> {
     ScopeId::new(format!("vmm-project:{project_id}")).map_err(identifier_error)
 }
 
-/// Creates the exact Core personal profile scope identity.
-/// 创建精确的 Core 个人画像作用域标识。
+/// Creates the exact Core personal-profile scope identity for the sole native user.
+/// 为唯一原生用户创建精确的 Core 个人画像作用域标识。
 fn subject_scope_id(user_id: u64) -> Result<ScopeId, VmmClientError> {
+    ensure_native_user_id(user_id)?;
     ScopeId::new(format!("vmm-subject:{user_id}")).map_err(identifier_error)
+}
+
+/// Rejects shared-protocol identities that try to create a second native user namespace.
+/// 拒绝试图通过共享协议创建第二个原生用户命名空间的身份。
+fn ensure_native_user_id(user_id: u64) -> Result<(), VmmClientError> {
+    if user_id == DEFAULT_NATIVE_USER_ID {
+        return Ok(());
+    }
+    Err(VmmClientError::new(
+        "invalid_argument",
+        format!(
+            "native VMM accepts only the fixed host user id {DEFAULT_NATIVE_USER_ID}, got {user_id}"
+        ),
+    ))
 }
 
 /// Creates the host session source identity without changing the source identifier.
 /// 在不改变来源标识的情况下创建宿主会话来源身份。
 fn session_source_id(session_id: &str) -> Result<SessionSourceId, VmmClientError> {
     SessionSourceId::new(session_id.to_owned()).map_err(identifier_error)
-}
-
-/// Creates the one shared logical native vector-space identity.
-/// 创建唯一共享的原生逻辑向量空间标识。
-fn vector_space_id() -> Result<VectorSpaceId, VmmClientError> {
-    VectorSpaceId::new(NATIVE_MEMORY_VECTOR_SPACE_ID).map_err(identifier_error)
 }
 
 /// Creates an exact Core turn identity from its public numeric projection.
@@ -1672,6 +2148,119 @@ fn post_action_timeline(
     Ok(timeline)
 }
 
+/// Defines the exact external-VMM-compatible dehydrated turn JSON shape.
+/// 定义与外部 VMM 准确兼容的脱水回合 JSON 结构。
+#[derive(Serialize)]
+struct NativeDehydratedTurnPayload {
+    /// Carries the first user prompt.
+    /// 携带首条用户提示词。
+    user: String,
+    /// Carries ordered middle user and assistant items.
+    /// 携带按序排列的中间用户与助手项目。
+    timeline: Vec<NativeDehydratedTimelineItem>,
+    /// Carries the final assistant answer when present.
+    /// 携带存在时的最终助手回答。
+    assistant: String,
+}
+
+/// Defines one exact middle item in a dehydrated turn payload.
+/// 定义脱水回合载荷中的一条准确中间项目。
+#[derive(Serialize)]
+struct NativeDehydratedTimelineItem {
+    /// Carries the lower-case external VMM role token.
+    /// 携带外部 VMM 使用的小写角色标记。
+    #[serde(rename = "type")]
+    kind: &'static str,
+    /// Carries the normalized item content.
+    /// 携带规范化的项目内容。
+    content: String,
+}
+
+/// Projects one durable Core turn into the external VMM DETAILS/RAW_TURN context contract.
+/// 将一个耐久 Core 回合投影为外部 VMM 的 DETAILS/RAW_TURN 上下文契约。
+///
+/// # Parameters
+/// 参数
+/// `turn` is one exact same-session durable turn.
+/// `turn` 是同会话中的一个准确耐久回合。
+///
+/// # Returns
+/// 返回值
+/// The extracted detail when completed and available, otherwise compact dehydrated JSON.
+/// 已完成且存在提炼内容时返回详情，否则返回紧凑脱水 JSON。
+///
+/// # Errors
+/// 错误
+/// Returns an error when a stored role cannot be represented by the host conversation contract or JSON serialization fails.
+/// 当存储角色无法由宿主会话契约表示或 JSON 序列化失败时返回错误。
+fn precheck_turn_context(turn: Turn) -> Result<PreCheckTurnContext, VmmClientError> {
+    if turn.status == vulcan_memorymesh_core::TurnStatus::Completed
+        && turn
+            .analysis_details
+            .as_deref()
+            .is_some_and(|details| !details.trim().is_empty())
+    {
+        return Ok(PreCheckTurnContext {
+            turn_id: turn.id,
+            content_type: PreCheckTurnContentType::Details,
+            content: turn.analysis_details.unwrap_or_default().trim().to_owned(),
+        });
+    }
+    let turn_id = turn.id;
+    let mut timeline = turn.timeline;
+    let user = if timeline.first().is_some_and(|item| item.role == Role::User) {
+        timeline.remove(0).content.trim().to_owned()
+    } else {
+        String::new()
+    };
+    let assistant = if timeline
+        .last()
+        .is_some_and(|item| item.role == Role::Assistant)
+    {
+        timeline
+            .pop()
+            .map(|item| item.content.trim().to_owned())
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let timeline = timeline
+        .into_iter()
+        .map(|item| {
+            let kind = match item.role {
+                Role::User => "user",
+                Role::Assistant => "assistant",
+                Role::System | Role::Tool => {
+                    return Err(VmmClientError::new(
+                        "native_timeline_role_mismatch",
+                        "native VMM recent turn context cannot represent system or tool items",
+                    ));
+                }
+            };
+            Ok(NativeDehydratedTimelineItem {
+                kind,
+                content: item.content.trim().to_owned(),
+            })
+        })
+        .collect::<Result<Vec<_>, VmmClientError>>()?;
+    let content = serde_json::to_string(&NativeDehydratedTurnPayload {
+        user,
+        timeline,
+        assistant,
+    })
+    .map_err(|error| {
+        VmmClientError::new(
+            "native_turn_serialization",
+            format!("failed to serialize native VMM recent turn: {error}"),
+        )
+    })?;
+    Ok(PreCheckTurnContext {
+        turn_id,
+        content_type: PreCheckTurnContentType::RawTurn,
+        content,
+    })
+}
+
 /// Converts one Core search hit into the AI-facing VMM result projection.
 /// 将一个 Core 检索命中转换为面向 AI 的 VMM 结果投影。
 fn memory_search_hit(
@@ -1842,6 +2431,30 @@ mod tests {
     use super::*;
     use vulcan_vmm::PostActionRequest;
 
+    /// Verifies the process-local client cannot open a second native user namespace.
+    /// 验证进程内客户端不能打开第二个原生用户命名空间。
+    #[test]
+    fn native_subject_identity_is_fixed_to_the_host_user() {
+        assert_eq!(
+            subject_id(DEFAULT_NATIVE_USER_ID)
+                .expect("fixed native subject")
+                .as_str(),
+            "vmm-subject:1"
+        );
+        assert_eq!(
+            subject_scope_id(DEFAULT_NATIVE_USER_ID)
+                .expect("fixed native subject scope")
+                .as_str(),
+            "vmm-subject:1"
+        );
+        let subject_error = subject_id(DEFAULT_NATIVE_USER_ID + 1)
+            .expect_err("second native subject must be rejected");
+        let scope_error = subject_scope_id(DEFAULT_NATIVE_USER_ID + 1)
+            .expect_err("second native subject scope must be rejected");
+        assert_eq!(subject_error.kind, "invalid_argument");
+        assert_eq!(scope_error.kind, "invalid_argument");
+    }
+
     /// Verifies durable analysis retry delay grows exponentially and remains bounded.
     /// 验证耐久分析重试延迟按指数增长且保持有界。
     #[test]
@@ -1864,6 +2477,135 @@ mod tests {
             VMM_PENDING_ANALYSIS_ERROR_CHAR_LIMIT
         );
         assert!(message.starts_with(&bounded));
+    }
+
+    /// Verifies malformed jobs isolate immediately while ordinary analysis uses the five-pass policy.
+    /// 验证损坏作业立即隔离，而普通分析使用五次失败放行策略。
+    #[test]
+    fn pending_analysis_terminal_policy_matches_external_vmm() {
+        assert_eq!(
+            pending_analysis_terminal_status(
+                &PendingAnalysisJobError::Corrupted(String::from("bad payload")),
+                0,
+            ),
+            Some(TurnStatus::Corrupted)
+        );
+        let analysis = PendingAnalysisJobError::Analysis {
+            diagnostic: String::from("invalid model output"),
+            outcome_uncertain: false,
+        };
+        assert_eq!(pending_analysis_terminal_status(&analysis, 3), None);
+        assert_eq!(
+            pending_analysis_terminal_status(&analysis, 4),
+            Some(TurnStatus::AnalysisBypassed)
+        );
+        assert_eq!(
+            pending_analysis_terminal_status(
+                &PendingAnalysisJobError::Analysis {
+                    diagnostic: String::from("uncertain commit"),
+                    outcome_uncertain: true,
+                },
+                0,
+            ),
+            Some(TurnStatus::AnalysisBypassed)
+        );
+        assert_eq!(
+            pending_analysis_terminal_status(
+                &PendingAnalysisJobError::Retryable(String::from("route unavailable")),
+                u32::MAX,
+            ),
+            None
+        );
+    }
+
+    /// Verifies the host failure policy changes only a pending turn and preserves recovered terminals.
+    /// 验证宿主失败策略只改变待处理回合，并保留恢复得到的既有终态。
+    #[test]
+    fn pending_turn_terminal_transition_is_strict_and_idempotent() {
+        let turn_id = TurnId::new("vmm-turn-terminal").expect("turn id");
+        let mut snapshot = vulcan_memorymesh_core::StorageSnapshot {
+            dataset: vulcan_memorymesh_core::ExportDataset {
+                turns: vec![Turn {
+                    id: turn_id.clone(),
+                    subject_id: subject_id(1).expect("subject"),
+                    scope_id: project_scope_id(1).expect("scope"),
+                    session_source_id: session_source_id("session").expect("session"),
+                    timeline: Vec::new(),
+                    previous_turn_ids: Vec::new(),
+                    next_turn_ids: Vec::new(),
+                    created_at_ns: 1,
+                    status: TurnStatus::Pending,
+                    user_input_kind: None,
+                    analysis_details: None,
+                }],
+                ..vulcan_memorymesh_core::ExportDataset::empty()
+            },
+            storage_version: 1,
+            next_entity_sequence: 1,
+            outcomes: Vec::new(),
+            analysis_attempts: Vec::new(),
+            noise_prototypes: Vec::new(),
+            retention_trash_batches: Vec::new(),
+            retention_cold_turn_jobs: Vec::new(),
+        };
+
+        assert_eq!(
+            transition_pending_turn_status(
+                &mut snapshot,
+                &turn_id,
+                TurnStatus::AnalysisBypassed,
+                "operation",
+            )
+            .expect("transition pending turn"),
+            TurnStatus::AnalysisBypassed
+        );
+        assert_eq!(
+            transition_pending_turn_status(
+                &mut snapshot,
+                &turn_id,
+                TurnStatus::Corrupted,
+                "operation",
+            )
+            .expect("preserve terminal turn"),
+            TurnStatus::AnalysisBypassed
+        );
+        snapshot.dataset.turns[0].status = TurnStatus::ProcessedUnknown;
+        assert!(
+            transition_pending_turn_status(
+                &mut snapshot,
+                &turn_id,
+                TurnStatus::Corrupted,
+                "operation",
+            )
+            .is_err()
+        );
+    }
+
+    /// Verifies idempotent PostAction retries accept ready and every terminal queue state.
+    /// 验证幂等 PostAction 重试接受就绪态及每一种队列终态。
+    #[test]
+    fn pending_analysis_acceptance_includes_failure_terminal_states() {
+        let mut job = NativeVmmPendingAnalysisJob {
+            operation_id: String::from("operation"),
+            request_fingerprint: String::from("sha256:test"),
+            payload_json: String::from("{}"),
+            intake_mutation_operation_id: String::from("intake"),
+            turn_id: Some(String::from("vmm-turn-1")),
+            state: String::from(VMM_PENDING_ANALYSIS_INTAKING),
+            attempt_count: 0,
+            next_attempt_at_unix_ms: 0,
+            last_error: None,
+        };
+        assert!(!pending_analysis_job_is_accepted(&job));
+        for state in [
+            VMM_PENDING_ANALYSIS_READY,
+            VMM_PENDING_ANALYSIS_COMPLETED,
+            VMM_PENDING_ANALYSIS_BYPASSED,
+            VMM_PENDING_ANALYSIS_CORRUPTED,
+        ] {
+            job.state = String::from(state);
+            assert!(pending_analysis_job_is_accepted(&job));
+        }
     }
 
     /// Verifies request fingerprints are deterministic, payload-sensitive, and time-independent.
@@ -1899,7 +2641,7 @@ mod tests {
         let other_scope = project_scope_id(8).expect("other scope");
         let subject = subject_id(1).expect("subject");
         let session = session_source_id("session").expect("session");
-        let vector_space = vector_space_id().expect("vector space");
+        let vector_space = VectorSpaceId::new("test-vector-space").expect("vector space");
         let payload = NativePendingPostActionPayload {
             intake: PostActionIntakeCommand {
                 input_kind: PostActionInputKind::SingleTurn,

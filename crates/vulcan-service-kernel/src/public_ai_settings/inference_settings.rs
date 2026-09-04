@@ -3,7 +3,10 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use vulcan_ai_contract::{AiOperation, InferenceUsageScope, ModelCapabilities, ReasoningEffort};
+use vulcan_ai_contract::{
+    AiOperation, InferenceUsageScope, ModelCapabilities, ReasoningEffort,
+    StructuredOutputCapability,
+};
 use vulcan_provider_adapters::{
     ConnectionModelCatalog, InferenceRouteBinding, InferenceRouteConfiguration,
     InternalModelOverrides, PersistedAiConfiguration, PublicAiRuntime,
@@ -14,7 +17,10 @@ use vulcan_service_api::ServiceEventEmitter;
 use super::{
     PublicAiSettingsSnapshot, build_public_ai_settings_snapshot,
     effective_catalog_model_protocol_id,
-    inference_validation::{validate_internal_model_overrides, validate_vmm_llm_reasoning_policy},
+    inference_validation::{
+        validate_internal_model_overrides, validate_vmm_llm_reasoning_policy,
+        validate_vmm_llm_structured_output_policy,
+    },
     public_ai_runtime_and_configuration,
     publication::mutate_public_ai_configuration_and_publish_in_transaction,
     validate_non_empty,
@@ -407,6 +413,12 @@ pub(crate) async fn service_save_public_ai_inference_route(
             &selection.model.capabilities,
             effective_reasoning_effort,
         )?;
+        validate_vmm_llm_structured_output_policy(
+            request.consumer_profile_id.as_str(),
+            request.operation,
+            route,
+            &selection.model.capabilities,
+        )?;
     }
     let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
         &app,
@@ -559,6 +571,12 @@ fn push_internal_inference_route_diagnostic(
                             .and_then(|profile| profile.llm_reasoning_efforts.get(purpose_id))
                             .copied()
                     }),
+                )?;
+                validate_vmm_llm_structured_output_policy(
+                    consumer_profile_id,
+                    expected_operation,
+                    route,
+                    &selection.model.capabilities,
                 )
             })
     };
@@ -696,6 +714,20 @@ pub(super) fn build_internal_inference_candidates(
                     }
                     _ => continue,
                 };
+                // candidateCapabilities exposes the exact model/protocol intersection to every settings consumer.
+                // candidateCapabilities 向每个设置消费方公开准确的模型与协议能力交集。
+                let mut candidate_capabilities = model.capabilities.clone();
+                if let InferenceRouteBinding::Protocol {
+                    protocol_profile_id,
+                } = &binding
+                    && !crate::configured_inference::model_route_supports_json_schema_contract(
+                        protocol_profile_id,
+                        &candidate_capabilities,
+                    )
+                {
+                    candidate_capabilities.structured_output =
+                        StructuredOutputCapability::Unsupported;
+                }
                 for usage_scope in internal_usage_scopes.iter().copied() {
                     candidates.push(PublicAiInternalInferenceCandidate {
                         provider_display_name: provider.display_name.clone(),
@@ -718,7 +750,7 @@ pub(super) fn build_internal_inference_candidates(
                             default_internal_enabled,
                         ),
                         usage_scopes: internal_usage_scopes.clone(),
-                        capabilities: model.capabilities.clone(),
+                        capabilities: candidate_capabilities.clone(),
                         overrides: configuration
                             .internal_model_overrides
                             .get(
@@ -858,6 +890,12 @@ pub(crate) async fn sync_knowledge_inference_profile(
             route.operation,
             &selection.model.capabilities,
             None,
+        )?;
+        validate_vmm_llm_structured_output_policy(
+            consumer_profile_id,
+            route.operation,
+            route,
+            &selection.model.capabilities,
         )?;
     }
     let (_configuration, ()) = mutate_public_ai_configuration_and_publish_in_transaction(

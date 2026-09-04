@@ -253,8 +253,8 @@ impl NativeVmmResourceStore {
     /// 校验一份准确覆盖、持久化并激活新的不可变快照。
     ///
     /// # Errors
-    /// Returns an error for an unknown path, missing prompt confirmations, invalid content, or I/O failure.
-    /// 路径未知、提示词确认缺失、内容无效或 I/O 失败时返回错误。
+    /// Returns an error for an unknown path, missing edit confirmations, invalid content, or I/O failure.
+    /// 路径未知、编辑确认缺失、内容无效或 I/O 失败时返回错误。
     pub(super) fn write_file(
         &self,
         core: &MemoryMeshCore,
@@ -264,9 +264,9 @@ impl NativeVmmResourceStore {
         confirmed_modification: bool,
     ) -> Result<VmmNativeResourceFileContent, String> {
         ensure_catalog_path(path)?;
-        if is_prompt_path(path) && (!confirmed_purpose || !confirmed_modification) {
+        if !confirmed_purpose || !confirmed_modification {
             return Err(String::from(
-                "提示词覆盖属于高风险修改，必须先确认用途与修改方法，再次确认后才能保存。",
+                "原生 VMM 规则覆盖必须先确认文件用途与修改风险，并在保存时再次确认。",
             ));
         }
         let paths = embedded_paths()?;
@@ -1021,10 +1021,10 @@ mod tests {
         );
     }
 
-    /// Verifies prompt writes are rejected unless both high-risk confirmations are explicit.
-    /// 验证提示词写入在两项高风险确认未同时明确时会被拒绝。
+    /// Verifies every resource write is rejected unless both edit confirmations are explicit.
+    /// 验证每份资源写入在两项编辑确认未同时明确时都会被拒绝。
     #[test]
-    fn prompt_edit_requires_both_confirmations() {
+    fn resource_edit_requires_both_confirmations() {
         let temporary = tempfile::tempdir().expect("create VMM resource test root");
         let store = NativeVmmResourceStore::new(temporary.path());
         let core = MemoryMeshCore::new().expect("create Core");
@@ -1037,7 +1037,18 @@ mod tests {
                 false,
             )
             .expect_err("missing second confirmation must fail");
-        assert!(error.contains("高风险修改"));
+        assert!(error.contains("再次确认"));
+
+        let pii_error = store
+            .write_file(
+                &core,
+                "pii_rules/zh-CN.json",
+                String::from("{}"),
+                false,
+                true,
+            )
+            .expect_err("PII edit without unlock confirmation must fail");
+        assert!(pii_error.contains("确认文件用途"));
     }
 
     /// Verifies oversized override files are rejected before their contents are read into memory.

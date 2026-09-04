@@ -10,10 +10,10 @@ use vulcan_memorymesh_core_contracts::{
     MemorySearchBatchCommand, MemorySearchCommand, MemoryWriteBatchCommand, MemoryWriteBatchItem,
     MemoryWriteCommand, MutationIdentity, MutationSourceKind, OperationId,
     PostActionAnalyzePendingTurnCommand, PostActionIntakeCommand, PreCheckCommand,
-    ProfileInstructionCommand, ProfileQueryCommand, ProfileView, ProfileViewMode,
-    ProfileViewSection, RecallMode, RetentionCommand, RetentionPolicy, Role, ScopeAccess, ScopeId,
-    SectionRole, SessionRecallMode, SessionSourceId, SubjectId, TimelineItem, TurnId,
-    VectorSpaceId, request_fingerprint,
+    PreCheckTurnContentType, PreCheckTurnContext, ProfileInstructionCommand, ProfileQueryCommand,
+    ProfileView, ProfileViewMode, ProfileViewSection, RecallMode, RetentionCommand,
+    RetentionPolicy, Role, ScopeAccess, ScopeId, SectionRole, SessionRecallMode, SessionSourceId,
+    SubjectId, TimelineItem, TurnId, VectorSpaceId, request_fingerprint,
 };
 
 /// Preserves the existing fixture's readable scopes while explicitly allowing replacement only in its primary write scope.
@@ -83,10 +83,10 @@ fn precheck_command() -> CoreCommand {
             ),
         },
         user_content: "中文内容 Ünïcodé ✓".to_owned(),
-        recent_timeline: vec![TimelineItem {
-            role: Role::User,
+        recent_turns: vec![PreCheckTurnContext {
+            turn_id: TurnId::new("turn-precheck-golden").expect("turn identity must be valid"),
+            content_type: PreCheckTurnContentType::Details,
             content: "历史轮次".to_owned(),
-            occurred_at_ns: 111,
         }],
         recall_mode: RecallMode::Force,
         session_recall_mode: SessionRecallMode::CompactAware,
@@ -360,7 +360,7 @@ fn precheck_fingerprint_matches_golden() {
     // 身份字段（操作标识、幂等键、观测时间）不参与材料，因此该精确摘要冻结跨语言契约。
     assert_eq!(
         request_fingerprint(&precheck_command(), SNAPSHOT_ID),
-        "fp256:daaafbb51ca35add8c6a0cd032328ab733e0e78e5262a99e78f38efc78d063ce"
+        "fp256:e0170c5246fbc0522fa175fcdc1276de74d8ea1fe8463f9078f26620ebc2e85e"
     );
 }
 
@@ -508,6 +508,7 @@ fn representative_commands_match_golden() {
             protected_priority_floor: 80,
             protected_memory_level_floor: 4,
             skip_protected_shared_memories: false,
+            profile_expiry_limit: 256,
             memory_recycle_limit: 100,
             cold_turn_scan_limit: 50,
             cold_turn_job_limit: 16,
@@ -519,7 +520,16 @@ fn representative_commands_match_golden() {
     });
     assert_eq!(
         request_fingerprint(&retention, SNAPSHOT_ID),
-        "fp256:95ec55e11abbf261dc8dfe2ca63800c5674c161bf225ce3abe4b7832ba984ea7"
+        "fp256:e6e68f78b2ddc6d9d955094790de572fc99900b60f21e31093c76b27fdf44652"
+    );
+    let mut changed_profile_expiry_limit = retention.clone();
+    let CoreCommand::Retention(command) = &mut changed_profile_expiry_limit else {
+        unreachable!("golden command is always Retention");
+    };
+    command.policy.profile_expiry_limit += 1;
+    assert_ne!(
+        request_fingerprint(&changed_profile_expiry_limit, SNAPSHOT_ID),
+        request_fingerprint(&retention, SNAPSHOT_ID)
     );
 }
 

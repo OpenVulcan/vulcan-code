@@ -113,7 +113,15 @@ fn vmm_management_sections_use_backend_specific_identity_copy() {
     assert_eq!(external_identity.label, "用户与项目");
     assert!(external_identity.description.contains("外置 VMM 身份"));
     assert!(native.iter().any(|section| section.id == "inference"));
+    assert!(native.iter().any(|section| section.id == "resource_rules"));
+    assert!(native.iter().any(|section| section.id == "maintenance"));
     assert!(!external.iter().any(|section| section.id == "inference"));
+    assert!(
+        !external
+            .iter()
+            .any(|section| section.id == "resource_rules")
+    );
+    assert!(!external.iter().any(|section| section.id == "maintenance"));
 }
 
 /// Verifies setup probes can use one external connection without persisting a global draft.

@@ -28,6 +28,7 @@ import type {
   VmmNativeMemoryRecordSummary,
   VmmNativeMemoryRecordsSummary,
   VmmNativeMemorySessionSummary,
+  VmmNativeProfileRecordSummary,
   VmmNativeProjectCatalogSummary,
   VmmNativeTurnRecordSummary,
   VmmNativeTurnStatusCounts,
@@ -176,6 +177,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction }: VmmNativeMemory
   const [sessionId, setSessionId] = React.useState(SESSION_OVERVIEW_VALUE)
   const [selectedTurn, setSelectedTurn] = React.useState<VmmNativeTurnRecordSummary | null>(null)
   const [selectedMemory, setSelectedMemory] = React.useState<VmmNativeMemoryRecordSummary | null>(null)
+  const [selectedProfile, setSelectedProfile] = React.useState<VmmNativeProfileRecordSummary | null>(null)
   const [localBusy, setLocalBusy] = React.useState(false)
   const [catalogRefreshVersion, setCatalogRefreshVersion] = React.useState(0)
   const loadedContextRef = React.useRef<string | null>(null)
@@ -193,6 +195,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction }: VmmNativeMemory
     setRecords(null)
     setSelectedTurn(null)
     setSelectedMemory(null)
+    setSelectedProfile(null)
     setLocalBusy(true)
     try {
       const overviewResult = await onRunAction(
@@ -242,6 +245,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction }: VmmNativeMemory
     requestSequenceRef.current = sequence
     setSelectedTurn(null)
     setSelectedMemory(null)
+    setSelectedProfile(null)
     setLocalBusy(true)
     try {
       const result = await onRunAction(
@@ -389,6 +393,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction }: VmmNativeMemory
           && records.sessions.length === 0
           && records.turns.length === 0
           && records.memories.length === 0
+          && records.profileNodes.length === 0
           && !effectiveBusy ? (
           <NativeRecordsEmpty
             description={t("memory.nativeRecords.noProjectRecords")}
@@ -400,6 +405,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction }: VmmNativeMemory
           <NativeProjectSummary
             counts={recordCounts}
             memoryCount={records.memories.length}
+            profileNodeCount={records.profileNodes.length}
             projectName={selectedProject?.name ?? String(records.projectId)}
             sessionCount={records.sessions.length}
             turnCount={records.turns.length}
@@ -427,6 +433,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction }: VmmNativeMemory
                   <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
                     <span>{t("memory.nativeRecords.turns")} {session.turnCount}</span>
                     <span>{t("memory.nativeRecords.memories")} {session.memoryCount}</span>
+                    <span>{t("memory.nativeRecords.profileNodes")} {session.profileNodeCount}</span>
                     <span>{t("memory.nativeRecords.completed")} {session.turnStatuses.completed}</span>
                     <span>{t("memory.nativeRecords.pending")} {session.turnStatuses.pending}</span>
                   </div>
@@ -473,7 +480,9 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction }: VmmNativeMemory
                           </span>
                         </div>
                         <span className="text-xs text-muted-foreground">
-                          {t("memory.nativeRecords.generated")} {turn.generatedMemoryIds.length}
+                          {t("memory.nativeRecords.generatedMemories")} {turn.generatedMemoryIds.length}
+                          {" · "}
+                          {t("memory.nativeRecords.generatedProfiles")} {turn.generatedProfileNodeIds.length}
                         </span>
                       </div>
                       <p className="mt-3 line-clamp-2 text-sm">{turn.userPreview || t("memory.nativeRecords.noUserPreview")}</p>
@@ -538,20 +547,63 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction }: VmmNativeMemory
                 </div>
               )}
             </section>
+
+            <section className="space-y-3">
+              <h3 className="text-sm font-medium">{t("memory.nativeRecords.profileNodes")}</h3>
+              {records.profileNodes.length === 0 ? (
+                <p className="text-sm text-muted-foreground">{t("memory.nativeRecords.noProfileNodes")}</p>
+              ) : (
+                <div className="grid gap-3 md:grid-cols-2">
+                  {records.profileNodes.map((profile) => (
+                    <button
+                      className="rounded-xl border p-4 text-left transition-colors hover:bg-muted/40"
+                      key={`${profile.target}-${profile.profileNodeId}`}
+                      onClick={() => setSelectedProfile(profile)}
+                      type="button"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <p className="line-clamp-3 font-medium">{profile.content}</p>
+                        <div className="flex shrink-0 gap-1">
+                          <Badge variant="outline">
+                            {t(profile.target === "user" ? "memory.profile.user" : "memory.profile.project")}
+                          </Badge>
+                          <Badge variant={profile.effectiveState === "active" ? "secondary" : "outline"}>
+                            {t(nativeProfileStateKey(profile.effectiveState))}
+                          </Badge>
+                        </div>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                        <span>#{profile.profileNodeId}</span>
+                        <span>{t(nativeProfileSourceKey(profile.sourceKind))}</span>
+                        <span>
+                          {t("memory.profile.sourceTurns")} {profile.sourceTurnIds.map((id) => `#${id}`).join(", ")}
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </section>
           </>
         ) : null}
       </CardContent>
 
       <NativeTurnSheet
         memories={records?.memories ?? []}
+        profiles={records?.profileNodes ?? []}
         onClose={() => setSelectedTurn(null)}
         onOpenMemory={(memory) => {
           setSelectedTurn(null)
           setSelectedMemory(memory)
         }}
+        onOpenProfile={(profile) => {
+          setSelectedTurn(null)
+          setSelectedProfile(profile)
+        }}
         turn={selectedTurn}
       />
       <NativeMemorySheet memory={selectedMemory} onClose={() => setSelectedMemory(null)} />
+      <NativeProfileSheet profile={selectedProfile} onClose={() => setSelectedProfile(null)} />
     </Card>
   )
 }
@@ -563,12 +615,14 @@ function NativeProjectSummary({
   sessionCount,
   turnCount,
   memoryCount,
+  profileNodeCount,
   counts,
 }: {
   projectName: string
   sessionCount: number
   turnCount: number
   memoryCount: number
+  profileNodeCount: number
   counts: NativeRecordCounts
 }) {
   const { t } = useI18n()
@@ -578,10 +632,11 @@ function NativeProjectSummary({
         <h3 className="font-medium">{projectName}</h3>
         <p className="text-xs text-muted-foreground">{t("memory.nativeRecords.projectSummary")}</p>
       </div>
-      <div className="grid gap-2 sm:grid-cols-3">
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         <NativeCount label={t("memory.nativeRecords.sessions")} value={sessionCount} />
         <NativeCount label={t("memory.nativeRecords.turns")} value={turnCount} />
         <NativeCount label={t("memory.nativeRecords.memories")} value={memoryCount} />
+        <NativeCount label={t("memory.nativeRecords.profileNodes")} value={profileNodeCount} />
       </div>
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
         <NativeCount label={t("memory.nativeRecords.completed")} value={counts.turnStatuses.completed} />
@@ -611,6 +666,11 @@ function NativeSessionSummary({ session }: { session: VmmNativeMemorySessionSumm
         <NativeCount label={t("memory.nativeRecords.processedUnknown")} value={session.turnStatuses.processedUnknown} />
         <NativeCount label={t("memory.nativeRecords.bypassed")} value={session.turnStatuses.analysisBypassed} />
         <NativeCount label={t("memory.nativeRecords.corrupted")} value={session.turnStatuses.corrupted} />
+      </div>
+      <div className="grid gap-2 sm:grid-cols-3">
+        <NativeCount label={t("memory.nativeRecords.turns")} value={session.turnCount} />
+        <NativeCount label={t("memory.nativeRecords.memories")} value={session.memoryCount} />
+        <NativeCount label={t("memory.nativeRecords.profileNodes")} value={session.profileNodeCount} />
       </div>
       <NativeMemoryLevelCountsView counts={session.memoryLevels} />
     </section>
@@ -661,17 +721,24 @@ function NativeRecordsEmpty({ title, description }: { title: string; description
 function NativeTurnSheet({
   turn,
   memories,
+  profiles,
   onClose,
   onOpenMemory,
+  onOpenProfile,
 }: {
   turn: VmmNativeTurnRecordSummary | null
   memories: VmmNativeMemoryRecordSummary[]
+  profiles: VmmNativeProfileRecordSummary[]
   onClose: () => void
   onOpenMemory: (memory: VmmNativeMemoryRecordSummary) => void
+  onOpenProfile: (profile: VmmNativeProfileRecordSummary) => void
 }) {
   const { t } = useI18n()
   const generatedMemories = turn
     ? memories.filter((memory) => turn.generatedMemoryIds.includes(memory.memoryId))
+    : []
+  const generatedProfiles = turn
+    ? profiles.filter((profile) => turn.generatedProfileNodeIds.includes(profile.profileNodeId))
     : []
   return (
     <Sheet open={turn !== null} onOpenChange={(open) => { if (!open) onClose() }}>
@@ -707,6 +774,31 @@ function NativeTurnSheet({
                       <span className="mt-1 block text-xs text-muted-foreground">#{memory.memoryId}</span>
                     </span>
                     <Badge variant="outline">{t(nativeMemoryLevelKey(memory.memoryLevel))}</Badge>
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+          <section className="space-y-2">
+            <h3 className="text-sm font-medium">{t("memory.nativeRecords.generatedProfiles")}</h3>
+            {generatedProfiles.length === 0 ? (
+              <p className="text-sm text-muted-foreground">{t("memory.nativeRecords.noGeneratedProfiles")}</p>
+            ) : (
+              <div className="space-y-2">
+                {generatedProfiles.map((profile) => (
+                  <button
+                    className="flex w-full items-start justify-between gap-3 rounded-lg border p-3 text-left transition-colors hover:bg-muted/40"
+                    key={`${profile.target}-${profile.profileNodeId}`}
+                    onClick={() => onOpenProfile(profile)}
+                    type="button"
+                  >
+                    <span className="min-w-0">
+                      <span className="block line-clamp-2 text-sm font-medium">{profile.content}</span>
+                      <span className="mt-1 block text-xs text-muted-foreground">#{profile.profileNodeId}</span>
+                    </span>
+                    <Badge variant="outline">
+                      {t(profile.target === "user" ? "memory.profile.user" : "memory.profile.project")}
+                    </Badge>
                   </button>
                 ))}
               </div>
@@ -778,6 +870,69 @@ function NativeMemorySheet({
             <NativeDetail
               label={t("memory.nativeRecords.expiresAt")}
               value={formatNativeTimestamp(memory.expiresAtUnixMs)}
+            />
+          ) : null}
+        </div>
+      </SheetContent>
+    </Sheet>
+  )
+}
+
+// NativeProfileSheet shows one complete user or project profile node and its turn provenance.
+// NativeProfileSheet 显示一条完整的用户或项目画像节点及其回合来源。
+function NativeProfileSheet({
+  profile,
+  onClose,
+}: {
+  profile: VmmNativeProfileRecordSummary | null
+  onClose: () => void
+}) {
+  const { t } = useI18n()
+  return (
+    <Sheet open={profile !== null} onOpenChange={(open) => { if (!open) onClose() }}>
+      <SheetContent className="overflow-y-auto" size="md">
+        <SheetHeader>
+          <SheetTitle>
+            {t(profile?.target === "user" ? "memory.profile.user" : "memory.profile.project")}
+            {profile ? ` #${profile.profileNodeId}` : ""}
+          </SheetTitle>
+          <SheetDescription>
+            {profile ? formatNativeTimestamp(profile.updatedAtUnixMs) : ""}
+          </SheetDescription>
+        </SheetHeader>
+        <div className="space-y-4 px-4 pb-4">
+          {profile ? (
+            <div className="flex flex-wrap gap-2">
+              <Badge>{t(nativeProfileStateKey(profile.effectiveState))}</Badge>
+              <Badge variant="secondary">
+                {t("memory.profile.level")}{t("global.labelSeparator")}{profile.level}
+              </Badge>
+              <Badge variant="outline">{t(nativeProfileSourceKey(profile.sourceKind))}</Badge>
+              {!profile.activeForInjection ? (
+                <Badge variant="outline">{t("memory.profile.notInjected")}</Badge>
+              ) : null}
+            </div>
+          ) : null}
+          {profile ? <NativeDetail label={t("memory.content.fullDetails")} value={profile.content} /> : null}
+          {profile?.sourceTurnIds.length ? (
+            <NativeDetail
+              label={t("memory.profile.sourceTurns")}
+              value={profile.sourceTurnIds.map((turnId) => `#${turnId}`).join(", ")}
+            />
+          ) : null}
+          {profile?.sourceId ? (
+            <NativeDetail label={t("memory.profile.source")} value={profile.sourceId} />
+          ) : null}
+          {profile ? (
+            <NativeDetail label={t("memory.profile.priority")} value={String(profile.priority)} />
+          ) : null}
+          {profile?.statusReason ? (
+            <NativeDetail label={t("memory.profile.statusReason")} value={profile.statusReason} />
+          ) : null}
+          {profile?.expiresAtUnixMs != null ? (
+            <NativeDetail
+              label={t("memory.nativeRecords.expiresAt")}
+              value={formatNativeTimestamp(profile.expiresAtUnixMs)}
             />
           ) : null}
         </div>
@@ -897,6 +1052,34 @@ function nativeMemoryCategoryKey(category: VmmNativeMemoryRecordSummary["categor
     case "project_context": return "memory.nativeRecords.categoryProject"
     case "logical_bug_debt": return "memory.nativeRecords.categoryBugDebt"
     case "security_policy": return "memory.nativeRecords.categorySecurity"
+  }
+}
+
+// nativeProfileStateKey maps one closed native profile state to localized user text.
+// nativeProfileStateKey 将一个封闭的原生画像状态映射为本地化用户文本。
+function nativeProfileStateKey(
+  state: VmmNativeProfileRecordSummary["effectiveState"]
+    | VmmNativeProfileRecordSummary["storedState"],
+): TranslationKey {
+  switch (state) {
+    case "active": return "memory.profile.stateActive"
+    case "pending": return "memory.profile.statePending"
+    case "scheduled": return "memory.profile.stateScheduled"
+    case "inactive": return "memory.profile.stateInactive"
+    case "expired": return "memory.profile.stateExpired"
+  }
+}
+
+// nativeProfileSourceKey maps one closed native profile source to localized user text.
+// nativeProfileSourceKey 将一个封闭的原生画像来源映射为本地化用户文本。
+function nativeProfileSourceKey(
+  sourceKind: VmmNativeProfileRecordSummary["sourceKind"],
+): TranslationKey {
+  switch (sourceKind) {
+    case "turn_extract": return "memory.profile.sourceTurnExtract"
+    case "manual_instruction": return "memory.profile.sourceManualInstruction"
+    case "system_seed": return "memory.profile.sourceSystemSeed"
+    case "retained_after_subject_delete": return "memory.profile.sourceRetained"
   }
 }
 

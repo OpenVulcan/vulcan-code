@@ -14,7 +14,7 @@ mod rrf_width_tests;
 mod weibull_math;
 
 pub use algorithms::{decayed_score, deduplicate_by_content, mmr_select, normalize_text};
-pub use engine::CommandEngine;
+pub use engine::{CommandEngine, estimate_text_tokens};
 pub use retrieval_kernel::{
     ContextScore, context_score, hard_duplicate_similarity, normalized_rank_score,
     passes_threshold, rrf_fusion, weibull_multiplier,

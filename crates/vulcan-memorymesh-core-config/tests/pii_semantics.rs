@@ -30,8 +30,10 @@ struct ResourcePath {
 /// 通过生产配置将每个清单拥有的 PII 语言与通用规则一起编译。
 #[test]
 fn every_authoritative_pii_language_compiles() {
-    let manifest: ManifestPaths =
-        toml::from_str(include_str!("../resources/resource-manifest.toml")).expect("manifest");
+    let manifest: ManifestPaths = toml::from_str(include_str!(
+        "../../vulcan-runtime-assets/resources/memory/resource-manifest.toml"
+    ))
+    .expect("manifest");
     let mut count = 0;
     let mut registry = ConfigRegistry::new().expect("registry");
     for file in manifest.files {

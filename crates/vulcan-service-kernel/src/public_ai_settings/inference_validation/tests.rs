@@ -85,3 +85,58 @@ fn vmm_llm_route_enforces_disabled_reasoning_for_every_purpose() {
         .is_ok()
     );
 }
+
+/// Verifies VMM accepts only an exact model/protocol pair that preserves its JSON Schema contract.
+/// 验证 VMM 仅接受能够保留其 JSON Schema 契约的准确模型与协议组合。
+#[test]
+fn vmm_llm_route_enforces_structured_output_before_save() {
+    // route provides one protocol-backed internal-background VMM LLM slot.
+    // route 提供一个由协议承载的内部后台 VMM LLM 槽位。
+    let mut route = InferenceRouteConfiguration {
+        provider_id: String::from("provider"),
+        service_entry_id: String::from("entry"),
+        connection_id: String::from("connection"),
+        model_id: String::from("model"),
+        binding: InferenceRouteBinding::Protocol {
+            protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        },
+        operation: AiOperation::ConversationRespond,
+        usage_scope: vulcan_ai_contract::InferenceUsageScope::InternalBackground,
+    };
+    let mut capabilities = ModelCapabilities {
+        structured_output: vulcan_ai_contract::StructuredOutputCapability::JsonObject,
+        ..ModelCapabilities::default()
+    };
+    assert!(
+        validate_vmm_llm_structured_output_policy(
+            VMM_CONSUMER_PROFILE_ID,
+            AiOperation::ConversationRespond,
+            &route,
+            &capabilities,
+        )
+        .is_ok()
+    );
+
+    route.binding = InferenceRouteBinding::Protocol {
+        protocol_profile_id: String::from(vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID),
+    };
+    assert!(
+        validate_vmm_llm_structured_output_policy(
+            VMM_CONSUMER_PROFILE_ID,
+            AiOperation::ConversationRespond,
+            &route,
+            &capabilities,
+        )
+        .is_err()
+    );
+    capabilities.structured_output = vulcan_ai_contract::StructuredOutputCapability::JsonSchema;
+    assert!(
+        validate_vmm_llm_structured_output_policy(
+            VMM_CONSUMER_PROFILE_ID,
+            AiOperation::ConversationRespond,
+            &route,
+            &capabilities,
+        )
+        .is_ok()
+    );
+}

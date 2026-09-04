@@ -5,8 +5,8 @@ use serde_json::{Map, Value, json};
 use time::{OffsetDateTime, UtcOffset, macros::format_description};
 use vulcan_memorymesh_core::{
     CoreError, ErrorCode, ErrorStage, LlmInput, MemoryCategory, MemoryScopeClass, MemorySourceKind,
-    PostActionReviewContext, ProfileLevel, ProfileNode, ProfileSourceKind, Role, SectionRole,
-    TurnInputKind,
+    PostActionReviewContext, PreCheckTurnContext, ProfileLevel, ProfileNode, ProfileSourceKind,
+    Role, SectionRole, TurnInputKind,
 };
 
 /// Renders one typed Core LLM input into the stable JSON body described by the bundled prompt.
@@ -18,25 +18,25 @@ use vulcan_memorymesh_core::{
 pub(super) fn render_llm_input(input: &LlmInput) -> Result<String, CoreError> {
     let value = match input {
         LlmInput::PreCheckIntent {
-            recent_timeline,
+            recent_turns,
             user_content,
             max_search_queries,
         } => {
-            let recent_turns = recent_timeline
+            let rendered_turns = recent_turns
                 .iter()
-                .enumerate()
-                .filter(|(_, item)| !item.content.trim().is_empty())
-                .map(|(index, item)| {
-                    json!({
-                        "turn_id": index.saturating_add(1),
-                        "content_type": role_label(item.role),
-                        "content": item.content.trim(),
-                    })
+                .map(|turn| {
+                    Ok(json!({
+                        "turn_id": native_turn_prompt_id(turn.turn_id.as_str())?,
+                        "content_type": turn.content_type.as_str(),
+                        "content": turn.content.trim(),
+                    }))
                 })
-                .collect::<Vec<_>>();
+                .collect::<Result<Vec<_>, CoreError>>()?;
             json!({
-                "recent_turns": recent_turns,
+                "recent_turns": rendered_turns,
                 "current_user_input": user_content.trim(),
+                "current_context_hints": extract_precheck_context_hints(user_content, 4),
+                "recent_context_hints": extract_recent_turn_context_hints(recent_turns, 4),
                 "max_search_queries": max_search_queries,
             })
         }
@@ -165,6 +165,163 @@ pub(super) fn render_llm_input(input: &LlmInput) -> Result<String, CoreError> {
             format!("failed to encode native VMM prompt input: {error}"),
         )
     })
+}
+
+/// Resolves a native durable turn identity to the numeric prompt contract used by VMM.
+/// 将原生耐久轮次身份解析为 VMM 使用的数字提示词契约。
+fn native_turn_prompt_id(turn_id: &str) -> Result<u64, CoreError> {
+    turn_id
+        .strip_prefix("vmm-turn-")
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .ok_or_else(|| {
+            CoreError::new(
+                ErrorCode::InvalidArgument,
+                ErrorStage::Effect,
+                "native VMM PreCheck turn identity is not canonical",
+            )
+        })
+}
+
+/// Extracts compact deterministic prompt anchors without invoking another model.
+/// 在不调用另一个模型的情况下提取紧凑且确定性的提示词锚点。
+fn extract_precheck_context_hints(text: &str, limit: usize) -> Vec<String> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let mut normalized = normalize_hint_text(text);
+    if let Ok(value) = serde_json::from_str::<Value>(text.trim()) {
+        let mut parts = Vec::new();
+        for key in ["user", "assistant", "details", "content"] {
+            if let Some(value) = value.get(key) {
+                collect_json_hint_text(value, &mut parts);
+            }
+        }
+        if let Some(items) = value.get("timeline").and_then(Value::as_array) {
+            for item in items {
+                if let Some(content) = item.get("content") {
+                    collect_json_hint_text(content, &mut parts);
+                }
+            }
+        }
+        if !parts.is_empty() {
+            normalized = normalize_hint_text(&parts.join(" "));
+        }
+    }
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+    let mut hints = Vec::new();
+    append_precheck_hint(&mut hints, &normalized, limit);
+    for segment in normalized.split([
+        '，', ',', '。', '；', ';', '：', ':', '、', '（', '）', '(', ')', '？', '?', '！', '!',
+    ]) {
+        append_precheck_hint(&mut hints, segment, limit);
+        if hints.len() >= limit {
+            break;
+        }
+    }
+    hints
+}
+
+/// Extracts newest-first deduplicated anchors from recent turn contexts.
+/// 从最近轮次上下文中按新到旧提取去重锚点。
+fn extract_recent_turn_context_hints(turns: &[PreCheckTurnContext], limit: usize) -> Vec<String> {
+    let mut hints = Vec::new();
+    for turn in turns.iter().rev() {
+        for hint in extract_precheck_context_hints(&turn.content, 2) {
+            append_precheck_hint(&mut hints, &hint, limit);
+            if hints.len() >= limit {
+                return hints;
+            }
+        }
+    }
+    hints
+}
+
+/// Appends one normalized, bounded, non-deictic hint exactly once.
+/// 仅追加一次经过规范化、有界且非纯指代的锚点。
+fn append_precheck_hint(hints: &mut Vec<String>, value: &str, limit: usize) {
+    if hints.len() >= limit {
+        return;
+    }
+    let value = normalize_hint_text(value)
+        .chars()
+        .take(48)
+        .collect::<String>();
+    if is_weak_precheck_hint(&value)
+        || hints
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(&value))
+    {
+        return;
+    }
+    hints.push(value);
+}
+
+/// Reports whether a candidate is only conversational glue and not a useful anchor.
+/// 判断候选是否仅为对话连接词而不是有效锚点。
+fn is_weak_precheck_hint(value: &str) -> bool {
+    const WEAK_HINTS: &[&str] = &[
+        "这个",
+        "这个改动",
+        "这个地方",
+        "这个问题",
+        "这个方案",
+        "这个实现",
+        "这个逻辑",
+        "这个流程",
+        "这里",
+        "这样",
+        "这种",
+        "这一块",
+        "这块",
+        "这段",
+        "这一段",
+        "上面",
+        "前面",
+        "后面",
+        "刚才",
+        "刚刚",
+        "当前",
+        "为什么",
+        "怎么",
+        "如何",
+        "是否",
+        "会不会",
+    ];
+    let normalized = normalize_hint_text(value).to_lowercase();
+    normalized.chars().count() <= 1 || WEAK_HINTS.contains(&normalized.as_str())
+}
+
+/// Collapses Unicode whitespace into one stable single-line hint.
+/// 将 Unicode 空白折叠为稳定的单行锚点。
+fn normalize_hint_text(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Collects textual leaves from one known prompt JSON field.
+/// 从一个已知提示词 JSON 字段中收集文本叶节点。
+fn collect_json_hint_text(value: &Value, output: &mut Vec<String>) {
+    match value {
+        Value::String(text) => {
+            let text = normalize_hint_text(text);
+            if !text.is_empty() {
+                output.push(text);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_json_hint_text(item, output);
+            }
+        }
+        Value::Object(fields) => {
+            for value in fields.values() {
+                collect_json_hint_text(value, output);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
 }
 
 /// Renders the joint post-action memory and profile review payload.
@@ -397,17 +554,6 @@ fn normalized_strings(values: &[String]) -> Vec<&str> {
         .collect()
 }
 
-/// Returns the stable prompt label for one author role.
-/// 返回一个作者角色的稳定提示词标签。
-const fn role_label(role: Role) -> &'static str {
-    match role {
-        Role::User => "user",
-        Role::Assistant => "assistant",
-        Role::System => "system",
-        Role::Tool => "tool",
-    }
-}
-
 /// Returns the stable prompt label for one turn classification.
 /// 返回一个轮次分类的稳定提示词标签。
 const fn turn_input_kind_label(kind: TurnInputKind) -> &'static str {
@@ -501,17 +647,17 @@ const fn section_target_label(role: SectionRole) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vulcan_memorymesh_core::{LlmInput, TimelineItem};
+    use vulcan_memorymesh_core::{LlmInput, PreCheckTurnContentType, PreCheckTurnContext, TurnId};
 
     /// Verifies that pre-check intent projection keeps the prompt-owned field names.
     /// 验证 PreCheck 意图投影保留提示词拥有的字段名。
     #[test]
     fn precheck_intent_uses_stable_prompt_shape() -> Result<(), Box<dyn std::error::Error>> {
         let rendered = render_llm_input(&LlmInput::PreCheckIntent {
-            recent_timeline: vec![TimelineItem {
-                role: Role::Assistant,
+            recent_turns: vec![PreCheckTurnContext {
+                turn_id: TurnId::new("vmm-turn-7")?,
+                content_type: PreCheckTurnContentType::Details,
                 content: " Earlier answer. ".to_owned(),
-                occurred_at_ns: 1,
             }],
             user_content: " Current question. ".to_owned(),
             max_search_queries: 3,
@@ -519,7 +665,10 @@ mod tests {
         let value: Value = serde_json::from_str(&rendered)?;
         assert_eq!(value["current_user_input"], "Current question.");
         assert_eq!(value["max_search_queries"], 3);
-        assert_eq!(value["recent_turns"][0]["content_type"], "assistant");
+        assert_eq!(value["recent_turns"][0]["turn_id"], 7);
+        assert_eq!(value["recent_turns"][0]["content_type"], "DETAILS");
+        assert_eq!(value["current_context_hints"][0], "Current question.");
+        assert_eq!(value["recent_context_hints"][0], "Earlier answer.");
         Ok(())
     }
 }

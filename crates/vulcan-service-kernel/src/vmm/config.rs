@@ -184,6 +184,17 @@ pub(crate) async fn save_vmm_memory_config(
     )
     .await??;
     clear_external_vmm_health_probe();
+    if let Some(maintenance) = state
+        .lock()
+        .map_err(|error| format!("锁定原生 VMM 保留工作器状态失败：{error}"))?
+        .native_vmm_maintenance
+        .clone()
+    {
+        maintenance.set_native_backend_enabled(
+            next_effective.enabled
+                && next_effective.backend_mode == vulcan_vmm::VmmBackendMode::Native,
+        );
+    }
     Ok(execute_prepared_project_binding_plan(state, prepared_binding_plan).await)
 }
 

@@ -12,6 +12,8 @@ import { VmmDataPage } from "./vmm-data-page"
 import { VmmAdvancedPage } from "./vmm-advanced-page"
 import { VmmIdentityProjectPage } from "./vmm-identity-project-page"
 import { VmmNativeProjectPage } from "./vmm-native-project-page"
+import { VmmNativeMaintenancePage } from "./vmm-native-maintenance-page"
+import { VmmNativeResourcesPage } from "./vmm-native-resources-page"
 import { VmmOverviewPage } from "./vmm-overview-page"
 import { VmmProfilePage } from "./vmm-profile-page"
 import { VmmRulesPage } from "./vmm-rules-page"
@@ -163,6 +165,11 @@ export function MemoryArea(props: {
   // setupDialogOpen controls the first-time native or external VMM setup workflow.
   // setupDialogOpen 控制首次原生或外置 VMM 快速配置流程。
   const [setupDialogOpen, setSetupDialogOpen] = React.useState(false)
+  // nativeDeployment is the saved service authority; an unsaved settings draft must not reroute pages.
+  // nativeDeployment 是已保存的服务端权威；未保存的设置草稿不得改写页面路由。
+  const nativeDeployment = vmmUsesNativeMemoryMaintenance(
+    props.snapshot.experienceState.deployment,
+  )
   // catalogLoadRequested prevents repeated automatic directory requests during snapshot refreshes.
   // catalogLoadRequested 防止快照刷新期间重复发起自动目录请求。
   const catalogLoadRequested = React.useRef(false)
@@ -339,7 +346,7 @@ export function MemoryArea(props: {
   }
 
   if (activeSection === "inference") {
-    if (globalDraft.backendMode !== "native") return overviewPage
+    if (!nativeDeployment) return overviewPage
     return (
       <section className="vmm-memory-page">
         <div className="vmm-memory-shell status-only">
@@ -352,7 +359,7 @@ export function MemoryArea(props: {
   }
 
   if (activeSection === "identity_projects") {
-    if (globalDraft.backendMode === "native") {
+    if (nativeDeployment) {
       return (
         <section className="vmm-memory-page">
           <div className="vmm-memory-shell status-only">
@@ -414,12 +421,25 @@ export function MemoryArea(props: {
     )
   }
 
+  if (activeSection === "resource_rules") {
+    if (!nativeDeployment) return overviewPage
+    return (
+      <section className="vmm-memory-page">
+        <div className="vmm-memory-shell status-only">
+          <main className="vmm-memory-main vmm-status-page">
+            <VmmNativeResourcesPage busy={operationBusy} onRunAction={runAction} />
+          </main>
+        </div>
+      </section>
+    )
+  }
+
   if (activeSection === "content") {
     return (
       <section className="vmm-memory-page">
         <div className="vmm-memory-shell status-only">
           <main className="vmm-memory-main vmm-status-page">
-            {vmmUsesNativeMemoryMaintenance(props.snapshot.experienceState.deployment) ? (
+            {nativeDeployment ? (
               <VmmContentPage
                 busy={operationBusy}
                 onRunAction={runAction}
@@ -451,6 +471,19 @@ export function MemoryArea(props: {
               result={result}
               snapshot={props.snapshot}
             />
+          </main>
+        </div>
+      </section>
+    )
+  }
+
+  if (activeSection === "maintenance") {
+    if (!nativeDeployment) return overviewPage
+    return (
+      <section className="vmm-memory-page">
+        <div className="vmm-memory-shell status-only">
+          <main className="vmm-memory-main vmm-status-page">
+            <VmmNativeMaintenancePage busy={operationBusy} onRunAction={runAction} />
           </main>
         </div>
       </section>
@@ -492,8 +525,10 @@ function vmmVisibleSection(section: MemorySubAreaId): MemorySubAreaId {
     "inference",
     "identity_projects",
     "rules",
+    "resource_rules",
     "content",
     "profile",
+    "maintenance",
     "advanced",
   ])
   return visibleSections.has(section) ? section : "overview"

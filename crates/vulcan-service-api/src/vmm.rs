@@ -827,6 +827,9 @@ pub struct VmmNativeMemorySessionSummary {
     /// Number of memories attributed to the session.
     /// 归属于会话的记忆数量。
     pub memory_count: u64,
+    /// Number of user or project profile nodes attributed to turns in the session.
+    /// 可归属于该会话回合的用户或项目画像节点数量。
+    pub profile_node_count: u64,
     /// Number of explicit direct writes without one source turn.
     /// 不含来源回合的显式主动写入数量。
     pub direct_memory_count: u64,
@@ -896,6 +899,9 @@ pub struct VmmNativeTurnRecordSummary {
     /// Stable identities of memories extracted from this exact turn.
     /// 从该准确回合提取出的记忆稳定标识集合。
     pub generated_memory_ids: Vec<u64>,
+    /// Stable identities of user or project profile nodes extracted from this exact turn.
+    /// 从该准确回合提取出的用户或项目画像节点稳定标识集合。
+    pub generated_profile_node_ids: Vec<u64>,
     /// Generated memories split by authoritative lifecycle level.
     /// 生成记忆按权威生命周期等级拆分的统计。
     pub memory_levels: VmmNativeMemoryLevelCounts,
@@ -992,6 +998,109 @@ pub struct VmmNativeMemoryRecordsSummary {
     /// Durable memories for the selected session, or every project memory when no session is selected.
     /// 所选会话的持久记忆；未选择会话时为项目全部记忆。
     pub memories: Vec<VmmNativeMemoryRecordSummary>,
+    /// User and project profile nodes attributable to the selected turns.
+    /// 可归属于所选回合的用户与项目画像节点。
+    pub profile_nodes: Vec<VmmNativeProfileRecordSummary>,
+}
+
+/// Counts native profile nodes by effective read-time lifecycle state.
+/// 按读取时的有效生命周期状态统计原生画像节点。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeProfileStateCounts {
+    /// Nodes currently eligible for profile rendering and injection.
+    /// 当前可参与画像渲染与注入的节点。
+    pub active: u64,
+    /// Nodes retained after deactivation or replacement.
+    /// 停用或替换后保留的节点。
+    pub inactive: u64,
+    /// Extracted nodes awaiting an authoritative review result.
+    /// 等待权威评审结果的已提取节点。
+    pub pending: u64,
+    /// Nodes past their lifecycle deadline.
+    /// 已超过生命周期截止时间的节点。
+    pub expired: u64,
+    /// Active nodes whose effective date has not arrived yet.
+    /// 生效日期尚未到达的活动节点。
+    pub scheduled: u64,
+}
+
+/// Projects one native profile node with complete lifecycle and provenance metadata.
+/// 投影一条包含完整生命周期与来源元数据的原生画像节点。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeProfileRecordSummary {
+    /// Stable native numeric profile-node identity.
+    /// 稳定的原生数字画像节点标识。
+    pub profile_node_id: u64,
+    /// Stable profile target token: user or project.
+    /// 稳定的画像目标标记：user 或 project。
+    pub target: String,
+    /// Persisted authoritative lifecycle state.
+    /// 已持久化的权威生命周期状态。
+    pub stored_state: String,
+    /// Effective lifecycle state after current date boundaries are applied.
+    /// 应用当前日期边界后的有效生命周期状态。
+    pub effective_state: String,
+    /// Whether this node is currently eligible for prompt injection.
+    /// 该节点当前是否可参与提示词注入。
+    pub active_for_injection: bool,
+    /// Atomic profile statement.
+    /// 原子化画像陈述。
+    pub content: String,
+    /// Host-normalized priority from zero through one hundred.
+    /// 宿主规范化后的零到一百优先级。
+    pub priority: u32,
+    /// Stable profile lifecycle level token.
+    /// 稳定的画像生命周期等级标记。
+    pub level: String,
+    /// Stable durable source-kind token.
+    /// 稳定的持久来源类别标记。
+    pub source_kind: String,
+    /// Exact durable source identity when present.
+    /// 存在时的准确持久来源标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+    /// Supporting canonical turn identities.
+    /// 提供支撑的规范回合标识。
+    pub source_turn_ids: Vec<u64>,
+    /// Optional effective date in Unix milliseconds.
+    /// 可选的生效日期 Unix 毫秒值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_date_at_unix_ms: Option<i64>,
+    /// Optional absolute expiration time in Unix milliseconds.
+    /// 可选的绝对过期 Unix 毫秒值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at_unix_ms: Option<i64>,
+    /// Stable lifecycle reason when present.
+    /// 存在时的稳定生命周期原因。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_reason: Option<String>,
+    /// Last update time in Unix milliseconds.
+    /// 最后更新时间的 Unix 毫秒值。
+    pub updated_at_unix_ms: i64,
+}
+
+/// Complete native user or project profile audit response.
+/// 完整的原生用户或项目画像审计响应。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeProfileRecordsSummary {
+    /// Core storage version used to build this coherent response.
+    /// 构建该一致响应所使用的 Core 存储版本。
+    pub storage_version: u64,
+    /// Selected project used by project scope or user-profile display context.
+    /// 项目作用域或用户画像显示上下文使用的所选项目。
+    pub project_id: u64,
+    /// Stable selected target token: user or project.
+    /// 稳定的所选目标标记：user 或 project。
+    pub target: String,
+    /// Effective state counts covering every returned node.
+    /// 覆盖全部返回节点的有效状态统计。
+    pub counts: VmmNativeProfileStateCounts,
+    /// Every durable node for the selected target, including audit-only states.
+    /// 所选目标的全部持久节点，包括仅供审计的状态。
+    pub nodes: Vec<VmmNativeProfileRecordSummary>,
 }
 
 /// Describes one mandatory automatic session rename in a native migration.
@@ -1290,6 +1399,314 @@ pub struct VmmNativeNoiseTestResult {
     pub mode: String,
 }
 
+/// Frozen native retention policy exposed for maintenance diagnostics.
+/// 为维护诊断暴露的冻结原生保留策略。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeRetentionPolicySummary {
+    /// Closed policy schema version.
+    /// 封闭策略 Schema 版本。
+    pub schema_version: u32,
+    /// Effective number of newest turns protected per session.
+    /// 每个会话受保护的最新回合有效数量。
+    pub turn_hot_window_size: u32,
+    /// Session idle duration before cleanup evaluation, in milliseconds.
+    /// 进入清洗评估前的会话空闲毫秒数。
+    pub session_idle_ms: u64,
+    /// Recycle-bin retention duration before automatic purge, in milliseconds.
+    /// 回收站自动清除前的保留毫秒数。
+    pub trash_retention_ms: u64,
+    /// Lowest protected priority on the zero-to-one-hundred scale.
+    /// 零到一百尺度上的最低受保护优先级。
+    pub protected_priority_floor: u32,
+    /// Lowest protected memory-level discriminant.
+    /// 最低受保护记忆等级判别值。
+    pub protected_memory_level_floor: u32,
+    /// Whether either protection floor preserves shared terminal memories.
+    /// 是否由任一保护下限保留共享终态记忆。
+    pub skip_protected_shared_memories: bool,
+    /// Maximum due active profile nodes expired by one project pass.
+    /// 单个项目轮次最多收敛的到期活跃画像节点数。
+    pub profile_expiry_limit: u32,
+    /// Maximum terminal memories recycled by one project pass.
+    /// 单个项目轮次最多回收的终态记忆数。
+    pub memory_recycle_limit: u32,
+    /// Maximum sessions scanned for cold-turn work by one project pass.
+    /// 单个项目轮次最多扫描的冷回合会话数。
+    pub cold_turn_scan_limit: u32,
+    /// Maximum due cold-turn jobs executed by one project pass.
+    /// 单个项目轮次最多执行的到期冷回合作业数。
+    pub cold_turn_job_limit: u32,
+    /// Maximum idle sessions recycled by one project pass.
+    /// 单个项目轮次最多回收的闲置会话数。
+    pub idle_session_limit: u32,
+    /// External-compatible vector-GC batch limit retained in the Core policy.
+    /// Core 策略中保留的外置兼容向量 GC 批次上限。
+    pub vector_gc_limit: u32,
+    /// Maximum expired recycle batches purged by one project pass.
+    /// 单个项目轮次最多清除的过期回收批次数。
+    pub trash_purge_limit: u32,
+}
+
+/// Aggregate counters produced by one complete native retention run.
+/// 一次完整原生保留运行产生的汇总计数。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeRetentionApplyResult {
+    /// Due active profile nodes materialized as expired.
+    /// 被真实收敛为过期状态的到期活跃画像节点数量。
+    pub expired_profile_nodes: u64,
+    /// Terminal or idle memories moved to the recycle bin.
+    /// 移入回收站的终态或闲置记忆数量。
+    pub recycled_memories: u64,
+    /// Cold or idle turns moved to the recycle bin.
+    /// 移入回收站的冷回合或闲置回合数量。
+    pub recycled_turns: u64,
+    /// Durable cold-turn jobs created by the run.
+    /// 本次运行创建的耐久冷回合作业数量。
+    pub enqueued_cold_jobs: u64,
+    /// Durable cold-turn jobs completed by the run.
+    /// 本次运行完成的耐久冷回合作业数量。
+    pub completed_cold_jobs: u64,
+    /// Expired recycle batches permanently purged by the run.
+    /// 本次运行永久清除的过期回收批次数量。
+    pub purged_trash_batches: u64,
+    /// Project-local failures collected while unrelated projects continued.
+    /// 在其他无关项目继续运行时收集的项目局部失败。
+    pub project_failures: Vec<VmmNativeRetentionProjectFailure>,
+}
+
+/// One project-local failure from a complete native retention run.
+/// 一次完整原生保留运行中的项目局部失败。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeRetentionProjectFailure {
+    /// One-level native project whose maintenance failed.
+    /// 维护失败的一级原生项目。
+    pub project_id: u64,
+    /// Exact planning or persistence failure.
+    /// 准确的规划或持久化失败。
+    pub error: String,
+}
+
+/// Current schedule and last-run state of native periodic retention.
+/// 原生周期保留的当前调度与最近运行状态。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeRetentionStatusSummary {
+    /// Whether the globally selected native backend enables the worker.
+    /// 全局选择的原生后端是否启用该工作器。
+    pub enabled: bool,
+    /// Whether one scheduled or manual pass is running.
+    /// 是否有一次定时或手动运行正在执行。
+    pub running: bool,
+    /// Whether the independently scheduled profile-expiry convergence is running.
+    /// 独立调度的画像过期收敛是否正在运行。
+    pub profile_expiry_running: bool,
+    /// Fixed schedule interval in minutes.
+    /// 固定调度周期的分钟数。
+    pub interval_minutes: u64,
+    /// Fixed profile-expiry convergence interval in seconds.
+    /// 固定画像过期收敛周期的秒数。
+    pub profile_expiry_interval_seconds: u64,
+    /// Frozen retention policy applied by Core.
+    /// Core 应用的冻结保留策略。
+    pub policy: VmmNativeRetentionPolicySummary,
+    /// Start time of the latest attempted run in Unix milliseconds.
+    /// 最近一次尝试运行开始时间的 Unix 毫秒值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_started_at_unix_ms: Option<i64>,
+    /// Finish time of the latest attempted run in Unix milliseconds.
+    /// 最近一次尝试运行结束时间的 Unix 毫秒值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_finished_at_unix_ms: Option<i64>,
+    /// Latest exact failure, absent after a successful run.
+    /// 最近一次准确失败；成功运行后为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// Aggregate result of the latest completed run, including project-local failures.
+    /// 最近一次已完成运行的汇总结果，包括项目局部失败。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_result: Option<VmmNativeRetentionApplyResult>,
+    /// Start time of the latest profile-expiry convergence in Unix milliseconds.
+    /// 最近一次画像过期收敛开始时间的 Unix 毫秒值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_expiry_last_started_at_unix_ms: Option<i64>,
+    /// Finish time of the latest profile-expiry convergence in Unix milliseconds.
+    /// 最近一次画像过期收敛结束时间的 Unix 毫秒值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_expiry_last_finished_at_unix_ms: Option<i64>,
+    /// Latest exact profile-expiry convergence failure.
+    /// 最近一次准确的画像过期收敛失败。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_expiry_last_error: Option<String>,
+    /// Aggregate result of the latest profile-expiry convergence.
+    /// 最近一次画像过期收敛的汇总结果。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_expiry_last_result: Option<VmmNativeRetentionApplyResult>,
+    /// Current durable cold-turn job count.
+    /// 当前耐久冷回合作业数量。
+    pub pending_cold_jobs: u64,
+    /// Current durable recycle-batch count.
+    /// 当前耐久回收批次数量。
+    pub recycle_batch_count: u64,
+}
+
+/// Current compatibility between native active/recoverable memories and the embedding generation.
+/// 原生活动/可恢复记忆与已配置 Embedding 代次之间的当前兼容状态。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeVectorStatusSummary {
+    /// Whether the configured route can produce an exact vector generation.
+    /// 已配置路由是否能够产生准确向量代次。
+    pub configured: bool,
+    /// Current route-derived logical vector-space identity when configured.
+    /// 已配置时当前由路由派生的逻辑向量空间标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_vector_space_id: Option<String>,
+    /// Current dense embedding width when configured.
+    /// 已配置时当前稠密向量维度。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding_dimension: Option<u32>,
+    /// Number of all active native memories.
+    /// 全部原生活动记忆数量。
+    pub active_memory_count: u64,
+    /// Number of memories retained in recoverable recycle batches.
+    /// 可恢复回收批次中的记忆数量。
+    pub recycle_bin_memory_count: u64,
+    /// Number of active memories already using the current generation.
+    /// 已使用当前代次的活动记忆数量。
+    pub current_memory_count: u64,
+    /// Number of recoverable memories already using the current generation.
+    /// 已使用当前代次的可恢复记忆数量。
+    pub current_recycle_bin_memory_count: u64,
+    /// Total number of active and recoverable memories requiring an explicit rebuild.
+    /// 需要显式重建的活动与可恢复记忆总数。
+    pub rebuild_required_memory_count: u64,
+    /// Number of incompatible active memories.
+    /// 不兼容的活动记忆数量。
+    pub active_rebuild_required_memory_count: u64,
+    /// Number of incompatible recoverable memories.
+    /// 不兼容的可恢复记忆数量。
+    pub recycle_bin_rebuild_required_memory_count: u64,
+    /// Number of distinct older logical spaces still referenced by active memories.
+    /// 活动记忆仍引用的不同旧逻辑空间数量。
+    pub legacy_vector_space_count: u64,
+    /// Number of durable turns waiting for PostAction analysis.
+    /// 等待 PostAction 分析的耐久回合数量。
+    pub pending_analysis_job_count: u64,
+    /// Exact route-resolution failure when configuration is unavailable.
+    /// 配置不可用时的准确路由解析失败。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Side-effect-free confirmation payload for one native vector-generation rebuild.
+/// 一次原生向量代次重建的无副作用确认载荷。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeVectorRebuildPreview {
+    /// Core storage version required by execution.
+    /// 执行所需的 Core 存储版本。
+    pub storage_version: u64,
+    /// Exact target logical vector generation.
+    /// 准确目标逻辑向量代次。
+    pub target_vector_space_id: String,
+    /// Exact target embedding width.
+    /// 准确目标向量维度。
+    pub embedding_dimension: u32,
+    /// Total active-memory count inspected by the preview.
+    /// 预检检查的活动记忆总数。
+    pub active_memory_count: u64,
+    /// Total recycle-bin memory count inspected by the preview.
+    /// 预检检查的回收站记忆总数。
+    pub recycle_bin_memory_count: u64,
+    /// Active and recoverable memories requiring a new embedding.
+    /// 需要生成新向量的活动与可恢复记忆数量。
+    pub rebuild_memory_count: u64,
+    /// Active memories requiring a new embedding.
+    /// 需要生成新向量的活动记忆数量。
+    pub active_rebuild_memory_count: u64,
+    /// Recoverable memories requiring a new embedding.
+    /// 需要生成新向量的可恢复记忆数量。
+    pub recycle_bin_rebuild_memory_count: u64,
+    /// Project scopes affected by the rebuild.
+    /// 重建影响的项目作用域数量。
+    pub affected_project_count: u64,
+    /// Exact number of bounded durable batches across active and recoverable storage.
+    /// 跨活动与可恢复存储的有界耐久批次数量。
+    pub batch_count: u64,
+    /// SHA-256 identity of the exact displayed target set.
+    /// 所显示准确目标集合的 SHA-256 身份。
+    pub preview_fingerprint: String,
+}
+
+/// Result of one confirmed native vector-generation rebuild.
+/// 一次已确认原生向量代次重建的结果。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeVectorRebuildResult {
+    /// Final committed Core storage version.
+    /// 最终提交的 Core 存储版本。
+    pub storage_version: u64,
+    /// Exact target logical vector generation.
+    /// 准确目标逻辑向量代次。
+    pub target_vector_space_id: String,
+    /// Number of memories rebuilt by this execution.
+    /// 本次执行重建的记忆数量。
+    pub rebuilt_memory_count: u64,
+    /// Number of durable batches committed by this execution.
+    /// 本次执行提交的耐久批次数量。
+    pub batch_count: u64,
+}
+
+/// One native recycle-bin batch available for restore or permanent purge.
+/// 一份可恢复或永久清除的原生回收站批次。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeRecycleBatchSummary {
+    /// Stable batch identity used by mutation commands.
+    /// 变更命令使用的稳定批次身份。
+    pub batch_id: String,
+    /// One-level native project that owns the batch.
+    /// 拥有该批次的一级原生项目。
+    pub project_id: u64,
+    /// Stable retention reason token.
+    /// 稳定保留原因标记。
+    pub reason: String,
+    /// Recycle timestamp in Unix milliseconds.
+    /// 回收时间的 Unix 毫秒值。
+    pub recycled_at_unix_ms: i64,
+    /// Automatic permanent-purge deadline in Unix milliseconds.
+    /// 自动永久清除截止时间的 Unix 毫秒值。
+    pub expires_at_unix_ms: i64,
+    /// Recycled canonical turn count.
+    /// 已回收规范回合数量。
+    pub turn_count: u64,
+    /// Recycled durable memory count.
+    /// 已回收持久记忆数量。
+    pub memory_count: u64,
+    /// Recycled profile-node count.
+    /// 已回收画像节点数量。
+    pub profile_node_count: u64,
+    /// Recycled context-evidence row count.
+    /// 已回收情境证据行数量。
+    pub context_evidence_count: u64,
+}
+
+/// Coherent native recycle-bin projection guarded by one storage version.
+/// 由一个存储版本保护的一致原生回收站投影。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeRecycleBinSummary {
+    /// Core storage version required by restore and purge confirmations.
+    /// 恢复与清除确认所需的 Core 存储版本。
+    pub storage_version: u64,
+    /// Recycle batches ordered newest first.
+    /// 按最新优先排列的回收批次。
+    pub batches: Vec<VmmNativeRecycleBatchSummary>,
+}
+
 /// Typed payload returned by one VMM management action.
 /// VMM 单次管理动作返回的强类型载荷。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1370,6 +1787,9 @@ pub enum VmmMemoryActionResponse {
     /// Native project/session/turn/memory provenance records.
     /// 原生项目/会话/回合/记忆来源记录。
     NativeMemoryRecords(VmmNativeMemoryRecordsSummary),
+    /// Native all-state user or project profile audit records.
+    /// 原生全状态用户或项目画像审计记录。
+    NativeProfileRecords(VmmNativeProfileRecordsSummary),
     /// Native project deletion impact preview.
     /// 原生项目删除影响预检。
     NativeProjectDeletePreview(VmmNativeProjectDeletePreview),
@@ -1400,6 +1820,27 @@ pub enum VmmMemoryActionResponse {
     /// Active deterministic Noise-rule tester result.
     /// 当前确定性噪音规则测试结果。
     NativeNoiseTest(VmmNativeNoiseTestResult),
+    /// Current native periodic-retention status and frozen policy.
+    /// 当前原生周期保留状态与冻结策略。
+    NativeRetentionStatus(VmmNativeRetentionStatusSummary),
+    /// Result counters returned by a completed manual retention run.
+    /// 完成人工保留运行后返回的结果计数。
+    NativeRetentionRun(VmmNativeRetentionApplyResult),
+    /// Current native embedding-generation compatibility.
+    /// 当前原生 Embedding 代次兼容状态。
+    NativeVectorStatus(VmmNativeVectorStatusSummary),
+    /// Side-effect-free native vector-rebuild preview.
+    /// 无副作用的原生向量重建预检。
+    NativeVectorRebuildPreview(VmmNativeVectorRebuildPreview),
+    /// Completed native vector-generation rebuild.
+    /// 已完成的原生向量代次重建。
+    NativeVectorRebuild(VmmNativeVectorRebuildResult),
+    /// Current native recycle-bin batches.
+    /// 当前原生回收站批次。
+    NativeRecycleBin(VmmNativeRecycleBinSummary),
+    /// One restored or permanently purged native recycle batch.
+    /// 一份已恢复或已永久清除的原生回收批次。
+    NativeRecycleBatch(VmmNativeRecycleBatchSummary),
     /// Structured response returned by the isolated VMM management HTTP API.
     /// 独立 VMM 管理 HTTP API 返回的结构化响应。
     Management(serde_json::Value),

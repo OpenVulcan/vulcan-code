@@ -1015,10 +1015,14 @@ fn run_service_bootstrap(
         {
             eprintln!("[webui-service] native VMM Host AI validation failed: {error}");
         }
+        let (native_backend_enabled, pending_analysis_notify) =
+            native_vmm_maintenance.pending_analysis_activation();
         let native_vmm_client = Arc::new(crate::native_vmm::NativeVmmClient::new(
             Arc::clone(&native_vmm_runtime),
             native_vmm_data_plane,
             native_vmm_operation_gate,
+            native_backend_enabled,
+            pending_analysis_notify,
         ));
         native_vmm_client
             .prepare_pending_analysis_worker()
@@ -1038,6 +1042,10 @@ fn run_service_bootstrap(
             // The durable worker starts only after every public native client registry accepts it.
             // 仅在全部公开原生客户端注册表接纳后启动耐久工作器。
             native_vmm_client.start_pending_analysis_worker(runtime.handle());
+            native_vmm_maintenance.set_native_backend_enabled(native_vmm_bootstrap_is_required(
+                &global_vmm_effective,
+            ));
+            native_vmm_maintenance.start_retention_worker(runtime.handle());
             Ok(native_vmm_maintenance)
         },
     ) {

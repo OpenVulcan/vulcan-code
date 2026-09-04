@@ -13,6 +13,10 @@ pub(crate) use driver::{NativeVmmCoreRuntime, NativeVmmHostAiStatus};
 pub(crate) use maintenance::{
     NativeVmmClearPreview, NativeVmmClearResult, NativeVmmMaintenance, NativeVmmMemoryLevelCounts,
     NativeVmmMemoryRecords, NativeVmmMigrationPreview, NativeVmmMigrationRecordSummary,
-    NativeVmmMigrationResult, NativeVmmProjectCatalog, NativeVmmProjectContentCounts,
-    NativeVmmProjectDeletePreview, NativeVmmSessionRename, NativeVmmTurnStatusCounts,
+    NativeVmmMigrationResult, NativeVmmProfileRecordSummary, NativeVmmProfileRecords,
+    NativeVmmProfileTarget, NativeVmmProjectCatalog, NativeVmmProjectContentCounts,
+    NativeVmmProjectDeletePreview, NativeVmmRecycleBatchSummary, NativeVmmRecycleBin,
+    NativeVmmRetentionApplyResult, NativeVmmRetentionStatus, NativeVmmSessionRename,
+    NativeVmmTurnStatusCounts, NativeVmmVectorRebuildPreview, NativeVmmVectorRebuildResult,
+    NativeVmmVectorStatus,
 };

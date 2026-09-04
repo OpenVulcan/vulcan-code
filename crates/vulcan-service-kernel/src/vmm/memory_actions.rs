@@ -12,10 +12,14 @@ use vulcan_service_api::{
     ProjectSettingsDomain, ServiceEventEmitter, VmmMemoryActionResponse, VmmNativeClearPreview,
     VmmNativeClearResult, VmmNativeMemoryLevelCounts, VmmNativeMemoryRecordSummary,
     VmmNativeMemoryRecordsSummary, VmmNativeMemorySessionSummary, VmmNativeMigrationPreview,
-    VmmNativeMigrationRecordSummary, VmmNativeMigrationResult, VmmNativeProjectBindingSummary,
+    VmmNativeMigrationRecordSummary, VmmNativeMigrationResult, VmmNativeProfileRecordSummary,
+    VmmNativeProfileRecordsSummary, VmmNativeProfileStateCounts, VmmNativeProjectBindingSummary,
     VmmNativeProjectCatalogSummary, VmmNativeProjectContentCounts, VmmNativeProjectDeletePreview,
-    VmmNativeProjectSummary, VmmNativeResourceSettingsSummary, VmmNativeSessionRename,
+    VmmNativeProjectSummary, VmmNativeRecycleBatchSummary, VmmNativeRecycleBinSummary,
+    VmmNativeResourceSettingsSummary, VmmNativeRetentionApplyResult,
+    VmmNativeRetentionPolicySummary, VmmNativeRetentionStatusSummary, VmmNativeSessionRename,
     VmmNativeTimelineItemSummary, VmmNativeTurnRecordSummary, VmmNativeTurnStatusCounts,
+    VmmNativeVectorRebuildPreview, VmmNativeVectorRebuildResult, VmmNativeVectorStatusSummary,
     VmmProjectDisplaySummary, VmmUserDisplaySummary,
 };
 
@@ -48,6 +52,7 @@ pub(crate) async fn service_run_vmm_memory_action(
         request.action.trim(),
         "native_project_catalog"
             | "native_memory_records"
+            | "native_profile_records"
             | "native_project_create_and_bind"
             | "native_project_bind_existing"
             | "native_project_set_access"
@@ -68,6 +73,14 @@ pub(crate) async fn service_run_vmm_memory_action(
             | "native_pii_test"
             | "native_pii_formula_test"
             | "native_noise_test"
+            | "native_retention_status"
+            | "native_retention_run"
+            | "native_vector_status"
+            | "native_vector_rebuild_preview"
+            | "native_vector_rebuild"
+            | "native_recycle_bin"
+            | "native_recycle_restore"
+            | "native_recycle_purge"
     ) {
         return service_run_native_vmm_maintenance_action(state, request).await;
     }
@@ -293,9 +306,8 @@ async fn service_run_native_vmm_maintenance_action(
             )
         }
         "native_noise_test" => {
-            let role = required_native_text(&request.payload, "role")?;
             let text = required_native_text_verbatim(&request.payload, "text")?;
-            let result = maintenance.test_noise(&role, &text).await?;
+            let result = maintenance.test_noise(&text).await?;
             native_action_result(
                 action,
                 if result.is_noise {
@@ -310,6 +322,161 @@ async fn service_run_native_vmm_maintenance_action(
                 request_preview,
                 &result,
                 VmmMemoryActionResponse::NativeNoiseTest(result.clone()),
+            )
+        }
+        "native_retention_status" => {
+            let status = native_retention_status(maintenance.retention_status().await?);
+            native_action_result(
+                action,
+                if status.running {
+                    String::from("原生 VMM 定期清洗正在运行。")
+                } else if status.enabled {
+                    String::from("原生 VMM 定期清洗已启用。")
+                } else {
+                    String::from("原生 VMM 定期清洗当前未启用。")
+                },
+                "native_retention_status",
+                request_preview,
+                &status,
+                VmmMemoryActionResponse::NativeRetentionStatus(status.clone()),
+            )
+        }
+        "native_retention_run" => {
+            let result = native_retention_apply_result(maintenance.run_retention_once().await?);
+            native_action_result(
+                action,
+                format!(
+                    "原生 VMM 清洗完成：收敛 {} 条到期画像，回收 {} 条记忆、{} 个回合，入队 {} 个并完成 {} 个冷回合作业，清除 {} 个到期批次。",
+                    result.expired_profile_nodes,
+                    result.recycled_memories,
+                    result.recycled_turns,
+                    result.enqueued_cold_jobs,
+                    result.completed_cold_jobs,
+                    result.purged_trash_batches
+                ),
+                "native_retention_run",
+                request_preview,
+                &result,
+                VmmMemoryActionResponse::NativeRetentionRun(result.clone()),
+            )
+        }
+        "native_vector_status" => {
+            let status = native_vector_status(maintenance.vector_status().await?);
+            native_action_result(
+                action,
+                if !status.configured {
+                    String::from("原生 VMM Embedding 路由尚未就绪。")
+                } else if status.rebuild_required_memory_count > 0 {
+                    format!(
+                        "当前 Embedding 代次需要重建 {} 条活动记忆。",
+                        status.rebuild_required_memory_count
+                    )
+                } else {
+                    String::from("原生 VMM 活动记忆向量均与当前 Embedding 代次一致。")
+                },
+                "native_vector_status",
+                request_preview,
+                &status,
+                VmmMemoryActionResponse::NativeVectorStatus(status.clone()),
+            )
+        }
+        "native_vector_rebuild_preview" => {
+            let preview =
+                native_vector_rebuild_preview(maintenance.preview_vector_rebuild().await?);
+            native_action_result(
+                action,
+                format!(
+                    "向量重建预检完成：{} 条活动记忆中有 {} 条需要重建，涉及 {} 个项目、{} 个批次。",
+                    preview.active_memory_count,
+                    preview.rebuild_memory_count,
+                    preview.affected_project_count,
+                    preview.batch_count
+                ),
+                "native_vector_rebuild_preview",
+                request_preview,
+                &preview,
+                VmmMemoryActionResponse::NativeVectorRebuildPreview(preview.clone()),
+            )
+        }
+        "native_vector_rebuild" => {
+            let result = native_vector_rebuild_result(
+                maintenance
+                    .execute_vector_rebuild(
+                        &request.command_id,
+                        required_native_storage_version(
+                            &request.payload,
+                            "expectedStorageVersion",
+                        )?,
+                        &required_native_text(&request.payload, "expectedPreviewFingerprint")?,
+                        required_native_bool(&request.payload, "confirmed")?,
+                    )
+                    .await?,
+            );
+            native_action_result(
+                action,
+                format!(
+                    "原生 VMM 向量重建完成：已在 {} 个批次中重建 {} 条活动记忆。",
+                    result.batch_count, result.rebuilt_memory_count
+                ),
+                "native_vector_rebuild",
+                request_preview,
+                &result,
+                VmmMemoryActionResponse::NativeVectorRebuild(result.clone()),
+            )
+        }
+        "native_recycle_bin" => {
+            let project_id = vmm_payload_u64(&request.payload, "vmmProjectId")
+                .filter(|project_id| *project_id > 0);
+            let recycle_bin = native_recycle_bin(maintenance.recycle_bin(project_id).await?);
+            native_action_result(
+                action,
+                format!("已加载 {} 个原生 VMM 回收批次。", recycle_bin.batches.len()),
+                "native_recycle_bin",
+                request_preview,
+                &recycle_bin,
+                VmmMemoryActionResponse::NativeRecycleBin(recycle_bin.clone()),
+            )
+        }
+        "native_recycle_restore" => {
+            let batch_id = required_native_text(&request.payload, "batchId")?;
+            let storage_version =
+                required_native_storage_version(&request.payload, "storageVersion")?;
+            let batch = native_recycle_batch(
+                maintenance
+                    .restore_recycle_batch(&request.command_id, &batch_id, storage_version)
+                    .await?,
+            );
+            native_action_result(
+                action,
+                format!(
+                    "已恢复回收批次 `{batch_id}`：{} 个回合、{} 条记忆。",
+                    batch.turn_count, batch.memory_count
+                ),
+                "native_recycle_batch",
+                request_preview,
+                &batch,
+                VmmMemoryActionResponse::NativeRecycleBatch(batch.clone()),
+            )
+        }
+        "native_recycle_purge" => {
+            let batch_id = required_native_text(&request.payload, "batchId")?;
+            let storage_version =
+                required_native_storage_version(&request.payload, "storageVersion")?;
+            let batch = native_recycle_batch(
+                maintenance
+                    .purge_recycle_batch(&request.command_id, &batch_id, storage_version)
+                    .await?,
+            );
+            native_action_result(
+                action,
+                format!(
+                    "已永久清除回收批次 `{batch_id}`：{} 个回合、{} 条记忆。",
+                    batch.turn_count, batch.memory_count
+                ),
+                "native_recycle_batch",
+                request_preview,
+                &batch,
+                VmmMemoryActionResponse::NativeRecycleBatch(batch.clone()),
             )
         }
         "native_project_catalog" => {
@@ -357,6 +524,32 @@ async fn service_run_native_vmm_maintenance_action(
                 request_preview,
                 &records,
                 VmmMemoryActionResponse::NativeMemoryRecords(records.clone()),
+            )
+        }
+        "native_profile_records" => {
+            let project_id = required_native_project_id(&request.payload, "vmmProjectId")?;
+            let target = required_native_profile_target(&request.payload)?;
+            let records =
+                native_profile_records(maintenance.profile_records(project_id, target).await?);
+            native_action_result(
+                action,
+                format!(
+                    "已加载原生 VMM {}画像：{} 个活动，{} 个待处理，{} 个非活动，{} 个过期，{} 个待生效。",
+                    if records.target == "user" {
+                        "用户"
+                    } else {
+                        "项目"
+                    },
+                    records.counts.active,
+                    records.counts.pending,
+                    records.counts.inactive,
+                    records.counts.expired,
+                    records.counts.scheduled,
+                ),
+                "native_profile_records",
+                request_preview,
+                &records,
+                VmmMemoryActionResponse::NativeProfileRecords(records.clone()),
             )
         }
         "native_project_create_and_bind" => {
@@ -650,6 +843,20 @@ fn required_native_text(payload: &Value, key: &str) -> Result<String, String> {
         .ok_or_else(|| format!("原生 VMM 动作缺少有效字段 `{key}`。"))
 }
 
+/// Requires one closed native profile target token from an action payload.
+/// 从动作载荷中读取一个封闭的原生画像目标标记。
+fn required_native_profile_target(
+    payload: &Value,
+) -> Result<crate::native_vmm::NativeVmmProfileTarget, String> {
+    match required_native_text(payload, "target")?.as_str() {
+        "user" => Ok(crate::native_vmm::NativeVmmProfileTarget::User),
+        "project" => Ok(crate::native_vmm::NativeVmmProfileTarget::Project),
+        target => Err(format!(
+            "原生 VMM 画像目标 `{target}` 无效；只允许 `user` 或 `project`。"
+        )),
+    }
+}
+
 /// Requires one non-empty native VMM action text field without trimming its content.
 /// 读取一个必需的非空原生 VMM 动作文本字段，同时不裁剪其内容。
 fn required_native_text_verbatim(payload: &Value, key: &str) -> Result<String, String> {
@@ -756,6 +963,161 @@ fn native_project_catalog(
     }
 }
 
+/// Maps one internal retention result into the stable service API.
+/// 将一个内部保留结果映射为稳定服务 API。
+fn native_retention_apply_result(
+    result: crate::native_vmm::NativeVmmRetentionApplyResult,
+) -> VmmNativeRetentionApplyResult {
+    VmmNativeRetentionApplyResult {
+        expired_profile_nodes: result.expired_profile_nodes,
+        recycled_memories: result.recycled_memories,
+        recycled_turns: result.recycled_turns,
+        enqueued_cold_jobs: result.enqueued_cold_jobs,
+        completed_cold_jobs: result.completed_cold_jobs,
+        purged_trash_batches: result.purged_trash_batches,
+        project_failures: result
+            .project_failures
+            .into_iter()
+            .map(
+                |failure| vulcan_service_api::VmmNativeRetentionProjectFailure {
+                    project_id: failure.project_id,
+                    error: failure.error,
+                },
+            )
+            .collect(),
+    }
+}
+
+/// Maps internal retention state and its frozen Core policy into the service API.
+/// 将内部保留状态及其冻结 Core 策略映射为服务 API。
+fn native_retention_status(
+    status: crate::native_vmm::NativeVmmRetentionStatus,
+) -> VmmNativeRetentionStatusSummary {
+    VmmNativeRetentionStatusSummary {
+        enabled: status.enabled,
+        running: status.running,
+        profile_expiry_running: status.profile_expiry_running,
+        interval_minutes: status.interval_minutes,
+        profile_expiry_interval_seconds: status.profile_expiry_interval_seconds,
+        policy: VmmNativeRetentionPolicySummary {
+            schema_version: status.policy.schema_version,
+            turn_hot_window_size: status.policy.turn_hot_window_size,
+            session_idle_ms: status.policy.session_idle_ms,
+            trash_retention_ms: status.policy.trash_retention_ms,
+            protected_priority_floor: status.policy.protected_priority_floor,
+            protected_memory_level_floor: status.policy.protected_memory_level_floor,
+            skip_protected_shared_memories: status.policy.skip_protected_shared_memories,
+            profile_expiry_limit: status.policy.profile_expiry_limit,
+            memory_recycle_limit: status.policy.memory_recycle_limit,
+            cold_turn_scan_limit: status.policy.cold_turn_scan_limit,
+            cold_turn_job_limit: status.policy.cold_turn_job_limit,
+            idle_session_limit: status.policy.idle_session_limit,
+            vector_gc_limit: status.policy.vector_gc_limit,
+            trash_purge_limit: status.policy.trash_purge_limit,
+        },
+        last_started_at_unix_ms: status.last_started_at_unix_ms,
+        last_finished_at_unix_ms: status.last_finished_at_unix_ms,
+        last_error: status.last_error,
+        last_result: status.last_result.map(native_retention_apply_result),
+        profile_expiry_last_started_at_unix_ms: status.profile_expiry_last_started_at_unix_ms,
+        profile_expiry_last_finished_at_unix_ms: status.profile_expiry_last_finished_at_unix_ms,
+        profile_expiry_last_error: status.profile_expiry_last_error,
+        profile_expiry_last_result: status
+            .profile_expiry_last_result
+            .map(native_retention_apply_result),
+        pending_cold_jobs: status.pending_cold_jobs,
+        recycle_batch_count: status.recycle_batch_count,
+    }
+}
+
+/// Maps native vector compatibility into the stable browser-facing contract.
+/// 将原生向量兼容状态映射为稳定的浏览器契约。
+fn native_vector_status(
+    status: crate::native_vmm::NativeVmmVectorStatus,
+) -> VmmNativeVectorStatusSummary {
+    VmmNativeVectorStatusSummary {
+        configured: status.configured,
+        current_vector_space_id: status.current_vector_space_id,
+        embedding_dimension: status.embedding_dimension,
+        active_memory_count: status.active_memory_count,
+        recycle_bin_memory_count: status.recycle_bin_memory_count,
+        current_memory_count: status.current_memory_count,
+        current_recycle_bin_memory_count: status.current_recycle_bin_memory_count,
+        rebuild_required_memory_count: status.rebuild_required_memory_count,
+        active_rebuild_required_memory_count: status.active_rebuild_required_memory_count,
+        recycle_bin_rebuild_required_memory_count: status.recycle_bin_rebuild_required_memory_count,
+        legacy_vector_space_count: status.legacy_vector_space_count,
+        pending_analysis_job_count: status.pending_analysis_job_count,
+        error: status.error,
+    }
+}
+
+/// Maps one internal vector-rebuild preview into the stable browser-facing contract.
+/// 将一份内部向量重建预检映射为稳定的浏览器契约。
+fn native_vector_rebuild_preview(
+    preview: crate::native_vmm::NativeVmmVectorRebuildPreview,
+) -> VmmNativeVectorRebuildPreview {
+    VmmNativeVectorRebuildPreview {
+        storage_version: preview.storage_version,
+        target_vector_space_id: preview.target_vector_space_id,
+        embedding_dimension: preview.embedding_dimension,
+        active_memory_count: preview.active_memory_count,
+        recycle_bin_memory_count: preview.recycle_bin_memory_count,
+        rebuild_memory_count: preview.rebuild_memory_count,
+        active_rebuild_memory_count: preview.active_rebuild_memory_count,
+        recycle_bin_rebuild_memory_count: preview.recycle_bin_rebuild_memory_count,
+        affected_project_count: preview.affected_project_count,
+        batch_count: preview.batch_count,
+        preview_fingerprint: preview.preview_fingerprint,
+    }
+}
+
+/// Maps one completed native vector rebuild into the stable browser-facing contract.
+/// 将一次已完成原生向量重建映射为稳定的浏览器契约。
+fn native_vector_rebuild_result(
+    result: crate::native_vmm::NativeVmmVectorRebuildResult,
+) -> VmmNativeVectorRebuildResult {
+    VmmNativeVectorRebuildResult {
+        storage_version: result.storage_version,
+        target_vector_space_id: result.target_vector_space_id,
+        rebuilt_memory_count: result.rebuilt_memory_count,
+        batch_count: result.batch_count,
+    }
+}
+
+/// Maps one internal native recycle batch into the stable service API.
+/// 将一个内部原生回收批次映射为稳定服务 API。
+fn native_recycle_batch(
+    batch: crate::native_vmm::NativeVmmRecycleBatchSummary,
+) -> VmmNativeRecycleBatchSummary {
+    VmmNativeRecycleBatchSummary {
+        batch_id: batch.batch_id,
+        project_id: batch.project_id,
+        reason: batch.reason,
+        recycled_at_unix_ms: batch.recycled_at_unix_ms,
+        expires_at_unix_ms: batch.expires_at_unix_ms,
+        turn_count: batch.turn_count,
+        memory_count: batch.memory_count,
+        profile_node_count: batch.profile_node_count,
+        context_evidence_count: batch.context_evidence_count,
+    }
+}
+
+/// Maps one internal recycle-bin projection into the stable service API.
+/// 将一个内部回收站投影映射为稳定服务 API。
+fn native_recycle_bin(
+    recycle_bin: crate::native_vmm::NativeVmmRecycleBin,
+) -> VmmNativeRecycleBinSummary {
+    VmmNativeRecycleBinSummary {
+        storage_version: recycle_bin.storage_version,
+        batches: recycle_bin
+            .batches
+            .into_iter()
+            .map(native_recycle_batch)
+            .collect(),
+    }
+}
+
 /// Loads current and archived VulcanCode session titles without requiring them for provenance.
 /// 加载当前及已归档 VulcanCode 会话标题，但不将标题作为来源关联条件。
 ///
@@ -809,6 +1171,7 @@ fn native_memory_records(
                 turn_count: session.turn_count,
                 turn_statuses: native_turn_status_counts(session.turn_statuses),
                 memory_count: session.memory_count,
+                profile_node_count: session.profile_node_count,
                 direct_memory_count: session.direct_memory_count,
                 memory_levels: native_memory_level_counts(session.memory_levels),
                 first_activity_at_unix_ms: session.first_activity_at_unix_ms,
@@ -838,6 +1201,7 @@ fn native_memory_records(
                     .collect(),
                 analysis_details: turn.analysis_details,
                 generated_memory_ids: turn.generated_memory_ids,
+                generated_profile_node_ids: turn.generated_profile_node_ids,
                 memory_levels: native_memory_level_counts(turn.memory_levels),
                 analysis_job_state: turn.analysis_job_state,
                 analysis_attempt_count: turn.analysis_attempt_count,
@@ -864,6 +1228,69 @@ fn native_memory_records(
                 expires_at_unix_ms: memory.expires_at_unix_ms,
                 status_reason: memory.status_reason,
             })
+            .collect(),
+        profile_nodes: records
+            .profile_nodes
+            .into_iter()
+            .map(native_profile_record)
+            .collect(),
+    }
+}
+
+/// Maps one internal native profile record into the stable service API shape.
+/// 将一条内部原生画像记录映射为稳定服务 API 结构。
+///
+/// # Parameters
+/// 参数
+/// `node` is one complete native profile audit record.
+/// `node` 是一条完整的原生画像审计记录。
+///
+/// # Returns
+/// 返回值
+/// The API projection preserving target, lifecycle, and exact source-turn identities.
+/// 返回保留目标、生命周期与准确来源回合身份的 API 投影。
+fn native_profile_record(
+    node: crate::native_vmm::NativeVmmProfileRecordSummary,
+) -> VmmNativeProfileRecordSummary {
+    VmmNativeProfileRecordSummary {
+        profile_node_id: node.profile_node_id,
+        target: node.target,
+        stored_state: node.stored_state,
+        effective_state: node.effective_state,
+        active_for_injection: node.active_for_injection,
+        content: node.content,
+        priority: node.priority,
+        level: node.level,
+        source_kind: node.source_kind,
+        source_id: node.source_id,
+        source_turn_ids: node.source_turn_ids,
+        effective_date_at_unix_ms: node.effective_date_at_unix_ms,
+        expires_at_unix_ms: node.expires_at_unix_ms,
+        status_reason: node.status_reason,
+        updated_at_unix_ms: node.updated_at_unix_ms,
+    }
+}
+
+/// Maps all-state native profile records into the stable service API.
+/// 将全状态原生画像记录映射为稳定服务 API。
+fn native_profile_records(
+    records: crate::native_vmm::NativeVmmProfileRecords,
+) -> VmmNativeProfileRecordsSummary {
+    VmmNativeProfileRecordsSummary {
+        storage_version: records.storage_version,
+        project_id: records.project_id,
+        target: records.target,
+        counts: VmmNativeProfileStateCounts {
+            active: records.counts.active,
+            inactive: records.counts.inactive,
+            pending: records.counts.pending,
+            expired: records.counts.expired,
+            scheduled: records.counts.scheduled,
+        },
+        nodes: records
+            .nodes
+            .into_iter()
+            .map(native_profile_record)
             .collect(),
     }
 }

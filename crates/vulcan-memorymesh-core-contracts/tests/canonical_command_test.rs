@@ -16,11 +16,11 @@ use vulcan_memorymesh_core_contracts::{
     MemorySearchBatchCommand, MemorySearchCommand, MemoryWriteBatchCommand, MemoryWriteBatchItem,
     MemoryWriteCommand, MutationIdentity, MutationSourceKind, OperationId,
     PostActionAnalyzePendingTurnCommand, PostActionIntakeCommand, PreCheckCommand,
-    ProfileInstructionCommand, ProfileQueryCommand, ProfileView, ProfileViewMode,
-    ProfileViewSection, RecallMode, RetentionCommand, RetentionPolicy, Role, ScopeAccess, ScopeId,
-    SectionRole, SessionRecallMode, SessionSourceId, SubjectId, TimelineItem, TurnId,
-    VectorSpaceId, VersionedMemoryRef, checkpoint_payload_digest, decode_checkpoint,
-    decode_command, encode_checkpoint, encode_command,
+    PreCheckTurnContentType, PreCheckTurnContext, ProfileInstructionCommand, ProfileQueryCommand,
+    ProfileView, ProfileViewMode, ProfileViewSection, RecallMode, RetentionCommand,
+    RetentionPolicy, Role, ScopeAccess, ScopeId, SectionRole, SessionRecallMode, SessionSourceId,
+    SubjectId, TimelineItem, TurnId, VectorSpaceId, VersionedMemoryRef, checkpoint_payload_digest,
+    decode_checkpoint, decode_command, encode_checkpoint, encode_command,
 };
 
 /// Preserves the existing fixture's readable scopes while explicitly allowing replacement only in its primary write scope.
@@ -113,7 +113,11 @@ fn all_sixteen_commands_round_trip() {
             origin_session_source_id: Some(session.clone()),
         },
         user_content: "中文内容 Ünïcodé ✓".to_owned(),
-        recent_timeline: timeline.clone(),
+        recent_turns: vec![PreCheckTurnContext {
+            turn_id: TurnId::new("turn-precheck-context").expect("valid turn identity"),
+            content_type: PreCheckTurnContentType::RawTurn,
+            content: r#"{"user":"roundtrip 内容","timeline":[],"assistant":""}"#.to_owned(),
+        }],
         recall_mode: RecallMode::Force,
         session_recall_mode: SessionRecallMode::CompactAware,
         max_search_queries: 3,
@@ -260,6 +264,7 @@ fn all_sixteen_commands_round_trip() {
             protected_priority_floor: 80,
             protected_memory_level_floor: 4,
             skip_protected_shared_memories: false,
+            profile_expiry_limit: 256,
             memory_recycle_limit: 100,
             cold_turn_scan_limit: 50,
             cold_turn_job_limit: 16,

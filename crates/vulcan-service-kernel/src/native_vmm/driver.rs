@@ -23,17 +23,18 @@ use vulcan_ai_contract::{
     HostAiCapabilityHandle, HostAiCapabilityRegistration, HostAiCapabilityRequirement,
     HostAiEmbeddingRequest, HostAiError, HostAiErrorCode, HostAiPort, INFERENCE_CONTRACT_VERSION,
     InferenceCallerBudget, InferenceCallerContext, InferencePermission, InferenceUsageScope,
-    MessageRole, ReasoningOutputPolicy, RerankRequest, RerankText, RerankTruncation,
-    ResponsesExecutionRequest, StructuredOutputPolicy,
+    MessageRole, ReasoningEffort, ReasoningOutputPolicy, RerankRequest, RerankText,
+    RerankTruncation, ResponsesExecutionRequest, StructuredOutputPolicy,
 };
 use vulcan_memorymesh_core::{
     AsyncHostDriver, CandidateChannelResult, CandidateObservation, CommandResult, CoreCommand,
     CoreError, EffectDeadlineClass, EffectFailure, EffectFailureKind, EffectRequest, EffectResult,
     EmbeddingBatchResult, EmbeddingDropReason, EmbeddingDroppedInput, ErrorCode, ErrorStage,
     FailureClass, HostEffect, HostEffectResult, InMemoryStorage, LlmEffect, LlmPurpose,
-    MemoryAccessClass, MemoryMeshCore, MutationBatch, MutationOutcome, PhysicalCandidate,
-    PhysicalCandidateChannel, PhysicalCandidateScore, RawScoreKind, RerankEffect, RerankEntry,
-    ScoreDirection, StoragePort, StorageQuery, StorageQueryResult, StorageSnapshot, test_pii_rule,
+    MemoryAccessClass, MemoryMeshCore, MemoryPolicy, MemoryState, MutationBatch, MutationOutcome,
+    PhysicalCandidate, PhysicalCandidateChannel, PhysicalCandidateScore, RawScoreKind,
+    RerankEffect, RerankEntry, ScoreDirection, StoragePort, StorageQuery, StorageQueryResult,
+    StorageSnapshot, VectorSpaceId, test_pii_rule,
 };
 use vulcan_service_api::{
     VmmNativeNoiseTestResult, VmmNativePiiFormulaMatchSummary, VmmNativePiiFormulaTestResult,
@@ -61,6 +62,25 @@ const NATIVE_VMM_EMBEDDING_TASK: EmbeddingTask = EmbeddingTask::ProviderDefault;
 /// Maximum LLM output budget accepted from one Core effect.
 /// 单个 Core Effect 接受的最大 LLM 输出预算。
 const NATIVE_VMM_LLM_OUTPUT_TOKENS: u64 = 8_192;
+
+/// Stable namespace for route-derived native memory vector generations.
+/// 由路由派生的原生记忆向量代次所使用的稳定命名空间。
+const NATIVE_VMM_VECTOR_SPACE_NAMESPACE: &str = "vmm-native:memory:v1";
+
+/// Identifies the exact route-derived vector generation used by native memory commands.
+/// 标识原生记忆命令使用的、由准确路由派生的向量代次。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct NativeVmmVectorSpaceDescriptor {
+    /// Stable logical Core vector-space identity for this route generation.
+    /// 当前路由代次对应的稳定 Core 逻辑向量空间标识。
+    pub(super) vector_space_id: VectorSpaceId,
+    /// Exact configured dense embedding width.
+    /// 已配置稠密向量的准确维度。
+    pub(super) embedding_dimension: u32,
+    /// Opaque capability fingerprint used to derive the generation.
+    /// 用于派生该代次的不透明能力指纹。
+    pub(super) capability_fingerprint: String,
+}
 
 /// Owns the copied native Core and its process-local host driver.
 /// 持有复制后的原生 Core 及其进程内宿主驱动。
@@ -346,7 +366,8 @@ impl NativeVmmCoreRuntime {
     /// 返回稳定的 Core 命令、Effect 或持久化失败。
     pub(crate) async fn run(&self, mut command: CoreCommand) -> Result<CommandResult, CoreError> {
         if command_requires_ai_configuration(&command) {
-            self.ensure_host_ai_config().await?;
+            let descriptor = self.ensure_host_ai_config().await?;
+            validate_command_vector_generation(&command, &descriptor.vector_space_id)?;
         }
         if command.is_mutating() {
             let snapshot = self.core.active_snapshot()?;
@@ -386,7 +407,193 @@ impl NativeVmmCoreRuntime {
     pub(crate) async fn validate_host_ai(&self) -> Result<(), String> {
         self.ensure_host_ai_config()
             .await
+            .map(|_| ())
             .map_err(|error| error.to_string())
+    }
+
+    /// Returns the current route-derived vector generation after rejecting partially migrated active memory.
+    /// 在拒绝尚未完整迁移的活动记忆后返回当前由路由派生的向量代次。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The stable logical vector-space identity selected by the current configured embedding route.
+    /// 返回当前已配置 Embedding 路由选择的稳定逻辑向量空间标识。
+    ///
+    /// # Errors
+    /// 错误
+    /// Returns the exact Host AI configuration failure or a rebuild-required diagnostic.
+    /// 返回准确的宿主 AI 配置错误，或必须重建向量的诊断。
+    pub(crate) async fn current_vector_space_id(&self) -> Result<VectorSpaceId, String> {
+        let descriptor = self.current_vector_space_descriptor().await?;
+        self.ensure_active_memories_use_vector_space(&descriptor.vector_space_id)?;
+        Ok(descriptor.vector_space_id)
+    }
+
+    /// Returns the current memory policy and compatible vector generation from one configuration activation.
+    /// 通过一次配置激活返回当前记忆策略及兼容向量代次。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The immutable memory policy paired with the exact current vector-space identity.
+    /// 返回与准确当前向量空间标识配对的不可变记忆策略。
+    ///
+    /// # Errors
+    /// 错误
+    /// Returns the exact configuration, snapshot, or vector-rebuild requirement failure.
+    /// 返回准确的配置、快照或向量重建要求错误。
+    pub(crate) async fn active_memory_context(
+        &self,
+    ) -> Result<(MemoryPolicy, VectorSpaceId), String> {
+        let descriptor = self.current_vector_space_descriptor().await?;
+        self.ensure_active_memories_use_vector_space(&descriptor.vector_space_id)?;
+        let policy = self
+            .core
+            .active_snapshot()
+            .map_err(|error| error.to_string())?
+            .memory_policy
+            .clone();
+        Ok((policy, descriptor.vector_space_id))
+    }
+
+    /// Resolves the current route-derived vector generation without requiring migration completion.
+    /// 解析当前由路由派生的向量代次，但不要求迁移已经完成。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The exact logical generation, dimension, and capability fingerprint used by maintenance.
+    /// 返回维护流程使用的准确逻辑代次、维度与能力指纹。
+    ///
+    /// # Errors
+    /// 错误
+    /// Returns the exact Host AI capability or Core resource activation failure.
+    /// 返回准确的宿主 AI 能力或 Core 资源激活失败。
+    pub(super) async fn current_vector_space_descriptor(
+        &self,
+    ) -> Result<NativeVmmVectorSpaceDescriptor, String> {
+        let _gate = self.config_gate.lock().await;
+        let result = self.activate_host_ai_config();
+        let status = match result.as_ref() {
+            Ok(handle) => NativeVmmHostAiStatus::ready(handle),
+            Err(error) => NativeVmmHostAiStatus::failed(error),
+        };
+        *self
+            .host_ai_status
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = status;
+        let handle = result.map_err(|error| error.to_string())?;
+        vector_space_descriptor_from_capability(&handle).map_err(|error| error.to_string())
+    }
+
+    /// Embeds one bounded maintenance batch through the same registered Host AI capability as Core.
+    /// 通过与 Core 相同的已注册宿主 AI 能力嵌入一个有界维护批次。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `operation_id` is the stable batch identity used for diagnostics and cancellation correlation.
+    /// `operation_id` 是用于诊断与取消关联的稳定批次身份。
+    /// `descriptor` freezes the exact route generation confirmed by the caller.
+    /// `descriptor` 冻结调用方已确认的准确路由代次。
+    /// `inputs` contains non-empty durable memory summaries in caller order.
+    /// `inputs` 按调用方顺序包含非空持久记忆摘要。
+    ///
+    /// # Returns
+    /// 返回值
+    /// One dense vector per input in the same order.
+    /// 按相同顺序为每个输入返回一个稠密向量。
+    ///
+    /// # Errors
+    /// 错误
+    /// Returns on route drift, provider failure, partial output, or any dimension mismatch.
+    /// 路由漂移、供应商失败、部分输出或任一维度不匹配时返回错误。
+    pub(super) async fn embed_maintenance_summaries(
+        &self,
+        operation_id: &str,
+        descriptor: &NativeVmmVectorSpaceDescriptor,
+        inputs: Vec<String>,
+    ) -> Result<Vec<Vec<f32>>, String> {
+        if inputs.is_empty() {
+            return Err(String::from("原生 VMM 维护向量批次不能为空。"));
+        }
+        let current = self.current_vector_space_descriptor().await?;
+        if current != *descriptor {
+            return Err(String::from(
+                "向量重建期间 Embedding 路由发生变化；请重新预检剩余记录。",
+            ));
+        }
+        let effect = vulcan_memorymesh_core::EmbeddingEffect {
+            inputs,
+            vector_space_id: descriptor.vector_space_id.clone(),
+            expected_dimension: descriptor.embedding_dimension,
+            allow_partial_invalid_inputs: false,
+        };
+        let request_id = format!(
+            "vmm-maintenance-embedding-{}",
+            hex::encode(Sha256::digest(operation_id.as_bytes()))
+        );
+        let context = HostAiCallContext::new(operation_id.to_owned())
+            .with_deadline(effect_deadline(EffectDeadlineClass::Maintenance))
+            .with_cancellation(Arc::new(NativeVmmHostAiCancellation::default()));
+        match self
+            .host
+            .execute_embedding_with_context(context, request_id, &effect)
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            HostEffectResult::Embedding(batch)
+                if batch.dropped.is_empty()
+                    && batch.vectors.len() == effect.inputs.len()
+                    && (batch.result_indices.is_empty()
+                        || batch.result_indices.iter().copied().eq(0..u32::try_from(
+                            effect.inputs.len(),
+                        )
+                        .map_err(|error| {
+                            format!("原生 VMM 维护向量批次计数超出范围：{error}")
+                        })?)) =>
+            {
+                Ok(batch.vectors)
+            }
+            HostEffectResult::Failure(failure) => {
+                Err(format!("原生 VMM 维护向量生成失败：{}", failure.diagnostic))
+            }
+            HostEffectResult::Embedding(_) => Err(String::from(
+                "原生 VMM 维护向量响应包含缺失、丢弃或乱序结果。",
+            )),
+            _ => Err(String::from("原生 VMM 维护向量返回了错误的结果类型。")),
+        }
+    }
+
+    /// Rejects ordinary vector-dependent commands while any active memory still uses an older generation.
+    /// 当任一活动记忆仍使用旧代次时拒绝普通向量相关命令。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `current` is the exact logical vector-space identity derived from the active route.
+    /// `current` 是由当前活动路由派生的准确逻辑向量空间标识。
+    ///
+    /// # Errors
+    /// 错误
+    /// Returns a bounded diagnostic containing the number of memories that require rebuilding.
+    /// 返回包含待重建记忆数量的有界诊断。
+    fn ensure_active_memories_use_vector_space(
+        &self,
+        current: &VectorSpaceId,
+    ) -> Result<(), String> {
+        let snapshot = self.storage_snapshot()?;
+        let rebuild_required = snapshot
+            .dataset
+            .memories
+            .iter()
+            .filter(|memory| {
+                memory.state == MemoryState::Active
+                    && memory.vector_space_id.as_ref() != Some(current)
+            })
+            .count();
+        if rebuild_required == 0 {
+            return Ok(());
+        }
+        Err(format!(
+            "当前 Embedding 路由与 {rebuild_required} 条活动记忆的向量代次不一致。请在记忆设置的“内部维护”中完成向量重建后再使用记忆读写。"
+        ))
     }
 
     /// Returns the latest Host AI readiness snapshot without triggering provider work.
@@ -557,25 +764,16 @@ impl NativeVmmCoreRuntime {
     /// # Errors
     /// Returns an error for an invalid role or invalid active resource snapshot.
     /// 角色无效或当前资源快照无效时返回错误。
-    pub(crate) async fn test_noise(
-        &self,
-        role: &str,
-        text: &str,
-    ) -> Result<VmmNativeNoiseTestResult, String> {
-        let role = match role {
-            "user" => vulcan_memorymesh_core::Role::User,
-            "assistant" => vulcan_memorymesh_core::Role::Assistant,
-            "system" => vulcan_memorymesh_core::Role::System,
-            "tool" => vulcan_memorymesh_core::Role::Tool,
-            _ => return Err(format!("不支持的噪音测试角色：{role}")),
-        };
+    pub(crate) async fn test_noise(&self, text: &str) -> Result<VmmNativeNoiseTestResult, String> {
         let _gate = self.config_gate.lock().await;
         self.activate_resource_config_from_active_vector()?;
         let snapshot = self
             .core
             .active_snapshot()
             .map_err(|error| error.to_string())?;
-        let decision = snapshot.noise_detector.detect(role, text);
+        let decision = snapshot
+            .noise_detector
+            .detect(vulcan_memorymesh_core::Role::User, text);
         Ok(VmmNativeNoiseTestResult {
             is_noise: decision.is_noise,
             category: decision.category,
@@ -751,7 +949,7 @@ impl NativeVmmCoreRuntime {
 
     /// Activates a Core snapshot derived from the exact configured embedding route.
     /// 激活由精确已配置向量路由派生的 Core 快照。
-    async fn ensure_host_ai_config(&self) -> Result<(), CoreError> {
+    async fn ensure_host_ai_config(&self) -> Result<NativeVmmVectorSpaceDescriptor, CoreError> {
         let _gate = self.config_gate.lock().await;
         let result = self.activate_host_ai_config();
         let status = match result.as_ref() {
@@ -762,7 +960,8 @@ impl NativeVmmCoreRuntime {
             .host_ai_status
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = status;
-        result.map(|_| ())
+        let handle = result?;
+        vector_space_descriptor_from_capability(&handle)
     }
 
     /// Refreshes capability truth and activates the matching Core vector-space configuration.
@@ -1046,7 +1245,7 @@ impl NativeVmmHostDriver {
             prompt_cache: Default::default(),
             prompt_cache_key: None,
             include_reasoning_encrypted_content: false,
-            reasoning_effort: None,
+            reasoning_effort: Some(ReasoningEffort::None),
             reasoning_output: ReasoningOutputPolicy::Hidden,
             model_parameters: BTreeMap::new(),
             stop_sequences: Vec::new(),
@@ -1088,6 +1287,22 @@ impl NativeVmmHostDriver {
         request: &EffectRequest,
         effect: &vulcan_memorymesh_core::EmbeddingEffect,
     ) -> Result<HostEffectResult, CoreError> {
+        self.execute_embedding_with_context(
+            effect_call_context(request, Arc::clone(&self.ai_cancellation)),
+            format!("vmm-embedding-{}", request.effect_id.as_str()),
+            effect,
+        )
+        .await
+    }
+
+    /// Runs one ordered dense embedding batch with an explicit host-owned call context.
+    /// 使用显式宿主持有调用上下文运行一个有序稠密向量批次。
+    async fn execute_embedding_with_context(
+        &self,
+        context: HostAiCallContext,
+        request_id: String,
+        effect: &vulcan_memorymesh_core::EmbeddingEffect,
+    ) -> Result<HostEffectResult, CoreError> {
         let capability = match self.capability() {
             Ok(value) => value,
             Err(error) => return Ok(ai_failure(EffectFailureKind::Embedding, error)),
@@ -1103,7 +1318,7 @@ impl NativeVmmHostDriver {
             .collect::<Vec<_>>();
         let embedding_request = EmbeddingRequest {
             contract_version: INFERENCE_CONTRACT_VERSION,
-            request_id: format!("vmm-embedding-{}", request.effect_id.as_str()),
+            request_id,
             idempotency_key: None,
             consumer_profile_id: String::from(NATIVE_VMM_CONSUMER_PROFILE_ID),
             inputs,
@@ -1123,11 +1338,7 @@ impl NativeVmmHostDriver {
         };
         let response = match self
             .ai_port
-            .create_embeddings(
-                &capability,
-                effect_call_context(request, Arc::clone(&self.ai_cancellation)),
-                host_request,
-            )
+            .create_embeddings(&capability, context, host_request)
             .await
         {
             Ok(value) => value,
@@ -1775,7 +1986,12 @@ async fn hydrate_storage(data_plane: &VmmDataPlaneHandle) -> Result<InMemoryStor
     let mut snapshot: StorageSnapshot = serde_json::from_str(&encoded)
         .map_err(|error| format!("解析原生 VMM Core 快照失败：{error}"))?;
     let mut by_space = BTreeMap::<String, Vec<String>>::new();
-    for memory in &snapshot.dataset.memories {
+    for memory in snapshot.dataset.memories.iter().chain(
+        snapshot
+            .retention_trash_batches
+            .iter()
+            .flat_map(|batch| batch.dataset.memories.iter()),
+    ) {
         if let Some(space_id) = memory.vector_space_id.as_ref() {
             by_space
                 .entry(space_id.as_str().to_owned())
@@ -1800,6 +2016,15 @@ async fn hydrate_storage(data_plane: &VmmDataPlaneHandle) -> Result<InMemoryStor
                     .remove(memory.id.as_str())
                     .ok_or_else(|| format!("原生 VMM 记忆 `{}` 缺少向量", memory.id.as_str()))?,
             );
+        }
+    }
+    for batch in &mut snapshot.retention_trash_batches {
+        for memory in &mut batch.dataset.memories {
+            if memory.vector_space_id.is_some() {
+                memory.embedding = Some(vectors.remove(memory.id.as_str()).ok_or_else(|| {
+                    format!("原生 VMM 回收站记忆 `{}` 缺少隔离向量", memory.id.as_str())
+                })?);
+            }
         }
     }
     if !vectors.is_empty() {
@@ -1934,6 +2159,55 @@ fn command_requires_ai_configuration(command: &CoreCommand) -> bool {
     }
 }
 
+/// Rejects a vector-bearing command when its caller-observed generation differs from the freshly activated route.
+/// 当携带向量的命令所观察代次与刚激活的路由不一致时拒绝该命令。
+///
+/// # Parameters
+/// 参数
+/// `command` is the immutable semantic request and `current` is derived after the final Host AI activation.
+/// `command` 是不可变语义请求，`current` 在最终宿主 AI 激活后派生。
+///
+/// # Errors
+/// 错误
+/// Returns before any Core effect when a concurrent provider change made the request stale.
+/// 当并发供应商变更使请求过期时，在任何 Core Effect 之前返回错误。
+fn validate_command_vector_generation(
+    command: &CoreCommand,
+    current: &VectorSpaceId,
+) -> Result<(), CoreError> {
+    let requested = match command {
+        CoreCommand::PreCheck(command) => Some(&command.vector_space_id),
+        CoreCommand::PostActionIntake(command) => Some(&command.vector_space_id),
+        CoreCommand::PostActionAnalyzePendingTurn(command) => Some(&command.vector_space_id),
+        CoreCommand::MemorySearch(command) => Some(&command.vector_space_id),
+        CoreCommand::MemoryWrite(command) => Some(&command.vector_space_id),
+        CoreCommand::MemorySearchBatch(command) => Some(&command.vector_space_id),
+        CoreCommand::MemoryWriteBatch(command) => Some(&command.vector_space_id),
+        CoreCommand::Maintenance(command) => match &command.action {
+            vulcan_memorymesh_core::MaintenanceAction::RebuildVectors {
+                vector_space_id, ..
+            } => Some(vector_space_id),
+            _ => None,
+        },
+        CoreCommand::ProfileInstruction(_)
+        | CoreCommand::ChatCompact(_)
+        | CoreCommand::MemoryDetails(_)
+        | CoreCommand::MemoryDelete(_)
+        | CoreCommand::ProfileQuery(_)
+        | CoreCommand::Retention(_)
+        | CoreCommand::MemoryDetailsBatch(_)
+        | CoreCommand::MemoryDeleteBatch(_) => None,
+    };
+    if requested.is_none_or(|requested| requested == current) {
+        return Ok(());
+    }
+    Err(CoreError::new(
+        ErrorCode::InvalidConfiguration,
+        ErrorStage::Configuration,
+        "native VMM vector generation changed after request preparation; retry with the current embedding route",
+    ))
+}
+
 /// Borrows the mutation identity of a command already proven to be mutating.
 /// 借用一个已确认会产生变更的命令的变更身份。
 fn command_mutation_identity(
@@ -2058,6 +2332,78 @@ fn embedding_config_from_capability(
     ))
 }
 
+/// Derives one collision-resistant logical vector generation from the exact embedding capability.
+/// 根据准确 Embedding 能力派生一个抗碰撞的逻辑向量代次。
+///
+/// # Parameters
+/// 参数
+/// `capability_fingerprint` is the opaque route-bearing capability digest and `dimension` is its
+/// exact dense-vector width.
+/// `capability_fingerprint` 是携带路由的不透明能力摘要，`dimension` 是其准确稠密向量宽度。
+///
+/// # Returns
+/// 返回值
+/// A stable Core vector-space identity that changes only when vector compatibility changes.
+/// 返回仅在向量兼容性变化时才改变的稳定 Core 向量空间标识。
+///
+/// # Errors
+/// 错误
+/// Returns a Core identifier error if the closed generated identity violates Core bounds.
+/// 当封闭生成的标识违反 Core 边界时返回 Core 标识错误。
+fn native_vector_space_id(
+    capability_fingerprint: &str,
+    dimension: u32,
+) -> Result<VectorSpaceId, vulcan_memorymesh_core::IdentifierError> {
+    let mut hasher = Sha256::new();
+    hasher.update(NATIVE_VMM_VECTOR_SPACE_NAMESPACE.as_bytes());
+    hasher.update([0]);
+    hasher.update(capability_fingerprint.as_bytes());
+    hasher.update([0]);
+    hasher.update(dimension.to_le_bytes());
+    VectorSpaceId::new(format!(
+        "{NATIVE_VMM_VECTOR_SPACE_NAMESPACE}:{}",
+        hex::encode(hasher.finalize())
+    ))
+}
+
+/// Derives one complete native vector descriptor from the exact registered embedding capability.
+/// 从准确注册的 Embedding 能力派生一份完整原生向量描述符。
+///
+/// # Parameters
+/// 参数
+/// `handle` is the freshly validated Host AI capability snapshot.
+/// `handle` 是刚完成校验的宿主 AI 能力快照。
+///
+/// # Returns
+/// 返回值
+/// The route-derived logical generation, dense width, and opaque capability fingerprint.
+/// 返回由路由派生的逻辑代次、稠密维度及不透明能力指纹。
+///
+/// # Errors
+/// 错误
+/// Returns when the embedding capability cannot select one exact dimension or valid identity.
+/// Embedding 能力无法选择一个准确维度或有效身份时返回错误。
+fn vector_space_descriptor_from_capability(
+    handle: &HostAiCapabilityHandle,
+) -> Result<NativeVmmVectorSpaceDescriptor, CoreError> {
+    let (embedding_dimension, capability_fingerprint) = embedding_config_from_capability(handle)?;
+    let vector_space_id =
+        native_vector_space_id(capability_fingerprint.as_str(), embedding_dimension).map_err(
+            |error| {
+                CoreError::new(
+                    ErrorCode::InvalidConfiguration,
+                    ErrorStage::Configuration,
+                    error.to_string(),
+                )
+            },
+        )?;
+    Ok(NativeVmmVectorSpaceDescriptor {
+        vector_space_id,
+        embedding_dimension,
+        capability_fingerprint,
+    })
+}
+
 /// Converts one Host AI registration failure into a stable Core configuration error.
 /// 将一个宿主 AI 注册失败转换为稳定的 Core 配置错误。
 fn host_ai_core_error(error: HostAiError) -> CoreError {
@@ -2176,7 +2522,12 @@ fn vector_records(
 ) -> Result<BTreeMap<(String, u32), Vec<VmmVectorRecord>>, CoreError> {
     let mut grouped = BTreeMap::<(String, u32), Vec<VmmVectorRecord>>::new();
     let mut dimensions = BTreeMap::<String, u32>::new();
-    for memory in &snapshot.dataset.memories {
+    for memory in snapshot.dataset.memories.iter().chain(
+        snapshot
+            .retention_trash_batches
+            .iter()
+            .flat_map(|batch| batch.dataset.memories.iter()),
+    ) {
         let (Some(space_id), Some(embedding)) =
             (memory.vector_space_id.as_ref(), memory.embedding.as_ref())
         else {
@@ -2225,6 +2576,12 @@ fn snapshot_vector_keys(snapshot: &StorageSnapshot) -> BTreeSet<(String, String)
         .dataset
         .memories
         .iter()
+        .chain(
+            snapshot
+                .retention_trash_batches
+                .iter()
+                .flat_map(|batch| batch.dataset.memories.iter()),
+        )
         .filter_map(|memory| {
             memory.vector_space_id.as_ref().and_then(|space_id| {
                 memory
@@ -2356,6 +2713,61 @@ mod tests {
     #[test]
     fn native_vmm_embedding_task_is_provider_default() {
         assert_eq!(NATIVE_VMM_EMBEDDING_TASK, EmbeddingTask::ProviderDefault);
+    }
+
+    /// Verifies vector generations are stable for one route and change for either capability or dimension drift.
+    /// 验证同一路由的向量代次保持稳定，并在能力或维度漂移时发生变化。
+    #[test]
+    fn native_vector_generation_tracks_exact_embedding_capability() {
+        let first = native_vector_space_id("capability-a", 1_536).expect("first vector space");
+        let repeated =
+            native_vector_space_id("capability-a", 1_536).expect("repeated vector space");
+        let changed_capability =
+            native_vector_space_id("capability-b", 1_536).expect("changed capability space");
+        let changed_dimension =
+            native_vector_space_id("capability-a", 3_072).expect("changed dimension space");
+
+        assert_eq!(first, repeated);
+        assert_ne!(first, changed_capability);
+        assert_ne!(first, changed_dimension);
+        assert!(first.as_str().starts_with("vmm-native:memory:v1:"));
+    }
+
+    /// Verifies a provider change between request preparation and Core start fails before any effect can run.
+    /// 验证请求准备与 Core 启动之间发生供应商变化时，会在任何 Effect 运行前失败。
+    #[test]
+    fn stale_command_vector_generation_is_rejected_before_dispatch() {
+        let current = VectorSpaceId::new("current-space").expect("current vector space");
+        let stale = VectorSpaceId::new("stale-space").expect("stale vector space");
+        let command = CoreCommand::MemorySearch(vulcan_memorymesh_core::MemorySearchCommand {
+            subject_id: vulcan_memorymesh_core::SubjectId::new("subject").expect("subject id"),
+            scope_access: vulcan_memorymesh_core::ScopeAccess {
+                write_scope: vulcan_memorymesh_core::ScopeId::new("scope").expect("scope id"),
+                visible_scopes: vec![
+                    vulcan_memorymesh_core::ScopeId::new("scope").expect("visible scope"),
+                ],
+            },
+            query: String::from("query"),
+            limit: 1,
+            vector_space_id: stale,
+            boundary: vulcan_memorymesh_core::CandidateQueryBoundary {
+                candidate_scope: None,
+                session_recall_boundary: None,
+            },
+            now_ns: 1,
+        });
+
+        let error = validate_command_vector_generation(&command, &current)
+            .expect_err("stale vector generation must fail");
+        assert_eq!(error.code, ErrorCode::InvalidConfiguration);
+
+        let mut current_command = command;
+        let CoreCommand::MemorySearch(search) = &mut current_command else {
+            unreachable!("test command remains memory search");
+        };
+        search.vector_space_id = current.clone();
+        validate_command_vector_generation(&current_command, &current)
+            .expect("current vector generation is accepted");
     }
 
     /// Verifies dropping an unfinished native request wakes the exact Host AI cancellation signal.

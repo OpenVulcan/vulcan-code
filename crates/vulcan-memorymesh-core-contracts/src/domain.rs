@@ -142,6 +142,57 @@ pub struct Turn {
     pub analysis_details: Option<String>,
 }
 
+/// Classifies the representation carried by one recent turn in `PreCheck`.
+/// 对 `PreCheck` 最近轮次携带的内容表示进行分类。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u32)]
+pub enum PreCheckTurnContentType {
+    /// Carries the successful compact extraction of one completed turn.
+    /// 携带一个已完成轮次成功生成的紧凑提炼内容。
+    Details = 1,
+    /// Carries compact raw turn JSON when no successful extraction is available.
+    /// 在没有成功提炼结果时携带紧凑原始轮次 JSON。
+    RawTurn = 2,
+}
+
+impl PreCheckTurnContentType {
+    /// Returns the stable prompt token understood by the bundled VMM prompts.
+    /// 返回内置 VMM 提示词理解的稳定标记。
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Details => "DETAILS",
+            Self::RawTurn => "RAW_TURN",
+        }
+    }
+
+    /// Resolves one canonical discriminant without accepting aliases.
+    /// 解析一个规范判别值且不接受别名。
+    #[must_use]
+    pub const fn try_from_u32(value: u32) -> Option<Self> {
+        match value {
+            1 => Some(Self::Details),
+            2 => Some(Self::RawTurn),
+            _ => None,
+        }
+    }
+}
+
+/// Carries one same-session historical turn into the first `PreCheck` stage.
+/// 将一个同会话历史轮次携带到 `PreCheck` 第一阶段。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreCheckTurnContext {
+    /// Identifies the exact durable turn represented by this context.
+    /// 标识该上下文表示的准确耐久轮次。
+    pub turn_id: TurnId,
+    /// Identifies whether content is extracted detail or compact raw turn JSON.
+    /// 标识内容是提炼详情还是紧凑原始轮次 JSON。
+    pub content_type: PreCheckTurnContentType,
+    /// Carries the bounded context text selected by the host.
+    /// 携带宿主选出的有界上下文文本。
+    pub content: String,
+}
+
 /// Carries the durable compact boundary for one resolved host session.
 /// 携带一个已解析宿主会话的持久压缩边界。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -564,6 +615,9 @@ pub enum ProfileNodeState {
     /// Retains extracted evidence that has not received an authoritative review decision.
     /// 保留尚未获得权威评审决定的提炼证据，不参与活跃画像渲染。
     Pending = 3,
+    /// Indicates a node whose absolute lifecycle deadline has elapsed.
+    /// 表示绝对生命周期截止时间已经到期的画像节点。
+    Expired = 4,
 }
 
 /// Classifies the durable origin of one profile node without exposing host hierarchy.

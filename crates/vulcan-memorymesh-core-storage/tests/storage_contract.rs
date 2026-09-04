@@ -4,17 +4,127 @@
 #![allow(clippy::expect_used)]
 
 use vulcan_memorymesh_core_contracts::{
-    CandidateQueryBoundary, ContextEvidenceRelation, DirectWriteDedupeLookup, EntityKind,
-    EntityRef, ErrorCode, EvidenceRef, IdempotencyKey, MemoryAccessClass, MemoryAccessIdentity,
+    AnalysisAttemptIdentity, CandidateQueryBoundary, ChatCompactBoundary, ConfigSnapshotId,
+    ContextEvidenceRelation, DirectWriteDedupeLookup, EntityKind, EntityRef, ErrorCode,
+    EvidenceRef, ExportDataset, IdempotencyKey, MemoryAccessClass, MemoryAccessIdentity,
     MemoryCategory, MemoryId, MemoryLevel, MemoryRecord, MemoryScopeClass, MemorySourceKind,
     MemoryState, Mutation, MutationBatch, MutationIdentity, MutationOutcome, MutationSourceKind,
-    OperationId, Role, ScopeAccess, ScopeId, ScoreContractRef, SessionRecallBoundary,
-    SessionRecallMode, SessionSourceId, StorageQuery, StorageQueryResult, SubjectId, TimelineItem,
-    Turn, TurnId, TurnStatus, VectorSpaceId, context_evidence_domain_id,
+    OperationId, RetentionPolicy, RetentionReasonCode, Role, ScopeAccess, ScopeId,
+    ScoreContractRef, SessionRecallBoundary, SessionRecallMode, SessionSourceId, StorageQuery,
+    StorageQueryResult, StructuredOutputContractId, SubjectId, TimelineItem, Turn, TurnId,
+    TurnStatus, VectorSpaceId, context_evidence_domain_id,
 };
 use vulcan_memorymesh_core_storage::{
     InMemoryStorage, REFERENCE_CONTRACT_VERSION, REFERENCE_VECTOR_CONTRACT_ID, StoragePort,
+    StorageRetentionTrashBatch, StorageSnapshot,
 };
+
+/// Verifies the vector persistence inventory retains recycle-bin embeddings for direct restore.
+/// 验证向量持久化清单会保留回收站嵌入，以支持直接恢复。
+#[test]
+fn snapshot_memory_embeddings_include_recycle_bin_records() {
+    let mut storage = InMemoryStorage::new();
+    storage
+        .mutate(&batch(
+            "trash-vector-seed",
+            vec![put_memory(
+                memory("trash-vector", "subject", "scope", "retained"),
+                0,
+            )],
+        ))
+        .expect("seed memory must commit");
+    let mut snapshot = storage.snapshot();
+    let recycled = snapshot.dataset.memories.remove(0);
+    snapshot
+        .retention_trash_batches
+        .push(StorageRetentionTrashBatch {
+            batch_id: "trash-vector-batch".to_owned(),
+            subject_id: recycled
+                .source_subject_id
+                .clone()
+                .expect("seed memory must carry its source subject"),
+            scope_id: recycled.scope_id.clone(),
+            recycled_at_ns: 2,
+            reason: RetentionReasonCode::TerminalMemoryRecycle,
+            dataset: ExportDataset {
+                memories: vec![recycled],
+                ..ExportDataset::empty()
+            },
+            analysis_attempts: Vec::new(),
+        });
+
+    let embeddings = snapshot.memory_embeddings();
+    assert_eq!(embeddings.len(), 1);
+    assert_eq!(embeddings[0].0.as_str(), "trash-vector");
+    assert_eq!(embeddings[0].1.as_str(), "vector-1");
+    assert_eq!(embeddings[0].2, vec![1.0, 0.0]);
+}
+
+/// Verifies a recycled identity remains reserved for future generated entities.
+/// 验证已回收身份对后续生成实体仍保持占用。
+#[test]
+fn recycled_identity_survives_new_slot_allocation() {
+    use vulcan_memorymesh_core_contracts::EntitySlotId;
+
+    let mut snapshot = InMemoryStorage::new().snapshot();
+    snapshot
+        .retention_trash_batches
+        .push(StorageRetentionTrashBatch {
+            batch_id: "trash-generated-id".to_owned(),
+            subject_id: SubjectId::new("subject-retention")
+                .expect("subject identity must be valid"),
+            scope_id: ScopeId::new("scope-retention").expect("scope identity must be valid"),
+            recycled_at_ns: 1,
+            reason: RetentionReasonCode::ColdTurnRecycle,
+            dataset: ExportDataset {
+                turns: vec![retention_turn("vmm-turn-1", "trash-session", 1)],
+                ..ExportDataset::empty()
+            },
+            analysis_attempts: Vec::new(),
+        });
+    let mut storage =
+        InMemoryStorage::from_snapshot(snapshot).expect("one isolated trash identity must load");
+    let created = retention_turn("placeholder", "active-session", 2);
+    let outcome = storage
+        .mutate(&batch(
+            "trash-generated-id-allocation",
+            vec![Mutation::PutTurn {
+                entity: EntityRef::New(EntitySlotId::new("new-turn").expect("slot must be valid")),
+                turn: created,
+            }],
+        ))
+        .expect("new turn allocation must succeed");
+
+    assert!(matches!(outcome, MutationOutcome::Committed { .. }));
+    assert_eq!(storage.dataset().turns[0].id.as_str(), "vmm-turn-2");
+}
+
+/// Verifies active and recycled storage cannot claim the same durable identity.
+/// 验证活动区与回收站不能声明同一个耐久身份。
+#[test]
+fn snapshot_rejects_active_and_recycled_identity_collision() {
+    let mut snapshot: StorageSnapshot = InMemoryStorage::new().snapshot();
+    let record = memory("colliding-memory", "subject", "scope", "active and trash");
+    snapshot.dataset.memories.push(record.clone());
+    snapshot
+        .retention_trash_batches
+        .push(StorageRetentionTrashBatch {
+            batch_id: "trash-collision".to_owned(),
+            subject_id: SubjectId::new("subject").expect("subject identity must be valid"),
+            scope_id: ScopeId::new("scope").expect("scope identity must be valid"),
+            recycled_at_ns: 1,
+            reason: RetentionReasonCode::TerminalMemoryRecycle,
+            dataset: ExportDataset {
+                memories: vec![record],
+                ..ExportDataset::empty()
+            },
+            analysis_attempts: Vec::new(),
+        });
+
+    let error = InMemoryStorage::from_snapshot(snapshot)
+        .expect_err("active and recycled identities must not collide");
+    assert!(error.contains("active-or-trash memory identity collision"));
+}
 
 /// Builds one structurally valid mutation identity for direct storage tests.
 /// 为直接存储测试构建一个结构有效的变更身份。
@@ -182,6 +292,223 @@ fn turn(identity: &str, created_at_ns: i64) -> Turn {
         user_input_kind: Some(vulcan_memorymesh_core_contracts::TurnInputKind::Statement),
         analysis_details: Some("storage fixture analysis".to_owned()),
     }
+}
+
+/// Builds one completed retention turn for a chosen session and activity time.
+/// 为指定会话与活动时间构建一个已完成的保留策略测试回合。
+fn retention_turn(identity: &str, session: &str, created_at_ns: i64) -> Turn {
+    let mut value = turn(identity, created_at_ns);
+    value.subject_id = SubjectId::new("subject-retention").expect("subject identity must be valid");
+    value.scope_id = ScopeId::new("scope-retention").expect("scope identity must be valid");
+    value.session_source_id =
+        SessionSourceId::new(session).expect("session identity must be valid");
+    value
+}
+
+/// Verifies cold-turn pagination selects the oldest session activity before lexical identity.
+/// 验证冷回合分页按最久会话活动优先，而不是按字典序身份优先。
+#[test]
+fn retention_scan_pages_cold_sessions_by_oldest_activity() {
+    let mut storage = InMemoryStorage::new();
+    let mut mutations = Vec::new();
+    for index in 0_i64..9 {
+        let old = retention_turn(
+            format!("old-turn-{index}").as_str(),
+            "z-old-session",
+            index + 1,
+        );
+        mutations.push(Mutation::PutTurn {
+            entity: EntityRef::Existing {
+                domain_id: old.id.as_str().to_owned(),
+                expected_version: 0,
+            },
+            turn: old,
+        });
+        let recent = retention_turn(
+            format!("recent-turn-{index}").as_str(),
+            "a-recent-session",
+            index + 101,
+        );
+        mutations.push(Mutation::PutTurn {
+            entity: EntityRef::Existing {
+                domain_id: recent.id.as_str().to_owned(),
+                expected_version: 0,
+            },
+            turn: recent,
+        });
+    }
+    storage
+        .mutate(&batch("retention-oldest-session", mutations))
+        .expect("retention turns must commit");
+
+    let mut policy = RetentionPolicy::v1();
+    policy.cold_turn_scan_limit = 1;
+    let result = storage
+        .query(&StorageQuery::RetentionScan {
+            subject_id: SubjectId::new("subject-retention")
+                .expect("subject identity must be valid"),
+            scope_access: ScopeAccess {
+                write_scope: ScopeId::new("scope-retention").expect("scope identity must be valid"),
+                visible_scopes: vec![
+                    ScopeId::new("scope-retention").expect("scope identity must be valid"),
+                ],
+            },
+            now_ns: 1_000,
+            policy,
+        })
+        .expect("retention scan must succeed");
+    let StorageQueryResult::RetentionScan(facts) = result else {
+        panic!("retention scan must return retention facts");
+    };
+
+    assert_eq!(facts.cold_turn_candidates.len(), 1);
+    assert_eq!(
+        facts.cold_turn_candidates[0].session_source_id.as_str(),
+        "z-old-session"
+    );
+}
+
+/// Verifies extraction and compaction activity update the retention session activity boundary.
+/// 验证提取与压缩活动会更新保留策略使用的会话活动边界。
+#[test]
+fn retention_scan_uses_analysis_and_compaction_as_session_activity() {
+    let mut storage = InMemoryStorage::new();
+    let mut mutations = Vec::new();
+    for index in 0_i64..9 {
+        let analyzed = retention_turn(
+            format!("analyzed-turn-{index}").as_str(),
+            "z-analyzed-session",
+            index + 1,
+        );
+        mutations.push(Mutation::PutTurn {
+            entity: EntityRef::Existing {
+                domain_id: analyzed.id.as_str().to_owned(),
+                expected_version: 0,
+            },
+            turn: analyzed,
+        });
+        let untouched = retention_turn(
+            format!("untouched-turn-{index}").as_str(),
+            "a-untouched-session",
+            index + 101,
+        );
+        mutations.push(Mutation::PutTurn {
+            entity: EntityRef::Existing {
+                domain_id: untouched.id.as_str().to_owned(),
+                expected_version: 0,
+            },
+            turn: untouched,
+        });
+    }
+    mutations.push(Mutation::PutChatCompactBoundary(ChatCompactBoundary {
+        subject_id: SubjectId::new("subject-retention").expect("subject identity must be valid"),
+        scope_id: ScopeId::new("scope-retention").expect("scope identity must be valid"),
+        session_source_id: SessionSourceId::new("z-analyzed-session")
+            .expect("session identity must be valid"),
+        compacted_turn_id: TurnId::new("analyzed-turn-7").expect("turn identity must be valid"),
+        compacted_at_ns: 800,
+    }));
+    // attempt_identity records the newer extraction observation that must dominate compaction.
+    // attempt_identity 记录必须晚于压缩活动的最新提取观察时间。
+    let mut attempt_identity = identity("retention-session-analysis");
+    attempt_identity.observed_at_ns = 900;
+    mutations.push(Mutation::PutAnalysisAttempt(AnalysisAttemptIdentity {
+        turn_id: TurnId::new("analyzed-turn-8").expect("turn identity must be valid"),
+        analysis_generation: 1,
+        mutation_identity: attempt_identity,
+        config_snapshot_id: ConfigSnapshotId::new("retention-session-activity")
+            .expect("snapshot identity must be valid"),
+        structured_output_contracts: vec![StructuredOutputContractId::PostActionAnalysis],
+        score_contracts: Vec::new(),
+    }));
+    storage
+        .mutate(&batch("retention-session-activity", mutations))
+        .expect("retention activity fixtures must commit");
+
+    let mut policy = RetentionPolicy::v1();
+    policy.cold_turn_scan_limit = 1;
+    policy.idle_session_limit = 2;
+    let StorageQueryResult::RetentionScan(facts) = storage
+        .query(&StorageQuery::RetentionScan {
+            subject_id: SubjectId::new("subject-retention")
+                .expect("subject identity must be valid"),
+            scope_access: ScopeAccess {
+                write_scope: ScopeId::new("scope-retention").expect("scope identity must be valid"),
+                visible_scopes: vec![
+                    ScopeId::new("scope-retention").expect("scope identity must be valid"),
+                ],
+            },
+            now_ns: 1_000,
+            policy,
+        })
+        .expect("retention scan must succeed")
+    else {
+        panic!("retention scan must return retention facts");
+    };
+
+    assert_eq!(facts.cold_turn_candidates.len(), 1);
+    assert_eq!(
+        facts.cold_turn_candidates[0].session_source_id.as_str(),
+        "a-untouched-session",
+        "the recently analyzed session must no longer win oldest-first pagination"
+    );
+    let analyzed = facts
+        .idle_sessions
+        .iter()
+        .find(|session| session.session_source_id.as_str() == "z-analyzed-session")
+        .expect("analyzed session must remain visible to idle planning");
+    assert_eq!(analyzed.last_activity_ns, 900);
+}
+
+/// Verifies idle retention discovers a session established only by one direct session memory.
+/// 验证闲置保留能够发现仅由一条主动会话记忆建立的会话。
+#[test]
+fn retention_scan_includes_direct_memory_only_sessions() {
+    let mut storage = InMemoryStorage::new();
+    let mut direct = memory(
+        "direct-session-memory",
+        "subject-retention",
+        "scope-retention",
+        "direct session fact",
+    );
+    direct.scope_class = MemoryScopeClass::Session;
+    direct.origin_session_source_id =
+        Some(SessionSourceId::new("direct-only-session").expect("session identity must be valid"));
+    direct.expires_at_ns = Some(2);
+    storage
+        .mutate(&batch(
+            "retention-direct-session",
+            vec![put_memory(direct, 0)],
+        ))
+        .expect("direct session memory must commit");
+
+    let mut policy = RetentionPolicy::v1();
+    policy.session_idle_ms = 1;
+    let StorageQueryResult::RetentionScan(facts) = storage
+        .query(&StorageQuery::RetentionScan {
+            subject_id: SubjectId::new("subject-retention")
+                .expect("subject identity must be valid"),
+            scope_access: ScopeAccess {
+                write_scope: ScopeId::new("scope-retention").expect("scope identity must be valid"),
+                visible_scopes: vec![
+                    ScopeId::new("scope-retention").expect("scope identity must be valid"),
+                ],
+            },
+            now_ns: 2_000_000,
+            policy,
+        })
+        .expect("retention scan must succeed")
+    else {
+        panic!("retention scan must return retention facts");
+    };
+
+    assert_eq!(facts.idle_sessions.len(), 1);
+    assert_eq!(
+        facts.idle_sessions[0].session_source_id.as_str(),
+        "direct-only-session"
+    );
+    assert_eq!(facts.idle_sessions[0].last_activity_ns, 1);
+    assert!(!facts.idle_sessions[0].has_pending_turn);
 }
 
 /// Verifies completed and legacy details-bearing turns become details-only analysis references while invalid terminal states stay excluded.

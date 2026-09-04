@@ -23,6 +23,7 @@ use vulcan_agent_runtime::agent_runtime::provider_request_telemetry::{
 use vulcan_agent_runtime::agent_runtime::provider_transport_retry::{
     ProviderRetryDecision, ProviderRetryPolicy,
 };
+use vulcan_agent_runtime::provider_input_normalizer::protocol_profile_supports_structured_output;
 use vulcan_ai_contract::{
     AiErrorCategory, AiExecutionError, AiExecutionRequest, AiOperation, AiStreamEvent, ContentItem,
     DispatchOutcome, EmbeddingInputContent, EmbeddingRequest, EmbeddingResponse,
@@ -30,8 +31,8 @@ use vulcan_ai_contract::{
     InferenceOperationCapability, InferencePermission, InferenceUsageScope, ModelCapabilities,
     ModelParameterValue, NativeToolKind, PromptCachePolicy, ReasoningControlMode, ReasoningEffort,
     RequestUsage, RerankRequest, RerankResponse, ResourceKind, ResponsesExecutionOutputItem,
-    ResponsesExecutionRequest, ResponsesExecutionResult, StructuredOutputPolicy, ToolCall,
-    ToolChoicePolicy, UsageValue,
+    ResponsesExecutionRequest, ResponsesExecutionResult, StructuredOutputCapability,
+    StructuredOutputPolicy, ToolCall, ToolChoicePolicy, UsageValue,
 };
 use vulcan_ai_protocols::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
@@ -4182,6 +4183,11 @@ fn responses_provider_request(
     let mut effective_capabilities = selection.model.capabilities.clone();
     vulcan_provider_adapters::apply_host_default_reasoning_policy(&mut effective_capabilities);
     validate_responses_model_capabilities(request, &effective_capabilities)?;
+    validate_restricted_structured_output_route(
+        selection.route.protocol_route.protocol_profile_id.as_str(),
+        &request.structured_output,
+        &effective_capabilities,
+    )?;
     validate_prompt_cache_policy(&effective_capabilities, &prompt_cache)?;
     let requested_reasoning_effort = request
         .reasoning_effort
@@ -4446,6 +4452,113 @@ fn structured_output_policy_for_protocol(
         return StructuredOutputPolicy::JsonObject;
     }
     StructuredOutputPolicy::None
+}
+
+/// Verifies that one exact model and protocol route can carry the requested structured contract.
+/// 验证一条精确模型与协议路由能够承载请求的结构化契约。
+///
+/// # Parameters
+/// 参数
+/// `protocol_id` selects the frozen encoder, `policy` is the caller contract, and `capabilities`
+/// is the exact selected-model declaration.
+/// `protocol_id` 选择冻结编码器，`policy` 是调用方契约，`capabilities` 是所选模型的准确声明。
+///
+/// # Returns
+/// 返回值
+/// Success only when both the model declaration and protocol encoder preserve structured output.
+/// 仅当模型声明与协议编码器都能保留结构化输出时返回成功。
+fn validate_restricted_structured_output_route(
+    protocol_id: &str,
+    policy: &StructuredOutputPolicy,
+    capabilities: &ModelCapabilities,
+) -> Result<(), ConfiguredInferenceError> {
+    let requested = match policy {
+        StructuredOutputPolicy::None => return Ok(()),
+        StructuredOutputPolicy::JsonObject => StructuredOutputCapability::JsonObject,
+        StructuredOutputPolicy::JsonSchema { .. } => StructuredOutputCapability::JsonSchema,
+    };
+    if model_route_supports_structured_output(protocol_id, requested, capabilities) {
+        return Ok(());
+    }
+    Err(ConfiguredInferenceError::new(
+        ConfiguredInferenceErrorCategory::Contract,
+        "The selected model and protocol route cannot preserve the requested structured-output contract.",
+    ))
+}
+
+/// Reports whether one exact route can preserve a caller-owned JSON Schema contract.
+/// 判断一条精确路由能否保留调用方拥有的 JSON Schema 契约。
+///
+/// # Parameters
+/// 参数
+/// `protocol_id` identifies the frozen encoder and `capabilities` is the selected model contract.
+/// `protocol_id` 标识冻结编码器，`capabilities` 是所选模型契约。
+///
+/// # Returns
+/// 返回值
+/// `true` when provider-side JSON control remains active and host-side Schema validation is valid.
+/// 当提供方 JSON 控制保持启用且宿主侧 Schema 校验有效时返回 `true`。
+pub(crate) fn model_route_supports_json_schema_contract(
+    protocol_id: &str,
+    capabilities: &ModelCapabilities,
+) -> bool {
+    model_route_supports_structured_output(
+        protocol_id,
+        StructuredOutputCapability::JsonSchema,
+        capabilities,
+    )
+}
+
+/// Intersects a caller structured-output requirement with model and protocol capabilities.
+/// 将调用方结构化输出要求与模型及协议能力取交集。
+///
+/// # Parameters
+/// 参数
+/// `protocol_id`, `requested`, and `capabilities` are the three frozen authorities for one route.
+/// `protocol_id`、`requested` 与 `capabilities` 是一条路由的三项冻结权威。
+///
+/// # Returns
+/// 返回值
+/// `true` only when the provider wire can enforce JSON and the model declares sufficient support.
+/// 仅当提供方 Wire 可强制 JSON 且模型声明具备足够支持时返回 `true`。
+fn model_route_supports_structured_output(
+    protocol_id: &str,
+    requested: StructuredOutputCapability,
+    capabilities: &ModelCapabilities,
+) -> bool {
+    let provider_requirement = if matches!(
+        protocol_id,
+        ANTHROPIC_MESSAGES_PROFILE_ID
+            | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
+            | CLAUDE_CODE_MESSAGES_PROFILE_ID
+    ) {
+        requested
+    } else if matches!(
+        protocol_id,
+        OPENAI_CHAT_PROFILE_ID
+            | OPENAI_RESPONSES_PROFILE_ID
+            | OPENAI_CODEX_RESPONSES_PROFILE_ID
+            | GEMINI_GENERATE_CONTENT_PROFILE_ID
+            | GOOGLE_CODE_ASSIST_PROFILE_ID
+            | GEMINI_INTERACTIONS_PROFILE_ID
+            | COHERE_CHAT_PROFILE_ID
+    ) {
+        StructuredOutputCapability::JsonObject
+    } else {
+        return false;
+    };
+    if !protocol_profile_supports_structured_output(protocol_id, provider_requirement) {
+        return false;
+    }
+    match provider_requirement {
+        StructuredOutputCapability::JsonObject => {
+            capabilities.structured_output != StructuredOutputCapability::Unsupported
+        }
+        StructuredOutputCapability::JsonSchema => {
+            capabilities.structured_output == StructuredOutputCapability::JsonSchema
+        }
+        StructuredOutputCapability::Unsupported => false,
+    }
 }
 
 /// Applies the shared restricted-request reasoning policy and removes conflicting provider controls.

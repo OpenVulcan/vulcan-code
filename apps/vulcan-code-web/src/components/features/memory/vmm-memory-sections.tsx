@@ -2,7 +2,9 @@ import type * as React from "react"
 import {
   BrainCircuit,
   Database,
+  FileCode2,
   FolderTree,
+  RefreshCcw,
   ScrollText,
   Settings2,
   SlidersHorizontal,
@@ -20,9 +22,11 @@ const VMM_SECTION_TRANSLATION_KEYS: Record<string, { detail: TranslationKey; lab
   overview: { detail: "memory.overview.description", label: "memory.overview.title" },
   inference: { detail: "settings.inference.subtitle", label: "settings.inference.title" },
   rules: { detail: "memory.rules.description", label: "memory.rules.title" },
+  resource_rules: { detail: "memory.resources.description", label: "memory.resources.title" },
   content: { detail: "memory.content.description", label: "memory.content.title" },
   identity_projects: { detail: "memory.identity.description", label: "memory.identity.title" },
   profile: { detail: "memory.profile.description", label: "memory.profile.title" },
+  maintenance: { detail: "memory.maintenance.description", label: "memory.maintenance.title" },
   advanced: { detail: "memory.advanced.description", label: "memory.advanced.title" },
 }
 
@@ -83,6 +87,12 @@ export function vmmSectionIcon(sectionId: string): React.ReactNode {
   }
   if (sectionId === "rules") {
     return <SlidersHorizontal size={16} />
+  }
+  if (sectionId === "resource_rules") {
+    return <FileCode2 size={16} />
+  }
+  if (sectionId === "maintenance") {
+    return <RefreshCcw size={16} />
   }
   if (sectionId === "content") {
     return <Database size={16} />

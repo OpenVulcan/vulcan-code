@@ -1,0 +1,298 @@
+import * as React from "react"
+import { AlertTriangle, ArchiveRestore, DatabaseZap, RefreshCw, ShieldCheck, Sparkles, Trash2 } from "lucide-react"
+
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { useI18n } from "@/i18n"
+import type {
+  VmmMemoryActionResult,
+  VmmNativeProjectCatalogSummary,
+  VmmNativeRecycleBatchSummary,
+  VmmNativeRecycleBinSummary,
+  VmmNativeRetentionStatusSummary,
+  VmmNativeVectorRebuildPreview,
+  VmmNativeVectorStatusSummary,
+} from "@/types"
+
+// VmmNativeMaintenancePageProps binds native retention controls to the shared action channel.
+// VmmNativeMaintenancePageProps 将原生保留控制绑定到共享动作通道。
+interface VmmNativeMaintenancePageProps {
+  busy: boolean
+  onRunAction: (
+    action: string,
+    payload?: Record<string, unknown>,
+  ) => Promise<VmmMemoryActionResult | null>
+}
+
+// RecycleConfirmation identifies the selected irreversible or restorative recycle operation.
+// RecycleConfirmation 标识所选的不可逆或恢复型回收操作。
+interface RecycleConfirmation {
+  action: "restore" | "purge"
+  batch: VmmNativeRecycleBatchSummary
+}
+
+// VmmNativeMaintenancePage renders scheduled cleanup status and the native recycle bin.
+// VmmNativeMaintenancePage 渲染定期清洗状态与原生回收站。
+export function VmmNativeMaintenancePage({ busy, onRunAction }: VmmNativeMaintenancePageProps) {
+  const { t } = useI18n()
+  const [status, setStatus] = React.useState<VmmNativeRetentionStatusSummary | null>(null)
+  const [vectorStatus, setVectorStatus] = React.useState<VmmNativeVectorStatusSummary | null>(null)
+  const [vectorPreview, setVectorPreview] = React.useState<VmmNativeVectorRebuildPreview | null>(null)
+  const [catalog, setCatalog] = React.useState<VmmNativeProjectCatalogSummary | null>(null)
+  const [recycleBin, setRecycleBin] = React.useState<VmmNativeRecycleBinSummary | null>(null)
+  const [projectFilter, setProjectFilter] = React.useState("all")
+  const [confirmation, setConfirmation] = React.useState<RecycleConfirmation | null>(null)
+  const [error, setError] = React.useState<string | null>(null)
+
+  // loadStatus refreshes the process-local schedule and latest execution outcome.
+  // loadStatus 刷新进程内调度状态与最近执行结果。
+  const loadStatus = React.useCallback(async () => {
+    const result = await onRunAction("native_retention_status")
+    if (result?.data.kind !== "native_retention_status") {
+      setError(t("memory.maintenance.invalidResponse"))
+      return false
+    }
+    setStatus(result.data.value)
+    return true
+  }, [onRunAction, t])
+
+  // loadVectorStatus refreshes exact compatibility with the configured embedding generation.
+  // loadVectorStatus 刷新与已配置 Embedding 代次的准确兼容状态。
+  const loadVectorStatus = React.useCallback(async () => {
+    const result = await onRunAction("native_vector_status")
+    if (result?.data.kind !== "native_vector_status") {
+      setError(t("memory.maintenance.invalidResponse"))
+      return false
+    }
+    setVectorStatus(result.data.value)
+    return true
+  }, [onRunAction, t])
+
+  // loadRecycleBin refreshes one version-guarded recycle view for the active filter.
+  // loadRecycleBin 为当前筛选刷新一份受版本保护的回收视图。
+  const loadRecycleBin = React.useCallback(async (filter: string) => {
+    const payload = filter === "all" ? undefined : { vmmProjectId: Number(filter) }
+    const result = await onRunAction("native_recycle_bin", payload)
+    if (result?.data.kind !== "native_recycle_bin") {
+      setError(t("memory.maintenance.invalidResponse"))
+      return false
+    }
+    setRecycleBin(result.data.value)
+    return true
+  }, [onRunAction, t])
+
+  // loadPage refreshes status, project names, and recycle batches in channel-safe sequence.
+  // loadPage 按动作通道安全的顺序刷新状态、项目名称与回收批次。
+  const loadPage = React.useCallback(async () => {
+    if (!await loadStatus()) return
+    if (!await loadVectorStatus()) return
+    const catalogResult = await onRunAction("native_project_catalog")
+    if (catalogResult?.data.kind !== "native_project_catalog") {
+      setError(t("memory.maintenance.invalidResponse"))
+      return
+    }
+    setCatalog(catalogResult.data.value)
+    if (!await loadRecycleBin(projectFilter)) return
+    setError(null)
+  }, [loadRecycleBin, loadStatus, loadVectorStatus, onRunAction, projectFilter, t])
+
+  React.useEffect(() => {
+    void loadPage()
+  }, [loadPage])
+
+  // runCleanup executes one manual pass through the same serialized worker path.
+  // runCleanup 通过相同的串行工作器路径执行一次人工清洗。
+  const runCleanup = React.useCallback(async () => {
+    const result = await onRunAction("native_retention_run")
+    if (result?.data.kind !== "native_retention_run") {
+      setError(t("memory.maintenance.invalidResponse"))
+      return
+    }
+    await loadStatus()
+    await loadVectorStatus()
+    await loadRecycleBin(projectFilter)
+    setError(null)
+  }, [loadRecycleBin, loadStatus, loadVectorStatus, onRunAction, projectFilter, t])
+
+  // previewVectorRebuild obtains the exact versioned target set before asking for confirmation.
+  // previewVectorRebuild 在请求确认前获取准确的版本化目标集合。
+  const previewVectorRebuild = React.useCallback(async () => {
+    const result = await onRunAction("native_vector_rebuild_preview")
+    if (result?.data.kind !== "native_vector_rebuild_preview") {
+      setError(t("memory.maintenance.invalidResponse"))
+      return
+    }
+    setVectorPreview(result.data.value)
+    setError(null)
+  }, [onRunAction, t])
+
+  // applyVectorRebuild commits the exact previewed generation through bounded durable batches.
+  // applyVectorRebuild 通过有界耐久批次提交准确预检的向量代次。
+  const applyVectorRebuild = React.useCallback(async () => {
+    if (!vectorPreview) return
+    const result = await onRunAction("native_vector_rebuild", {
+      expectedStorageVersion: vectorPreview.storageVersion,
+      expectedPreviewFingerprint: vectorPreview.previewFingerprint,
+      confirmed: true,
+    })
+    if (result?.data.kind !== "native_vector_rebuild") {
+      setError(t("memory.maintenance.invalidResponse"))
+      return
+    }
+    setVectorPreview(null)
+    await loadVectorStatus()
+    setError(null)
+  }, [loadVectorStatus, onRunAction, t, vectorPreview])
+
+  // applyRecycleAction restores or permanently purges one exact versioned batch.
+  // applyRecycleAction 恢复或永久清除一个准确的带版本批次。
+  const applyRecycleAction = React.useCallback(async () => {
+    if (!confirmation || !recycleBin) return
+    const action = confirmation.action === "restore" ? "native_recycle_restore" : "native_recycle_purge"
+    const result = await onRunAction(action, {
+      batchId: confirmation.batch.batchId,
+      storageVersion: recycleBin.storageVersion,
+    })
+    if (result?.data.kind !== "native_recycle_batch") {
+      setError(t("memory.maintenance.invalidResponse"))
+      return
+    }
+    setConfirmation(null)
+    await loadStatus()
+    await loadVectorStatus()
+    await loadRecycleBin(projectFilter)
+    setError(null)
+  }, [confirmation, loadRecycleBin, loadStatus, loadVectorStatus, onRunAction, projectFilter, recycleBin, t])
+
+  const projectNames = React.useMemo(() => new Map(
+    (catalog?.projects ?? []).map((entry) => [entry.projectId, entry.name]),
+  ), [catalog])
+
+  return (
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div><h2 className="text-lg font-semibold">{t("memory.maintenance.title")}</h2><p className="mt-1 max-w-3xl text-sm text-muted-foreground">{t("memory.maintenance.description")}</p></div>
+        <div className="flex flex-wrap gap-2"><Button disabled={busy || status?.running} onClick={() => void runCleanup()} type="button"><Sparkles className="size-4" aria-hidden="true" />{t("memory.maintenance.runNow")}</Button><Button disabled={busy} onClick={() => void loadPage()} type="button" variant="outline"><RefreshCw className="size-4" aria-hidden="true" />{t("memory.resources.refresh")}</Button></div>
+      </div>
+      {error ? <p className="settings-error-text text-sm">{error}</p> : null}
+
+      <Card>
+        <CardHeader><CardTitle className="flex items-center gap-2"><ShieldCheck className="size-4" aria-hidden="true" />{t("memory.maintenance.status")}</CardTitle><CardDescription>{t("memory.maintenance.statusDescription")}</CardDescription></CardHeader>
+        <CardContent className="space-y-4">
+      {status ? <><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6"><Metric label={t("memory.maintenance.worker")} value={status.running ? t("memory.maintenance.running") : status.enabled ? t("memory.maintenance.enabled") : t("memory.maintenance.disabled")} /><Metric label={t("memory.maintenance.profileExpiryWorker")} value={status.profileExpiryRunning ? t("memory.maintenance.running") : status.enabled ? t("memory.maintenance.enabled") : t("memory.maintenance.disabled")} /><Metric label={t("memory.maintenance.interval")} value={`${status.intervalMinutes} min`} /><Metric label={t("memory.maintenance.profileExpiryInterval")} value={`${status.profileExpiryIntervalSeconds} s`} /><Metric label={t("memory.maintenance.pendingJobs")} value={String(status.pendingColdJobs)} /><Metric label={t("memory.maintenance.recycleBatches")} value={String(status.recycleBatchCount)} /></div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Metric label={t("memory.maintenance.hotWindow")} value={String(status.policy.turnHotWindowSize)} /><Metric label={t("memory.maintenance.idleWindow")} value={formatDuration(status.policy.sessionIdleMs)} /><Metric label={t("memory.maintenance.trashWindow")} value={formatDuration(status.policy.trashRetentionMs)} /><Metric label={t("memory.maintenance.protectionFloor")} value={`${status.policy.protectedPriorityFloor} / L${status.policy.protectedMemoryLevelFloor}`} /></div><div className="space-y-2"><p className="text-sm font-medium">{t("memory.maintenance.limits")}</p><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"><Metric label={t("memory.maintenance.profileExpiryLimit")} value={String(status.policy.profileExpiryLimit)} /><Metric label={t("memory.maintenance.memoryRecycleLimit")} value={String(status.policy.memoryRecycleLimit)} /><Metric label={t("memory.maintenance.coldScanLimit")} value={String(status.policy.coldTurnScanLimit)} /><Metric label={t("memory.maintenance.coldJobLimit")} value={String(status.policy.coldTurnJobLimit)} /><Metric label={t("memory.maintenance.idleSessionLimit")} value={String(status.policy.idleSessionLimit)} /><Metric label={t("memory.maintenance.trashPurgeLimit")} value={String(status.policy.trashPurgeLimit)} /></div><p className="text-xs text-muted-foreground">{t("memory.maintenance.vectorConsistency")}</p></div><div className="grid gap-3 lg:grid-cols-2"><div className="rounded-lg border bg-muted/20 px-3 py-2 text-sm"><p>{t("memory.maintenance.lastRun")}: {formatTimestamp(status.lastFinishedAtUnixMs, t("memory.maintenance.never"))}</p>{status.lastResult ? <p className="mt-1 text-muted-foreground">{t("memory.maintenance.lastResult").replace("{profiles}", String(status.lastResult.expiredProfileNodes)).replace("{memories}", String(status.lastResult.recycledMemories)).replace("{turns}", String(status.lastResult.recycledTurns)).replace("{enqueued}", String(status.lastResult.enqueuedColdJobs)).replace("{completed}", String(status.lastResult.completedColdJobs)).replace("{purged}", String(status.lastResult.purgedTrashBatches))}</p> : null}{status.lastError ? <p className="mt-1 text-destructive">{status.lastError}</p> : null}{status.lastResult?.projectFailures.length ? <ul className="mt-2 space-y-1 text-xs text-destructive">{status.lastResult.projectFailures.map((failure) => <li key={`${failure.projectId}:${failure.error}`}>{projectNames.get(failure.projectId) ?? `#${failure.projectId}`}: {failure.error}</li>)}</ul> : null}</div><div className="rounded-lg border bg-muted/20 px-3 py-2 text-sm"><p>{t("memory.maintenance.profileExpiryLastRun")}: {formatTimestamp(status.profileExpiryLastFinishedAtUnixMs, t("memory.maintenance.never"))}</p>{status.profileExpiryLastResult ? <p className="mt-1 text-muted-foreground">{t("memory.maintenance.profileExpiryLastResult").replace("{profiles}", String(status.profileExpiryLastResult.expiredProfileNodes))}</p> : null}{status.profileExpiryLastError ? <p className="mt-1 text-destructive">{status.profileExpiryLastError}</p> : null}{status.profileExpiryLastResult?.projectFailures.length ? <ul className="mt-2 space-y-1 text-xs text-destructive">{status.profileExpiryLastResult.projectFailures.map((failure) => <li key={`${failure.projectId}:${failure.error}`}>{projectNames.get(failure.projectId) ?? `#${failure.projectId}`}: {failure.error}</li>)}</ul> : null}</div></div></> : <p className="text-sm text-muted-foreground">{t("memory.resources.loading")}</p>}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><DatabaseZap className="size-4" aria-hidden="true" />{t("memory.maintenance.vectorTitle")}</CardTitle>
+          <CardDescription>{t("memory.maintenance.vectorDescription")}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {vectorStatus ? <>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Metric label={t("memory.maintenance.vectorConfigured")} value={vectorStatus.configured ? t("memory.maintenance.configured") : t("memory.maintenance.notConfigured")} />
+              <Metric label={t("memory.maintenance.vectorDimension")} value={vectorStatus.embeddingDimension == null ? "-" : String(vectorStatus.embeddingDimension)} />
+              <Metric label={t("memory.maintenance.activeMemories")} value={String(vectorStatus.activeMemoryCount)} />
+              <Metric label={t("memory.maintenance.recycleBinMemories")} value={String(vectorStatus.recycleBinMemoryCount)} />
+              <Metric label={t("memory.maintenance.currentVectors")} value={String(vectorStatus.currentMemoryCount)} />
+              <Metric label={t("memory.maintenance.currentRecycleBinVectors")} value={String(vectorStatus.currentRecycleBinMemoryCount)} />
+              <Metric label={t("memory.maintenance.pendingAnalysisJobs")} value={String(vectorStatus.pendingAnalysisJobCount)} />
+            </div>
+            <div className={!vectorStatus.configured || vectorStatus.rebuildRequiredMemoryCount > 0 ? "rounded-lg border border-destructive/40 bg-destructive/5 p-3" : "rounded-lg border bg-muted/20 p-3"}>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium">{!vectorStatus.configured ? t("memory.maintenance.vectorRouteUnavailable") : vectorStatus.rebuildRequiredMemoryCount > 0 ? t("memory.maintenance.vectorRebuildRequired") : t("memory.maintenance.vectorCompatible")}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{t("memory.maintenance.vectorRebuildCounts").replace("{memories}", String(vectorStatus.rebuildRequiredMemoryCount)).replace("{active}", String(vectorStatus.activeRebuildRequiredMemoryCount)).replace("{recycled}", String(vectorStatus.recycleBinRebuildRequiredMemoryCount)).replace("{spaces}", String(vectorStatus.legacyVectorSpaceCount))}</p>
+                  {vectorStatus.error ? <p className="mt-1 text-xs text-destructive">{vectorStatus.error}</p> : null}
+                </div>
+                <Button disabled={busy || !vectorStatus.configured || vectorStatus.rebuildRequiredMemoryCount === 0} onClick={() => void previewVectorRebuild()} type="button" variant="outline">
+                  <DatabaseZap className="size-4" aria-hidden="true" />{t("memory.maintenance.previewVectorRebuild")}
+                </Button>
+              </div>
+            </div>
+          </> : <p className="text-sm text-muted-foreground">{t("memory.resources.loading")}</p>}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle>{t("memory.maintenance.recycleBin")}</CardTitle><CardDescription>{t("memory.maintenance.recycleDescription")}</CardDescription></CardHeader>
+        <CardContent className="space-y-4">
+          <div className="max-w-sm space-y-2"><Label>{t("memory.maintenance.projectFilter")}</Label><Select onValueChange={setProjectFilter} value={projectFilter}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{t("memory.maintenance.allProjects")}</SelectItem>{catalog?.projects.map((project) => <SelectItem key={project.projectId} value={String(project.projectId)}>{project.name} · {project.tag}</SelectItem>)}</SelectContent></Select></div>
+          {recycleBin?.batches.length ? <div className="space-y-3">{recycleBin.batches.map((batch) => <RecycleBatchCard batch={batch} busy={busy} key={batch.batchId} onConfirm={(action) => setConfirmation({ action, batch })} projectName={projectNames.get(batch.projectId) ?? `#${batch.projectId}`} />)}</div> : <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">{t("memory.maintenance.emptyRecycleBin")}</div>}
+        </CardContent>
+      </Card>
+
+      <AlertDialog open={confirmation !== null} onOpenChange={(open) => !open && setConfirmation(null)}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{confirmation?.action === "purge" ? t("memory.maintenance.confirmPurgeTitle") : t("memory.maintenance.confirmRestoreTitle")}</AlertDialogTitle><AlertDialogDescription>{confirmation?.action === "purge" ? t("memory.maintenance.confirmPurgeDescription") : t("memory.maintenance.confirmRestoreDescription")}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{t("memory.common.cancel")}</AlertDialogCancel><AlertDialogAction onClick={() => void applyRecycleAction()}>{confirmation?.action === "purge" ? t("memory.maintenance.purge") : t("memory.maintenance.restore")}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+      <AlertDialog open={vectorPreview !== null} onOpenChange={(open) => !open && setVectorPreview(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("memory.maintenance.confirmVectorRebuildTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {vectorPreview ? t("memory.maintenance.confirmVectorRebuildDescription")
+                .replace("{memories}", String(vectorPreview.rebuildMemoryCount))
+                .replace("{active}", String(vectorPreview.activeRebuildMemoryCount))
+                .replace("{recycled}", String(vectorPreview.recycleBinRebuildMemoryCount))
+                .replace("{projects}", String(vectorPreview.affectedProjectCount))
+                .replace("{batches}", String(vectorPreview.batchCount))
+                .replace("{dimension}", String(vectorPreview.embeddingDimension)) : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("memory.common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void applyVectorRebuild()}>{t("memory.maintenance.rebuildVectors")}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  )
+}
+
+// Metric renders one compact retention status value.
+// Metric 渲染一个紧凑的保留状态值。
+function Metric({ label, value }: { label: string; value: string }) {
+  return <div className="rounded-lg border px-3 py-2"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 font-medium">{value}</p></div>
+}
+
+// RecycleBatchCard renders one recoverable batch and its guarded actions.
+// RecycleBatchCard 渲染一个可恢复批次及其受保护动作。
+function RecycleBatchCard({ batch, busy, onConfirm, projectName }: { batch: VmmNativeRecycleBatchSummary; busy: boolean; onConfirm: (action: "restore" | "purge") => void; projectName: string }) {
+  const { t } = useI18n()
+  return <div className="rounded-lg border p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex flex-wrap items-center gap-2"><span className="font-medium">{projectName}</span><Badge variant="outline">{retentionReasonLabel(batch.reason, t)}</Badge></div><p className="mt-1 break-all font-mono text-xs text-muted-foreground">{batch.batchId}</p></div><div className="flex gap-2"><Button disabled={busy} onClick={() => onConfirm("restore")} size="sm" type="button" variant="outline"><ArchiveRestore className="size-3.5" aria-hidden="true" />{t("memory.maintenance.restore")}</Button><Button disabled={busy} onClick={() => onConfirm("purge")} size="sm" type="button" variant="destructive"><Trash2 className="size-3.5" aria-hidden="true" />{t("memory.maintenance.purge")}</Button></div></div><div className="mt-3 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2 lg:grid-cols-4"><span>{t("memory.maintenance.turns")}: {batch.turnCount}</span><span>{t("memory.maintenance.memories")}: {batch.memoryCount}</span><span>{t("memory.maintenance.profiles")}: {batch.profileNodeCount}</span><span>{t("memory.maintenance.evidence")}: {batch.contextEvidenceCount}</span></div><div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground"><AlertTriangle className="size-3.5" aria-hidden="true" /><span>{t("memory.maintenance.expiresAt")}: {formatTimestamp(batch.expiresAtUnixMs, "-")}</span></div></div>
+}
+
+// retentionReasonLabel localizes one closed Core retention reason token.
+// retentionReasonLabel 本地化一个封闭 Core 保留原因标记。
+function retentionReasonLabel(reason: string, t: ReturnType<typeof useI18n>["t"]): string {
+  if (reason === "terminal_memory_recycle") return t("memory.maintenance.reasonTerminal")
+  if (reason === "cold_turn_recycle") return t("memory.maintenance.reasonColdTurn")
+  if (reason === "idle_session_recycle") return t("memory.maintenance.reasonIdle")
+  return reason
+}
+
+// formatDuration renders a fixed millisecond policy duration in human-scale days or hours.
+// formatDuration 将固定毫秒策略时长渲染为人类尺度的天或小时。
+function formatDuration(durationMs: number): string {
+  const dayMs = 24 * 60 * 60 * 1000
+  if (durationMs % dayMs === 0) return `${durationMs / dayMs} d`
+  return `${durationMs / (60 * 60 * 1000)} h`
+}
+
+// formatTimestamp renders an optional Unix millisecond timestamp without inventing a value.
+// formatTimestamp 渲染可选 Unix 毫秒时间戳，且不虚构值。
+function formatTimestamp(value: number | null | undefined, fallback: string): string {
+  return value == null ? fallback : new Date(value).toLocaleString()
+}

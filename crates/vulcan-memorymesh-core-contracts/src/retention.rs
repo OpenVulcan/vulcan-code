@@ -1,7 +1,7 @@
 //! VMM-aligned retention policy snapshots and strongly typed maintenance plans.
 //! 与 VMM 对齐的保留策略快照与强类型维护计划。
 
-use crate::{MemoryAccessIdentity, MutationIdentity, ScopeId, SubjectId};
+use crate::{MemoryAccessIdentity, MutationIdentity, ProfileNodeId, ScopeId, SubjectId};
 use serde::{Deserialize, Serialize};
 
 /// Carries the complete host-agnostic retention policy evaluated by Core.
@@ -29,6 +29,9 @@ pub struct RetentionPolicy {
     /// States whether shared terminal memories meeting either protection floor are skipped.
     /// 表示是否跳过满足任一保护下限的共享终态记忆。
     pub skip_protected_shared_memories: bool,
+    /// Limits one due active-profile expiry convergence pass; zero disables this family.
+    /// 限制一次到期活跃画像收敛批次；零值禁用该计划族。
+    pub profile_expiry_limit: u32,
     /// Limits one terminal-memory recycle pass; zero disables this family.
     /// 限制一次终态记忆回收批次；零值禁用该计划族。
     pub memory_recycle_limit: u32,
@@ -69,6 +72,30 @@ pub enum RetentionReasonCode {
     /// Indicates retry of one due sidecar vector deletion job.
     /// 表示重试一个到期旁路向量删除任务。
     VectorGcRetry = 5,
+    /// Indicates deterministic expiry of one due active profile node.
+    /// 表示对一个已到期活跃画像节点执行确定性过期收敛。
+    ProfileExpiry = 6,
+}
+
+/// Identifies one exact due active profile node selected for expiry convergence.
+/// 标识一个被选择执行过期收敛的精确到期活跃画像节点。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlannedProfileNodeRef {
+    /// Identifies the planned profile node.
+    /// 标识计划中的画像节点。
+    pub profile_node_id: ProfileNodeId,
+    /// Identifies the originating subject observed by Core.
+    /// 标识 Core 观察到的来源主体。
+    pub expected_subject_id: Option<SubjectId>,
+    /// Identifies the exact owning scope observed by Core.
+    /// 标识 Core 观察到的精确归属作用域。
+    pub expected_scope_id: ScopeId,
+    /// Carries the required optimistic version.
+    /// 携带必需的乐观版本。
+    pub expected_version: u64,
+    /// Carries the stable reason code for this planned item.
+    /// 携带该计划项的稳定原因码。
+    pub reason: RetentionReasonCode,
 }
 
 /// Identifies one exact memory and its required optimistic version inside a plan.
@@ -156,6 +183,9 @@ pub struct RetentionPlanSet {
     /// Identifies the exact write scope governed by this plan set.
     /// 标识该计划集管理的精确写入作用域。
     pub scope_id: ScopeId,
+    /// Carries due active profile nodes to materialize as expired audit rows.
+    /// 携带需要真实收敛为过期审计行的到期活跃画像节点。
+    pub profile_expiry: Vec<PlannedProfileNodeRef>,
     /// Carries terminal durable memories to move out of the hot tables.
     /// 携带需要迁出热表的终态持久记忆。
     pub terminal_memory_recycle: Vec<PlannedMemoryRef>,
@@ -183,12 +213,15 @@ impl RetentionPolicy {
     pub const fn v1() -> Self {
         Self {
             schema_version: 1,
-            turn_hot_window_size: 15,
+            turn_hot_window_size: 8,
             session_idle_ms: 1_296_000_000,
             trash_retention_ms: 2_592_000_000,
-            protected_priority_floor: 50,
+            // VMM P1 maps to the native normalized priority value 60.
+            // VMM 的 P1 映射到原生规范化优先级数值 60。
+            protected_priority_floor: 60,
             protected_memory_level_floor: 3,
             skip_protected_shared_memories: true,
+            profile_expiry_limit: 256,
             memory_recycle_limit: 128,
             cold_turn_scan_limit: 64,
             cold_turn_job_limit: 16,

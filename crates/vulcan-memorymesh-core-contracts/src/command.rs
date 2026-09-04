@@ -5,10 +5,10 @@ use crate::{
     CandidateQueryBoundary, CommandId, CommitReceipt, ConfigSnapshotId, CoreError,
     DroppedCandidate, ExportDataset, MemoryCandidateScope, MemoryCategory, MemoryContextEvidence,
     MemoryId, MemoryLevel, MemoryRecord, MemoryScopeClass, MutationIdentity,
-    PreCheckReviewCandidate, ProfileBundle, ProfileNode, ProfileNodeId, ProfileView,
-    ProfileViewSection, RetentionPlanSet, RetentionPolicy, RetiredProfileNode, ScopeAccess,
-    ScopeId, SearchHit, SessionSourceId, SubjectId, TimelineItem, Turn, TurnId, UnixNanos,
-    VectorSpaceId,
+    PreCheckReviewCandidate, PreCheckTurnContext, ProfileBundle, ProfileNode, ProfileNodeId,
+    ProfileView, ProfileViewSection, RetentionPlanSet, RetentionPolicy, RetiredProfileNode,
+    ScopeAccess, ScopeId, SearchHit, SessionSourceId, SubjectId, TimelineItem, Turn, TurnId,
+    UnixNanos, VectorSpaceId,
 };
 use serde::{Deserialize, Serialize};
 
@@ -78,9 +78,9 @@ pub struct PreCheckCommand {
     /// Carries the current raw user content.
     /// 携带当前原始用户内容。
     pub user_content: String,
-    /// Carries recent canonical timeline context.
-    /// 携带最近的规范化时间线上下文。
-    pub recent_timeline: Vec<TimelineItem>,
+    /// Carries recent same-session turns using VMM's details-or-raw contract.
+    /// 使用 VMM 的详情或原始内容契约携带最近同会话轮次。
+    pub recent_turns: Vec<PreCheckTurnContext>,
     /// Selects recall behavior.
     /// 选择召回行为。
     pub recall_mode: RecallMode,

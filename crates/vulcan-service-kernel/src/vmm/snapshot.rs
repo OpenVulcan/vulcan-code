@@ -791,8 +791,8 @@ pub(crate) fn vmm_runtime_summary(
 pub(crate) fn vmm_management_sections(
     backend_mode: vulcan_vmm::VmmBackendMode,
 ) -> Vec<VmmManagementSectionSummary> {
-    // Native pages expose one-level project memory and never advertise external users or recycle APIs.
-    // 原生页面只暴露一级项目记忆，绝不宣传外置用户或回收站接口。
+    // Native pages expose one-level projects plus their host-owned resource and retention controls.
+    // 原生页面暴露一级项目及其宿主持有的资源与保留控制。
     let native = backend_mode == vulcan_vmm::VmmBackendMode::Native;
     let content_description = if native {
         "使用自然语言搜索、查看、写入和删除当前绑定原生项目的长期记忆。"
@@ -828,6 +828,12 @@ pub(crate) fn vmm_management_sections(
             "记忆规则",
             "编辑记忆规则，并应用到全局或指定项目。",
         ),
+        (
+            "resource_rules",
+            "RESOURCE RULES",
+            "规则文件",
+            "按提示词、PII 和噪音分类查看、测试并安全覆盖原生 VMM 规则文件。",
+        ),
         ("content", "CONTENT", "记忆数据", content_description),
         (
             "identity_projects",
@@ -842,6 +848,12 @@ pub(crate) fn vmm_management_sections(
             "查看画像摘要并应用人工画像指令。",
         ),
         (
+            "maintenance",
+            "RETENTION",
+            "清洗与回收",
+            "查看周期清洗状态、立即运行清洗，并恢复或永久清除回收批次。",
+        ),
+        (
             "advanced",
             "ADVANCED",
             "高级设置",
@@ -849,7 +861,9 @@ pub(crate) fn vmm_management_sections(
         ),
     ]
     .into_iter()
-    .filter(|(id, _, _, _)| native || *id != "inference")
+    .filter(|(id, _, _, _)| {
+        native || !matches!(*id, "inference" | "resource_rules" | "maintenance")
+    })
     .map(
         |(id, key, label, description)| VmmManagementSectionSummary {
             id: id.to_string(),

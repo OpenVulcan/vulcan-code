@@ -61,7 +61,12 @@ closed_discriminant!(MemoryState {
     Recycled = 5
 });
 closed_discriminant!(ProfileLevel { Transient = 1, Situational = 2, Stable = 3, Persistent = 4 });
-closed_discriminant!(ProfileNodeState { Active = 1, Inactive = 2, Pending = 3 });
+closed_discriminant!(ProfileNodeState {
+    Active = 1,
+    Inactive = 2,
+    Pending = 3,
+    Expired = 4
+});
 closed_discriminant!(ProfileSourceKind {
     TurnExtract = 1,
     ManualInstruction = 2,
@@ -93,4 +98,4 @@ closed_discriminant!(MutationSourceKind { HostRpc = 1, BackgroundWorker = 2, Imp
 closed_discriminant!(RawScoreKind { CosineDistance = 1, CosineSimilarity = 2, Bm25 = 3, TokenOverlap = 4, TrigramSimilarity = 5, ReciprocalRankFusion = 6, L2Distance = 7 });
 closed_discriminant!(ScoreDirection { LowerIsBetter = 1, HigherIsBetter = 2 });
 closed_discriminant!(RrfScoreMode { RankNormalized = 1, FusedRankOnly = 2 });
-closed_discriminant!(RetentionReasonCode { TerminalMemoryRecycle = 1, ColdTurnRecycle = 2, IdleSessionRecycle = 3, TrashExpiryPurge = 4, VectorGcRetry = 5 });
+closed_discriminant!(RetentionReasonCode { TerminalMemoryRecycle = 1, ColdTurnRecycle = 2, IdleSessionRecycle = 3, TrashExpiryPurge = 4, VectorGcRetry = 5, ProfileExpiry = 6 });

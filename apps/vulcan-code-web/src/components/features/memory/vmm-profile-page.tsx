@@ -31,6 +31,8 @@ import { useI18n } from "@/i18n"
 import type {
   VmmMemoryActionResult,
   VmmMemorySnapshot,
+  VmmNativeProfileRecordSummary,
+  VmmNativeProfileStateCounts,
   VmmNativeProjectCatalogSummary,
   VmmProfileBundleActionValue,
   VmmProfileNodeActionValue,
@@ -40,13 +42,21 @@ import type {
 // NATIVE_FIXED_USER_TARGET 是原生记忆唯一宿主用户的纯界面身份。
 const NATIVE_FIXED_USER_TARGET = "__native_fixed_user__"
 
-// ProfileNodeView is the user-facing projection of one active profile node.
-// ProfileNodeView 是单个有效画像节点的用户可见投影。
+// ProfileNodeView is the user-facing projection of one active or audit-only profile node.
+// ProfileNodeView 是单个活动或仅供审计画像节点的用户可见投影。
 interface ProfileNodeView {
   content: string
   priority: string
   level: string
   date: string
+  state?: VmmNativeProfileRecordSummary["effectiveState"]
+  storedState?: VmmNativeProfileRecordSummary["storedState"]
+  activeForInjection?: boolean
+  sourceKind?: VmmNativeProfileRecordSummary["sourceKind"]
+  sourceId?: string | null
+  sourceTurnIds?: number[]
+  statusReason?: string | null
+  updatedAtUnixMs?: number
 }
 
 // VmmProfilePageProps defines the active profile snapshot and service actions.
@@ -77,6 +87,16 @@ export function vmmProfileCatalogAction(
   return vmmProfileUsesNativeProjectCatalog(deployment)
     ? "native_project_catalog"
     : "load_users_projects"
+}
+
+// vmmProfileNodeAction selects native lifecycle audit records or the external active-only contract.
+// vmmProfileNodeAction 选择原生生命周期审计记录或外置仅活动节点契约。
+export function vmmProfileNodeAction(
+  deployment: VmmMemorySnapshot["experienceState"]["deployment"],
+): "native_profile_records" | "load_profile_nodes" {
+  return vmmProfileUsesNativeProjectCatalog(deployment)
+    ? "native_profile_records"
+    : "load_profile_nodes"
 }
 
 // vmmProfileEffectiveTarget preserves the selected profile class for both native and external modes.
@@ -142,6 +162,9 @@ function VmmProfilePage({
   // selectedProjectRef 是当前明确查看的 VMM 目录项目。
   const [selectedProjectRef, setSelectedProjectRef] = React.useState(snapshot.globalDraft.projectId)
   const [nodes, setNodes] = React.useState<ProfileNodeView[]>([])
+  // nativeStateCounts keeps all profile lifecycle states visible without changing active injection.
+  // nativeStateCounts 让全部画像生命周期状态可见，同时不改变活动注入逻辑。
+  const [nativeStateCounts, setNativeStateCounts] = React.useState<VmmNativeProfileStateCounts | null>(null)
   const [instruction, setInstruction] = React.useState("")
   const [bundlePreview, setBundlePreview] = React.useState(snapshot.runtime.profilePreview)
   // nativeCatalog contains the host-owned one-level project identities available to native profiles.
@@ -188,6 +211,7 @@ function VmmProfilePage({
       setNativeCatalog(null)
     }
     setNodes([])
+    setNativeStateCounts(null)
     setBundlePreview("")
     automaticLoadKey.current = ""
     nativeCatalogLoadIssued.current = false
@@ -260,6 +284,11 @@ function VmmProfilePage({
   React.useEffect(() => {
     if (result?.data.kind === "profile_nodes") {
       setNodes(projectProfileNodes(result.data.value.nodes))
+      setNativeStateCounts(null)
+    }
+    if (result?.data.kind === "native_profile_records") {
+      setNodes(nativeProfileNodes(result.data.value.nodes))
+      setNativeStateCounts(result.data.value.counts)
     }
     if (result?.data.kind === "profile_bundle") {
       setBundlePreview(vmmProfileBundlePreview(result.data.value, effectiveTarget))
@@ -285,10 +314,12 @@ function VmmProfilePage({
     const identityPayload = isNative
       ? { projectRef: selectedProjectRef }
       : { userRef: selectedUserRef, projectRef: selectedProjectRef }
-    const nodesResult = await onRunAction("load_profile_nodes", {
-      ...identityPayload,
-      target: effectiveTarget,
-    })
+    const nodesResult = await onRunAction(
+      vmmProfileNodeAction(snapshot.experienceState.deployment),
+      isNative
+        ? { vmmProjectId: Number(selectedProjectRef), target: effectiveTarget }
+        : { ...identityPayload, target: effectiveTarget },
+    )
     if (!nodesResult) {
       return
     }
@@ -401,6 +432,7 @@ function VmmProfilePage({
             onValueChange={(value) => {
               setTarget(value as "user" | "project")
               setNodes([])
+              setNativeStateCounts(null)
               setBundlePreview("")
             }}
             value={target}
@@ -438,6 +470,7 @@ function VmmProfilePage({
                   : t("memory.profile.noProject")}
                 onValueChange={(value) => {
                   setNodes([])
+                  setNativeStateCounts(null)
                   setBundlePreview("")
                   if (effectiveTarget === "user") {
                     setSelectedUserRef(value)
@@ -459,6 +492,22 @@ function VmmProfilePage({
         </CardContent>
       </Card>
 
+      {isNative && nativeStateCounts ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("memory.profile.stateSummary")}</CardTitle>
+            <CardDescription>{t("memory.profile.stateSummaryDescription")}</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <ProfileStateMetric label={t("memory.profile.stateActive")} value={nativeStateCounts.active} />
+            <ProfileStateMetric label={t("memory.profile.statePending")} value={nativeStateCounts.pending} />
+            <ProfileStateMetric label={t("memory.profile.stateScheduled")} value={nativeStateCounts.scheduled} />
+            <ProfileStateMetric label={t("memory.profile.stateInactive")} value={nativeStateCounts.inactive} />
+            <ProfileStateMetric label={t("memory.profile.stateExpired")} value={nativeStateCounts.expired} />
+          </CardContent>
+        </Card>
+      ) : null}
+
       {nodes.length === 0 ? (
         <Empty className="min-h-48" variant="outlined">
           <EmptyHeader>
@@ -474,6 +523,14 @@ function VmmProfilePage({
               <CardContent className="space-y-3 pt-5">
                 <p className="whitespace-pre-wrap text-sm">{node.content}</p>
                 <div className="flex flex-wrap gap-2">
+                  {node.state ? (
+                    <Badge variant={node.state === "active" ? "secondary" : "outline"}>
+                      {t(nativeProfileStateKey(node.state))}
+                    </Badge>
+                  ) : null}
+                  {node.activeForInjection === false ? (
+                    <Badge variant="outline">{t("memory.profile.notInjected")}</Badge>
+                  ) : null}
                   {node.priority ? (
                     <Badge variant="secondary">
                       {t("memory.profile.priority")}{t("global.labelSeparator")}{node.priority}
@@ -486,6 +543,39 @@ function VmmProfilePage({
                   ) : null}
                   {node.date ? <span className="text-xs text-muted-foreground">{node.date}</span> : null}
                 </div>
+                {node.sourceKind ? (
+                  <div className="space-y-1 text-xs text-muted-foreground">
+                    <p>
+                      {t("memory.profile.source")}{t("global.labelSeparator")}
+                      {t(nativeProfileSourceKey(node.sourceKind))}
+                      {node.sourceId ? ` · ${node.sourceId}` : ""}
+                    </p>
+                    {node.sourceTurnIds?.length ? (
+                      <p>
+                        {t("memory.profile.sourceTurns")}{t("global.labelSeparator")}
+                        {node.sourceTurnIds.map((turnId) => `#${turnId}`).join(", ")}
+                      </p>
+                    ) : null}
+                    {node.statusReason ? (
+                      <p>
+                        {t("memory.profile.statusReason")}{t("global.labelSeparator")}
+                        {node.statusReason}
+                      </p>
+                    ) : null}
+                    {node.updatedAtUnixMs != null ? (
+                      <p>
+                        {t("memory.profile.updatedAt")}{t("global.labelSeparator")}
+                        {new Date(node.updatedAtUnixMs).toLocaleString()}
+                      </p>
+                    ) : null}
+                    {node.storedState && node.state && node.storedState !== node.state ? (
+                      <p>
+                        {t("memory.profile.storedState")}{t("global.labelSeparator")}
+                        {t(nativeProfileStateKey(node.storedState))}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
           ))}
@@ -544,6 +634,73 @@ function VmmProfilePage({
       ) : null}
     </div>
   )
+}
+
+// ProfileStateMetricProps defines one compact native profile-state counter.
+// ProfileStateMetricProps 定义一个紧凑的原生画像状态计数器。
+interface ProfileStateMetricProps {
+  label: string
+  value: number
+}
+
+// ProfileStateMetric renders one lifecycle count without exposing transport details.
+// ProfileStateMetric 渲染一个生命周期计数且不暴露传输细节。
+function ProfileStateMetric({ label, value }: ProfileStateMetricProps) {
+  return (
+    <div className="rounded-lg border bg-muted/20 px-3 py-2.5">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="mt-1 text-lg font-semibold tabular-nums">{value}</p>
+    </div>
+  )
+}
+
+// nativeProfileStateKey maps one closed native state token to localized user text.
+// nativeProfileStateKey 将一个封闭的原生状态标记映射为本地化用户文本。
+function nativeProfileStateKey(
+  state: VmmNativeProfileRecordSummary["effectiveState"]
+    | VmmNativeProfileRecordSummary["storedState"],
+) {
+  switch (state) {
+    case "active": return "memory.profile.stateActive" as const
+    case "inactive": return "memory.profile.stateInactive" as const
+    case "pending": return "memory.profile.statePending" as const
+    case "expired": return "memory.profile.stateExpired" as const
+    case "scheduled": return "memory.profile.stateScheduled" as const
+  }
+}
+
+// nativeProfileSourceKey maps one closed native provenance token to localized user text.
+// nativeProfileSourceKey 将一个封闭的原生来源标记映射为本地化用户文本。
+function nativeProfileSourceKey(sourceKind: VmmNativeProfileRecordSummary["sourceKind"]) {
+  switch (sourceKind) {
+    case "turn_extract": return "memory.profile.sourceTurnExtract" as const
+    case "manual_instruction": return "memory.profile.sourceManualInstruction" as const
+    case "system_seed": return "memory.profile.sourceSystemSeed" as const
+    case "retained_after_subject_delete": return "memory.profile.sourceRetained" as const
+  }
+}
+
+// nativeProfileNodes converts native all-state records into detailed profile cards.
+// nativeProfileNodes 将原生全状态记录转换为详细画像卡片。
+function nativeProfileNodes(nodes: VmmNativeProfileRecordSummary[]): ProfileNodeView[] {
+  return nodes
+    .filter((node) => node.content.trim().length > 0)
+    .map((node) => ({
+      content: node.content,
+      priority: String(node.priority),
+      level: node.level,
+      date: node.effectiveDateAtUnixMs == null
+        ? ""
+        : new Date(node.effectiveDateAtUnixMs).toLocaleString(),
+      state: node.effectiveState,
+      storedState: node.storedState,
+      activeForInjection: node.activeForInjection,
+      sourceKind: node.sourceKind,
+      sourceId: node.sourceId,
+      sourceTurnIds: node.sourceTurnIds,
+      statusReason: node.statusReason,
+      updatedAtUnixMs: node.updatedAtUnixMs,
+    }))
 }
 
 // projectProfileNodes converts typed profile entries into identifier-free card data.

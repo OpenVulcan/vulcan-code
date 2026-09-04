@@ -147,7 +147,7 @@ fn write_semantic_payload(writer: &mut CanonicalWriter, command: &crate::CoreCom
             writer.string(command.vector_space_id.as_str());
             write_candidate_scope(writer, &command.candidate_scope);
             writer.string(&command.user_content);
-            write_timeline(writer, &command.recent_timeline);
+            write_precheck_turns(writer, &command.recent_turns);
             writer.u32(command.recall_mode as u32);
             writer.u32(command.session_recall_mode as u32);
             writer.u32(command.max_search_queries);
@@ -275,6 +275,16 @@ fn write_timeline(writer: &mut CanonicalWriter, timeline: &[crate::TimelineItem]
     });
 }
 
+/// Writes same-session `PreCheck` turn contexts into semantic fingerprint material.
+/// 将同会话 `PreCheck` 轮次上下文写入语义指纹材料。
+fn write_precheck_turns(writer: &mut CanonicalWriter, turns: &[crate::PreCheckTurnContext]) {
+    writer.list(turns, |inner, turn| {
+        inner.string(turn.turn_id.as_str());
+        inner.u32(turn.content_type as u32);
+        inner.string(&turn.content);
+    });
+}
+
 /// Writes one ordered direct-write batch item.
 /// 写入一个有序主动写入批次项。
 fn write_write_batch_item(writer: &mut CanonicalWriter, item: &crate::MemoryWriteBatchItem) {
@@ -311,6 +321,7 @@ fn write_retention_policy(writer: &mut CanonicalWriter, policy: &crate::Retentio
     writer.u32(policy.protected_priority_floor);
     writer.u32(policy.protected_memory_level_floor);
     writer.bool(policy.skip_protected_shared_memories);
+    writer.u32(policy.profile_expiry_limit);
     writer.u32(policy.memory_recycle_limit);
     writer.u32(policy.cold_turn_scan_limit);
     writer.u32(policy.cold_turn_job_limit);

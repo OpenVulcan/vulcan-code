@@ -65,9 +65,21 @@ pub const VMM_PENDING_ANALYSIS_READY: &str = "ready";
 /// 分析作业已不再保留其原始会话载荷。
 pub const VMM_PENDING_ANALYSIS_COMPLETED: &str = "completed";
 
+/// The analysis job reached the explicit repeated-failure policy and released its turn.
+/// 分析作业达到显式重复失败策略并已放行对应回合。
+pub const VMM_PENDING_ANALYSIS_BYPASSED: &str = "analysis_bypassed";
+
+/// The analysis job carried an unreadable durable payload and was isolated permanently.
+/// 分析作业携带不可读取的耐久载荷并已被永久隔离。
+pub const VMM_PENDING_ANALYSIS_CORRUPTED: &str = "corrupted";
+
 /// Maximum Unicode character count accepted for one persisted analysis failure diagnostic.
 /// 单条持久分析失败诊断允许的最大 Unicode 字符数。
 pub const VMM_PENDING_ANALYSIS_ERROR_CHAR_LIMIT: usize = 512;
+
+/// Completes one reconciled journal row while retaining only its compact idempotent result.
+/// 完成一条已对账账本记录，并且只保留其紧凑幂等结果。
+const COMPLETE_CORE_MUTATION_SQL: &str = "UPDATE vmm_core_mutations SET state = 'completed', before_snapshot_json = '', after_snapshot_json = '', updated_at_unix_ms = ? WHERE operation_id = ? AND state = 'committed';";
 
 /// Maximum candidate rows requested from LanceDB before exact Core visibility filtering.
 /// 在 Core 精确可见性过滤前从 LanceDB 请求的最大候选行数。
@@ -114,11 +126,11 @@ pub struct NativeVmmCoreMutation {
     /// Current durable state: prepared, committed, or completed.
     /// 当前耐久状态：已准备、已提交或已完成。
     pub state: String,
-    /// Full vector-bearing snapshot before the operation.
-    /// 操作前包含向量的完整快照。
+    /// Full vector-bearing snapshot before an unfinished operation, erased after completion.
+    /// 未完成操作前包含向量的完整快照，完成后擦除。
     pub before_snapshot_json: String,
-    /// Full vector-bearing snapshot after the operation.
-    /// 操作后包含向量的完整快照。
+    /// Full vector-bearing snapshot after an unfinished operation, erased after completion.
+    /// 未完成操作后包含向量的完整快照，完成后擦除。
     pub after_snapshot_json: String,
     /// Serialized typed operation result returned for transport retries.
     /// 供传输重试返回的已序列化强类型操作结果。
@@ -1234,6 +1246,42 @@ ON CONFLICT(snapshot_key) DO UPDATE SET
             .collect()
     }
 
+    /// Lists every durable native analysis job for maintenance audit projections.
+    /// 列出用于维护审计投影的全部耐久原生分析作业。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Active and terminal jobs in stable creation order; terminal payloads remain erased.
+    /// 返回按创建顺序排列的活动态与终态作业；终态载荷保持已擦除状态。
+    ///
+    /// # Errors
+    /// 错误
+    /// Returns an error when SQLite access or typed row validation fails.
+    /// SQLite 访问或强类型记录校验失败时返回错误。
+    pub async fn list_analysis_jobs_for_audit(
+        &self,
+    ) -> Result<Vec<NativeVmmPendingAnalysisJob>, String> {
+        let result = self
+            .client
+            .query_sqlite_json_typed(
+                VMM_SPACE_ID,
+                self.sqlite_binding_id.as_str(),
+                r#"SELECT operation_id, request_fingerprint, payload_json,
+                          intake_mutation_operation_id, turn_id, state, attempt_count,
+                          next_attempt_at_unix_ms, last_error
+                   FROM vmm_pending_analysis_jobs
+                   ORDER BY created_at_unix_ms, operation_id;"#,
+                Vec::new(),
+            )
+            .await
+            .map_err(|error| format!("列出原生 VMM 分析审计作业失败：{error}"))?;
+        let rows: Vec<NativeVmmPendingAnalysisJobRow> = serde_json::from_str(&result.json_data)
+            .map_err(|error| format!("解析原生 VMM 分析审计作业失败：{error}"))?;
+        rows.into_iter()
+            .map(NativeVmmPendingAnalysisJobRow::into_job)
+            .collect()
+    }
+
     /// Records one bounded failed analysis attempt and schedules its next retry.
     /// 记录一次有界分析失败并调度下一次重试。
     ///
@@ -1274,6 +1322,63 @@ ON CONFLICT(snapshot_key) DO UPDATE SET
             .map_err(|error| format!("记录原生 VMM 分析失败失败：{error}"))?;
         if !result.success {
             return Err(format!("记录原生 VMM 分析失败失败：{}", result.message));
+        }
+        Ok(())
+    }
+
+    /// Finalizes one failed analysis job and erases its original conversation payload.
+    /// 终结一条失败分析作业并擦除其原始会话载荷。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `operation_id` and `request_fingerprint` guard the exact accepted request, `terminal_state`
+    /// must be bypassed or corrupted, and `last_error` is the bounded final diagnostic.
+    /// `operation_id` 与 `request_fingerprint` 守护准确已接受请求，`terminal_state`
+    /// 必须为已放行或已损坏，`last_error` 是有界最终诊断。
+    ///
+    /// # Errors
+    /// 错误
+    /// Returns an error for an unsupported state, oversized diagnostic, or failed SQLite update.
+    /// 状态不受支持、诊断过长或 SQLite 更新失败时返回错误。
+    pub async fn finalize_failed_pending_analysis_job(
+        &self,
+        operation_id: &str,
+        request_fingerprint: &str,
+        terminal_state: &str,
+        last_error: &str,
+    ) -> Result<(), String> {
+        if !matches!(
+            terminal_state,
+            VMM_PENDING_ANALYSIS_BYPASSED | VMM_PENDING_ANALYSIS_CORRUPTED
+        ) {
+            return Err(format!("原生 VMM 分析作业终态 `{terminal_state}` 不受支持"));
+        }
+        if last_error.trim().is_empty()
+            || last_error.chars().count() > VMM_PENDING_ANALYSIS_ERROR_CHAR_LIMIT
+        {
+            return Err(String::from("原生 VMM 分析作业最终诊断为空或超过长度限制"));
+        }
+        let result = self
+            .client
+            .execute_sqlite_script_typed(
+                VMM_SPACE_ID,
+                self.sqlite_binding_id.as_str(),
+                r#"UPDATE vmm_pending_analysis_jobs
+                   SET state = ?, payload_json = '', attempt_count = attempt_count + 1,
+                       next_attempt_at_unix_ms = 0, last_error = ?, updated_at_unix_ms = ?
+                   WHERE operation_id = ? AND request_fingerprint = ? AND state = 'ready';"#,
+                vec![
+                    sqlite_text(terminal_state),
+                    sqlite_text(last_error),
+                    ControllerSqliteValue::Int64(current_unix_epoch_millis_i64()?),
+                    sqlite_text(operation_id),
+                    sqlite_text(request_fingerprint),
+                ],
+            )
+            .await
+            .map_err(|error| format!("终结原生 VMM 失败分析作业失败：{error}"))?;
+        if !result.success {
+            return Err(format!("终结原生 VMM 失败分析作业失败：{}", result.message));
         }
         Ok(())
     }
@@ -1552,8 +1657,8 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
         Ok(())
     }
 
-    /// Marks one committed native Core mutation fully reconciled after vector cleanup.
-    /// 在向量清理完成后将一条已提交原生 Core 变更标记为完全对账。
+    /// Marks one committed native Core mutation fully reconciled and releases recovery snapshots.
+    /// 将一条已提交原生 Core 变更标记为完全对账并释放恢复快照。
     ///
     /// # Parameters
     /// 参数
@@ -1562,15 +1667,15 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
     ///
     /// # Returns
     /// 返回值
-    /// Success after the completed marker is durable.
-    /// 完成标记耐久化后返回成功。
+    /// Success after the completed marker and compacted recovery payload are durable.
+    /// 完成标记与压缩后的恢复载荷耐久化后返回成功。
     pub async fn complete_core_mutation(&self, operation_id: &str) -> Result<(), String> {
         let result = self
             .client
             .execute_sqlite_script_typed(
                 VMM_SPACE_ID,
                 self.sqlite_binding_id.as_str(),
-                "UPDATE vmm_core_mutations SET state = 'completed', updated_at_unix_ms = ? WHERE operation_id = ? AND state = 'committed';",
+                COMPLETE_CORE_MUTATION_SQL,
                 vec![
                     ControllerSqliteValue::Int64(current_unix_epoch_millis_i64()?),
                     sqlite_text(operation_id),
@@ -1975,6 +2080,8 @@ impl NativeVmmPendingAnalysisJobRow {
             VMM_PENDING_ANALYSIS_INTAKING
                 | VMM_PENDING_ANALYSIS_READY
                 | VMM_PENDING_ANALYSIS_COMPLETED
+                | VMM_PENDING_ANALYSIS_BYPASSED
+                | VMM_PENDING_ANALYSIS_CORRUPTED
         ) {
             return Err(format!("原生 VMM 待分析作业状态 `{}` 无效", self.state));
         }
@@ -1986,6 +2093,14 @@ impl NativeVmmPendingAnalysisJobRow {
             }
             VMM_PENDING_ANALYSIS_READY => self.turn_id.is_some() && !self.payload_json.is_empty(),
             VMM_PENDING_ANALYSIS_COMPLETED => self.payload_json.is_empty(),
+            VMM_PENDING_ANALYSIS_BYPASSED | VMM_PENDING_ANALYSIS_CORRUPTED => {
+                self.turn_id.is_some()
+                    && self.payload_json.is_empty()
+                    && self
+                        .last_error
+                        .as_deref()
+                        .is_some_and(|error| !error.trim().is_empty())
+            }
             _ => false,
         };
         if !state_shape_valid || self.next_attempt_at_unix_ms < 0 {
@@ -2349,7 +2464,7 @@ CREATE TABLE IF NOT EXISTS vmm_pending_analysis_jobs (
     intake_mutation_operation_id TEXT NOT NULL UNIQUE
         CHECK(length(trim(intake_mutation_operation_id)) > 0),
     turn_id TEXT UNIQUE,
-    state TEXT NOT NULL CHECK(state IN ('intaking', 'ready', 'completed')),
+    state TEXT NOT NULL CHECK(state IN ('intaking', 'ready', 'completed', 'analysis_bypassed', 'corrupted')),
     attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
     next_attempt_at_unix_ms INTEGER NOT NULL DEFAULT 0 CHECK(next_attempt_at_unix_ms >= 0),
     last_error TEXT CHECK(last_error IS NULL OR length(last_error) <= {analysis_error_char_limit}),
@@ -2359,6 +2474,7 @@ CREATE TABLE IF NOT EXISTS vmm_pending_analysis_jobs (
         (state = 'intaking' AND turn_id IS NULL)
         OR (state = 'ready' AND turn_id IS NOT NULL AND length(payload_json) > 0)
         OR (state = 'completed' AND length(payload_json) = 0)
+        OR (state IN ('analysis_bypassed', 'corrupted') AND turn_id IS NOT NULL AND length(payload_json) = 0 AND length(trim(last_error)) > 0)
     )
 );
 
@@ -2373,7 +2489,11 @@ CREATE TABLE IF NOT EXISTS vmm_core_mutations (
     after_snapshot_json TEXT NOT NULL,
     result_json TEXT NOT NULL,
     created_at_unix_ms INTEGER NOT NULL,
-    updated_at_unix_ms INTEGER NOT NULL
+    updated_at_unix_ms INTEGER NOT NULL,
+    CHECK(
+        (state IN ('prepared', 'committed') AND length(before_snapshot_json) > 0 AND length(after_snapshot_json) > 0)
+        OR (state = 'completed' AND length(before_snapshot_json) = 0 AND length(after_snapshot_json) = 0)
+    )
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_vmm_core_mutations_single_unfinished
@@ -2712,8 +2832,12 @@ mod tests {
         assert!(schema.contains("before_snapshot_json TEXT NOT NULL"));
         assert!(schema.contains("after_snapshot_json TEXT NOT NULL"));
         assert!(schema.contains("result_json TEXT NOT NULL"));
+        assert!(schema.contains("state = 'completed' AND length(before_snapshot_json) = 0"));
         assert!(schema.contains("idx_vmm_core_mutations_single_unfinished"));
         assert!(schema.contains("WHERE state != 'completed'"));
+        assert!(COMPLETE_CORE_MUTATION_SQL.contains("before_snapshot_json = ''"));
+        assert!(COMPLETE_CORE_MUTATION_SQL.contains("after_snapshot_json = ''"));
+        assert!(!COMPLETE_CORE_MUTATION_SQL.contains("result_json = ''"));
     }
 
     /// Verifies post-action analysis jobs bind turns atomically and erase completed payloads.
@@ -2725,9 +2849,38 @@ mod tests {
         assert!(schema.contains("intake_mutation_operation_id TEXT NOT NULL UNIQUE"));
         assert!(
             schema
-                .contains("state TEXT NOT NULL CHECK(state IN ('intaking', 'ready', 'completed'))")
+                .contains("state TEXT NOT NULL CHECK(state IN ('intaking', 'ready', 'completed', 'analysis_bypassed', 'corrupted'))")
         );
+        assert!(schema.contains("state IN ('analysis_bypassed', 'corrupted')"));
         assert!(schema.contains("idx_vmm_pending_analysis_due"));
+    }
+
+    /// Verifies failed terminal jobs require a turn, erased payload, and retained diagnostic.
+    /// 验证失败终态作业必须包含回合、已擦除载荷与保留诊断。
+    #[test]
+    fn pending_analysis_terminal_rows_enforce_failure_shape() {
+        let terminal_row = NativeVmmPendingAnalysisJobRow {
+            operation_id: String::from("operation"),
+            request_fingerprint: String::from("sha256:test"),
+            payload_json: String::new(),
+            intake_mutation_operation_id: String::from("intake"),
+            turn_id: Some(String::from("vmm-turn-1")),
+            state: String::from(VMM_PENDING_ANALYSIS_BYPASSED),
+            attempt_count: 5,
+            next_attempt_at_unix_ms: 0,
+            last_error: Some(String::from("analysis failed five times")),
+        };
+        let job = terminal_row.clone().into_job().expect("valid terminal job");
+        assert_eq!(job.state, VMM_PENDING_ANALYSIS_BYPASSED);
+
+        let mut missing_diagnostic = terminal_row.clone();
+        missing_diagnostic.last_error = None;
+        assert!(missing_diagnostic.into_job().is_err());
+
+        let mut retained_payload = terminal_row;
+        retained_payload.state = String::from(VMM_PENDING_ANALYSIS_CORRUPTED);
+        retained_payload.payload_json = String::from("{}");
+        assert!(retained_payload.into_job().is_err());
     }
 
     /// Verifies owner and recall links are published by one ordered SQLite transaction.

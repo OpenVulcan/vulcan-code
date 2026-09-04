@@ -43,6 +43,7 @@ function testCandidate(route: PublicAiInferenceRoute): PublicAiInternalInference
     enabled: true,
     usageScopes: ["internal_background"],
     capabilities: {
+      structured_output: "json_object",
       reasoning_control: "toggle",
       reasoning_efforts: ["none"],
     },
@@ -106,6 +107,17 @@ describe("VMM first-run inference readiness", () => {
       VMM_REQUIRED_LLM_PURPOSES.map((purpose) => [purpose, "none"]),
     )
     snapshot.inferenceProfiles.vmm.llm_reasoning_efforts.postaction_l2 = "high"
+
+    expect(vmmRequiredInferenceReady(snapshot)).toBe(false)
+  })
+
+  it("rejects a route whose exact model and protocol intersection cannot preserve JSON", () => {
+    const snapshot = readySnapshot()
+    const candidate = snapshot.internalInferenceCandidates.find((value) => (
+      value.route.operation === "conversation_respond"
+    ))
+    expect(candidate).toBeDefined()
+    candidate!.capabilities.structured_output = "unsupported"
 
     expect(vmmRequiredInferenceReady(snapshot)).toBe(false)
   })

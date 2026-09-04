@@ -97,6 +97,7 @@ fn retention_zero_limits_disable_individual_plan_families() {
                     RetentionScanFacts {
                         subject_id,
                         scope_id: scope_access.write_scope,
+                        expired_profile_nodes: Vec::new(),
                         terminal_memories: Vec::new(),
                         cold_turn_candidates: Vec::new(),
                         cold_turn_jobs: Vec::new(),
@@ -124,6 +125,110 @@ fn retention_zero_limits_disable_individual_plan_families() {
     assert!(plan.idle_session_recycle.is_empty());
     assert_eq!(plan.vector_gc_retry.len(), 1);
     assert!(plan.trash_purge.is_empty());
+}
+
+/// Verifies one newly enqueued cold-turn session is not simultaneously planned as idle cleanup.
+/// 验证一个新入队冷回合作业的会话不会同时被规划为闲置清洗。
+#[test]
+fn retention_sequences_new_cold_turn_work_before_idle_cleanup() {
+    const NOW_NS: i64 = 10_000_000;
+    let core = MemoryMeshCore::new().expect("Core must initialize");
+    let (subject_id, scope_access, _) = identities();
+    let mut policy = retention_policy();
+    policy.profile_expiry_limit = 0;
+    policy.memory_recycle_limit = 0;
+    policy.cold_turn_scan_limit = 1;
+    policy.cold_turn_job_limit = 0;
+    policy.idle_session_limit = 1;
+    policy.vector_gc_limit = 0;
+    policy.trash_purge_limit = 0;
+    let command = with_identity(
+        &core,
+        |identity| {
+            CoreCommand::Retention(RetentionCommand {
+                subject_id: subject_id.clone(),
+                scope_access: scope_access.clone(),
+                now_ns: NOW_NS,
+                policy,
+                mutation_identity: identity,
+            })
+        },
+        "retention:cold-before-idle",
+        NOW_NS,
+    );
+    let (handle, step) = core.start(command).expect("Retention must start");
+    let CommandStep::Effects(mut effects) = step else {
+        panic!("Retention must request storage facts");
+    };
+    let effect = effects.pop().expect("Retention query must exist");
+    let session_source_id = SessionSourceId::new("session-a").expect("session id");
+    let completed = core
+        .resume(
+            &handle,
+            EffectResult {
+                effect_id: effect.effect_id,
+                result: HostEffectResult::StorageQuery(StorageQueryResult::RetentionScan(
+                    RetentionScanFacts {
+                        subject_id,
+                        scope_id: scope_access.write_scope,
+                        expired_profile_nodes: Vec::new(),
+                        terminal_memories: Vec::new(),
+                        cold_turn_candidates: vec![RetentionColdTurnCandidateFact {
+                            session_source_id: session_source_id.clone(),
+                            recyclable_turn_count: 2,
+                        }],
+                        cold_turn_jobs: Vec::new(),
+                        idle_sessions: vec![RetentionIdleSessionFact {
+                            session_source_id,
+                            last_activity_ns: 1,
+                            has_pending_turn: false,
+                        }],
+                        vector_gc_jobs: Vec::new(),
+                        trash_batches: Vec::new(),
+                    },
+                )),
+            },
+        )
+        .expect("Retention facts must complete");
+    let CommandStep::Complete(result) = completed else {
+        panic!("Retention facts must complete synchronously");
+    };
+    let CommandResult::Retention(plan) = result.as_ref() else {
+        panic!("Retention must return one typed plan set");
+    };
+    assert_eq!(plan.cold_turn_enqueue.len(), 1);
+    assert!(plan.idle_session_recycle.is_empty());
+}
+
+/// Verifies every retention family, including profile expiry, obeys the public maximum bound.
+/// 验证包括画像过期在内的每个保留计划族都遵守公共最大上限。
+#[test]
+fn retention_rejects_oversized_profile_expiry_limit() {
+    const NOW_NS: i64 = 10_000_000;
+    let core = MemoryMeshCore::new().expect("Core must initialize");
+    let (subject_id, scope_access, _) = identities();
+    let mut policy = retention_policy();
+    policy.profile_expiry_limit = 10_001;
+    let command = with_identity(
+        &core,
+        |identity| {
+            CoreCommand::Retention(RetentionCommand {
+                subject_id,
+                scope_access,
+                now_ns: NOW_NS,
+                policy,
+                mutation_identity: identity,
+            })
+        },
+        "retention:oversized-profile-expiry",
+        NOW_NS,
+    );
+
+    let error = core
+        .start(command)
+        .expect_err("oversized profile expiry limit must fail");
+
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
 }
 
 /// Restricts physical candidates to every scope explicitly visible to the fixture command.
@@ -490,6 +595,7 @@ const fn retention_policy() -> RetentionPolicy {
         protected_priority_floor: 100,
         protected_memory_level_floor: MemoryLevel::Persistent as u32,
         skip_protected_shared_memories: false,
+        profile_expiry_limit: 100,
         memory_recycle_limit: 100,
         cold_turn_scan_limit: 100,
         cold_turn_job_limit: 100,
@@ -519,6 +625,7 @@ fn apply_retention_recycle_plan(host: &mut DeterministicHost, plan: &RetentionPl
                     RetentionReasonCode::IdleSessionRecycle => "retention-idle-session",
                     RetentionReasonCode::TrashExpiryPurge => "retention-trash-expiry",
                     RetentionReasonCode::VectorGcRetry => "retention-vector-gc",
+                    RetentionReasonCode::ProfileExpiry => "retention-profile-expiry",
                 }
                 .to_owned(),
             ),
@@ -2056,7 +2163,7 @@ fn public_facade_runs_the_complete_function_set() {
                         vector_space_id: vector_space_id.clone(),
                         candidate_scope: fixture_candidate_scope(&scope_access),
                         user_content: "What do I prefer for systems work?".to_owned(),
-                        recent_timeline: Vec::new(),
+                        recent_turns: Vec::new(),
                         recall_mode: RecallMode::Auto,
                         session_recall_mode: SessionRecallMode::CompactAware,
                         max_search_queries: 3,
@@ -3497,7 +3604,7 @@ fn nonretryable_storage_failure_becomes_result_uncertain() {
                     vector_space_id: vector_space_id.clone(),
                     candidate_scope: fixture_candidate_scope(&scope_access),
                     user_content: "Which language do I prefer for systems work?".to_owned(),
-                    recent_timeline: Vec::new(),
+                    recent_turns: Vec::new(),
                     recall_mode: RecallMode::Auto,
                     session_recall_mode: SessionRecallMode::CompactAware,
                     max_search_queries: 3,
@@ -3718,7 +3825,7 @@ fn precheck_review_failure_returns_empty_degraded_context() {
                         vector_space_id: vector_space_id.clone(),
                         candidate_scope: fixture_candidate_scope(&scope_access),
                         user_content: "What do I prefer for systems work?".to_owned(),
-                        recent_timeline: Vec::new(),
+                        recent_turns: Vec::new(),
                         recall_mode: RecallMode::Auto,
                         session_recall_mode: SessionRecallMode::CompactAware,
                         max_search_queries: 3,
@@ -3810,7 +3917,7 @@ fn precheck_rejects_foreign_identity_after_result_limit() {
                         vector_space_id: vector_space_id.clone(),
                         candidate_scope: fixture_candidate_scope(&scope_access),
                         user_content: "What do I prefer for systems work?".to_owned(),
-                        recent_timeline: Vec::new(),
+                        recent_turns: Vec::new(),
                         recall_mode: RecallMode::Auto,
                         session_recall_mode: SessionRecallMode::CompactAware,
                         max_search_queries: 3,
@@ -3937,7 +4044,7 @@ fn timed_mutations_reject_future_business_time() {
                     vector_space_id: vector_space_id.clone(),
                     candidate_scope: fixture_candidate_scope(&scope_access),
                     user_content: "future precheck".to_owned(),
-                    recent_timeline: Vec::new(),
+                    recent_turns: Vec::new(),
                     recall_mode: RecallMode::Disabled,
                     session_recall_mode: SessionRecallMode::CompactAware,
                     max_search_queries: 1,
@@ -6151,7 +6258,7 @@ fn precheck_restores_mid_search_pipeline_in_fresh_instance() {
                     vector_space_id: vector_space_id.clone(),
                     candidate_scope: fixture_candidate_scope(&scope_access),
                     user_content: "What do I prefer for systems work?".to_owned(),
-                    recent_timeline: Vec::new(),
+                    recent_turns: Vec::new(),
                     recall_mode: RecallMode::Auto,
                     session_recall_mode: SessionRecallMode::CompactAware,
                     max_search_queries: 3,
@@ -6888,6 +6995,7 @@ fn retention_rejects_mismatched_result_identity() {
                             .expect("foreign subject identity must be valid"),
                         scope_id: ScopeId::new("other-scope")
                             .expect("foreign scope identity must be valid"),
+                        expired_profile_nodes: Vec::new(),
                         terminal_memories: Vec::new(),
                         cold_turn_candidates: Vec::new(),
                         cold_turn_jobs: Vec::new(),
@@ -6902,10 +7010,10 @@ fn retention_rejects_mismatched_result_identity() {
     assert_eq!(error.code, ErrorCode::EffectMismatch);
 }
 
-/// Verifies all six retention families from typed Host facts through deterministic Core plans.
-/// 验证六类保留维护从强类型宿主事实到确定性 Core 计划的完整链路。
+/// Verifies all seven retention families from typed Host facts through deterministic Core plans.
+/// 验证七类保留维护从强类型宿主事实到确定性 Core 计划的完整链路。
 #[test]
-fn retention_plans_all_six_families_with_due_and_protection_rules() {
+fn retention_plans_all_seven_families_with_due_and_protection_rules() {
     const NOW_NS: i64 = 10_000_000;
     let core = MemoryMeshCore::new().expect("Core must initialize");
     let (subject_id, scope_access, vector_space_id) = identities();
@@ -6986,6 +7094,7 @@ fn retention_plans_all_six_families_with_due_and_protection_rules() {
                     RetentionScanFacts {
                         subject_id: subject_id.clone(),
                         scope_id: scope_access.write_scope.clone(),
+                        expired_profile_nodes: Vec::new(),
                         terminal_memories: vec![RetentionMemoryFact {
                             memory: invalid_memory,
                             protected_shared: false,
@@ -7033,6 +7142,29 @@ fn retention_plans_all_six_families_with_due_and_protection_rules() {
     let facts = RetentionScanFacts {
         subject_id: subject_id.clone(),
         scope_id: scope_access.write_scope.clone(),
+        expired_profile_nodes: vec![ProfileNode {
+            id: ProfileNodeId::new("profile-due").expect("profile identity must be valid"),
+            subject_id: Some(subject_id.clone()),
+            scope_id: scope_access.write_scope.clone(),
+            content: "due profile fact".to_owned(),
+            confidence: Some(1.0),
+            state: ProfileNodeState::Active,
+            source_turn_ids: Vec::new(),
+            source_kind: ProfileSourceKind::SystemSeed,
+            source_id: None,
+            evidence_source: None,
+            priority: 60,
+            profile_level: ProfileLevel::Stable,
+            level_reason: None,
+            refresh_weight: 0,
+            effective_date_ns: Some(1),
+            expires_at_ns: Some(NOW_NS),
+            status_reason: None,
+            superseded_by: None,
+            version: 1,
+            created_at_ns: 1,
+            updated_at_ns: 1,
+        }],
         terminal_memories: vec![
             RetentionMemoryFact {
                 memory: protected_shared_memory,
@@ -7113,7 +7245,7 @@ fn retention_plans_all_six_families_with_due_and_protection_rules() {
                 result: HostEffectResult::StorageQuery(StorageQueryResult::RetentionScan(facts)),
             },
         )
-        .expect("six-family Retention facts must complete");
+        .expect("seven-family Retention facts must complete");
     let CommandStep::Complete(result) = completed else {
         panic!("Retention facts must complete synchronously");
     };
@@ -7122,6 +7254,15 @@ fn retention_plans_all_six_families_with_due_and_protection_rules() {
     };
     assert_eq!(plan.subject_id, subject_id);
     assert_eq!(plan.scope_id, scope_access.write_scope);
+    assert_eq!(plan.profile_expiry.len(), 1);
+    assert_eq!(
+        plan.profile_expiry[0].profile_node_id.as_str(),
+        "profile-due"
+    );
+    assert_eq!(
+        plan.profile_expiry[0].reason,
+        RetentionReasonCode::ProfileExpiry
+    );
     assert_eq!(plan.terminal_memory_recycle.len(), 1);
     assert_eq!(
         plan.terminal_memory_recycle[0].memory_id,

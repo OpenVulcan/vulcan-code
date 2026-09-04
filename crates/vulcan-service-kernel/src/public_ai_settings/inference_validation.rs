@@ -2,8 +2,8 @@
 //! 精确内部模型覆盖与思考策略校验。
 
 use crate::configured_inference::{
-    VMM_CONSUMER_PROFILE_ID, model_supports_disabled_reasoning,
-    vmm_purpose_requires_disabled_reasoning,
+    VMM_CONSUMER_PROFILE_ID, model_route_supports_json_schema_contract,
+    model_supports_disabled_reasoning, vmm_purpose_requires_disabled_reasoning,
 };
 use vulcan_ai_contract::{AiOperation, ModelCapabilities, ReasoningControlMode, ReasoningEffort};
 use vulcan_provider_adapters::{
@@ -178,6 +178,47 @@ pub(super) fn validate_vmm_llm_reasoning_policy(
     Err(format!(
         "VMM purpose `{purpose_id}` cannot use reasoning effort `{}` with the selected model contract.",
         reasoning_effort.as_str()
+    ))
+}
+
+/// Enforces the provider JSON contract required by every native VMM LLM route.
+/// 对每条原生 VMM LLM 路由强制执行提供方 JSON 契约。
+///
+/// # Parameters
+/// 参数
+/// `consumer_profile_id` and `operation` identify the profile slot; `route` and `capabilities`
+/// provide the exact protocol and model authorities.
+/// `consumer_profile_id` 与 `operation` 标识配置档槽位；`route` 与 `capabilities`
+/// 提供准确协议与模型权威。
+///
+/// # Returns
+/// 返回值
+/// Success outside VMM LLM slots or when provider-side JSON control remains enforceable.
+/// 非 VMM LLM 槽位或提供方侧 JSON 控制仍可强制时返回成功。
+pub(super) fn validate_vmm_llm_structured_output_policy(
+    consumer_profile_id: &str,
+    operation: AiOperation,
+    route: &InferenceRouteConfiguration,
+    capabilities: &ModelCapabilities,
+) -> Result<(), String> {
+    if consumer_profile_id != VMM_CONSUMER_PROFILE_ID
+        || operation != AiOperation::ConversationRespond
+    {
+        return Ok(());
+    }
+    let InferenceRouteBinding::Protocol {
+        protocol_profile_id,
+    } = &route.binding
+    else {
+        return Err(String::from(
+            "VMM LLM routes require one exact protocol binding for structured output.",
+        ));
+    };
+    if model_route_supports_json_schema_contract(protocol_profile_id, capabilities) {
+        return Ok(());
+    }
+    Err(String::from(
+        "VMM LLM routes require a model and protocol that preserve provider-side JSON output and host-side Schema validation.",
     ))
 }
 

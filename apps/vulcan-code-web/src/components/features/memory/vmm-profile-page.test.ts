@@ -4,6 +4,7 @@ import {
   vmmProfileBundlePreview,
   vmmProfileCatalogAction,
   vmmProfileEffectiveTarget,
+  vmmProfileNodeAction,
   vmmProfileUsesFixedNativeUser,
   vmmProfileUsesNativeProjectCatalog,
 } from "./vmm-profile-page"
@@ -12,6 +13,7 @@ describe("VMM profile backend separation", () => {
   it("uses the one-level native project catalog while preserving both profile targets", () => {
     expect(vmmProfileUsesNativeProjectCatalog("native")).toBe(true)
     expect(vmmProfileCatalogAction("native")).toBe("native_project_catalog")
+    expect(vmmProfileNodeAction("native")).toBe("native_profile_records")
     expect(vmmProfileEffectiveTarget("native", "user")).toBe("user")
     expect(vmmProfileEffectiveTarget("native", "project")).toBe("project")
     expect(vmmProfileUsesFixedNativeUser("native", "user")).toBe(true)
@@ -21,6 +23,7 @@ describe("VMM profile backend separation", () => {
   it("keeps the external user and project catalog behavior", () => {
     expect(vmmProfileUsesNativeProjectCatalog("external")).toBe(false)
     expect(vmmProfileCatalogAction("external")).toBe("load_users_projects")
+    expect(vmmProfileNodeAction("external")).toBe("load_profile_nodes")
     expect(vmmProfileEffectiveTarget("external", "user")).toBe("user")
     expect(vmmProfileEffectiveTarget("external", "project")).toBe("project")
     expect(vmmProfileUsesFixedNativeUser("external", "user")).toBe(false)

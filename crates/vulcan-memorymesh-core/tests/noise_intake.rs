@@ -1,4 +1,4 @@
-﻿//! Verifies single-turn Noise, timeline bypass, and persisted continuations through the public Core.
+//! Verifies single-turn Noise, timeline bypass, and persisted continuations through the public Core.
 //! 通过公共 Core 验证单轮 Noise、时间线跳过及持久续体。
 
 #![allow(clippy::expect_used, clippy::panic)]
@@ -32,7 +32,7 @@ fn assert_noise_identity(core: &MemoryMeshCore, noise: &NoiseAudit) {
 fn core_with_policy(noise_policy: vulcan_memorymesh_core::NoisePolicy) -> MemoryMeshCore {
     let core = MemoryMeshCore::new().expect("Core");
     let mut layer = ResourceLayer::default();
-    layer.insert("noise_rules/common.json", br#"{"language":"common","version":"1.0.0","categories":[{"name":"user_meta","targets":["user"],"phrases":["User Prototype"]},{"name":"assistant_denial","targets":["assistant"],"patterns":["^DENY$"],"phrases":["Assistant Prototype"]}]}"#.to_vec()).expect("common rules");
+    layer.insert("noise_rules/common.json", br#"{"language":"common","version":"1.0.0","categories":[{"name":"user_meta","targets":["user"],"patterns":["^IGNORE$"],"phrases":["User Prototype"]},{"name":"assistant_denial","targets":["assistant"],"patterns":["^DENY$"],"phrases":["Assistant Prototype"]}]}"#.to_vec()).expect("common rules");
     layer
         .insert(
             "noise_rules/zh-CN.json",
@@ -129,7 +129,7 @@ impl HostDriver for NoiseHost {
                     .map(|text| match text.as_str() {
                         "User Prototype" => vec![1.0, 0.0, 0.0],
                         "Assistant Prototype" | "semantic denial" => vec![0.0, 1.0, 0.0],
-                        "borderline denial" => vec![0.0, 0.5, 0.866_025_4],
+                        "borderline user" => vec![0.5, 0.0, 0.866_025_4],
                         _ => vec![0.0, 0.0, 1.0],
                     })
                     .collect();
@@ -144,14 +144,14 @@ impl HostDriver for NoiseHost {
     }
 }
 
-/// Checks assistant regex rejection and source-timeline bypass before any embedding call.
-/// 检查助手正则拒绝及来源时间线在任何嵌入调用前跳过门控。
+/// Checks that assistant regexes never gate native intake and source timelines still bypass Noise.
+/// 检查助手正则绝不门控原生登记，且来源时间线仍跳过 Noise。
 #[test]
-fn assistant_regex_and_timeline_bypass_follow_vmm() {
+fn assistant_regex_is_ignored_and_timeline_bypass_is_preserved() {
     let core = core();
-    for (kind, ignored) in [
-        (PostActionInputKind::SingleTurn, true),
-        (PostActionInputKind::Timeline, false),
+    for kind in [
+        PostActionInputKind::SingleTurn,
+        PostActionInputKind::Timeline,
     ] {
         let messages = [
             (Role::User, "useful information"),
@@ -164,41 +164,44 @@ fn assistant_regex_and_timeline_bypass_follow_vmm() {
         let CommandResult::PostActionAccepted(result) = result else {
             panic!("intake result")
         };
-        assert_eq!(result.ignored_as_noise, ignored);
-        assert_eq!(result.turn_id.is_none(), ignored);
+        assert!(!result.ignored_as_noise);
+        assert!(result.turn_id.is_some());
         assert_noise_identity(&core, &result.noise);
         assert!(!result.noise.degraded);
         assert!(result.noise.unavailable_categories.is_empty());
-        if ignored {
-            assert_eq!(result.noise.source, NoiseDecisionSource::Regex);
-            assert_eq!(result.noise.role, Some(Role::Assistant));
-            assert_eq!(result.noise.category.as_deref(), Some("assistant_denial"));
-            assert_eq!(result.noise.confidence.to_bits(), 1.0_f64.to_bits());
-        } else {
+        if kind == PostActionInputKind::Timeline {
             assert_eq!(result.noise.source, NoiseDecisionSource::TimelineBypass);
             assert_eq!(result.noise.role, None);
             assert_eq!(result.noise.category, None);
             assert_eq!(result.noise.confidence.to_bits(), 0.0_f64.to_bits());
+            assert!(host.embeddings.is_empty());
+        } else {
+            assert_eq!(result.noise.source, NoiseDecisionSource::Semantic);
+            assert_eq!(result.noise.role, Some(Role::User));
+            assert_eq!(result.noise.category, None);
+            assert_eq!(result.noise.confidence.to_bits(), 0.0_f64.to_bits());
+            assert_eq!(
+                host.embeddings,
+                vec![vec!["User Prototype"], vec!["useful information"]]
+            );
         }
-        assert!(host.embeddings.is_empty());
-        assert_eq!(host.storage.dataset().turns.len(), usize::from(!ignored));
+        assert_eq!(host.storage.dataset().turns.len(), 1);
     }
 }
 
-/// Restores every semantic stage into a fresh Core and verifies assistant queries and cache reuse.
-/// 将每个语义阶段恢复到新 Core，并验证助手查询与缓存复用。
+/// Restores every semantic stage into a fresh Core and verifies user-only queries and cache reuse.
+/// 将每个语义阶段恢复到新 Core，并验证仅查询用户提示词及缓存复用。
 #[test]
-fn semantic_roles_and_shared_cache_survive_every_checkpoint() {
+fn user_only_semantics_and_shared_cache_survive_every_checkpoint() {
     let mut host = NoiseHost::default();
-    for (key, messages, ignored) in [
-        ("first", vec![(Role::User, "useful information")], false),
+    for (key, messages) in [
+        ("first", vec![(Role::User, "useful information")]),
         (
             "second",
             vec![
                 (Role::User, "useful information"),
                 (Role::Assistant, "semantic denial"),
             ],
-            true,
         ),
     ] {
         let mut current = core();
@@ -236,32 +239,22 @@ fn semantic_roles_and_shared_cache_survive_every_checkpoint() {
         let CommandResult::PostActionAccepted(result) = *result else {
             panic!("intake result")
         };
-        assert_eq!(result.ignored_as_noise, ignored);
+        assert!(!result.ignored_as_noise);
         assert_noise_identity(&current, &result.noise);
         assert_eq!(result.noise.source, NoiseDecisionSource::Semantic);
-        assert_eq!(
-            result.noise.role,
-            Some(if ignored { Role::Assistant } else { Role::User })
-        );
-        assert_eq!(
-            result.noise.category.as_deref(),
-            ignored.then_some("assistant_denial")
-        );
-        assert_eq!(
-            result.noise.confidence.to_bits(),
-            if ignored { 1.0_f64 } else { 0.0_f64 }.to_bits()
-        );
+        assert_eq!(result.noise.role, Some(Role::User));
+        assert_eq!(result.noise.category, None);
+        assert_eq!(result.noise.confidence.to_bits(), 0.0_f64.to_bits());
         assert!(!result.noise.degraded);
         current.release_command(&handle).expect("release");
     }
-    assert_eq!(host.storage.dataset().turns.len(), 1);
+    assert_eq!(host.storage.dataset().turns.len(), 2);
     assert_eq!(
         host.embeddings,
         vec![
             vec!["User Prototype"],
-            vec!["Assistant Prototype"],
             vec!["useful information"],
-            vec!["useful information", "semantic denial"],
+            vec!["useful information"],
         ]
     );
 }
@@ -395,17 +388,37 @@ impl HostDriver for FaultHost {
     }
 }
 
-/// A failed category cannot erase another category; optional cache failures still run semantics.
-/// 失败类别不能抹去其他类别；可选缓存故障后仍运行语义判断。
+/// Verifies user-only Noise failures degrade without ever falling back to assistant content.
+/// 验证仅面向用户的 Noise 故障会受控降级，且绝不回退到助手内容。
 #[test]
-fn noise_failures_preserve_available_categories() {
-    for (fault, ignored) in [
-        (NoiseFault::UserPrototype, true),
-        (NoiseFault::AllPrototypes, false),
-        (NoiseFault::Runtime, false),
-        (NoiseFault::CacheQuery, true),
-        (NoiseFault::CacheIncomplete, true),
-        (NoiseFault::CacheRejected, true),
+fn noise_failures_preserve_user_only_admission() {
+    for (fault, degraded, source) in [
+        (
+            NoiseFault::UserPrototype,
+            true,
+            NoiseDecisionSource::RegexOnlyFallback,
+        ),
+        (
+            NoiseFault::AllPrototypes,
+            true,
+            NoiseDecisionSource::RegexOnlyFallback,
+        ),
+        (
+            NoiseFault::Runtime,
+            true,
+            NoiseDecisionSource::RegexOnlyFallback,
+        ),
+        (NoiseFault::CacheQuery, true, NoiseDecisionSource::Semantic),
+        (
+            NoiseFault::CacheIncomplete,
+            false,
+            NoiseDecisionSource::Semantic,
+        ),
+        (
+            NoiseFault::CacheRejected,
+            true,
+            NoiseDecisionSource::Semantic,
+        ),
     ] {
         let core = core();
         let mut host = FaultHost {
@@ -429,42 +442,24 @@ fn noise_failures_preserve_available_categories() {
         let CommandResult::PostActionAccepted(result) = result else {
             panic!("intake result")
         };
-        assert_eq!(result.ignored_as_noise, ignored);
+        assert!(!result.ignored_as_noise);
         assert_noise_identity(&core, &result.noise);
-        assert!(result.noise.degraded);
-        assert_eq!(
-            result.noise.source,
-            if ignored {
-                NoiseDecisionSource::Semantic
-            } else {
-                NoiseDecisionSource::RegexOnlyFallback
-            }
-        );
+        assert_eq!(result.noise.degraded, degraded);
+        assert_eq!(result.noise.source, source);
         let unavailable: &[&str] = match fault {
             NoiseFault::UserPrototype => &["user_meta"],
-            NoiseFault::AllPrototypes => &["user_meta", "assistant_denial"],
+            NoiseFault::AllPrototypes => &["user_meta"],
             _ => &[],
         };
         assert_eq!(result.noise.unavailable_categories, unavailable);
-        if ignored {
-            assert_eq!(result.noise.role, Some(Role::Assistant));
-            assert_eq!(result.noise.category.as_deref(), Some("assistant_denial"));
-            assert_eq!(result.noise.confidence.to_bits(), 1.0_f64.to_bits());
+        if source == NoiseDecisionSource::Semantic {
+            assert_eq!(result.noise.role, Some(Role::User));
         } else {
             assert_eq!(result.noise.role, None);
-            assert_eq!(result.noise.category, None);
-            assert_eq!(result.noise.confidence.to_bits(), 0.0_f64.to_bits());
         }
-        assert_eq!(
-            host.base.storage.dataset().turns.len(),
-            usize::from(!ignored)
-        );
-        if matches!(fault, NoiseFault::UserPrototype) {
-            assert_eq!(
-                host.base.embeddings.last().expect("runtime query"),
-                &["semantic denial"]
-            );
-        }
+        assert_eq!(result.noise.category, None);
+        assert_eq!(result.noise.confidence.to_bits(), 0.0_f64.to_bits());
+        assert_eq!(host.base.storage.dataset().turns.len(), 1);
     }
 }
 
@@ -473,12 +468,13 @@ fn noise_failures_preserve_available_categories() {
 #[test]
 fn intake_uses_snapshot_noise_policy() {
     use vulcan_memorymesh_core::NoisePolicy;
-    for (policy, assistant, ignored) in [
+    for (policy, user, assistant, ignored) in [
         (
             NoisePolicy {
                 enabled: false,
                 ..NoisePolicy::default()
             },
+            "IGNORE",
             "DENY",
             false,
         ),
@@ -487,6 +483,7 @@ fn intake_uses_snapshot_noise_policy() {
                 semantic_enabled: false,
                 ..NoisePolicy::default()
             },
+            "IGNORE",
             "DENY",
             true,
         ),
@@ -495,6 +492,7 @@ fn intake_uses_snapshot_noise_policy() {
                 semantic_enabled: false,
                 ..NoisePolicy::default()
             },
+            "useful information",
             "semantic denial",
             false,
         ),
@@ -506,10 +504,7 @@ fn intake_uses_snapshot_noise_policy() {
                 command(
                     &core,
                     PostActionInputKind::SingleTurn,
-                    &[
-                        (Role::User, "useful information"),
-                        (Role::Assistant, assistant),
-                    ],
+                    &[(Role::User, user), (Role::Assistant, assistant)],
                     "policy",
                 ),
                 &mut host,
@@ -542,8 +537,8 @@ fn intake_uses_snapshot_noise_policy() {
                     &core,
                     PostActionInputKind::SingleTurn,
                     &[
-                        (Role::User, "useful information"),
-                        (Role::Assistant, "borderline denial"),
+                        (Role::User, "borderline user"),
+                        (Role::Assistant, "useful answer"),
                     ],
                     "threshold",
                 ),
@@ -556,7 +551,7 @@ fn intake_uses_snapshot_noise_policy() {
         assert_eq!(result.ignored_as_noise, ignored);
         assert_noise_identity(&core, &result.noise);
         assert_eq!(result.noise.source, NoiseDecisionSource::Semantic);
-        assert_eq!(result.noise.category.as_deref(), Some("assistant_denial"));
+        assert_eq!(result.noise.category.as_deref(), Some("user_meta"));
         assert!((result.noise.confidence - 0.5).abs() < 0.000_01);
     }
 }

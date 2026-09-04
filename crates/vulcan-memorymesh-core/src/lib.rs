@@ -13,9 +13,12 @@ pub use vulcan_memorymesh_core_config::{
 };
 pub use vulcan_memorymesh_core_contracts::*;
 pub use vulcan_memorymesh_core_engine::{
-    decayed_score, deduplicate_by_content, mmr_select, normalize_text,
+    decayed_score, deduplicate_by_content, estimate_text_tokens, mmr_select, normalize_text,
 };
-pub use vulcan_memorymesh_core_storage::{InMemoryStorage, StoragePort, StorageSnapshot};
+pub use vulcan_memorymesh_core_storage::{
+    InMemoryStorage, StoragePort, StorageRetentionColdTurnJob, StorageRetentionTrashBatch,
+    StorageSnapshot,
+};
 
 use vulcan_memorymesh_core_config::ConfigRegistry;
 use vulcan_memorymesh_core_engine::CommandEngine;

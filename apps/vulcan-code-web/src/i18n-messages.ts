@@ -1433,6 +1433,7 @@ export type TranslationKey =
   | "memory.nativeRecords.sessions"
   | "memory.nativeRecords.turns"
   | "memory.nativeRecords.memories"
+  | "memory.nativeRecords.profileNodes"
   | "memory.nativeRecords.completed"
   | "memory.nativeRecords.pending"
   | "memory.nativeRecords.processedUnknown"
@@ -1450,6 +1451,9 @@ export type TranslationKey =
   | "memory.nativeRecords.generated"
   | "memory.nativeRecords.generatedMemories"
   | "memory.nativeRecords.noGeneratedMemories"
+  | "memory.nativeRecords.generatedProfiles"
+  | "memory.nativeRecords.noGeneratedProfiles"
+  | "memory.nativeRecords.noProfileNodes"
   | "memory.nativeRecords.noUserPreview"
   | "memory.nativeRecords.retryCount"
   | "memory.nativeRecords.sourceTurn"
@@ -1582,13 +1586,28 @@ export type TranslationKey =
   | "memory.profile.nativePreviewDescription"
   | "memory.profile.priority"
   | "memory.profile.level"
+  | "memory.profile.stateSummary"
+  | "memory.profile.stateSummaryDescription"
+  | "memory.profile.stateActive"
+  | "memory.profile.statePending"
+  | "memory.profile.stateScheduled"
+  | "memory.profile.stateInactive"
+  | "memory.profile.stateExpired"
+  | "memory.profile.notInjected"
+  | "memory.profile.source"
+  | "memory.profile.sourceTurns"
+  | "memory.profile.statusReason"
+  | "memory.profile.updatedAt"
+  | "memory.profile.storedState"
+  | "memory.profile.sourceTurnExtract"
+  | "memory.profile.sourceManualInstruction"
+  | "memory.profile.sourceSystemSeed"
+  | "memory.profile.sourceRetained"
   | "memory.advanced.title"
   | "memory.advanced.description"
   | "memory.advanced.deployment"
   | "memory.advanced.native"
   | "memory.advanced.nativeDescription"
-  | "memory.advanced.managed"
-  | "memory.advanced.managedDescription"
   | "memory.advanced.external"
   | "memory.advanced.externalDescription"
   | "memory.advanced.connection"
@@ -1678,6 +1697,95 @@ export type TranslationKey =
   | "memory.resources.promptPurpose.postactionL2"
   | "memory.resources.promptPurpose.profileInstruction"
   | "memory.resources.promptPurpose.unknown"
+  | "memory.resources.overrideDirectory"
+  | "memory.resources.promptTab"
+  | "memory.resources.piiTab"
+  | "memory.resources.noiseTab"
+  | "memory.resources.unlocked"
+  | "memory.resources.locked"
+  | "memory.resources.guardedEdit"
+  | "memory.resources.currentEffective"
+  | "memory.resources.composition"
+  | "memory.resources.compositionDescription"
+  | "memory.resources.piiPurpose"
+  | "memory.resources.noisePurpose"
+  | "memory.resources.saveConfirmTitle"
+  | "memory.resources.resetConfirmTitle"
+  | "memory.resources.saveConfirmDescription"
+  | "memory.resources.resetConfirmDescription"
+  | "memory.resources.saveConfirmAction"
+  | "memory.resources.resetConfirmAction"
+  | "memory.resources.userPromptOnly"
+  | "memory.maintenance.title"
+  | "memory.maintenance.description"
+  | "memory.maintenance.invalidResponse"
+  | "memory.maintenance.runNow"
+  | "memory.maintenance.status"
+  | "memory.maintenance.statusDescription"
+  | "memory.maintenance.worker"
+  | "memory.maintenance.profileExpiryWorker"
+  | "memory.maintenance.running"
+  | "memory.maintenance.enabled"
+  | "memory.maintenance.disabled"
+  | "memory.maintenance.interval"
+  | "memory.maintenance.profileExpiryInterval"
+  | "memory.maintenance.vectorTitle"
+  | "memory.maintenance.vectorDescription"
+  | "memory.maintenance.vectorConfigured"
+  | "memory.maintenance.configured"
+  | "memory.maintenance.notConfigured"
+  | "memory.maintenance.vectorDimension"
+  | "memory.maintenance.activeMemories"
+  | "memory.maintenance.recycleBinMemories"
+  | "memory.maintenance.currentVectors"
+  | "memory.maintenance.currentRecycleBinVectors"
+  | "memory.maintenance.pendingAnalysisJobs"
+  | "memory.maintenance.vectorRebuildRequired"
+  | "memory.maintenance.vectorRouteUnavailable"
+  | "memory.maintenance.vectorCompatible"
+  | "memory.maintenance.vectorRebuildCounts"
+  | "memory.maintenance.previewVectorRebuild"
+  | "memory.maintenance.confirmVectorRebuildTitle"
+  | "memory.maintenance.confirmVectorRebuildDescription"
+  | "memory.maintenance.rebuildVectors"
+  | "memory.maintenance.pendingJobs"
+  | "memory.maintenance.recycleBatches"
+  | "memory.maintenance.hotWindow"
+  | "memory.maintenance.idleWindow"
+  | "memory.maintenance.trashWindow"
+  | "memory.maintenance.protectionFloor"
+  | "memory.maintenance.limits"
+  | "memory.maintenance.profileExpiryLimit"
+  | "memory.maintenance.memoryRecycleLimit"
+  | "memory.maintenance.coldScanLimit"
+  | "memory.maintenance.coldJobLimit"
+  | "memory.maintenance.idleSessionLimit"
+  | "memory.maintenance.trashPurgeLimit"
+  | "memory.maintenance.vectorConsistency"
+  | "memory.maintenance.lastRun"
+  | "memory.maintenance.profileExpiryLastRun"
+  | "memory.maintenance.profileExpiryLastResult"
+  | "memory.maintenance.never"
+  | "memory.maintenance.lastResult"
+  | "memory.maintenance.recycleBin"
+  | "memory.maintenance.recycleDescription"
+  | "memory.maintenance.projectFilter"
+  | "memory.maintenance.allProjects"
+  | "memory.maintenance.emptyRecycleBin"
+  | "memory.maintenance.confirmPurgeTitle"
+  | "memory.maintenance.confirmRestoreTitle"
+  | "memory.maintenance.confirmPurgeDescription"
+  | "memory.maintenance.confirmRestoreDescription"
+  | "memory.maintenance.purge"
+  | "memory.maintenance.restore"
+  | "memory.maintenance.turns"
+  | "memory.maintenance.memories"
+  | "memory.maintenance.profiles"
+  | "memory.maintenance.evidence"
+  | "memory.maintenance.expiresAt"
+  | "memory.maintenance.reasonTerminal"
+  | "memory.maintenance.reasonColdTurn"
+  | "memory.maintenance.reasonIdle"
   | "vmm.experience.deployment.disabled"
   | "vmm.experience.deployment.external"
   | "vmm.experience.setup.notConfigured"
@@ -4401,6 +4509,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.nativeRecords.sessions": "会话记录",
     "memory.nativeRecords.turns": "回合",
     "memory.nativeRecords.memories": "记忆",
+    "memory.nativeRecords.profileNodes": "画像节点",
     "memory.nativeRecords.completed": "已提取",
     "memory.nativeRecords.pending": "待提取",
     "memory.nativeRecords.processedUnknown": "已处理，结果未知",
@@ -4418,6 +4527,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.nativeRecords.generated": "生成记忆",
     "memory.nativeRecords.generatedMemories": "本回合生成的记忆",
     "memory.nativeRecords.noGeneratedMemories": "本回合未生成持久记忆。",
+    "memory.nativeRecords.generatedProfiles": "本回合生成的画像",
+    "memory.nativeRecords.noGeneratedProfiles": "本回合未生成用户或项目画像节点。",
+    "memory.nativeRecords.noProfileNodes": "所选范围内尚未生成用户或项目画像节点。",
     "memory.nativeRecords.noUserPreview": "该回合没有可显示的用户内容。",
     "memory.nativeRecords.retryCount": "失败重试次数",
     "memory.nativeRecords.sourceTurn": "来源回合",
@@ -4550,13 +4662,28 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.profile.nativePreviewDescription": "这是原生记忆内核为当前所选用户或项目整理的完整画像文本，仅在排查或核对时需要查看。",
     "memory.profile.priority": "优先级",
     "memory.profile.level": "层级",
+    "memory.profile.stateSummary": "画像状态",
+    "memory.profile.stateSummaryDescription": "原生模式显示全部持久画像节点；只有当前活动节点会参与画像渲染和提示词注入。",
+    "memory.profile.stateActive": "活动",
+    "memory.profile.statePending": "待评审",
+    "memory.profile.stateScheduled": "待生效",
+    "memory.profile.stateInactive": "已停用",
+    "memory.profile.stateExpired": "已过期",
+    "memory.profile.notInjected": "不参与注入",
+    "memory.profile.source": "来源",
+    "memory.profile.sourceTurns": "来源回合",
+    "memory.profile.statusReason": "状态原因",
+    "memory.profile.updatedAt": "更新时间",
+    "memory.profile.storedState": "持久状态",
+    "memory.profile.sourceTurnExtract": "回合提取",
+    "memory.profile.sourceManualInstruction": "手工画像指令",
+    "memory.profile.sourceSystemSeed": "系统种子",
+    "memory.profile.sourceRetained": "用户删除后保留",
     "memory.advanced.title": "高级设置",
     "memory.advanced.description": "选择内置原生或外置 gRPC 后端，并查看各自专属配置与技术诊断。",
     "memory.advanced.deployment": "运行方式",
     "memory.advanced.native": "内置原生 VMM（推荐）",
     "memory.advanced.nativeDescription": "VMM Core 直接运行在 Vulcan Code 内并复用宿主 AI 与 VLDB。",
-    "memory.advanced.managed": "本地托管（推荐）",
-    "memory.advanced.managedDescription": "由 Vulcan Code 自动启动、停止和保护本地记忆服务。",
     "memory.advanced.external": "连接外部 VMM",
     "memory.advanced.externalDescription": "连接由你或团队独立运行的 VMM 服务。",
     "memory.advanced.connection": "外部服务连接",
@@ -4567,7 +4694,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.advanced.testManagement": "保存并测试管理连接",
     "memory.advanced.managementTimeout": "管理请求超时（毫秒）",
     "memory.advanced.defaultBinding": "新增项目默认绑定规则",
-    "memory.advanced.nativeFixedProject": "默认固定原生项目 ID",
+    "memory.advanced.nativeFixedProject": "默认固定原生记忆项目",
     "memory.advanced.externalPrefix": "自动创建项目前缀",
     "memory.advanced.nativeStorage": "由 Vulcan Code 管理的原生存储",
     "memory.advanced.nativeStorageDescription": "关系数据与 LanceDB 向量分别存放在 .vulcan/code/vmm 下；项目级迁移和清空请在“记忆项目”页面执行。",
@@ -4592,7 +4719,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.advanced.save": "保存高级设置",
     "memory.advanced.backupRebuild": "备份并重建",
     "memory.resources.title": "原生资源与规则",
-    "memory.resources.description": "选择提示词语言、PII 与噪音区域，并在用户目录中维护独立覆盖；内置原文始终保持不变。",
+    "memory.resources.description": "按提示词、PII 与噪音分页选择组合、验证规则并维护用户目录覆盖；编辑器只显示当前实际生效内容。",
     "memory.resources.invalidResponse": "原生 VMM 资源接口返回了不匹配的结果。",
     "memory.resources.loading": "正在加载原生资源…",
     "memory.resources.refresh": "刷新资源",
@@ -4635,7 +4762,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.resources.runTest": "运行测试",
     "memory.resources.noMatch": "没有命中规则",
     "memory.resources.noiseMatched": "命中噪音类别",
-    "memory.resources.confirmPurposeTitle": "确认你理解该提示词的用途",
+    "memory.resources.confirmPurposeTitle": "确认你理解该规则文件的用途与风险",
     "memory.resources.confirmModificationTitle": "再次确认修改方法与风险",
     "memory.resources.confirmModificationDescription": "编辑后必须保持既有 JSON 契约与字段含义。确认后才会解锁编辑器和保存按钮；用户覆盖将写入 .vulcan/code/vmm/config。",
     "memory.resources.confirmPurpose": "我理解用途，继续",
@@ -4646,6 +4773,95 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.resources.promptPurpose.postactionL2": "PostAction L2 审核并整理候选记忆；修改会影响最终写入、层级、优先级与画像节点。",
     "memory.resources.promptPurpose.profileInstruction": "画像指令将用户自然语言调整转换为画像节点变更；修改必须保持操作与目标字段契约。",
     "memory.resources.promptPurpose.unknown": "这是 Core 结构化推理链路使用的提示词文件；修改前必须核对对应 Schema。",
+    "memory.resources.overrideDirectory": "用户覆盖目录",
+    "memory.resources.promptTab": "提示词设置",
+    "memory.resources.piiTab": "PII 设置",
+    "memory.resources.noiseTab": "噪音设置",
+    "memory.resources.unlocked": "已解锁",
+    "memory.resources.locked": "禁止编辑",
+    "memory.resources.guardedEdit": "受保护的规则修改",
+    "memory.resources.currentEffective": "当前生效内容",
+    "memory.resources.composition": "当前规则组合",
+    "memory.resources.compositionDescription": "只配置当前分页对应的语言、区域或策略；保存后立即校验并热更新。",
+    "memory.resources.piiPurpose": "PII 规则在内容进入记忆处理前执行本地脱敏；正则、捕获组、condition 公式和 replacement 必须保持合法。",
+    "memory.resources.noisePurpose": "噪音规则只判断当前 user prompt 是否应进入记忆分析；common 与所选国家/区域规则共同生效。",
+    "memory.resources.saveConfirmTitle": "再次确认保存规则覆盖",
+    "memory.resources.resetConfirmTitle": "确认恢复内置规则",
+    "memory.resources.saveConfirmDescription": "保存将把当前内容写入 .vulcan/code/vmm/config 并立即热更新。错误提示词或规则可能导致记忆遗漏、误写或处理失败。",
+    "memory.resources.resetConfirmDescription": "这会删除当前文件的用户覆盖，并立即恢复应用内置原文。",
+    "memory.resources.saveConfirmAction": "确认保存并应用",
+    "memory.resources.resetConfirmAction": "确认恢复内置内容",
+    "memory.resources.userPromptOnly": "用户提示词（不接收 system、assistant 或 tool 内容）",
+    "memory.maintenance.title": "清洗与回收",
+    "memory.maintenance.description": "原生 VMM 启用后立即执行一次清洗，随后每 30 分钟运行；这里可查看策略、手动运行并维护回收站。",
+    "memory.maintenance.invalidResponse": "原生 VMM 清洗接口返回了不匹配的结果。",
+    "memory.maintenance.runNow": "立即清洗",
+    "memory.maintenance.status": "定期清洗状态",
+    "memory.maintenance.statusDescription": "清洗由宿主串行调度，关系数据与 LanceDB 向量通过同一耐久变更账本提交。",
+    "memory.maintenance.worker": "完整清洗工作器",
+    "memory.maintenance.profileExpiryWorker": "画像过期工作器",
+    "memory.maintenance.running": "运行中",
+    "memory.maintenance.enabled": "已启用",
+    "memory.maintenance.disabled": "未启用",
+    "memory.maintenance.interval": "运行周期",
+    "memory.maintenance.profileExpiryInterval": "画像过期检查周期",
+    "memory.maintenance.vectorTitle": "向量代次与重建",
+    "memory.maintenance.vectorDescription": "嵌入模型或向量维度变化后，活动记忆和回收站内可恢复记忆必须显式重建到当前代次；预检不会修改数据。",
+    "memory.maintenance.vectorConfigured": "当前嵌入路由",
+    "memory.maintenance.configured": "已配置",
+    "memory.maintenance.notConfigured": "不可用",
+    "memory.maintenance.vectorDimension": "向量维度",
+    "memory.maintenance.activeMemories": "活动记忆",
+    "memory.maintenance.recycleBinMemories": "回收站记忆",
+    "memory.maintenance.currentVectors": "活动记忆当前代次",
+    "memory.maintenance.currentRecycleBinVectors": "回收站当前代次",
+    "memory.maintenance.pendingAnalysisJobs": "待分析作业",
+    "memory.maintenance.vectorRebuildRequired": "检测到旧代次向量。完成重建前，活动记忆读写或旧回收批次恢复会明确拒绝，避免混用不兼容向量。",
+    "memory.maintenance.vectorRouteUnavailable": "当前无法解析嵌入路由，因此尚不能判断或重建向量代次。",
+    "memory.maintenance.vectorCompatible": "所有活动记忆与回收站可恢复记忆均使用当前嵌入路由对应的向量代次。",
+    "memory.maintenance.vectorRebuildCounts": "需要重建 {memories} 条记忆（活动 {active}，回收站 {recycled}），涉及 {spaces} 个旧向量代次。",
+    "memory.maintenance.previewVectorRebuild": "预检向量重建",
+    "memory.maintenance.confirmVectorRebuildTitle": "确认重建原生记忆向量？",
+    "memory.maintenance.confirmVectorRebuildDescription": "将按当前嵌入路由重建 {memories} 条记忆（活动 {active}，回收站 {recycled}），覆盖 {projects} 个项目、{batches} 个有界批次，目标维度为 {dimension}。执行前会再次校验预检版本与路由。",
+    "memory.maintenance.rebuildVectors": "确认重建",
+    "memory.maintenance.pendingJobs": "待处理冷回合作业",
+    "memory.maintenance.recycleBatches": "回收批次",
+    "memory.maintenance.hotWindow": "每会话热回合保护数",
+    "memory.maintenance.idleWindow": "闲置会话期限",
+    "memory.maintenance.trashWindow": "回收站保留期限",
+    "memory.maintenance.protectionFloor": "共享记忆保护阈值",
+    "memory.maintenance.limits": "每轮清洗上限",
+    "memory.maintenance.profileExpiryLimit": "到期画像节点",
+    "memory.maintenance.memoryRecycleLimit": "终态记忆",
+    "memory.maintenance.coldScanLimit": "冷回合会话扫描",
+    "memory.maintenance.coldJobLimit": "冷回合作业执行",
+    "memory.maintenance.idleSessionLimit": "闲置会话",
+    "memory.maintenance.trashPurgeLimit": "到期回收批次",
+    "memory.maintenance.vectorConsistency": "原生模式不运行独立向量 GC：活动数据与回收站向量由同一 VLDB 变更日志原子对账，永久清除批次时同步删除。",
+    "memory.maintenance.lastRun": "最近完成",
+    "memory.maintenance.profileExpiryLastRun": "最近画像过期检查",
+    "memory.maintenance.profileExpiryLastResult": "本轮收敛 {profiles} 条到期画像。",
+    "memory.maintenance.never": "尚未运行",
+    "memory.maintenance.lastResult": "最近结果：收敛 {profiles} 条到期画像，回收 {memories} 条记忆、{turns} 个回合，入队 {enqueued} 个并完成 {completed} 个冷回合作业，永久清除 {purged} 个到期批次。",
+    "memory.maintenance.recycleBin": "回收站",
+    "memory.maintenance.recycleDescription": "回收期间保留原始关系记录和 LanceDB 向量；恢复不重新生成向量。若嵌入路由已变化，需先在上方完成包含回收站内容的向量重建；到期或手动永久清除后才删除。",
+    "memory.maintenance.projectFilter": "记忆项目",
+    "memory.maintenance.allProjects": "全部记忆项目",
+    "memory.maintenance.emptyRecycleBin": "当前筛选范围没有回收批次。",
+    "memory.maintenance.confirmPurgeTitle": "永久清除该回收批次？",
+    "memory.maintenance.confirmRestoreTitle": "恢复该回收批次？",
+    "memory.maintenance.confirmPurgeDescription": "该操作会永久删除批次内的关系记录和保留向量，无法撤销。",
+    "memory.maintenance.confirmRestoreDescription": "恢复前会重新检查所有持久身份；如已产生冲突，操作将拒绝且不修改数据。",
+    "memory.maintenance.purge": "永久清除",
+    "memory.maintenance.restore": "恢复",
+    "memory.maintenance.turns": "回合",
+    "memory.maintenance.memories": "记忆",
+    "memory.maintenance.profiles": "画像节点",
+    "memory.maintenance.evidence": "情境证据",
+    "memory.maintenance.expiresAt": "自动清除时间",
+    "memory.maintenance.reasonTerminal": "终态记忆",
+    "memory.maintenance.reasonColdTurn": "冷回合",
+    "memory.maintenance.reasonIdle": "闲置会话",
     "vmm.experience.deployment.disabled": "未启用",
     "vmm.experience.deployment.external": "外部服务",
     "vmm.experience.setup.notConfigured": "未配置",
@@ -7384,6 +7600,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.nativeRecords.sessions": "Conversation records",
     "memory.nativeRecords.turns": "Turns",
     "memory.nativeRecords.memories": "Memories",
+    "memory.nativeRecords.profileNodes": "Profile nodes",
     "memory.nativeRecords.completed": "Extracted",
     "memory.nativeRecords.pending": "Pending extraction",
     "memory.nativeRecords.processedUnknown": "Processed, result unknown",
@@ -7401,6 +7618,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.nativeRecords.generated": "Generated memories",
     "memory.nativeRecords.generatedMemories": "Memories generated by this turn",
     "memory.nativeRecords.noGeneratedMemories": "This turn did not generate durable memory.",
+    "memory.nativeRecords.generatedProfiles": "Profiles generated by this turn",
+    "memory.nativeRecords.noGeneratedProfiles": "This turn did not generate user or project profile nodes.",
+    "memory.nativeRecords.noProfileNodes": "No user or project profile nodes were generated in the selected scope.",
     "memory.nativeRecords.noUserPreview": "This turn has no user content to display.",
     "memory.nativeRecords.retryCount": "Failed retry count",
     "memory.nativeRecords.sourceTurn": "Source turn",
@@ -7533,13 +7753,28 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.profile.nativePreviewDescription": "This is the complete profile text prepared by the native memory core for the selected user or project. Open it only for review or troubleshooting.",
     "memory.profile.priority": "Priority",
     "memory.profile.level": "Level",
+    "memory.profile.stateSummary": "Profile states",
+    "memory.profile.stateSummaryDescription": "Native mode shows every durable profile node. Only currently active nodes participate in profile rendering and prompt injection.",
+    "memory.profile.stateActive": "Active",
+    "memory.profile.statePending": "Pending review",
+    "memory.profile.stateScheduled": "Scheduled",
+    "memory.profile.stateInactive": "Inactive",
+    "memory.profile.stateExpired": "Expired",
+    "memory.profile.notInjected": "Not injected",
+    "memory.profile.source": "Source",
+    "memory.profile.sourceTurns": "Source turns",
+    "memory.profile.statusReason": "Status reason",
+    "memory.profile.updatedAt": "Updated",
+    "memory.profile.storedState": "Stored state",
+    "memory.profile.sourceTurnExtract": "Turn extraction",
+    "memory.profile.sourceManualInstruction": "Manual profile instruction",
+    "memory.profile.sourceSystemSeed": "System seed",
+    "memory.profile.sourceRetained": "Retained after user deletion",
     "memory.advanced.title": "Advanced settings",
     "memory.advanced.description": "Choose the built-in native or external gRPC backend and inspect only its relevant settings and diagnostics.",
     "memory.advanced.deployment": "Deployment",
     "memory.advanced.native": "Built-in native VMM (recommended)",
     "memory.advanced.nativeDescription": "VMM Core runs directly inside Vulcan Code and reuses host AI and VLDB.",
-    "memory.advanced.managed": "Locally managed (recommended)",
-    "memory.advanced.managedDescription": "Vulcan Code starts, stops, and protects the local memory service automatically.",
     "memory.advanced.external": "Connect an external VMM",
     "memory.advanced.externalDescription": "Connect to a VMM service operated independently by you or your team.",
     "memory.advanced.connection": "External service connection",
@@ -7550,7 +7785,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.advanced.testManagement": "Save and test management connection",
     "memory.advanced.managementTimeout": "Management timeout (ms)",
     "memory.advanced.defaultBinding": "Default binding for new projects",
-    "memory.advanced.nativeFixedProject": "Default fixed native project ID",
+    "memory.advanced.nativeFixedProject": "Default fixed native memory project",
     "memory.advanced.externalPrefix": "Auto-create project prefix",
     "memory.advanced.nativeStorage": "Native storage managed by Vulcan Code",
     "memory.advanced.nativeStorageDescription": "Relational data and LanceDB vectors are stored separately under .vulcan/code/vmm. Use Memory projects for project migration and clearing.",
@@ -7575,7 +7810,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.advanced.save": "Save advanced settings",
     "memory.advanced.backupRebuild": "Back up and rebuild",
     "memory.resources.title": "Native resources and rules",
-    "memory.resources.description": "Select prompt language and PII/Noise locales, then maintain isolated overrides in the user directory without changing embedded sources.",
+    "memory.resources.description": "Select, validate, and override Prompt, PII, and Noise resources by category. The editor shows only the currently effective content.",
     "memory.resources.invalidResponse": "The native VMM resource API returned an unexpected result.",
     "memory.resources.loading": "Loading native resources…",
     "memory.resources.refresh": "Refresh resources",
@@ -7618,7 +7853,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.resources.runTest": "Run test",
     "memory.resources.noMatch": "No rule matched",
     "memory.resources.noiseMatched": "Matched Noise category",
-    "memory.resources.confirmPurposeTitle": "Confirm that you understand this prompt's purpose",
+    "memory.resources.confirmPurposeTitle": "Confirm that you understand this rule file and its risks",
     "memory.resources.confirmModificationTitle": "Confirm the modification method and risk again",
     "memory.resources.confirmModificationDescription": "The existing JSON contract and field meanings must remain intact. Confirmation unlocks editing and saving; the override is written under .vulcan/code/vmm/config.",
     "memory.resources.confirmPurpose": "I understand the purpose",
@@ -7629,6 +7864,95 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.resources.promptPurpose.postactionL2": "PostAction L2 reviews and organizes candidates. Changes affect final writes, levels, priority, and profile nodes.",
     "memory.resources.promptPurpose.profileInstruction": "Profile instructions convert natural-language adjustments into profile-node changes. Preserve operation and target field contracts.",
     "memory.resources.promptPurpose.unknown": "This prompt belongs to Core's structured inference path. Verify its schema before editing.",
+    "memory.resources.overrideDirectory": "User override directory",
+    "memory.resources.promptTab": "Prompt settings",
+    "memory.resources.piiTab": "PII settings",
+    "memory.resources.noiseTab": "Noise settings",
+    "memory.resources.unlocked": "Unlocked",
+    "memory.resources.locked": "Editing locked",
+    "memory.resources.guardedEdit": "Protected rule modification",
+    "memory.resources.currentEffective": "Current effective content",
+    "memory.resources.composition": "Active rule composition",
+    "memory.resources.compositionDescription": "Configure only this category's language, locale, or policy. Saving validates and hot-reloads it immediately.",
+    "memory.resources.piiPurpose": "PII rules scrub content locally before memory processing. Regex, captures, condition formulas, and replacements must remain valid.",
+    "memory.resources.noisePurpose": "Noise rules decide only whether the current user prompt enters memory analysis. Common and selected country/region rules are combined.",
+    "memory.resources.saveConfirmTitle": "Confirm saving this rule override again",
+    "memory.resources.resetConfirmTitle": "Restore the built-in rule?",
+    "memory.resources.saveConfirmDescription": "Saving writes the current content under .vulcan/code/vmm/config and hot-reloads it. Incorrect prompts or rules can omit, miswrite, or break memory processing.",
+    "memory.resources.resetConfirmDescription": "This removes the user override for this file and immediately restores the embedded source.",
+    "memory.resources.saveConfirmAction": "Save and apply",
+    "memory.resources.resetConfirmAction": "Restore built-in content",
+    "memory.resources.userPromptOnly": "User prompt only (system, assistant, and tool content are not accepted)",
+    "memory.maintenance.title": "Cleanup and recycle bin",
+    "memory.maintenance.description": "Native VMM runs an eager cleanup when enabled and then every 30 minutes. Inspect policy, run it now, and maintain recycled data here.",
+    "memory.maintenance.invalidResponse": "The native VMM retention API returned an unexpected result.",
+    "memory.maintenance.runNow": "Run cleanup now",
+    "memory.maintenance.status": "Scheduled cleanup status",
+    "memory.maintenance.statusDescription": "The host serializes cleanup and commits relational data plus LanceDB vectors through one durable mutation journal.",
+    "memory.maintenance.worker": "Full cleanup worker",
+    "memory.maintenance.profileExpiryWorker": "Profile expiry worker",
+    "memory.maintenance.running": "Running",
+    "memory.maintenance.enabled": "Enabled",
+    "memory.maintenance.disabled": "Disabled",
+    "memory.maintenance.interval": "Interval",
+    "memory.maintenance.profileExpiryInterval": "Profile expiry interval",
+    "memory.maintenance.vectorTitle": "Vector generation and rebuild",
+    "memory.maintenance.vectorDescription": "When the embedding model or dimension changes, active and recoverable recycle-bin memories must be explicitly rebuilt into the current generation. Previewing does not mutate data.",
+    "memory.maintenance.vectorConfigured": "Current embedding route",
+    "memory.maintenance.configured": "Configured",
+    "memory.maintenance.notConfigured": "Unavailable",
+    "memory.maintenance.vectorDimension": "Vector dimension",
+    "memory.maintenance.activeMemories": "Active memories",
+    "memory.maintenance.recycleBinMemories": "Recycle-bin memories",
+    "memory.maintenance.currentVectors": "Active on current generation",
+    "memory.maintenance.currentRecycleBinVectors": "Recycle bin on current generation",
+    "memory.maintenance.pendingAnalysisJobs": "Pending analysis jobs",
+    "memory.maintenance.vectorRebuildRequired": "Older vector generations were detected. Active-memory operations or restoration of an old recycle batch fail explicitly until rebuilding completes.",
+    "memory.maintenance.vectorRouteUnavailable": "The embedding route cannot currently be resolved, so vector compatibility cannot yet be evaluated or rebuilt.",
+    "memory.maintenance.vectorCompatible": "All active and recoverable recycle-bin memories use the vector generation for the current embedding route.",
+    "memory.maintenance.vectorRebuildCounts": "Rebuild {memories} memories (active {active}, recycle bin {recycled}) across {spaces} older vector generations.",
+    "memory.maintenance.previewVectorRebuild": "Preview vector rebuild",
+    "memory.maintenance.confirmVectorRebuildTitle": "Rebuild native-memory vectors?",
+    "memory.maintenance.confirmVectorRebuildDescription": "This rebuilds {memories} memories (active {active}, recycle bin {recycled}) across {projects} projects in {batches} bounded batches using the current embedding route at dimension {dimension}. The preview version and route are revalidated before execution.",
+    "memory.maintenance.rebuildVectors": "Confirm rebuild",
+    "memory.maintenance.pendingJobs": "Pending cold-turn jobs",
+    "memory.maintenance.recycleBatches": "Recycle batches",
+    "memory.maintenance.hotWindow": "Protected hot turns per session",
+    "memory.maintenance.idleWindow": "Idle-session window",
+    "memory.maintenance.trashWindow": "Recycle retention window",
+    "memory.maintenance.protectionFloor": "Shared-memory protection floor",
+    "memory.maintenance.limits": "Per-pass cleanup limits",
+    "memory.maintenance.profileExpiryLimit": "Expired profile nodes",
+    "memory.maintenance.memoryRecycleLimit": "Terminal memories",
+    "memory.maintenance.coldScanLimit": "Cold-turn session scans",
+    "memory.maintenance.coldJobLimit": "Cold-turn job executions",
+    "memory.maintenance.idleSessionLimit": "Idle sessions",
+    "memory.maintenance.trashPurgeLimit": "Expired recycle batches",
+    "memory.maintenance.vectorConsistency": "Native mode does not run a separate vector GC. Active and recycled vectors are atomically reconciled by the same VLDB mutation journal and removed with permanent batch purge.",
+    "memory.maintenance.lastRun": "Last completed",
+    "memory.maintenance.profileExpiryLastRun": "Last profile expiry pass",
+    "memory.maintenance.profileExpiryLastResult": "Expired {profiles} due profile nodes in this pass.",
+    "memory.maintenance.never": "Never run",
+    "memory.maintenance.lastResult": "Latest result: expired {profiles} profile nodes, recycled {memories} memories and {turns} turns, enqueued {enqueued} and completed {completed} cold-turn jobs, and permanently purged {purged} expired batches.",
+    "memory.maintenance.recycleBin": "Recycle bin",
+    "memory.maintenance.recycleDescription": "Original relational records and LanceDB vectors remain during recycling. Restore does not re-embed. If the embedding route changed, first run the vector rebuild above, which includes recycle-bin content. Expiry or permanent purge removes them.",
+    "memory.maintenance.projectFilter": "Memory project",
+    "memory.maintenance.allProjects": "All memory projects",
+    "memory.maintenance.emptyRecycleBin": "No recycle batches match the current filter.",
+    "memory.maintenance.confirmPurgeTitle": "Permanently purge this recycle batch?",
+    "memory.maintenance.confirmRestoreTitle": "Restore this recycle batch?",
+    "memory.maintenance.confirmPurgeDescription": "This permanently removes the batch's relational records and retained vectors and cannot be undone.",
+    "memory.maintenance.confirmRestoreDescription": "Every durable identity is checked again before restore. Conflicts reject the operation without changing data.",
+    "memory.maintenance.purge": "Permanently purge",
+    "memory.maintenance.restore": "Restore",
+    "memory.maintenance.turns": "Turns",
+    "memory.maintenance.memories": "Memories",
+    "memory.maintenance.profiles": "Profile nodes",
+    "memory.maintenance.evidence": "Context evidence",
+    "memory.maintenance.expiresAt": "Automatic purge time",
+    "memory.maintenance.reasonTerminal": "Terminal memory",
+    "memory.maintenance.reasonColdTurn": "Cold turns",
+    "memory.maintenance.reasonIdle": "Idle session",
     "vmm.experience.deployment.disabled": "Disabled",
     "vmm.experience.deployment.external": "External service",
     "vmm.experience.setup.notConfigured": "Not configured",

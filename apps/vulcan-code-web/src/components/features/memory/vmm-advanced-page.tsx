@@ -10,9 +10,7 @@ import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useI18n } from "@/i18n"
-import type { VmmConfigDraftSummary, VmmMemoryActionResult, VmmMemorySnapshot } from "@/types"
-
-import { VmmNativeResourcesPage } from "./vmm-native-resources-page"
+import type { VmmConfigDraftSummary, VmmMemoryActionResult, VmmMemorySnapshot, VmmNativeProjectCatalogSummary } from "@/types"
 
 // VmmAdvancedPageProps defines global native or external settings and diagnostics.
 // VmmAdvancedPageProps 定义全局原生或外置设置与诊断。
@@ -35,6 +33,23 @@ interface VmmAdvancedPageProps {
 function VmmAdvancedPage({ busy, draft, snapshot, notice, onChange, onSave, onTestManagement, onRunAction }: VmmAdvancedPageProps) {
   const { t } = useI18n()
   const native = draft.backendMode === "native"
+  const [nativeCatalog, setNativeCatalog] = React.useState<VmmNativeProjectCatalogSummary | null>(null)
+
+  React.useEffect(() => {
+    if (!native) {
+      setNativeCatalog(null)
+      return
+    }
+    let active = true
+    void onRunAction("native_project_catalog").then((result) => {
+      if (active && result?.data.kind === "native_project_catalog") {
+        setNativeCatalog(result.data.value)
+      }
+    })
+    return () => {
+      active = false
+    }
+  }, [native, onRunAction])
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
@@ -59,7 +74,7 @@ function VmmAdvancedPage({ busy, draft, snapshot, notice, onChange, onSave, onTe
           {native ? (
             <div className="grid gap-4 sm:grid-cols-2">
               <BindingModeSelect label={t("memory.advanced.defaultBinding")} onChange={(nativeProjectBindingMode) => onChange({ nativeProjectBindingMode })} value={draft.nativeProjectBindingMode} />
-              <AdvancedNumberField label={t("memory.advanced.nativeFixedProject")} onChange={(nativeFixedProjectId) => onChange({ nativeFixedProjectId })} value={draft.nativeFixedProjectId} />
+              {draft.nativeProjectBindingMode === "fixed" ? <NativeFixedProjectSelect catalog={nativeCatalog} disabled={busy} label={t("memory.advanced.nativeFixedProject")} onChange={(nativeFixedProjectId) => onChange({ nativeFixedProjectId })} value={draft.nativeFixedProjectId} /> : null}
             </div>
           ) : (
             <div className="grid gap-4 sm:grid-cols-2">
@@ -81,7 +96,6 @@ function VmmAdvancedPage({ busy, draft, snapshot, notice, onChange, onSave, onTe
             <CardHeader><CardTitle className="flex items-center gap-2"><Database className="size-4" aria-hidden="true" />{t("memory.advanced.data")}</CardTitle></CardHeader>
             <CardContent><Alert><Database aria-hidden="true" /><AlertTitle>{t("memory.advanced.nativeStorage")}</AlertTitle><AlertDescription>{t("memory.advanced.nativeStorageDescription")}</AlertDescription></Alert></CardContent>
           </Card>
-          <VmmNativeResourcesPage busy={busy} onRunAction={onRunAction} />
         </>
       ) : null}
 
@@ -109,6 +123,13 @@ function VmmAdvancedPage({ busy, draft, snapshot, notice, onChange, onSave, onTe
       </Accordion>
     </div>
   )
+}
+
+// NativeFixedProjectSelect renders stable project IDs as user-facing project names and tags.
+// NativeFixedProjectSelect 将稳定项目 ID 渲染为面向用户的项目名称与标签。
+function NativeFixedProjectSelect({ catalog, disabled, label, onChange, value }: { catalog: VmmNativeProjectCatalogSummary | null; disabled: boolean; label: string; onChange: (value: string) => void; value: string }) {
+  const inputId = React.useId()
+  return <div className="space-y-2"><Label htmlFor={inputId}>{label}</Label><Select disabled={disabled || !catalog} onValueChange={onChange} value={value}><SelectTrigger id={inputId}><SelectValue /></SelectTrigger><SelectContent>{catalog?.projects.map((project) => <SelectItem key={project.projectId} value={String(project.projectId)}>{project.name} · {project.tag}</SelectItem>)}</SelectContent></Select></div>
 }
 
 // BindingModeSelect renders the exact fixed or per-project global default.

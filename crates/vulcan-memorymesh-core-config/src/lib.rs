@@ -24,7 +24,8 @@ use vulcan_memorymesh_core_contracts::{
 
 /// Embeds the exact authoritative resource tree into the Core artifact.
 /// 将精确的权威资源树嵌入 Core 工件。
-static EMBEDDED_RESOURCES: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/resources");
+static EMBEDDED_RESOURCES: Dir<'static> =
+    include_dir!("$CARGO_MANIFEST_DIR/../vulcan-runtime-assets/resources/memory");
 
 /// Names the required prompt scenes shared by all bundles.
 /// 命名所有 Prompt Bundle 共享的必需场景。

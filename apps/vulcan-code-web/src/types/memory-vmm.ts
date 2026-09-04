@@ -482,6 +482,7 @@ export interface VmmNativeMemorySessionSummary {
   turnCount: number;
   turnStatuses: VmmNativeTurnStatusCounts;
   memoryCount: number;
+  profileNodeCount: number;
   directMemoryCount: number;
   memoryLevels: VmmNativeMemoryLevelCounts;
   firstActivityAtUnixMs?: number | null;
@@ -509,6 +510,7 @@ export interface VmmNativeTurnRecordSummary {
   timeline: VmmNativeTimelineItemSummary[];
   analysisDetails?: string | null;
   generatedMemoryIds: number[];
+  generatedProfileNodeIds: number[];
   memoryLevels: VmmNativeMemoryLevelCounts;
   analysisJobState?: string | null;
   analysisAttemptCount: number;
@@ -545,6 +547,48 @@ export interface VmmNativeMemoryRecordsSummary {
   selectedSessionSourceId?: string | null;
   turns: VmmNativeTurnRecordSummary[];
   memories: VmmNativeMemoryRecordSummary[];
+  profileNodes: VmmNativeProfileRecordSummary[];
+}
+
+// VmmNativeProfileStateCounts counts every effective native profile lifecycle state.
+// VmmNativeProfileStateCounts 统计全部有效原生画像生命周期状态。
+export interface VmmNativeProfileStateCounts {
+  active: number;
+  inactive: number;
+  pending: number;
+  expired: number;
+  scheduled: number;
+}
+
+// VmmNativeProfileRecordSummary describes one all-state native profile audit row.
+// VmmNativeProfileRecordSummary 描述一条全状态原生画像审计记录。
+export interface VmmNativeProfileRecordSummary {
+  profileNodeId: number;
+  target: "user" | "project";
+  storedState: "active" | "inactive" | "pending" | "expired";
+  effectiveState: "active" | "inactive" | "pending" | "expired" | "scheduled";
+  activeForInjection: boolean;
+  content: string;
+  priority: number;
+  level: "transient" | "situational" | "stable" | "persistent";
+  sourceKind: "turn_extract" | "manual_instruction" | "system_seed"
+    | "retained_after_subject_delete";
+  sourceId?: string | null;
+  sourceTurnIds: number[];
+  effectiveDateAtUnixMs?: number | null;
+  expiresAtUnixMs?: number | null;
+  statusReason?: string | null;
+  updatedAtUnixMs: number;
+}
+
+// VmmNativeProfileRecordsSummary contains all profile states for one native target.
+// VmmNativeProfileRecordsSummary 包含一个原生目标的全部画像状态。
+export interface VmmNativeProfileRecordsSummary {
+  storageVersion: number;
+  projectId: number;
+  target: "user" | "project";
+  counts: VmmNativeProfileStateCounts;
+  nodes: VmmNativeProfileRecordSummary[];
 }
 
 // VmmNativeSessionRename describes one deterministic migration collision rename.
@@ -840,6 +884,129 @@ export interface VmmNativeNoiseTestResult {
   mode: "deterministic_regex";
 }
 
+// VmmNativeRetentionPolicySummary is the frozen Core cleanup policy shown to users.
+// VmmNativeRetentionPolicySummary 是向用户展示的冻结 Core 清洗策略。
+export interface VmmNativeRetentionPolicySummary {
+  schemaVersion: number;
+  turnHotWindowSize: number;
+  sessionIdleMs: number;
+  trashRetentionMs: number;
+  protectedPriorityFloor: number;
+  protectedMemoryLevelFloor: number;
+  skipProtectedSharedMemories: boolean;
+  profileExpiryLimit: number;
+  memoryRecycleLimit: number;
+  coldTurnScanLimit: number;
+  coldTurnJobLimit: number;
+  idleSessionLimit: number;
+  vectorGcLimit: number;
+  trashPurgeLimit: number;
+}
+
+// VmmNativeRetentionApplyResult summarizes one complete native cleanup run.
+// VmmNativeRetentionApplyResult 汇总一次完整原生清洗运行。
+export interface VmmNativeRetentionApplyResult {
+  expiredProfileNodes: number;
+  recycledMemories: number;
+  recycledTurns: number;
+  enqueuedColdJobs: number;
+  completedColdJobs: number;
+  purgedTrashBatches: number;
+  projectFailures: VmmNativeRetentionProjectFailure[];
+}
+
+// VmmNativeRetentionProjectFailure preserves one project-local cleanup failure.
+// VmmNativeRetentionProjectFailure 保留一个项目局部清洗失败。
+export interface VmmNativeRetentionProjectFailure {
+  projectId: number;
+  error: string;
+}
+
+// VmmNativeRetentionStatusSummary exposes the schedule and latest retention outcome.
+// VmmNativeRetentionStatusSummary 暴露调度状态与最近保留结果。
+export interface VmmNativeRetentionStatusSummary {
+  enabled: boolean;
+  running: boolean;
+  profileExpiryRunning: boolean;
+  intervalMinutes: number;
+  profileExpiryIntervalSeconds: number;
+  policy: VmmNativeRetentionPolicySummary;
+  lastStartedAtUnixMs?: number | null;
+  lastFinishedAtUnixMs?: number | null;
+  lastError?: string | null;
+  lastResult?: VmmNativeRetentionApplyResult | null;
+  profileExpiryLastStartedAtUnixMs?: number | null;
+  profileExpiryLastFinishedAtUnixMs?: number | null;
+  profileExpiryLastError?: string | null;
+  profileExpiryLastResult?: VmmNativeRetentionApplyResult | null;
+  pendingColdJobs: number;
+  recycleBatchCount: number;
+}
+
+// VmmNativeVectorStatusSummary reports active and recoverable memory compatibility with the configured embedding generation.
+// VmmNativeVectorStatusSummary 报告活动与可恢复记忆和已配置 Embedding 代次的兼容状态。
+export interface VmmNativeVectorStatusSummary {
+  configured: boolean;
+  currentVectorSpaceId?: string | null;
+  embeddingDimension?: number | null;
+  activeMemoryCount: number;
+  recycleBinMemoryCount: number;
+  currentMemoryCount: number;
+  currentRecycleBinMemoryCount: number;
+  rebuildRequiredMemoryCount: number;
+  activeRebuildRequiredMemoryCount: number;
+  recycleBinRebuildRequiredMemoryCount: number;
+  legacyVectorSpaceCount: number;
+  pendingAnalysisJobCount: number;
+  error?: string | null;
+}
+
+// VmmNativeVectorRebuildPreview binds a high-impact rebuild to one exact displayed target set.
+// VmmNativeVectorRebuildPreview 将高影响重建绑定到一个准确显示的目标集合。
+export interface VmmNativeVectorRebuildPreview {
+  storageVersion: number;
+  targetVectorSpaceId: string;
+  embeddingDimension: number;
+  activeMemoryCount: number;
+  recycleBinMemoryCount: number;
+  rebuildMemoryCount: number;
+  activeRebuildMemoryCount: number;
+  recycleBinRebuildMemoryCount: number;
+  affectedProjectCount: number;
+  batchCount: number;
+  previewFingerprint: string;
+}
+
+// VmmNativeVectorRebuildResult summarizes one completed native vector-generation rebuild.
+// VmmNativeVectorRebuildResult 汇总一次已完成的原生向量代次重建。
+export interface VmmNativeVectorRebuildResult {
+  storageVersion: number;
+  targetVectorSpaceId: string;
+  rebuiltMemoryCount: number;
+  batchCount: number;
+}
+
+// VmmNativeRecycleBatchSummary describes one recoverable native cleanup batch.
+// VmmNativeRecycleBatchSummary 描述一个可恢复的原生清洗批次。
+export interface VmmNativeRecycleBatchSummary {
+  batchId: string;
+  projectId: number;
+  reason: string;
+  recycledAtUnixMs: number;
+  expiresAtUnixMs: number;
+  turnCount: number;
+  memoryCount: number;
+  profileNodeCount: number;
+  contextEvidenceCount: number;
+}
+
+// VmmNativeRecycleBinSummary is one version-guarded recycle-bin snapshot.
+// VmmNativeRecycleBinSummary 是一份受版本保护的回收站快照。
+export interface VmmNativeRecycleBinSummary {
+  storageVersion: number;
+  batches: VmmNativeRecycleBatchSummary[];
+}
+
 // VmmMemoryActionResponse is the tagged response union consumed by product pages.
 // VmmMemoryActionResponse 是产品页面消费的带标签响应联合。
 export type VmmMemoryActionResponse =
@@ -876,6 +1043,7 @@ export type VmmMemoryActionResponse =
     }
   | { kind: "native_project_catalog"; value: VmmNativeProjectCatalogSummary }
   | { kind: "native_memory_records"; value: VmmNativeMemoryRecordsSummary }
+  | { kind: "native_profile_records"; value: VmmNativeProfileRecordsSummary }
   | { kind: "native_project_delete_preview"; value: VmmNativeProjectDeletePreview }
   | { kind: "native_migration_preview"; value: VmmNativeMigrationPreview }
   | { kind: "native_migration"; value: VmmNativeMigrationResult }
@@ -886,6 +1054,13 @@ export type VmmMemoryActionResponse =
   | { kind: "native_pii_test"; value: VmmNativePiiTestResult }
   | { kind: "native_pii_formula_test"; value: VmmNativePiiFormulaTestResult }
   | { kind: "native_noise_test"; value: VmmNativeNoiseTestResult }
+  | { kind: "native_retention_status"; value: VmmNativeRetentionStatusSummary }
+  | { kind: "native_retention_run"; value: VmmNativeRetentionApplyResult }
+  | { kind: "native_vector_status"; value: VmmNativeVectorStatusSummary }
+  | { kind: "native_vector_rebuild_preview"; value: VmmNativeVectorRebuildPreview }
+  | { kind: "native_vector_rebuild"; value: VmmNativeVectorRebuildResult }
+  | { kind: "native_recycle_bin"; value: VmmNativeRecycleBinSummary }
+  | { kind: "native_recycle_batch"; value: VmmNativeRecycleBatchSummary }
   | { kind: "management"; value: unknown };
 
 // VmmMemoryActionResult describes one VMM action response.

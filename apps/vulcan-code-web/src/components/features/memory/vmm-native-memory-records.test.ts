@@ -66,6 +66,7 @@ describe("native memory provenance requests", () => {
         corrupted: 0,
       },
       memoryCount: 0,
+      profileNodeCount: 0,
       directMemoryCount: 0,
       memoryLevels: { session: 0, phase: 0, stable: 0, persistent: 0 },
     }]

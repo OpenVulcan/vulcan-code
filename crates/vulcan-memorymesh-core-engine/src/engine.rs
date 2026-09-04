@@ -42,15 +42,16 @@ use vulcan_memorymesh_core_contracts::{
     MemoryWriteBatchItem, MemoryWriteBatchResult, MemoryWriteCommand, MemoryWriteResult, Mutation,
     MutationBatch, MutationIdentity, MutationOutcome, NoiseAudit, NoiseDecisionSource,
     NoisePrototype, NoisePrototypeCacheIdentity, PhysicalCandidate, PlannedColdTurnJobRef,
-    PlannedMemoryRef, PlannedSessionRef, PlannedTrashBatchRef, PlannedVectorGcRef,
-    PostActionAcceptedResult, PostActionAnalysisResult, PostActionAnalyzePendingTurnCommand,
-    PostActionDirectWrite, PostActionIntakeCommand, PostActionReferenceTurn, PreCheckCommand,
-    PreCheckResult, PreCheckReviewCandidate, ProfileBundle, ProfileCandidate,
-    ProfileInstructionCommand, ProfileInstructionResult, ProfileLevel, ProfileNode, ProfileNodeId,
-    ProfileNodeState, ProfileQueryCommand, ProfileSectionBundle, ProfileSourceId,
-    ProfileSourceKind, ProfileViewSection, RecallMode, ReinforcementResult, RerankEffect,
-    RetentionCommand, RetentionPlanSet, RetentionReasonCode, RetiredProfileNode, Role, ScopeAccess,
-    ScopeId, SearchHit, SectionRole, SessionRecallBoundary, StorageQuery, StorageQueryResult,
+    PlannedMemoryRef, PlannedProfileNodeRef, PlannedSessionRef, PlannedTrashBatchRef,
+    PlannedVectorGcRef, PostActionAcceptedResult, PostActionAnalysisResult,
+    PostActionAnalyzePendingTurnCommand, PostActionDirectWrite, PostActionIntakeCommand,
+    PostActionReferenceTurn, PreCheckCommand, PreCheckResult, PreCheckReviewCandidate,
+    PreCheckTurnContext, ProfileBundle, ProfileCandidate, ProfileInstructionCommand,
+    ProfileInstructionResult, ProfileLevel, ProfileNode, ProfileNodeId, ProfileNodeState,
+    ProfileQueryCommand, ProfileSectionBundle, ProfileSourceId, ProfileSourceKind,
+    ProfileViewSection, RecallMode, ReinforcementResult, RerankEffect, RetentionCommand,
+    RetentionPlanSet, RetentionReasonCode, RetiredProfileNode, Role, ScopeAccess, ScopeId,
+    SearchHit, SectionRole, SessionRecallBoundary, StorageQuery, StorageQueryResult,
     StructuredOutputContractId, SubjectId, TimelineItem, Turn, TurnId, TurnStatus, VectorSpaceId,
 };
 
@@ -2754,7 +2755,7 @@ fn initialize_precheck(
         .scrub(&command.user_content)?
         .text;
     command.user_content.clone_from(&content);
-    command.recent_timeline = normalize_timeline(&record.snapshot, &command.recent_timeline)?;
+    command.recent_turns = normalize_precheck_turns(&record.snapshot, &command.recent_turns)?;
     match command.recall_mode {
         RecallMode::Disabled => complete(
             record,
@@ -2801,7 +2802,7 @@ fn initialize_precheck(
                 LlmPurpose::PreCheckIntent,
                 prompt,
                 LlmInput::PreCheckIntent {
-                    recent_timeline: command.recent_timeline.clone(),
+                    recent_turns: command.recent_turns.clone(),
                     user_content: content,
                     max_search_queries: command.max_search_queries,
                 },
@@ -2845,7 +2846,7 @@ fn advance_precheck_intent(
             queries = crate::precheck::normalize_intent_queries(
                 queries,
                 &content,
-                !command.recent_timeline.is_empty(),
+                !command.recent_turns.is_empty(),
                 command.max_search_queries as usize,
             );
             if queries.is_empty() {
@@ -4570,16 +4571,25 @@ fn initialize_intake(
         noise.source = NoiseDecisionSource::TimelineBypass;
         return emit_intake_turn(record, command, noise);
     }
-    // Single-turn shape validation guarantees user then optional assistant ordering.
-    // 单轮形态校验保证用户在前、可选助手在后的顺序。
-    if let Some((role, decision)) = command.timeline.iter().find_map(|item| {
-        let decision = record
-            .snapshot
-            .noise_detector
-            .detect(item.role, &item.content);
-        decision.is_noise.then_some((item.role, decision))
-    }) {
-        noise.role = Some(role);
+    // VulcanCode admission is owned exclusively by the canonical user prompt. Assistant output
+    // must never turn a valid user request into Noise after the model has already answered it.
+    // VulcanCode 的准入仅由规范用户提示词决定；模型回答后，助手输出绝不能把有效用户请求改判为 Noise。
+    let user_item = command
+        .timeline
+        .iter()
+        .find(|item| item.role == Role::User)
+        .ok_or_else(|| {
+            command_error(
+                ErrorCode::InvalidArgument,
+                "single-turn intake has no user item",
+            )
+        })?;
+    let decision = record
+        .snapshot
+        .noise_detector
+        .detect(Role::User, &user_item.content);
+    if decision.is_noise {
+        noise.role = Some(Role::User);
         noise.category = decision.category;
         noise.confidence = decision.confidence;
         return complete(
@@ -4594,24 +4604,25 @@ fn initialize_intake(
     }
     // Semantic noise requires embedding support; query the prototype cache first.
     // 语义 Noise 需要嵌入支持；首先查询原型缓存。
-    // Cache all role targets under one rules identity, even when this request lacks an assistant.
-    // 在同一规则身份下缓存所有角色目标，即使本次请求没有助手回复。
-    let mut phrase_targets = Vec::new();
+    // Native admission compiles and queries user-targeted semantic prototypes only.
+    // 原生准入仅编译并查询面向用户的语义原型。
+    let phrase_targets = record
+        .snapshot
+        .noise_detector
+        .semantic_phrase_targets(Role::User)
+        .into_iter()
+        .map(|target| (target.category, target.phrase, target.threshold))
+        .collect::<Vec<_>>();
     let mut seen = BTreeSet::new();
-    let mut queries = Vec::new();
-    for role in [Role::User, Role::Assistant] {
-        let targets = record.snapshot.noise_detector.semantic_phrase_targets(role);
-        if !targets.is_empty() {
-            for item in command.timeline.iter().filter(|item| item.role == role) {
-                queries.push((role, item.content.clone()));
-            }
-        }
-        for target in targets {
-            if seen.insert((target.category.clone(), target.phrase.clone())) {
-                phrase_targets.push((target.category, target.phrase, target.threshold));
-            }
-        }
-    }
+    let phrase_targets = phrase_targets
+        .into_iter()
+        .filter(|(category, phrase, _)| seen.insert((category.clone(), phrase.clone())))
+        .collect::<Vec<_>>();
+    let queries = if phrase_targets.is_empty() {
+        Vec::new()
+    } else {
+        vec![(Role::User, user_item.content.clone())]
+    };
     if queries.is_empty() {
         return emit_intake_turn(record, command, noise);
     }
@@ -5327,6 +5338,23 @@ fn estimate_postaction_tokens(text: &str) -> u32 {
     } else {
         (total * 1.06).ceil().min(f64::from(u32::MAX)) as u32
     }
+}
+
+/// Estimates one text fragment with the frozen VMM domestic-language token profile.
+/// 使用冻结的 VMM 国内语言 Token 配置估算一段文本。
+///
+/// # Parameters
+/// 参数
+/// `text` is the exact normalized or serialized fragment whose prompt budget is required.
+/// `text` 是需要计算提示词预算的准确规范化文本或序列化片段。
+///
+/// # Returns
+/// 返回值
+/// The deterministic approximate token count shared by host-side PreCheck windowing and Core PostAction history trimming.
+/// 返回由宿主侧 PreCheck 窗口与 Core PostAction 历史裁剪共同使用的确定性近似 Token 数。
+#[must_use]
+pub fn estimate_text_tokens(text: &str) -> u32 {
+    estimate_postaction_tokens(text)
 }
 
 /// Reports whether one Unicode scalar belongs to the CJK families used by VMM.
@@ -8336,8 +8364,8 @@ fn validate_profile_sections(
     Ok(())
 }
 
-/// Advances VMM-aligned retention facts into six independently executable plans.
-/// 将与 VMM 对齐的保留事实推进为六类可独立执行的计划。
+/// Advances VMM-aligned retention facts into seven independently executable plans.
+/// 将与 VMM 对齐的保留事实推进为七类可独立执行的计划。
 #[allow(clippy::needless_pass_by_value)]
 #[allow(clippy::too_many_lines)]
 fn advance_retention_query(
@@ -8360,6 +8388,7 @@ fn advance_retention_query(
         identity: command.mutation_identity.clone(),
         subject_id: command.subject_id.clone(),
         scope_id: command.scope_access.write_scope.clone(),
+        profile_expiry: Vec::new(),
         terminal_memory_recycle: Vec::new(),
         cold_turn_enqueue: Vec::new(),
         cold_turn_execute: Vec::new(),
@@ -8368,9 +8397,49 @@ fn advance_retention_query(
         trash_purge: Vec::new(),
     };
 
-    // Phase one only recycles terminal memories and applies VMM's narrowly scoped shared-memory
+    // Phase one materializes due active profiles as expired under their exact observed scope.
+    // 第一阶段在画像节点的精确已观察作用域内，将到期活跃画像真实收敛为过期状态。
+    let visible_scopes = command
+        .scope_access
+        .visible_scopes
+        .iter()
+        .collect::<BTreeSet<_>>();
+    let mut expired_profile_nodes = facts.expired_profile_nodes;
+    expired_profile_nodes.sort_by(|left, right| {
+        left.expires_at_ns
+            .cmp(&right.expires_at_ns)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let mut profile_node_ids = BTreeSet::new();
+    for node in expired_profile_nodes {
+        validate_host_profile_node(&node)?;
+        if node.state != ProfileNodeState::Active
+            || node.created_at_ns > command.now_ns
+            || node.updated_at_ns > command.now_ns
+            || node
+                .expires_at_ns
+                .is_none_or(|expires_at_ns| expires_at_ns > command.now_ns)
+            || !visible_scopes.contains(&node.scope_id)
+            || node.scope_id != command.scope_access.write_scope
+                && node.subject_id.as_ref() != Some(&command.subject_id)
+            || !profile_node_ids.insert(node.id.clone())
+        {
+            return Err(effect_type_error(
+                "Retention profile-expiry facts violate ownership, state, time, scope, or identity bounds",
+            ));
+        }
+        plans.profile_expiry.push(PlannedProfileNodeRef {
+            profile_node_id: node.id,
+            expected_subject_id: node.subject_id,
+            expected_scope_id: node.scope_id,
+            expected_version: node.version,
+            reason: RetentionReasonCode::ProfileExpiry,
+        });
+    }
+
+    // Phase two only recycles terminal memories and applies VMM's narrowly scoped shared-memory
     // protection rule. Active memory age and importance are intentionally irrelevant here.
-    // 第一阶段仅回收终态记忆，并应用 VMM 的窄范围共享记忆保护规则；活跃记忆年龄与重要度在此无关。
+    // 第二阶段仅回收终态记忆，并应用 VMM 的窄范围共享记忆保护规则；活跃记忆年龄与重要度在此无关。
     let mut terminal_memories = facts.terminal_memories;
     terminal_memories.sort_by(|left, right| {
         left.memory
@@ -8409,9 +8478,9 @@ fn advance_retention_query(
         }
     }
 
-    // Phase two creates durable jobs from Host-resolved sessions with at least one unreferenced
+    // Phase three creates durable jobs from Host-resolved sessions with at least one unreferenced
     // turn outside the count-based hot window.
-    // 第二阶段从 Host 已解析且至少有一个热窗口外无引用 Turn 的会话创建持久任务。
+    // 第三阶段从 Host 已解析且至少有一个热窗口外无引用 Turn 的会话创建持久任务。
     let mut cold_candidates = facts.cold_turn_candidates;
     cold_candidates.sort_by(|left, right| left.session_source_id.cmp(&right.session_source_id));
     let mut cold_sessions = BTreeSet::new();
@@ -8428,9 +8497,9 @@ fn advance_retention_query(
         });
     }
 
-    // Phase three selects only due durable cold-turn jobs; enqueue and execution remain separate
+    // Phase four selects only due durable cold-turn jobs; enqueue and execution remain separate
     // so a crash cannot lose the maintenance authority.
-    // 第三阶段仅选择已到期的持久冷 Turn 任务；入队与执行保持分离，避免崩溃丢失维护权威。
+    // 第四阶段仅选择已到期的持久冷 Turn 任务；入队与执行保持分离，避免崩溃丢失维护权威。
     let mut cold_jobs = facts.cold_turn_jobs;
     cold_jobs.sort_by(|left, right| {
         left.next_run_at_ns
@@ -8457,9 +8526,9 @@ fn advance_retention_query(
         }
     }
 
-    // Phase four selects sessions whose latest durable activity is older than the idle window and
+    // Phase five selects sessions whose latest durable activity is older than the idle window and
     // that have no Pending Turn, preserving Pending Turn as the recovery authority.
-    // 第四阶段选择最近持久活动超过闲置窗口且不存在 Pending Turn 的会话，继续以 Pending Turn 作为恢复权威。
+    // 第五阶段选择最近持久活动超过闲置窗口且不存在 Pending Turn 的会话，继续以 Pending Turn 作为恢复权威。
     let mut idle_sessions = facts.idle_sessions;
     idle_sessions.sort_by(|left, right| {
         left.last_activity_ns
@@ -8476,7 +8545,9 @@ fn advance_retention_query(
             ));
         }
         let idle_ns = checked_duration_ns(policy.session_idle_ms, "session idle")?;
-        if !fact.has_pending_turn && command.now_ns.saturating_sub(fact.last_activity_ns) >= idle_ns
+        if !cold_sessions.contains(&fact.session_source_id)
+            && !fact.has_pending_turn
+            && command.now_ns.saturating_sub(fact.last_activity_ns) >= idle_ns
         {
             plans.idle_session_recycle.push(PlannedSessionRef {
                 session_source_id: fact.session_source_id.as_str().to_owned(),
@@ -8485,9 +8556,9 @@ fn advance_retention_query(
         }
     }
 
-    // Phase five retries due sidecar vector deletions. This is GC retry, never an instruction to
+    // Phase six retries due sidecar vector deletions. This is GC retry, never an instruction to
     // recompute database-specific embeddings or similarity formulas inside Core.
-    // 第五阶段重试到期旁路向量删除；这是 GC 重试，绝不是要求 Core 重算数据库专用嵌入或相似度公式。
+    // 第六阶段重试到期旁路向量删除；这是 GC 重试，绝不是要求 Core 重算数据库专用嵌入或相似度公式。
     let mut vector_jobs = facts.vector_gc_jobs;
     vector_jobs.sort_by(|left, right| {
         left.next_run_at_ns
@@ -8514,9 +8585,9 @@ fn advance_retention_query(
         }
     }
 
-    // Phase six purges whole expired recycle batches so relational trash coordinates remain
+    // Phase seven purges whole expired recycle batches so relational trash coordinates remain
     // atomic instead of being weakened into unrelated per-memory deletes.
-    // 第六阶段按完整过期回收批次清除，使关系回收站坐标保持原子性，而不退化成无关的逐记忆删除。
+    // 第七阶段按完整过期回收批次清除，使关系回收站坐标保持原子性，而不退化成无关的逐记忆删除。
     let mut trash_batches = facts.trash_batches;
     trash_batches.sort_by(|left, right| {
         left.recycled_at_ns
@@ -8549,7 +8620,10 @@ fn validate_retention_fact_bounds(
     policy: &vulcan_memorymesh_core_contracts::RetentionPolicy,
 ) -> Result<(), CoreError> {
     let within = |actual: usize, limit: u32| actual <= limit as usize;
-    if !within(facts.terminal_memories.len(), policy.memory_recycle_limit)
+    if !within(
+        facts.expired_profile_nodes.len(),
+        policy.profile_expiry_limit,
+    ) || !within(facts.terminal_memories.len(), policy.memory_recycle_limit)
         || !within(
             facts.cold_turn_candidates.len(),
             policy.cold_turn_scan_limit,
@@ -9395,6 +9469,24 @@ fn normalize_timeline(
         .collect()
 }
 
+/// Normalizes and scrubs every host-selected recent `PreCheck` turn context.
+/// 规范化并脱敏宿主选出的每个最近 `PreCheck` 轮次上下文。
+fn normalize_precheck_turns(
+    snapshot: &ConfigSnapshot,
+    turns: &[PreCheckTurnContext],
+) -> Result<Vec<PreCheckTurnContext>, CoreError> {
+    turns
+        .iter()
+        .map(|turn| {
+            Ok(PreCheckTurnContext {
+                turn_id: turn.turn_id.clone(),
+                content_type: turn.content_type,
+                content: snapshot.pii_scrubber.scrub(turn.content.trim())?.text,
+            })
+        })
+        .collect()
+}
+
 /// Builds a bounded evidence excerpt from one canonical turn.
 /// 从一个规范化轮次构建有界证据摘录。
 fn turn_excerpt(turn: &Turn) -> String {
@@ -9590,7 +9682,7 @@ fn validate_command(command: &CoreCommand, snapshot: &ConfigSnapshot) -> Result<
                 .validate(&command.scope_access)
                 .map_err(validation_error)?;
             validate_nonempty_text(&command.user_content, "PreCheck user content")?;
-            validate_timeline(&command.recent_timeline, true)?;
+            validate_precheck_turns(&command.recent_turns)?;
             validate_observed_time(
                 command.now_ns,
                 command.mutation_identity.observed_at_ns,
@@ -9739,6 +9831,7 @@ fn validate_command(command: &CoreCommand, snapshot: &ConfigSnapshot) -> Result<
                 "retention evaluation time",
             )?;
             let limits = [
+                command.policy.profile_expiry_limit,
                 command.policy.memory_recycle_limit,
                 command.policy.cold_turn_scan_limit,
                 command.policy.cold_turn_job_limit,
@@ -10270,6 +10363,24 @@ fn validate_timeline(timeline: &[TimelineItem], allow_empty: bool) -> Result<(),
             return Err(validation_error("timeline timestamps are not ordered"));
         }
         previous = Some(item.occurred_at_ns);
+    }
+    Ok(())
+}
+
+/// Validates bounded, unique recent-turn contexts selected for `PreCheck`.
+/// 校验为 `PreCheck` 选择的有界且唯一最近轮次上下文。
+fn validate_precheck_turns(turns: &[PreCheckTurnContext]) -> Result<(), CoreError> {
+    if turns.len() > MAX_DOMAIN_COLLECTION_ITEMS {
+        return Err(validation_error("PreCheck recent turn count is invalid"));
+    }
+    let mut turn_ids = BTreeSet::new();
+    for turn in turns {
+        validate_nonempty_text(&turn.content, "PreCheck recent turn content")?;
+        if !turn_ids.insert(turn.turn_id.clone()) {
+            return Err(validation_error(
+                "PreCheck recent turn identities must be unique",
+            ));
+        }
     }
     Ok(())
 }

@@ -201,7 +201,7 @@ fn write_command_payload(writer: &mut crate::CanonicalWriter, command: &CoreComm
             writer.string(command.vector_space_id.as_str());
             crate::fingerprint::write_candidate_scope(writer, &command.candidate_scope);
             writer.string(&command.user_content);
-            write_timeline_list(writer, &command.recent_timeline);
+            write_precheck_turns(writer, &command.recent_turns);
             writer.u32(command.recall_mode as u32);
             writer.u32(command.session_recall_mode as u32);
             writer.u32(command.max_search_queries);
@@ -384,7 +384,7 @@ fn read_command_payload(
                 .map_err(|error| codec_error(error.to_string()))?,
             candidate_scope: read_candidate_scope(reader)?,
             user_content: reader.string()?,
-            recent_timeline: read_timeline_list(reader)?,
+            recent_turns: read_precheck_turns(reader)?,
             recall_mode: crate::RecallMode::try_from_u32(reader.u32()?)
                 .ok_or_else(|| codec_error("unknown recall mode"))?,
             session_recall_mode: crate::SessionRecallMode::try_from_u32(reader.u32()?)
@@ -704,6 +704,32 @@ fn write_timeline_list(writer: &mut crate::CanonicalWriter, timeline: &[crate::T
     });
 }
 
+/// Writes one ordered list of same-session `PreCheck` turn contexts.
+/// 写入一个有序的同会话 `PreCheck` 轮次上下文列表。
+fn write_precheck_turns(writer: &mut crate::CanonicalWriter, turns: &[crate::PreCheckTurnContext]) {
+    writer.list(turns, |inner, turn| {
+        inner.string(turn.turn_id.as_str());
+        inner.u32(turn.content_type as u32);
+        inner.string(&turn.content);
+    });
+}
+
+/// Reads one ordered list of same-session `PreCheck` turn contexts.
+/// 读取一个有序的同会话 `PreCheck` 轮次上下文列表。
+fn read_precheck_turns(
+    reader: &mut CanonicalReader<'_>,
+) -> Result<Vec<crate::PreCheckTurnContext>, CoreError> {
+    reader.list(|inner| {
+        Ok(crate::PreCheckTurnContext {
+            turn_id: crate::TurnId::new(&inner.string()?)
+                .map_err(|error| codec_error(error.to_string()))?,
+            content_type: crate::PreCheckTurnContentType::try_from_u32(inner.u32()?)
+                .ok_or_else(|| codec_error("unknown PreCheck turn content type"))?,
+            content: inner.string()?,
+        })
+    })
+}
+
 /// Reads one ordered timeline.
 /// 读取一个有序时间线。
 fn read_timeline_list(
@@ -806,6 +832,7 @@ fn write_retention_policy(writer: &mut crate::CanonicalWriter, policy: &crate::R
     writer.u32(policy.protected_priority_floor);
     writer.u32(policy.protected_memory_level_floor);
     writer.bool(policy.skip_protected_shared_memories);
+    writer.u32(policy.profile_expiry_limit);
     writer.u32(policy.memory_recycle_limit);
     writer.u32(policy.cold_turn_scan_limit);
     writer.u32(policy.cold_turn_job_limit);
@@ -827,6 +854,7 @@ fn read_retention_policy(
         protected_priority_floor: reader.u32()?,
         protected_memory_level_floor: reader.u32()?,
         skip_protected_shared_memories: reader.bool()?,
+        profile_expiry_limit: reader.u32()?,
         memory_recycle_limit: reader.u32()?,
         cold_turn_scan_limit: reader.u32()?,
         cold_turn_job_limit: reader.u32()?,

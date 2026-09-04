@@ -303,6 +303,12 @@ pub struct HostAiExecutionHandle {
 `wait_response` 返回聚合 `ResponsesExecutionResult`，`execution_status` 返回状态快照，
 `cancel_execution` 发出协作式取消请求。
 
+结构化输出必须同时满足两层约束：消费者提交并由宿主终结器校验准确 JSON Schema；对于只提供
+JSON Object 开关的协议，`ConfiguredInferenceService` 可将线路请求投影为 `JsonObject`，但不能
+降低最终宿主 Schema 校验。Provider 的全部 Manifest/自定义投影结束后，执行 配置、Responses
+`text.format`、Gemini MIME、Interactions/Cohere response format 等协议原生 JSON 控制必须仍然
+存在；任何后置投影删除或改变该控制都必须在网络分派前失败，不能以普通文本请求继续发送。
+
 ### 5.9 Port 方法全集
 
 ```rust
@@ -550,6 +556,8 @@ Native VMM 已用相同规则注册 `vmm` consumer profile，把 Core 的 LLM、
 - Native VMM 的必需 LLM/Embedding 与可选画像指令/Rerank 在启用和调用前刷新；Effect 失败显式
   转换为 Core 可降级失败，Storage Effect 独立走宿主 VLDB，不混入 AI Port。VMM Embedding 固定为
   对称 `ProviderDefault` 任务并在激活阶段校验完整请求形态；VCE 的 `Document`/`Query` 任务保持独立。
+- LLM 结构化输出保留“调用方 Schema + 提供方 JSON 模式 + 宿主最终校验”三层边界；最终线路编码器
+  会检查协议原生 JSON 控制仍存在，避免 Manifest 或模型投影静默退化为普通文本请求。
 
 ### 12.4 遗留问题与注意事项
 

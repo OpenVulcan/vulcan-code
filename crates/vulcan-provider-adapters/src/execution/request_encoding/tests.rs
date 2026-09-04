@@ -6,8 +6,8 @@ use super::*;
 use std::sync::Arc;
 use vulcan_ai_protocols::ProtocolRegistry;
 
-/// Verifies Chat, Responses, and Anthropic routes retain one exact structured-output schema.
-/// 验证 Chat、Responses 与 Anthropic 路由都会保留同一份精确结构化输出 Schema。
+/// Verifies every schema-capable protocol retains one exact structured-output schema.
+/// 验证每个支持 Schema 的协议都会保留同一份精确结构化输出 Schema。
 #[test]
 fn encode_request_preserves_structured_output_schema_for_supported_protocols() {
     let client = ProviderExecutionClient::new(
@@ -25,6 +25,9 @@ fn encode_request_preserves_structured_output_schema_for_supported_protocols() {
         OPENAI_CHAT_PROFILE_ID,
         OPENAI_RESPONSES_PROFILE_ID,
         ANTHROPIC_MESSAGES_PROFILE_ID,
+        GEMINI_GENERATE_CONTENT_PROFILE_ID,
+        GOOGLE_CODE_ASSIST_PROFILE_ID,
+        GEMINI_INTERACTIONS_PROFILE_ID,
     ] {
         let mut request = minimal_request();
         request.structured_output = StructuredOutputPolicy::JsonSchema {
@@ -33,17 +36,142 @@ fn encode_request_preserves_structured_output_schema_for_supported_protocols() {
             schema: schema.clone(),
             strict: true,
         };
+        // route reuses one valid provider shell while selecting the exact protocol under test.
+        // route 复用一个有效供应商外壳，同时选择当前测试的准确协议。
+        let mut route = pinned_openrouter_route(OPENAI_CHAT_PROFILE_ID);
+        route.protocol_route.protocol_profile_id = protocol_id.to_owned();
         let encoded = client
-            .encode_request(&pinned_openrouter_route(protocol_id), &request)
+            .encode_request(&route, &request)
             .expect("supported protocol should preserve structured output schema");
         let projected_schema = match protocol_id {
             OPENAI_CHAT_PROFILE_ID => encoded.body.pointer("/response_format/json_schema/schema"),
             OPENAI_RESPONSES_PROFILE_ID => encoded.body.pointer("/text/format/schema"),
             ANTHROPIC_MESSAGES_PROFILE_ID => encoded.body.pointer("/output_config/format/schema"),
+            GEMINI_GENERATE_CONTENT_PROFILE_ID => {
+                encoded.body.pointer("/generationConfig/responseJsonSchema")
+            }
+            GOOGLE_CODE_ASSIST_PROFILE_ID => encoded
+                .body
+                .pointer("/request/generationConfig/responseJsonSchema"),
+            GEMINI_INTERACTIONS_PROFILE_ID => encoded.body.pointer("/response_format/schema"),
             _ => unreachable!("the loop only contains supported protocol profiles"),
         };
         assert_eq!(projected_schema, Some(&schema));
     }
+}
+
+/// Verifies every JSON-object protocol retains its native wire control after all projections.
+/// 验证每个 JSON Object 协议在全部投影后仍保留其原生线路控制项。
+#[test]
+fn encode_request_preserves_json_object_mode_for_supported_protocols() {
+    let client = ProviderExecutionClient::new(
+        reqwest::Client::new(),
+        Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+    );
+
+    for protocol_id in [
+        OPENAI_CHAT_PROFILE_ID,
+        OPENAI_RESPONSES_PROFILE_ID,
+        GEMINI_GENERATE_CONTENT_PROFILE_ID,
+        GOOGLE_CODE_ASSIST_PROFILE_ID,
+        GEMINI_INTERACTIONS_PROFILE_ID,
+    ] {
+        let mut request = minimal_request();
+        request.structured_output = StructuredOutputPolicy::JsonObject;
+        // route reuses one valid provider shell while selecting the exact protocol under test.
+        // route 复用一个有效供应商外壳，同时选择当前测试的准确协议。
+        let mut route = pinned_openrouter_route(OPENAI_CHAT_PROFILE_ID);
+        route.protocol_route.protocol_profile_id = protocol_id.to_owned();
+        let encoded = client
+            .encode_request(&route, &request)
+            .expect("supported protocol should preserve JSON Object mode");
+        let projected_type = match protocol_id {
+            OPENAI_CHAT_PROFILE_ID => encoded
+                .body
+                .pointer("/response_format/type")
+                .and_then(Value::as_str),
+            OPENAI_RESPONSES_PROFILE_ID => encoded
+                .body
+                .pointer("/text/format/type")
+                .and_then(Value::as_str),
+            GEMINI_GENERATE_CONTENT_PROFILE_ID => encoded
+                .body
+                .pointer("/generationConfig/responseMimeType")
+                .and_then(Value::as_str),
+            GOOGLE_CODE_ASSIST_PROFILE_ID => encoded
+                .body
+                .pointer("/request/generationConfig/responseMimeType")
+                .and_then(Value::as_str),
+            GEMINI_INTERACTIONS_PROFILE_ID => encoded
+                .body
+                .pointer("/response_format/mime_type")
+                .and_then(Value::as_str),
+            _ => unreachable!("the loop only contains supported protocol profiles"),
+        };
+        let expected_type = if matches!(
+            protocol_id,
+            GEMINI_GENERATE_CONTENT_PROFILE_ID
+                | GOOGLE_CODE_ASSIST_PROFILE_ID
+                | GEMINI_INTERACTIONS_PROFILE_ID
+        ) {
+            "application/json"
+        } else {
+            "json_object"
+        };
+        assert_eq!(projected_type, Some(expected_type));
+    }
+}
+
+/// Verifies a late provider projection cannot silently remove JSON Object mode.
+/// 验证后置供应商投影不能静默移除 JSON Object 模式。
+#[test]
+fn encode_request_rejects_json_object_mode_loss_after_custom_projection() {
+    let client = ProviderExecutionClient::new(
+        reqwest::Client::new(),
+        Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+    );
+    let mut route = pinned_openrouter_route(OPENAI_RESPONSES_PROFILE_ID);
+    route.custom_model_projection = Some(CustomModelRequestProjection {
+        delete: vec![String::from("text")],
+        ..Default::default()
+    });
+    let mut request = minimal_request();
+    request.structured_output = StructuredOutputPolicy::JsonObject;
+
+    let error = client
+        .encode_request(&route, &request)
+        .expect_err("JSON Object mode loss must fail before dispatch");
+    assert!(error.error.message.contains("JSON Object mode"));
+}
+
+/// Verifies the exact DeepSeek Responses route used by native VMM sends JSON mode with reasoning off.
+/// 验证原生 VMM 使用的准确 DeepSeek Responses 路由会发送 JSON 模式并关闭思考。
+#[test]
+fn deepseek_responses_preserves_vmm_json_and_disabled_reasoning_controls() {
+    let client = ProviderExecutionClient::new(
+        reqwest::Client::new(),
+        Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
+    );
+    let mut request = minimal_request();
+    request.structured_output = StructuredOutputPolicy::JsonObject;
+    request.reasoning_effort = Some(ReasoningEffort::None);
+
+    let encoded = client
+        .encode_required_disabled_reasoning_request(
+            &deepseek_route(OPENAI_RESPONSES_PROFILE_ID),
+            &request,
+            false,
+        )
+        .expect("DeepSeek VMM request must preserve both mandatory controls");
+
+    assert_eq!(
+        encoded.body.pointer("/text/format/type"),
+        Some(&json!("json_object"))
+    );
+    assert_eq!(
+        encoded.body.pointer("/reasoning/effort"),
+        Some(&json!("none"))
+    );
 }
 
 /// Verifies a custom projector cannot silently remove the required Anthropic schema.

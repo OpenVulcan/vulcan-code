@@ -17,9 +17,10 @@ use vulcan_ai_contract::{
 };
 use vulcan_ai_protocols::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
-    CLAUDE_CODE_MESSAGES_PROFILE_ID, GEMINI_GENERATE_CONTENT_PROFILE_ID,
-    GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_CODEX_RESPONSES_PROFILE_ID,
-    OPENAI_RESPONSES_PROFILE_ID, gemini_replay_signature_payload, wrap_openai_reasoning_signature,
+    CLAUDE_CODE_MESSAGES_PROFILE_ID, COHERE_CHAT_PROFILE_ID, GEMINI_GENERATE_CONTENT_PROFILE_ID,
+    GEMINI_INTERACTIONS_PROFILE_ID, GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
+    OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
+    gemini_replay_signature_payload, wrap_openai_reasoning_signature,
 };
 use vulcan_llm_core::{
     AnthropicReasoningMode, EncodedWireRequest, ProviderRouteContext, UpstreamProtocol,
@@ -748,60 +749,122 @@ fn validate_structured_output_projection(
     request: &AiExecutionRequest,
     encoded: &EncodedWireRequest,
 ) -> Result<(), ProviderExecutionFailure> {
-    let StructuredOutputPolicy::JsonSchema { schema, .. } = &request.structured_output else {
-        return Ok(());
-    };
     let protocol_id = route.protocol_route.protocol_profile_id.as_str();
-    let (projected_type, projected_schema) = match protocol_id {
-        ANTHROPIC_MESSAGES_PROFILE_ID
-        | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
-        | CLAUDE_CODE_MESSAGES_PROFILE_ID => (
-            encoded
-                .body
-                .pointer("/output_config/format/type")
-                .and_then(Value::as_str),
-            encoded.body.pointer("/output_config/format/schema"),
-        ),
-        OPENAI_CHAT_PROFILE_ID => (
-            encoded
-                .body
-                .pointer("/response_format/type")
-                .and_then(Value::as_str),
-            encoded.body.pointer("/response_format/json_schema/schema"),
-        ),
-        OPENAI_RESPONSES_PROFILE_ID | OPENAI_CODEX_RESPONSES_PROFILE_ID => (
-            encoded
-                .body
-                .pointer("/text/format/type")
-                .and_then(Value::as_str),
-            encoded.body.pointer("/text/format/schema"),
-        ),
-        GEMINI_GENERATE_CONTENT_PROFILE_ID => (
-            encoded
-                .body
-                .pointer("/generationConfig/responseMimeType")
-                .and_then(Value::as_str),
-            encoded.body.pointer("/generationConfig/responseJsonSchema"),
-        ),
-        GOOGLE_CODE_ASSIST_PROFILE_ID => (
-            encoded
-                .body
-                .pointer("/request/generationConfig/responseMimeType")
-                .and_then(Value::as_str),
-            encoded
-                .body
-                .pointer("/request/generationConfig/responseJsonSchema"),
-        ),
-        _ => return Ok(()),
-    };
-    if (projected_type == Some("json_schema") && projected_schema == Some(schema))
-        || (projected_type == Some("application/json") && projected_schema == Some(schema))
-    {
-        return Ok(());
+    match &request.structured_output {
+        StructuredOutputPolicy::None => Ok(()),
+        StructuredOutputPolicy::JsonObject => {
+            let projected_type = match protocol_id {
+                OPENAI_CHAT_PROFILE_ID | COHERE_CHAT_PROFILE_ID => encoded
+                    .body
+                    .pointer("/response_format/type")
+                    .and_then(Value::as_str),
+                OPENAI_RESPONSES_PROFILE_ID | OPENAI_CODEX_RESPONSES_PROFILE_ID => encoded
+                    .body
+                    .pointer("/text/format/type")
+                    .and_then(Value::as_str),
+                GEMINI_GENERATE_CONTENT_PROFILE_ID => encoded
+                    .body
+                    .pointer("/generationConfig/responseMimeType")
+                    .and_then(Value::as_str),
+                GOOGLE_CODE_ASSIST_PROFILE_ID => encoded
+                    .body
+                    .pointer("/request/generationConfig/responseMimeType")
+                    .and_then(Value::as_str),
+                GEMINI_INTERACTIONS_PROFILE_ID => encoded
+                    .body
+                    .pointer("/response_format/mime_type")
+                    .and_then(Value::as_str),
+                _ => return Ok(()),
+            };
+            let expected_type = match protocol_id {
+                OPENAI_CHAT_PROFILE_ID
+                | OPENAI_RESPONSES_PROFILE_ID
+                | OPENAI_CODEX_RESPONSES_PROFILE_ID
+                | COHERE_CHAT_PROFILE_ID => "json_object",
+                GEMINI_GENERATE_CONTENT_PROFILE_ID
+                | GOOGLE_CODE_ASSIST_PROFILE_ID
+                | GEMINI_INTERACTIONS_PROFILE_ID => "application/json",
+                _ => return Ok(()),
+            };
+            if projected_type == Some(expected_type) {
+                return Ok(());
+            }
+            Err(pre_dispatch_failure(format!(
+                "Protocol `{protocol_id}` dropped or changed the requested structured-output JSON Object mode.",
+            )))
+        }
+        StructuredOutputPolicy::JsonSchema { schema, .. } => {
+            let (projected_type, projected_schema, expected_type) = match protocol_id {
+                ANTHROPIC_MESSAGES_PROFILE_ID
+                | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
+                | CLAUDE_CODE_MESSAGES_PROFILE_ID => (
+                    encoded
+                        .body
+                        .pointer("/output_config/format/type")
+                        .and_then(Value::as_str),
+                    encoded.body.pointer("/output_config/format/schema"),
+                    "json_schema",
+                ),
+                OPENAI_CHAT_PROFILE_ID => (
+                    encoded
+                        .body
+                        .pointer("/response_format/type")
+                        .and_then(Value::as_str),
+                    encoded.body.pointer("/response_format/json_schema/schema"),
+                    "json_schema",
+                ),
+                OPENAI_RESPONSES_PROFILE_ID | OPENAI_CODEX_RESPONSES_PROFILE_ID => (
+                    encoded
+                        .body
+                        .pointer("/text/format/type")
+                        .and_then(Value::as_str),
+                    encoded.body.pointer("/text/format/schema"),
+                    "json_schema",
+                ),
+                GEMINI_GENERATE_CONTENT_PROFILE_ID => (
+                    encoded
+                        .body
+                        .pointer("/generationConfig/responseMimeType")
+                        .and_then(Value::as_str),
+                    encoded.body.pointer("/generationConfig/responseJsonSchema"),
+                    "application/json",
+                ),
+                GOOGLE_CODE_ASSIST_PROFILE_ID => (
+                    encoded
+                        .body
+                        .pointer("/request/generationConfig/responseMimeType")
+                        .and_then(Value::as_str),
+                    encoded
+                        .body
+                        .pointer("/request/generationConfig/responseJsonSchema"),
+                    "application/json",
+                ),
+                COHERE_CHAT_PROFILE_ID => (
+                    encoded
+                        .body
+                        .pointer("/response_format/type")
+                        .and_then(Value::as_str),
+                    encoded.body.pointer("/response_format/schema"),
+                    "json_object",
+                ),
+                GEMINI_INTERACTIONS_PROFILE_ID => (
+                    encoded
+                        .body
+                        .pointer("/response_format/mime_type")
+                        .and_then(Value::as_str),
+                    encoded.body.pointer("/response_format/schema"),
+                    "application/json",
+                ),
+                _ => return Ok(()),
+            };
+            if projected_type == Some(expected_type) && projected_schema == Some(schema) {
+                return Ok(());
+            }
+            Err(pre_dispatch_failure(format!(
+                "Protocol `{protocol_id}` dropped or changed the requested structured-output JSON Schema.",
+            )))
+        }
     }
-    Err(pre_dispatch_failure(format!(
-        "Protocol `{protocol_id}` dropped or changed the requested structured-output JSON Schema.",
-    )))
 }
 
 /// Applies one validated custom model projection after standard protocol encoding.
