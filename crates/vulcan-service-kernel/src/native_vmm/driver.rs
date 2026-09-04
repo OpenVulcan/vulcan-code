@@ -13,17 +13,18 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use vulcan_ai_contract::{
     AiMessage, AiOperation, ContentItem, EmbeddingEncoding, EmbeddingInput, EmbeddingInputContent,
     EmbeddingInvalidInputPolicy, EmbeddingOutputKind, EmbeddingPayload, EmbeddingRequest,
-    EmbeddingSpaceFingerprint, EmbeddingTask, HostAiCallContext, HostAiCapabilityHandle,
-    HostAiCapabilityRegistration, HostAiCapabilityRequirement, HostAiEmbeddingRequest, HostAiError,
-    HostAiErrorCode, HostAiPort, INFERENCE_CONTRACT_VERSION, InferenceCallerBudget,
-    InferenceCallerContext, InferencePermission, InferenceUsageScope, MessageRole,
-    ReasoningOutputPolicy, RerankRequest, RerankText, RerankTruncation, ResponsesExecutionRequest,
-    StructuredOutputPolicy,
+    EmbeddingSpaceFingerprint, EmbeddingTask, HostAiCallContext, HostAiCancellation,
+    HostAiCapabilityHandle, HostAiCapabilityRegistration, HostAiCapabilityRequirement,
+    HostAiEmbeddingRequest, HostAiError, HostAiErrorCode, HostAiPort, INFERENCE_CONTRACT_VERSION,
+    InferenceCallerBudget, InferenceCallerContext, InferencePermission, InferenceUsageScope,
+    MessageRole, ReasoningOutputPolicy, RerankRequest, RerankText, RerankTruncation,
+    ResponsesExecutionRequest, StructuredOutputPolicy,
 };
 use vulcan_memorymesh_core::{
     AsyncHostDriver, CandidateChannelResult, CandidateObservation, CommandResult, CoreCommand,
@@ -61,7 +62,7 @@ const NATIVE_VMM_LLM_OUTPUT_TOKENS: u64 = 8_192;
 pub(crate) struct NativeVmmCoreRuntime {
     /// Shared provider-independent command engine.
     /// 共享的供应商无关命令引擎。
-    core: MemoryMeshCore,
+    core: Arc<MemoryMeshCore>,
     /// Cloneable host effect executor used independently by concurrent commands.
     /// 并发命令分别使用的可克隆宿主 Effect 执行器。
     host: NativeVmmHostDriver,
@@ -71,6 +72,102 @@ pub(crate) struct NativeVmmCoreRuntime {
     /// Latest authoritative Host AI activation outcome used by readiness projection.
     /// 用于就绪状态投影的最近一次权威宿主 AI 激活结果。
     host_ai_status: RwLock<NativeVmmHostAiStatus>,
+}
+
+/// Carries one monotonic request-cancellation edge into every Host AI effect of a native command.
+/// 将一个单调请求取消边沿传递到原生命令的每个宿主 AI Effect。
+#[derive(Default)]
+struct NativeVmmHostAiCancellation {
+    /// Cached cancellation state used by synchronous Host AI boundary probes.
+    /// 供宿主 AI 边界同步探测使用的缓存取消状态。
+    cancelled: AtomicBool,
+    /// Wakes every active Host AI call after the owning native request is cancelled.
+    /// 所属原生请求取消后唤醒全部活动宿主 AI 调用。
+    changed: tokio::sync::Notify,
+}
+
+impl NativeVmmHostAiCancellation {
+    /// Publishes cancellation exactly once and wakes all current waiters.
+    /// 仅发布一次取消状态并唤醒全部当前等待方。
+    fn cancel(&self) {
+        if !self.cancelled.swap(true, Ordering::AcqRel) {
+            self.changed.notify_waiters();
+        }
+    }
+}
+
+impl HostAiCancellation for NativeVmmHostAiCancellation {
+    /// Returns the monotonic process-local cancellation state.
+    /// 返回单调的进程内取消状态。
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+
+    /// Resolves after cancellation without missing a check-to-wait race.
+    /// 在取消发布后完成，并避免遗漏检查到等待之间的竞态。
+    fn cancelled<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            loop {
+                // notified is enabled before the state probe so cancellation cannot fall into the gap.
+                // notified 在状态探测前启用，确保取消不会落入竞态间隙。
+                let notified = self.changed.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if self.is_cancelled() {
+                    return;
+                }
+                notified.await;
+            }
+        })
+    }
+}
+
+/// Cancels a detached native command worker when its owning request future is dropped.
+/// 所属请求 Future 被丢弃时取消已分离的原生命令 Worker。
+struct NativeVmmRunCancellationGuard {
+    /// Shared signal observed by every Host AI call in the command worker.
+    /// 命令 Worker 中每次宿主 AI 调用观察的共享信号。
+    cancellation: Arc<NativeVmmHostAiCancellation>,
+    /// Whether dropping this guard must still publish cancellation.
+    /// 丢弃该守卫时是否仍需发布取消。
+    armed: bool,
+}
+
+impl NativeVmmRunCancellationGuard {
+    /// Creates an armed guard for one spawned native command worker.
+    /// 为一个已生成的原生命令 Worker 创建启用状态的守卫。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `cancellation` is the exact signal attached to the worker's Host AI contexts.
+    /// `cancellation` 是附加到 Worker 宿主 AI 上下文的准确信号。
+    ///
+    /// # Returns
+    /// 返回值
+    /// An armed guard that cancels the worker's active Host AI call on drop.
+    /// 返回一个会在丢弃时取消 Worker 活动宿主 AI 调用的启用守卫。
+    fn new(cancellation: Arc<NativeVmmHostAiCancellation>) -> Self {
+        Self {
+            cancellation,
+            armed: true,
+        }
+    }
+
+    /// Disarms cancellation after the worker reaches a terminal command result.
+    /// Worker 到达命令终态结果后解除取消发布。
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for NativeVmmRunCancellationGuard {
+    /// Publishes cancellation only when the owning request ended before its worker.
+    /// 仅在所属请求早于 Worker 结束时发布取消。
+    fn drop(&mut self) {
+        if self.armed {
+            self.cancellation.cancel();
+        }
+    }
 }
 
 /// Describes the latest native VMM Host AI capability validation outcome.
@@ -210,7 +307,7 @@ impl NativeVmmCoreRuntime {
         data_plane: VmmDataPlaneHandle,
     ) -> Result<Self, String> {
         let storage = hydrate_storage(&data_plane).await?;
-        let core = MemoryMeshCore::new().map_err(|error| error.to_string())?;
+        let core = Arc::new(MemoryMeshCore::new().map_err(|error| error.to_string())?);
         // runtime is assembled before recovery so the same persistence code repairs interrupted maintenance.
         // runtime 在恢复前完成组装，使中断维护可复用同一持久化代码完成修复。
         let runtime = Self {
@@ -218,6 +315,7 @@ impl NativeVmmCoreRuntime {
             host: NativeVmmHostDriver {
                 ai_port,
                 capability: Arc::new(RwLock::new(None)),
+                ai_cancellation: Arc::new(NativeVmmHostAiCancellation::default()),
                 embedding_fingerprints: Arc::new(RwLock::new(BTreeMap::new())),
                 storage: Arc::new(RwLock::new(storage)),
                 mutation_gate: Arc::new(tokio::sync::Mutex::new(())),
@@ -246,8 +344,27 @@ impl NativeVmmCoreRuntime {
                 vulcan_memorymesh_core::request_fingerprint(&command, snapshot.id.as_str());
             command_mutation_identity(&mut command).request_fingerprint = fingerprint;
         }
+        // cancellation is unique to this command and shared by all physical Host AI attempts.
+        // cancellation 对该命令唯一，并由全部真实宿主 AI 尝试共享。
+        let cancellation = Arc::new(NativeVmmHostAiCancellation::default());
         let mut host = self.host.clone();
-        self.core.run_to_completion_async(command, &mut host).await
+        host.ai_cancellation = Arc::clone(&cancellation);
+        let core = Arc::clone(&self.core);
+        // worker remains alive after caller cancellation long enough to resume Core with the
+        // controlled Host AI cancellation result and release its command lifecycle state.
+        // worker 会在调用方取消后继续存活，直至使用受控宿主 AI 取消结果恢复 Core 并释放命令生命周期状态。
+        let mut worker =
+            tokio::spawn(async move { core.run_to_completion_async(command, &mut host).await });
+        let mut cancellation_guard = NativeVmmRunCancellationGuard::new(cancellation);
+        let outcome = (&mut worker).await;
+        cancellation_guard.disarm();
+        outcome.map_err(|error| {
+            CoreError::new(
+                ErrorCode::Internal,
+                ErrorStage::Command,
+                format!("native VMM command worker terminated unexpectedly: {error}"),
+            )
+        })?
     }
 
     /// Validates and activates the exact host AI capability required by native VMM.
@@ -475,6 +592,9 @@ struct NativeVmmHostDriver {
     /// Unified host AI boundary shared with other native libraries.
     /// 与其他原生库共享的统一宿主 AI 边界。
     ai_port: Arc<dyn HostAiPort>,
+    /// Request-scoped cancellation observed by all Host AI effects of one command.
+    /// 单个命令全部宿主 AI Effect 观察的请求级取消信号。
+    ai_cancellation: Arc<NativeVmmHostAiCancellation>,
     /// Lazily registered capability so disabled VMM does not require configured inference at startup.
     /// 延迟注册的能力，确保 VMM 禁用时启动阶段不要求已配置推理。
     capability: Arc<RwLock<Option<HostAiCapabilityHandle>>>,
@@ -719,7 +839,7 @@ impl NativeVmmHostDriver {
             resources: Vec::new(),
             output_token_limit: Some(NATIVE_VMM_LLM_OUTPUT_TOKENS),
         };
-        let context = effect_call_context(request);
+        let context = effect_call_context(request, Arc::clone(&self.ai_cancellation));
         let execution = match self
             .ai_port
             .start_response_execution(&capability, context, ai_request)
@@ -789,7 +909,11 @@ impl NativeVmmHostDriver {
         };
         let response = match self
             .ai_port
-            .create_embeddings(&capability, effect_call_context(request), host_request)
+            .create_embeddings(
+                &capability,
+                effect_call_context(request, Arc::clone(&self.ai_cancellation)),
+                host_request,
+            )
             .await
         {
             Ok(value) => value,
@@ -877,7 +1001,11 @@ impl NativeVmmHostDriver {
         };
         let response = match self
             .ai_port
-            .rerank_documents(&capability, effect_call_context(request), rerank_request)
+            .rerank_documents(
+                &capability,
+                effect_call_context(request, Arc::clone(&self.ai_cancellation)),
+                rerank_request,
+            )
             .await
         {
             Ok(value) => value,
@@ -1729,7 +1857,10 @@ fn host_ai_core_error(error: HostAiError) -> CoreError {
 
 /// Builds correlation and a stage-specific deadline for one Core effect.
 /// 为一个 Core Effect 构造关联信息与阶段专属截止时间。
-fn effect_call_context(request: &EffectRequest) -> HostAiCallContext {
+fn effect_call_context(
+    request: &EffectRequest,
+    cancellation: Arc<NativeVmmHostAiCancellation>,
+) -> HostAiCallContext {
     let operation_id = request
         .operation_id
         .as_ref()
@@ -1740,6 +1871,7 @@ fn effect_call_context(request: &EffectRequest) -> HostAiCallContext {
             Some(request.command_id.as_str().to_owned()),
         )
         .with_deadline(effect_deadline(request.deadline_class))
+        .with_cancellation(cancellation)
 }
 
 /// Computes the absolute deadline assigned to one Core effect class.
@@ -2010,6 +2142,44 @@ mod tests {
     #[test]
     fn native_vmm_embedding_task_is_provider_default() {
         assert_eq!(NATIVE_VMM_EMBEDDING_TASK, EmbeddingTask::ProviderDefault);
+    }
+
+    /// Verifies dropping an unfinished native request wakes the exact Host AI cancellation signal.
+    /// 验证丢弃未完成原生请求会唤醒准确的宿主 AI 取消信号。
+    #[tokio::test]
+    async fn native_vmm_run_guard_propagates_cancellation() {
+        // cancellation is shared by the request guard and the simulated Host AI waiter.
+        // cancellation 由请求守卫与模拟宿主 AI 等待方共享。
+        let cancellation = Arc::new(NativeVmmHostAiCancellation::default());
+        let observed = Arc::clone(&cancellation);
+        // waiter proves the asynchronous cancellation edge wakes instead of relying on polling.
+        // waiter 证明异步取消边沿会主动唤醒，而不是依赖轮询。
+        let waiter = tokio::spawn(async move {
+            observed.cancelled().await;
+            observed.is_cancelled()
+        });
+        {
+            // guard remains armed because the simulated command never reaches a terminal result.
+            // guard 保持启用，因为模拟命令未到达终态结果。
+            let _guard = NativeVmmRunCancellationGuard::new(cancellation);
+        }
+        assert!(waiter.await.expect("cancellation waiter should complete"));
+    }
+
+    /// Verifies a terminal native command does not publish a false cancellation event.
+    /// 验证已到达终态的原生命令不会发布错误取消事件。
+    #[test]
+    fn native_vmm_run_guard_disarms_after_completion() {
+        // cancellation remains inspectable after the guard is dropped.
+        // cancellation 在守卫丢弃后仍可检查。
+        let cancellation = Arc::new(NativeVmmHostAiCancellation::default());
+        {
+            // guard is explicitly disarmed at the same boundary used after joining the worker.
+            // guard 在与 Worker 等待完成后相同的边界显式解除。
+            let mut guard = NativeVmmRunCancellationGuard::new(Arc::clone(&cancellation));
+            guard.disarm();
+        }
+        assert!(!cancellation.is_cancelled());
     }
 
     /// Verifies native VMM rejects a configured embedding route before runtime effects can fail.
