@@ -2941,6 +2941,12 @@ impl PersistedAiConfiguration {
             profile
                 .llm_routes
                 .retain(|_, route| route.provider_id != provider_id);
+            // Purpose-scoped reasoning belongs to an exact surviving LLM route and must not
+            // remain as detached configuration after its provider is removed.
+            // 用途级思考配置属于准确存续的 LLM 路由，供应商移除后不得留下孤立配置。
+            profile
+                .llm_reasoning_efforts
+                .retain(|purpose_id, _| profile.llm_routes.contains_key(purpose_id));
             if profile
                 .embedding
                 .as_ref()
@@ -4940,6 +4946,10 @@ mod tests {
                     (String::from("removed-purpose"), removed_llm_route),
                     (String::from("retained-purpose"), retained_llm_route),
                 ]),
+                llm_reasoning_efforts: BTreeMap::from([
+                    (String::from("removed-purpose"), ReasoningEffort::None),
+                    (String::from("retained-purpose"), ReasoningEffort::None),
+                ]),
                 embedding: Some(removed_embedding_route),
                 rerank: Some(retained_rerank_route),
             },
@@ -5009,6 +5019,14 @@ mod tests {
             .expect("mixed inference profile");
         assert_eq!(
             profile.llm_routes.keys().cloned().collect::<Vec<_>>(),
+            vec![String::from("retained-purpose")]
+        );
+        assert_eq!(
+            profile
+                .llm_reasoning_efforts
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
             vec![String::from("retained-purpose")]
         );
         assert!(profile.embedding.is_none());
