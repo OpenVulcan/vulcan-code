@@ -47,7 +47,7 @@ VCE 与 VMM、知识库复用同一 HostAI 契约，但不共享 registration、
 
 `VceProjectSourceAdapter` 只从已规范化项目根读取源码，拒绝父目录穿越、符号链接逃逸、二进制、超大文件和读取期间发生变化的内容。初扫先生成 metadata-only 清单，VCE 只拉取实际缺失 Blob 的正文。
 
-VCE 不创建物理文件 watcher。service-owned `WorkspaceWatcherCenter` 只有一套 notify backend，Git 与 VCE 使用独立 subscriber。VCE subscriber 负责项目路径归并、节流、同项目单飞、失败重排、重建升级和关闭收敛。
+VCE 不创建物理文件 watcher。service-owned `WorkspaceWatcherCenter` 只有一套 notify backend，Git 与 VCE 使用独立 subscriber。宿主在首次全量扫描前先建立项目监听，以关闭扫描与监听之间的事件空窗；VCE subscriber 负责项目路径归并、节流、同项目单飞、取消后收敛、失败重排、重建升级和关闭收敛。
 
 当前编辑器没有可供服务消费的权威未保存文档事件，因此生产集成边界是 filesystem-only。VCE 的 `observe/remove` overlay 入口保留给未来明确的编辑器文档协议，但宿主不会猜测或轮询未保存内容。
 

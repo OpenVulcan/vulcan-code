@@ -480,6 +480,15 @@ async fn reconcile_vce_project_handles(
         return manager.disable_project(&project.id).await;
     }
     let project_root = PathBuf::from(&project.path);
+    // watcher is the required host-owned observation boundary for every enabled project.
+    // watcher 是每个已启用项目必需的宿主持有观察边界。
+    let watcher = watcher.ok_or_else(|| String::from("VCE 文件监听服务不可用。"))?;
+    // Arm the filesystem watch before the authoritative full scan. Every write after the scan
+    // boundary is then queued for a serialized path refresh instead of falling into an unobserved
+    // activation window.
+    // 在权威全量扫描前建立文件监听，使扫描边界之后的每次写入都进入串行路径刷新队列，避免落入
+    // 无监听的激活窗口。
+    watcher.watch_project(&project.id, &project_root)?;
     match manager
         .enable_project(&project.id, &project_root, project.vce.clone())
         .await
@@ -489,8 +498,7 @@ async fn reconcile_vce_project_handles(
             if !runtime_status_matches_revision(status.as_ref(), project.vce.revision) {
                 return Ok(());
             }
-            let watcher = watcher.ok_or_else(|| String::from("VCE 文件监听服务不可用。"))?;
-            watcher.watch_project(&project.id, &project_root)
+            Ok(())
         }
         Err(error) => {
             let status = manager.project_status(&project.id).await;
@@ -500,9 +508,7 @@ async fn reconcile_vce_project_handles(
             {
                 return Ok(());
             }
-            if let Some(watcher) = watcher {
-                watcher.unwatch_project(&project.id).await;
-            }
+            watcher.unwatch_project(&project.id).await;
             Err(error)
         }
     }

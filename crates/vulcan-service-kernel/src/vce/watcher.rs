@@ -142,6 +142,9 @@ impl VceWatcherService {
         });
 
         let refresh_pending = Arc::clone(&pending);
+        // refreshTargets prevents completed workers from restoring work after project removal.
+        // refreshTargets 防止已完成工作器在项目移除后重新写回任务。
+        let refresh_targets = Arc::clone(&targets);
         let mut refresh_shutdown = shutdown_sender.subscribe();
         let refresh_task = crate::spawn_service_task(async move {
             let mut interval = tokio::time::interval(Duration::from_millis(500));
@@ -225,20 +228,14 @@ impl VceWatcherService {
                             eprintln!(
                                 "[webui-service] VCE watcher refresh failed for `{project_id}`: {error}"
                             );
-                            if error == super::VCE_REFRESH_CANCELLED_ERROR {
-                                continue;
-                            }
-                            let mut queued = refresh_pending.lock().await;
-                            let retry = queued.entry(project_id).or_default();
-                            retry.paths.extend(batch.paths);
-                            retry.force_full |= batch.force_full;
-                            retry.retry_attempt = retry
-                                .retry_attempt
-                                .max(batch.retry_attempt.saturating_add(1));
-                            retry.retry_not_before = Some(
-                                tokio::time::Instant::now()
-                                    + vce_watch_retry_delay(retry.retry_attempt),
-                            );
+                            requeue_vce_watch_batch(
+                                &refresh_targets,
+                                &refresh_pending,
+                                project_id,
+                                batch,
+                                error == super::VCE_REFRESH_CANCELLED_ERROR,
+                            )
+                            .await;
                         }
                     }
                 }
@@ -289,22 +286,33 @@ impl VceWatcherService {
         if !canonical.is_dir() {
             return Err(format!("VCE 监听项目路径不是目录：{}", canonical.display()));
         }
+        // registration starts the physical recursive observation before publication.
+        // registration 在发布映射前启动物理递归观察。
         let registration = self.inner.subscriber.register_path(canonical.clone(), true);
-        self.inner
+        // registrations retains the RAII handle through the same publication critical section.
+        // registrations 在同一发布临界区内保留 RAII 句柄。
+        let mut registrations = self
+            .inner
             .registrations
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(
-                project_id.to_owned(),
-                VceWatchRegistration {
-                    _registration: registration,
-                },
-            );
-        self.inner
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // targets blocks the event consumer until both ownership maps are coherent.
+        // targets 阻塞事件消费者，直到两个所有权映射保持一致。
+        let mut targets = self
+            .inner
             .targets
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(project_id.to_owned(), canonical);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Publish the target while retaining the physical registration under the same critical
+        // section. The event consumer cannot observe a registered project without its root map.
+        // 在同一临界区内发布目标并保留物理注册，事件消费者无法观察到缺少根目录映射的已注册项目。
+        targets.insert(project_id.to_owned(), canonical);
+        registrations.insert(
+            project_id.to_owned(),
+            VceWatchRegistration {
+                _registration: registration,
+            },
+        );
         Ok(())
     }
 
@@ -359,9 +367,9 @@ impl VceWatcherService {
                 .await
                 .is_err();
             if timed_out {
-                // The manager shutdown immediately following this call joins the project gate and
-                // converts any abandoned generation into an idempotent cleanup request.
-                // 紧随其后的管理器关闭会汇合项目闸门，并把任何遗留代次转换为幂等清理请求。
+                // The manager shutdown immediately preceding this call already joined every
+                // project gate and converted abandoned generations into idempotent cleanup work.
+                // 紧邻本调用之前的管理器关闭已汇合全部项目闸门，并把遗留代次转换为幂等清理任务。
                 task.abort();
                 let _ = task.await;
             }
@@ -378,6 +386,78 @@ impl VceWatcherService {
             .clear();
         self.inner.pending.lock().await.clear();
     }
+}
+
+/// Requeue one failed watcher batch only while the project remains registered.
+/// 仅在项目仍处于监听注册状态时重新排队失败批次。
+///
+/// # Parameters
+/// 参数
+/// `targets` is the authoritative set of watched project roots.
+/// `targets` 是已监听项目根目录的权威集合。
+/// `pending` retains coalesced work across transient failures.
+/// `pending` 跨瞬时失败保留合并任务。
+/// `project_id` identifies the failed project worker.
+/// `project_id` 标识失败的项目工作器。
+/// `batch` is the exact work removed before the failed attempt.
+/// `batch` 是失败尝试前移出的精确工作批次。
+/// `cancelled` distinguishes cooperative cancellation from an operational failure.
+/// `cancelled` 区分协作式取消与操作失败。
+async fn requeue_vce_watch_batch(
+    targets: &RwLock<BTreeMap<String, PathBuf>>,
+    pending: &AsyncMutex<BTreeMap<String, VcePendingWatchBatch>>,
+    project_id: String,
+    batch: VcePendingWatchBatch,
+    cancelled: bool,
+) {
+    if !vce_watch_target_exists(targets, &project_id) {
+        return;
+    }
+    // queued serializes retry restoration against watcher event coalescing.
+    // queued 将重试恢复与监听事件合并串行化。
+    let mut queued = pending.lock().await;
+    // Recheck after acquiring the pending lock so an overlapping unwatch either clears this entry
+    // afterwards or wins the target removal before insertion.
+    // 获取待处理锁后再次检查，使并发取消监听要么随后清除此项，要么先移除目标并阻止插入。
+    if !vce_watch_target_exists(targets, &project_id) {
+        return;
+    }
+    // retry merges the failed batch with any newer events already waiting for the project.
+    // retry 将失败批次与项目已经等待的较新事件合并。
+    let retry = queued.entry(project_id).or_default();
+    retry.paths.extend(batch.paths);
+    retry.force_full |= batch.force_full;
+    if cancelled {
+        retry.retry_attempt = retry.retry_attempt.max(batch.retry_attempt);
+        retry.retry_not_before = Some(tokio::time::Instant::now() + Duration::from_secs(1));
+    } else {
+        retry.retry_attempt = retry
+            .retry_attempt
+            .max(batch.retry_attempt.saturating_add(1));
+        retry.retry_not_before =
+            Some(tokio::time::Instant::now() + vce_watch_retry_delay(retry.retry_attempt));
+    }
+}
+
+/// Return whether one project still owns a watcher target.
+/// 返回指定项目是否仍持有监听目标。
+///
+/// # Parameters
+/// 参数
+/// `targets` is the authoritative project-root map.
+/// `targets` 是权威项目根目录映射。
+/// `project_id` is the stable workbench project identity.
+/// `project_id` 是稳定工作台项目身份。
+///
+/// # Returns
+/// 返回值
+/// `true` only while watcher-driven convergence remains enabled for the project.
+/// 仅在项目仍启用监听驱动收敛时返回 `true`。
+fn vce_watch_target_exists(targets: &RwLock<BTreeMap<String, PathBuf>>, project_id: &str) -> bool {
+    targets
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains_key(project_id)
 }
 
 /// Return a bounded exponential delay for one watcher refresh retry.
@@ -469,6 +549,8 @@ mod tests {
     /// 嵌套物理路径会转换为项目相对脏身份。
     #[test]
     fn groups_nested_path_for_exact_project() {
+        // targets models one project whose watcher-driven convergence remains enabled.
+        // targets 模拟一个仍启用监听驱动收敛的项目。
         let targets = RwLock::new(BTreeMap::from([(
             String::from("project-a"),
             PathBuf::from("/workspace/project-a"),
@@ -528,5 +610,57 @@ mod tests {
         assert_eq!(grouped["project-b"].paths.len(), 5);
         assert!(!grouped["project-a"].force_full);
         assert!(!grouped["project-b"].force_full);
+    }
+
+    /// Cancelled batches retry while watched, whereas removed projects cannot regain stale work.
+    /// 已取消批次会在仍受监听时重试，而已移除项目不能重新产生陈旧任务。
+    #[tokio::test]
+    async fn cancelled_batches_requeue_only_for_registered_projects() {
+        let targets = RwLock::new(BTreeMap::from([(
+            String::from("project-a"),
+            PathBuf::from("/workspace/project-a"),
+        )]));
+        // pending records work restored after a cooperative cancellation.
+        // pending 记录协作式取消后恢复的任务。
+        let pending = AsyncMutex::new(BTreeMap::new());
+        // batch is the exact dirty set removed before the cancelled worker started.
+        // batch 是已取消工作器启动前移出的精确脏集合。
+        let batch = VcePendingWatchBatch {
+            paths: BTreeSet::from([String::from("src/lib.rs")]),
+            force_full: false,
+            retry_attempt: 0,
+            retry_not_before: None,
+        };
+
+        requeue_vce_watch_batch(&targets, &pending, String::from("project-a"), batch, true).await;
+        // queued is the restored convergence work inspected by this regression test.
+        // queued 是本回归测试检查的已恢复收敛任务。
+        let queued = pending
+            .lock()
+            .await
+            .remove("project-a")
+            .expect("retry batch");
+        assert_eq!(queued.paths, BTreeSet::from([String::from("src/lib.rs")]));
+        assert_eq!(queued.retry_attempt, 0);
+        assert!(queued.retry_not_before.is_some());
+
+        targets
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove("project-a");
+        requeue_vce_watch_batch(
+            &targets,
+            &pending,
+            String::from("project-a"),
+            VcePendingWatchBatch {
+                paths: BTreeSet::from([String::from("src/main.rs")]),
+                force_full: false,
+                retry_attempt: 1,
+                retry_not_before: None,
+            },
+            false,
+        )
+        .await;
+        assert!(pending.lock().await.is_empty());
     }
 }
