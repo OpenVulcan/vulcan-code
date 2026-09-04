@@ -41,6 +41,7 @@ export type TranslationKey =
   | "area.agentSkills"
   | "area.agents"
   | "area.memory"
+  | "area.contextEngine"
   | "area.knowledge"
   | "area.settings"
   | "area.chat.description"
@@ -48,6 +49,7 @@ export type TranslationKey =
   | "area.agentSkills.description"
   | "area.agents.description"
   | "area.memory.description"
+  | "area.contextEngine.description"
   | "area.knowledge.description"
   | "knowledge.name"
   | "knowledge.name.placeholder"
@@ -3025,6 +3027,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "area.agentSkills": "技能",
     "area.agents": "智能体",
     "area.memory": "记忆",
+    "area.contextEngine": "语义引擎",
     "area.knowledge": "知识库",
     "area.settings": "设置",
     "area.chat.description": "项目会话、消息流与模型输入区",
@@ -3032,6 +3035,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "area.agentSkills.description": "标准 Agent Skills 技能目录",
     "area.agents.description": "智能体、专家画像与调度提示词",
     "area.memory.description": "VMM 用户、项目与会话记忆",
+      "area.contextEngine.description": "ContextEngine 代码语义索引、模型路由与运行状态",
       "area.knowledge.description": "Markdown、Jieba 与 BM25 项目资料",
       "knowledge.name": "知识库名称",
       "knowledge.name.placeholder": "新知识库名称",
@@ -6006,6 +6010,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "area.agentSkills": "Skills",
     "area.agents": "Agents",
     "area.memory": "Memory",
+    "area.contextEngine": "ContextEngine",
     "area.knowledge": "Knowledge",
     "area.settings": "Settings",
     "area.chat.description": "Project sessions, message stream, and model input",
@@ -6013,6 +6018,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "area.agentSkills.description": "Standard Agent Skills catalog",
     "area.agents.description": "Agents, expert profiles, and delegation prompts",
     "area.memory.description": "VMM user, project, and conversation memory",
+      "area.contextEngine.description": "ContextEngine code-semantic indexing, model routes, and runtime status",
       "area.knowledge.description": "Project Markdown with Jieba BM25 search",
       "knowledge.name": "Knowledge library name",
       "knowledge.name.placeholder": "New knowledge library",

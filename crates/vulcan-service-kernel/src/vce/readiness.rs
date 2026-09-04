@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use vulcan_ai_contract::{
     AiOperation, InferenceCallerBudget, InferenceCallerContext, InferenceCapabilitySnapshot,
-    InferenceOperationCapability, InferencePermission, InferenceUsageScope, RerankTruncation,
+    InferenceOperationCapability, InferencePermission, InferenceUsageScope,
     StructuredOutputCapability,
 };
 use vulcan_provider_adapters::PublicAiRuntime;
@@ -16,6 +16,7 @@ use crate::{SharedServiceBridgeState, configured_inference::ConfiguredInferenceS
 
 use super::{
     VCE_CONSUMER_PROFILE_ID, VCE_QUERY_REWRITE_PURPOSE_ID, vce_embedding_physical_fingerprint,
+    vce_rerank_truncation,
 };
 
 /// Internal VCE readiness facts including the storage compatibility identity.
@@ -203,8 +204,8 @@ fn vce_status_caller() -> InferenceCallerContext {
     }
 }
 
-/// Evaluates the required document-and-query dense-float embedding route.
-/// 评估必需的文档与查询稠密浮点向量路由。
+/// Evaluates the required task-specific or provider-default dense-float embedding route.
+/// 评估必需的任务专用或 Provider 默认稠密浮点向量路由。
 fn evaluate_embedding(
     configured: bool,
     snapshot: &InferenceCapabilitySnapshot,
@@ -284,8 +285,8 @@ fn evaluate_query_rewrite(
     available_capability()
 }
 
-/// Evaluates the required rerank route without allowing provider-side truncation.
-/// 评估必需的重排路由，且不允许 Provider 侧截断。
+/// Evaluates the required rerank route with an explicitly declared truncation policy.
+/// 评估必需且明确声明截断策略的重排路由。
 fn evaluate_rerank(
     configured: bool,
     snapshot: &InferenceCapabilitySnapshot,
@@ -308,11 +309,8 @@ fn evaluate_rerank(
     let Some(capabilities) = operation.rerank.as_ref() else {
         return unavailable_capability(true, "VCE Rerank 模型缺少强类型能力声明。");
     };
-    if !capabilities
-        .truncation
-        .contains(&RerankTruncation::Disabled)
-    {
-        return unavailable_capability(true, "VCE Rerank 模型不支持禁用截断。");
+    if let Err(error) = vce_rerank_truncation(&capabilities.truncation) {
+        return unavailable_capability(true, error);
     }
     available_capability()
 }

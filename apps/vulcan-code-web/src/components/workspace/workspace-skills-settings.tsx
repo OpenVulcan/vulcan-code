@@ -6,6 +6,7 @@ import {
   Minimize2,
   Puzzle,
   Route,
+  ScanSearch,
   Settings,
 } from "lucide-react";
 import { IconButton } from "@/components/ui/button";
@@ -99,6 +100,7 @@ export function FloatingSkillMenu(props: {
   const rows: Array<{ icon: React.ReactNode; id: SkillSubAreaId; label: string }> = [
     { icon: <Hammer size={15} />, id: "catalog", label: t("skills.navigation.list") },
     { icon: <Settings size={15} />, id: "settings", label: t("skills.navigation.luaSettings") },
+    { icon: <ScanSearch size={15} />, id: "context-engine", label: t("area.contextEngine") },
     { icon: <Puzzle size={15} />, id: "plugins", label: t("skills.navigation.plugins") },
     ...pluginRows,
   ];
@@ -163,6 +165,9 @@ export function skillSubAreaLabel(
   }
   if (subArea === "plugins") {
     return t("skills.navigation.plugins");
+  }
+  if (subArea === "context-engine") {
+    return t("area.contextEngine");
   }
   // pluginSelection resolves the selected manifest-owned navigation label.
   // pluginSelection 解析选中的清单自有导航名称。

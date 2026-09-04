@@ -10,7 +10,7 @@ mod watcher;
 
 pub(crate) use ai_port::{
     VCE_QUERY_REWRITE_PURPOSE_ID, VceHostAiAdapter, VceHostAiRegistrationConfig,
-    vce_embedding_physical_fingerprint,
+    vce_embedding_physical_fingerprint, vce_rerank_truncation,
 };
 pub(crate) use manager::{
     VCE_CONSUMER_PROFILE_ID, VCE_REFRESH_CANCELLED_ERROR, VceProjectLifecycle, VceRuntimeManager,

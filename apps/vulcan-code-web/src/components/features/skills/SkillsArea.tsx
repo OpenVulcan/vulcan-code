@@ -1,11 +1,11 @@
 import { useI18n } from "@/i18n"
 import type { WorkbenchSnapshot } from "@/types"
 import { DynamicPluginMountPanel } from "@/components/plugins/dynamic-plugin-mount-panel"
+import { ContextEngineArea } from "@/components/features/context-engine/context-engine-area"
 
 import { LuaSkillsPanel, LuaSkillInstallDialog } from "./lua-skills-panel"
 import { LuaSkillsSettingsPanel } from "./lua-skills-settings-panel"
 import { VulcanPluginsPanel } from "./vulcan-plugins-panel"
-import { VceBuiltInPluginPanel } from "./vce-built-in-plugin-panel"
 import {
   findEnabledPluginDetailMount,
   type SkillActionProps,
@@ -40,18 +40,17 @@ export function SkillsArea(props: {
           skills={props.workbench.luaSkills.skills}
         />
       ) : props.activeTab === "plugins" ? (
-        <div className="space-y-4">
-          <VceBuiltInPluginPanel workbenchRevision={props.workbench.revision} />
-          <VulcanPluginsPanel
-            actions={props.skillActions}
-            plugins={props.workbench.plugins}
-          />
-        </div>
+        <VulcanPluginsPanel
+          actions={props.skillActions}
+          plugins={props.workbench.plugins}
+        />
       ) : props.activeTab === "settings" ? (
         <LuaSkillsSettingsPanel
           actions={props.skillActions}
           catalog={props.workbench.luaSkills}
         />
+      ) : props.activeTab === "context-engine" ? (
+        <ContextEngineArea workbenchRevision={props.workbench.revision} />
       ) : null}
       {pluginSelection ? (
         <div key={pluginSelection.subAreaId}>

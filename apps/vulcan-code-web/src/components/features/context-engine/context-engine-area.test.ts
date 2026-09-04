@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { PublicAiInternalInferenceCandidate, PublicAiOperation } from "@/types";
 
-import { vceCandidateEligible } from "./vce-built-in-plugin-panel";
+import { vceCandidateEligible } from "./context-engine-area";
 
 // candidateFixture builds one exact internal-background catalog candidate.
 // candidateFixture 构建一个精确的内部后台目录候选项。
@@ -42,13 +42,13 @@ function candidateFixture(operation: PublicAiOperation): PublicAiInternalInferen
   };
 }
 
-describe("VCE built-in plugin candidate contract", () => {
-  // Embedding requires document/query dense-float output and a deterministic dimension.
-  // 向量候选项要求文档/查询稠密浮点输出与确定维度。
-  it("accepts only a complete deterministic embedding contract", () => {
+describe("ContextEngine candidate contract", () => {
+  // Embedding accepts either task-specific projection or one declared provider-default task.
+  // 向量候选项接受任务专用投影或已声明的 Provider 默认任务。
+  it("accepts the host-supported provider-default embedding contract", () => {
     const candidate = candidateFixture("embedding_create");
     candidate.capabilities.embedding = {
-      tasks: ["document", "query"],
+      tasks: ["provider_default"],
       output_kinds: ["dense"],
       encodings: ["float"],
       dimensions: [],
@@ -80,9 +80,9 @@ describe("VCE built-in plugin candidate contract", () => {
     expect(vceCandidateEligible(candidate, "query_rewrite")).toBe(false);
   });
 
-  // Rerank must preserve oversized-input rejection instead of truncating code silently.
-  // 重排必须保留超限拒绝，不能静默截断代码。
-  it("requires disabled rerank truncation", () => {
+  // Rerank accepts both explicit no-truncation and an exact provider-default contract.
+  // 重排同时接受显式禁用截断与精确的 Provider 默认契约。
+  it("accepts the declared provider-default rerank contract", () => {
     const candidate = candidateFixture("rerank_documents");
     candidate.capabilities.rerank = {
       truncation: ["provider_default"],
@@ -90,8 +90,10 @@ describe("VCE built-in plugin candidate contract", () => {
       score_semantics: "higher_is_better",
     };
 
-    expect(vceCandidateEligible(candidate, "rerank")).toBe(false);
+    expect(vceCandidateEligible(candidate, "rerank")).toBe(true);
     candidate.capabilities.rerank.truncation = ["disabled"];
     expect(vceCandidateEligible(candidate, "rerank")).toBe(true);
+    candidate.capabilities.rerank.truncation = [];
+    expect(vceCandidateEligible(candidate, "rerank")).toBe(false);
   });
 });

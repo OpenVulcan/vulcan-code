@@ -36,11 +36,11 @@ VCE 与 VMM、知识库复用同一 HostAI 契约，但不共享 registration、
 
 ### 全局配置与失败关闭
 
-插件管理页的“Vulcan Context Engine”内置能力卡是 VCE 唯一模型配置入口。它写入公共 AI 的 `vce` consumer profile，并要求同时配置：
+“插件”功能区菜单中的固定“语义引擎 / ContextEngine”设置页是 VCE 唯一模型配置入口；它与“LuaSkills 设置”同级，不属于“插件管理”内容。该页面写入公共 AI 的 `vce` consumer profile，并要求同时配置：
 
-- 支持 Document 与 Query、Dense Float 且维度可确定的 Embedding 路由；
+- 支持 Document/Query 专用任务或 `ProviderDefault` 通用任务、Dense Float 且维度可确定的 Embedding 路由；
 - 支持宿主校验 JSON 输出且能固定关闭推理的查询改写 LLM 路由；
-- 支持 `Disabled` 截断策略的 Rerank 路由。
+- 支持 `Disabled` 或 `ProviderDefault` 截断策略的 Rerank 路由。
 
 后端使用当前凭据连接、模型目录、操作绑定、用途范围和请求投影计算唯一权威就绪状态。任一路由缺失、模型被移除或禁用、能力不兼容时均失败关闭：停止项目运行时与文件监听，隐藏项目代码上下文入口，不向 AI 暴露 `codebase_retrieval`，并拒绝直接管理与检索调用。公共 AI 配置每次成功发布后都会触发 VCE 全项目重协调；Embedding 物理指纹变化会重建项目索引，LLM 或 Rerank 路由变化则复用当前索引并刷新 HostAI 路由。
 

@@ -476,20 +476,14 @@ impl VceAiPort for VceHostAiAdapter {
     ) -> VceFuture<Result<VceEmbeddingResponse, VcePortError>> {
         let adapter = self.clone();
         Box::pin(async move {
-            let task = match request.context.purpose {
-                VceAiPurpose::CodeDocumentEmbedding | VceAiPurpose::CodePathEmbedding => {
-                    EmbeddingTask::Document
-                }
-                VceAiPurpose::CodeQueryEmbedding | VceAiPurpose::CodePathQueryEmbedding => {
-                    EmbeddingTask::Query
-                }
-                _ => {
-                    return Err(VcePortError::Rejected {
-                        operation: VcePortOperation::Embedding,
-                        reason: String::from("VCE embedding request used a non-embedding purpose"),
-                    });
-                }
-            };
+            let task = vce_embedding_task(
+                &adapter.embedding_contract.capabilities.tasks,
+                request.context.purpose,
+            )
+            .map_err(|reason| VcePortError::Rejected {
+                operation: VcePortOperation::Embedding,
+                reason,
+            })?;
             adapter.validate_context(
                 &request.context,
                 request.context.purpose,
@@ -634,6 +628,26 @@ impl VceAiPort for VceHostAiAdapter {
                     operation: VcePortOperation::Rerank,
                 });
             }
+            let rerank_capabilities = handle
+                .snapshot
+                .operations
+                .iter()
+                .find(|operation| {
+                    operation.operation == AiOperation::RerankDocuments
+                        && operation.purpose_id.is_none()
+                })
+                .and_then(|operation| operation.rerank.as_ref())
+                .ok_or_else(|| VcePortError::Rejected {
+                    operation: VcePortOperation::Rerank,
+                    reason: String::from("VCE rerank capability declaration is missing"),
+                })?;
+            let truncation =
+                vce_rerank_truncation(&rerank_capabilities.truncation).map_err(|reason| {
+                    VcePortError::Rejected {
+                        operation: VcePortOperation::Rerank,
+                        reason,
+                    }
+                })?;
             let top_n = u32::try_from(request.top_n).map_err(|_| VcePortError::Rejected {
                 operation: VcePortOperation::Rerank,
                 reason: String::from("VCE rerank top_n exceeds the HostAI contract range"),
@@ -663,7 +677,7 @@ impl VceAiPort for VceHostAiAdapter {
                     })
                     .collect(),
                 top_n,
-                truncation: RerankTruncation::Disabled,
+                truncation,
                 return_content: false,
             };
             let (host_context, mut call_guard) = VceHostCallGuard::new(
@@ -807,8 +821,8 @@ fn resolve_embedding_dimension(
     Ok(dimension)
 }
 
-/// Extracts and validates the exact Document/Query dense-float embedding contract.
-/// 提取并校验精确的 Document/Query 稠密浮点向量契约。
+/// Extracts and validates a task-specific or provider-default dense-float embedding contract.
+/// 提取并校验任务专用或 Provider 默认的稠密浮点向量契约。
 fn embedding_contract(
     snapshot: &InferenceCapabilitySnapshot,
     dimension: u32,
@@ -834,15 +848,17 @@ fn embedding_contract(
         .embedding
         .clone()
         .ok_or_else(|| String::from("VCE HostAI Embedding capabilities are missing"))?;
-    if !capabilities.tasks.contains(&EmbeddingTask::Document)
-        || !capabilities.tasks.contains(&EmbeddingTask::Query)
+    let provider_default_task = capabilities.tasks.contains(&EmbeddingTask::ProviderDefault);
+    if (!provider_default_task
+        && (!capabilities.tasks.contains(&EmbeddingTask::Document)
+            || !capabilities.tasks.contains(&EmbeddingTask::Query)))
         || !capabilities
             .output_kinds
             .contains(&EmbeddingOutputKind::Dense)
         || !capabilities.encodings.contains(&EmbeddingEncoding::Float)
     {
         return Err(String::from(
-            "VCE requires Document and Query dense-float Embedding capabilities",
+            "VCE requires Document and Query or ProviderDefault dense-float Embedding capabilities",
         ));
     }
     let dimension_supported = (capabilities.dimensions.is_empty()
@@ -869,6 +885,72 @@ fn embedding_contract(
         capabilities,
         physical_fingerprint,
     })
+}
+
+/// Selects the exact host embedding task for one VCE semantic purpose.
+/// 为一个 VCE 语义用途选择精确的宿主向量任务。
+///
+/// # Parameters
+/// 参数
+/// `supported_tasks` is the frozen task set and `purpose` identifies document or query input.
+/// `supported_tasks` 是冻结的任务集合，`purpose` 标识文档或查询输入。
+///
+/// # Returns
+/// 返回值
+/// The purpose-specific task when declared, otherwise the explicitly supported provider-default task.
+/// 返回已声明的用途专用任务，否则返回明确支持的 Provider 默认任务。
+fn vce_embedding_task(
+    supported_tasks: &BTreeSet<EmbeddingTask>,
+    purpose: VceAiPurpose,
+) -> Result<EmbeddingTask, String> {
+    let requested = match purpose {
+        VceAiPurpose::CodeDocumentEmbedding | VceAiPurpose::CodePathEmbedding => {
+            EmbeddingTask::Document
+        }
+        VceAiPurpose::CodeQueryEmbedding | VceAiPurpose::CodePathQueryEmbedding => {
+            EmbeddingTask::Query
+        }
+        _ => {
+            return Err(String::from(
+                "VCE embedding request used a non-embedding purpose",
+            ));
+        }
+    };
+    if supported_tasks.contains(&requested) {
+        return Ok(requested);
+    }
+    if supported_tasks.contains(&EmbeddingTask::ProviderDefault) {
+        return Ok(EmbeddingTask::ProviderDefault);
+    }
+    Err(String::from(
+        "VCE embedding model does not support the requested semantic task",
+    ))
+}
+
+/// Selects one rerank truncation policy explicitly declared by the active model route.
+/// 选择当前模型路由明确声明的一种重排截断策略。
+///
+/// # Parameters
+/// 参数
+/// `supported_truncation` is the truncation set exposed by the strong HostAI rerank contract.
+/// `supported_truncation` 是 HostAI 强类型重排契约暴露的截断策略集合。
+///
+/// # Returns
+/// 返回值
+/// Disabled truncation when available, otherwise the declared provider-default policy.
+/// 优先返回禁用截断，否则返回已声明的 Provider 默认策略。
+pub(crate) fn vce_rerank_truncation(
+    supported_truncation: &BTreeSet<RerankTruncation>,
+) -> Result<RerankTruncation, String> {
+    if supported_truncation.contains(&RerankTruncation::Disabled) {
+        return Ok(RerankTruncation::Disabled);
+    }
+    if supported_truncation.contains(&RerankTruncation::ProviderDefault) {
+        return Ok(RerankTruncation::ProviderDefault);
+    }
+    Err(String::from(
+        "VCE rerank model does not declare a supported truncation policy",
+    ))
 }
 
 /// Builds one task-neutral content-addressed fingerprint from the frozen HostAI route.
@@ -1130,6 +1212,55 @@ mod tests {
 
         assert_eq!(execution.reasoning_effort, Some(ReasoningEffort::None));
         assert!(!execution.include_reasoning_encrypted_content);
+    }
+
+    /// Verifies VCE preserves dedicated embedding semantics and accepts one declared provider default.
+    /// 验证 VCE 保留专用向量语义，并接受一个已声明的 Provider 默认任务。
+    #[test]
+    fn embedding_task_uses_the_declared_host_contract() {
+        let provider_default = BTreeSet::from([EmbeddingTask::ProviderDefault]);
+        assert_eq!(
+            vce_embedding_task(&provider_default, VceAiPurpose::CodeDocumentEmbedding)
+                .expect("provider default should serve document embedding"),
+            EmbeddingTask::ProviderDefault
+        );
+        assert_eq!(
+            vce_embedding_task(&provider_default, VceAiPurpose::CodeQueryEmbedding)
+                .expect("provider default should serve query embedding"),
+            EmbeddingTask::ProviderDefault
+        );
+
+        let dedicated = BTreeSet::from([EmbeddingTask::Document, EmbeddingTask::Query]);
+        assert_eq!(
+            vce_embedding_task(&dedicated, VceAiPurpose::CodePathEmbedding)
+                .expect("document task should serve path documents"),
+            EmbeddingTask::Document
+        );
+        assert_eq!(
+            vce_embedding_task(&dedicated, VceAiPurpose::CodePathQueryEmbedding)
+                .expect("query task should serve path queries"),
+            EmbeddingTask::Query
+        );
+    }
+
+    /// Verifies VCE chooses only a truncation policy explicitly declared by the rerank model.
+    /// 验证 VCE 仅选择重排模型明确声明的截断策略。
+    #[test]
+    fn rerank_truncation_uses_the_declared_host_contract() {
+        assert_eq!(
+            vce_rerank_truncation(&BTreeSet::from([RerankTruncation::ProviderDefault]))
+                .expect("provider default should be accepted"),
+            RerankTruncation::ProviderDefault
+        );
+        assert_eq!(
+            vce_rerank_truncation(&BTreeSet::from([
+                RerankTruncation::ProviderDefault,
+                RerankTruncation::Disabled,
+            ]))
+            .expect("disabled should be preferred when available"),
+            RerankTruncation::Disabled
+        );
+        assert!(vce_rerank_truncation(&BTreeSet::new()).is_err());
     }
 
     /// Verifies dropping an in-flight adapter Future wakes the common HostAI cancellation source.

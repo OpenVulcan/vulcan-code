@@ -20,6 +20,9 @@ export function activeSkillHeaderSummary(
   if (activeTab === "settings") {
     return { title: t("skills.navigation.luaSettings"), detail: workbench.luaSkills.notice }
   }
+  if (activeTab === "context-engine") {
+    return { title: t("area.contextEngine"), detail: t("area.contextEngine.description") }
+  }
   if (activeTab === "plugins") {
     // vulcanPlugins excludes ordinary Lua Skill projection rows from the plugin menu page.
     // vulcanPlugins 从插件菜单页面排除普通 Lua Skill 投影行。

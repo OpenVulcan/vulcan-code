@@ -248,8 +248,8 @@ async fn require_vce_project_runtime_ready(
 ///
 /// # Returns
 /// 返回值
-/// A provider-independent fail-closed status suitable for the built-in plugin page.
-/// 返回适用于内置插件页面且不依赖 Provider 的失败关闭状态。
+/// A provider-independent fail-closed status suitable for the fixed ContextEngine settings page.
+/// 返回适用于固定 ContextEngine 设置页且不依赖 Provider 的失败关闭状态。
 pub(crate) fn service_get_vce_configuration_status(
     state: SharedServiceBridgeState,
 ) -> Result<api::VceGlobalConfigurationStatus, String> {

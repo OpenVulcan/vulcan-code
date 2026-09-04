@@ -28,16 +28,16 @@ import type {
   VceGlobalConfigurationStatus,
 } from "@/types";
 
-/// Stable public-AI consumer profile owned by the built-in VCE capability.
-/// VCE 内置能力持有的稳定公共 AI 消费者配置档。
+/// Stable public-AI consumer profile owned by ContextEngine.
+/// ContextEngine 持有的稳定公共 AI 消费者配置档。
 export const VCE_CONSUMER_PROFILE_ID = "vce";
 
 /// Stable LLM purpose used only for code-search query rewriting.
 /// 仅用于代码检索查询改写的稳定 LLM 用途。
 export const VCE_QUERY_REWRITE_PURPOSE_ID = "code_retrieval.query_rewrite";
 
-// VceRouteKind identifies one required selector in the built-in plugin card.
-// VceRouteKind 标识内置插件卡片中的一个必需选择器。
+// VceRouteKind identifies one required selector in the ContextEngine settings page.
+// VceRouteKind 标识 ContextEngine 设置页中的一个必需选择器。
 type VceRouteKind = "embedding" | "query_rewrite" | "rerank";
 
 // VceRouteFieldDefinition describes one required route without duplicating provider behavior.
@@ -92,9 +92,9 @@ interface VceRouteFieldProps {
   onTest?: () => Promise<void>;
 }
 
-// VceBuiltInPluginPanelProps carries the workbench generation used to invalidate route catalogs.
-// VceBuiltInPluginPanelProps 携带用于使路由目录失效的工作台代际。
-interface VceBuiltInPluginPanelProps {
+// ContextEngineAreaProps carries the workbench generation used to invalidate route catalogs.
+// ContextEngineAreaProps 携带用于使路由目录失效的工作台代际。
+interface ContextEngineAreaProps {
   // Optional current workbench generation.
   // 可选当前工作台代际。
   workbenchRevision?: number;
@@ -118,8 +118,13 @@ export function vceCandidateEligible(
     const capability = candidate.capabilities.embedding;
     return candidate.route.operation === "embedding_create"
       && Boolean(capability)
-      && capability!.tasks.includes("document")
-      && capability!.tasks.includes("query")
+      && (
+        capability!.tasks.includes("provider_default")
+        || (
+          capability!.tasks.includes("document")
+          && capability!.tasks.includes("query")
+        )
+      )
       && capability!.output_kinds.includes("dense")
       && capability!.encodings.includes("float")
       && deterministicEmbeddingDimension(capability!);
@@ -130,7 +135,10 @@ export function vceCandidateEligible(
       && candidateSupportsDisabledReasoning(candidate);
   }
   return candidate.route.operation === "rerank_documents"
-    && Boolean(candidate.capabilities.rerank?.truncation.includes("disabled"));
+    && Boolean(candidate.capabilities.rerank)
+    && candidate.capabilities.rerank!.truncation.some((truncation) => (
+      truncation === "disabled" || truncation === "provider_default"
+    ));
 }
 
 /// Creates a deterministic identity for one exact public-AI inference route.
@@ -155,14 +163,14 @@ export function vceInferenceRouteKey(route: PublicAiInferenceRoute): string {
   ].join("\u0000");
 }
 
-/// Renders and owns the built-in VCE plugin configuration surface.
-/// 渲染并管理 VCE 内置插件配置界面。
+/// Renders and owns the fixed ContextEngine settings surface.
+/// 渲染并管理固定的 ContextEngine 设置界面。
 ///
 /// Parameters: `workbenchRevision` invalidates the view after committed public-AI publications.
 /// 参数：`workbenchRevision` 在公共 AI 发布提交后使界面状态失效。
 /// Returns: the complete route, readiness, reasoning-policy, storage, and test panel.
 /// 返回值：完整的路由、就绪状态、推理策略、存储与测试面板。
-export function VceBuiltInPluginPanel(props: VceBuiltInPluginPanelProps) {
+export function ContextEngineArea(props: ContextEngineAreaProps) {
   // locale selects local bilingual copy without changing the backend-owned diagnostic contract.
   // locale 选择本地双语文案且不改变后端持有的诊断契约。
   const { locale } = useI18n();
@@ -249,8 +257,8 @@ export function VceBuiltInPluginPanel(props: VceBuiltInPluginPanelProps) {
       operation: "embedding_create",
       label: copy("Embedding 向量模型", "Embedding model"),
       description: copy(
-        "同时用于源码文档与检索查询的稠密浮点向量；维度必须可确定。",
-        "Dense float vectors for both source documents and search queries, with deterministic dimensions.",
+        "复用宿主已验证的源码文档与查询向量能力；支持专用任务或 Provider 默认任务，维度必须可确定。",
+        "Reuses host-validated document and query vectors through dedicated or provider-default tasks, with deterministic dimensions.",
       ),
     },
     {
@@ -268,8 +276,8 @@ export function VceBuiltInPluginPanel(props: VceBuiltInPluginPanelProps) {
       operation: "rerank_documents",
       label: copy("Rerank 重排模型", "Rerank model"),
       description: copy(
-        "对语义候选进行二次排序；必须支持禁用截断。",
-        "Reorders semantic candidates and must support disabled truncation.",
+        "对语义候选进行二次排序；使用模型明确声明的禁用截断或 Provider 默认截断策略。",
+        "Reorders semantic candidates with an explicitly declared disabled or provider-default truncation policy.",
       ),
     },
   ];
@@ -347,7 +355,7 @@ export function VceBuiltInPluginPanel(props: VceBuiltInPluginPanelProps) {
           <BrainCircuit className="mt-0.5 size-5 shrink-0" />
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <strong>Vulcan Context Engine</strong>
+              <strong>{copy("语义引擎", "ContextEngine")}</strong>
               <span className="rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground">
                 {copy("内置能力", "Built-in capability")}
               </span>

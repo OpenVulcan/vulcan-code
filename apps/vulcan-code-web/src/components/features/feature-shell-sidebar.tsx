@@ -9,6 +9,7 @@ import {
   PanelTopOpen,
   Puzzle,
   Route,
+  ScanSearch,
   Undo2,
   Settings,
 } from "lucide-react"
@@ -477,6 +478,7 @@ function featureSidebarRows(
     return [
       { id: "luaskills-catalog", label: t("skills.navigation.list"), detail: formatSkillText(t("skills.sidebar.luaDetail"), { count: workbench.luaSkills.skills.length }), icon: <Hammer size={16} /> },
       { id: "luaskills-settings", label: t("skills.navigation.luaSettings"), detail: workbench.luaSkills.notice, icon: <Settings size={16} /> },
+      { id: "context-engine", label: t("area.contextEngine"), detail: t("area.contextEngine.description"), icon: <ScanSearch size={16} /> },
       { id: "luaskills-plugins", label: t("skills.navigation.plugins"), detail: formatSkillText(t("skills.sidebar.pluginDetail"), { count: workbench.plugins.filter((plugin) => plugin.managementKind === "vulcanPlugin").length }), icon: <Puzzle size={16} /> },
       ...pluginRows,
     ]
@@ -536,6 +538,9 @@ function skillSidebarRowToSubArea(rowId: string): SkillSubAreaId | null {
   }
   if (rowId === "luaskills-plugins") {
     return "plugins"
+  }
+  if (rowId === "context-engine") {
+    return "context-engine"
   }
   if (rowId.startsWith("plugin:")) {
     return rowId as SkillSubAreaId
