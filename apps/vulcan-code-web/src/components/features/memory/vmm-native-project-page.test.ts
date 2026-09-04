@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import type { VmmNativeProjectContentCounts } from "@/types"
 
 import {
+  nativeProjectAccessRequest,
   nativeProjectConfirmationRequest,
   type NativeProjectPreview,
 } from "./vmm-native-project-page"
@@ -20,6 +21,26 @@ const EMPTY_COUNTS: VmmNativeProjectContentCounts = {
 }
 
 describe("native project confirmation requests", () => {
+  it("commits the owner and recall-only projects through one atomic action", () => {
+    // linkedProjectIds models mutable page state after the save request has been built.
+    // linkedProjectIds 模拟保存请求构建后仍可变化的页面状态。
+    const linkedProjectIds = [3, 4]
+
+    // request must own the exact list snapshot accepted for the atomic transaction.
+    // request 必须持有原子事务已接受的准确列表快照。
+    const request = nativeProjectAccessRequest("project-a", 2, linkedProjectIds)
+    linkedProjectIds.push(5)
+
+    expect(request).toEqual({
+      action: "native_project_set_access",
+      payload: {
+        vulcanProjectId: "project-a",
+        ownerProjectId: 2,
+        linkedProjectIds: [3, 4],
+      },
+    })
+  })
+
   it("reuses the same migration command identity after a lost response", () => {
     // preview represents one accepted confirmation dialog that remains mounted across retries.
     // preview 表示一个已接受且在重试期间保持挂载的确认对话框。

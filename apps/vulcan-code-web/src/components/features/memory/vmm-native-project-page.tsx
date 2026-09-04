@@ -63,6 +63,46 @@ export interface NativeProjectConfirmationRequest {
   payload: Record<string, unknown>
 }
 
+// NativeProjectAccessRequest carries one atomic owner-and-recall association update.
+// NativeProjectAccessRequest 携带一次原子的归属与召回关联更新。
+export interface NativeProjectAccessRequest {
+  // Backend action that commits the complete project access tuple in one transaction.
+  // 在一个事务中提交完整项目访问元组的后端动作。
+  action: "native_project_set_access"
+  // Stable VulcanCode project identity, one write owner, and the ordered recall-only projects.
+  // 稳定的 VulcanCode 项目标识、唯一写入归属，以及有序的仅召回项目。
+  payload: {
+    vulcanProjectId: string
+    ownerProjectId: number
+    linkedProjectIds: number[]
+  }
+}
+
+// nativeProjectAccessRequest builds one indivisible owner-and-recall update for the backend.
+// nativeProjectAccessRequest 为后端构造一次不可分割的归属与召回更新。
+//
+// Parameters: vulcanProjectId is the stable host project identity, ownerProjectId is its only
+// write destination, and linkedProjectIds are ordered read-only recall extensions.
+// 参数：vulcanProjectId 是稳定宿主项目身份，ownerProjectId 是唯一写入目标，
+// linkedProjectIds 是有序的只读召回扩展。
+//
+// Returns: one `native_project_set_access` request whose list is detached from mutable UI state.
+// 返回：一条 `native_project_set_access` 请求，其列表与可变界面状态相互独立。
+export function nativeProjectAccessRequest(
+  vulcanProjectId: string,
+  ownerProjectId: number,
+  linkedProjectIds: readonly number[],
+): NativeProjectAccessRequest {
+  return {
+    action: "native_project_set_access",
+    payload: {
+      vulcanProjectId,
+      ownerProjectId,
+      linkedProjectIds: [...linkedProjectIds],
+    },
+  }
+}
+
 // nativeProjectConfirmationRequest builds the exact retry-safe mutation request for one preview.
 // nativeProjectConfirmationRequest 为一次预检构造准确且可安全重试的变更请求。
 //
@@ -192,8 +232,8 @@ function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNative
     setCreateProjectName(nextProjectId)
   }, [createVulcanProjectId, unboundProjects])
 
-  // saveBinding commits one write owner first and then its independent recall-only links.
-  // saveBinding 先提交唯一写入归属，再提交独立的仅召回连带项目。
+  // saveBinding commits one owner and all recall-only links through one atomic backend action.
+  // saveBinding 通过一个原子后端动作共同提交唯一归属与全部仅召回链接。
   const saveBinding = React.useCallback(async (vulcanProjectId: string) => {
     const ownerProjectId = Number(ownerDrafts[vulcanProjectId])
     const current = catalog?.bindings.find((binding) => binding.vulcanProjectId === vulcanProjectId)
@@ -201,15 +241,12 @@ function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNative
       if (current) await runAction("native_project_unbind", { vulcanProjectId })
       return
     }
-    const bound = await runAction("native_project_bind_existing", {
+    const request = nativeProjectAccessRequest(
       vulcanProjectId,
-      vmmProjectId: ownerProjectId,
-    })
-    if (!bound) return
-    await runAction("native_project_replace_query_links", {
-      vulcanProjectId,
-      linkedProjectIds: linkedDrafts[vulcanProjectId] ?? [],
-    })
+      ownerProjectId,
+      linkedDrafts[vulcanProjectId] ?? [],
+    )
+    await runAction(request.action, request.payload)
   }, [catalog?.bindings, linkedDrafts, ownerDrafts, runAction])
 
   // toggleLinkedProject changes only one recall-only project choice for one VulcanCode project.
