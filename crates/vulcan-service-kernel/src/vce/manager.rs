@@ -4,15 +4,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use sha2::{Digest, Sha256};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, Notify, RwLock};
 use uuid::Uuid;
 use vulcan_ai_contract::HostAiPort;
 use vulcan_context_engine::{
-    RefreshReason, RefreshRequest, RefreshResult, RetrieveRequest, RetrieveResult, VceEngine,
-    VceEngineSnapshot, VceIndexBinding, VceManagementQueryRequest, VceManagementQueryResponse,
-    VceManagementRequest, VceManagementSnapshot, VceStateIdentity, VceWorkspaceStatistics,
+    IndexAbortRequest, RefreshReason, RefreshRequest, RefreshResult, RetrieveRequest,
+    RetrieveResult, VceAiPort, VceEngine, VceEngineSnapshot, VceIndexBinding, VceIndexPort,
+    VceManagementQueryRequest, VceManagementQueryResponse, VceManagementRequest,
+    VceManagementSnapshot, VceStateIdentity, VceWorkspaceStatistics,
 };
 use vulcan_workbench_model::ProjectVceSettings;
 use vulcan_workspace_store::vce_data_plane::{
@@ -35,6 +37,10 @@ const VCE_PREPROCESSING_VERSION: &str = "vce-preprocess-v1";
 /// 与 VCE 向量共同持久化的稳定递归语义切块契约。
 const VCE_CHUNKER_VERSION: &str = "vce-recursive-v1";
 
+/// Stable cancellation diagnostic shared by RPC and watcher retry classification.
+/// RPC 与监听重试分类共同使用的稳定取消诊断。
+pub(crate) const VCE_REFRESH_CANCELLED_ERROR: &str = "VCE refresh was cancelled by the host";
+
 /// Project lifecycle states owned by the VulcanCode host.
 /// 由 VulcanCode 宿主持有的项目生命周期状态。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,37 +48,30 @@ pub(crate) enum VceProjectLifecycle {
     /// The project is being constructed and validated.
     /// 项目正在构建与校验。
     Activating,
+    /// A compatible persisted engine state is being restored.
+    /// 正在恢复一份兼容的持久化引擎状态。
+    Restoring,
     /// The project has a usable committed checkpoint.
     /// 项目已有可用的已提交检查点。
     Ready,
+    /// The committed checkpoint is ready while optional AI stages are unavailable.
+    /// 已提交检查点可用，但可选 AI 阶段不可用。
+    DegradedOptionalAi,
     /// A host-owned refresh is running against a private working engine.
     /// 宿主持有的刷新正在私有工作引擎上执行。
     Refreshing,
     /// Required HostAI or project configuration is unavailable.
     /// 必需的 HostAI 或项目配置不可用。
     BlockedConfiguration,
+    /// Persisted state is incompatible and requires one complete rebuild.
+    /// 持久化状态不兼容且需要一次完整重建。
+    RebuildRequired,
     /// The last host or VCE operation failed.
     /// 最近一次宿主或 VCE 操作失败。
     Failed,
-}
-
-impl VceProjectLifecycle {
-    /// Return the stable API value for this lifecycle state.
-    /// 返回此生命周期状态的稳定 API 值。
-    ///
-    /// # Returns
-    /// 返回值
-    /// A lowercase snake-case lifecycle identifier.
-    /// 返回小写蛇形生命周期标识。
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Activating => "activating",
-            Self::Ready => "ready",
-            Self::Refreshing => "refreshing",
-            Self::BlockedConfiguration => "blocked_configuration",
-            Self::Failed => "failed",
-        }
-    }
+    /// The runtime is cancelling work and releasing its HostAI registration.
+    /// 运行时正在取消工作并释放其 HostAI 注册。
+    Stopping,
 }
 
 /// Management-safe project status returned by the VCE runtime manager.
@@ -82,24 +81,12 @@ pub(crate) struct VceRuntimeProjectStatus {
     /// Stable workbench project identity.
     /// 稳定的工作台项目身份。
     pub(crate) project_id: String,
-    /// Canonical absolute project root.
-    /// 规范绝对项目根目录。
-    pub(crate) project_root: String,
     /// Host lifecycle state.
     /// 宿主生命周期状态。
     pub(crate) lifecycle: VceProjectLifecycle,
     /// Project configuration revision represented by the runtime.
     /// 运行时表示的项目配置修订号。
     pub(crate) config_revision: u64,
-    /// Complete validated project-owned VCE settings represented by this status.
-    /// 此状态表示的完整已验证项目自有 VCE 设置。
-    pub(crate) settings: ProjectVceSettings,
-    /// Active code-semantic namespace when activation succeeded.
-    /// 激活成功时的活动代码语义命名空间。
-    pub(crate) namespace_id: Option<String>,
-    /// Active logical vector space when activation succeeded.
-    /// 激活成功时的活动逻辑向量空间。
-    pub(crate) vector_space_id: Option<String>,
     /// Current functional engine snapshot when activation succeeded.
     /// 激活成功时的当前功能引擎快照。
     pub(crate) engine: Option<VceEngineSnapshot>,
@@ -109,6 +96,21 @@ pub(crate) struct VceRuntimeProjectStatus {
     /// Latest host-boundary error, if any.
     /// 最近一条宿主边界错误（如果有）。
     pub(crate) last_error: Option<String>,
+}
+
+/// Immutable runtime envelope returned by one project-scoped semantic retrieval.
+/// 单次项目作用域语义检索返回的不可变运行时信封。
+#[derive(Clone, Debug)]
+pub(crate) struct VceRuntimeRetrieveResult {
+    /// Settings revision represented by the selected runtime.
+    /// 所选运行时表示的设置修订号。
+    pub(crate) settings_revision: u64,
+    /// Exact committed checkpoint searched by the selected engine snapshot.
+    /// 所选引擎快照实际检索的已提交检查点。
+    pub(crate) checkpoint_version: u64,
+    /// Functional VCE retrieval result.
+    /// VCE 功能检索结果。
+    pub(crate) result: RetrieveResult,
 }
 
 /// Shared process-wide manager for all enabled project VCE runtimes.
@@ -135,9 +137,6 @@ struct VceProjectRuntime {
     /// Stable workbench project identity.
     /// 稳定的工作台项目身份。
     project_id: String,
-    /// Canonical absolute project root.
-    /// 规范绝对项目根目录。
-    project_root: String,
     /// Immutable engine configuration used to fork refresh workers.
     /// 用于派生刷新工作引擎的不可变引擎配置。
     config: vulcan_context_engine::VceConfig,
@@ -165,6 +164,53 @@ struct VceProjectRuntime {
     /// Host lifecycle and latest boundary diagnostic.
     /// 宿主生命周期与最近边界诊断。
     host_status: RwLock<VceHostStatus>,
+    /// Currently running refresh cancellation handle, if any.
+    /// 当前正在运行的刷新取消句柄（如果有）。
+    active_refresh: Mutex<Option<VceActiveRefresh>>,
+}
+
+/// One host-cancellable refresh identity retained only while its future is running.
+/// 一项仅在刷新 Future 运行期间保留的宿主可取消刷新身份。
+#[derive(Clone)]
+struct VceActiveRefresh {
+    /// Stable logical refresh identity.
+    /// 稳定逻辑刷新身份。
+    request_id: String,
+    /// Cooperative cancellation signal that drops the active VCE future.
+    /// 用于丢弃活动 VCE Future 的协作式取消信号。
+    cancellation: VceRefreshCancellation,
+}
+
+/// Race-safe one-shot cancellation signal for a project refresh.
+/// 项目刷新的竞态安全一次性取消信号。
+#[derive(Clone, Default)]
+struct VceRefreshCancellation {
+    /// Sticky flag prevents a notification from being lost before the waiter registers.
+    /// 粘性标志防止等待器登记前丢失通知。
+    cancelled: Arc<AtomicBool>,
+    /// Async notification wakes the active refresh future.
+    /// 异步通知唤醒活动刷新 Future。
+    notify: Arc<Notify>,
+}
+
+impl VceRefreshCancellation {
+    /// Request cancellation exactly once.
+    /// 精确请求一次取消。
+    fn cancel(&self) {
+        if !self.cancelled.swap(true, Ordering::AcqRel) {
+            self.notify.notify_waiters();
+        }
+    }
+
+    /// Wait until cancellation has been requested without losing an early signal.
+    /// 等待取消请求且不丢失提前到达的信号。
+    async fn cancelled(&self) {
+        let notified = self.notify.notified();
+        if self.cancelled.load(Ordering::Acquire) {
+            return;
+        }
+        notified.await;
+    }
 }
 
 /// Mutable host lifecycle data independent from the VCE functional engine.
@@ -182,15 +228,9 @@ struct VceHostStatus {
 /// 即使无法构造功能运行时也会保留的激活失败记录。
 #[derive(Clone)]
 struct VceActivationFailure {
-    /// Canonical or requested project root used during activation.
-    /// 激活期间使用的规范或请求项目根目录。
-    project_root: String,
     /// Project configuration revision that failed.
     /// 失败的项目配置修订号。
     config_revision: u64,
-    /// Complete settings revision that failed activation.
-    /// 激活失败的完整设置修订版。
-    settings: ProjectVceSettings,
     /// Whether the failure is caused by required configuration.
     /// 失败是否由必需配置导致。
     blocked_configuration: bool,
@@ -250,11 +290,11 @@ impl VceRuntimeManager {
             return Err(String::from("VCE project settings are disabled"));
         }
         if let Some(previous) = self.projects.write().await.remove(project_id) {
-            previous.ai.deactivate()?;
+            self.stop_runtime(&previous).await?;
         }
-        let requested_root = crate::normalized_workspace_path_text_from_path(project_root);
+        let config_revision = settings.revision;
         match self
-            .activate_project(project_id, project_root, settings.clone())
+            .activate_project(project_id, project_root, settings)
             .await
         {
             Ok(runtime) => {
@@ -272,9 +312,7 @@ impl VceRuntimeManager {
                 self.activation_failures.write().await.insert(
                     project_id.to_owned(),
                     VceActivationFailure {
-                        project_root: requested_root,
-                        config_revision: settings.revision,
-                        settings,
+                        config_revision,
                         blocked_configuration,
                         error: bounded_error(error.clone()),
                     },
@@ -301,7 +339,7 @@ impl VceRuntimeManager {
         let runtime = self.projects.write().await.remove(project_id);
         self.activation_failures.write().await.remove(project_id);
         if let Some(runtime) = runtime {
-            runtime.ai.deactivate()?;
+            self.stop_runtime(&runtime).await?;
         }
         Ok(())
     }
@@ -327,6 +365,96 @@ impl VceRuntimeManager {
     ) -> Result<RefreshResult, String> {
         let runtime = self.require_project(project_id).await?;
         self.refresh_full_runtime(&runtime, reason).await
+    }
+
+    /// Rebuild every present Blob while keeping the previous checkpoint visible until commit.
+    /// 重建全部现存 Blob，并在提交前保持旧检查点可见。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `project_id` selects the exact project runtime.
+    /// `project_id` 选择精确项目运行时。
+    /// `reason` records the host reason for the rebuild.
+    /// `reason` 记录宿主发起重建的原因。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The newly committed full-rebuild result.
+    /// 返回新提交的完整重建结果。
+    pub(crate) async fn rebuild_full(
+        &self,
+        project_id: &str,
+        reason: RefreshReason,
+    ) -> Result<RefreshResult, String> {
+        let runtime = self.require_project(project_id).await?;
+        let _refresh_guard = runtime.refresh_gate.lock().await;
+        let manifest = runtime.source.scan_full().await?;
+        let request = RefreshRequest::full_rebuild(
+            request_id(project_id, "rebuild"),
+            reason,
+            manifest.observations,
+            None,
+        );
+        self.refresh_runtime_locked(&runtime, request).await
+    }
+
+    /// Retry cleanup of unpublished generations for one project without touching its checkpoint.
+    /// 为单个项目重试未发布代次清理，且不触碰其检查点。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `project_id` selects the exact project runtime.
+    /// `project_id` 选择精确项目运行时。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success after the storage-owned cleanup queue converges.
+    /// 返回存储持有的清理队列收敛后的成功结果。
+    pub(crate) async fn cleanup_staging(&self, project_id: &str) -> Result<(), String> {
+        let runtime = self.require_project(project_id).await?;
+        let _refresh_guard = runtime.refresh_gate.lock().await;
+        runtime.index.cleanup_abandoned_staging().await
+    }
+
+    /// Cancel the currently running project refresh under an optional visible operation identity.
+    /// 在可选可见操作身份约束下取消当前正在运行的项目刷新。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `project_id` selects the exact project runtime.
+    /// `project_id` 选择精确项目运行时。
+    /// `operation_id` optionally guards against cancelling a newer unrelated refresh.
+    /// `operation_id` 可选用于防止取消较新的无关刷新。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The stable logical refresh identity whose cancellation was requested.
+    /// 返回已请求取消的稳定逻辑刷新身份。
+    pub(crate) async fn cancel_refresh(
+        &self,
+        project_id: &str,
+        operation_id: Option<&str>,
+    ) -> Result<String, String> {
+        let runtime = self.require_project(project_id).await?;
+        let active = runtime
+            .active_refresh
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| String::from("VCE project has no active refresh to cancel"))?;
+        if let Some(operation_id) = operation_id {
+            let operation_id = operation_id.trim();
+            if operation_id.is_empty()
+                || (operation_id != active.request_id
+                    && !operation_id.starts_with(format!("{}:", active.request_id).as_str()))
+            {
+                return Err(String::from(
+                    "VCE cancel operation identity does not match the active refresh",
+                ));
+            }
+        }
+        active.cancellation.cancel();
+        Ok(active.request_id)
     }
 
     /// Perform one watcher-driven path refresh, escalating ignore/directory changes to full.
@@ -408,23 +536,31 @@ impl VceRuntimeManager {
         &self,
         project_id: &str,
         information_request: &str,
-    ) -> Result<RetrieveResult, String> {
+    ) -> Result<VceRuntimeRetrieveResult, String> {
         if information_request.trim().is_empty() {
             return Err(String::from("VCE information_request must not be empty"));
         }
         let runtime = self.require_project(project_id).await?;
         let engine_handle = runtime.current_engine.read().await.clone();
         let mut engine = engine_handle.lock().await;
+        let checkpoint_version = engine.status().checkpoint_version.ok_or_else(|| {
+            String::from("VCE project has no committed checkpoint available for retrieval")
+        })?;
         let mut request = RetrieveRequest::current_checkpoint(
             request_id(project_id, "retrieve"),
             information_request,
         );
         request.allow_query_rewrite = runtime.settings.allow_query_rewrite;
         request.allow_rerank = runtime.settings.allow_rerank;
-        engine
+        let result = engine
             .retrieve(request, runtime.index.as_ref(), runtime.ai.as_ref())
             .await
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        Ok(VceRuntimeRetrieveResult {
+            settings_revision: runtime.config_revision,
+            checkpoint_version,
+            result,
+        })
     }
 
     /// Build one storage-backed management snapshot for a project.
@@ -508,45 +644,16 @@ impl VceRuntimeManager {
             .get(project_id)
             .map(|failure| VceRuntimeProjectStatus {
                 project_id: project_id.to_owned(),
-                project_root: failure.project_root.clone(),
                 lifecycle: if failure.blocked_configuration {
                     VceProjectLifecycle::BlockedConfiguration
                 } else {
                     VceProjectLifecycle::Failed
                 },
                 config_revision: failure.config_revision,
-                settings: failure.settings.clone(),
-                namespace_id: None,
-                vector_space_id: None,
                 engine: None,
                 workspace: None,
                 last_error: Some(failure.error.clone()),
             })
-    }
-
-    /// Return deterministic statuses for every active or blocked project.
-    /// 返回每个活动或受阻项目的确定性状态。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Project statuses sorted by stable project ID.
-    /// 返回按稳定项目 ID 排序的项目状态。
-    pub(crate) async fn project_statuses(&self) -> Vec<VceRuntimeProjectStatus> {
-        let mut project_ids = self
-            .projects
-            .read()
-            .await
-            .keys()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        project_ids.extend(self.activation_failures.read().await.keys().cloned());
-        let mut statuses = Vec::with_capacity(project_ids.len());
-        for project_id in project_ids {
-            if let Some(status) = self.project_status(&project_id).await {
-                statuses.push(status);
-            }
-        }
-        statuses
     }
 
     /// Unregister all active project capabilities during ordered application shutdown.
@@ -563,7 +670,7 @@ impl VceRuntimeManager {
         self.activation_failures.write().await.clear();
         let mut failures = Vec::new();
         for runtime in runtimes {
-            if let Err(error) = runtime.ai.deactivate() {
+            if let Err(error) = self.stop_runtime(&runtime).await {
                 failures.push(error);
             }
         }
@@ -665,20 +772,27 @@ impl VceRuntimeManager {
             config.index_schema_version,
             config.embedding_space.clone(),
         );
-        let engine = match self
+        let (engine, initial_lifecycle) = match self
             .data_plane
             .load_state_snapshot(&config.index_namespace_id)
             .await?
         {
-            Some(snapshot) if snapshot.identity == expected_identity => {
+            Some(snapshot) if snapshot.identity == expected_identity => (
                 VceEngine::from_state_snapshot(config.clone(), snapshot)
-                    .map_err(|error| error.to_string())?
-            }
-            Some(_) | None => VceEngine::new(config.clone()).map_err(|error| error.to_string())?,
+                    .map_err(|error| error.to_string())?,
+                VceProjectLifecycle::Restoring,
+            ),
+            Some(_) => (
+                VceEngine::new(config.clone()).map_err(|error| error.to_string())?,
+                VceProjectLifecycle::RebuildRequired,
+            ),
+            None => (
+                VceEngine::new(config.clone()).map_err(|error| error.to_string())?,
+                VceProjectLifecycle::Activating,
+            ),
         };
         Ok(Arc::new(VceProjectRuntime {
             project_id: project_id.to_owned(),
-            project_root,
             config,
             config_revision: settings.revision,
             settings,
@@ -688,9 +802,10 @@ impl VceRuntimeManager {
             current_engine: RwLock::new(Arc::new(Mutex::new(engine))),
             refresh_gate: Mutex::new(()),
             host_status: RwLock::new(VceHostStatus {
-                lifecycle: VceProjectLifecycle::Activating,
+                lifecycle: initial_lifecycle,
                 last_error: None,
             }),
+            active_refresh: Mutex::new(None),
         }))
     }
 
@@ -728,22 +843,82 @@ impl VceRuntimeManager {
         runtime.set_refreshing().await;
         let current_handle = runtime.current_engine.read().await.clone();
         let base_snapshot = current_handle.lock().await.state_snapshot();
+        let base_generation = base_snapshot.workspace.generation;
+        let base_has_checkpoint = base_snapshot.workspace.checkpoint.is_some();
         let mut working = VceEngine::from_state_snapshot(runtime.config.clone(), base_snapshot)
             .map_err(|error| error.to_string())?;
-        let result = working
-            .refresh(
+        let request_id = request.request_id.clone();
+        let cancellation = VceRefreshCancellation::default();
+        {
+            let mut active = runtime.active_refresh.lock().await;
+            *active = Some(VceActiveRefresh {
+                request_id: request_id.clone(),
+                cancellation: cancellation.clone(),
+            });
+        }
+        // refresh_result owns no borrow after this scope, allowing cancellation cleanup to inspect
+        // the private working engine before deciding whether an unpublished generation exists.
+        // refresh_result 在此作用域后不再持有借用，使取消清理可检查私有工作引擎并判断是否
+        // 存在未发布代次。
+        let refresh_result = {
+            let refresh = working.refresh(
                 request,
                 runtime.index.as_ref(),
                 runtime.ai.as_ref(),
                 runtime.source.as_ref(),
-            )
-            .await;
+            );
+            tokio::pin!(refresh);
+            tokio::select! {
+                biased;
+                () = cancellation.cancelled() => None,
+                result = &mut refresh => Some(result),
+            }
+        };
+        {
+            let mut active = runtime.active_refresh.lock().await;
+            if active
+                .as_ref()
+                .is_some_and(|active| active.request_id == request_id)
+            {
+                *active = None;
+            }
+        }
+        let Some(result) = refresh_result else {
+            let cancelled_generation = working.workspace_snapshot().generation;
+            if cancelled_generation > base_generation {
+                let abort_result = runtime
+                    .index
+                    .abort_stage(IndexAbortRequest {
+                        operation_id: format!("{request_id}:cancel"),
+                        refresh_id: request_id,
+                        generation: cancelled_generation,
+                    })
+                    .await;
+                if let Err(error) = abort_result {
+                    runtime
+                        .set_failure(bounded_error(format!(
+                            "{VCE_REFRESH_CANCELLED_ERROR}; staging cleanup failed: {error}"
+                        )))
+                        .await;
+                    return Err(format!(
+                        "{VCE_REFRESH_CANCELLED_ERROR}; staging cleanup failed: {error}"
+                    ));
+                }
+            }
+            runtime.set_cancelled(base_has_checkpoint).await;
+            return Err(String::from(VCE_REFRESH_CANCELLED_ERROR));
+        };
         match result {
             Ok(result) => {
-                let snapshot = working.state_snapshot();
-                self.data_plane
-                    .persist_state_snapshot(&runtime.config.index_namespace_id, &snapshot)
-                    .await?;
+                // A checkpoint-changing refresh persisted its state atomically inside commit.
+                // A no-op refresh has no commit transaction, so persist its counters and summary here.
+                // 改变检查点的刷新已在提交事务内原子持久化状态；无提交的刷新则在此持久化计数与摘要。
+                if result.commit_receipt.is_none() {
+                    let snapshot = working.state_snapshot();
+                    self.data_plane
+                        .persist_state_snapshot(&runtime.config.index_namespace_id, &snapshot)
+                        .await?;
+                }
                 *runtime.current_engine.write().await = Arc::new(Mutex::new(working));
                 runtime.set_ready().await;
                 Ok(result)
@@ -754,6 +929,28 @@ impl VceRuntimeManager {
                 Err(message)
             }
         }
+    }
+
+    /// Stop one runtime after cancelling and joining its serialized refresh boundary.
+    /// 在取消并汇合其串行刷新边界后停止一个运行时。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `runtime` is the exact runtime removed from the manager map.
+    /// `runtime` 是从管理器映射中移除的精确运行时。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success after no refresh can use the deactivated HostAI registration.
+    /// 在没有刷新可再使用已注销 HostAI 注册后返回成功。
+    async fn stop_runtime(&self, runtime: &Arc<VceProjectRuntime>) -> Result<(), String> {
+        runtime.set_stopping().await;
+        if let Some(active) = runtime.active_refresh.lock().await.clone() {
+            active.cancellation.cancel();
+        }
+        let _refresh_guard = runtime.refresh_gate.lock().await;
+        runtime.index.cleanup_abandoned_staging().await?;
+        runtime.ai.deactivate()
     }
 
     /// Resolve one active project or preserve its blocked activation diagnostic.
@@ -786,12 +983,8 @@ impl VceProjectRuntime {
         let engine = engine_handle.lock().await;
         VceRuntimeProjectStatus {
             project_id: self.project_id.clone(),
-            project_root: self.project_root.clone(),
             lifecycle: host_status.lifecycle,
             config_revision: self.config_revision,
-            settings: self.settings.clone(),
-            namespace_id: Some(self.config.index_namespace_id.clone()),
-            vector_space_id: Some(self.config.embedding_space.vector_space_id.clone()),
             engine: Some(engine.status()),
             workspace: Some(engine.workspace_statistics()),
             last_error: host_status
@@ -813,8 +1006,50 @@ impl VceProjectRuntime {
     /// 在原子发布后将宿主运行时标记为就绪。
     async fn set_ready(&self) {
         let mut status = self.host_status.write().await;
-        status.lifecycle = VceProjectLifecycle::Ready;
+        status.lifecycle = self.ready_lifecycle();
         status.last_error = None;
+    }
+
+    /// Mark a cancelled refresh without hiding an already committed checkpoint.
+    /// 标记一次已取消刷新，同时不隐藏已经提交的检查点。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `has_checkpoint` states whether retrieval can continue from the previous publication.
+    /// `has_checkpoint` 表示检索是否可继续读取之前的发布结果。
+    async fn set_cancelled(&self, has_checkpoint: bool) {
+        let mut status = self.host_status.write().await;
+        status.lifecycle = if has_checkpoint {
+            self.ready_lifecycle()
+        } else {
+            VceProjectLifecycle::Failed
+        };
+        status.last_error = Some(String::from(VCE_REFRESH_CANCELLED_ERROR));
+    }
+
+    /// Mark the runtime as stopping before its refresh gate is joined.
+    /// 在汇合刷新闸门前将运行时标记为正在停止。
+    async fn set_stopping(&self) {
+        let mut status = self.host_status.write().await;
+        status.lifecycle = VceProjectLifecycle::Stopping;
+    }
+
+    /// Select ready or optional-AI-degraded state from current host capabilities and settings.
+    /// 根据当前宿主能力和设置选择就绪或可选 AI 降级状态。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A usable lifecycle that never treats optional AI as required.
+    /// 返回不会把可选 AI 当作必需能力的可用生命周期。
+    fn ready_lifecycle(&self) -> VceProjectLifecycle {
+        let capability = self.ai.capability_snapshot();
+        if (self.settings.allow_query_rewrite && !capability.query_rewrite_available)
+            || (self.settings.allow_rerank && !capability.rerank_available)
+        {
+            VceProjectLifecycle::DegradedOptionalAi
+        } else {
+            VceProjectLifecycle::Ready
+        }
     }
 
     /// Retain one bounded host or functional failure.

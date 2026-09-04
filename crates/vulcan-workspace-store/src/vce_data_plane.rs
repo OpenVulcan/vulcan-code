@@ -1600,8 +1600,10 @@ mod tests {
     };
     use vulcan_context_engine::{
         AuxiliaryIndexStatus, Checkpoint, Chunk, ChunkKind, DenseSearchRequest, EmbeddingSpace,
-        EmbeddingVector, IndexAbortRequest, IndexCommit, IndexStageBatch, IndexedBlob,
-        IndexedBlobStatus, VceIndexBinding, VceIndexPort,
+        EmbeddingVector, FileRecord, FileSource, FileStatus, IndexAbortRequest, IndexCommit,
+        IndexStageBatch, IndexedBlob, IndexedBlobStatus, RefreshMode, RefreshReason,
+        VceIndexBinding, VceIndexPort, VceQueryStatistics, VceRefreshSummary, VceStateIdentity,
+        VceStateSnapshot, WorkspaceSnapshot, blob_name,
     };
 
     /// Verifies the VCE schema remains isolated and contains atomic-publication tables.
@@ -1734,11 +1736,13 @@ mod tests {
             .open_project_index(second)
             .await
             .expect("rotate VCE project binding");
-        let blob_name = String::from("blob-project-two-v1");
+        let source_content = "pub fn semantic_entry() {}";
+        let blob_name = blob_name("src/lib.rs", source_content)
+            .expect("build canonical VCE integration Blob identity");
         let chunk = Chunk::new(
             blob_name.clone(),
             "src/lib.rs",
-            "pub fn semantic_entry() {}",
+            source_content,
             1,
             1,
             ChunkKind::Recursive,
@@ -1774,6 +1778,54 @@ mod tests {
             .await
             .expect("stage VCE integration Blob");
         assert_eq!(stage.staged_blob_names, vec![blob_name.clone()]);
+        let checkpoint = Checkpoint::new(
+            second_index.binding().checkpoint_chain_id.clone(),
+            1,
+            [blob_name.clone()],
+        );
+        let state_snapshot = VceStateSnapshot::new(
+            VceStateIdentity::new(
+                second_index.binding().namespace_id.clone(),
+                second_index.binding().checkpoint_chain_id.clone(),
+                second_index.binding().schema_version,
+                second_index.binding().embedding_space.clone(),
+            ),
+            WorkspaceSnapshot {
+                generation: 1,
+                checkpoint: Some(checkpoint.clone()),
+                records: vec![FileRecord {
+                    path: String::from("src/lib.rs"),
+                    blob_name: Some(blob_name.clone()),
+                    committed_blob_name: Some(blob_name.clone()),
+                    status: FileStatus::Present,
+                    size: source_content.len() as u64,
+                    mtime_ns: None,
+                    source: FileSource::Filesystem,
+                    content: None,
+                    generation: 1,
+                    skip_reason: None,
+                }],
+            },
+            VceQueryStatistics {
+                refresh_attempts: 1,
+                refresh_successes: 1,
+                ..VceQueryStatistics::default()
+            },
+            Some(VceRefreshSummary {
+                request_id: String::from("refresh-one"),
+                mode: RefreshMode::Full,
+                reason: RefreshReason::Initial,
+                generation: 1,
+                added_blob_count: 1,
+                deleted_blob_count: 0,
+                indexed_blob_count: 1,
+                skipped_path_count: 0,
+                checkpoint_version: Some(1),
+                source_revision: Some(String::from("source-one")),
+            }),
+            None,
+            None,
+        );
         second_index
             .commit(IndexCommit {
                 request_id: String::from("commit-one"),
@@ -1783,14 +1835,17 @@ mod tests {
                 deleted_blobs: BTreeSet::new(),
                 staged_blob_names: BTreeSet::from([blob_name.clone()]),
                 expected_checkpoint_version: None,
-                checkpoint: Checkpoint::new(
-                    second_index.binding().checkpoint_chain_id.clone(),
-                    1,
-                    [blob_name.clone()],
-                ),
+                checkpoint,
+                state_snapshot: state_snapshot.clone(),
             })
             .await
             .expect("commit VCE integration Blob");
+        let persisted_state = data_plane
+            .load_state_snapshot(&second_index.binding().namespace_id)
+            .await
+            .expect("load atomically committed VCE state")
+            .expect("committed VCE state should exist");
+        assert_eq!(persisted_state, state_snapshot);
         let search = second_index
             .search_dense(DenseSearchRequest {
                 request_id: String::from("search-one"),
@@ -2792,6 +2847,24 @@ impl VceIndexPort for VceProjectIndex {
 }
 
 impl VceProjectIndex {
+    /// Clean every unpublished generation and retry its derived vector cleanup queue.
+    /// 清理全部未发布代次，并重试其派生向量清理队列。
+    ///
+    /// This host-only entry is serialized with stage and commit operations and never removes the
+    /// active committed generation.
+    /// 此宿主专用入口与暂存和提交操作串行化，且绝不会移除活动已提交代次。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success after abandoned relational state is marked aborted and pending vector cleanup has
+    /// either completed or returned an explicit failure.
+    /// 在遗留关系状态标记为已中止且待处理向量清理完成或返回明确失败后返回成功。
+    pub async fn cleanup_abandoned_staging(&self) -> Result<(), String> {
+        let _guard = self.mutation_lock.lock().await;
+        self.enqueue_abandoned_generation_cleanup().await?;
+        self.recover_pending_vector_cleanup().await
+    }
+
     /// Verifies this handle still represents the active persisted binding.
     /// 校验此句柄仍表示当前活动的持久化绑定。
     async fn require_active_binding(
@@ -3627,6 +3700,13 @@ impl VceProjectIndex {
     /// Validates checkpoint identity and membership before storage mutation.
     /// 在修改存储前校验检查点身份与成员关系。
     fn validate_commit(&self, request: &IndexCommit) -> Result<(), VcePortError> {
+        request
+            .state_snapshot
+            .validate()
+            .map_err(|error| port_rejected(VcePortOperation::Commit, error.to_string()))?;
+        let state_identity = &request.state_snapshot.identity;
+        let state_workspace = &request.state_snapshot.workspace;
+        let state_refresh = request.state_snapshot.last_refresh.as_ref();
         if request.refresh_id.trim().is_empty()
             || request.generation == 0
             || request.checkpoint.chain_id != self.binding.checkpoint_chain_id
@@ -3639,10 +3719,24 @@ impl VceProjectIndex {
                 .deleted_blobs
                 .iter()
                 .any(|blob| request.checkpoint.members.contains(blob))
+            || state_identity.index_namespace_id != self.binding.namespace_id
+            || state_identity.checkpoint_chain_id != self.binding.checkpoint_chain_id
+            || state_identity.index_schema_version != self.binding.schema_version
+            || state_identity.embedding_space != self.binding.embedding_space
+            || state_workspace.generation != request.generation
+            || state_workspace.checkpoint.as_ref() != Some(&request.checkpoint)
+            || state_refresh.is_none_or(|summary| {
+                summary.request_id != request.refresh_id
+                    || summary.generation != request.generation
+                    || summary.checkpoint_version != Some(request.checkpoint.version)
+                    || summary.deleted_blob_count != request.deleted_blobs.len()
+                    || summary.indexed_blob_count != request.staged_blob_names.len()
+                    || summary.source_revision != request.source_revision
+            })
         {
             return Err(port_rejected(
                 VcePortOperation::Commit,
-                "commit identity, generation, chain, version, or membership is invalid",
+                "commit identity, generation, chain, version, membership, or state snapshot is invalid",
             ));
         }
         Ok(())
@@ -3691,6 +3785,9 @@ impl VceProjectIndex {
         let checkpoint_json = serde_json::to_string(&request.checkpoint)
             .map_err(|error| port_failed(VcePortOperation::Commit, error.to_string()))?;
         let checkpoint_json = sqlite_string_literal(&checkpoint_json);
+        let state_snapshot_json = serde_json::to_string(&request.state_snapshot)
+            .map_err(|error| port_failed(VcePortOperation::Commit, error.to_string()))?;
+        let state_snapshot_json = sqlite_string_literal(&state_snapshot_json);
         let source_revision = request
             .source_revision
             .as_deref()
@@ -3793,6 +3890,11 @@ ON CONFLICT(namespace_id) DO UPDATE SET
     checkpoint_json = excluded.checkpoint_json,
     source_revision = excluded.source_revision,
     committed_at_unix_ms = excluded.committed_at_unix_ms;
+INSERT INTO vce_state_snapshots(namespace_id, snapshot_json, updated_at_unix_ms)
+VALUES ('{namespace}', '{state_snapshot_json}', {now})
+ON CONFLICT(namespace_id) DO UPDATE SET
+    snapshot_json = excluded.snapshot_json,
+    updated_at_unix_ms = excluded.updated_at_unix_ms;
 UPDATE vce_generations SET state = 'committed', operation_id = '{operation_id}', updated_at_unix_ms = {now}
 WHERE namespace_id = '{namespace}' AND refresh_id = '{refresh_id}' AND generation = {generation};
 INSERT INTO vce_operations(
@@ -4421,7 +4523,14 @@ COMMIT;"#,
             VceMaintenanceMode::Rebuild => "重建当前项目的全部 VCE 派生索引",
             VceMaintenanceMode::CleanupStaging => "清理未发布的 VCE 暂存数据",
         };
-        let actions = (!blob_names.is_empty())
+        let action_required = match mode {
+            VceMaintenanceMode::Repair => !issues.is_empty(),
+            VceMaintenanceMode::Rebuild => !blob_names.is_empty(),
+            VceMaintenanceMode::CleanupStaging => issues
+                .iter()
+                .any(|issue| issue.kind == VceIntegrityIssueKind::OrphanedStaging),
+        };
+        let actions = action_required
             .then(|| VceMaintenanceAction {
                 action_id: maintenance_action_id(mode, &blob_names),
                 description: String::from(description),

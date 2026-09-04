@@ -11,6 +11,7 @@ use crate::management::{
 };
 use crate::model::{Chunk, SearchHit};
 use crate::path_index::PathDocument;
+use crate::state::VceStateSnapshot;
 use crate::structure::StructureMode;
 use crate::symbol::SymbolOccurrence;
 use crate::workspace::{Checkpoint, FileObservation};
@@ -588,6 +589,9 @@ pub struct IndexCommit {
     /// Checkpoint to publish atomically with the data writes.
     /// 与数据写入一起原子发布的检查点。
     pub checkpoint: Checkpoint,
+    /// Successful engine state that must become durable in the same transaction as the checkpoint.
+    /// 必须与检查点在同一事务中持久化的成功引擎状态。
+    pub state_snapshot: VceStateSnapshot,
 }
 
 /// Receipt returned after the host atomically publishes an index commit.
@@ -1087,6 +1091,9 @@ pub struct RefreshRequest {
     /// Why the host requested the refresh.
     /// 宿主请求刷新的原因。
     pub reason: RefreshReason,
+    /// Whether every present Blob must be rebuilt even when its identity is already indexed.
+    /// 是否必须重建每个现存 Blob，即使其身份已经建立索引。
+    pub force_reindex: bool,
     /// File observations read by the host and supplied to VCE.
     /// 宿主读取后提供给 VCE 的文件观察结果。
     pub observations: Vec<FileObservation>,
@@ -1111,6 +1118,42 @@ impl RefreshRequest {
             request_id: request_id.into(),
             mode: RefreshMode::Full,
             reason,
+            force_reindex: false,
+            observations,
+            removed_paths: Vec::new(),
+            source_revision,
+        }
+    }
+
+    /// Construct a complete refresh that rebuilds every present Blob behind one atomic checkpoint.
+    /// 构造一次在单个原子检查点之后重建全部现存 Blob 的完整刷新。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `request_id` is the stable host-owned operation identity.
+    /// `request_id` 是稳定的宿主持有操作身份。
+    /// `reason` records why the host requested the rebuild.
+    /// `reason` 记录宿主请求重建的原因。
+    /// `observations` is the complete authoritative workspace manifest.
+    /// `observations` 是完整权威工作区清单。
+    /// `source_revision` is the optional host source revision.
+    /// `source_revision` 是可选宿主源码修订。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A validated full-scope request with forced reindexing enabled.
+    /// 返回启用强制重建的完整作用域请求。
+    pub fn full_rebuild(
+        request_id: impl Into<String>,
+        reason: RefreshReason,
+        observations: Vec<FileObservation>,
+        source_revision: Option<String>,
+    ) -> Self {
+        Self {
+            request_id: request_id.into(),
+            mode: RefreshMode::Full,
+            reason,
+            force_reindex: true,
             observations,
             removed_paths: Vec::new(),
             source_revision,
@@ -1130,6 +1173,7 @@ impl RefreshRequest {
             request_id: request_id.into(),
             mode: RefreshMode::Paths,
             reason,
+            force_reindex: false,
             observations,
             removed_paths,
             source_revision,

@@ -1239,6 +1239,7 @@ impl VceEngine {
         let request_id = request.request_id;
         let mode = request.mode;
         let reason = request.reason;
+        let force_reindex = request.force_reindex;
         let source_revision = request.source_revision;
         let snapshot = match mode {
             RefreshMode::Full => self.workspace.reconcile(request.observations)?,
@@ -1247,22 +1248,40 @@ impl VceEngine {
                 .reconcile_paths(request.observations, request.removed_paths)?,
         };
         let sync_plan = self.workspace.sync_plan();
-        let missing = if sync_plan.added_blobs.is_empty() {
+        // candidate_blobs widens only an explicit full rebuild to every present content identity.
+        // candidate_blobs 仅在显式完整重建时扩展为全部现存内容身份。
+        let candidate_blobs = if force_reindex {
+            self.workspace
+                .snapshot()
+                .records
+                .into_iter()
+                .filter(|record| record.status == crate::model::FileStatus::Present)
+                .filter_map(|record| record.blob_name)
+                .collect::<BTreeSet<_>>()
+        } else {
+            sync_plan.added_blobs.clone()
+        };
+        let missing = if candidate_blobs.is_empty() || force_reindex {
             crate::ports::FindMissingResponse::default()
         } else {
             let operation_id = format!("{request_id}:find-missing");
             let response = index
                 .find_missing(FindMissingRequest {
                     request_id: operation_id.clone(),
-                    blob_names: sync_plan.added_blobs.clone(),
+                    blob_names: candidate_blobs.clone(),
                 })
                 .await?;
-            validate_missing_response(&operation_id, &sync_plan.added_blobs, &response)?;
+            validate_missing_response(&operation_id, &candidate_blobs, &response)?;
             response
         };
 
-        let mut blobs_to_prepare = missing.unknown;
-        blobs_to_prepare.extend(missing.nonindexed);
+        let blobs_to_prepare = if force_reindex {
+            candidate_blobs
+        } else {
+            let mut missing_blobs = missing.unknown;
+            missing_blobs.extend(missing.nonindexed);
+            missing_blobs
+        };
         let stage_context = RefreshStageContext {
             refresh_id: &request_id,
             generation: snapshot.generation,
@@ -1286,10 +1305,11 @@ impl VceEngine {
             }
         };
 
-        let checkpoint_needed = self.workspace.checkpoint.is_none()
+        let checkpoint_needed = force_reindex
+            || self.workspace.checkpoint.is_none()
             || !sync_plan.added_blobs.is_empty()
             || !sync_plan.deleted_blobs.is_empty();
-        let (checkpoint_version, commit_receipt) = if checkpoint_needed {
+        let (checkpoint_version, commit_receipt, summary) = if checkpoint_needed {
             let expected_checkpoint_version = self
                 .workspace
                 .checkpoint
@@ -1297,6 +1317,35 @@ impl VceEngine {
                 .map(|checkpoint| checkpoint.version);
             let checkpoint = self.next_checkpoint()?;
             let checkpoint_version = checkpoint.version;
+            let mut committed_workspace = self.workspace.clone();
+            committed_workspace.commit_checkpoint(checkpoint.clone())?;
+            committed_workspace.release_committed_filesystem_content();
+            let summary = VceRefreshSummary {
+                request_id: request_id.clone(),
+                mode,
+                reason,
+                generation: snapshot.generation,
+                added_blob_count: sync_plan.added_blobs.len(),
+                deleted_blob_count: sync_plan.deleted_blobs.len(),
+                indexed_blob_count: staged_blob_names.len(),
+                skipped_path_count: sync_plan.skipped_paths.len(),
+                checkpoint_version: Some(checkpoint_version),
+                source_revision: source_revision.clone(),
+            };
+            let mut committed_statistics = self.statistics;
+            committed_statistics.refresh_successes =
+                committed_statistics.refresh_successes.saturating_add(1);
+            // The host publishes this prospective successful state with the checkpoint. The live
+            // engine adopts the same workspace only after the exact commit receipt is validated.
+            // 宿主将这份预期成功状态与检查点一同发布；只有精确校验提交回执后，活动引擎才采用同一工作区。
+            let state_snapshot = VceStateSnapshot::new(
+                self.state_identity(),
+                committed_workspace.snapshot(),
+                committed_statistics,
+                Some(summary.clone()),
+                self.last_retrieval.clone(),
+                None,
+            );
             let commit = IndexCommit {
                 request_id: format!("{request_id}:commit"),
                 generation: snapshot.generation,
@@ -1306,6 +1355,7 @@ impl VceEngine {
                 staged_blob_names,
                 expected_checkpoint_version,
                 checkpoint: checkpoint.clone(),
+                state_snapshot,
             };
             let publication = match index.commit(commit.clone()).await {
                 Ok(receipt) => validate_commit_receipt(&commit, &receipt).map(|()| receipt),
@@ -1326,33 +1376,28 @@ impl VceEngine {
                     return Err(primary);
                 }
             };
-            self.workspace.commit_checkpoint(checkpoint)?;
-            self.workspace.release_committed_filesystem_content();
-            (Some(checkpoint_version), Some(receipt))
+            self.workspace = committed_workspace;
+            (Some(checkpoint_version), Some(receipt), summary)
         } else {
             self.workspace.release_committed_filesystem_content();
-            (
-                self.workspace
-                    .checkpoint
-                    .as_ref()
-                    .map(|checkpoint| checkpoint.version),
-                None,
-            )
-        };
-
-        let summary = VceRefreshSummary {
-            request_id: request_id.clone(),
-            mode,
-            reason,
-            generation: snapshot.generation,
-            added_blob_count: sync_plan.added_blobs.len(),
-            deleted_blob_count: sync_plan.deleted_blobs.len(),
-            indexed_blob_count: commit_receipt
+            let checkpoint_version = self
+                .workspace
+                .checkpoint
                 .as_ref()
-                .map_or(0, |receipt| receipt.indexed_count),
-            skipped_path_count: sync_plan.skipped_paths.len(),
-            checkpoint_version,
-            source_revision: source_revision.clone(),
+                .map(|checkpoint| checkpoint.version);
+            let summary = VceRefreshSummary {
+                request_id: request_id.clone(),
+                mode,
+                reason,
+                generation: snapshot.generation,
+                added_blob_count: sync_plan.added_blobs.len(),
+                deleted_blob_count: sync_plan.deleted_blobs.len(),
+                indexed_blob_count: 0,
+                skipped_path_count: sync_plan.skipped_paths.len(),
+                checkpoint_version,
+                source_revision: source_revision.clone(),
+            };
+            (checkpoint_version, None, summary)
         };
         self.last_refresh = Some(summary);
         Ok(RefreshResult {
@@ -2652,6 +2697,11 @@ fn validate_refresh_request(request: &RefreshRequest) -> Result<(), VceError> {
             "full refresh must represent deletions by omitting paths, not removed_paths".to_owned(),
         ));
     }
+    if request.force_reindex && request.mode != RefreshMode::Full {
+        return Err(VceError::InvalidRequest(
+            "force_reindex requires a full refresh".to_owned(),
+        ));
+    }
     let mut paths = BTreeSet::new();
     for observation in &request.observations {
         let path = crate::identity::normalize_relative_path(&observation.path)
@@ -3869,7 +3919,9 @@ mod tests {
         .unwrap();
         assert_eq!(result.generation, 1);
         assert_eq!(result.indexed_blobs.len(), 1);
-        assert_eq!(commits.lock().unwrap().len(), 1);
+        let committed = commits.lock().unwrap();
+        assert_eq!(committed.len(), 1);
+        assert_eq!(committed[0].state_snapshot, engine.state_snapshot());
         assert_eq!(engine.status().state, VceEngineState::Ready);
     }
 
@@ -3948,6 +4000,51 @@ mod tests {
                 .iter()
                 .all(|record| record.content.is_none())
         );
+    }
+
+    /// Verify an explicit full rebuild reindexes unchanged Blobs and publishes a new checkpoint.
+    /// 验证明示完整重建会重新索引未变化 Blob 并发布新检查点。
+    #[test]
+    fn forced_full_rebuild_reindexes_unchanged_blobs() {
+        let mut engine = test_engine();
+        let (ai, index, source, commits) = fake_host();
+        let stage_call_count = Arc::clone(&index.stage_call_count);
+        let observation = crate::workspace::FileObservation::present(
+            "src/lib.rs",
+            "fn main() {}",
+            Some(1),
+            crate::model::FileSource::Filesystem,
+        );
+        block_on(engine.refresh(
+            RefreshRequest::full(
+                "refresh-before-rebuild",
+                RefreshReason::Initial,
+                vec![observation.clone()],
+                None,
+            ),
+            &index,
+            &ai,
+            &source,
+        ))
+        .unwrap();
+
+        let rebuilt = block_on(engine.refresh(
+            RefreshRequest::full_rebuild(
+                "refresh-rebuild",
+                RefreshReason::Manual,
+                vec![observation],
+                None,
+            ),
+            &index,
+            &ai,
+            &source,
+        ))
+        .unwrap();
+
+        assert_eq!(rebuilt.indexed_blobs.len(), 1);
+        assert_eq!(rebuilt.checkpoint_version, Some(2));
+        assert_eq!(*stage_call_count.lock().unwrap(), 2);
+        assert_eq!(commits.lock().unwrap().len(), 2);
     }
 
     /// Verify editor overlay changes are visible as pending work before publication.
