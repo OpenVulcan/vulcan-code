@@ -19,6 +19,7 @@ import type {
   PublicAiModelOverrides,
   PublicAiInferenceRoute,
   PublicAiInferenceTestResult,
+  PublicAiReasoningEffort,
   PublicAiInternalModelOverrides,
   PublicAiOperation,
   PublicAiProviderToolCapabilityKind,
@@ -491,6 +492,7 @@ export async function savePublicAiInferenceRoute(request: {
   purposeId?: string;
   operation: PublicAiOperation;
   route: PublicAiInferenceRoute | null;
+  reasoningEffort?: PublicAiReasoningEffort;
 }): Promise<PublicAiSettingsSnapshot> {
   return serviceClient.request<PublicAiSettingsSnapshot>(
     "service_save_public_ai_inference_route",

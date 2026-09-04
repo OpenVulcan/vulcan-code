@@ -468,6 +468,7 @@ export function MemoryArea(props: {
               notice={notice}
               onChange={(patch) => setGlobalDraft((draft) => ({ ...draft, ...patch }))}
               onSave={saveAdvancedDraft}
+              onRunAction={runAction}
               onTestManagement={async () => {
                 if (!await saveAdvancedDraft()) return false
                 return Boolean(await runAction("management_capabilities"))

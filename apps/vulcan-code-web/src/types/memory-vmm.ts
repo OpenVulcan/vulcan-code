@@ -455,6 +455,98 @@ export interface VmmNativeProjectContentCounts {
   vectorRows: number;
 }
 
+// VmmNativeMemoryLevelCounts counts memories across the four authoritative Core levels.
+// VmmNativeMemoryLevelCounts 按 Core 的四个权威等级统计记忆。
+export interface VmmNativeMemoryLevelCounts {
+  session: number;
+  phase: number;
+  stable: number;
+  persistent: number;
+}
+
+// VmmNativeTurnStatusCounts counts turns across the authoritative processing states.
+// VmmNativeTurnStatusCounts 按权威处理状态统计回合。
+export interface VmmNativeTurnStatusCounts {
+  pending: number;
+  completed: number;
+  processedUnknown: number;
+  analysisBypassed: number;
+  corrupted: number;
+}
+
+// VmmNativeMemorySessionSummary describes one project-owned host session.
+// VmmNativeMemorySessionSummary 描述一个由项目拥有的宿主会话。
+export interface VmmNativeMemorySessionSummary {
+  sessionSourceId: string;
+  displayTitle?: string | null;
+  turnCount: number;
+  turnStatuses: VmmNativeTurnStatusCounts;
+  memoryCount: number;
+  directMemoryCount: number;
+  memoryLevels: VmmNativeMemoryLevelCounts;
+  firstActivityAtUnixMs?: number | null;
+  lastActivityAtUnixMs?: number | null;
+}
+
+// VmmNativeTimelineItemSummary describes one complete persisted timeline item.
+// VmmNativeTimelineItemSummary 描述一条完整持久化时间线项目。
+export interface VmmNativeTimelineItemSummary {
+  role: "user" | "assistant" | "system" | "tool";
+  content: string;
+  occurredAtUnixMs: number;
+}
+
+// VmmNativeTurnRecordSummary describes one canonical turn and its extraction outcome.
+// VmmNativeTurnRecordSummary 描述一个规范回合及其提取结果。
+export interface VmmNativeTurnRecordSummary {
+  turnId: number;
+  sessionSourceId: string;
+  createdAtUnixMs: number;
+  status: "pending" | "completed" | "processed_unknown" | "analysis_bypassed" | "corrupted";
+  extracted?: boolean | null;
+  userPreview: string;
+  assistantPreview: string;
+  timeline: VmmNativeTimelineItemSummary[];
+  analysisDetails?: string | null;
+  generatedMemoryIds: number[];
+  memoryLevels: VmmNativeMemoryLevelCounts;
+  analysisJobState?: string | null;
+  analysisAttemptCount: number;
+  analysisLastError?: string | null;
+}
+
+// VmmNativeMemoryRecordSummary describes one durable memory with exact provenance.
+// VmmNativeMemoryRecordSummary 描述一条具有准确来源的持久记忆。
+export interface VmmNativeMemoryRecordSummary {
+  memoryId: number;
+  sourceTurnId?: number | null;
+  sessionSourceId?: string | null;
+  summary: string;
+  content: string;
+  category: "general" | "architecture_decision" | "tech_spec_api" | "business_logic"
+    | "requirement_todo" | "project_context" | "logical_bug_debt" | "security_policy";
+  sourceKind: "turn" | "direct" | "import" | "system_seed" | "legacy";
+  state: "active" | "superseded" | "deleted" | "expired" | "recycled";
+  memoryLevel: "session" | "phase" | "stable" | "persistent";
+  priority: number;
+  tags: string[];
+  createdAtUnixMs: number;
+  updatedAtUnixMs: number;
+  expiresAtUnixMs?: number | null;
+  statusReason?: string | null;
+}
+
+// VmmNativeMemoryRecordsSummary is one coherent project/session provenance response.
+// VmmNativeMemoryRecordsSummary 是一个一致的项目/会话来源响应。
+export interface VmmNativeMemoryRecordsSummary {
+  storageVersion: number;
+  projectId: number;
+  sessions: VmmNativeMemorySessionSummary[];
+  selectedSessionSourceId?: string | null;
+  turns: VmmNativeTurnRecordSummary[];
+  memories: VmmNativeMemoryRecordSummary[];
+}
+
 // VmmNativeSessionRename describes one deterministic migration collision rename.
 // VmmNativeSessionRename 描述一次确定性的迁移冲突会话改名。
 export interface VmmNativeSessionRename {
@@ -614,6 +706,12 @@ export interface VmmProfileNodesActionValue {
 // VmmProfileBundleActionValue 是准确的最终画像组合契约。
 export interface VmmProfileBundleActionValue {
   combined_text: string;
+  // Project profile section returned independently from the combined prompt text.
+  // 与组合提示词文本独立返回的项目画像段落。
+  project_profile: string;
+  // Fixed or selected user profile section returned independently from the combined prompt text.
+  // 与组合提示词文本独立返回的固定或所选用户画像段落。
+  user_profile: string;
   trace_id: string;
 }
 
@@ -664,6 +762,84 @@ export interface VmmGetTurnDetailsActionValue {
   trace_id: string;
 }
 
+// VmmNativeResourceSettingsSummary is the persisted native Core composition selection.
+// VmmNativeResourceSettingsSummary 是持久化的原生 Core 组合选择。
+export interface VmmNativeResourceSettingsSummary {
+  promptBundle: string;
+  piiLanguage: string;
+  noiseLanguage: string;
+  noiseEnabled: boolean;
+  noiseSemanticEnabled: boolean;
+  noiseSemanticThreshold: number;
+}
+
+// VmmNativeResourceFileSummary describes one independently selectable embedded resource.
+// VmmNativeResourceFileSummary 描述一份可独立选择的内置资源。
+export interface VmmNativeResourceFileSummary {
+  path: string;
+  group: "prompt" | "pii" | "noise";
+  selector: string;
+  fileName: string;
+  highRisk: boolean;
+  hasUserOverride: boolean;
+}
+
+// VmmNativeResourceCatalogSummary exposes resource selectors and exact user override state.
+// VmmNativeResourceCatalogSummary 暴露资源选择项与准确用户覆盖状态。
+export interface VmmNativeResourceCatalogSummary {
+  overrideRoot: string;
+  settings: VmmNativeResourceSettingsSummary;
+  promptBundles: string[];
+  promptScenes: string[];
+  piiLanguages: string[];
+  noiseLanguages: string[];
+  files: VmmNativeResourceFileSummary[];
+}
+
+// VmmNativeResourceFileContent carries immutable, effective, and optional user text.
+// VmmNativeResourceFileContent 携带不可变、生效与可选用户文本。
+export interface VmmNativeResourceFileContent {
+  path: string;
+  builtInText: string;
+  effectiveText: string;
+  userOverrideText?: string | null;
+  hasUserOverride: boolean;
+  highRisk: boolean;
+}
+
+// VmmNativePiiTestResult reports common-plus-locale redaction behavior.
+// VmmNativePiiTestResult 报告 common 加区域脱敏行为。
+export interface VmmNativePiiTestResult {
+  outputText: string;
+  redactions: Array<{ ruleName: string; matchCount: number }>;
+}
+
+// VmmNativePiiFormulaMatchSummary describes one regex candidate and condition-formula decision.
+// VmmNativePiiFormulaMatchSummary 描述一个正则候选及条件公式判定。
+export interface VmmNativePiiFormulaMatchSummary {
+  startByte: number;
+  endByte: number;
+  matchedText: string;
+  captures: Array<string | null>;
+  conditionAccepted: boolean;
+}
+
+// VmmNativePiiFormulaTestResult reports an ad-hoc rule result and its complete local trace.
+// VmmNativePiiFormulaTestResult 报告临时规则结果及其完整本地轨迹。
+export interface VmmNativePiiFormulaTestResult {
+  outputText: string;
+  matches: VmmNativePiiFormulaMatchSummary[];
+}
+
+// VmmNativeNoiseTestResult reports deterministic common-plus-locale regex behavior.
+// VmmNativeNoiseTestResult 报告确定性 common 加区域正则行为。
+export interface VmmNativeNoiseTestResult {
+  isNoise: boolean;
+  category?: string | null;
+  confidence: number;
+  mode: "deterministic_regex";
+}
+
 // VmmMemoryActionResponse is the tagged response union consumed by product pages.
 // VmmMemoryActionResponse 是产品页面消费的带标签响应联合。
 export type VmmMemoryActionResponse =
@@ -699,11 +875,17 @@ export type VmmMemoryActionResponse =
       };
     }
   | { kind: "native_project_catalog"; value: VmmNativeProjectCatalogSummary }
+  | { kind: "native_memory_records"; value: VmmNativeMemoryRecordsSummary }
   | { kind: "native_project_delete_preview"; value: VmmNativeProjectDeletePreview }
   | { kind: "native_migration_preview"; value: VmmNativeMigrationPreview }
   | { kind: "native_migration"; value: VmmNativeMigrationResult }
   | { kind: "native_clear_preview"; value: VmmNativeClearPreview }
   | { kind: "native_clear"; value: VmmNativeClearResult }
+  | { kind: "native_resource_catalog"; value: VmmNativeResourceCatalogSummary }
+  | { kind: "native_resource_file"; value: VmmNativeResourceFileContent }
+  | { kind: "native_pii_test"; value: VmmNativePiiTestResult }
+  | { kind: "native_pii_formula_test"; value: VmmNativePiiFormulaTestResult }
+  | { kind: "native_noise_test"; value: VmmNativeNoiseTestResult }
   | { kind: "management"; value: unknown };
 
 // VmmMemoryActionResult describes one VMM action response.

@@ -54,6 +54,8 @@ import type {
   VmmSearchMemoryEventsActionValue,
 } from "@/types"
 
+import { VmmNativeMemoryRecords } from "./vmm-native-memory-records"
+
 // MemorySearchHitView is the exact product projection used by one search card.
 // MemorySearchHitView 是单个检索卡片使用的准确产品投影。
 interface MemorySearchHitView {
@@ -208,6 +210,14 @@ function VmmContentPage({
           <AlertTitle>{t("memory.content.sessionRequiredTitle")}</AlertTitle>
           <AlertDescription>{t("memory.content.sessionRequired")}</AlertDescription>
         </Alert>
+      ) : null}
+
+      {snapshot.experienceState.deployment === "native" ? (
+        <VmmNativeMemoryRecords
+          busy={busy}
+          onRunAction={onRunAction}
+          snapshot={snapshot}
+        />
       ) : null}
 
       <form

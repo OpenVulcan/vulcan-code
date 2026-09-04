@@ -32,8 +32,13 @@ import type {
   VmmMemoryActionResult,
   VmmMemorySnapshot,
   VmmNativeProjectCatalogSummary,
+  VmmProfileBundleActionValue,
   VmmProfileNodeActionValue,
 } from "@/types"
+
+// NATIVE_FIXED_USER_TARGET is a UI-only identity for the single host-owned native memory user.
+// NATIVE_FIXED_USER_TARGET 是原生记忆唯一宿主用户的纯界面身份。
+const NATIVE_FIXED_USER_TARGET = "__native_fixed_user__"
 
 // ProfileNodeView is the user-facing projection of one active profile node.
 // ProfileNodeView 是单个有效画像节点的用户可见投影。
@@ -74,13 +79,49 @@ export function vmmProfileCatalogAction(
     : "load_users_projects"
 }
 
-// vmmProfileEffectiveTarget removes the nonexistent user selector from native mode.
-// vmmProfileEffectiveTarget 从原生模式移除不存在的用户选择目标。
+// vmmProfileEffectiveTarget preserves the selected profile class for both native and external modes.
+// vmmProfileEffectiveTarget 在原生与外置模式下都保留所选画像类别。
+//
+// Parameters: deployment identifies the active backend and requestedTarget is the user-selected class.
+// 参数：deployment 标识当前后端，requestedTarget 是用户选择的画像类别。
+//
+// Returns: the exact requested user or project target; native user identity remains host-owned.
+// 返回：准确的用户或项目目标；原生用户身份仍由宿主持有。
 export function vmmProfileEffectiveTarget(
-  deployment: VmmMemorySnapshot["experienceState"]["deployment"],
+  _deployment: VmmMemorySnapshot["experienceState"]["deployment"],
   requestedTarget: "user" | "project",
 ): "user" | "project" {
-  return vmmProfileUsesNativeProjectCatalog(deployment) ? "project" : requestedTarget
+  return requestedTarget
+}
+
+// vmmProfileUsesFixedNativeUser identifies the non-selectable host-owned user profile target.
+// vmmProfileUsesFixedNativeUser 标识不可选择身份的宿主持有固定用户画像目标。
+//
+// Parameters: deployment identifies the backend and target identifies the selected profile class.
+// 参数：deployment 标识后端，target 标识所选画像类别。
+//
+// Returns: true only for the native user profile.
+// 返回：仅原生用户画像返回真。
+export function vmmProfileUsesFixedNativeUser(
+  deployment: VmmMemorySnapshot["experienceState"]["deployment"],
+  target: "user" | "project",
+): boolean {
+  return deployment === "native" && target === "user"
+}
+
+// vmmProfileBundlePreview selects the profile section matching the visible target.
+// vmmProfileBundlePreview 选择与当前可见目标匹配的画像段落。
+//
+// Parameters: bundle is the exact VMM response and target is the visible profile class.
+// 参数：bundle 是准确的 VMM 响应，target 是当前可见画像类别。
+//
+// Returns: only the user profile or project profile text requested by the page.
+// 返回：仅返回页面请求的用户画像或项目画像文本。
+export function vmmProfileBundlePreview(
+  bundle: VmmProfileBundleActionValue,
+  target: "user" | "project",
+): string {
+  return target === "user" ? bundle.user_profile : bundle.project_profile
 }
 
 // VmmProfilePage renders current profile content without internal node identifiers.
@@ -93,9 +134,7 @@ function VmmProfilePage({
 }: VmmProfilePageProps) {
   const { t } = useI18n()
   const isNative = vmmProfileUsesNativeProjectCatalog(snapshot.experienceState.deployment)
-  const [target, setTarget] = React.useState<"user" | "project">(
-    isNative ? "project" : "user",
-  )
+  const [target, setTarget] = React.useState<"user" | "project">("user")
   // selectedUserRef is the explicit VMM catalog user being inspected.
   // selectedUserRef 是当前明确查看的 VMM 目录用户。
   const [selectedUserRef, setSelectedUserRef] = React.useState(snapshot.globalDraft.userId)
@@ -144,7 +183,7 @@ function VmmProfilePage({
 
   React.useEffect(() => {
     if (isNative) {
-      setTarget("project")
+      setTarget("user")
     } else {
       setNativeCatalog(null)
     }
@@ -203,9 +242,19 @@ function VmmProfilePage({
   const profileDescription = t(isNative
     ? "memory.profile.nativeDescription"
     : "memory.profile.description")
-  const selectedTargetRef = effectiveTarget === "user" ? selectedUserRef : selectedProjectRef
-  const selectedTargetDescription = effectiveTarget === "user"
-    ? snapshot.managementCatalog.users.find((user) => user.stableKey === selectedUserRef)?.displayName
+  // usesFixedNativeUser distinguishes the host-owned user profile from selectable external users.
+  // usesFixedNativeUser 区分宿主持有的固定用户画像与可选择的外置用户。
+  const usesFixedNativeUser = vmmProfileUsesFixedNativeUser(
+    snapshot.experienceState.deployment,
+    effectiveTarget,
+  )
+  const selectedTargetRef = usesFixedNativeUser
+    ? (selectedProjectRef ? NATIVE_FIXED_USER_TARGET : "")
+    : effectiveTarget === "user" ? selectedUserRef : selectedProjectRef
+  const selectedTargetDescription = usesFixedNativeUser
+    ? t("memory.profile.nativeUserName")
+    : effectiveTarget === "user"
+      ? snapshot.managementCatalog.users.find((user) => user.stableKey === selectedUserRef)?.displayName
     : projectOptions.find((project) => project.value === selectedProjectRef)?.description
 
   React.useEffect(() => {
@@ -213,7 +262,7 @@ function VmmProfilePage({
       setNodes(projectProfileNodes(result.data.value.nodes))
     }
     if (result?.data.kind === "profile_bundle") {
-      setBundlePreview(result.data.value.combined_text)
+      setBundlePreview(vmmProfileBundlePreview(result.data.value, effectiveTarget))
     }
     if (result?.data.kind === "profile_instruction") {
       setNodes(projectProfileNodes(result.data.value.accepted_nodes))
@@ -221,7 +270,7 @@ function VmmProfilePage({
     if (result?.data.kind === "native_project_catalog") {
       setNativeCatalog(result.data.value)
     }
-  }, [result])
+  }, [effectiveTarget, result])
 
   // refreshProfile loads both atomic entries and the final profile preview.
   // refreshProfile 同时加载原子条目与最终画像预览。
@@ -346,60 +395,67 @@ function VmmProfilePage({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {!isNative ? (
-            <RadioGroup
-              className="grid gap-3 sm:grid-cols-2"
-              disabled={busy || !profileCatalogReady}
-              onValueChange={(value) => {
-                setTarget(value as "user" | "project")
-                setNodes([])
-                setBundlePreview("")
-              }}
-              value={target}
-            >
-              <label className="flex cursor-pointer items-center gap-3 rounded-lg border p-3">
-                <RadioGroupItem value="user" />
-                <span className="text-sm font-medium">{t("memory.profile.user")}</span>
-              </label>
-              <label className="flex cursor-pointer items-center gap-3 rounded-lg border p-3">
-                <RadioGroupItem value="project" />
-                <span className="text-sm font-medium">{t("memory.profile.project")}</span>
-              </label>
-            </RadioGroup>
-          ) : null}
-          <div className="space-y-2">
-            <Label>
-              {effectiveTarget === "user"
-                ? t("memory.profile.selectUser")
-                : t("memory.profile.selectProject")}
-            </Label>
-            <Combobox
-              ariaLabel={effectiveTarget === "user"
-                ? t("memory.profile.selectUser")
-                : t("memory.profile.selectProject")}
-              disabled={busy || !profileCatalogReady}
-              emptyText={effectiveTarget === "user"
-                ? t("memory.profile.noUser")
-                : t("memory.profile.noProject")}
-              onValueChange={(value) => {
-                setNodes([])
-                setBundlePreview("")
-                if (effectiveTarget === "user") {
-                  setSelectedUserRef(value)
-                } else {
-                  setSelectedProjectRef(value)
-                }
-              }}
-              options={effectiveTarget === "user" ? userOptions : projectOptions}
-              placeholder={effectiveTarget === "user"
-                ? t("memory.profile.selectUser")
-                : t("memory.profile.selectProject")}
-              searchPlaceholder={effectiveTarget === "user"
-                ? t("memory.profile.searchUser")
-                : t("memory.profile.searchProject")}
-              value={selectedTargetRef}
-            />
-          </div>
+          <RadioGroup
+            className="grid gap-3 sm:grid-cols-2"
+            disabled={busy || !profileCatalogReady}
+            onValueChange={(value) => {
+              setTarget(value as "user" | "project")
+              setNodes([])
+              setBundlePreview("")
+            }}
+            value={target}
+          >
+            <label className="flex cursor-pointer items-center gap-3 rounded-lg border p-3">
+              <RadioGroupItem value="user" />
+              <span className="text-sm font-medium">{t("memory.profile.user")}</span>
+            </label>
+            <label className="flex cursor-pointer items-center gap-3 rounded-lg border p-3">
+              <RadioGroupItem value="project" />
+              <span className="text-sm font-medium">{t("memory.profile.project")}</span>
+            </label>
+          </RadioGroup>
+          {usesFixedNativeUser ? (
+            <div className="space-y-1 rounded-lg border bg-muted/30 px-3 py-2.5">
+              <p className="text-sm font-medium">{t("memory.profile.nativeUserName")}</p>
+              <p className="text-xs text-muted-foreground">
+                {t("memory.profile.nativeUserDescription")}
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <Label>
+                {effectiveTarget === "user"
+                  ? t("memory.profile.selectUser")
+                  : t("memory.profile.selectProject")}
+              </Label>
+              <Combobox
+                ariaLabel={effectiveTarget === "user"
+                  ? t("memory.profile.selectUser")
+                  : t("memory.profile.selectProject")}
+                disabled={busy || !profileCatalogReady}
+                emptyText={effectiveTarget === "user"
+                  ? t("memory.profile.noUser")
+                  : t("memory.profile.noProject")}
+                onValueChange={(value) => {
+                  setNodes([])
+                  setBundlePreview("")
+                  if (effectiveTarget === "user") {
+                    setSelectedUserRef(value)
+                  } else {
+                    setSelectedProjectRef(value)
+                  }
+                }}
+                options={effectiveTarget === "user" ? userOptions : projectOptions}
+                placeholder={effectiveTarget === "user"
+                  ? t("memory.profile.selectUser")
+                  : t("memory.profile.selectProject")}
+                searchPlaceholder={effectiveTarget === "user"
+                  ? t("memory.profile.searchUser")
+                  : t("memory.profile.searchProject")}
+                value={selectedTargetRef}
+              />
+            </div>
+          )}
         </CardContent>
       </Card>
 

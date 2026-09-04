@@ -1562,6 +1562,8 @@ export type TranslationKey =
   | "memory.profile.target"
   | "memory.profile.user"
   | "memory.profile.project"
+  | "memory.profile.nativeUserName"
+  | "memory.profile.nativeUserDescription"
   | "memory.profile.selectUser"
   | "memory.profile.selectProject"
   | "memory.profile.searchUser"
@@ -1619,6 +1621,61 @@ export type TranslationKey =
   | "memory.advanced.data"
   | "memory.advanced.save"
   | "memory.advanced.backupRebuild"
+  | "memory.resources.title"
+  | "memory.resources.description"
+  | "memory.resources.invalidResponse"
+  | "memory.resources.loading"
+  | "memory.resources.refresh"
+  | "memory.resources.promptBundle"
+  | "memory.resources.piiLocale"
+  | "memory.resources.noiseLocale"
+  | "memory.resources.noiseEnabled"
+  | "memory.resources.noiseSemanticEnabled"
+  | "memory.resources.noiseThreshold"
+  | "memory.resources.saveComposition"
+  | "memory.resources.fileEditor"
+  | "memory.resources.fileEditorDescription"
+  | "memory.resources.file"
+  | "memory.resources.userOverride"
+  | "memory.resources.builtIn"
+  | "memory.resources.highRisk"
+  | "memory.resources.promptHowTo"
+  | "memory.resources.beginPromptEdit"
+  | "memory.resources.builtInSource"
+  | "memory.resources.effectiveEditor"
+  | "memory.resources.saveFile"
+  | "memory.resources.restoreBuiltIn"
+  | "memory.resources.piiTester"
+  | "memory.resources.piiTesterDescription"
+  | "memory.resources.piiActiveBundleTest"
+  | "memory.resources.piiFormulaTester"
+  | "memory.resources.piiFormulaTesterDescription"
+  | "memory.resources.piiSampleText"
+  | "memory.resources.piiPattern"
+  | "memory.resources.piiCondition"
+  | "memory.resources.piiReplacement"
+  | "memory.resources.piiCandidates"
+  | "memory.resources.piiAccepted"
+  | "memory.resources.piiRejected"
+  | "memory.resources.piiCaptures"
+  | "memory.resources.piiNoCandidates"
+  | "memory.resources.noiseTester"
+  | "memory.resources.noiseTesterDescription"
+  | "memory.resources.role"
+  | "memory.resources.runTest"
+  | "memory.resources.noMatch"
+  | "memory.resources.noiseMatched"
+  | "memory.resources.confirmPurposeTitle"
+  | "memory.resources.confirmModificationTitle"
+  | "memory.resources.confirmModificationDescription"
+  | "memory.resources.confirmPurpose"
+  | "memory.resources.unlockEditor"
+  | "memory.resources.promptPurpose.precheckL1"
+  | "memory.resources.promptPurpose.precheckL2"
+  | "memory.resources.promptPurpose.postactionL1"
+  | "memory.resources.promptPurpose.postactionL2"
+  | "memory.resources.promptPurpose.profileInstruction"
+  | "memory.resources.promptPurpose.unknown"
   | "vmm.experience.deployment.disabled"
   | "vmm.experience.deployment.external"
   | "vmm.experience.setup.notConfigured"
@@ -2598,6 +2655,11 @@ export type TranslationKey =
   | "settings.inference.overridesDescription"
   | "settings.inference.inheritModelDefault"
   | "settings.inference.reasoningEffort"
+  | "settings.inference.reasoningDisabled"
+  | "settings.inference.reasoningAdaptive"
+  | "settings.inference.reasoningMinimal"
+  | "settings.inference.reasoningXHigh"
+  | "settings.inference.reasoningUltra"
   | "settings.inference.embeddingTask"
   | "settings.inference.embeddingDimensions"
   | "settings.inference.embeddingOutputKind"
@@ -4462,10 +4524,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.data.updatedAt": "更新于 {time}",
     "memory.profile.title": "画像",
     "memory.profile.description": "选择一个记忆用户或记忆项目，查看 VMM 整理的长期偏好与约束，并通过自然语言进行修正。",
-    "memory.profile.nativeDescription": "选择一个原生记忆项目，查看内核整理的项目长期偏好与约束，并通过自然语言进行修正。",
+    "memory.profile.nativeDescription": "查看固定本地用户画像，或选择一个原生记忆项目查看项目画像，并通过自然语言进行修正。",
     "memory.profile.target": "画像目标",
     "memory.profile.user": "用户画像",
     "memory.profile.project": "项目画像",
+    "memory.profile.nativeUserName": "本地用户",
+    "memory.profile.nativeUserDescription": "原生记忆只有一个由 VulcanCode 管理的固定用户，无需选择用户。",
     "memory.profile.selectUser": "选择记忆用户",
     "memory.profile.selectProject": "选择记忆项目",
     "memory.profile.searchUser": "搜索记忆用户…",
@@ -4479,7 +4543,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.profile.applyInstruction": "应用指令",
     "memory.profile.preview": "最终画像预览",
     "memory.profile.previewDescription": "这是提供给记忆服务的完整画像文本，仅在排查或核对时需要查看。",
-    "memory.profile.nativePreviewDescription": "这是原生记忆内核为所选项目整理的完整画像文本，仅在排查或核对时需要查看。",
+    "memory.profile.nativePreviewDescription": "这是原生记忆内核为当前所选用户或项目整理的完整画像文本，仅在排查或核对时需要查看。",
     "memory.profile.priority": "优先级",
     "memory.profile.level": "层级",
     "memory.advanced.title": "高级设置",
@@ -4523,6 +4587,61 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.advanced.data": "记忆数据",
     "memory.advanced.save": "保存高级设置",
     "memory.advanced.backupRebuild": "备份并重建",
+    "memory.resources.title": "原生资源与规则",
+    "memory.resources.description": "选择提示词语言、PII 与噪音区域，并在用户目录中维护独立覆盖；内置原文始终保持不变。",
+    "memory.resources.invalidResponse": "原生 VMM 资源接口返回了不匹配的结果。",
+    "memory.resources.loading": "正在加载原生资源…",
+    "memory.resources.refresh": "刷新资源",
+    "memory.resources.promptBundle": "记忆提示词语言",
+    "memory.resources.piiLocale": "PII 国家/区域",
+    "memory.resources.noiseLocale": "噪音国家/区域",
+    "memory.resources.noiseEnabled": "启用噪音过滤",
+    "memory.resources.noiseSemanticEnabled": "启用语义噪音匹配",
+    "memory.resources.noiseThreshold": "语义噪音默认阈值",
+    "memory.resources.saveComposition": "保存并立即应用",
+    "memory.resources.fileEditor": "资源文件编辑器",
+    "memory.resources.fileEditorDescription": "每份文件都可单独查看和覆盖；PII 与噪音规则按 common 加所选区域组合。",
+    "memory.resources.file": "资源文件",
+    "memory.resources.userOverride": "用户覆盖",
+    "memory.resources.builtIn": "内置原文",
+    "memory.resources.highRisk": "高风险提示词修改",
+    "memory.resources.promptHowTo": "必须保留结构化输出约束、字段语义与阶段边界；错误修改会导致记忆遗漏、误写或结构化响应失败。",
+    "memory.resources.beginPromptEdit": "了解风险并准备编辑",
+    "memory.resources.builtInSource": "内置原文（只读）",
+    "memory.resources.effectiveEditor": "生效内容 / 用户覆盖",
+    "memory.resources.saveFile": "保存文件并立即应用",
+    "memory.resources.restoreBuiltIn": "恢复内置内容",
+    "memory.resources.piiTester": "PII 规则测试器",
+    "memory.resources.piiTesterDescription": "使用当前 common 与所选区域规则执行真实脱敏；规则中的 condition 公式由 Core 权威求值器执行，不调用 LLM。",
+    "memory.resources.piiActiveBundleTest": "当前规则组合测试",
+    "memory.resources.piiFormulaTester": "临时正则与 condition 公式测试",
+    "memory.resources.piiFormulaTesterDescription": "不修改配置文件，直接使用 Core 的正则、捕获组、condition DSL 与 replacement 语义验证一条临时规则。",
+    "memory.resources.piiSampleText": "测试文本",
+    "memory.resources.piiPattern": "正则 pattern",
+    "memory.resources.piiCondition": "条件 condition（可留空）",
+    "memory.resources.piiReplacement": "替换 replacement",
+    "memory.resources.piiCandidates": "正则候选：{count}",
+    "memory.resources.piiAccepted": "公式通过",
+    "memory.resources.piiRejected": "公式拒绝",
+    "memory.resources.piiCaptures": "捕获组",
+    "memory.resources.piiNoCandidates": "正则没有产生候选。",
+    "memory.resources.noiseTester": "噪音规则测试器",
+    "memory.resources.noiseTesterDescription": "这里只测试确定性正则；语义短语匹配由真实记忆录入链路执行。",
+    "memory.resources.role": "消息角色",
+    "memory.resources.runTest": "运行测试",
+    "memory.resources.noMatch": "没有命中规则",
+    "memory.resources.noiseMatched": "命中噪音类别",
+    "memory.resources.confirmPurposeTitle": "确认你理解该提示词的用途",
+    "memory.resources.confirmModificationTitle": "再次确认修改方法与风险",
+    "memory.resources.confirmModificationDescription": "编辑后必须保持既有 JSON 契约与字段含义。确认后才会解锁编辑器和保存按钮；用户覆盖将写入 .vulcan/code/vmm/config。",
+    "memory.resources.confirmPurpose": "我理解用途，继续",
+    "memory.resources.unlockEditor": "我确认风险，解锁编辑",
+    "memory.resources.promptPurpose.precheckL1": "PreCheck L1 在用户请求执行前做第一阶段记忆召回判定；修改必须保留它的结构化判定字段。",
+    "memory.resources.promptPurpose.precheckL2": "PreCheck L2 在需要进一步分析时完成第二阶段召回决策；修改必须保留它的结构化判定字段。",
+    "memory.resources.promptPurpose.postactionL1": "PostAction L1 在完成回合后提取候选记忆；修改会直接影响哪些信息进入长期记忆。",
+    "memory.resources.promptPurpose.postactionL2": "PostAction L2 审核并整理候选记忆；修改会影响最终写入、层级、优先级与画像节点。",
+    "memory.resources.promptPurpose.profileInstruction": "画像指令将用户自然语言调整转换为画像节点变更；修改必须保持操作与目标字段契约。",
+    "memory.resources.promptPurpose.unknown": "这是 Core 结构化推理链路使用的提示词文件；修改前必须核对对应 Schema。",
     "vmm.experience.deployment.disabled": "未启用",
     "vmm.experience.deployment.external": "外部服务",
     "vmm.experience.setup.notConfigured": "未配置",
@@ -5363,7 +5482,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.models.modality.rerank": "重排",
     "settings.inference.title": "内部推理",
     "settings.inference.subtitle": "为 VMM 等内部消费者选择精确模型、协议和凭据，不跟随当前会话模型。",
-    "settings.inference.vmmReasoningNotice": "为保证记忆处理效率，VMM 的全部 LLM 请求都会强制关闭思考；模型列表仅显示明确支持关闭思考的模型。",
+    "settings.inference.vmmReasoningNotice": "全部 VMM LLM 用途都只显示明确支持关闭思考的模型，并将思考档位固定为关闭。推理输出始终与 VMM JSON 正文分离。",
     "settings.inference.profileVmm": "VMM 配置档",
     "settings.inference.llm": "受限 LLM",
     "settings.inference.embedding": "向量",
@@ -5395,6 +5514,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.inference.overridesDescription": "这些设置属于供应商模型和操作，不绑定具体账号；保存时会校验全部精确可用路由。",
     "settings.inference.inheritModelDefault": "使用模型默认值",
     "settings.inference.reasoningEffort": "思考档位",
+    "settings.inference.reasoningDisabled": "关闭",
+    "settings.inference.reasoningAdaptive": "自适应",
+    "settings.inference.reasoningMinimal": "最小",
+    "settings.inference.reasoningXHigh": "超高",
+    "settings.inference.reasoningUltra": "极限",
     "settings.inference.embeddingTask": "向量任务",
     "settings.inference.embeddingDimensions": "向量维度",
     "settings.inference.embeddingOutputKind": "向量输出类型",
@@ -7381,10 +7505,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.data.updatedAt": "Updated {time}",
     "memory.profile.title": "Profile",
     "memory.profile.description": "Choose a memory user or memory project, review the durable preferences and constraints organized by VMM, and correct them with natural language.",
-    "memory.profile.nativeDescription": "Choose a native memory project, review its durable preferences and constraints, and correct them with natural language.",
+    "memory.profile.nativeDescription": "Review the fixed local user profile or select a native memory project profile, then correct it with natural language.",
     "memory.profile.target": "Profile target",
     "memory.profile.user": "User profile",
     "memory.profile.project": "Project profile",
+    "memory.profile.nativeUserName": "Local user",
+    "memory.profile.nativeUserDescription": "Native memory has one fixed user managed by VulcanCode, so no user selection is required.",
     "memory.profile.selectUser": "Select memory user",
     "memory.profile.selectProject": "Select memory project",
     "memory.profile.searchUser": "Search memory users…",
@@ -7398,7 +7524,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.profile.applyInstruction": "Apply instruction",
     "memory.profile.preview": "Final profile preview",
     "memory.profile.previewDescription": "This is the complete profile text supplied to the memory service. Open it only for review or troubleshooting.",
-    "memory.profile.nativePreviewDescription": "This is the complete profile text prepared by the native memory core for the selected project. Open it only for review or troubleshooting.",
+    "memory.profile.nativePreviewDescription": "This is the complete profile text prepared by the native memory core for the selected user or project. Open it only for review or troubleshooting.",
     "memory.profile.priority": "Priority",
     "memory.profile.level": "Level",
     "memory.advanced.title": "Advanced settings",
@@ -7442,6 +7568,61 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.advanced.data": "Memory data",
     "memory.advanced.save": "Save advanced settings",
     "memory.advanced.backupRebuild": "Back up and rebuild",
+    "memory.resources.title": "Native resources and rules",
+    "memory.resources.description": "Select prompt language and PII/Noise locales, then maintain isolated overrides in the user directory without changing embedded sources.",
+    "memory.resources.invalidResponse": "The native VMM resource API returned an unexpected result.",
+    "memory.resources.loading": "Loading native resources…",
+    "memory.resources.refresh": "Refresh resources",
+    "memory.resources.promptBundle": "Memory prompt language",
+    "memory.resources.piiLocale": "PII country/region",
+    "memory.resources.noiseLocale": "Noise country/region",
+    "memory.resources.noiseEnabled": "Enable Noise filtering",
+    "memory.resources.noiseSemanticEnabled": "Enable semantic Noise matching",
+    "memory.resources.noiseThreshold": "Default semantic Noise threshold",
+    "memory.resources.saveComposition": "Save and apply now",
+    "memory.resources.fileEditor": "Resource file editor",
+    "memory.resources.fileEditorDescription": "Inspect and override each file independently. PII and Noise rules combine common with the selected locale.",
+    "memory.resources.file": "Resource file",
+    "memory.resources.userOverride": "User override",
+    "memory.resources.builtIn": "Built-in source",
+    "memory.resources.highRisk": "High-risk prompt modification",
+    "memory.resources.promptHowTo": "Preserve structured-output constraints, field semantics, and stage boundaries. Incorrect edits can omit, miswrite, or invalidate memories.",
+    "memory.resources.beginPromptEdit": "Understand risk and prepare editing",
+    "memory.resources.builtInSource": "Built-in source (read-only)",
+    "memory.resources.effectiveEditor": "Effective content / user override",
+    "memory.resources.saveFile": "Save file and apply now",
+    "memory.resources.restoreBuiltIn": "Restore built-in content",
+    "memory.resources.piiTester": "PII rule tester",
+    "memory.resources.piiTesterDescription": "Runs the active common-plus-locale scrubber; Core's authoritative evaluator executes every condition formula without invoking an LLM.",
+    "memory.resources.piiActiveBundleTest": "Active rule-composition test",
+    "memory.resources.piiFormulaTester": "Ad-hoc regex and condition tester",
+    "memory.resources.piiFormulaTesterDescription": "Tests one temporary rule with Core's regex, captures, condition DSL, and replacement semantics without changing any resource file.",
+    "memory.resources.piiSampleText": "Sample text",
+    "memory.resources.piiPattern": "Regex pattern",
+    "memory.resources.piiCondition": "Condition formula (optional)",
+    "memory.resources.piiReplacement": "Replacement",
+    "memory.resources.piiCandidates": "Regex candidates: {count}",
+    "memory.resources.piiAccepted": "Condition accepted",
+    "memory.resources.piiRejected": "Condition rejected",
+    "memory.resources.piiCaptures": "Captures",
+    "memory.resources.piiNoCandidates": "The regex produced no candidates.",
+    "memory.resources.noiseTester": "Noise rule tester",
+    "memory.resources.noiseTesterDescription": "Tests deterministic regex only; the live memory intake path owns semantic phrase matching.",
+    "memory.resources.role": "Message role",
+    "memory.resources.runTest": "Run test",
+    "memory.resources.noMatch": "No rule matched",
+    "memory.resources.noiseMatched": "Matched Noise category",
+    "memory.resources.confirmPurposeTitle": "Confirm that you understand this prompt's purpose",
+    "memory.resources.confirmModificationTitle": "Confirm the modification method and risk again",
+    "memory.resources.confirmModificationDescription": "The existing JSON contract and field meanings must remain intact. Confirmation unlocks editing and saving; the override is written under .vulcan/code/vmm/config.",
+    "memory.resources.confirmPurpose": "I understand the purpose",
+    "memory.resources.unlockEditor": "I accept the risk; unlock editing",
+    "memory.resources.promptPurpose.precheckL1": "PreCheck L1 makes the first memory-recall decision before a user request executes. Preserve its structured decision fields.",
+    "memory.resources.promptPurpose.precheckL2": "PreCheck L2 completes second-stage recall analysis when needed. Preserve its structured decision fields.",
+    "memory.resources.promptPurpose.postactionL1": "PostAction L1 extracts candidate memories after a completed turn. Changes directly affect what can enter long-term memory.",
+    "memory.resources.promptPurpose.postactionL2": "PostAction L2 reviews and organizes candidates. Changes affect final writes, levels, priority, and profile nodes.",
+    "memory.resources.promptPurpose.profileInstruction": "Profile instructions convert natural-language adjustments into profile-node changes. Preserve operation and target field contracts.",
+    "memory.resources.promptPurpose.unknown": "This prompt belongs to Core's structured inference path. Verify its schema before editing.",
     "vmm.experience.deployment.disabled": "Disabled",
     "vmm.experience.deployment.external": "External service",
     "vmm.experience.setup.notConfigured": "Not configured",
@@ -8282,7 +8463,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.models.modality.rerank": "Rerank",
     "settings.inference.title": "Internal inference",
     "settings.inference.subtitle": "Select exact models, protocols, and credentials for VMM and other internal consumers independently from the active conversation model.",
-    "settings.inference.vmmReasoningNotice": "To keep memory processing efficient, every VMM LLM request forces reasoning off; the model list shows only models that explicitly support disabled reasoning.",
+    "settings.inference.vmmReasoningNotice": "Every VMM LLM purpose only lists models that explicitly support disabled reasoning and fixes the effort to Off. Reasoning output always remains separate from the VMM JSON body.",
     "settings.inference.profileVmm": "VMM profile",
     "settings.inference.llm": "Restricted LLM",
     "settings.inference.embedding": "Embeddings",
@@ -8314,6 +8495,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.inference.overridesDescription": "These settings belong to a provider model and operation rather than an account; every exact route is validated on save.",
     "settings.inference.inheritModelDefault": "Use model default",
     "settings.inference.reasoningEffort": "Reasoning effort",
+    "settings.inference.reasoningDisabled": "Off",
+    "settings.inference.reasoningAdaptive": "Adaptive",
+    "settings.inference.reasoningMinimal": "Minimal",
+    "settings.inference.reasoningXHigh": "Extra high",
+    "settings.inference.reasoningUltra": "Ultra",
     "settings.inference.embeddingTask": "Embedding task",
     "settings.inference.embeddingDimensions": "Embedding dimensions",
     "settings.inference.embeddingOutputKind": "Embedding output kind",

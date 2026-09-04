@@ -10,7 +10,9 @@ import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useI18n } from "@/i18n"
-import type { VmmConfigDraftSummary, VmmMemorySnapshot } from "@/types"
+import type { VmmConfigDraftSummary, VmmMemoryActionResult, VmmMemorySnapshot } from "@/types"
+
+import { VmmNativeResourcesPage } from "./vmm-native-resources-page"
 
 // VmmAdvancedPageProps defines global native or external settings and diagnostics.
 // VmmAdvancedPageProps 定义全局原生或外置设置与诊断。
@@ -22,11 +24,15 @@ interface VmmAdvancedPageProps {
   onChange: (patch: Partial<VmmConfigDraftSummary>) => void
   onSave: () => Promise<boolean>
   onTestManagement: () => Promise<boolean>
+  onRunAction: (
+    action: string,
+    payload?: Record<string, unknown>,
+  ) => Promise<VmmMemoryActionResult | null>
 }
 
 // VmmAdvancedPage renders mutually exclusive backend settings without removed sidecar controls.
 // VmmAdvancedPage 渲染互斥后端设置且不包含已移除的 Sidecar 控制。
-function VmmAdvancedPage({ busy, draft, snapshot, notice, onChange, onSave, onTestManagement }: VmmAdvancedPageProps) {
+function VmmAdvancedPage({ busy, draft, snapshot, notice, onChange, onSave, onTestManagement, onRunAction }: VmmAdvancedPageProps) {
   const { t } = useI18n()
   const native = draft.backendMode === "native"
 
@@ -70,10 +76,13 @@ function VmmAdvancedPage({ busy, draft, snapshot, notice, onChange, onSave, onTe
       </Card>
 
       {native ? (
-        <Card>
-          <CardHeader><CardTitle className="flex items-center gap-2"><Database className="size-4" aria-hidden="true" />{t("memory.advanced.data")}</CardTitle></CardHeader>
-          <CardContent><Alert><Database aria-hidden="true" /><AlertTitle>{t("memory.advanced.nativeStorage")}</AlertTitle><AlertDescription>{t("memory.advanced.nativeStorageDescription")}</AlertDescription></Alert></CardContent>
-        </Card>
+        <>
+          <Card>
+            <CardHeader><CardTitle className="flex items-center gap-2"><Database className="size-4" aria-hidden="true" />{t("memory.advanced.data")}</CardTitle></CardHeader>
+            <CardContent><Alert><Database aria-hidden="true" /><AlertTitle>{t("memory.advanced.nativeStorage")}</AlertTitle><AlertDescription>{t("memory.advanced.nativeStorageDescription")}</AlertDescription></Alert></CardContent>
+          </Card>
+          <VmmNativeResourcesPage busy={busy} onRunAction={onRunAction} />
+        </>
       ) : null}
 
       <Accordion className="rounded-xl border px-4" collapsible type="single">

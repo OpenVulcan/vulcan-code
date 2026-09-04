@@ -99,4 +99,14 @@ describe("VMM first-run inference readiness", () => {
     })
     expect(vmmRequiredInferenceReady(diagnosedSnapshot)).toBe(false)
   })
+
+  it("rejects every non-disabled persisted VMM reasoning effort", () => {
+    const snapshot = readySnapshot()
+    snapshot.inferenceProfiles.vmm.llm_reasoning_efforts = Object.fromEntries(
+      VMM_REQUIRED_LLM_PURPOSES.map((purpose) => [purpose, "none"]),
+    )
+    snapshot.inferenceProfiles.vmm.llm_reasoning_efforts.postaction_l2 = "high"
+
+    expect(vmmRequiredInferenceReady(snapshot)).toBe(false)
+  })
 })
