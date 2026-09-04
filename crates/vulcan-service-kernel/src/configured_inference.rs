@@ -35,7 +35,9 @@ use vulcan_ai_contract::{
 };
 use vulcan_ai_protocols::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
-    CLAUDE_CODE_MESSAGES_PROFILE_ID,
+    CLAUDE_CODE_MESSAGES_PROFILE_ID, COHERE_CHAT_PROFILE_ID, GEMINI_GENERATE_CONTENT_PROFILE_ID,
+    GEMINI_INTERACTIONS_PROFILE_ID, GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
+    OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
 };
 use vulcan_hooks::{HookContext, HookScope};
 use vulcan_plugin_runtime::VulcanPluginRuntimeManager;
@@ -2568,7 +2570,10 @@ impl ConfiguredInferenceService {
             .map_err(configuration_error)?;
         let provider_request =
             responses_provider_request(&configuration, &selection, &request, &caller)?;
-        if request.consumer_profile_id == VMM_CONSUMER_PROFILE_ID {
+        if vmm_purpose_requires_disabled_reasoning(
+            request.consumer_profile_id.as_str(),
+            request.purpose_id.as_str(),
+        ) {
             self.runtime
                 .validate_disabled_reasoning_request_projection(&selection, &provider_request)
                 .map_err(|message| {
@@ -4180,9 +4185,17 @@ fn responses_provider_request(
     validate_prompt_cache_policy(&effective_capabilities, &prompt_cache)?;
     let requested_reasoning_effort = request
         .reasoning_effort
+        .or_else(|| {
+            configured_purpose_reasoning_effort(
+                configuration,
+                request.consumer_profile_id.as_str(),
+                request.purpose_id.as_str(),
+            )
+        })
         .or_else(|| internal_overrides.and_then(|overrides| overrides.reasoning_effort));
-    let reasoning_effort = enforce_vmm_reasoning_policy(
+    let reasoning_effort = apply_restricted_reasoning_policy(
         request.consumer_profile_id.as_str(),
+        request.purpose_id.as_str(),
         &selection.model.capabilities,
         &selection
             .route
@@ -4400,10 +4413,11 @@ fn resource_kind_label(kind: ResourceKind) -> &'static str {
 ///
 /// # Returns
 /// 返回值
-/// The native policy for Anthropic Messages profiles; otherwise `None`, so the provider receives
-/// the existing prompt contract and the shared host finalizer still parses and validates JSON.
-/// Anthropic Messages Profile 返回原生策略；其他协议返回 `None`，供应商继续接收已有提示词契约，
-/// 共享宿主终结器仍负责解析并校验 JSON。
+/// Anthropic keeps the exact JSON Schema contract. Protocols whose provider APIs expose a
+/// JSON-object switch receive `JsonObject`, while the shared host finalizer still enforces the
+/// caller-owned schema after decoding. Unknown profiles receive no native projection.
+/// Anthropic 保留准确 JSON Schema 契约；提供方 API 暴露 JSON-object 开关的协议接收
+/// `JsonObject`，共享宿主终结器仍在解码后强制校验调用方拥有的 Schema；未知协议不投影。
 fn structured_output_policy_for_protocol(
     protocol_id: &str,
     policy: &StructuredOutputPolicy,
@@ -4419,50 +4433,119 @@ fn structured_output_policy_for_protocol(
     ) {
         return policy.clone();
     }
+    if matches!(
+        protocol_id,
+        OPENAI_CHAT_PROFILE_ID
+            | OPENAI_RESPONSES_PROFILE_ID
+            | OPENAI_CODEX_RESPONSES_PROFILE_ID
+            | GEMINI_GENERATE_CONTENT_PROFILE_ID
+            | GOOGLE_CODE_ASSIST_PROFILE_ID
+            | GEMINI_INTERACTIONS_PROFILE_ID
+            | COHERE_CHAT_PROFILE_ID
+    ) {
+        return StructuredOutputPolicy::JsonObject;
+    }
     StructuredOutputPolicy::None
 }
 
-/// Forces the VMM LLM contract to disable reasoning and removes conflicting provider controls.
-/// 强制 VMM LLM 契约关闭思考，并移除相互冲突的供应商控制参数。
+/// Applies the shared restricted-request reasoning policy and removes conflicting provider controls.
+/// 应用共享受限请求思考策略，并移除相互冲突的供应商控制参数。
 ///
 /// # Parameters
 /// 参数
-/// `consumer_profile_id` identifies the configured-inference consumer; `capabilities` describes
+/// `consumer_profile_id` and `purpose_id` identify the configured-inference slot; `capabilities` describes
 /// the selected model; `conflicting_model_parameter_ids` comes from the frozen route's generic
 /// manifest guards; `model_parameters` contains merged provider parameters; and
 /// `requested_effort` is the caller or configured override.
-/// `consumer_profile_id` 标识已配置推理消费者；`capabilities` 描述所选模型；
+/// `consumer_profile_id` 与 `purpose_id` 标识已配置推理槽位；`capabilities` 描述所选模型；
 /// `conflicting_model_parameter_ids` 来自冻结路由的通用 Manifest 守卫；
 /// `model_parameters` 包含合并后的供应商参数；`requested_effort` 是调用方或配置覆盖值。
 ///
 /// # Returns
 /// 返回值
-/// The effective reasoning effort or a controlled contract error.
-/// 返回有效思考档位或受控契约错误。
-fn enforce_vmm_reasoning_policy(
+/// The explicit caller selection for ordinary consumers, forced disabled reasoning for VMM, or a
+/// controlled contract error. Any explicit effective selection owns the request field and removes
+/// every Manifest-declared conflicting provider parameter before validation.
+/// 普通消费者返回调用方显式选择，VMM 返回强制关闭思考，或返回受控契约错误。任何显式有效选择
+/// 都拥有请求字段，并在校验前移除 Manifest 声明的全部冲突型供应商参数。
+fn apply_restricted_reasoning_policy(
     consumer_profile_id: &str,
+    purpose_id: &str,
     capabilities: &ModelCapabilities,
     conflicting_model_parameter_ids: &BTreeSet<String>,
     model_parameters: &mut BTreeMap<String, ModelParameterValue>,
     requested_effort: Option<ReasoningEffort>,
 ) -> Result<Option<ReasoningEffort>, ConfiguredInferenceError> {
-    if consumer_profile_id != VMM_CONSUMER_PROFILE_ID {
-        return Ok(requested_effort);
-    }
-    if !model_supports_disabled_reasoning(capabilities) {
+    let requires_disabled_reasoning =
+        vmm_purpose_requires_disabled_reasoning(consumer_profile_id, purpose_id);
+    if requires_disabled_reasoning && !model_supports_disabled_reasoning(capabilities) {
         return Err(ConfiguredInferenceError::new(
             ConfiguredInferenceErrorCategory::Contract,
-            "VMM LLM inference requires a model that explicitly supports disabled reasoning.",
+            "VMM inference requires a model that explicitly supports disabled reasoning.",
         ));
     }
-    // The frozen manifest route declares every model parameter that conflicts with the host-owned
-    // reasoning field; VMM removes exactly those declarations before forcing the disabled policy.
-    // 冻结 Manifest 路由声明与宿主持有思考字段冲突的每个模型参数；VMM 在强制关闭策略前
-    // 仅移除这些声明。
-    for parameter_id in conflicting_model_parameter_ids {
-        model_parameters.remove(parameter_id);
+    let effective_effort = if requires_disabled_reasoning {
+        Some(ReasoningEffort::None)
+    } else {
+        requested_effort
+    };
+    if effective_effort.is_some() {
+        // The frozen manifest route declares every model parameter that conflicts with the
+        // host-owned reasoning field; remove exactly those declarations before applying the
+        // purpose-scoped selection.
+        // 冻结 Manifest 路由声明与宿主持有思考字段冲突的每个模型参数；在应用用途级选择前
+        // 仅移除这些声明。
+        for parameter_id in conflicting_model_parameter_ids {
+            model_parameters.remove(parameter_id);
+        }
     }
-    Ok(Some(ReasoningEffort::None))
+    Ok(effective_effort)
+}
+
+/// Resolves a purpose-specific configured reasoning effort with backward-compatible VMM defaults.
+/// 使用向后兼容的 VMM 默认值解析用途专属已配置思考档位。
+///
+/// # Parameters
+/// 参数
+/// `configuration`, `consumer_profile_id`, and `purpose_id` identify one restricted LLM slot.
+/// `configuration`、`consumer_profile_id` 与 `purpose_id` 标识一个受限 LLM 槽位。
+///
+/// # Returns
+/// 返回值
+/// The persisted effort, or explicit disabled reasoning for an older VMM profile without the field.
+/// 返回已持久化档位；旧 VMM 配置档缺少该字段时返回显式关闭思考。
+fn configured_purpose_reasoning_effort(
+    configuration: &PersistedAiConfiguration,
+    consumer_profile_id: &str,
+    purpose_id: &str,
+) -> Option<ReasoningEffort> {
+    configuration
+        .inference_profiles
+        .get(consumer_profile_id)
+        .and_then(|profile| profile.llm_reasoning_efforts.get(purpose_id))
+        .copied()
+        .or_else(|| {
+            (consumer_profile_id == VMM_CONSUMER_PROFILE_ID).then_some(ReasoningEffort::None)
+        })
+}
+
+/// Reports whether one configured-inference slot must run with reasoning disabled.
+/// 判断一个已配置推理槽位是否必须关闭思考运行。
+///
+/// # Parameters
+/// 参数
+/// `consumer_profile_id` and `purpose_id` identify one exact restricted LLM slot.
+/// `consumer_profile_id` 与 `purpose_id` 标识一个准确受限 LLM 槽位。
+///
+/// # Returns
+/// 返回值
+/// `true` for every VMM LLM purpose because native structured output uses the proven no-reasoning route.
+/// 对每个 VMM LLM 用途返回 `true`，因为原生结构化输出使用已验证的无思考路线。
+pub(crate) fn vmm_purpose_requires_disabled_reasoning(
+    consumer_profile_id: &str,
+    _purpose_id: &str,
+) -> bool {
+    consumer_profile_id == VMM_CONSUMER_PROFILE_ID
 }
 
 /// Validates one explicit reasoning selection against the frozen model contract.
@@ -6339,8 +6422,9 @@ mod tests {
             String::from("provider.reasoning_budget"),
             ModelParameterValue::Integer(4_096),
         )]);
-        let effective_effort = enforce_vmm_reasoning_policy(
+        let effective_effort = apply_restricted_reasoning_policy(
             VMM_CONSUMER_PROFILE_ID,
+            "precheck_l1",
             &fixed_off,
             &BTreeSet::from([String::from("provider.reasoning_budget")]),
             &mut provider_parameters,
@@ -6352,6 +6436,17 @@ mod tests {
             !provider_parameters.contains_key("provider.reasoning_budget"),
             "VMM must remove every manifest-declared conflicting reasoning budget"
         );
+        let mut postaction_parameters = BTreeMap::new();
+        let postaction_effort = apply_restricted_reasoning_policy(
+            VMM_CONSUMER_PROFILE_ID,
+            "postaction_l2",
+            &fixed_off,
+            &BTreeSet::new(),
+            &mut postaction_parameters,
+            Some(ReasoningEffort::High),
+        )
+        .expect("every VMM purpose should force the proven disabled-reasoning route");
+        assert_eq!(postaction_effort, Some(ReasoningEffort::None));
 
         let toggle = ModelCapabilities {
             reasoning_control: ReasoningControlMode::Toggle,
@@ -6369,6 +6464,42 @@ mod tests {
 
         let unknown = ModelCapabilities::default();
         assert!(!model_supports_disabled_reasoning(&unknown));
+    }
+
+    /// Verifies every restricted consumer owns Manifest-conflicting provider controls when it
+    /// explicitly selects a reasoning effort.
+    /// 验证每个受限消费者显式选择思考档位时都会接管与 Manifest 冲突的供应商控制项。
+    #[test]
+    fn explicit_reasoning_selection_removes_conflicting_parameters_for_every_consumer() {
+        let capabilities = ModelCapabilities {
+            reasoning_control: ReasoningControlMode::Toggle,
+            reasoning_efforts: vec![ReasoningEffort::None, ReasoningEffort::High],
+            ..ModelCapabilities::default()
+        };
+        let mut provider_parameters = BTreeMap::from([
+            (
+                String::from("provider.reasoning_budget"),
+                ModelParameterValue::Integer(4_096),
+            ),
+            (
+                String::from("provider.temperature"),
+                ModelParameterValue::Decimal(String::from("0.2")),
+            ),
+        ]);
+
+        let effective_effort = apply_restricted_reasoning_policy(
+            "vce",
+            "query_rewrite",
+            &capabilities,
+            &BTreeSet::from([String::from("provider.reasoning_budget")]),
+            &mut provider_parameters,
+            Some(ReasoningEffort::None),
+        )
+        .expect("an explicit shared reasoning selection should own conflicting parameters");
+
+        assert_eq!(effective_effort, Some(ReasoningEffort::None));
+        assert!(!provider_parameters.contains_key("provider.reasoning_budget"));
+        assert!(provider_parameters.contains_key("provider.temperature"));
     }
 
     #[test]
@@ -6813,6 +6944,55 @@ mod tests {
         );
     }
 
+    /// Verifies reasoning deltas remain isolated from text-decoded structured JSON.
+    /// 验证思考增量与由文本解码的结构化 JSON 始终隔离。
+    #[test]
+    fn structured_output_never_merges_reasoning_text_into_json() {
+        let mut output_text = String::new();
+        let mut reasoning_text = String::new();
+        let mut structured_output = None;
+        let mut output_items = Vec::new();
+        let mut usage = RequestUsage::default();
+
+        aggregate_restricted_llm_event(
+            AiStreamEvent::ReasoningDelta {
+                item_id: String::from("reasoning-1"),
+                delta: String::from("private chain of thought"),
+            },
+            &mut output_text,
+            &mut reasoning_text,
+            &mut structured_output,
+            &mut output_items,
+            &mut usage,
+        )
+        .expect("reasoning delta should aggregate independently");
+        aggregate_restricted_llm_event(
+            AiStreamEvent::ResponseTextDelta {
+                item_id: String::from("text-1"),
+                delta: String::from(r#"{"accepted":true}"#),
+            },
+            &mut output_text,
+            &mut reasoning_text,
+            &mut structured_output,
+            &mut output_items,
+            &mut usage,
+        )
+        .expect("response text delta should aggregate independently");
+        finalize_restricted_structured_output(
+            &StructuredOutputPolicy::JsonObject,
+            &output_text,
+            &mut structured_output,
+        )
+        .expect("response JSON should materialize without reasoning text");
+
+        assert_eq!(reasoning_text, "private chain of thought");
+        assert_eq!(output_text, r#"{"accepted":true}"#);
+        assert_eq!(
+            structured_output,
+            Some(serde_json::json!({ "accepted": true }))
+        );
+    }
+
     /// Verifies a provider JSON code fence remains parseable before schema validation.
     /// 验证供应商返回的 JSON 代码围栏会在 Schema 校验前保持可解析。
     #[test]
@@ -6905,10 +7085,10 @@ mod tests {
         assert!(error.message.contains("/accepted"));
     }
 
-    /// Verifies protocol selection suppresses unsupported native response controls on the first request.
-    /// 验证协议选择会在首次请求前抑制不支持的原生响应控制。
+    /// Verifies protocol selection projects the strongest supported provider-side JSON control.
+    /// 验证协议选择会投影提供方侧支持的最强 JSON 控制。
     #[test]
-    fn structured_output_native_projection_is_limited_to_anthropic_messages() {
+    fn structured_output_projection_preserves_schema_and_requests_json_objects() {
         let policy = StructuredOutputPolicy::JsonSchema {
             name: String::from("decision"),
             description: None,
@@ -6930,13 +7110,24 @@ mod tests {
                 vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
                 &policy
             ),
-            StructuredOutputPolicy::None
+            StructuredOutputPolicy::JsonObject
         );
         assert_eq!(
             structured_output_policy_for_protocol(
                 vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID,
                 &policy
             ),
+            StructuredOutputPolicy::JsonObject
+        );
+        assert_eq!(
+            structured_output_policy_for_protocol(
+                vulcan_ai_protocols::COHERE_CHAT_PROFILE_ID,
+                &policy
+            ),
+            StructuredOutputPolicy::JsonObject
+        );
+        assert_eq!(
+            structured_output_policy_for_protocol("unknown.protocol", &policy),
             StructuredOutputPolicy::None
         );
     }

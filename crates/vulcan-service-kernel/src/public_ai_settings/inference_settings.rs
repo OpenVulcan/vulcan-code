@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use vulcan_ai_contract::{AiOperation, InferenceUsageScope, ModelCapabilities};
+use vulcan_ai_contract::{AiOperation, InferenceUsageScope, ModelCapabilities, ReasoningEffort};
 use vulcan_provider_adapters::{
     ConnectionModelCatalog, InferenceRouteBinding, InferenceRouteConfiguration,
     InternalModelOverrides, PersistedAiConfiguration, PublicAiRuntime,
@@ -19,7 +19,10 @@ use super::{
     publication::mutate_public_ai_configuration_and_publish_in_transaction,
     validate_non_empty,
 };
-use crate::{SharedServiceBridgeState, begin_public_ai_configuration_transaction};
+use crate::{
+    SharedServiceBridgeState, begin_public_ai_configuration_transaction,
+    configured_inference::VMM_CONSUMER_PROFILE_ID,
+};
 
 /// Stable LLM purpose key used by the library-owned configured-inference profile.
 /// 资料库独立配置推理档案使用的稳定 LLM 用途键。
@@ -118,6 +121,10 @@ pub(crate) struct PublicAiInferenceRouteSaveRequest {
     /// Exact route, or absence to clear the configured operation.
     /// 精确路由，缺失时清除已配置操作。
     route: Option<InferenceRouteConfiguration>,
+    /// Exact purpose-scoped reasoning effort for restricted LLM execution.
+    /// 受限 LLM 执行使用的准确用途级思考档位。
+    #[serde(default)]
+    reasoning_effort: Option<ReasoningEffort>,
 }
 
 /// Replaces operation-scoped internal defaults for one provider model.
@@ -137,6 +144,59 @@ pub(crate) struct PublicAiInternalModelOverridesSaveRequest {
     /// Complete replacement override value.
     /// 完整替换覆盖值。
     overrides: InternalModelOverrides,
+}
+
+/// Resolves the exact purpose-scoped reasoning value persisted with one VMM LLM route.
+/// 解析与一条 VMM LLM 路由共同持久化的准确用途级思考值。
+///
+/// # Parameters
+/// 参数
+/// `consumer_profile_id`, `purpose_id`, and `route` identify the profile slot while
+/// `requested` is the explicit browser selection.
+/// `consumer_profile_id`、`purpose_id` 与 `route` 标识配置档槽位，`requested` 是浏览器显式选择。
+///
+/// # Returns
+/// 返回值
+/// The exact VMM reasoning effort, a non-VMM absence, or a controlled contract error.
+/// 返回准确 VMM 思考档位、非 VMM 空值或受控契约错误。
+fn vmm_saved_reasoning_effort(
+    consumer_profile_id: &str,
+    purpose_id: Option<&str>,
+    route: Option<&InferenceRouteConfiguration>,
+    requested: Option<ReasoningEffort>,
+) -> Result<Option<ReasoningEffort>, String> {
+    if consumer_profile_id != VMM_CONSUMER_PROFILE_ID {
+        if requested.is_some() {
+            return Err(String::from(
+                "Purpose-scoped reasoning settings are currently defined only for the VMM profile.",
+            ));
+        }
+        return Ok(None);
+    }
+    let Some(route) = route else {
+        if requested.is_some() {
+            return Err(String::from(
+                "A cleared VMM LLM route cannot retain a reasoning effort.",
+            ));
+        }
+        return Ok(None);
+    };
+    if route.operation != AiOperation::ConversationRespond {
+        if requested.is_some() {
+            return Err(String::from(
+                "Embedding and rerank VMM routes do not accept a reasoning effort.",
+            ));
+        }
+        return Ok(None);
+    }
+    if purpose_id.is_none() {
+        return Err(String::from(
+            "A VMM LLM reasoning effort requires one exact purposeId.",
+        ));
+    }
+    // Missing values preserve the previous VMM behavior by storing an explicit disabled effort.
+    // 缺失值通过存储显式关闭档位来保留此前 VMM 行为。
+    Ok(Some(requested.unwrap_or(ReasoningEffort::None)))
 }
 
 /// Saves one model-level internal-use switch without changing conversation availability.
@@ -323,6 +383,12 @@ pub(crate) async fn service_save_public_ai_inference_route(
     // transaction 串行化校验、激活与工作台发布。
     let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    let effective_reasoning_effort = vmm_saved_reasoning_effort(
+        request.consumer_profile_id.as_str(),
+        request.purpose_id.as_deref(),
+        request.route.as_ref(),
+        request.reasoning_effort,
+    )?;
     if let Some(route) = request.route.as_ref() {
         if route.operation != request.operation {
             return Err(String::from(
@@ -336,8 +402,10 @@ pub(crate) async fn service_save_public_ai_inference_route(
             runtime.resolve_internal_inference_selection(&current_configuration, route)?;
         validate_vmm_llm_reasoning_policy(
             request.consumer_profile_id.as_str(),
+            request.purpose_id.as_deref(),
             request.operation,
             &selection.model.capabilities,
+            effective_reasoning_effort,
         )?;
     }
     let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
@@ -358,8 +426,16 @@ pub(crate) async fn service_save_public_ai_inference_route(
                     })?;
                     if let Some(route) = request.route.clone() {
                         profile.llm_routes.insert(purpose_id.to_string(), route);
+                        if let Some(reasoning_effort) = effective_reasoning_effort {
+                            profile
+                                .llm_reasoning_efforts
+                                .insert(purpose_id.to_string(), reasoning_effort);
+                        } else {
+                            profile.llm_reasoning_efforts.remove(purpose_id);
+                        }
                     } else {
                         profile.llm_routes.remove(purpose_id);
+                        profile.llm_reasoning_efforts.remove(purpose_id);
                     }
                 }
                 AiOperation::EmbeddingCreate => {
@@ -473,8 +549,16 @@ fn push_internal_inference_route_diagnostic(
             .and_then(|selection| {
                 validate_vmm_llm_reasoning_policy(
                     consumer_profile_id,
+                    purpose_id,
                     expected_operation,
                     &selection.model.capabilities,
+                    purpose_id.and_then(|purpose_id| {
+                        configuration
+                            .inference_profiles
+                            .get(consumer_profile_id)
+                            .and_then(|profile| profile.llm_reasoning_efforts.get(purpose_id))
+                            .copied()
+                    }),
                 )
             })
     };
@@ -770,8 +854,10 @@ pub(crate) async fn sync_knowledge_inference_profile(
             runtime.resolve_internal_inference_selection(&current_configuration, route)?;
         validate_vmm_llm_reasoning_policy(
             consumer_profile_id,
+            None,
             route.operation,
             &selection.model.capabilities,
+            None,
         )?;
     }
     let (_configuration, ()) = mutate_public_ai_configuration_and_publish_in_transaction(

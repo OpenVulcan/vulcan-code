@@ -1,7 +1,10 @@
 //! Exact internal-model override and reasoning-policy validation.
 //! 精确内部模型覆盖与思考策略校验。
 
-use crate::configured_inference::{VMM_CONSUMER_PROFILE_ID, model_supports_disabled_reasoning};
+use crate::configured_inference::{
+    VMM_CONSUMER_PROFILE_ID, model_supports_disabled_reasoning,
+    vmm_purpose_requires_disabled_reasoning,
+};
 use vulcan_ai_contract::{AiOperation, ModelCapabilities, ReasoningControlMode, ReasoningEffort};
 use vulcan_provider_adapters::{
     InferenceRouteBinding, InferenceRouteConfiguration, InternalModelOverrides,
@@ -132,32 +135,81 @@ pub(super) fn validate_internal_model_overrides(
     Ok(())
 }
 
-/// Enforces VMM's no-reasoning policy for one resolved route.
-/// 对一条已解析路由强制执行 VMM 禁用思考策略。
+/// Enforces the purpose-scoped VMM reasoning policy for one resolved route.
+/// 对一条已解析路由强制执行用途级 VMM 思考策略。
 ///
 /// # Parameters
 /// 参数
-/// `consumer_profile_id` and `operation` identify the profile slot; `capabilities` is exact.
-/// `consumer_profile_id` 与 `operation` 标识配置档槽位；`capabilities` 是精确能力。
+/// `consumer_profile_id`, `purpose_id`, and `operation` identify the profile slot;
+/// `capabilities` and `reasoning_effort` are the exact model contract and requested level.
+/// `consumer_profile_id`、`purpose_id` 与 `operation` 标识配置档槽位；
+/// `capabilities` 和 `reasoning_effort` 是准确模型契约与请求档位。
 ///
 /// # Returns
 /// 返回值
-/// Success outside VMM LLM slots or when the model explicitly supports disabled reasoning.
-/// 非 VMM LLM 槽位或模型明确支持关闭思考时返回成功。
+/// Success outside VMM LLM slots or when the selected effort satisfies the exact purpose policy.
+/// 非 VMM LLM 槽位或所选档位满足准确用途策略时返回成功。
 pub(super) fn validate_vmm_llm_reasoning_policy(
     consumer_profile_id: &str,
+    purpose_id: Option<&str>,
     operation: AiOperation,
     capabilities: &ModelCapabilities,
+    reasoning_effort: Option<ReasoningEffort>,
 ) -> Result<(), String> {
     if consumer_profile_id != VMM_CONSUMER_PROFILE_ID
         || operation != AiOperation::ConversationRespond
-        || model_supports_disabled_reasoning(capabilities)
     {
         return Ok(());
     }
-    Err(String::from(
-        "VMM LLM routes require a model that explicitly supports disabled reasoning.",
+    let purpose_id = purpose_id
+        .ok_or_else(|| String::from("VMM LLM routes require one exact purpose identifier."))?;
+    let reasoning_effort = reasoning_effort.unwrap_or(ReasoningEffort::None);
+    if vmm_purpose_requires_disabled_reasoning(consumer_profile_id, purpose_id)
+        && (reasoning_effort != ReasoningEffort::None
+            || !model_supports_disabled_reasoning(capabilities))
+    {
+        return Err(String::from(
+            "VMM LLM routes require a model and purpose setting that explicitly disable reasoning.",
+        ));
+    }
+    if reasoning_effort_supported(capabilities, reasoning_effort) {
+        return Ok(());
+    }
+    Err(format!(
+        "VMM purpose `{purpose_id}` cannot use reasoning effort `{}` with the selected model contract.",
+        reasoning_effort.as_str()
     ))
+}
+
+/// Reports whether one exact model contract accepts one reasoning effort.
+/// 判断一份准确模型契约是否接受一个思考档位。
+///
+/// # Parameters
+/// 参数
+/// `capabilities` is the frozen model contract and `reasoning_effort` is the requested level.
+/// `capabilities` 是冻结模型契约，`reasoning_effort` 是请求档位。
+///
+/// # Returns
+/// 返回值
+/// `true` only when the model control mode and declared effort set accept the request.
+/// 仅当模型控制模式与声明档位集合接受该请求时返回 `true`。
+fn reasoning_effort_supported(
+    capabilities: &ModelCapabilities,
+    reasoning_effort: ReasoningEffort,
+) -> bool {
+    match capabilities.reasoning_control {
+        ReasoningControlMode::FixedOff => reasoning_effort == ReasoningEffort::None,
+        ReasoningControlMode::FixedOn => {
+            reasoning_effort != ReasoningEffort::None
+                && capabilities.reasoning_efforts.contains(&reasoning_effort)
+        }
+        ReasoningControlMode::Toggle
+        | ReasoningControlMode::EffortSelection
+        | ReasoningControlMode::ProviderAdaptive => {
+            capabilities.reasoning_efforts.contains(&reasoning_effort)
+        }
+        ReasoningControlMode::Unknown => false,
+    }
 }
 
 /// Validates registered model parameters and their dependency graph for one exact route.

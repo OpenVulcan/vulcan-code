@@ -878,6 +878,9 @@ export interface PublicAiInternalInferenceCandidate {
 // PublicAiInferenceProfile 保存消费者隔离路由。
 export interface PublicAiInferenceProfile {
   llm_routes?: Record<string, PublicAiInferenceRoute>;
+  // Exact reasoning effort selected independently for each restricted LLM purpose.
+  // 为每个受限 LLM 用途独立选择的准确思考档位。
+  llm_reasoning_efforts?: Record<string, PublicAiReasoningEffort>;
   embedding?: PublicAiInferenceRoute;
   rerank?: PublicAiInferenceRoute;
 }

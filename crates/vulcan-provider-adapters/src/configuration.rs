@@ -482,6 +482,10 @@ pub struct InferenceProfile {
     /// 按消费者自有稳定用途标识索引的已配置受限 LLM 路由。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub llm_routes: BTreeMap<String, InferenceRouteConfiguration>,
+    /// Exact reasoning effort selected independently for each restricted LLM purpose.
+    /// 为每个受限 LLM 用途独立选择的准确思考档位。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub llm_reasoning_efforts: BTreeMap<String, ReasoningEffort>,
     /// Optional configured embedding route.
     /// 可选的已配置向量路由。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5529,6 +5533,7 @@ mod tests {
         };
         let expected_profile = InferenceProfile {
             llm_routes: BTreeMap::from([(String::from("precheck_l1"), llm_route)]),
+            llm_reasoning_efforts: BTreeMap::new(),
             embedding: Some(embedding_route),
             rerank: Some(rerank_route),
         };
