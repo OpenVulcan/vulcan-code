@@ -300,13 +300,16 @@ function VmmProfilePage({
       return
     }
     setInstruction("")
-    await onRunAction("load_profile_bundle", identityPayload)
+    // A profile instruction returns only changed nodes; reload the complete active node list and preview.
+    // 画像指令只返回发生变化的节点；随后重新加载完整活跃节点列表与预览。
+    await refreshProfile()
   }, [
     effectiveTarget,
     isNative,
     instruction,
     onRunAction,
     profileCatalogReady,
+    refreshProfile,
     selectedProjectRef,
     selectedTargetRef,
     selectedUserRef,

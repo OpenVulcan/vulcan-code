@@ -8,7 +8,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react"
 import type { TranslationKey } from "@/i18n-messages"
-import type { VmmManagementSectionSummary } from "@/types"
+import type { VmmDeploymentMode, VmmManagementSectionSummary } from "@/types"
 
 // VmmScope identifies the exact configuration layer targeted by one save.
 // VmmScope 标识一次保存所针对的准确配置层。
@@ -26,13 +26,40 @@ const VMM_SECTION_TRANSLATION_KEYS: Record<string, { detail: TranslationKey; lab
   advanced: { detail: "memory.advanced.description", label: "memory.advanced.title" },
 }
 
+// VMM_NATIVE_SECTION_TRANSLATION_KEYS replaces external identity wording for native-only pages.
+// VMM_NATIVE_SECTION_TRANSLATION_KEYS 为原生专属页面替换外置身份文案。
+const VMM_NATIVE_SECTION_TRANSLATION_KEYS: Partial<Record<string, { detail: TranslationKey; label: TranslationKey }>> = {
+  content: { detail: "memory.content.nativeDescription", label: "memory.content.title" },
+  identity_projects: { detail: "memory.identity.nativeDescription", label: "memory.identity.nativeTitle" },
+  profile: { detail: "memory.profile.nativeDescription", label: "memory.profile.title" },
+}
+
+// vmmManagementSectionTranslationKeys selects the exact navigation copy for one backend and section.
+// vmmManagementSectionTranslationKeys 为一个后端与分区选择准确的导航文案。
+//
+// Parameters: sectionId is the service-projected stable section id and deployment is the active backend.
+// 参数：sectionId 是服务投影的稳定分区标识，deployment 是当前活动后端。
+// Returns: localized key metadata, or undefined for an unknown section id.
+// 返回值：本地化键元数据；分区标识未知时返回 undefined。
+export function vmmManagementSectionTranslationKeys(
+  sectionId: string,
+  deployment: VmmDeploymentMode,
+): { detail: TranslationKey; label: TranslationKey } | undefined {
+  if (deployment === "native") {
+    return VMM_NATIVE_SECTION_TRANSLATION_KEYS[sectionId]
+      ?? VMM_SECTION_TRANSLATION_KEYS[sectionId]
+  }
+  return VMM_SECTION_TRANSLATION_KEYS[sectionId]
+}
+
 // localizedVmmManagementSection resolves one stable section id into locale-aware navigation text.
 // localizedVmmManagementSection 将稳定分区标识解析为当前语言的导航文案。
 export function localizedVmmManagementSection(
   section: VmmManagementSectionSummary,
+  deployment: VmmDeploymentMode,
   t: (key: TranslationKey) => string,
 ): { detail: string; label: string } {
-  const keys = VMM_SECTION_TRANSLATION_KEYS[section.id]
+  const keys = vmmManagementSectionTranslationKeys(section.id, deployment)
   if (!keys) {
     return {
       detail: t("area.memory.description"),

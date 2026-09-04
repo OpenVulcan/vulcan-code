@@ -495,7 +495,7 @@ function featureSidebarRows(
   if (activeArea === "memory") {
     return workbench.vmmMemory.sections.map((section) => ({
       id: section.id,
-      ...localizedVmmManagementSection(section, t),
+      ...localizedVmmManagementSection(section, workbench.vmmMemory.experienceState.deployment, t),
       icon: vmmSectionIcon(section.id),
     }))
   }

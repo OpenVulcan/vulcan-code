@@ -351,7 +351,11 @@ function VmmContentPage({
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>{t("memory.content.addTitle")}</DialogTitle>
-            <DialogDescription>{t("memory.content.description")}</DialogDescription>
+            <DialogDescription>
+              {t(snapshot.experienceState.deployment === "native"
+                ? "memory.content.nativeDescription"
+                : "memory.content.description")}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">

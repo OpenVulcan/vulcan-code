@@ -108,7 +108,7 @@ export function FloatingMemoryMenu(props: {
 // memoryMenuRows 根据快照构建内嵌记忆菜单行。
 function memoryMenuRows(workbench: WorkbenchSnapshot, t: ReturnType<typeof useI18n>["t"]): Array<{ detail: string; icon: React.ReactNode; id: MemorySubAreaId; label: string }> {
   return workbench.vmmMemory.sections.map((section) => ({
-    ...localizedVmmManagementSection(section, t),
+    ...localizedVmmManagementSection(section, workbench.vmmMemory.experienceState.deployment, t),
     icon: vmmSectionIcon(section.id),
     id: section.id,
   }));

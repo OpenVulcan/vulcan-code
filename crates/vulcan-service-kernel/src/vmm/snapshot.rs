@@ -791,6 +791,24 @@ pub(crate) fn vmm_runtime_summary(
 pub(crate) fn vmm_management_sections(
     backend_mode: vulcan_vmm::VmmBackendMode,
 ) -> Vec<VmmManagementSectionSummary> {
+    // Native pages expose one-level project memory and never advertise external users or recycle APIs.
+    // 原生页面只暴露一级项目记忆，绝不宣传外置用户或回收站接口。
+    let native = backend_mode == vulcan_vmm::VmmBackendMode::Native;
+    let content_description = if native {
+        "使用自然语言搜索、查看、写入和删除当前绑定原生项目的长期记忆。"
+    } else {
+        "按会话和回合查看、归档、回收、恢复并维护外置 VMM 长期记忆。"
+    };
+    let identity_label = if native {
+        "记忆项目"
+    } else {
+        "用户与项目"
+    };
+    let identity_description = if native {
+        "管理一级原生记忆项目、项目归属、连带召回、迁移、清空和删除。"
+    } else {
+        "管理外置 VMM 身份、项目绑定、迁移和删除。"
+    };
     [
         (
             "overview",
@@ -810,17 +828,12 @@ pub(crate) fn vmm_management_sections(
             "记忆规则",
             "编辑记忆规则，并应用到全局或指定项目。",
         ),
-        (
-            "content",
-            "CONTENT",
-            "记忆数据",
-            "按会话和回合查看、归档、回收、恢复并维护长期记忆。",
-        ),
+        ("content", "CONTENT", "记忆数据", content_description),
         (
             "identity_projects",
             "IDENTITY AND PROJECTS",
-            "用户与项目",
-            "管理当前身份、项目绑定、迁移和删除。",
+            identity_label,
+            identity_description,
         ),
         (
             "profile",
@@ -832,13 +845,11 @@ pub(crate) fn vmm_management_sections(
             "advanced",
             "ADVANCED",
             "高级设置",
-            "查看诊断信息并执行备份、重建和高级维护。",
+            "选择内置原生或外置 gRPC 后端，并查看对应配置与技术诊断。",
         ),
     ]
     .into_iter()
-    .filter(|(id, _, _, _)| {
-        backend_mode == vulcan_vmm::VmmBackendMode::Native || *id != "inference"
-    })
+    .filter(|(id, _, _, _)| native || *id != "inference")
     .map(
         |(id, key, label, description)| VmmManagementSectionSummary {
             id: id.to_string(),

@@ -1390,6 +1390,8 @@ export type TranslationKey =
   | "vmm.experience.openAdvanced"
   | "memory.identity.title"
   | "memory.identity.description"
+  | "memory.identity.nativeTitle"
+  | "memory.identity.nativeDescription"
   | "memory.identity.refresh"
   | "memory.identity.users"
   | "memory.identity.projects"
@@ -4269,6 +4271,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "vmm.experience.openAdvanced": "打开高级设置",
     "memory.identity.title": "用户与项目",
     "memory.identity.description": "管理长期记忆使用者与项目映射。内部编号仅用于服务路由，不会显示在页面中。",
+    "memory.identity.nativeTitle": "记忆项目",
+    "memory.identity.nativeDescription": "管理一级原生记忆项目、VulcanCode 项目归属、连带召回、迁移、清空和删除。",
     "memory.identity.refresh": "刷新列表",
     "memory.identity.users": "用户",
     "memory.identity.projects": "项目",
@@ -4452,7 +4456,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.advanced.nativeFixedProject": "默认固定原生项目 ID",
     "memory.advanced.externalPrefix": "自动创建项目前缀",
     "memory.advanced.nativeStorage": "由 Vulcan Code 管理的原生存储",
-    "memory.advanced.nativeStorageDescription": "关系数据与 LanceDB 向量分别存放在 .vulcan/code/vmm 下；项目级迁移和清空请在“用户与项目”页面执行。",
+    "memory.advanced.nativeStorageDescription": "关系数据与 LanceDB 向量分别存放在 .vulcan/code/vmm 下；项目级迁移和清空请在“记忆项目”页面执行。",
     "memory.advanced.runtime": "本地运行",
     "memory.advanced.autoStart": "随 Vulcan Code 自动启动",
     "memory.advanced.manualStart": "仅手动启动",
@@ -7163,6 +7167,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "vmm.experience.openAdvanced": "Open advanced settings",
     "memory.identity.title": "Users and projects",
     "memory.identity.description": "Manage durable memory users and project mappings. Internal identifiers remain hidden and are used only for routing.",
+    "memory.identity.nativeTitle": "Memory projects",
+    "memory.identity.nativeDescription": "Manage one-level native memory projects, VulcanCode ownership, linked recall, migration, clearing, and deletion.",
     "memory.identity.refresh": "Refresh list",
     "memory.identity.users": "Users",
     "memory.identity.projects": "Projects",
@@ -7346,7 +7352,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.advanced.nativeFixedProject": "Default fixed native project ID",
     "memory.advanced.externalPrefix": "Auto-create project prefix",
     "memory.advanced.nativeStorage": "Native storage managed by Vulcan Code",
-    "memory.advanced.nativeStorageDescription": "Relational data and LanceDB vectors are stored separately under .vulcan/code/vmm. Use Users & Projects for project migration and clearing.",
+    "memory.advanced.nativeStorageDescription": "Relational data and LanceDB vectors are stored separately under .vulcan/code/vmm. Use Memory projects for project migration and clearing.",
     "memory.advanced.runtime": "Local runtime",
     "memory.advanced.autoStart": "Start with Vulcan Code",
     "memory.advanced.manualStart": "Manual start only",

@@ -92,6 +92,30 @@ fn parse_vmm_memory_action_covers_common_management_branches() {
     assert!(error.contains("不支持的 VMM 记忆动作"));
 }
 
+/// Verifies backend-projected navigation never presents external identities as native concepts.
+/// 验证后端投影导航不会把外置身份概念呈现为原生概念。
+#[test]
+fn vmm_management_sections_use_backend_specific_identity_copy() {
+    let native = vmm_management_sections(vulcan_vmm::VmmBackendMode::Native);
+    let external = vmm_management_sections(vulcan_vmm::VmmBackendMode::ExternalGrpc);
+
+    let native_identity = native
+        .iter()
+        .find(|section| section.id == "identity_projects")
+        .expect("native identity section");
+    let external_identity = external
+        .iter()
+        .find(|section| section.id == "identity_projects")
+        .expect("external identity section");
+
+    assert_eq!(native_identity.label, "记忆项目");
+    assert!(!native_identity.description.contains("身份"));
+    assert_eq!(external_identity.label, "用户与项目");
+    assert!(external_identity.description.contains("外置 VMM 身份"));
+    assert!(native.iter().any(|section| section.id == "inference"));
+    assert!(!external.iter().any(|section| section.id == "inference"));
+}
+
 /// Verifies setup probes can use one external connection without persisting a global draft.
 /// 验证配置探测可以使用单次外置连接，而无需持久化全局草稿。
 #[test]
