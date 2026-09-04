@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { PublicAiInternalInferenceCandidate, PublicAiOperation } from "@/types";
 
-import { vceCandidateEligible } from "./context-engine-area";
+import { vceCandidateEligible, vceRoutePickerOptions } from "./context-engine-area";
 
 // candidateFixture builds one exact internal-background catalog candidate.
 // candidateFixture 构建一个精确的内部后台目录候选项。
@@ -43,6 +43,27 @@ function candidateFixture(operation: PublicAiOperation): PublicAiInternalInferen
 }
 
 describe("ContextEngine candidate contract", () => {
+  // Route options reuse the generic combobox and expose every human-searchable model identity.
+  // 路由选项复用通用组合框，并暴露全部便于人类搜索的模型身份。
+  it("builds searchable model route options", () => {
+    // option is the exact UI projection of one backend candidate.
+    // option 是一个后端候选项的精确界面投影。
+    const [option] = vceRoutePickerOptions([candidateFixture("embedding_create")]);
+
+    expect(option.label).toBe("Model · Account");
+    expect(option.description).toBe("Provider · Service");
+    expect(option.keywords).toEqual(expect.arrayContaining([
+      "model",
+      "Provider",
+      "provider",
+      "Account",
+      "account",
+      "Service",
+      "service",
+      "protocol",
+    ]));
+  });
+
   // Embedding accepts either task-specific projection or one declared provider-default task.
   // 向量候选项接受任务专用投影或已声明的 Provider 默认任务。
   it("accepts the host-supported provider-default embedding contract", () => {

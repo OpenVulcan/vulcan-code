@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 import { useI18n } from "@/i18n";
 import {
   loadPublicAiSettings,
@@ -161,6 +161,40 @@ export function vceInferenceRouteKey(route: PublicAiInferenceRoute): string {
     route.operation,
     route.usage_scope,
   ].join("\u0000");
+}
+
+/// Builds searchable options for exact ContextEngine model routes.
+/// 为精确的 ContextEngine 模型路由构建可搜索选项。
+///
+/// Parameters: `candidates` contains only routes already accepted by the VCE capability contract.
+/// 参数：`candidates` 仅包含已经通过 VCE 能力契约的路由。
+/// Returns: options searchable by model, provider, account, service entry, binding, and identifiers.
+/// 返回值：可按模型、供应商、账号、服务入口、绑定及标识符搜索的选项。
+export function vceRoutePickerOptions(
+  candidates: PublicAiInternalInferenceCandidate[],
+): ComboboxOption[] {
+  return candidates.map((candidate) => {
+    // bindingId preserves the exact protocol or action identity as searchable metadata.
+    // bindingId 将精确协议或动作身份保留为可搜索元数据。
+    const bindingId = candidate.route.binding.kind === "protocol"
+      ? candidate.route.binding.protocol_profile_id
+      : candidate.route.binding.action_binding_id;
+    return {
+      value: vceInferenceRouteKey(candidate.route),
+      label: `${candidate.modelDisplayName} · ${candidate.connectionDisplayName}`,
+      description: `${candidate.providerDisplayName} · ${candidate.serviceEntryDisplayName}`,
+      keywords: [
+        candidate.route.model_id,
+        candidate.providerDisplayName,
+        candidate.route.provider_id,
+        candidate.connectionDisplayName,
+        candidate.route.connection_id,
+        candidate.serviceEntryDisplayName,
+        candidate.route.service_entry_id,
+        bindingId,
+      ],
+    };
+  });
 }
 
 /// Renders and owns the fixed ContextEngine settings surface.
@@ -348,17 +382,23 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
     }
   }, [copy, reload]);
 
+  // unresolvedRouteCount summarizes the remaining configuration work without repeating every diagnostic.
+  // unresolvedRouteCount 汇总剩余配置工作，避免重复展示每一条诊断。
+  const unresolvedRouteCount = readiness
+    ? [readiness.embedding, readiness.queryRewrite, readiness.rerank]
+      .filter((status) => !status.available).length
+    : 3;
+
   return (
-    <section className="rounded-xl border bg-card p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <section className="mx-auto w-full max-w-6xl space-y-5">
+      <header className="flex flex-wrap items-start justify-between gap-4 border-b pb-4">
         <div className="flex min-w-0 items-start gap-3">
-          <BrainCircuit className="mt-0.5 size-5 shrink-0" />
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <BrainCircuit className="size-5" />
+          </span>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <strong>{copy("语义引擎", "ContextEngine")}</strong>
-              <span className="rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground">
-                {copy("内置能力", "Built-in capability")}
-              </span>
+              <h2 className="text-base font-semibold">{copy("语义引擎", "ContextEngine")}</h2>
               <span className={readiness?.ready
                 ? "rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] text-emerald-700 dark:text-emerald-300"
                 : "rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] text-amber-700 dark:text-amber-300"}
@@ -368,8 +408,8 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
               {copy(
-                "为 AI 提供项目级代码语义检索。三条模型路由全部有效后，项目入口、索引监听与检索工具才会启用。",
-                "Provides project-scoped semantic code retrieval for AI. Project UI, indexing, file watching, and the retrieval tool remain closed until all three model routes are valid.",
+                "为 AI 提供项目级代码语义检索；模型准备完成后，索引、文件监听和检索工具会自动启用。",
+                "Provides project-scoped semantic code retrieval for AI; indexing, file watching, and retrieval tools start automatically when the models are ready.",
               )}
             </p>
           </div>
@@ -378,70 +418,82 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
           <RefreshCw className="size-3.5" />
           {copy("重新检查", "Recheck")}
         </Button>
-      </div>
+      </header>
 
-      <div className="mt-3 grid gap-2 md:grid-cols-2">
-        <div className="flex items-start gap-2 rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-          <BrainCircuit className="mt-0.5 size-3.5 shrink-0" />
+      <div className="flex flex-wrap gap-x-6 gap-y-2 text-xs text-muted-foreground">
+        <div className="flex max-w-xl items-start gap-2">
+          <BrainCircuit className="mt-0.5 size-3.5 shrink-0 text-foreground/60" />
           <span>{copy(
-            "查询改写固定关闭模型推理，不提供用户档位；不能明确关闭推理的 LLM 不可选择。",
-            "Query rewriting always disables model reasoning. There is no user-selectable effort, and incompatible LLMs cannot be selected.",
+            "查询改写固定关闭模型思考，不提供额外思考档位。",
+            "Query rewriting keeps model reasoning disabled and exposes no additional effort setting.",
           )}</span>
         </div>
-        <div className="flex items-start gap-2 rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-          <Database className="mt-0.5 size-3.5 shrink-0" />
+        <div className="flex max-w-xl items-start gap-2">
+          <Database className="mt-0.5 size-3.5 shrink-0 text-foreground/60" />
           <span>{copy(
-            "索引存储由 VulcanCode 的 VLDB/LanceDB 数据平面统一提供，VCE 不创建独立数据库配置。",
-            "Index storage comes from VulcanCode's shared VLDB/LanceDB data plane; VCE creates no separate database configuration.",
+            "索引存储复用 VulcanCode 的 VLDB/LanceDB，无需单独配置数据库。",
+            "Index storage reuses VulcanCode's VLDB/LanceDB and needs no separate database setup.",
           )}</span>
         </div>
       </div>
 
       {error ? (
-        <div className="mt-3 flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+        <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
           <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
           <span>{error}</span>
         </div>
       ) : null}
 
-      {!snapshot || !readiness ? (
-        <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
-          <LoaderCircle className="size-4 animate-spin" />
-          {copy("正在读取公共 AI 模型目录…", "Loading the public AI model catalog…")}
+      <div className="overflow-hidden rounded-xl border bg-card">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-4 py-3">
+          <div>
+            <h3 className="text-sm font-medium">{copy("模型路由", "Model routes")}</h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {readiness?.ready
+                ? copy("三项能力均已就绪。", "All three capabilities are ready.")
+                : copy(
+                  `还需完成 ${unresolvedRouteCount} 项配置。`,
+                  `${unresolvedRouteCount} configuration ${unresolvedRouteCount === 1 ? "item" : "items"} remaining.`,
+                )}
+            </p>
+          </div>
+          <span className="text-xs text-muted-foreground">
+            {copy("修改后立即校验", "Validated after every change")}
+          </span>
         </div>
-      ) : (
-        <div className="mt-4 grid gap-3 lg:grid-cols-3">
-          {definitions.map((definition) => {
-            const route = routeForDefinition(profile, definition);
-            const candidates = snapshot.internalInferenceCandidates.filter((candidate) => (
-              vceCandidateEligible(candidate, definition.kind)
-            ));
-            const status = statusForDefinition(readiness, definition.kind);
-            return (
-              <VceRouteField
-                candidates={candidates}
-                definition={definition}
-                disabled={busyKey !== null}
-                key={definition.kind}
-                onChange={(nextRoute) => saveRoute(definition, nextRoute)}
-                onTest={definition.operation === "conversation_respond"
-                  ? undefined
-                  : () => testRoute(definition)}
-                route={route}
-                status={status}
-                testing={busyKey === `test:${definition.kind}`}
-                testSummary={testSummaries[definition.kind]}
-              />
-            );
-          })}
-        </div>
-      )}
-
-      {readiness && readiness.issues.length > 0 ? (
-        <ul className="mt-3 list-disc space-y-1 pl-5 text-xs text-amber-700 dark:text-amber-300">
-          {readiness.issues.map((issue, index) => <li key={`${index}:${issue}`}>{issue}</li>)}
-        </ul>
-      ) : null}
+        {!snapshot || !readiness ? (
+          <div className="flex items-center gap-2 px-4 py-8 text-sm text-muted-foreground">
+            <LoaderCircle className="size-4 animate-spin" />
+            {copy("正在读取公共 AI 模型目录…", "Loading the public AI model catalog…")}
+          </div>
+        ) : (
+          <div className="divide-y">
+            {definitions.map((definition) => {
+              const route = routeForDefinition(profile, definition);
+              const candidates = snapshot.internalInferenceCandidates.filter((candidate) => (
+                vceCandidateEligible(candidate, definition.kind)
+              ));
+              const status = statusForDefinition(readiness, definition.kind);
+              return (
+                <VceRouteField
+                  candidates={candidates}
+                  definition={definition}
+                  disabled={busyKey !== null}
+                  key={definition.kind}
+                  onChange={(nextRoute) => saveRoute(definition, nextRoute)}
+                  onTest={definition.operation === "conversation_respond"
+                    ? undefined
+                    : () => testRoute(definition)}
+                  route={route}
+                  status={status}
+                  testing={busyKey === `test:${definition.kind}`}
+                  testSummary={testSummaries[definition.kind]}
+                />
+              );
+            })}
+          </div>
+        )}
+      </div>
     </section>
   );
 }
@@ -464,43 +516,58 @@ function VceRouteField(props: VceRouteFieldProps) {
     vceInferenceRouteKey(candidate.route),
     candidate,
   ]));
+  // pickerOptions expose the shared searchable selector contract without weakening route identity.
+  // pickerOptions 暴露共享可搜索选择器契约，同时不削弱路由身份。
+  const pickerOptions = vceRoutePickerOptions(props.candidates);
+  // selectedValue is defined only while the persisted route remains an eligible exact candidate.
+  // selectedValue 仅在持久化路由仍是合格的精确候选项时存在。
+  const selectedValue = candidateByKey.has(selectedKey) ? selectedKey : undefined;
   return (
-    <div className="rounded-lg border p-3">
-      <div className="flex items-start justify-between gap-2">
-        <div>
+    <div className="grid gap-4 px-4 py-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(18rem,1.25fr)_auto] lg:items-start">
+      <div className="flex min-w-0 items-start gap-3">
+        <span className={props.status?.available
+          ? "mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600"
+          : "mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-amber-600"}
+        >
+          {props.status?.available
+            ? <CheckCircle2 className="size-4" />
+            : <CircleAlert className="size-4" />}
+        </span>
+        <div className="min-w-0">
           <div className="text-sm font-medium">{props.definition.label}</div>
-          <p className="mt-0.5 text-xs text-muted-foreground">{props.definition.description}</p>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{props.definition.description}</p>
         </div>
-        {props.status?.available ? (
-          <CheckCircle2 className="size-4 shrink-0 text-emerald-600" />
-        ) : (
-          <CircleAlert className="size-4 shrink-0 text-amber-600" />
-        )}
       </div>
-      <Select
-        disabled={props.disabled || props.candidates.length === 0}
-        onValueChange={(value) => {
-          const candidate = candidateByKey.get(value);
-          if (candidate) {
-            void props.onChange(candidate.route);
-          }
-        }}
-        value={candidateByKey.has(selectedKey) ? selectedKey : undefined}
-      >
-        <SelectTrigger className="mt-3 w-full">
-          <SelectValue placeholder={props.candidates.length > 0
+      <div className="min-w-0">
+        <Combobox
+          ariaLabel={props.definition.label}
+          className="h-10"
+          disabled={props.disabled || props.candidates.length === 0}
+          emptyText={copy("没有匹配的兼容模型", "No compatible models match this filter")}
+          onValueChange={(value) => {
+            const candidate = candidateByKey.get(value);
+            if (candidate) {
+              void props.onChange(candidate.route);
+            }
+          }}
+          options={pickerOptions}
+          placeholder={props.route?.model_id ?? (props.candidates.length > 0
             ? copy("选择模型与账号", "Select model and account")
-            : copy("没有兼容模型", "No compatible models")} />
-        </SelectTrigger>
-        <SelectContent>
-          {props.candidates.map((candidate) => (
-            <SelectItem key={vceInferenceRouteKey(candidate.route)} value={vceInferenceRouteKey(candidate.route)}>
-              {candidate.modelDisplayName} · {candidate.connectionDisplayName}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <div className="mt-2 flex flex-wrap items-center gap-2">
+            : copy("没有兼容模型", "No compatible models"))}
+          searchPlaceholder={copy(
+            "筛选模型、ID、供应商或账号…",
+            "Filter by model, ID, provider, or account…",
+          )}
+          value={selectedValue}
+        />
+        {props.testSummary ? (
+          <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-300">{props.testSummary}</p>
+        ) : null}
+        {props.status?.issue ? (
+          <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">{props.status.issue}</p>
+        ) : null}
+      </div>
+      <div className="flex flex-wrap items-center gap-2 lg:justify-end">
         {props.onTest ? (
           <Button
             disabled={props.disabled || !props.route}
@@ -522,8 +589,6 @@ function VceRouteField(props: VceRouteFieldProps) {
           {copy("清除", "Clear")}
         </Button>
       </div>
-      {props.testSummary ? <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-300">{props.testSummary}</p> : null}
-      {props.status?.issue ? <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">{props.status.issue}</p> : null}
     </div>
   );
 }
