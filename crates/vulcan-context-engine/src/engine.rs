@@ -3325,8 +3325,8 @@ mod tests {
         Box::pin(async move { value })
     }
 
-    /// Fake shared AI registration that returns deterministic two-dimensional vectors.
-    /// 返回确定性二维向量的伪共享 AI 注册。
+    /// Fake VCE AI registration that returns deterministic two-dimensional vectors.
+    /// 返回确定性二维向量的伪 VCE AI 注册。
     struct FakeAi {
         /// Fixed registration metadata.
         /// 固定注册元数据。

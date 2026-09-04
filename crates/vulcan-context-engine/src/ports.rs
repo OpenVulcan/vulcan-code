@@ -1271,15 +1271,15 @@ pub trait VceAiPort: Send + Sync {
         request: VceEmbeddingRequest,
     ) -> VceFuture<Result<VceEmbeddingResponse, VcePortError>>;
 
-    /// Execute one optional LLM query rewrite through the same host registration.
-    /// 通过同一宿主注册执行一次可选 LLM 查询改写。
+    /// Execute one optional LLM query rewrite through the same VCE host registration.
+    /// 通过同一项 VCE 宿主注册执行一次可选 LLM 查询改写。
     fn rewrite_query(
         &self,
         request: VceQueryRewriteRequest,
     ) -> VceFuture<Result<VceQueryRewriteResponse, VcePortError>>;
 
-    /// Execute one optional candidate Rerank through the same host registration.
-    /// 通过同一宿主注册执行一次可选候选重排。
+    /// Execute one optional candidate Rerank through the same VCE host registration.
+    /// 通过同一项 VCE 宿主注册执行一次可选候选重排。
     fn rerank(
         &self,
         request: VceRerankRequest,

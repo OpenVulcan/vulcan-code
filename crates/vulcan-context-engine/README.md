@@ -47,7 +47,7 @@ VCE 只依赖三个领域端口：
 - `VceIndexPort`：由 VulcanCode 注册的 VLDB/SQLite 适配，负责代码专属 namespace、暂存、原子发布、召回和管理查询；
 - `VceSourcePort`：由 VulcanCode 工作区提供不可变源码快照，VCE 按 Blob、size、mtime 重新校验，且只按配置批量读取。
 
-VCE 不创建 LLM 客户端、Embedding 客户端、LanceDB、SQLite、Milvus、文件监听器、Git 监听器、页面管理器或工具注册器。VulcanCode、VMM-Core、知识库和 VCE 可以共用同一套 AI 注册规则，但 VCE 的代码索引、VMM 的记忆数据和知识库数据必须使用独立 namespace 与 Schema。
+VCE 不创建 LLM 客户端、Embedding 客户端、LanceDB、SQLite、Milvus、文件监听器、Git 监听器、页面管理器或工具注册器。VulcanCode、VMM-Core、知识库和 VCE 可以共用同一套 AI 注册规则与底层服务，但必须分别持有消费者注册、向量空间、namespace 与 Schema。
 
 `external_service` 只表示已经移除的外部 sidecar 授权语义，不能用于原生 VCE。宿主配置发生变化后，适配器必须重新取得 capability handle/snapshot；VCE 在每次刷新、检索与管理投影时读取当前 `capability_snapshot()`，不缓存首次注册时的陈旧能力状态。
 

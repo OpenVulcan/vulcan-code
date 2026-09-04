@@ -481,7 +481,7 @@ File: <path>
 
 ### 6.1 文档向量
 
-当前 OCE 的 Embedding 客户端是 OpenAI-compatible API，目标实现应改为调用 VMM-Core 的内置 Embedding 服务，但保留以下处理语义：
+当前 OCE 的 Embedding 客户端是 OpenAI-compatible API，目标实现应改为调用 VulcanCode 注册的统一 HostAI Embedding 服务，但保留以下处理语义：
 
 1. 输入是带路径前缀的 Chunk embedding 文本；
 2. 单条输入超过模型字符上限时拆成多个片段；
@@ -503,7 +503,7 @@ File: <path>
 - 长输入 overlap 约 400 字符；
 - 最大并发约 4。
 
-这些是当前实现默认值，不应在 Rust 代码中硬编码；VMM-Core 应提供模型、维度、批量、并发和 token 使用信息。
+这些是当前实现默认值，不应在 Rust 代码中硬编码；VulcanCode 宿主应通过统一 HostAI 注册提供模型、维度、批量、并发和 token 使用信息。
 
 ### 6.2 查询向量
 
@@ -597,14 +597,16 @@ OCE 代码语义层
 ├── exact symbol metadata/index
 └── code chunk metadata
 
-VLDB / VMM-Core
-├── 向量生成
+VulcanCode HostAI
+└── 向量生成
+
+VulcanCode VLDB 数据面
 ├── 向量 upsert/delete/search/filter
 ├── 代码索引持久化
 └── generation / snapshot / 事务能力
 ```
 
-VMM 记忆索引和 OCE 代码索引可以共用向量服务和底层引擎，但必须使用独立 namespace、权限、schema、generation 和生命周期。
+VMM 记忆索引和 OCE 代码索引可以共用宿主向量服务与底层存储引擎，但必须使用独立注册、向量空间、namespace、权限、schema、generation 和生命周期。
 
 ## 8. 查询意图和检索策略
 
@@ -681,7 +683,7 @@ VMM 记忆索引和 OCE 代码索引可以共用向量服务和底层引擎，�
 6. 确保原查询仍然在查询列表中；
 7. 失败时只使用原查询。
 
-当前配置默认关闭普通查询改写，主要用于跨语言文件名和特殊路径场景。Rust 目标应复用 VMM-Core LLM，但默认不能让每次检索无条件产生额外模型调用。
+当前配置默认关闭普通查询改写，主要用于跨语言文件名和特殊路径场景。Rust 目标应复用 VulcanCode 注册的统一 HostAI LLM 服务，但默认不能让每次检索无条件产生额外模型调用。
 
 ### 8.5 启发式查询规划
 
@@ -831,7 +833,7 @@ LLM 重排候选必须携带：
 6. 返回数量不足时按原顺序补齐；
 7. 响应无有效下标或请求失败时回退原始顺序。
 
-LLM 重排应使用 VMM-Core 的共享 LLM 服务，并且默认受策略、预算和缓存控制；它不是每个查询必须发生的步骤。
+LLM 重排应使用 VulcanCode 注册的统一 HostAI Rerank 服务，并且默认受策略、预算和缓存控制；它不是每个查询必须发生的步骤。
 
 ### 9.9 源码优先因子
 
@@ -993,13 +995,13 @@ Lines: 20-45
 
 VCE 负责端口调用、暂存事务协议、结果校验、索引计划和检索结果；上级负责真实持久化、任务队列、权限、取消、deadline 和进程故障恢复。
 
-### 12.4 VMM-Core/VLDB 的复用方式
+### 12.4 HostAI/VLDB 的复用方式
 
 准确的复用边界是：
 
 ```text
 VCE 代码逻辑
-  -> VulcanCode 统一 AI 注册 -> 可复用 VMM-Core 服务实现
+  -> VulcanCode VCE 独立 AI 注册 -> 统一 HostAI 服务
   -> VulcanCode VceSourcePort -> 当前授权工作区
   -> VulcanCode VceIndexPort -> VLDB/SQLite 代码专属 namespace
 ```
@@ -1075,7 +1077,7 @@ OCE 支持意图分类、查询改写和 LLM 重排，但这些属于可选增�
 Embedding + dense/exact/path + fusion + coverage
 ```
 
-然后再按 VMM-Core 的模型成本和实际收益启用 LLM 阶段，避免把检索变成多次模型调用链。
+然后再按宿主模型服务的成本和实际收益启用 LLM 阶段，避免把检索变成多次模型调用链。
 
 ## 15. 实现验收清单
 
@@ -1116,7 +1118,7 @@ Embedding + dense/exact/path + fusion + coverage
 - [x] VCE 静态工具目录只允许统一 `codebase_retrieval` 进入 AI 可见面；
 - [x] VCE Rust 库不依赖 MCP、HTTP、Milvus 或 LanceDB 具体 API；
 - [x] CodeKit RG 保持精确文本/正则定位，VCE exact symbol 属于语义索引内部辅助通道；
-- [x] VMM-Core 只共享模型/向量注册能力，不承载代码检索业务逻辑；
+- [x] VMM-Core 与 VCE 只共享宿主模型/向量注册契约和底层服务，不共享注册实例，也不承载代码检索业务逻辑；
 - [x] CBM 不进入 VCE 依赖、降级路径或默认代码检索工具面；
 - [ ] VulcanCode 仍需把单一工具定义接入真实原生工具完整暴露链。
 

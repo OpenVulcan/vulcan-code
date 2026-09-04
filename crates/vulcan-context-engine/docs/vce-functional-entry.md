@@ -23,7 +23,7 @@ VCE
   └─ 管理查询及持久化状态契约
 ```
 
-CBM 不在链路中：VCE 不调用 CBM、不使用 CBM 数据、不把 CBM 作为回退，也不在 AI 工具面保留 CBM 工具。VMM 只与 VCE 共享宿主 AI/VLDB 注册规则，记忆和代码语义数据完全分离。
+CBM 不在链路中：VCE 不调用 CBM、不使用 CBM 数据、不把 CBM 作为回退，也不在 AI 工具面保留 CBM 工具。VMM 只与 VCE 共享宿主 AI/VLDB 能力契约与底层基础设施，消费者注册、记忆数据和代码语义数据完全分离。
 
 ## 2. 直接调用入口
 
@@ -87,7 +87,7 @@ VulcanCode 为原生进程内 VCE consumer 注册 `HostAiPort` 时，`InferenceC
 | `CodeQueryRewrite` | 生成有限查询改写 | 可选 |
 | `CodeCandidateRerank` | 对融合候选重排 | 可选 |
 
-VulcanCode、VMM-Core、知识库和 VCE 应复用相同的 `registration_id + consumer_profile_id + purpose` 调用规则。它们不能共用业务表；VCE 的 `vector_space_id`、namespace、Schema 和 checkpoint chain 始终独立。
+VulcanCode、VMM-Core、知识库和 VCE 应复用相同的宿主注册字段、用途和调用规则，但每个消费者必须生成并持有独立的 `registration_id`、`consumer_profile_id` 与 `vector_space_id`。它们不能共用业务表；VCE 的 namespace、Schema 和 checkpoint chain 也始终独立。
 
 VCE 会在调用前校验 AI binding 与当前能力快照，在响应后校验 operation ID、完整分段集合、向量维度、预处理版本、Chunker 版本及可选物理模型指纹。未激活注册不能同时声明 Embedding、查询改写或 Rerank 可用。配置变化后宿主适配器必须刷新 capability handle/snapshot，不能沿用首次注册的陈旧 handle；领域引擎会在每次刷新、检索和管理投影时重新读取 `capability_snapshot()`，并在单次入口中只消费这一份已验证快照。没有备用 Provider 探测或静默切换。
 
@@ -214,7 +214,7 @@ VCE 领域内核已经完成：
 
 VulcanCode 宿主已经完成：
 
-- VMM-Core、知识库和 VCE 共用 `HostAiPort` 注册、用途、额度、deadline、错误和取消规则；
+- VMM-Core、知识库和 VCE 共用 `HostAiPort` 契约以及注册字段、用途、额度、deadline、错误和取消规则，但分别创建和持有消费者注册；
 - `VceHostAiAdapter` 为每个项目注册 `InternalBackground` capability，并在调用时刷新快照、冻结向量指纹、传播 Future 取消；
 - `vulcan-workspace-store` 通过 VLDB Controller 持有独立 SQLite namespace、精确符号索引与两张 LanceDB 向量表，并实现 stage、事务内 CAS commit、abort、恢复和派生清理；
 - service-owned 共享 watcher 同时服务 Git 与 VCE，VCE subscriber 独立完成路径归并、节流、失败重排和关闭收敛；
