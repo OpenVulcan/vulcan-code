@@ -222,6 +222,12 @@
 - 修复：不改变 mock 的公共签名，也不为测试产生与真实 Port 不同的双重盒装；仅在 `test_support.rs` 模块级记录原因并局部豁免 `result_large_err`。
 - 状态：已修复；HostAI/VCE 严格 all-targets Clippy 通过。
 
+### F-032 外置 gRPC API Key 以原文进入 WebUI 草稿
+
+- 影响：VMM 快照已对管理 Bearer Token 返回统一遮罩占位符，但 gRPC API Key 仍从持久化配置原样返回前端；与保存端已实现的占位符复用语义矛盾，也扩大了凭据暴露面。
+- 修复：抽取统一秘密投影函数，gRPC API Key 与管理 Token 都只返回 `WEBUI_REDACTED_SECRET_PLACEHOLDER`；项目级保存原本就不持久化传输字段，全局保存继续把占位符解析为保留旧秘密。
+- 状态：已修复并新增双秘密遮罩测试；格式检查、定向测试与 `vulcan-service-kernel --lib` 严格 Clippy 均通过。由于本轮发现该问题，连续无问题轮次已重置为零。
+
 ## 提交前验证基线
 
 - `cargo fmt --all -- --check`：通过。

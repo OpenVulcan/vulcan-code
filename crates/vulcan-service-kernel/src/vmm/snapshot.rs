@@ -585,18 +585,14 @@ pub(crate) fn vmm_config_draft_summary(
             .grpc_target
             .clone()
             .unwrap_or_else(|| effective.grpc_target.clone()),
-        grpc_api_key: layer
-            .grpc_api_key
-            .clone()
-            .or_else(|| effective.grpc_api_key.clone())
-            .unwrap_or_default(),
+        grpc_api_key: redacted_vmm_secret(
+            layer
+                .grpc_api_key
+                .as_deref()
+                .or(effective.grpc_api_key.as_deref()),
+        ),
         management_base_url: layer.management_base_url.clone().unwrap_or_default(),
-        management_bearer_token: layer
-            .management_bearer_token
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .map(|_| String::from(WEBUI_REDACTED_SECRET_PLACEHOLDER))
-            .unwrap_or_default(),
+        management_bearer_token: redacted_vmm_secret(layer.management_bearer_token.as_deref()),
         management_timeout_ms: layer.management_timeout_ms.unwrap_or(30_000).to_string(),
         user_id: layer
             .user_id
@@ -668,6 +664,25 @@ pub(crate) fn vmm_config_draft_summary(
             .clone()
             .unwrap_or_else(|| effective.injection_description.clone()),
     }
+}
+
+/// Projects one optional persisted VMM secret into the shared WebUI placeholder.
+/// 将一个可选持久化 VMM 秘密投影为 WebUI 共享占位符。
+///
+/// # Parameters
+/// 参数
+/// `value` is a persisted transport secret that must never cross the service response boundary.
+/// `value` 是不得跨过服务响应边界的持久化传输秘密。
+///
+/// # Returns
+/// 返回值
+/// The stable placeholder for a configured secret, or an empty value when none is configured.
+/// 已配置秘密时返回稳定占位符，未配置时返回空值。
+fn redacted_vmm_secret(value: Option<&str>) -> String {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .map(|_| String::from(WEBUI_REDACTED_SECRET_PLACEHOLDER))
+        .unwrap_or_default()
 }
 
 /// Converts one optional layer policy into a draft mode key.

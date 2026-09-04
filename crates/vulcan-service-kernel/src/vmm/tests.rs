@@ -329,6 +329,29 @@ fn vmm_config_layer_from_draft_parses_transport_and_behavior_fields() {
     );
 }
 
+/// Verifies persisted external transport secrets never cross the WebUI snapshot boundary.
+/// 验证持久化外置传输秘密绝不跨过 WebUI 快照边界。
+#[test]
+fn vmm_config_draft_summary_redacts_external_transport_secrets() {
+    let layer = vulcan_vmm::VmmConfigLayer {
+        backend_mode: Some(vulcan_vmm::VmmBackendMode::ExternalGrpc),
+        grpc_api_key: Some(String::from("grpc-secret")),
+        management_bearer_token: Some(String::from("management-secret")),
+        ..vulcan_vmm::VmmConfigLayer::default()
+    };
+    let effective = vulcan_vmm::VmmEffectiveConfig::resolve(&layer, None, None);
+
+    let draft = vmm_config_draft_summary(&layer, &effective, true, true);
+
+    assert_eq!(draft.grpc_api_key, WEBUI_REDACTED_SECRET_PLACEHOLDER);
+    assert_eq!(
+        draft.management_bearer_token,
+        WEBUI_REDACTED_SECRET_PLACEHOLDER
+    );
+    assert_ne!(draft.grpc_api_key, "grpc-secret");
+    assert_ne!(draft.management_bearer_token, "management-secret");
+}
+
 /// Verifies external management transport requires a complete secure endpoint-token pair.
 /// 验证外部管理传输必须提供完整且安全的端点与 Token 组合。
 #[test]
