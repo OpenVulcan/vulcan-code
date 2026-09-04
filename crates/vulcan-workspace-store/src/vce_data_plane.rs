@@ -206,6 +206,24 @@ struct StateSnapshotRow {
     snapshot_json: String,
 }
 
+/// One durable idempotency fingerprint for an already published commit operation.
+/// 一条已发布提交操作的持久幂等指纹。
+#[derive(Clone, Debug, Deserialize)]
+struct CommitFingerprintRow {
+    /// SHA-256 fingerprint of every semantic commit request field.
+    /// 全部语义提交请求字段的 SHA-256 指纹。
+    request_fingerprint: String,
+}
+
+/// One persisted staging-generation lifecycle row.
+/// 一条持久化暂存代次生命周期记录。
+#[derive(Clone, Debug, Deserialize)]
+struct GenerationStateRow {
+    /// Current staging lifecycle state.
+    /// 当前暂存生命周期状态。
+    state: String,
+}
+
 /// One Blob readiness row used by `find_missing`.
 /// `find_missing` 使用的一条 Blob 就绪状态行。
 #[derive(Clone, Debug, Deserialize)]
@@ -1582,6 +1600,61 @@ fn current_unix_epoch_millis_i64() -> Result<i64, String> {
     i64::try_from(millis).map_err(|_| String::from("当前时间超出 SQLite 整数范围"))
 }
 
+/// Hash every semantic commit field into one durable idempotency identity.
+/// 将每个语义提交字段散列为一个持久幂等身份。
+///
+/// # Parameters
+/// 参数
+/// `request` is the fully validated atomic publication request.
+/// `request` 是已经完整校验的原子发布请求。
+///
+/// # Returns
+/// 返回值
+/// A lowercase SHA-256 digest, or a port failure when JSON encoding is impossible.
+/// 返回小写 SHA-256 摘要；JSON 编码不可完成时返回端口失败。
+fn commit_request_fingerprint(request: &IndexCommit) -> Result<String, VcePortError> {
+    let payload = serde_json::json!({
+        "request_id": &request.request_id,
+        "generation": request.generation,
+        "refresh_id": &request.refresh_id,
+        "source_revision": &request.source_revision,
+        "deleted_blobs": &request.deleted_blobs,
+        "staged_blob_names": &request.staged_blob_names,
+        "expected_checkpoint_version": request.expected_checkpoint_version,
+        "checkpoint": &request.checkpoint,
+        "state_snapshot": &request.state_snapshot,
+    });
+    let encoded = serde_json::to_vec(&payload)
+        .map_err(|error| port_failed(VcePortOperation::Commit, error.to_string()))?;
+    Ok(hex::encode(Sha256::digest(encoded)))
+}
+
+/// Reconstruct the deterministic receipt for a new or exactly replayed commit.
+/// 为新提交或精确重放的提交重建确定性回执。
+///
+/// # Parameters
+/// 参数
+/// `request` contains the exact accepted membership and checkpoint identity.
+/// `request` 包含精确接受的成员关系与检查点身份。
+///
+/// # Returns
+/// 返回值
+/// The stable receipt implied entirely by the accepted request.
+/// 返回完全由已接受请求决定的稳定回执。
+fn commit_receipt_from_request(request: IndexCommit) -> CommitReceipt {
+    CommitReceipt {
+        operation_id: request.request_id,
+        refresh_id: request.refresh_id,
+        checkpoint_chain_id: request.checkpoint.chain_id,
+        generation: request.generation,
+        checkpoint_version: request.checkpoint.version,
+        indexed_count: request.staged_blob_names.len(),
+        deleted_count: request.deleted_blobs.len(),
+        indexed_blob_names: request.staged_blob_names.into_iter().collect(),
+        deleted_blob_names: request.deleted_blobs.into_iter().collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1614,6 +1687,8 @@ mod tests {
         assert!(schema.contains("CREATE TABLE IF NOT EXISTS vce_project_bindings"));
         assert!(schema.contains("CREATE TABLE IF NOT EXISTS vce_staged_blobs"));
         assert!(schema.contains("CREATE TABLE IF NOT EXISTS vce_checkpoints"));
+        assert!(schema.contains("CREATE TABLE IF NOT EXISTS vce_commit_receipts"));
+        assert!(schema.contains("CREATE TABLE IF NOT EXISTS vce_commit_guards"));
         assert!(!schema.contains("vmm_projects"));
         assert!(!schema.contains("knowledge_documents"));
     }
@@ -1768,13 +1843,14 @@ mod tests {
             symbol_status: AuxiliaryIndexStatus::NotApplicable,
             status: IndexedBlobStatus::Ready,
         };
+        let stage_request = IndexStageBatch {
+            operation_id: String::from("stage-one"),
+            refresh_id: String::from("refresh-one"),
+            generation: 1,
+            blobs: vec![indexed_blob.clone()],
+        };
         let stage = second_index
-            .stage(IndexStageBatch {
-                operation_id: String::from("stage-one"),
-                refresh_id: String::from("refresh-one"),
-                generation: 1,
-                blobs: vec![indexed_blob.clone()],
-            })
+            .stage(stage_request.clone())
             .await
             .expect("stage VCE integration Blob");
         assert_eq!(stage.staged_blob_names, vec![blob_name.clone()]);
@@ -1826,20 +1902,38 @@ mod tests {
             None,
             None,
         );
-        second_index
-            .commit(IndexCommit {
-                request_id: String::from("commit-one"),
-                generation: 1,
-                refresh_id: String::from("refresh-one"),
-                source_revision: Some(String::from("source-one")),
-                deleted_blobs: BTreeSet::new(),
-                staged_blob_names: BTreeSet::from([blob_name.clone()]),
-                expected_checkpoint_version: None,
-                checkpoint,
-                state_snapshot: state_snapshot.clone(),
-            })
+        let commit_request = IndexCommit {
+            request_id: String::from("commit-one"),
+            generation: 1,
+            refresh_id: String::from("refresh-one"),
+            source_revision: Some(String::from("source-one")),
+            deleted_blobs: BTreeSet::new(),
+            staged_blob_names: BTreeSet::from([blob_name.clone()]),
+            expected_checkpoint_version: None,
+            checkpoint,
+            state_snapshot: state_snapshot.clone(),
+        };
+        let first_commit = second_index
+            .commit(commit_request.clone())
             .await
             .expect("commit VCE integration Blob");
+        let replayed_commit = second_index
+            .commit(commit_request)
+            .await
+            .expect("replay exact VCE commit idempotently");
+        assert_eq!(replayed_commit, first_commit);
+        second_index
+            .stage(stage_request)
+            .await
+            .expect_err("committed VCE generation must reject staging replay");
+        second_index
+            .abort_stage(IndexAbortRequest {
+                operation_id: String::from("abort-committed"),
+                refresh_id: String::from("refresh-one"),
+                generation: 1,
+            })
+            .await
+            .expect_err("committed VCE generation must reject abort");
         let persisted_state = data_plane
             .load_state_snapshot(&second_index.binding().namespace_id)
             .await
@@ -2572,6 +2666,21 @@ CREATE TABLE IF NOT EXISTS vce_state_snapshots (
     FOREIGN KEY(namespace_id) REFERENCES vce_project_bindings(namespace_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS vce_commit_receipts (
+    namespace_id TEXT NOT NULL,
+    operation_id TEXT NOT NULL,
+    request_fingerprint TEXT NOT NULL CHECK(length(request_fingerprint) = 64),
+    created_at_unix_ms INTEGER NOT NULL,
+    PRIMARY KEY(namespace_id, operation_id),
+    FOREIGN KEY(namespace_id) REFERENCES vce_project_bindings(namespace_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS vce_commit_guards (
+    namespace_id TEXT PRIMARY KEY,
+    valid INTEGER NOT NULL CHECK(valid = 1),
+    FOREIGN KEY(namespace_id) REFERENCES vce_project_bindings(namespace_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS vce_generations (
     namespace_id TEXT NOT NULL,
     refresh_id TEXT NOT NULL,
@@ -2979,6 +3088,16 @@ impl VceProjectIndex {
             ));
         }
         let _guard = self.mutation_lock.lock().await;
+        let mut staged_blob_names = BTreeSet::new();
+        for blob in &request.blobs {
+            self.validate_indexed_blob(blob, request.generation)?;
+            if !staged_blob_names.insert(blob.blob_name.clone()) {
+                return Err(port_rejected(
+                    VcePortOperation::Stage,
+                    "staging batch contains duplicate Blob identities",
+                ));
+            }
+        }
         let now = current_unix_epoch_millis_i64()
             .map_err(|message| port_failed(VcePortOperation::Stage, message))?;
         self.data_plane
@@ -3003,23 +3122,32 @@ impl VceProjectIndex {
             )
             .await
             .map_err(|message| port_failed(VcePortOperation::Stage, message))?;
-        let mut staged_blob_names = Vec::with_capacity(request.blobs.len());
+        let generation_state = self
+            .generation_state(
+                &request.refresh_id,
+                request.generation,
+                VcePortOperation::Stage,
+            )
+            .await?
+            .ok_or_else(|| {
+                port_failed(
+                    VcePortOperation::Stage,
+                    "staging generation was not created",
+                )
+            })?;
+        if generation_state != "staging" {
+            return Err(port_rejected(
+                VcePortOperation::Stage,
+                format!("staging generation is already {generation_state}"),
+            ));
+        }
         for blob in &request.blobs {
-            self.validate_indexed_blob(blob, request.generation)?;
             self.write_blob_vectors(blob, &request.refresh_id)
                 .await
                 .map_err(|message| port_failed(VcePortOperation::Stage, message))?;
             self.replace_staged_blob(blob, &request.refresh_id)
                 .await
                 .map_err(|message| port_failed(VcePortOperation::Stage, message))?;
-            staged_blob_names.push(blob.blob_name.clone());
-        }
-        staged_blob_names.sort();
-        if staged_blob_names.windows(2).any(|pair| pair[0] == pair[1]) {
-            return Err(port_rejected(
-                VcePortOperation::Stage,
-                "staging batch contains duplicate Blob identities",
-            ));
         }
         let staged_count = u64::try_from(staged_blob_names.len()).unwrap_or(u64::MAX);
         self.record_operation(OperationRecord {
@@ -3037,7 +3165,7 @@ impl VceProjectIndex {
             operation_id: request.operation_id,
             refresh_id: request.refresh_id,
             generation: request.generation,
-            staged_blob_names,
+            staged_blob_names: staged_blob_names.into_iter().collect(),
         })
     }
 
@@ -3055,6 +3183,40 @@ impl VceProjectIndex {
             ));
         }
         let _guard = self.mutation_lock.lock().await;
+        match self
+            .generation_state(
+                &request.refresh_id,
+                request.generation,
+                VcePortOperation::AbortStage,
+            )
+            .await?
+            .as_deref()
+        {
+            Some("committed") => {
+                return Err(port_rejected(
+                    VcePortOperation::AbortStage,
+                    "a committed generation cannot be aborted",
+                ));
+            }
+            Some("aborted") | None => {
+                self.recover_pending_vector_cleanup()
+                    .await
+                    .map_err(|message| port_failed(VcePortOperation::AbortStage, message))?;
+                return Ok(IndexAbortReceipt {
+                    operation_id: request.operation_id,
+                    refresh_id: request.refresh_id,
+                    generation: request.generation,
+                    removed_blob_count: 0,
+                });
+            }
+            Some("staging") => {}
+            Some(state) => {
+                return Err(port_invalid(
+                    VcePortOperation::AbortStage,
+                    format!("unknown staging generation state `{state}`"),
+                ));
+            }
+        }
         let cleanup_id = vector_cleanup_id(
             &self.binding.namespace_id,
             "aborted_generation",
@@ -3137,6 +3299,27 @@ impl VceProjectIndex {
             .await?;
         self.validate_commit(&request)?;
         let _guard = self.mutation_lock.lock().await;
+        let request_fingerprint = commit_request_fingerprint(&request)?;
+        let replay_rows: Vec<CommitFingerprintRow> = self
+            .data_plane
+            .query_rows(
+                "SELECT request_fingerprint FROM vce_commit_receipts WHERE namespace_id = ? AND operation_id = ? LIMIT 1;",
+                vec![
+                    sqlite_text(&self.binding.namespace_id),
+                    sqlite_text(&request.request_id),
+                ],
+            )
+            .await
+            .map_err(|message| port_failed(VcePortOperation::Commit, message))?;
+        if let Some(replay) = replay_rows.first() {
+            if replay.request_fingerprint != request_fingerprint {
+                return Err(port_rejected(
+                    VcePortOperation::Commit,
+                    "commit operation identity was reused with a different request",
+                ));
+            }
+            return Ok(commit_receipt_from_request(request));
+        }
         let current = self.current_checkpoint_row().await?;
         let actual_version = current
             .as_ref()
@@ -3167,7 +3350,7 @@ impl VceProjectIndex {
                 "staged Blob membership does not match the commit",
             ));
         }
-        let script = self.build_commit_script(&request)?;
+        let script = self.build_commit_script(&request, &request_fingerprint)?;
         self.data_plane
             .execute(&script, Vec::new(), "发布 VCE 检查点失败")
             .await
@@ -3175,17 +3358,7 @@ impl VceProjectIndex {
         // Cleanup is derived and may be retried later; the durable queue was committed atomically above.
         // 清理属于派生操作且可稍后重试；其持久队列已在上方原子提交。
         let _cleanup_result = self.recover_pending_vector_cleanup().await;
-        Ok(CommitReceipt {
-            operation_id: request.request_id,
-            refresh_id: request.refresh_id,
-            checkpoint_chain_id: request.checkpoint.chain_id,
-            generation: request.generation,
-            checkpoint_version: request.checkpoint.version,
-            indexed_count: request.staged_blob_names.len(),
-            deleted_count: request.deleted_blobs.len(),
-            indexed_blob_names: request.staged_blob_names.into_iter().collect(),
-            deleted_blob_names: request.deleted_blobs.into_iter().collect(),
-        })
+        Ok(commit_receipt_from_request(request))
     }
 
     /// Searches LanceDB content candidates and materializes authoritative SQLite chunks.
@@ -3777,9 +3950,36 @@ impl VceProjectIndex {
         Ok(rows.into_iter().map(|row| row.blob_name).collect())
     }
 
+    /// Loads one exact staging generation state without widening refresh identity.
+    /// 在不扩大刷新身份的情况下加载一个精确暂存代次状态。
+    async fn generation_state(
+        &self,
+        refresh_id: &str,
+        generation: u64,
+        operation: VcePortOperation,
+    ) -> Result<Option<String>, VcePortError> {
+        let rows: Vec<GenerationStateRow> = self
+            .data_plane
+            .query_rows(
+                "SELECT state FROM vce_generations WHERE namespace_id = ? AND refresh_id = ? AND generation = ? LIMIT 1;",
+                vec![
+                    sqlite_text(&self.binding.namespace_id),
+                    sqlite_text(refresh_id),
+                    sqlite_u64(generation, "VCE generation")?,
+                ],
+            )
+            .await
+            .map_err(|message| port_failed(operation, message))?;
+        Ok(rows.into_iter().next().map(|row| row.state))
+    }
+
     /// Builds one SQLite transaction that promotes a fully validated generation.
     /// 构建一个提升完整已校验代次的 SQLite 事务。
-    fn build_commit_script(&self, request: &IndexCommit) -> Result<String, VcePortError> {
+    fn build_commit_script(
+        &self,
+        request: &IndexCommit,
+        request_fingerprint: &str,
+    ) -> Result<String, VcePortError> {
         let namespace = sqlite_string_literal(&self.binding.namespace_id);
         let refresh_id = sqlite_string_literal(&request.refresh_id);
         let checkpoint_json = serde_json::to_string(&request.checkpoint)
@@ -3799,6 +3999,19 @@ impl VceProjectIndex {
         let generation = request.generation;
         let version = request.checkpoint.version;
         let operation_id = sqlite_string_literal(&request.request_id);
+        let request_fingerprint = sqlite_string_literal(request_fingerprint);
+        let cas_condition = request.expected_checkpoint_version.map_or_else(
+            || {
+                format!(
+                    "NOT EXISTS(SELECT 1 FROM vce_checkpoints WHERE namespace_id = '{namespace}')"
+                )
+            },
+            |expected| {
+                format!(
+                    "EXISTS(SELECT 1 FROM vce_checkpoints WHERE namespace_id = '{namespace}' AND checkpoint_version = {expected})"
+                )
+            },
+        );
         let deleted = sql_string_set(&request.deleted_blobs);
         let delete_clause = if deleted.is_empty() {
             String::new()
@@ -3844,6 +4057,9 @@ impl VceProjectIndex {
         }
         Ok(format!(
             r#"BEGIN IMMEDIATE;
+INSERT INTO vce_commit_guards(namespace_id, valid)
+VALUES ('{namespace}', CASE WHEN {cas_condition} THEN 1 ELSE 0 END)
+ON CONFLICT(namespace_id) DO UPDATE SET valid = excluded.valid;
 {delete_clause}DELETE FROM vce_blobs
 WHERE namespace_id = '{namespace}'
   AND path IN (
@@ -3895,6 +4111,8 @@ VALUES ('{namespace}', '{state_snapshot_json}', {now})
 ON CONFLICT(namespace_id) DO UPDATE SET
     snapshot_json = excluded.snapshot_json,
     updated_at_unix_ms = excluded.updated_at_unix_ms;
+INSERT INTO vce_commit_receipts(namespace_id, operation_id, request_fingerprint, created_at_unix_ms)
+VALUES ('{namespace}', '{operation_id}', '{request_fingerprint}', {now});
 UPDATE vce_generations SET state = 'committed', operation_id = '{operation_id}', updated_at_unix_ms = {now}
 WHERE namespace_id = '{namespace}' AND refresh_id = '{refresh_id}' AND generation = {generation};
 INSERT INTO vce_operations(
@@ -3913,6 +4131,7 @@ SET lifecycle_state = 'ready', updated_at_unix_ms = {now}
 WHERE namespace_id = '{namespace}';
 DELETE FROM vce_staged_blobs
 WHERE namespace_id = '{namespace}' AND refresh_id = '{refresh_id}' AND generation = {generation};
+DELETE FROM vce_commit_guards WHERE namespace_id = '{namespace}';
 COMMIT;"#,
             indexed_count = request.staged_blob_names.len(),
         ))

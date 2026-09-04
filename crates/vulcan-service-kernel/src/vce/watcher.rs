@@ -6,12 +6,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-use tokio::sync::Mutex as AsyncMutex;
+use futures_util::future::BoxFuture;
+use futures_util::stream::{FuturesUnordered, StreamExt};
+use tokio::sync::{Mutex as AsyncMutex, watch};
 use vulcan_context_engine::RefreshReason;
 use vulcan_file_watcher::live::{
     LiveFileWatcherSubscriber, LiveWatchRegistration, ThrottledLiveWatchReceiver,
 };
 
+use crate::ServiceEventEmitter;
 use crate::workspace_watcher::WorkspaceWatcherCenter;
 
 use super::VceRuntimeManager;
@@ -66,12 +69,15 @@ struct VceWatcherInner {
     /// Coalesced dirty sets retained across refresh failures.
     /// 跨刷新失败保留的合并脏集合。
     pending: Arc<AsyncMutex<BTreeMap<String, VcePendingWatchBatch>>>,
-    /// Physical event consumer task.
-    /// 物理事件消费任务。
-    _event_task: crate::ServiceTaskHandle<()>,
-    /// Serialized retrying refresh worker task.
-    /// 串行重试刷新工作任务。
-    _refresh_task: crate::ServiceTaskHandle<()>,
+    /// Physical event consumer task retained for convergent shutdown.
+    /// 为收敛式关闭保留的物理事件消费任务。
+    event_task: Mutex<Option<crate::ServiceTaskHandle<()>>>,
+    /// Concurrent cross-project refresh scheduler retained for convergent shutdown.
+    /// 为收敛式关闭保留的跨项目并发刷新调度任务。
+    refresh_task: Mutex<Option<crate::ServiceTaskHandle<()>>>,
+    /// Cooperative shutdown signal shared by the event consumer and refresh scheduler.
+    /// 由事件消费者与刷新调度器共享的协作关闭信号。
+    shutdown_sender: watch::Sender<bool>,
 }
 
 impl VceWatcherService {
@@ -89,18 +95,37 @@ impl VceWatcherService {
     /// 返回值
     /// A running watcher service.
     /// 返回运行中的监听服务。
-    pub(crate) fn new(center: &WorkspaceWatcherCenter, manager: VceRuntimeManager) -> Self {
+    pub(crate) fn new(
+        center: &WorkspaceWatcherCenter,
+        manager: VceRuntimeManager,
+        event_emitter: ServiceEventEmitter,
+    ) -> Self {
         let (subscriber, receiver) = center.subscribe();
         let targets = Arc::new(RwLock::new(BTreeMap::new()));
         let pending: Arc<AsyncMutex<BTreeMap<String, VcePendingWatchBatch>>> =
             Arc::new(AsyncMutex::new(BTreeMap::new()));
+        let (shutdown_sender, mut event_shutdown) = watch::channel(false);
 
         let event_targets = Arc::clone(&targets);
         let event_pending = Arc::clone(&pending);
         let event_task = crate::spawn_service_task(async move {
             let mut receiver =
                 ThrottledLiveWatchReceiver::new(receiver, Duration::from_millis(250));
-            while let Some(event) = receiver.recv().await {
+            loop {
+                let event = tokio::select! {
+                    shutdown = event_shutdown.changed() => {
+                        if shutdown.is_err() || *event_shutdown.borrow() {
+                            break;
+                        }
+                        continue;
+                    }
+                    event = receiver.recv() => {
+                        let Some(event) = event else {
+                            break;
+                        };
+                        event
+                    }
+                };
                 let grouped = group_vce_watch_events(&event_targets, &event.paths);
                 if grouped.is_empty() {
                     continue;
@@ -117,50 +142,104 @@ impl VceWatcherService {
         });
 
         let refresh_pending = Arc::clone(&pending);
+        let mut refresh_shutdown = shutdown_sender.subscribe();
         let refresh_task = crate::spawn_service_task(async move {
             let mut interval = tokio::time::interval(Duration::from_millis(500));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            let mut active_projects = BTreeSet::<String>::new();
+            let mut workers = FuturesUnordered::<
+                BoxFuture<'static, (String, VcePendingWatchBatch, Result<(), String>)>,
+            >::new();
             loop {
-                interval.tick().await;
-                let batches = {
-                    let mut queued = refresh_pending.lock().await;
-                    std::mem::take(&mut *queued)
-                };
-                for (project_id, batch) in batches {
-                    if batch
-                        .retry_not_before
-                        .is_some_and(|deadline| deadline > tokio::time::Instant::now())
-                    {
-                        refresh_pending.lock().await.insert(project_id, batch);
-                        continue;
+                tokio::select! {
+                    shutdown = refresh_shutdown.changed() => {
+                        if shutdown.is_ok() && !*refresh_shutdown.borrow() {
+                            continue;
+                        }
+                        // Stop admitting new batches, cancel every active project refresh, and
+                        // drain workers so their staging cleanup and runtime gates can converge.
+                        // 停止接纳新批次，取消所有活动项目刷新，并排空工作器，使暂存清理与运行时闸门收敛。
+                        for project_id in &active_projects {
+                            let _ = manager.cancel_refresh(project_id, None).await;
+                        }
+                        while workers.next().await.is_some() {}
+                        break;
                     }
-                    let result = if batch.force_full {
-                        manager
-                            .refresh_full(&project_id, RefreshReason::FileWatcher)
-                            .await
-                            .map(Some)
-                    } else {
-                        manager
-                            .refresh_paths(
-                                &project_id,
-                                batch.paths.clone(),
-                                RefreshReason::FileWatcher,
-                            )
-                            .await
-                    };
-                    if let Err(error) = result {
-                        eprintln!(
-                            "[webui-service] VCE watcher refresh failed for `{project_id}`: {error}"
-                        );
-                        let mut queued = refresh_pending.lock().await;
-                        let retry = queued.entry(project_id).or_default();
-                        retry.paths.extend(batch.paths);
-                        retry.force_full |= batch.force_full;
-                        retry.retry_attempt = batch.retry_attempt.saturating_add(1);
-                        retry.retry_not_before = Some(
-                            tokio::time::Instant::now()
-                                + vce_watch_retry_delay(retry.retry_attempt),
-                        );
+                    _ = interval.tick() => {
+                        let ready_batches = {
+                            let now = tokio::time::Instant::now();
+                            let mut queued = refresh_pending.lock().await;
+                            let project_ids = queued
+                                .iter()
+                                .filter(|(project_id, batch)| {
+                                    !active_projects.contains(*project_id)
+                                        && batch
+                                            .retry_not_before
+                                            .is_none_or(|deadline| deadline <= now)
+                                })
+                                .map(|(project_id, _)| project_id.clone())
+                                .collect::<Vec<_>>();
+                            project_ids
+                                .into_iter()
+                                .filter_map(|project_id| {
+                                    queued.remove(&project_id).map(|batch| (project_id, batch))
+                                })
+                                .collect::<Vec<_>>()
+                        };
+                        for (project_id, batch) in ready_batches {
+                            active_projects.insert(project_id.clone());
+                            let worker_manager = manager.clone();
+                            let worker_emitter = event_emitter.clone();
+                            workers.push(Box::pin(async move {
+                                let result = if batch.force_full {
+                                    worker_manager
+                                        .refresh_full(&project_id, RefreshReason::FileWatcher)
+                                        .await
+                                        .map(|_| ())
+                                } else {
+                                    worker_manager
+                                        .refresh_paths(
+                                            &project_id,
+                                            batch.paths.clone(),
+                                            RefreshReason::FileWatcher,
+                                        )
+                                        .await
+                                        .map(|_| ())
+                                };
+                                super::services::emit_vce_runtime_changed(
+                                    &worker_emitter,
+                                    &worker_manager,
+                                    &project_id,
+                                )
+                                .await;
+                                (project_id, batch, result)
+                            }));
+                        }
+                    }
+                    completed = workers.next(), if !workers.is_empty() => {
+                        let Some((project_id, batch, result)) = completed else {
+                            continue;
+                        };
+                        active_projects.remove(&project_id);
+                        if let Err(error) = result {
+                            eprintln!(
+                                "[webui-service] VCE watcher refresh failed for `{project_id}`: {error}"
+                            );
+                            if error == super::VCE_REFRESH_CANCELLED_ERROR {
+                                continue;
+                            }
+                            let mut queued = refresh_pending.lock().await;
+                            let retry = queued.entry(project_id).or_default();
+                            retry.paths.extend(batch.paths);
+                            retry.force_full |= batch.force_full;
+                            retry.retry_attempt = retry
+                                .retry_attempt
+                                .max(batch.retry_attempt.saturating_add(1));
+                            retry.retry_not_before = Some(
+                                tokio::time::Instant::now()
+                                    + vce_watch_retry_delay(retry.retry_attempt),
+                            );
+                        }
                     }
                 }
             }
@@ -172,8 +251,9 @@ impl VceWatcherService {
                 registrations: Mutex::new(BTreeMap::new()),
                 targets,
                 pending,
-                _event_task: event_task,
-                _refresh_task: refresh_task,
+                event_task: Mutex::new(Some(event_task)),
+                refresh_task: Mutex::new(Some(refresh_task)),
+                shutdown_sender,
             }),
         }
     }
@@ -252,8 +332,40 @@ impl VceWatcherService {
     /// Stop background tasks and release every physical project registration.
     /// 停止后台任务并释放全部物理项目注册。
     pub(crate) async fn shutdown(&self) {
-        self.inner._event_task.abort();
-        self.inner._refresh_task.abort();
+        let _ = self.inner.shutdown_sender.send(true);
+        let event_task = self
+            .inner
+            .event_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        let refresh_task = self
+            .inner
+            .refresh_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(mut task) = event_task {
+            if tokio::time::timeout(Duration::from_secs(5), &mut task)
+                .await
+                .is_err()
+            {
+                task.abort();
+                let _ = task.await;
+            }
+        }
+        if let Some(mut task) = refresh_task {
+            if tokio::time::timeout(Duration::from_secs(15), &mut task)
+                .await
+                .is_err()
+            {
+                // The manager shutdown immediately following this call joins the project gate and
+                // converts any abandoned generation into an idempotent cleanup request.
+                // 紧随其后的管理器关闭会汇合项目闸门，并把任何遗留代次转换为幂等清理请求。
+                task.abort();
+                let _ = task.await;
+            }
+        }
         self.inner
             .registrations
             .lock()
