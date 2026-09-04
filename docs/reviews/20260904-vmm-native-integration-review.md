@@ -248,6 +248,12 @@
 - 契约边界：复用已冻结的 `HostAiCancellation` 与 `HostAiCallContext.with_cancellation`，未增加或改变公共字段、错误码及调用语义，因此无需向 VCE 发布契约变更。
 - 状态：已修复并新增取消唤醒测试；格式检查、定向测试、`git diff --check` 与 `vulcan-service-kernel --lib` 严格 Clippy 通过。由于第 4 轮发现该问题，连续无问题轮次再次重置为零。
 
+### F-036 累计差异包含 EOF 多余空行
+
+- 影响：最终基线到 `HEAD` 的 `git diff --check` 在 `Makefile` 和 `apps/vulcan-code-web/src/service/browser-fallback-workbench.ts` 报告 `new blank line at EOF`；虽然不改变运行行为，但不满足最终差异质量门禁。
+- 修复：只删除两个文件末尾的额外空行，不改变 Make 路由或浏览器 fallback 逻辑。
+- 状态：已修复，待提交后累计差异复验。由于原第 5 轮发现该问题，F-035 后的连续审核计数全部作废并再次从零开始。
+
 ## 提交前验证基线
 
 - `cargo fmt --all -- --check`：通过。
@@ -259,9 +265,9 @@
 - WebUI：TypeScript lint 通过，137 个测试文件共 849 项通过。
 - 全工作区 all-targets 严格 Clippy 仍受 571 项既有非本任务 lint 阻断，主要位于 service-api、workspace-store 与 provider-adapters 的历史测试代码；输出中无 HostAI、VCE、Core、VMM 及本次 service-kernel 路径。本任务通过上述生产库与 HostAI/VCE 独立严格门禁确认无新增告警。
 
-## 连续无新增问题轮次
+## F-035 修复后的审核尝试（已作废）
 
-当前累计 5 轮。F-035 修复后从头重新开始；五轮均覆盖起始基线后的全部中间本地提交，最终轮次还覆盖执行总结、归档与审核文档。
+前四轮未发现问题，但第 5 轮提交后累计差异复核发现 F-036，因此本组连续计数作废，当前累计为 0。
 
 | 轮次 | 累计边界 | 审核重点 | 验证证据 | 结论 |
 | --- | --- | --- | --- | --- |
@@ -269,4 +275,16 @@
 | 2 | `52650f94989ded9f1f8d7a525b2f2bc0f37ce646..a0494285` 加当前审核文档改动 | ID 1 保护、稳定 tag/ID 绑定、原子访问配置、迁移预检与冲突改名、画像/会话/向量迁移、清空/删除和中断恢复 | Schema 保护与作用域身份校验、项目变更/功能读写双门、预检版本与指纹、幂等载荷、完整快照变换、向量原值 upsert/陈旧向量删除、恢复账本顺序复核；data-plane 6 项及维护迁移/清空 4 项测试通过 | 无新增问题，累计 2/5 |
 | 3 | `52650f94989ded9f1f8d7a525b2f2bc0f37ce646..a0494285` 加当前审核文档改动 | 全局 Native/ExternalGrpc 互斥配置、默认固定项目、启用时未绑定项目计划、后端专属界面、外置前缀与稳定 ID、新建项目自动绑定和结果提示 | `should_prepare_project_binding_plan` 触发边界、两类 exact-coverage 计划校验、固定目标/逐行创建或绑定、外置显式覆盖与前缀自动创建、非致命项目绑定通知调用链复核；`vulcan-vmm` 48 项、service-kernel VMM 46 项、WebUI 137 个文件共 849 项测试及完整 TypeScript lint 通过 | 无新增问题，累计 3/5 |
 | 4 | `52650f94989ded9f1f8d7a525b2f2bc0f37ce646..a0494285` 加当前审核文档改动 | HostAI 公共契约、ConfiguredInference 私有宿主适配器、资料库 LLM/Embedding、VMM Core HostEffect 映射与 VCE 消费端 | 能力注册/刷新与 owner/profile 校验、`InternalBackground` 作用域、宿主鉴权/预算/最早截止时间/取消竞态/错误映射、资料库持久取消投影、VMM LLM/Embedding/Rerank 强类型响应验证复核；HostAI+VCE 全特性 225 项测试、service-kernel internal_ai 2 项、native driver 3 项、knowledge 16 项测试通过，HostAI/VCE 全目标与 service-kernel 生产库严格 Clippy 均通过 | 无新增问题，累计 4/5 |
-| 5 | `52650f94989ded9f1f8d7a525b2f2bc0f37ce646..最终 HEAD`，含全部中间提交及最终归档文档 | 外部秘密与后端字段隔离、Native 数据目录和符号链接防护、权威资源清单、恢复账本/待分析队列、计划执行总结与最终全量门禁 | 双外部秘密遮罩调用链及目标源码密钥形态扫描；`.vulcan/code/vmm/{sqlite,lancedb}` 逐级可信目录校验；49 文件资源 manifest 精确校验；单未完成 mutation/分析队列与恢复顺序复核；资源契约 17 项、data-plane 6 项、秘密遮罩 1 项通过，最终格式检查、workspace all-targets check、14 个相关 Rust crate 48 套件 2280 项测试、WebUI 137 文件 849 项测试与 lint 通过 | 无新增问题，累计 5/5 |
+| 5 | `52650f94989ded9f1f8d7a525b2f2bc0f37ce646..2ab551cb`，含全部中间提交及首次最终归档文档 | 外部秘密与后端字段隔离、Native 数据目录和符号链接防护、权威资源清单、恢复账本/待分析队列、计划执行总结与最终全量门禁 | 业务与测试证据均通过，但提交后原始 `git diff --check` 在两个文件发现 EOF 多余空行 | 发现 F-036，连续计数清零 |
+
+## F-036 修复后连续无新增问题轮次
+
+当前累计 0 轮；每轮继续覆盖 `52650f94989ded9f1f8d7a525b2f2bc0f37ce646..最终 HEAD` 的全部中间提交和未提交改动。
+
+| 轮次 | 累计边界 | 审核重点 | 验证证据 | 结论 |
+| --- | --- | --- | --- | --- |
+| 1 | 待定 | 待定 | 待定 | 待执行 |
+| 2 | 待定 | 待定 | 待定 | 待执行 |
+| 3 | 待定 | 待定 | 待定 | 待执行 |
+| 4 | 待定 | 待定 | 待定 | 待执行 |
+| 5 | 待定 | 待定 | 待定 | 待执行 |

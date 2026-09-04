@@ -627,4 +627,3 @@ export function updateBrowserFallbackWorkbench(mutator: (snapshot: WorkbenchSnap
   browserFallbackWorkbenchState.plugins = [...luaSkillPlugins, ...vulcanPlugins];
   return browserFallbackSnapshot();
 }
-
