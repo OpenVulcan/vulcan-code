@@ -7422,6 +7422,7 @@ dependencies = [
  "vulcan-ai-contract",
  "vulcan-change-set",
  "vulcan-context",
+ "vulcan-context-engine",
  "vulcan-context-injection",
  "vulcan-core",
  "vulcan-provider-config",

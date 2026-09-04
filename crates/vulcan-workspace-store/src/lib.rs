@@ -4,6 +4,7 @@
 pub mod data_plane;
 pub mod knowledge_base;
 pub mod provider_usage;
+pub mod vce_data_plane;
 pub mod vmm_data_plane;
 pub mod workspace_store;
 
