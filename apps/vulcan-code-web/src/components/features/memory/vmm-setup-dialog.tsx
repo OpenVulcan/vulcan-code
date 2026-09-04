@@ -104,9 +104,45 @@ interface EditableBindingDecision {
   targetProjectId: string
 }
 
-// EXTERNAL_FIXED_TARGET_SENTINEL represents the not-yet-materialized global fixed project in setup state only.
-// EXTERNAL_FIXED_TARGET_SENTINEL 仅在配置状态中表示尚未物化 ID 的全局固定项目。
-const EXTERNAL_FIXED_TARGET_SENTINEL = "__global_fixed_vmm_project__"
+// FIXED_TARGET_SENTINEL represents a row that still follows the current global fixed-project choice.
+// FIXED_TARGET_SENTINEL 表示仍跟随当前全局固定项目选择的配置行。
+const FIXED_TARGET_SENTINEL = "__global_fixed_vmm_project__"
+
+// setupBindingTargetProjectId resolves one visible bind-existing decision for service submission.
+// setupBindingTargetProjectId 为服务提交解析一条可见的绑定已有项目决定。
+//
+// Parameters: mode selects native or external semantics, bindingMode identifies whether the row
+// can inherit a fixed default, decision is the exact row state, and nativeFixedProjectId is the
+// currently selected native default rather than the value present when rows were initialized.
+// 参数：mode 选择原生或外置语义，bindingMode 标识该行能否继承固定默认值，decision 是准确的行状态，
+// nativeFixedProjectId 是当前选择的原生默认值，而不是初始化配置行时的旧值。
+//
+// Returns: the stable selected ID, the current native fixed ID, or null for an external fixed
+// project whose ID will be materialized only after remote creation.
+// 返回：稳定的已选 ID、当前原生固定 ID，或尚待远端创建后物化 ID 的外置固定项目所对应的 null。
+export function setupBindingTargetProjectId(input: {
+  // Selected backend semantics.
+  // 已选择的后端语义。
+  mode: VmmQuickSetupMode
+  // Global binding mode shown in the setup dialog.
+  // 配置向导中显示的全局绑定模式。
+  bindingMode: VmmProjectBindingMode
+  // Exact row decision, absent only before initialization completes.
+  // 准确的逐行决定，仅在初始化完成前可能缺失。
+  decision?: EditableBindingDecision
+  // Current native fixed project identity.
+  // 当前原生固定项目身份。
+  nativeFixedProjectId: string
+}): number | null {
+  if (input.decision?.action !== "bind_existing") return null
+  if (
+    input.bindingMode === "fixed"
+    && input.decision.targetProjectId === FIXED_TARGET_SENTINEL
+  ) {
+    return input.mode === "native" ? Number(input.nativeFixedProjectId) : null
+  }
+  return Number(input.decision.targetProjectId)
+}
 
 // VmmSetupDialog guides the user through backend, inference, binding, and confirmation.
 // VmmSetupDialog 引导用户完成后端、推理、绑定与确认配置。
@@ -193,9 +229,7 @@ function VmmSetupDialog({
       nextDecisions[project.projectId] = {
         action: bindFixed ? "bind_existing" : "create_and_bind",
         projectName: project.projectId,
-        targetProjectId: bindFixed
-          ? (nextMode === "native" ? nativeFixedProjectId : EXTERNAL_FIXED_TARGET_SENTINEL)
-          : "",
+        targetProjectId: bindFixed ? FIXED_TARGET_SENTINEL : "",
       }
     }
     setDecisions(nextDecisions)
@@ -259,16 +293,12 @@ function VmmSetupDialog({
 
   const bindingPlan = unboundProjects.map((project): VmmProjectBindingPlanEntry => {
     const decision = decisions[project.projectId]
-    const usesPendingExternalFixedTarget = mode === "external"
-      && bindingMode === "fixed"
-      && decision?.action === "bind_existing"
-      && decision.targetProjectId === EXTERNAL_FIXED_TARGET_SENTINEL
     return {
       vulcanProjectId: project.projectId,
       action: decision?.action ?? "create_and_bind",
       projectName: decision?.action === "create_and_bind" ? decision.projectName.trim() : null,
       targetProjectId: decision?.action === "bind_existing"
-        ? (usesPendingExternalFixedTarget ? null : Number(decision.targetProjectId))
+        ? setupBindingTargetProjectId({ mode, bindingMode, decision, nativeFixedProjectId })
         : null,
     }
   })
@@ -629,8 +659,12 @@ function SetupBindingsStep(props: {
               ? props.externalFixedProjectName
               : existingProjects.find((projectOption) => projectOption.id === props.externalFixedTargetProjectId)?.label
                 ?? t("vmm.setup.binding.selectProject")
-            const rowProjectOptions = props.mode === "external" && props.bindingMode === "fixed"
-              ? [{ id: EXTERNAL_FIXED_TARGET_SENTINEL, label: `${t("vmm.setup.binding.fixed")}: ${fixedExternalLabel}` }, ...existingProjects]
+            const fixedTargetLabel = props.mode === "native"
+              ? existingProjects.find((projectOption) => projectOption.id === props.nativeFixedProjectId)?.label
+                ?? t("vmm.setup.binding.selectProject")
+              : fixedExternalLabel
+            const rowProjectOptions = props.bindingMode === "fixed"
+              ? [{ id: FIXED_TARGET_SENTINEL, label: `${t("vmm.setup.binding.fixed")}: ${fixedTargetLabel}` }, ...existingProjects]
               : existingProjects
             return (
               <div className="grid gap-3 rounded-lg border p-3 md:grid-cols-[minmax(10rem,1fr)_12rem_minmax(12rem,1fr)]" key={project.projectId}>
@@ -640,7 +674,7 @@ function SetupBindingsStep(props: {
                     action,
                     targetProjectId: action === "bind_existing"
                       ? (props.bindingMode === "fixed"
-                          ? (props.mode === "native" ? props.nativeFixedProjectId : EXTERNAL_FIXED_TARGET_SENTINEL)
+                          ? FIXED_TARGET_SENTINEL
                           : existingProjects[0]?.id ?? "")
                       : "",
                   })}
