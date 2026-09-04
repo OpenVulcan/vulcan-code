@@ -1655,11 +1655,51 @@ fn commit_receipt_from_request(request: IndexCommit) -> CommitReceipt {
     }
 }
 
+/// Validate the exact checkpoint membership transition represented by one commit.
+/// 校验一次提交所表示的精确检查点成员转换。
+///
+/// # Parameters
+/// 参数
+/// `current_members` is the authoritative membership of the current committed checkpoint.
+/// `current_members` 是当前已提交检查点的权威成员集合。
+/// `deleted_blobs` contains identities that must already exist and disappear from the next view.
+/// `deleted_blobs` 包含必须已存在且需从下一视图消失的身份。
+/// `staged_blobs` contains the complete validated staging membership for this refresh.
+/// `staged_blobs` 包含本次刷新的完整已校验暂存成员集合。
+/// `next_members` is the checkpoint membership requested for publication.
+/// `next_members` 是请求发布的检查点成员集合。
+///
+/// # Returns
+/// 返回值
+/// Success only when `next = (current - deleted) union staged` exactly.
+/// 仅当 `next = (current - deleted) union staged` 精确成立时返回成功。
+fn validate_checkpoint_membership_transition(
+    current_members: &BTreeSet<String>,
+    deleted_blobs: &BTreeSet<String>,
+    staged_blobs: &BTreeSet<String>,
+    next_members: &BTreeSet<String>,
+) -> Result<(), &'static str> {
+    if !deleted_blobs.is_subset(current_members) {
+        return Err("deleted Blob membership is not a subset of the current checkpoint");
+    }
+    // expectedMembers derives the only publishable next view from authoritative old and staged data.
+    // expectedMembers 从权威旧数据与暂存数据推导唯一可发布的下一视图。
+    let mut expected_members = current_members.clone();
+    for blob_name in deleted_blobs {
+        expected_members.remove(blob_name);
+    }
+    expected_members.extend(staged_blobs.iter().cloned());
+    if expected_members != *next_members {
+        return Err("checkpoint membership does not equal current minus deleted plus staged Blobs");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         VCE_SPACE_ID, VceProjectIndexConfig, bootstrap_vce_data_plane, build_vce_schema_script,
-        vector_table_name,
+        validate_checkpoint_membership_transition, vector_table_name,
     };
     use crate::data_plane::{ControllerRuntimeHandle, ControllerRuntimeMetadata};
     use sha2::{Digest, Sha256};
@@ -1683,8 +1723,8 @@ mod tests {
         VceStateIdentity, VceStateSnapshot, WorkspaceSnapshot, blob_name,
     };
 
-    /// Deterministic shared-AI boundary used by the real VCE data-plane test.
-    /// 真实 VCE 数据面测试使用的确定性共享 AI 边界。
+    /// Deterministic VCE AI boundary used by the real data-plane test.
+    /// 真实 VCE 数据面测试使用的确定性 VCE AI 边界。
     struct DeterministicAi {
         /// Frozen registration identity.
         /// 冻结的注册身份。
@@ -1832,6 +1872,60 @@ mod tests {
         assert_ne!(content, path);
         assert!(content.starts_with("vce_content_"));
         assert!(content.ends_with("_d1536"));
+    }
+
+    /// Verifies checkpoint publication cannot omit, fabricate, or delete unknown Blob identities.
+    /// 验证检查点发布不能遗漏、伪造成员或删除未知 Blob 身份。
+    #[test]
+    fn checkpoint_membership_transition_is_exact() {
+        // current is the authoritative predecessor membership.
+        // current 是权威前驱成员集合。
+        let current = BTreeSet::from([String::from("blob-a"), String::from("blob-b")]);
+        // deleted removes one existing identity from the next view.
+        // deleted 从下一视图移除一个已存在身份。
+        let deleted = BTreeSet::from([String::from("blob-a")]);
+        // staged publishes one replacement identity.
+        // staged 发布一个替换身份。
+        let staged = BTreeSet::from([String::from("blob-c")]);
+        // expected is the only valid next membership.
+        // expected 是唯一有效的下一成员集合。
+        let expected = BTreeSet::from([String::from("blob-b"), String::from("blob-c")]);
+
+        assert_eq!(
+            validate_checkpoint_membership_transition(&current, &deleted, &staged, &expected),
+            Ok(())
+        );
+        assert!(
+            validate_checkpoint_membership_transition(
+                &current,
+                &deleted,
+                &staged,
+                &BTreeSet::from([String::from("blob-c")]),
+            )
+            .is_err()
+        );
+        assert!(
+            validate_checkpoint_membership_transition(
+                &current,
+                &deleted,
+                &staged,
+                &BTreeSet::from([
+                    String::from("blob-b"),
+                    String::from("blob-c"),
+                    String::from("blob-fabricated"),
+                ]),
+            )
+            .is_err()
+        );
+        assert!(
+            validate_checkpoint_membership_transition(
+                &current,
+                &BTreeSet::from([String::from("blob-unknown")]),
+                &staged,
+                &expected,
+            )
+            .is_err()
+        );
     }
 
     /// Exercises project binding, root rotation, and physical-table creation against the real controller.
@@ -2029,6 +2123,81 @@ mod tests {
             .await
             .expect("replay exact VCE commit idempotently");
         assert_eq!(replayed_commit, first_commit);
+        // fabricatedSource is never staged and therefore has no authoritative storage row.
+        // fabricatedSource 从未暂存，因此不存在权威存储行。
+        let fabricated_source = "pub fn fabricated() {}";
+        // fabricatedBlob represents a canonical identity that has no staged or committed row.
+        // fabricatedBlob 表示一个既无暂存行也无已提交行的规范身份。
+        let fabricated_blob =
+            vulcan_context_engine::blob_name("src/fabricated.rs", fabricated_source)
+                .expect("build fabricated Blob identity");
+        second_index
+            .stage(IndexStageBatch {
+                operation_id: String::from("stage-invalid-membership"),
+                refresh_id: String::from("refresh-invalid-membership"),
+                generation: 2,
+                blobs: Vec::new(),
+            })
+            .await
+            .expect("stage empty invalid-membership generation");
+        // invalidCheckpoint attempts to add fabricatedBlob without staging it.
+        // invalidCheckpoint 尝试在未暂存 fabricatedBlob 的情况下将其加入成员集合。
+        let invalid_checkpoint = Checkpoint::new(
+            second_index.binding().checkpoint_chain_id.clone(),
+            2,
+            [blob_name.clone(), fabricated_blob.clone()],
+        );
+        // invalidState remains internally coherent so the storage transition check is decisive.
+        // invalidState 保持内部一致，使存储转换校验成为决定性拒绝条件。
+        let mut invalid_state = state_snapshot.clone();
+        invalid_state.workspace.generation = 2;
+        invalid_state.workspace.checkpoint = Some(invalid_checkpoint.clone());
+        invalid_state.workspace.records.push(FileRecord {
+            path: String::from("src/fabricated.rs"),
+            blob_name: Some(fabricated_blob.clone()),
+            committed_blob_name: Some(fabricated_blob),
+            status: FileStatus::Present,
+            size: fabricated_source.len() as u64,
+            mtime_ns: None,
+            source: FileSource::Filesystem,
+            content: None,
+            generation: 2,
+            skip_reason: None,
+        });
+        invalid_state.last_refresh = Some(VceRefreshSummary {
+            request_id: String::from("refresh-invalid-membership"),
+            mode: RefreshMode::Paths,
+            reason: RefreshReason::Manual,
+            generation: 2,
+            added_blob_count: 0,
+            deleted_blob_count: 0,
+            indexed_blob_count: 0,
+            skipped_path_count: 0,
+            checkpoint_version: Some(2),
+            source_revision: Some(String::from("source-invalid-membership")),
+        });
+        second_index
+            .commit(IndexCommit {
+                request_id: String::from("commit-invalid-membership"),
+                generation: 2,
+                refresh_id: String::from("refresh-invalid-membership"),
+                source_revision: Some(String::from("source-invalid-membership")),
+                deleted_blobs: BTreeSet::new(),
+                staged_blob_names: BTreeSet::new(),
+                expected_checkpoint_version: Some(1),
+                checkpoint: invalid_checkpoint,
+                state_snapshot: invalid_state,
+            })
+            .await
+            .expect_err("fabricated checkpoint membership must be rejected");
+        second_index
+            .abort_stage(IndexAbortRequest {
+                operation_id: String::from("abort-invalid-membership"),
+                refresh_id: String::from("refresh-invalid-membership"),
+                generation: 2,
+            })
+            .await
+            .expect("abort rejected membership generation");
         second_index
             .stage(stage_request)
             .await
@@ -3926,6 +4095,14 @@ impl VceProjectIndex {
                 ),
             ));
         }
+        // currentMembers decodes the authoritative predecessor selected by the checked CAS version.
+        // currentMembers 解码由已校验 CAS 版本选定的权威前驱成员集合。
+        let current_members = current
+            .as_ref()
+            .map(CheckpointRow::checkpoint_members)
+            .transpose()
+            .map_err(|message| port_invalid(VcePortOperation::Commit, message))?
+            .unwrap_or_default();
         let staged = self
             .staged_blob_names(&request.refresh_id, request.generation)
             .await?;
@@ -3935,6 +4112,13 @@ impl VceProjectIndex {
                 "staged Blob membership does not match the commit",
             ));
         }
+        validate_checkpoint_membership_transition(
+            &current_members,
+            &request.deleted_blobs,
+            &staged,
+            &request.checkpoint.members,
+        )
+        .map_err(|reason| port_rejected(VcePortOperation::Commit, reason))?;
         let script = self.build_commit_script(&request, &request_fingerprint)?;
         self.data_plane
             .execute(&script, Vec::new(), "发布 VCE 检查点失败")
@@ -4050,6 +4234,8 @@ impl VceProjectIndex {
         self.require_active_binding(VcePortOperation::ExactSearch, true)
             .await?;
         if request.limit == 0
+            || request.limit > VCE_VECTOR_SEARCH_LIMIT as usize
+            || request.allowed_blobs.is_empty()
             || request
                 .identifiers
                 .iter()
@@ -4057,24 +4243,36 @@ impl VceProjectIndex {
         {
             return Err(port_rejected(
                 VcePortOperation::ExactSearch,
-                "exact search identifiers and limit must be valid",
+                "exact search identifiers, Blob scope, and limit must be valid",
             ));
         }
+        // allowedBlobPlaceholders applies the caller's committed scope before SQLite's bounded row limit.
+        // allowedBlobPlaceholders 在 SQLite 有界行数限制之前应用调用方的已提交范围。
+        let allowed_blob_placeholders = placeholders(request.allowed_blobs.len());
         let mut hits = Vec::new();
         let mut seen = BTreeSet::new();
         for identifier in &request.identifiers {
+            // sql keeps exact-symbol ordering deterministic without admitting out-of-scope rows.
+            // sql 在不接纳范围外行的同时保持精确符号排序确定性。
+            let sql = format!(
+                r#"SELECT occurrence_id, identifier, blob_name, path, start_line, end_line,
+                          start_char_offset, chunk_id, content, kind
+                   FROM vce_symbols
+                   WHERE namespace_id = ? AND identifier = ? AND blob_name IN ({allowed_blob_placeholders})
+                   ORDER BY CASE kind WHEN 'endpoint' THEN 0 WHEN 'definition' THEN 1 ELSE 2 END,
+                            path, start_line, occurrence_id
+                   LIMIT 5000;"#,
+            );
+            // params binds every scope identity as data instead of interpolating caller input.
+            // params 将每个范围身份作为数据绑定，而不插值调用方输入。
+            let mut params = vec![
+                sqlite_text(&self.binding.namespace_id),
+                sqlite_text(identifier),
+            ];
+            params.extend(request.allowed_blobs.iter().map(sqlite_text));
             let rows: Vec<SymbolHitRow> = self
                 .data_plane
-                .query_rows(
-                    r#"SELECT occurrence_id, identifier, blob_name, path, start_line, end_line,
-                              start_char_offset, chunk_id, content, kind
-                       FROM vce_symbols
-                       WHERE namespace_id = ? AND identifier = ?
-                       ORDER BY CASE kind WHEN 'endpoint' THEN 0 WHEN 'definition' THEN 1 ELSE 2 END,
-                                path, start_line, occurrence_id
-                       LIMIT 5000;"#,
-                    vec![sqlite_text(&self.binding.namespace_id), sqlite_text(identifier)],
-                )
+                .query_rows(&sql, params)
                 .await
                 .map_err(|message| port_failed(VcePortOperation::ExactSearch, message))?;
             for row in rows {
