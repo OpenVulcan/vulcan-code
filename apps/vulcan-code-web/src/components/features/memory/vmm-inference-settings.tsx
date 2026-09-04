@@ -22,7 +22,6 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
   Tooltip,
   TooltipContent,
@@ -39,7 +38,6 @@ import type {
   PublicAiInferenceRoute,
   PublicAiInternalInferenceCandidate,
   PublicAiOperation,
-  PublicAiReasoningEffort,
   PublicAiSettingsSnapshot,
 } from "@/types"
 
@@ -96,12 +94,10 @@ export function vmmRequiredInferenceReady(
     const reasoningEffort = profile.llm_reasoning_efforts?.[purposeId] ?? "none"
     return Boolean(
       route
+      && reasoningEffort === "none"
       && llmCandidates.some((candidate) => (
         inferenceRouteKey(candidate.route) === inferenceRouteKey(route)
-        && candidateReasoningEfforts(
-          candidate,
-          purposeRequiresDisabledReasoning(purposeId),
-        ).includes(reasoningEffort)
+        && candidateSupportsDisabledReasoning(candidate)
       ))
       && !diagnostics.some((diagnostic) => (
         diagnostic.operation === "conversation_respond"
@@ -279,7 +275,6 @@ export function VmmInferenceSettings({
     operation: PublicAiOperation,
     purposeId: string | undefined,
     route: PublicAiInferenceRoute | null,
-    reasoningEffort?: PublicAiReasoningEffort,
   ) => {
     const key = `${operation}/${purposeId ?? "default"}`
     setTestSummaries((current) => ({ ...current, [operation]: undefined }))
@@ -290,7 +285,7 @@ export function VmmInferenceSettings({
         purposeId,
         operation,
         route,
-        reasoningEffort,
+        reasoningEffort: operation === "conversation_respond" && route ? "none" : undefined,
       }),
     )
   }, [runSnapshotMutation])
@@ -322,14 +317,11 @@ export function VmmInferenceSettings({
                 key={purpose.id}
                 label={`${t("settings.inference.modelRegion")} · ${purpose.label}`}
                 onConfigure={setEditingCandidate}
-                onChange={(route, reasoningEffort) => saveRoute(
+                onChange={(route) => saveRoute(
                   "conversation_respond",
                   purpose.id,
                   route,
-                  reasoningEffort,
                 )}
-                reasoningEffort={profile?.llm_reasoning_efforts?.[purpose.id] ?? "none"}
-                requireDisabledReasoning={purposeRequiresDisabledReasoning(purpose.id)}
                 route={profile?.llm_routes?.[purpose.id]}
                 unavailableReason={diagnostics.find((diagnostic) => (
                   diagnostic.operation === "conversation_respond"
@@ -436,22 +428,13 @@ function InferenceRouteField(props: {
   showEnableToggle?: boolean
   // Receives an exact route replacement or clear request.
   // 接收精确路由替换或清除请求。
-  onChange: (
-    route: PublicAiInferenceRoute | null,
-    reasoningEffort?: PublicAiReasoningEffort,
-  ) => void | Promise<boolean>
+  onChange: (route: PublicAiInferenceRoute | null) => void | Promise<boolean>
   // Optionally confirms a route change before local and persisted state changes.
   // 可选地在本地状态和持久化状态变更前确认路由变更。
   onBeforeChange?: (route: PublicAiInferenceRoute | null) => Promise<boolean>
   // Opens operation-scoped defaults for one selected route.
   // 打开所选路由的操作作用域默认值。
   onConfigure: (candidate: PublicAiInternalInferenceCandidate) => void
-  // Persisted purpose-scoped reasoning effort for an LLM route.
-  // LLM 路由已持久化的用途级思考档位。
-  reasoningEffort?: PublicAiReasoningEffort
-  // Whether the purpose must expose only the explicit disabled effort.
-  // 该用途是否必须只公开显式关闭思考档位。
-  requireDisabledReasoning?: boolean
   // Exact orphaned-route diagnostic.
   // 精确的孤立路由诊断。
   unavailableReason?: string
@@ -541,11 +524,6 @@ function InferenceRouteField(props: {
   const selectedCandidate = selectedAccountKey
     ? candidateByRouteKey.get(selectedAccountKey)
     : undefined
-  // reasoningOptions come only from the exact selected model capability contract.
-  // reasoningOptions 仅来自准确已选模型能力契约。
-  const reasoningOptions = selectedCandidate
-    ? candidateReasoningEfforts(selectedCandidate, props.requireDisabledReasoning === true)
-    : []
   // fallbackAttemptKey prevents repeated writes when an unavailable persisted account cannot be replaced.
   // fallbackAttemptKey 防止不可用的已持久化账号替换失败时重复写入。
   const fallbackAttemptKey = React.useRef<string | null>(null)
@@ -555,27 +533,11 @@ function InferenceRouteField(props: {
   const requestRouteChange = React.useCallback(async (
     route: PublicAiInferenceRoute | null,
     nextModelKey: string | null,
-    requestedReasoningEffort?: PublicAiReasoningEffort,
   ): Promise<boolean> => {
     // nextRouteKey identifies the exact provider/account route before any confirmation or write.
     // nextRouteKey 在确认或写入前标识精确的提供商/账户路由。
     const nextRouteKey = route ? inferenceRouteKey(route) : ""
-    const nextCandidate = route ? candidateByRouteKey.get(nextRouteKey) : undefined
-    const nextReasoningOptions = nextCandidate
-      ? candidateReasoningEfforts(nextCandidate, props.requireDisabledReasoning === true)
-      : []
-    const nextReasoningEffort = route
-      ? (requestedReasoningEffort && nextReasoningOptions.includes(requestedReasoningEffort)
-          ? requestedReasoningEffort
-          : nextReasoningOptions[0])
-      : undefined
-    if (route && !nextReasoningEffort && route.operation === "conversation_respond") {
-      return false
-    }
-    if (
-      persistedRouteKey === nextRouteKey
-      && props.reasoningEffort === nextReasoningEffort
-    ) {
+    if (persistedRouteKey === nextRouteKey) {
       setSelectedModelKey(nextModelKey)
       return true
     }
@@ -585,7 +547,7 @@ function InferenceRouteField(props: {
     setSelectedModelKey(nextModelKey)
     // persisted is the asynchronous route-write outcome used to restore the previous draft on failure.
     // persisted 是异步路由写入结果，用于失败时恢复之前的草稿。
-    const persisted = props.onChange(route, nextReasoningEffort)
+    const persisted = props.onChange(route)
     if (persisted instanceof Promise && !await persisted) {
       setSelectedModelKey(persistedModelKey)
       return false
@@ -597,8 +559,6 @@ function InferenceRouteField(props: {
     persistedRouteKey,
     props.onBeforeChange,
     props.onChange,
-    props.reasoningEffort,
-    props.requireDisabledReasoning,
   ])
 
   // changeEnabledState opens selection for a new route or clears the persisted route when disabled.
@@ -698,10 +658,7 @@ function InferenceRouteField(props: {
           {t("settings.inference.rerankDisabled")}
         </p>
       ) : null}
-      <div className={cn(
-        "grid min-w-0 gap-1.5",
-        props.reasoningEffort ? "grid-cols-3" : "grid-cols-2",
-      )}>
+      <div className="grid min-w-0 grid-cols-2 gap-1.5">
         <div className="min-w-0">
           <span className="mb-1 block text-[11px] text-muted-foreground">
             {t("settings.inference.modelRegion")}
@@ -730,7 +687,6 @@ function InferenceRouteField(props: {
                 void requestRouteChange(
                   firstAvailableAccount.route,
                   value,
-                  props.reasoningEffort,
                 )
               } else {
                 setSelectedModelKey(value)
@@ -757,7 +713,6 @@ function InferenceRouteField(props: {
               void requestRouteChange(
                 value ? candidateByRouteKey.get(value)?.route ?? null : null,
                 selectedModelKey,
-                props.reasoningEffort,
               )
             }}
             options={accountOptions}
@@ -769,39 +724,6 @@ function InferenceRouteField(props: {
             value={selectedAccountKey}
           />
         </div>
-        {props.reasoningEffort ? (
-          <div className="min-w-0">
-            <span className="mb-1 block text-[11px] text-muted-foreground">
-              {t("settings.inference.reasoningEffort")}
-            </span>
-            <Select
-              disabled={props.disabled || !featureEnabled || !selectedCandidate}
-              onValueChange={(value) => {
-                if (props.route) {
-                  void requestRouteChange(
-                    props.route,
-                    selectedModelKey,
-                    value as PublicAiReasoningEffort,
-                  )
-                }
-              }}
-              value={reasoningOptions.includes(props.reasoningEffort)
-                ? props.reasoningEffort
-                : reasoningOptions[0]}
-            >
-              <SelectTrigger aria-label={`${props.label} · ${t("settings.inference.reasoningEffort")}`}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {reasoningOptions.map((effort) => (
-                  <SelectItem key={effort} value={effort}>
-                    {reasoningEffortLabel(t, effort)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        ) : null}
       </div>
       <div className="mt-1.5 flex justify-end gap-1.5">
         <Button
@@ -1088,38 +1010,6 @@ function candidateSupportsDisabledReasoning(
     return false
   }
   return (candidate.capabilities.reasoning_efforts ?? []).includes("none")
-}
-
-// purposeRequiresDisabledReasoning keeps every VMM LLM purpose on the proven no-reasoning route.
-// purposeRequiresDisabledReasoning 让每个 VMM LLM 用途保持在已验证的无思考路线。
-function purposeRequiresDisabledReasoning(_purposeId: string): boolean {
-  return true
-}
-
-// candidateReasoningEfforts projects exact selectable levels for one VMM purpose.
-// candidateReasoningEfforts 为一个 VMM 用途投影准确可选档位。
-function candidateReasoningEfforts(
-  candidate: PublicAiInternalInferenceCandidate,
-  _requireDisabledReasoning: boolean,
-): PublicAiReasoningEffort[] {
-  return candidateSupportsDisabledReasoning(candidate) ? ["none"] : []
-}
-
-// reasoningEffortLabel returns one localized user-visible effort label.
-// reasoningEffortLabel 返回一个本地化的用户可见思考档位标签。
-function reasoningEffortLabel(
-  t: ReturnType<typeof useI18n>["t"],
-  effort: PublicAiReasoningEffort,
-): string {
-  if (effort === "none") return t("settings.inference.reasoningDisabled")
-  if (effort === "adaptive") return t("settings.inference.reasoningAdaptive")
-  if (effort === "minimal") return t("settings.inference.reasoningMinimal")
-  if (effort === "low") return t("composer.reasoning.low")
-  if (effort === "medium") return t("composer.reasoning.medium")
-  if (effort === "high") return t("composer.reasoning.high")
-  if (effort === "xhigh") return t("settings.inference.reasoningXHigh")
-  if (effort === "ultra") return t("settings.inference.reasoningUltra")
-  return t("composer.reasoning.max")
 }
 
 // errorMessage converts one rejected value into a visible diagnostic.
