@@ -553,4 +553,4 @@ Native VMM 已用相同规则注册 `vmm` consumer profile，把 Core 的 LLM、
 - 验证结果：HostAI+VCE 全特性 225 项测试通过；service-kernel 的 internal_ai、Native driver 和
   knowledge 定向测试分别 2、3、16 项通过；HostAI/VCE 全目标及 service-kernel 生产库严格 Clippy
   均为零告警；最终 14 个相关 Rust crate 共 48 个套件 2280 项通过，8 项既有忽略。
-- 最终累计审核覆盖起始基线、全部中间本地提交和归档文档；F-035 修复后连续五轮没有发现新问题。
+- 最终累计审核覆盖起始基线、全部中间本地提交和归档文档；F-036 EOF 空行修复后重新连续五轮没有发现新问题。
