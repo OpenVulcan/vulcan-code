@@ -367,6 +367,14 @@ export function ProjectSettingsDialog(props: {
     };
   }, [projectId, props.settingsRevision.vce, vceEventNonce]);
 
+  // An invalidated global VCE gate removes a previously open code-context surface immediately.
+  // 失效的全局 VCE 闸门会立即移除先前打开的代码上下文界面。
+  React.useEffect(() => {
+    if (activeSection === "code-context" && vceOverview?.configuration.ready !== true) {
+      setActiveSection("overview");
+    }
+  }, [activeSection, vceOverview?.configuration.ready]);
+
   React.useEffect(() => {
     if (projectId === null || vmmDirty || vmmSaveInFlight) {
       return;
@@ -492,7 +500,12 @@ export function ProjectSettingsDialog(props: {
     ...project,
     vceEnabled: vceOverview?.settings.enabled ?? project.vceEnabled,
   };
-  const sections = projectSettingsSections(effectiveProject, props.workbench, t);
+  const sections = projectSettingsSections(
+    effectiveProject,
+    props.workbench,
+    vceOverview?.configuration.ready === true,
+    t,
+  );
   const attachmentRoot = projectAttachmentRoot(project);
   const conversationCount = projectConversationCount(props.workbench, project.id);
 
@@ -846,7 +859,7 @@ export function ProjectSettingsDialog(props: {
               />
             ) : null}
 
-            {activeSection === "code-context" ? (
+            {activeSection === "code-context" && vceOverview?.configuration.ready === true ? (
               <CodeContextArea
                 busy={vceBusy}
                 key={project.id}

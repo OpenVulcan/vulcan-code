@@ -108,6 +108,14 @@ pub fn build_vulcan_tools_manager(
         if native_tool_id_is_vmm_memory_tool(&tool_id) && !vmm_ai_tools_enabled {
             continue;
         }
+        // codebase_retrieval is absent, not merely failing at invocation, while its host gate is closed.
+        // 当宿主闸门关闭时，codebase_retrieval 必须完全不可见，而不只是调用时报错。
+        if tool_id == vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID
+            && vce_retrieval_handler.is_none()
+        {
+            occupied_public_tool_ids.insert(tool_id);
+            continue;
+        }
         if native_tool_id_is_knowledge_tool(&tool_id)
             && knowledge_access
                 .as_ref()

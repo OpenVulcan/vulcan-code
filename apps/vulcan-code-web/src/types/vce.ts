@@ -66,6 +66,31 @@ export interface VceAiCapabilitySummary {
   rerankAvailable: boolean;
 }
 
+// VceConfigurationCapabilityStatus describes one required public-AI route.
+// VceConfigurationCapabilityStatus 描述一条必需公共 AI 路由。
+export interface VceConfigurationCapabilityStatus {
+  configured: boolean;
+  available: boolean;
+  issue?: string | null;
+}
+
+// VceReasoningPolicy identifies the host-enforced reasoning mode for query rewriting.
+// VceReasoningPolicy 标识宿主为查询改写强制执行的推理模式。
+export type VceReasoningPolicy = "fixed_off";
+
+// VceGlobalConfigurationStatus is the authoritative gate for every VCE project surface.
+// VceGlobalConfigurationStatus 是每个 VCE 项目界面共同使用的权威闸门。
+export interface VceGlobalConfigurationStatus {
+  ready: boolean;
+  consumerProfileId: string;
+  queryRewritePurposeId: string;
+  reasoningPolicy: VceReasoningPolicy;
+  embedding: VceConfigurationCapabilityStatus;
+  queryRewrite: VceConfigurationCapabilityStatus;
+  rerank: VceConfigurationCapabilityStatus;
+  issues: string[];
+}
+
 // VceIndexCountsSummary contains aggregate persisted index counts.
 // VceIndexCountsSummary 包含持久化索引聚合计数。
 export interface VceIndexCountsSummary {
@@ -95,6 +120,7 @@ export interface VceIndexIntegritySummary {
 // VceProjectOverviewResponse combines settings, runtime, AI, counts, and integrity.
 // VceProjectOverviewResponse 组合设置、运行态、AI、计数与完整性。
 export interface VceProjectOverviewResponse {
+  configuration: VceGlobalConfigurationStatus;
   settings: VceProjectSettingsSummary;
   status: VceProjectStatusSummary;
   ai?: VceAiCapabilitySummary | null;

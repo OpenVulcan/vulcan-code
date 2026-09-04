@@ -11,8 +11,17 @@ import type {
 
 // projectSettingsSections builds the left-side project settings navigation.
 // projectSettingsSections 构建项目设置左侧导航。
-export function projectSettingsSections(project: ProjectSummary, workbench: WorkbenchSnapshot, t: (key: TranslationKey) => string): ProjectSettingsSectionSummary[] {
-  return [
+// Parameters: project/workbench provide current data, vceReady is the backend gate, and t localizes labels.
+// 参数：project/workbench 提供当前数据，vceReady 是后端闸门，t 负责本地化标签。
+// Returns: ordered sections with code context omitted unless the authoritative VCE gate is ready.
+// 返回值：有序分区；仅在权威 VCE 闸门就绪时包含代码上下文。
+export function projectSettingsSections(
+  project: ProjectSummary,
+  workbench: WorkbenchSnapshot,
+  vceReady: boolean,
+  t: (key: TranslationKey) => string,
+): ProjectSettingsSectionSummary[] {
+  const sections: ProjectSettingsSectionSummary[] = [
     {
       id: "overview",
       icon: <FolderCog size={16} />,
@@ -24,14 +33,6 @@ export function projectSettingsSections(project: ProjectSummary, workbench: Work
       icon: <BrainCircuit size={16} />,
       label: t("projectSettings.vmmMemory"),
       detail: workbench.vmmMemory.projectDraft.hasOverride ? t("projectSettings.projectOverride") : t("projectSettings.inheritGlobal"),
-    },
-    {
-      id: "code-context",
-      icon: <Network size={16} />,
-      label: t("projectSettings.codeContext.title"),
-      detail: project.vceEnabled
-        ? t("projectSettings.codeContext.enabled")
-        : t("projectSettings.codeContext.disabled"),
     },
     {
       id: "knowledge-bases",
@@ -52,6 +53,17 @@ export function projectSettingsSections(project: ProjectSummary, workbench: Work
       detail: t("projectSettings.attachmentCleanup"),
     },
   ];
+  if (vceReady) {
+    sections.splice(2, 0, {
+      id: "code-context",
+      icon: <Network size={16} />,
+      label: t("projectSettings.codeContext.title"),
+      detail: project.vceEnabled
+        ? t("projectSettings.codeContext.enabled")
+        : t("projectSettings.codeContext.disabled"),
+    });
+  }
+  return sections;
 }
 
 // projectConversationCount returns the visible conversation count under one project.

@@ -261,6 +261,7 @@ mod tests {
         assert!(methods.contains("service_set_session_knowledge_libraries"));
         assert!(methods.contains("service_save_public_ai_media_delivery_policy"));
         assert!(methods.contains("service_reset_public_ai_media_delivery_policy"));
+        assert!(methods.contains("service_get_vce_configuration_status"));
         assert!(methods.contains("service_get_vce_project_overview"));
         assert!(methods.contains("service_update_vce_project_settings"));
         assert!(methods.contains("service_list_vce_files"));

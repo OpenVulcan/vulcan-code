@@ -3,6 +3,7 @@ import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtim
 import type {
   VceBlobDetailResponse,
   VceFileSummary,
+  VceGlobalConfigurationStatus,
   VceIntegrityIssueSummary,
   VceMaintenancePlanResponse,
   VceOperationSummary,
@@ -22,6 +23,7 @@ function browserVceOverview(projectId: string): VceProjectOverviewResponse {
   }
   const enabled = Boolean(project.vceEnabled);
   return {
+    configuration: browserVceConfigurationStatus(),
     settings: {
       enabled,
       revision: project.vceSettingsRevision ?? 1,
@@ -37,9 +39,9 @@ function browserVceOverview(projectId: string): VceProjectOverviewResponse {
     },
     status: {
       projectId,
-      enabled,
+      enabled: false,
       settingsRevision: project.vceSettingsRevision ?? 1,
-      lifecycle: enabled ? "failed" : "disabled",
+      lifecycle: enabled ? "blocked_configuration" : "disabled",
       presentFiles: 0,
       checkpointBlobs: 0,
       lastError: enabled ? "代码语义服务仅在桌面服务连接后可用。" : null,
@@ -48,6 +50,33 @@ function browserVceOverview(projectId: string): VceProjectOverviewResponse {
     counts: null,
     integrity: null,
   };
+}
+
+// browserVceConfigurationStatus returns an explicit closed state outside the desktop service.
+// browserVceConfigurationStatus 在桌面服务之外返回明确的关闭状态。
+function browserVceConfigurationStatus(): VceGlobalConfigurationStatus {
+  const issue = "代码语义模型配置只能由桌面服务验证。";
+  return {
+    ready: false,
+    consumerProfileId: "vce",
+    queryRewritePurposeId: "code_retrieval.query_rewrite",
+    reasoningPolicy: "fixed_off",
+    embedding: { configured: false, available: false, issue },
+    queryRewrite: { configured: false, available: false, issue },
+    rerank: { configured: false, available: false, issue },
+    issues: [issue],
+  };
+}
+
+// loadVceConfigurationStatus loads the only global prerequisite gate used by VCE.
+// loadVceConfigurationStatus 加载 VCE 使用的唯一全局前置闸门。
+export async function loadVceConfigurationStatus(): Promise<VceGlobalConfigurationStatus> {
+  if (!hasServiceRuntime()) {
+    return browserVceConfigurationStatus();
+  }
+  return serviceClient.request<VceGlobalConfigurationStatus>(
+    "service_get_vce_configuration_status",
+  );
 }
 
 // loadVceProjectOverview loads current settings and provider-independent runtime diagnostics.

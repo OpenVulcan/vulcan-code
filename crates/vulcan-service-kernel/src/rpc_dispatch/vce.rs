@@ -7,6 +7,7 @@ use super::*;
 /// 仅由 VCE 路由持有的精确公共 RPC 线协议名称。
 #[cfg(test)]
 pub(super) const RPC_METHODS: &[&str] = &[
+    "service_get_vce_configuration_status",
     "service_get_vce_project_overview",
     "service_update_vce_project_settings",
     "service_refresh_vce_project",
@@ -45,6 +46,9 @@ pub(super) async fn dispatch(
     params: &Value,
 ) -> Result<ServiceRpcDispatch, String> {
     let result = match method {
+        "service_get_vce_configuration_status" => {
+            rpc_json_result(service_get_vce_configuration_status(state))
+        }
         "service_get_vce_project_overview" => rpc_json_result(
             service_get_vce_project_overview(state, rpc_required_param(params, "request")?).await,
         ),

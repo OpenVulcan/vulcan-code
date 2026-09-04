@@ -8,6 +8,16 @@ import { CodeContextArea, loadAuthoritativeVceOverview } from "./code-context-ar
 // overviewFixture 构建一份完整且管理安全的项目投影。
 function overviewFixture(enabled: boolean): VceProjectOverviewResponse {
   return {
+    configuration: {
+      ready: true,
+      consumerProfileId: "vce",
+      queryRewritePurposeId: "code_retrieval.query_rewrite",
+      reasoningPolicy: "fixed_off",
+      embedding: { configured: true, available: true },
+      queryRewrite: { configured: true, available: true },
+      rerank: { configured: true, available: true },
+      issues: [],
+    },
     settings: {
       enabled,
       revision: 4,
@@ -36,7 +46,7 @@ function overviewFixture(enabled: boolean): VceProjectOverviewResponse {
     ai: enabled ? {
       registered: true,
       embeddingAvailable: true,
-      queryRewriteAvailable: false,
+      queryRewriteAvailable: true,
       rerankAvailable: true,
     } : null,
     counts: enabled ? {

@@ -530,17 +530,34 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         state.clone(),
         app.clone(),
     ));
-    // vceRetrievalHandler freezes the current process manager while project identity remains execution-context owned.
-    // vceRetrievalHandler 冻结当前进程管理器，同时项目身份仍由执行上下文持有。
-    request.vce_retrieval_handler = {
-        let guard = state
+    // vceProjectReady binds tool visibility to both the exact project and the current global model contract.
+    // vceProjectReady 将工具可见性同时绑定到精确项目与当前全局模型契约。
+    let vce_project_ready = request
+        .project_id
+        .as_deref()
+        .is_some_and(|project_id| crate::vce::vce_project_tool_enabled(state, project_id));
+    // vceRetrievalHandler freezes the current process manager while retaining a live fail-closed callback.
+    // vceRetrievalHandler 冻结当前进程管理器，同时保留实时失败关闭回调。
+    request.vce_retrieval_handler = if vce_project_ready {
+        let manager = state
             .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        guard
+            .map_err(|error| format!("failed to lock service state: {error}"))?
             .vce_runtime
-            .clone()
-            .map(crate::vce::vce_retrieval_handler)
+            .clone();
+        manager.map(|manager| crate::vce::vce_retrieval_handler(state.clone(), manager))
+    } else {
+        None
     };
+    if request.vce_retrieval_handler.is_none()
+        && !request
+            .tool_request_hidden_tool_ids
+            .iter()
+            .any(|tool_id| tool_id == vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID)
+    {
+        request.tool_request_hidden_tool_ids.push(String::from(
+            vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID,
+        ));
+    }
     let goal_context_started_at = current_unix_millis_value();
     let (session_goal_context, goal_turn_usage_context) =
         session_goal_prompt_parts_from_state(state, session_id)?;

@@ -5,6 +5,7 @@ import { DynamicPluginMountPanel } from "@/components/plugins/dynamic-plugin-mou
 import { LuaSkillsPanel, LuaSkillInstallDialog } from "./lua-skills-panel"
 import { LuaSkillsSettingsPanel } from "./lua-skills-settings-panel"
 import { VulcanPluginsPanel } from "./vulcan-plugins-panel"
+import { VceBuiltInPluginPanel } from "./vce-built-in-plugin-panel"
 import {
   findEnabledPluginDetailMount,
   type SkillActionProps,
@@ -39,10 +40,13 @@ export function SkillsArea(props: {
           skills={props.workbench.luaSkills.skills}
         />
       ) : props.activeTab === "plugins" ? (
-        <VulcanPluginsPanel
-          actions={props.skillActions}
-          plugins={props.workbench.plugins}
-        />
+        <div className="space-y-4">
+          <VceBuiltInPluginPanel workbenchRevision={props.workbench.revision} />
+          <VulcanPluginsPanel
+            actions={props.skillActions}
+            plugins={props.workbench.plugins}
+          />
+        </div>
       ) : props.activeTab === "settings" ? (
         <LuaSkillsSettingsPanel
           actions={props.skillActions}

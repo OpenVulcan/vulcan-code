@@ -124,8 +124,8 @@ pub enum VceProjectLifecycleState {
     /// A committed checkpoint is available for retrieval.
     /// 已有可用于检索的已提交检查点。
     Ready,
-    /// Retrieval is available while optional AI stages are degraded.
-    /// 检索可用，但可选 AI 阶段处于降级状态。
+    /// Legacy compatibility value retained for older clients; the current host no longer emits it.
+    /// 为旧客户端保留的兼容值；当前宿主不再发送该状态。
     DegradedOptionalAi,
     /// Required host AI or project configuration is unavailable.
     /// 必需宿主 AI 或项目配置不可用。
@@ -215,12 +215,70 @@ pub struct VceAiCapabilitySummary {
     /// Whether required Embedding is available.
     /// 必需的向量能力是否可用。
     pub embedding_available: bool,
-    /// Whether optional query rewriting is available.
-    /// 可选查询改写是否可用。
+    /// Whether required query rewriting is available.
+    /// 必需查询改写是否可用。
     pub query_rewrite_available: bool,
-    /// Whether optional reranking is available.
-    /// 可选重排是否可用。
+    /// Whether required reranking is available.
+    /// 必需重排是否可用。
     pub rerank_available: bool,
+}
+
+/// Readiness of one required VCE public-AI route.
+/// 一条 VCE 必需公共 AI 路由的就绪状态。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VceConfigurationCapabilityStatus {
+    /// Whether an exact route is persisted for this capability.
+    /// 是否已为此能力持久化一条精确路由。
+    pub configured: bool,
+    /// Whether the persisted route resolves to an enabled compatible model now.
+    /// 已持久化路由当前是否能解析到已启用且兼容的模型。
+    pub available: bool,
+    /// Bounded diagnostic explaining why the route is unavailable.
+    /// 解释路由为何不可用的有界诊断。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue: Option<String>,
+}
+
+/// Fixed reasoning policy used by VCE machine retrieval stages.
+/// VCE 机器检索阶段使用的固定推理策略。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum VceReasoningPolicy {
+    /// Query rewriting must execute with model reasoning disabled.
+    /// 查询改写必须在关闭模型推理的状态下执行。
+    FixedOff,
+}
+
+/// Authoritative global prerequisite state for every VCE project and tool entry.
+/// 每个 VCE 项目与工具入口共同使用的权威全局前置状态。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VceGlobalConfigurationStatus {
+    /// Whether every required route is configured, current, and contract-compatible.
+    /// 每条必需路由是否均已配置、当前有效且契约兼容。
+    pub ready: bool,
+    /// Stable public-AI consumer profile owned by VCE.
+    /// VCE 持有的稳定公共 AI 消费者配置档。
+    pub consumer_profile_id: String,
+    /// Stable LLM purpose used only for query rewriting.
+    /// 仅用于查询改写的稳定 LLM 用途。
+    pub query_rewrite_purpose_id: String,
+    /// Non-configurable reasoning policy enforced by the host.
+    /// 由宿主强制执行且不可配置的推理策略。
+    pub reasoning_policy: VceReasoningPolicy,
+    /// Required document-and-query embedding route status.
+    /// 必需的文档与查询向量路由状态。
+    pub embedding: VceConfigurationCapabilityStatus,
+    /// Required no-reasoning LLM query-rewrite route status.
+    /// 必需的无推理 LLM 查询改写路由状态。
+    pub query_rewrite: VceConfigurationCapabilityStatus,
+    /// Required non-truncating rerank route status.
+    /// 必需的不截断重排路由状态。
+    pub rerank: VceConfigurationCapabilityStatus,
+    /// Ordered bounded diagnostics for all unavailable prerequisites.
+    /// 所有不可用前置条件的有序有界诊断。
+    pub issues: Vec<String>,
 }
 
 /// Aggregate persisted VCE index counts.
@@ -291,6 +349,9 @@ pub struct VceIndexIntegritySummary {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VceProjectOverviewResponse {
+    /// Authoritative global configuration prerequisite state.
+    /// 权威全局配置前置状态。
+    pub configuration: VceGlobalConfigurationStatus,
     /// Complete persisted settings.
     /// 完整持久化设置。
     pub settings: VceProjectSettingsSummary,
@@ -804,6 +865,17 @@ mod tests {
             serde_json::to_value(VceProjectLifecycleState::BlockedConfiguration)
                 .expect("serialize VCE lifecycle"),
             json!("blocked_configuration")
+        );
+    }
+
+    /// Verifies the non-configurable VCE reasoning policy keeps its stable wire value.
+    /// 验证不可配置的 VCE 推理策略保持稳定线协议值。
+    #[test]
+    fn fixed_off_reasoning_policy_serialization_is_stable() {
+        assert_eq!(
+            serde_json::to_value(VceReasoningPolicy::FixedOff)
+                .expect("serialize VCE reasoning policy"),
+            json!("fixed_off")
         );
     }
 }

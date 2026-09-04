@@ -943,6 +943,10 @@ where
         guard.workbench.clone()
     };
     emit_workbench_event(app, &workbench);
+    // VCE consumes the committed public-AI generation and closes every project runtime when a
+    // required route disappears or becomes incompatible.
+    // VCE 消费已提交的公共 AI 代际；任一必需路由消失或不兼容时关闭全部项目运行时。
+    crate::vce::schedule_vce_reconciliation(app.clone(), state.clone());
     Ok(workbench)
 }
 

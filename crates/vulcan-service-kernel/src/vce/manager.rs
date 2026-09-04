@@ -12,7 +12,7 @@ use uuid::Uuid;
 use vulcan_ai_contract::HostAiPort;
 use vulcan_context_engine::{
     IndexAbortRequest, RefreshReason, RefreshRequest, RefreshResult, RetrieveRequest,
-    RetrieveResult, VceAiPort, VceEngine, VceEngineSnapshot, VceIndexBinding, VceIndexPort,
+    RetrieveResult, VceEngine, VceEngineSnapshot, VceIndexBinding, VceIndexPort,
     VceManagementQueryRequest, VceManagementQueryResponse, VceManagementRequest,
     VceManagementSnapshot, VceStateIdentity, VceWorkspaceStatistics,
 };
@@ -29,7 +29,7 @@ use super::{
 
 /// System inference profile configured through the shared public AI settings.
 /// 通过共享公共 AI 设置配置的系统推理 Profile。
-const VCE_CONSUMER_PROFILE_ID: &str = "vce";
+pub(crate) const VCE_CONSUMER_PROFILE_ID: &str = "vce";
 
 /// Stable preprocessing contract used before every VCE embedding call.
 /// 每次 VCE 向量调用前使用的稳定预处理契约。
@@ -56,9 +56,6 @@ pub(crate) enum VceProjectLifecycle {
     /// The project has a usable committed checkpoint.
     /// 项目已有可用的已提交检查点。
     Ready,
-    /// The committed checkpoint is ready while optional AI stages are unavailable.
-    /// 已提交检查点可用，但可选 AI 阶段不可用。
-    DegradedOptionalAi,
     /// A host-owned refresh is running against a private working engine.
     /// 宿主持有的刷新正在私有工作引擎上执行。
     Refreshing,
@@ -89,6 +86,9 @@ pub(crate) struct VceRuntimeProjectStatus {
     /// Project configuration revision represented by the runtime.
     /// 运行时表示的项目配置修订号。
     pub(crate) config_revision: u64,
+    /// Physical embedding contract represented by the active project index.
+    /// 活动项目索引所表示的物理向量契约。
+    pub(crate) embedding_physical_fingerprint: Option<String>,
     /// Current functional engine snapshot when activation succeeded.
     /// 激活成功时的当前功能引擎快照。
     pub(crate) engine: Option<VceEngineSnapshot>,
@@ -846,10 +846,66 @@ impl VceRuntimeManager {
                     VceProjectLifecycle::Failed
                 },
                 config_revision: failure.config_revision,
+                embedding_physical_fingerprint: None,
                 engine: None,
                 workspace: None,
                 last_error: Some(failure.error.clone()),
             })
+    }
+
+    /// Reports whether one project can expose retrieval without awaiting runtime locks.
+    /// 判断一个项目是否可在不等待运行时锁的前提下暴露检索能力。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `project_id` selects the exact workbench project.
+    /// `project_id` 选择精确工作台项目。
+    /// `config_revision` is the currently persisted project settings revision.
+    /// `config_revision` 是当前持久化的项目设置修订号。
+    /// `embedding_physical_fingerprint` is the current global embedding identity.
+    /// `embedding_physical_fingerprint` 是当前全局向量身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` only for a current usable runtime with a committed checkpoint; contention fails closed.
+    /// 仅对拥有已提交检查点的当前可用运行时返回 `true`；锁竞争按失败关闭处理。
+    pub(crate) fn project_can_serve_now(
+        &self,
+        project_id: &str,
+        config_revision: u64,
+        embedding_physical_fingerprint: &str,
+    ) -> bool {
+        if self.shutting_down.load(Ordering::Acquire) {
+            return false;
+        }
+        let Ok(projects) = self.projects.try_read() else {
+            return false;
+        };
+        let Some(runtime) = projects.get(project_id) else {
+            return false;
+        };
+        if runtime.config_revision != config_revision
+            || runtime.ai.embedding_space().physical_fingerprint.as_deref()
+                != Some(embedding_physical_fingerprint)
+        {
+            return false;
+        }
+        let Ok(host_status) = runtime.host_status.try_read() else {
+            return false;
+        };
+        if !matches!(
+            host_status.lifecycle,
+            VceProjectLifecycle::Ready | VceProjectLifecycle::Refreshing
+        ) {
+            return false;
+        }
+        let Ok(engine_handle) = runtime.current_engine.try_read() else {
+            return false;
+        };
+        let Ok(engine) = engine_handle.try_lock() else {
+            return false;
+        };
+        engine.status().checkpoint_version.is_some()
     }
 
     /// Unregister all active project capabilities during ordered application shutdown.
@@ -1309,6 +1365,7 @@ impl VceProjectRuntime {
             project_id: self.project_id.clone(),
             lifecycle: host_status.lifecycle,
             config_revision: self.config_revision,
+            embedding_physical_fingerprint: self.ai.embedding_space().physical_fingerprint.clone(),
             engine: Some(engine.status()),
             workspace: Some(engine.workspace_statistics()),
             last_error: host_status
@@ -1358,22 +1415,15 @@ impl VceProjectRuntime {
         status.lifecycle = VceProjectLifecycle::Stopping;
     }
 
-    /// Select ready or optional-AI-degraded state from current host capabilities and settings.
-    /// 根据当前宿主能力和设置选择就绪或可选 AI 降级状态。
+    /// Select the usable lifecycle after every required HostAI route has passed activation.
+    /// 在每条必需 HostAI 路由均通过激活后选择可用生命周期。
     ///
     /// # Returns
     /// 返回值
-    /// A usable lifecycle that never treats optional AI as required.
-    /// 返回不会把可选 AI 当作必需能力的可用生命周期。
+    /// The ready lifecycle; capability loss is handled by global fail-closed reconciliation.
+    /// 返回就绪生命周期；能力丢失由全局失败关闭协调处理。
     fn ready_lifecycle(&self) -> VceProjectLifecycle {
-        let capability = self.ai.capability_snapshot();
-        if (self.settings.allow_query_rewrite && !capability.query_rewrite_available)
-            || (self.settings.allow_rerank && !capability.rerank_available)
-        {
-            VceProjectLifecycle::DegradedOptionalAi
-        } else {
-            VceProjectLifecycle::Ready
-        }
+        VceProjectLifecycle::Ready
     }
 
     /// Retain one bounded host or functional failure.

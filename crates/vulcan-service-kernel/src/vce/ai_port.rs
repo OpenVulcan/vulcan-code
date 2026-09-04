@@ -17,8 +17,9 @@ use vulcan_ai_contract::{
     HostAiCapabilityRequirement, HostAiError, HostAiErrorCode, HostAiExecutionHandle, HostAiPort,
     INFERENCE_CONTRACT_VERSION, InferenceCallerBudget, InferenceCallerContext,
     InferenceCapabilitySnapshot, InferencePermission, InferenceUsageScope, MessageRole,
-    ParallelToolCallPolicy, PromptCachePolicy, ReasoningOutputPolicy, RerankRequest, RerankText,
-    RerankTruncation, ResponsesExecutionRequest, StructuredOutputPolicy, ToolChoicePolicy,
+    ParallelToolCallPolicy, PromptCachePolicy, ReasoningEffort, ReasoningOutputPolicy,
+    RerankRequest, RerankText, RerankTruncation, ResponsesExecutionRequest, StructuredOutputPolicy,
+    ToolChoicePolicy,
 };
 use vulcan_context_engine::host_adapter::{
     HostEmbeddingRequestConfig, create_embedding_batch_with_response, rerank_documents,
@@ -30,8 +31,8 @@ use vulcan_context_engine::{
     VceQueryRewriteRequest, VceQueryRewriteResponse, VceRerankRequest, VceRerankResponse,
 };
 
-/// Stable consumer purpose used by optional VCE query rewriting.
-/// VCE 可选查询改写使用的稳定消费者用途。
+/// Stable consumer purpose used by required VCE query rewriting.
+/// VCE 必需查询改写使用的稳定消费者用途。
 pub(crate) const VCE_QUERY_REWRITE_PURPOSE_ID: &str = "code_retrieval.query_rewrite";
 
 /// Maximum output token count accepted from one query-rewrite request.
@@ -734,12 +735,12 @@ fn vce_capability_registration(
             HostAiCapabilityRequirement {
                 operation: AiOperation::ConversationRespond,
                 purpose_id: Some(String::from(VCE_QUERY_REWRITE_PURPOSE_ID)),
-                required: false,
+                required: true,
             },
             HostAiCapabilityRequirement {
                 operation: AiOperation::RerankDocuments,
                 purpose_id: None,
-                required: false,
+                required: true,
             },
         ],
     }
@@ -882,8 +883,27 @@ fn embedding_physical_fingerprint(
     Ok(format!("sha256:{}", hex::encode(Sha256::digest(encoded))))
 }
 
-/// Builds the closed structured-output request used for optional query rewriting.
-/// 构建可选查询改写使用的封闭结构化输出请求。
+/// Resolves the exact VCE embedding compatibility fingerprint from a live capability snapshot.
+/// 从实时能力快照解析精确的 VCE 向量兼容性指纹。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` is the current configured-inference capability projection for the VCE profile.
+/// `snapshot` 是 VCE 配置档当前的已配置推理能力投影。
+///
+/// # Returns
+/// 返回值
+/// The same physical fingerprint used when opening a project index, or an explicit contract error.
+/// 返回打开项目索引时使用的相同物理指纹，或明确的契约错误。
+pub(crate) fn vce_embedding_physical_fingerprint(
+    snapshot: &InferenceCapabilitySnapshot,
+) -> Result<String, String> {
+    let dimension = resolve_embedding_dimension(snapshot, None)?;
+    Ok(embedding_contract(snapshot, dimension)?.physical_fingerprint)
+}
+
+/// Builds the closed structured-output request used for required no-reasoning query rewriting.
+/// 构建必需且关闭推理的查询改写封闭结构化输出请求。
 fn build_query_rewrite_request(
     binding: &VceAiBinding,
     request: &VceQueryRewriteRequest,
@@ -944,7 +964,7 @@ fn build_query_rewrite_request(
         prompt_cache: PromptCachePolicy::default(),
         prompt_cache_key: None,
         include_reasoning_encrypted_content: false,
-        reasoning_effort: None,
+        reasoning_effort: Some(ReasoningEffort::None),
         reasoning_output: ReasoningOutputPolicy::ProviderDefault,
         model_parameters: BTreeMap::new(),
         stop_sequences: Vec::new(),
@@ -1031,7 +1051,7 @@ mod tests {
     /// Verifies VCE registers through the common internal-background capability contract.
     /// 验证 VCE 通过公共内部后台能力契约进行注册。
     #[test]
-    fn registration_uses_fixed_identity_permissions_and_optional_capabilities() {
+    fn registration_uses_fixed_identity_permissions_and_required_capabilities() {
         let registration = vce_capability_registration(&registration_config());
 
         assert_eq!(
@@ -1062,15 +1082,54 @@ mod tests {
                 .permissions
                 .contains(&InferencePermission::Rerank)
         );
+        assert!(
+            registration
+                .requirements
+                .iter()
+                .all(|requirement| requirement.required)
+        );
         assert_eq!(
             registration
                 .requirements
                 .iter()
-                .filter(|requirement| requirement.required)
                 .map(|requirement| requirement.operation)
                 .collect::<Vec<_>>(),
-            vec![AiOperation::EmbeddingCreate]
+            vec![
+                AiOperation::EmbeddingCreate,
+                AiOperation::ConversationRespond,
+                AiOperation::RerankDocuments,
+            ]
         );
+    }
+
+    /// Verifies VCE query rewriting explicitly disables model reasoning at the request boundary.
+    /// 验证 VCE 查询改写在请求边界显式关闭模型推理。
+    #[test]
+    fn query_rewrite_request_fixes_reasoning_off() {
+        let config = registration_config();
+        let binding = VceAiBinding::new(
+            config.registration_id(),
+            config.consumer_profile_id,
+            config.vector_space_id,
+        )
+        .expect("query rewrite binding should be valid");
+        let request = VceQueryRewriteRequest {
+            context: vulcan_context_engine::VceAiRequestContext {
+                operation_id: String::from("rewrite-operation"),
+                registration_id: binding.registration_id.clone(),
+                purpose: VceAiPurpose::CodeQueryRewrite,
+                consumer_profile_id: binding.consumer_profile_id.clone(),
+                vector_space_id: binding.vector_space_id.clone(),
+            },
+            query: String::from("find the authorization boundary"),
+            max_rewrites: 3,
+        };
+
+        let execution = build_query_rewrite_request(&binding, &request)
+            .expect("query rewrite request should be valid");
+
+        assert_eq!(execution.reasoning_effort, Some(ReasoningEffort::None));
+        assert!(!execution.include_reasoning_encrypted_content);
     }
 
     /// Verifies dropping an in-flight adapter Future wakes the common HostAI cancellation source.
@@ -1177,15 +1236,35 @@ mod tests {
         mock.set_capability_snapshot(InferenceCapabilitySnapshot {
             contract_version: INFERENCE_CONTRACT_VERSION,
             consumer_profile_id: String::from("vce"),
-            operations: vec![vulcan_ai_contract::InferenceOperationCapability {
-                operation: AiOperation::EmbeddingCreate,
-                purpose_id: None,
-                available: true,
-                unavailable_reason: None,
-                route: None,
-                embedding: None,
-                rerank: None,
-            }],
+            operations: vec![
+                vulcan_ai_contract::InferenceOperationCapability {
+                    operation: AiOperation::EmbeddingCreate,
+                    purpose_id: None,
+                    available: true,
+                    unavailable_reason: None,
+                    route: None,
+                    embedding: None,
+                    rerank: None,
+                },
+                vulcan_ai_contract::InferenceOperationCapability {
+                    operation: AiOperation::ConversationRespond,
+                    purpose_id: Some(String::from(VCE_QUERY_REWRITE_PURPOSE_ID)),
+                    available: true,
+                    unavailable_reason: None,
+                    route: None,
+                    embedding: None,
+                    rerank: None,
+                },
+                vulcan_ai_contract::InferenceOperationCapability {
+                    operation: AiOperation::RerankDocuments,
+                    purpose_id: None,
+                    available: true,
+                    unavailable_reason: None,
+                    route: None,
+                    embedding: None,
+                    rerank: None,
+                },
+            ],
         })
         .expect("configure malformed post-registration snapshot");
         let port: Arc<dyn HostAiPort> = Arc::new(mock.clone());

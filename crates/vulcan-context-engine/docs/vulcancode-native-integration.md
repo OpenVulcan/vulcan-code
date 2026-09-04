@@ -26,12 +26,25 @@
 `vulcan-service-kernel::vce::VceHostAiAdapter` 为每个启用项目向共同 `HostAiPort` 注册固定 capability：
 
 - usage scope 固定为 `InternalBackground`；
-- Embedding 为必需能力，查询改写与 Rerank 为可选能力；
+- Embedding、查询改写 LLM 与 Rerank 均为启动前必需能力；
+- 查询改写固定发送 `ReasoningEffort::None`，不提供用户推理档位；不能明确关闭推理或请求投影无法表达关闭推理的 LLM 不可用于 VCE；
 - registration、consumer profile、vector space、purpose、维度与物理指纹在边界校验；
 - 每次调用刷新 capability snapshot，不继续使用陈旧 Provider 路由；
 - VCE Future 提前丢弃时向调用上下文传播协作取消；已经启动的 LLM execution 还会收到显式取消。
 
 VCE 与 VMM、知识库复用同一 HostAI 契约，但不共享 registration、consumer 数据或向量空间。
+
+### 全局配置与失败关闭
+
+插件管理页的“Vulcan Context Engine”内置能力卡是 VCE 唯一模型配置入口。它写入公共 AI 的 `vce` consumer profile，并要求同时配置：
+
+- 支持 Document 与 Query、Dense Float 且维度可确定的 Embedding 路由；
+- 支持宿主校验 JSON 输出且能固定关闭推理的查询改写 LLM 路由；
+- 支持 `Disabled` 截断策略的 Rerank 路由。
+
+后端使用当前凭据连接、模型目录、操作绑定、用途范围和请求投影计算唯一权威就绪状态。任一路由缺失、模型被移除或禁用、能力不兼容时均失败关闭：停止项目运行时与文件监听，隐藏项目代码上下文入口，不向 AI 暴露 `codebase_retrieval`，并拒绝直接管理与检索调用。公共 AI 配置每次成功发布后都会触发 VCE 全项目重协调；Embedding 物理指纹变化会重建项目索引，LLM 或 Rerank 路由变化则复用当前索引并刷新 HostAI 路由。
+
+VCE 不持久化 Provider 私有配置，也不提供 LanceDB/SQLite 选择项。模型调用由 VulcanCode 注册的 HostAI 提供，索引存储由 VLDB Controller 的 LanceDB 与 SQLite 数据面提供。
 
 ### 数据面
 
