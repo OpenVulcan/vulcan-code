@@ -25,7 +25,8 @@ use vulcan_service_api::{
 };
 use vulcan_workspace_store::vmm_data_plane::{
     NativeVmmPendingAnalysisJob, NativeVmmProject, NativeVmmProjectAccess,
-    NativeVmmProjectBindingAccess, NativeVmmProjectUsage, VmmDataPlaneHandle,
+    NativeVmmProjectBindingAccess, NativeVmmProjectUsage, VMM_PENDING_ANALYSIS_BYPASSED,
+    VMM_PENDING_ANALYSIS_COMPLETED, VMM_PENDING_ANALYSIS_CORRUPTED, VmmDataPlaneHandle,
 };
 
 /// Identifies the sole host-owned user used by native VMM subject and personal-profile scope.
@@ -1550,7 +1551,8 @@ impl NativeVmmMaintenance {
         let _operation_guard = self.operation_gate.write().await;
         let mutation_kind = format!("retention_purge:{batch_id}:{expected_storage_version}");
         let policy = RetentionPolicy::v1();
-        self.runtime
+        let summary = self
+            .runtime
             .transform_storage_snapshot(
                 operation_id,
                 &mutation_kind,
@@ -1567,7 +1569,9 @@ impl NativeVmmMaintenance {
                     Ok(summary)
                 },
             )
-            .await
+            .await?;
+        self.prune_orphaned_terminal_analysis_jobs().await?;
+        Ok(summary)
     }
 
     /// Executes one serialized process-wide retention pass under the canonical lock order.
@@ -1590,6 +1594,7 @@ impl NativeVmmMaintenance {
                     }),
             }
         }
+        self.prune_orphaned_terminal_analysis_jobs().await?;
         Ok(aggregate)
     }
 
@@ -2207,6 +2212,7 @@ impl NativeVmmMaintenance {
             self.data_plane
                 .delete_project_with_bindings(project_id)
                 .await?;
+            self.prune_orphaned_terminal_analysis_jobs().await?;
             return Ok(preview);
         }
         let preview = self.preview_project_delete(project_id).await?;
@@ -2241,6 +2247,7 @@ impl NativeVmmMaintenance {
         self.data_plane
             .delete_project_with_bindings(project_id)
             .await?;
+        self.prune_orphaned_terminal_analysis_jobs().await?;
         Ok(deleted_preview)
     }
 
@@ -2254,6 +2261,11 @@ impl NativeVmmMaintenance {
         self.ensure_distinct_projects(source_project_id, target_project_id)
             .await?;
         self.ensure_no_pending_analysis_jobs(source_project_id)
+            .await?;
+        // Target-side pending extraction can materialize a session after preview and invalidate
+        // the conflict count or the deterministic rename plan, so both scopes must be quiescent.
+        // 目标侧待处理提取可能在预检后落入新会话，导致冲突数量或确定性改名方案失真，因此两个作用域都必须静止。
+        self.ensure_no_pending_analysis_jobs(target_project_id)
             .await?;
         preview_migration(
             &self.runtime.storage_snapshot()?,
@@ -2281,6 +2293,11 @@ impl NativeVmmMaintenance {
         // 写入守卫在检查来源队列及迁移内容期间冻结全部原生操作。
         let _operation_guard = self.operation_gate.write().await;
         self.ensure_no_pending_analysis_jobs(source_project_id)
+            .await?;
+        // Recheck the target under the write gate so queued target work cannot invalidate the
+        // accepted preview between confirmation and the atomic snapshot migration.
+        // 在写入守卫内重新检查目标，避免目标队列在确认与原子快照迁移之间使已接受预检失效。
+        self.ensure_no_pending_analysis_jobs(target_project_id)
             .await?;
         self.ensure_distinct_projects(source_project_id, target_project_id)
             .await?;
@@ -2366,6 +2383,7 @@ impl NativeVmmMaintenance {
                 |snapshot| clear_project(snapshot, project_id),
             )
             .await?;
+        self.prune_orphaned_terminal_analysis_jobs().await?;
         Ok(NativeVmmClearResult {
             storage_version: expected_storage_version.saturating_add(1),
             removed,
@@ -2413,6 +2431,28 @@ impl NativeVmmMaintenance {
             ));
         }
         Ok(())
+    }
+
+    /// Removes terminal host audit rows whose Core turns no longer exist in hot or recoverable storage.
+    /// 删除其 Core 回合在活动区和可恢复存储中都已不存在的终态宿主审计记录。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The number of terminal audit rows selected for idempotent deletion.
+    /// 返回选中进行幂等删除的终态审计记录数量。
+    ///
+    /// # Errors
+    /// 错误
+    /// Returns an error when the current snapshot, audit ledger, or SQLite delete cannot be verified.
+    /// 当前快照、审计账本或 SQLite 删除无法校验时返回错误。
+    async fn prune_orphaned_terminal_analysis_jobs(&self) -> Result<u64, String> {
+        let snapshot = self.runtime.storage_snapshot()?;
+        let jobs = self.data_plane.list_analysis_jobs_for_audit().await?;
+        let operation_ids = orphaned_terminal_analysis_operation_ids(&snapshot, &jobs);
+        self.data_plane
+            .delete_terminal_analysis_jobs(&operation_ids)
+            .await?;
+        Ok(usize_to_u64(operation_ids.len()))
     }
 
     /// Verifies two existing projects form a valid directed migration pair.
@@ -2501,6 +2541,52 @@ fn retention_plan_is_empty(plan: &RetentionPlanSet) -> bool {
         && plan.idle_session_recycle.is_empty()
         && plan.vector_gc_retry.is_empty()
         && plan.trash_purge.is_empty()
+}
+
+/// Finds terminal host-analysis rows whose referenced turn is no longer hot or recoverable.
+/// 查找其引用回合已不在活动区或可恢复存储中的终态宿主分析记录。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` is the authoritative Core state including recycle batches, while `jobs` is the
+/// independently durable host audit ledger observed under the same operation barrier.
+/// `snapshot` 是包含回收批次的权威 Core 状态，`jobs` 是在同一操作屏障下观察到的独立耐久宿主审计账本。
+///
+/// # Returns
+/// 返回值
+/// Stable operation identities safe to delete. Terminal no-turn receipts remain because no
+/// approved time-based idempotency expiry policy exists.
+/// 返回可安全删除的稳定操作身份；无回合的终态收据会保留，因为当前没有获批的时间型幂等过期策略。
+fn orphaned_terminal_analysis_operation_ids(
+    snapshot: &StorageSnapshot,
+    jobs: &[NativeVmmPendingAnalysisJob],
+) -> Vec<String> {
+    let retained_turn_ids = snapshot
+        .dataset
+        .turns
+        .iter()
+        .chain(
+            snapshot
+                .retention_trash_batches
+                .iter()
+                .flat_map(|batch| batch.dataset.turns.iter()),
+        )
+        .map(|turn| turn.id.as_str())
+        .collect::<BTreeSet<_>>();
+    jobs.iter()
+        .filter(|job| {
+            matches!(
+                job.state.as_str(),
+                VMM_PENDING_ANALYSIS_COMPLETED
+                    | VMM_PENDING_ANALYSIS_BYPASSED
+                    | VMM_PENDING_ANALYSIS_CORRUPTED
+            ) && job
+                .turn_id
+                .as_deref()
+                .is_some_and(|turn_id| !retained_turn_ids.contains(turn_id))
+        })
+        .map(|job| job.operation_id.clone())
+        .collect()
 }
 
 /// Rejects a Core plan whose family sizes exceed the frozen native policy bounds.
@@ -5563,6 +5649,78 @@ mod tests {
         assert_eq!(retained.embedding.as_deref(), Some([0.25, 0.75].as_slice()));
         assert_eq!(retained.state, original_state);
         assert_eq!(retained.updated_at_ns, original_updated_at_ns);
+    }
+
+    /// Verifies audit cleanup preserves hot, recoverable, active, and no-turn idempotency rows.
+    /// 验证审计清理会保留活动区、可恢复、活动态以及无回合的幂等记录。
+    #[test]
+    fn orphaned_terminal_analysis_cleanup_follows_permanent_turn_removal() {
+        let mut snapshot = empty_snapshot(12);
+        snapshot.dataset.turns.push(turn("vmm-turn-hot", 2, "hot"));
+        let mut recycle_batch = retention_trash_batch(
+            String::from("audit-trash"),
+            native_vmm_subject_id().expect("subject"),
+            project_scope(2).expect("scope"),
+            1,
+            RetentionReasonCode::ColdTurnRecycle,
+        );
+        recycle_batch
+            .dataset
+            .turns
+            .push(turn("vmm-turn-recoverable", 2, "cold"));
+        snapshot.retention_trash_batches.push(recycle_batch);
+        let audit_job =
+            |operation_id: &str, turn_id: Option<&str>, state: &str| NativeVmmPendingAnalysisJob {
+                operation_id: operation_id.to_owned(),
+                request_fingerprint: format!("fp256:{}", "1".repeat(64)),
+                payload_json: String::new(),
+                intake_mutation_operation_id: format!("{operation_id}:intake"),
+                turn_id: turn_id.map(str::to_owned),
+                state: state.to_owned(),
+                attempt_count: 0,
+                next_attempt_at_unix_ms: 0,
+                last_error: None,
+            };
+        let jobs = vec![
+            audit_job(
+                "hot-terminal",
+                Some("vmm-turn-hot"),
+                VMM_PENDING_ANALYSIS_COMPLETED,
+            ),
+            audit_job(
+                "recoverable-terminal",
+                Some("vmm-turn-recoverable"),
+                VMM_PENDING_ANALYSIS_COMPLETED,
+            ),
+            audit_job(
+                "orphan-completed",
+                Some("vmm-turn-gone-a"),
+                VMM_PENDING_ANALYSIS_COMPLETED,
+            ),
+            audit_job(
+                "orphan-bypassed",
+                Some("vmm-turn-gone-b"),
+                VMM_PENDING_ANALYSIS_BYPASSED,
+            ),
+            audit_job(
+                "active-ready",
+                Some("vmm-turn-gone-c"),
+                vulcan_workspace_store::vmm_data_plane::VMM_PENDING_ANALYSIS_READY,
+            ),
+            audit_job(
+                "terminal-without-turn",
+                None,
+                VMM_PENDING_ANALYSIS_COMPLETED,
+            ),
+        ];
+
+        assert_eq!(
+            orphaned_terminal_analysis_operation_ids(&snapshot, &jobs),
+            vec![
+                String::from("orphan-completed"),
+                String::from("orphan-bypassed")
+            ]
+        );
     }
 
     /// Verifies session browsing exposes extraction states, retries, levels, and memory provenance.

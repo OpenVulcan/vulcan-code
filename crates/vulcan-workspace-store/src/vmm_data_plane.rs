@@ -1282,6 +1282,95 @@ ON CONFLICT(snapshot_key) DO UPDATE SET
             .collect()
     }
 
+    /// Deletes terminal analysis audit rows after their referenced Core turns are permanently gone.
+    /// 在其引用的 Core 回合永久消失后删除终态分析审计记录。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `operation_ids` contains exact durable analysis-operation identities selected by the
+    /// caller after comparing the authoritative active and recycle-bin snapshots.
+    /// `operation_ids` 包含调用方对照权威活动区与回收站快照后选出的准确耐久分析操作身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns success only after every selected terminal row is absent.
+    /// 仅当全部选中终态记录均已不存在时返回成功。
+    ///
+    /// # Errors
+    /// 错误
+    /// Returns an error for an empty identity, SQLite failure, or a row that remains because it
+    /// is still active rather than terminal.
+    /// 操作身份为空、SQLite 失败，或记录仍因处于活动态而保留时返回错误。
+    pub async fn delete_terminal_analysis_jobs(
+        &self,
+        operation_ids: &[String],
+    ) -> Result<(), String> {
+        let normalized_ids = operation_ids
+            .iter()
+            .map(|operation_id| operation_id.trim())
+            .map(|operation_id| {
+                if operation_id.is_empty() {
+                    Err(String::from("原生 VMM 终态分析作业操作身份不能为空"))
+                } else {
+                    Ok(operation_id.to_owned())
+                }
+            })
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        if normalized_ids.is_empty() {
+            return Ok(());
+        }
+
+        // A bounded parameter batch avoids SQLite variable limits while keeping every identity
+        // typed; partial completion is safe because deletion is idempotent and verified below.
+        // 有界参数批次既避免 SQLite 变量上限，也保证每个身份均为强类型；删除具备幂等性并会在下方校验，因此部分完成可安全重试。
+        const DELETE_BATCH_SIZE: usize = 128;
+        let normalized_ids = normalized_ids.into_iter().collect::<Vec<_>>();
+        for operation_id_batch in normalized_ids.chunks(DELETE_BATCH_SIZE) {
+            let placeholders = std::iter::repeat_n("?", operation_id_batch.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "DELETE FROM vmm_pending_analysis_jobs WHERE state IN ('completed', 'analysis_bypassed', 'corrupted') AND operation_id IN ({placeholders});"
+            );
+            let parameters = operation_id_batch
+                .iter()
+                .map(sqlite_text)
+                .collect::<Vec<_>>();
+            let result = self
+                .client
+                .execute_sqlite_script_typed(
+                    VMM_SPACE_ID,
+                    self.sqlite_binding_id.as_str(),
+                    sql.as_str(),
+                    parameters,
+                )
+                .await
+                .map_err(|error| format!("删除原生 VMM 终态分析审计作业失败：{error}"))?;
+            if !result.success {
+                return Err(format!(
+                    "删除原生 VMM 终态分析审计作业失败：{}",
+                    result.message
+                ));
+            }
+        }
+
+        let remaining_operation_ids = self
+            .list_analysis_jobs_for_audit()
+            .await?
+            .into_iter()
+            .map(|job| job.operation_id)
+            .collect::<BTreeSet<_>>();
+        if let Some(remaining) = normalized_ids
+            .iter()
+            .find(|operation_id| remaining_operation_ids.contains(operation_id.as_str()))
+        {
+            return Err(format!(
+                "原生 VMM 分析审计作业 `{remaining}` 仍处于活动态，不能作为终态记录删除"
+            ));
+        }
+        Ok(())
+    }
+
     /// Records one bounded failed analysis attempt and schedules its next retry.
     /// 记录一次有界分析失败并调度下一次重试。
     ///
